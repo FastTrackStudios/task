@@ -1,25 +1,25 @@
 /*
  * Task palette — an OVERRIDE LAYER over the canonical FTS design tokens.
  *
- * The canonical sheet is libs/architect-ui/architect-ui/assets/fts-theme.css and is
- * imported verbatim below; this file adds only the handful of tokens
- * where the Task product deliberately departs from the shadcn defaults.
- * Everything else — the light palette, the `@theme inline` mappings, the
- * signal-* tokens, the keyframes — comes from the canonical sheet, so a
- * change there reaches Task automatically.
+ * The canonical sheet lives in the architect repo (architect-ui's
+ * assets/fts-theme.css). assets/fts-theme.css beside this file is a
+ * VENDORED COPY of it, imported verbatim below; this file adds only the
+ * handful of tokens where Task deliberately departs from the shadcn
+ * defaults.
  *
- * Previously this sheet was vendored three times (desktop/, mobile/,
- * web/) with a header explaining that a relative @import "climbs out of
- * the Task repo". That stopped being true when architect-ui was merged into
- * this monorepo — the Task tailwind input already `@source`s
- * ../../libs/architect-ui/architect-ui/src, and the pure-Nix image build (nix/
- * modules/packages/web-bundles.nix) builds from the whole tree. One
- * copy, one place to edit.
+ * It has to be a copy. Tailwind resolves `@import` on the filesystem, and
+ * architect-ui is a git dependency — a cargo checkout has no stable path,
+ * so there is nothing to point at. Rust code reads the same bytes through
+ * `architect_ui::THEME_CSS`, which is the equivalent trick for the
+ * compiler; CSS has no such escape.
  *
- * Do NOT re-vendor. Add product overrides here instead.
+ * This header used to say "Do NOT re-vendor", which was true while
+ * architect-ui was in the same tree and became false the moment it left.
+ * Keeping the copy in step with architect-ui is a manual job until
+ * architect ships a compiled utilities sheet.
  */
 
-@import "../../libs/architect-ui/architect-ui/assets/fts-theme.css";
+@import "./assets/fts-theme.css";
 
 /* Obsidian dark: editor #1e1e1e, panels #161616 (2026-07-03).
  * These 9 tokens are the entire Task departure from the canonical dark

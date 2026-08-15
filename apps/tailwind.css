@@ -26,28 +26,36 @@
  * utility class in one of them still compiles). */
 @source "./*/src/**/*.{rs,html,css}";
 
-/* Paths track the monorepo dissolve (c1c5754ce): the Task crates now
- * live at <root>/crates/task/* and <root>/features/task/*.
+/* The glob is `crates/*` rather than naming `ui` alone: the shell split
+ * produced `ui-core` and `player-ui`, and naming one crate meant their
+ * classes only reached the sheet via Tailwind's automatic (cwd-rooted)
+ * scan. That scan is off — see `source(none)` above — so every source
+ * has to be named. */
+@source "../../crates/*/src/**/*.rs";
+@source "../../features/*/*-ui/src/**/*.rs";
+@source "../../features/view/view-*/src/**/*.rs";
+
+/* GONE WITH THE AUGUST 2026 SPLIT, and a real (if cosmetic) regression.
  *
- * The glob is `crates/task/*` rather than naming `ui` alone: the shell
- * split produced `ui-core` and `player-ui`, and naming one crate meant
- * their classes were only reaching the sheet via Tailwind's automatic
- * (cwd-rooted) scan. That scan is off — see `source(none)` above — so
- * every source has to be named. */
-@source "../../crates/task/*/src/**/*.rs";
-@source "../../features/task/*/*-ui/src/**/*.rs";
-@source "../../features/task/view/view-*/src/**/*.rs";
-/* architect-ui primitives (Button/Sheet/Badge/…) — their variant classes
- * must exist in the compiled sheet too. In-tree since the monorepo
- * merge, so the pure-Nix image build sees it as well. */
-@source "../../libs/architect-ui/architect-ui/src/**/*.rs";
-/* session-ui (mixer / transport / progress bars) + dock classes used by the
- * `type: song` session player embedded in the vault page — keep their
- * utility classes from being purged (the "unstyled player" bug).
- * These two were web-only before the merge; desktop and mobile render
- * the same player, so they had the same latent bug. */
-@source "../../crates/session/ui/src/**/*.rs";
-@source "../../libs/dock/*/src/**/*.rs";
+ * These used to scan crates that now live in other repos:
+ *   ../../libs/architect-ui/architect-ui/src   -> architect repo
+ *   ../../crates/session/ui/src                -> fasttrackstudio repo
+ *   ../../libs/dock/                           -> fasttrackstudio repo
+ *
+ * A git dependency has no stable path on disk, so there is nothing to
+ * glob. Utility classes used ONLY inside those crates' rsx! — architect-ui
+ * primitives (Button/Sheet/Badge variants), the session player's mixer and
+ * transport, dock chrome — are no longer generated into this sheet.
+ *
+ * Note the failure mode: a @source that matches nothing is silent. It does
+ * not error the way the @import above did; you just get fewer classes and
+ * an element that renders unstyled. That is the "unstyled player" bug this
+ * block was originally written to fix, reintroduced by the split.
+ *
+ * The fix is for architect to ship a COMPILED utilities sheet that
+ * consumers @import, rather than expecting them to scan its sources. Until
+ * then, classes needed from those crates have to be named here by hand or
+ * safelisted. */
 
 @theme {
     --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
