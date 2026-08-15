@@ -1,5 +1,12 @@
-# Matches the FastTrackStudio fleet pin. architect and fasttrackstudio pin
-# the same toolchain; keep these in lockstep when bumping.
+# Matches the FastTrackStudio fleet pin, and must match
+# nix/modules/toolchain.nix.
+#
+# Held at 1.94 by rust-overlay, which follows dioxus-flake — the hub that
+# keeps `dx` and rustc in lockstep. Its newest stable is 1.94.1, so moving
+# past it means bumping dioxus-flake, not editing this file. Two
+# workarounds are waiting on that: the cargo-rail rust-version patch
+# (rail wants 1.95) and the kstring 2.0.2 pin in Cargo.toml (2.0.4 wants
+# 1.96).
 [toolchain]
 channel = "1.94.0"
 components = ["rustfmt", "clippy", "rust-src"]

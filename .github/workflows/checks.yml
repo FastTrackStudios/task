@@ -1,3 +1,23 @@
+# Task Checks — the one PR/push gate, on GitHub-hosted runners.
+#
+# Toolchain comes from the repo flake: every step runs under
+# `nix develop .#ci -c` (rust 1.94 pin, wasm target, clang env for ring,
+# native headers, tailwindcss, cargo-rail). `--accept-flake-config` picks
+# up the fasttrackstudio.cachix.org substituter from flake.nix nixConfig,
+# so the toolchain is a download, not a build.
+#
+# CHANGE SELECTION: the `plan` job asks `cargo rail plan` (patched flake
+# build — nix/modules/cargo-rail.nix) which workspace crates the range
+# actually affects, walking cargo's resolved reverse-dependency graph.
+# This workspace is ~163 members, so that selection is worth real minutes
+# per PR. Gates are crate-membership checks against the plan's execution
+# set; infra changes (.github/**, flake.nix, nix/**, … — see
+# .config/rail.toml [change-detection].infrastructure) or any rail
+# failure FAIL OPEN.
+#
+# Build, tests and quality are PARALLEL jobs — hosted runners are
+# isolated VMs, each with its own rust-cache.
+
 name: checks
 
 on:
@@ -7,35 +27,122 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: checks-${{ github.ref }}
+  group: checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  NIX_DEV: nix develop --accept-flake-config .#ci -c
 
 jobs:
-  check:
+  plan:
+    name: Plan affected crates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      workspace: ${{ steps.filter.outputs.workspace }}
+      wasm: ${{ steps.filter.outputs.wasm }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: apt deps
+        with:
+          # Full history: the plan needs both diff endpoints' ancestry.
+          fetch-depth: 0
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - name: Plan affected crates
+        id: filter
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
-            libasound2-dev libudev-dev pkg-config
+          set -u
 
-      - uses: dtolnay/rust-toolchain@stable
+          # Fail open: if we cannot compute an honest plan, run everything.
+          run_all() {
+            echo "plan: $1 — running EVERYTHING (fail open)"
+            for o in workspace wasm; do
+              echo "$o=true" >> "$GITHUB_OUTPUT"
+            done
+            exit 0
+          }
+
+          [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && run_all "manual dispatch"
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+            base="$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD 2>/dev/null)" \
+              || run_all "no merge-base"
+          else
+            base="${{ github.event.before }}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base="$(git rev-parse HEAD~1 2>/dev/null)" || run_all "no parent commit"
+            fi
+          fi
+
+          plan="$(${NIX_DEV} cargo rail plan --quiet --from "$base" --to HEAD -f json)" \
+            || run_all "cargo rail plan failed"
+
+          eval "$(printf '%s' "$plan" | python3 -c '
+          import json, sys
+
+          plan = json.load(sys.stdin)
+
+          infra = bool(plan.get("surfaces", {}).get("infra", {}).get("enabled"))
+          if plan.get("result") != "success":
+              infra = True
+
+          crates = set(plan.get("scope", {}).get("crates", []))
+
+          # The browser build is a first-class target: these crates and
+          # everything they pull must stay wasm-clean or the web app stops
+          # building. rail already folded reverse deps into `crates`, so
+          # membership of the leaf entry points is enough.
+          WASM = {"ui", "task-ui-core", "task-player-ui", "task-app-web"}
+
+          gates = {
+              "workspace": bool(crates),
+              "wasm":      bool(crates & WASM),
+          }
+          if infra:
+              gates = {k: True for k in gates}
+              print("infra=true")
+          for k, v in gates.items():
+              print(f"{k}={str(v).lower()}")
+          print(f"n_crates={len(crates)}")
+          ')" || run_all "plan parse failed"
+
+          # Infra surface (toolchain / flake / CI inputs changed) is a
+          # DELIBERATE full run, not a failure — everything's inputs
+          # changed, so everything rebuilds.
+          [ "${infra:-false}" = "true" ] && echo "plan: infra-surface change — full run (all gates on)"
+
+          {
+            echo "workspace=$workspace"
+            echo "wasm=$wasm"
+          } >> "$GITHUB_OUTPUT"
+          echo "rail plan: $n_crates affected crate(s) — workspace=$workspace wasm=$wasm"
+
+  build:
+    name: Build (workspace + wasm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: plan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        if: needs.plan.outputs.workspace == 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h / | tail -1
+      - uses: DeterminateSystems/nix-installer-action@v22
+        if: needs.plan.outputs.workspace == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.plan.outputs.workspace == 'true'
+        with:
+          shared-key: build
+          cache-on-failure: "true"
 
       # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
-      # committed, and asset!() resolves them at compile time — so they have
-      # to exist before cargo runs. dx builds them during `dx serve`/`dx
-      # build`, but CI drives plain cargo.
-      - uses: taiki-e/install-action@just
+      # committed, and asset!() resolves them at compile time — so they
+      # have to exist before cargo runs. dx builds them during `dx
+      # serve`/`dx build`, but CI drives plain cargo.
       - name: tailwind
+        if: needs.plan.outputs.workspace == 'true'
         run: |
           # BOTH installs are required. -g puts the `tailwindcss` binary on
           # PATH; the local one puts the `tailwindcss` MODULE in node_modules
@@ -43,42 +150,82 @@ jobs:
           # resolution walks up from apps/, so repo-root is enough).
           npm install -g @tailwindcss/cli
           npm install --no-save tailwindcss
-          just --justfile apps/Justfile --working-directory apps css
+          ${NIX_DEV} just --justfile apps/Justfile --working-directory apps css
 
-      - name: fmt
-        run: cargo fmt --all -- --check
+      - name: Manifests + lockfile
+        if: needs.plan.outputs.workspace == 'true'
+        run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
+      - name: cargo check --workspace
+        if: needs.plan.outputs.workspace == 'true'
+        run: ${NIX_DEV} cargo check --workspace --all-targets
+      # wasm32 target + ring's clang env come from the flake CI shell.
+      - name: wasm check (ui, task-ui-core)
+        if: needs.plan.outputs.wasm == 'true'
+        run: |
+          ${NIX_DEV} cargo check --target wasm32-unknown-unknown \
+            -p ui -p task-ui-core
 
-      - name: check
-        run: cargo check --workspace --all-targets
-
-      - name: clippy
-        run: cargo clippy --workspace --all-targets
-
-      - name: test
-        run: cargo test --workspace
-
-  wasm:
+  tests:
+    name: Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: plan
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-
-      # Same reason as the native job: asset!() needs the generated sheets.
-      - uses: taiki-e/install-action@just
-      - name: tailwind
+      - name: Free disk space
+        if: needs.plan.outputs.workspace == 'true'
         run: |
-          # BOTH installs are required. -g puts the `tailwindcss` binary on
-          # PATH; the local one puts the `tailwindcss` MODULE in node_modules
-          # so `@import "tailwindcss"` inside the CSS can resolve it (node
-          # resolution walks up from apps/, so repo-root is enough).
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h / | tail -1
+      - uses: DeterminateSystems/nix-installer-action@v22
+        if: needs.plan.outputs.workspace == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.plan.outputs.workspace == 'true'
+        with:
+          shared-key: tests
+          cache-on-failure: "true"
+      - name: tailwind
+        if: needs.plan.outputs.workspace == 'true'
+        run: |
           npm install -g @tailwindcss/cli
           npm install --no-save tailwindcss
-          just --justfile apps/Justfile --working-directory apps css
+          ${NIX_DEV} just --justfile apps/Justfile --working-directory apps css
+      - name: cargo nextest run --workspace
+        if: needs.plan.outputs.workspace == 'true'
+        run: ${NIX_DEV} cargo nextest run --workspace
 
-      # The browser build is a first-class target: the UI crate and the
-      # vault/proto slices must stay wasm-clean or the web app stops building.
-      - name: check wasm
-        run: cargo check --target wasm32-unknown-unknown -p ui -p task-ui-core
+  quality:
+    name: Quality (fmt + clippy + docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: plan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h / | tail -1
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: Swatinem/rust-cache@v2
+        if: needs.plan.outputs.workspace == 'true'
+        with:
+          shared-key: quality
+          cache-on-failure: "true"
+      # fmt is ungated: it compiles nothing, so change selection would
+      # save nothing.
+      - name: fmt
+        run: ${NIX_DEV} cargo fmt --all -- --check
+      - name: tailwind
+        if: needs.plan.outputs.workspace == 'true'
+        run: |
+          npm install -g @tailwindcss/cli
+          npm install --no-save tailwindcss
+          ${NIX_DEV} just --justfile apps/Justfile --working-directory apps css
+      - name: Clippy
+        if: needs.plan.outputs.workspace == 'true'
+        run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings
+      - name: Docs
+        if: needs.plan.outputs.workspace == 'true'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: ${NIX_DEV} cargo doc --workspace --no-deps

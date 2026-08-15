@@ -1,0 +1,64 @@
+diff --git a/src/graph/core.rs b/src/graph/core.rs
+index e2b857a..2ef8f8c 100644
+--- a/src/graph/core.rs
++++ b/src/graph/core.rs
+@@ -96,7 +96,14 @@ impl WorkspaceGraph {
+       };
+ 
+       let node_idx = graph.add_node(node);
+-      name_to_node.insert(package.name.as_ref().to_string(), node_idx);
++      // Never let a non-member package shadow a workspace member of the
++      // same name (multi-version externals and git copies of workspace
++      // crates make bare names ambiguous).
++      if workspace_pkg_ids.contains(&package.id) {
++        name_to_node.insert(package.name.as_ref().to_string(), node_idx);
++      } else {
++        name_to_node.entry(package.name.as_ref().to_string()).or_insert(node_idx);
++      }
+       id_to_node.insert(package.id.clone(), node_idx);
+ 
+       if workspace_pkg_ids.contains(&package.id) {
+@@ -104,14 +111,35 @@ impl WorkspaceGraph {
+       }
+     }
+ 
+-    // Add dependency edges
+-    for package in &metadata.packages {
+-      let from_idx = id_to_node[&package.id];
+-
+-      for dep in &package.dependencies {
+-        // Find the resolved dependency
+-        if let Some(to_idx) = name_to_node.get(dep.name.as_str()) {
+-          graph.add_edge(from_idx, *to_idx, dep.kind);
++    // Add dependency edges. Prefer cargo's resolve graph: it is keyed by
++    // package ID (immune to name collisions between workspace members,
++    // multi-version externals, and third-party manifests' dev-deps that
++    // are never built — e.g. iroh dev-depends on a crates.io crate named
++    // `patchbay`, which must not alias a workspace crate of that name).
++    if let Some(resolve) = &metadata.resolve {
++      for node in &resolve.nodes {
++        let Some(from_idx) = id_to_node.get(&node.id) else { continue };
++        for dep in &node.deps {
++          if let Some(to_idx) = id_to_node.get(&dep.pkg) {
++            if dep.dep_kinds.is_empty() {
++              graph.add_edge(*from_idx, *to_idx, cargo_metadata::DependencyKind::Normal);
++            }
++            for k in &dep.dep_kinds {
++              graph.add_edge(*from_idx, *to_idx, k.kind);
++            }
++          }
++        }
++      }
++    } else {
++      // Fallback (metadata ran with --no-deps): manifest names.
++      for package in &metadata.packages {
++        let from_idx = id_to_node[&package.id];
++
++        for dep in &package.dependencies {
++          // Find the resolved dependency
++          if let Some(to_idx) = name_to_node.get(dep.name.as_str()) {
++            graph.add_edge(from_idx, *to_idx, dep.kind);
++          }
+         }
+       }
+     }

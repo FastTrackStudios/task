@@ -1,0 +1,117 @@
+# cargo-rail configuration
+# Documentation: https://github.com/loadingalias/cargo-rail
+
+# Targets for multi-platform validation (runs `cargo metadata --filter-platform <target>` per target)
+targets = ["wasm32-unknown-unknown"]
+
+[unify]
+include_paths = true
+include_renamed = false
+
+pin_transitives = false  # enable for hakari/workspace-hack users
+transitive_host = "root"  # only used if pin_transitives = true
+
+strict_version_compat = true
+exact_pin_handling = "warn"
+major_version_conflict = "warn"  # warn = skip, bump = force highest
+
+msrv = true
+msrv_source = "max"  # deps | workspace | max
+
+detect_unused = true
+remove_unused = true  # requires detect_unused = true
+
+prune_dead_features = true
+preserve_features = []  # glob patterns to keep from pruning
+detect_undeclared_features = true
+fix_undeclared_features = true  # requires detect_undeclared_features = true
+skip_undeclared_patterns = [
+  "default",
+  "std",
+  "alloc",
+  "*_backend",
+  "*_impl",
+]
+
+exclude = []
+include = []
+max_backups = 3
+enforce_msrv_inheritance = false  # Ensure members inherit workspace rust-version
+consumer_scope = "open"  # Consumer boundary for destructive private-graph cleanup: open, workspace
+compiler_diag_cache = true  # Cache rustc source diagnostics for faster repeated unify runs (default: true)
+sort_dependencies = true  # Sort deps alphabetically (default: true)
+
+
+[release]
+tag_prefix = "v"
+tag_format = "{crate}-{prefix}{version}"  # e.g. my-crate-v1.0.0 (with tag_prefix = "v")
+require_clean = true
+publish_delay = 5  # seconds between publishes
+create_github_release = true  # canonical forge is GitHub (2026-07-16)
+sign_tags = false
+changelog_path = "CHANGELOG.md"
+changelog_relative_to = "crate"  # crate = per-crate, workspace = single file
+skip_changelog_for = []
+require_changelog_entries = false
+forge = "auto"  # Release creation provider: auto, github, gitlab
+push = true  # Push release commit and tags before public publishing (GitHub canonical)
+require_release_notes = true  # Require release notes for target version before apply
+release_notes_dir = "release-notes"  # Manual release notes override directory
+change_dir = ".changes"  # Pending release intent file directory
+pre_1_breaking_bump = "minor"  # Auto bump for breaking changes on 0.x crates: minor or major
+unconventional_commits = "warn"  # Commit diagnostic policy: allow, warn, deny
+semver_check = "warn"  # cargo-semver-checks policy: off, warn, deny
+require_change_files = false  # Require change-file coverage: false, true, or [crate]
+
+[release.changelog]
+path = "CHANGELOG.md"  # Default changelog filename
+relative_to = "crate"  # Changelog path base: crate or workspace
+entry_format = "- {scope}{breaking}{description}{prs} ({sha_link})"  # Entry placeholders: scope, breaking, description, prs, sha, sha_link, type
+emoji = true  # Render emoji in changelog section headers
+group_order = ["breaking", "feat", "fix", "build", "chore", "ci", "deps", "docs", "other", "perf", "refactor", "style", "test"]  # Commit type section order
+fallback = "other"  # Fallback section for unlisted types, or skip
+
+[release.changelog.filters]
+skip_types = []  # Commit types to omit from changelog output
+skip_scopes = []  # Commit scopes to omit from changelog output
+include_paths = []  # Optional changelog attribution include globs
+exclude_paths = []  # Optional changelog attribution exclude globs
+
+
+[change-detection]
+# Paths that trigger full workspace rebuild
+infrastructure = [
+  ".github/**",
+  ".forgejo/**",
+  "flake.nix",
+  "flake.lock",
+  "nix/**",
+  "scripts/**",
+  "justfile",
+  "Justfile",
+  "Makefile",
+  "makefile",
+  "GNUmakefile",
+  "*.sh",
+  "Taskfile.yml",
+  "Taskfile.yaml",
+  ".pre-commit-config.yaml",
+  "deny.toml",
+  "cliff.toml",
+  "release.toml",
+  "release-plz.toml",
+]
+unknown_file_policy = "strict"  # Unknown-file policy: docs, owned_build_test, workspace_infra, strict
+confidence_profile = "balanced"  # Planner confidence profile: strict, balanced, fast
+bot_pr_confidence_profile = "strict"  # Optional planner profile override for bot-authored PRs
+
+[run]
+default_profile = "local"  # Default run profile (built-ins: local, ci, nightly)
+
+
+# Per-crate configuration: run 'cargo rail split init <crate>' to generate
+# [crates.my-crate.split]
+# remote = "git@github.com:org/my-crate.git"
+# branch = "main"
+# mode = "single"
+# paths = [{ crate = "crates/my-crate" }]
