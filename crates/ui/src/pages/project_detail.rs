@@ -13,9 +13,9 @@
 use std::collections::BTreeSet;
 
 use agent_proto::session::{Session as AgentSession, SessionStatus as AgentStatus};
+use architect_ui::prelude::*;
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 use project_proto::ProjectInfo;
 use task_proto::TaskInfo as DbTask;
 use task_ui::{TaskInfo as UiTask, TaskMutation, TasksApp};

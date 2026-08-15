@@ -24,8 +24,8 @@
 
 use std::collections::HashMap;
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use view_knowledge_graph::{
     GraphFilterState, GraphLegend, KnowledgeGraphView, WikiGraph, apply_filters, build_wiki_graph,
 };

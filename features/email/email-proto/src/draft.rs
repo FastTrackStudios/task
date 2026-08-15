@@ -258,20 +258,32 @@ mod tests {
         // Setting only In-Reply-To is how you get a reply that clients
         // render as a brand new conversation. `in_reply_to` therefore
         // does both.
-        let d = Draft::new(Addr::mailbox("me@x.com"), vec![Addr::mailbox("a@x.com")], "Re: hi")
-            .in_reply_to("parent@x.com");
+        let d = Draft::new(
+            Addr::mailbox("me@x.com"),
+            vec![Addr::mailbox("a@x.com")],
+            "Re: hi",
+        )
+        .in_reply_to("parent@x.com");
         assert_eq!(d.in_reply_to.as_deref(), Some("parent@x.com"));
         assert_eq!(d.references, vec!["parent@x.com".to_owned()]);
     }
 
     #[test]
     fn a_parents_chain_is_carried_ahead_of_the_parent() {
-        let d = Draft::new(Addr::mailbox("me@x.com"), vec![Addr::mailbox("a@x.com")], "Re: hi")
-            .in_reply_to("parent@x.com")
-            .with_references(["root@x.com".to_owned(), "mid@x.com".to_owned()]);
+        let d = Draft::new(
+            Addr::mailbox("me@x.com"),
+            vec![Addr::mailbox("a@x.com")],
+            "Re: hi",
+        )
+        .in_reply_to("parent@x.com")
+        .with_references(["root@x.com".to_owned(), "mid@x.com".to_owned()]);
         assert_eq!(
             d.references,
-            vec!["root@x.com".to_owned(), "mid@x.com".to_owned(), "parent@x.com".to_owned()],
+            vec![
+                "root@x.com".to_owned(),
+                "mid@x.com".to_owned(),
+                "parent@x.com".to_owned()
+            ],
             "oldest first, parent last"
         );
     }
@@ -286,16 +298,20 @@ mod tests {
 
     #[test]
     fn recipients_covers_to_cc_and_bcc() {
-        let d = Draft::new(Addr::mailbox("me@x.com"), vec![Addr::mailbox("a@x.com")], "s")
-            .with_cc(Addr::mailbox("c@x.com"))
-            .with_bcc(Addr::mailbox("b@x.com"));
+        let d = Draft::new(
+            Addr::mailbox("me@x.com"),
+            vec![Addr::mailbox("a@x.com")],
+            "s",
+        )
+        .with_cc(Addr::mailbox("c@x.com"))
+        .with_bcc(Addr::mailbox("b@x.com"));
         assert_eq!(d.recipients(), vec!["a@x.com", "c@x.com", "b@x.com"]);
     }
 
     #[test]
     fn inline_attachments_are_distinguishable_and_cid_is_bare() {
-        let plain = Attachment::new("notes.pdf", b"pdf".to_vec())
-            .with_content_type("application/pdf");
+        let plain =
+            Attachment::new("notes.pdf", b"pdf".to_vec()).with_content_type("application/pdf");
         assert!(!plain.is_inline());
         assert_eq!(plain.meta.size, 3);
 

@@ -4,9 +4,9 @@
 
 use std::collections::HashMap;
 
+use architect_ui::lucide_dioxus::{ChevronLeft, ChevronRight};
 use chrono::{Datelike, Days, NaiveDate, Weekday};
 use dioxus::prelude::*;
-use architect_ui::lucide_dioxus::{ChevronLeft, ChevronRight};
 
 use crate::intensity::ColorTag;
 

@@ -85,11 +85,7 @@ fn local_plugin_set() -> task_plugin::PluginSet {
         }?;
         Some(manifest.disabled_plugins.0.clone())
     })();
-    task_plugin::PluginSet::resolve(
-        disabled
-            .map(task_plugin::PluginChoice::Disabled)
-            .as_ref(),
-    )
+    task_plugin::PluginSet::resolve(disabled.map(task_plugin::PluginChoice::Disabled).as_ref())
 }
 
 /// Find a service by alias, descriptor name, or unique substring.
@@ -105,8 +101,7 @@ fn find<'a>(services: &'a [ApiService], query: &str) -> Result<&'a ApiService, S
     let matches: Vec<&ApiService> = services
         .iter()
         .filter(|s| {
-            s.name.to_ascii_lowercase().contains(&q)
-                || s.alias.is_some_and(|a| a.contains(&q))
+            s.name.to_ascii_lowercase().contains(&q) || s.alias.is_some_and(|a| a.contains(&q))
         })
         .collect();
     match matches.as_slice() {

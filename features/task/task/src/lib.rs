@@ -58,12 +58,12 @@ pub use task_proto::filing::{Anchor, anchor, is_filed, is_unfiled};
 /// The agent lane's triage vocabulary (see [`task_proto::agent_lane`]).
 pub use task_proto::agent_lane;
 
-/// Wayfinder map bodies (see [`task_proto::wayfinder`]).
-pub use task_proto::wayfinder;
-pub use task_proto::wayfinder::{MapBody, Section, map_body};
 pub use task_proto::agent_lane::{
     TriageLabel, has_triage_label, is_untriaged, triage_label, triage_labels,
 };
+/// Wayfinder map bodies (see [`task_proto::wayfinder`]).
+pub use task_proto::wayfinder;
+pub use task_proto::wayfinder::{MapBody, Section, map_body};
 
 // FS-dependent modules (vault::Vault, std::fs walks).
 pub mod backend;

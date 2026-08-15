@@ -101,7 +101,13 @@ mod tests {
             .derivation_upsert("<a>", DerivationKind::Urgency, 1, "2", 100)
             .unwrap();
         store
-            .derivation_upsert("<a>", DerivationKind::Tags, 1, "action-needed,calendar", 100)
+            .derivation_upsert(
+                "<a>",
+                DerivationKind::Tags,
+                1,
+                "action-needed,calendar",
+                100,
+            )
             .unwrap();
 
         let ids = vec!["<a>".to_string(), "<b>".to_string()];
@@ -112,7 +118,10 @@ mod tests {
             .find(|d| d.kind == DerivationKind::Urgency)
             .unwrap();
         assert_eq!(urgency.urgency(), Some(2));
-        let tags = rows.iter().find(|d| d.kind == DerivationKind::Tags).unwrap();
+        let tags = rows
+            .iter()
+            .find(|d| d.kind == DerivationKind::Tags)
+            .unwrap();
         assert_eq!(tags.tags(), vec!["action-needed", "calendar"]);
 
         // <b> has nothing; <a> is done for v1.

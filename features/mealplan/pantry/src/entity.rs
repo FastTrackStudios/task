@@ -118,10 +118,7 @@ impl VaultEntity for PantryItems {
             nutrition_unit: yaml::str_at(&map, "nutritionUnit"),
             minimum: yaml::f64_at(&map, "minimum"),
             default_best_before_days: shelf_days(&map, "defaultBestBeforeDays"),
-            default_best_before_days_after_open: shelf_days(
-                &map,
-                "defaultBestBeforeDaysAfterOpen",
-            ),
+            default_best_before_days_after_open: shelf_days(&map, "defaultBestBeforeDaysAfterOpen"),
             default_best_before_days_after_freezing: shelf_days(
                 &map,
                 "defaultBestBeforeDaysAfterFreezing",

@@ -18,11 +18,11 @@ use wiki_proto::health::WikiHealth as ProtoHealth;
 use wiki_proto::ingest as itypes;
 use wiki_proto::lint as ltypes;
 use wiki_proto::log as ctypes;
+use wiki_proto::pages as ptypes;
 use wiki_proto::raw::{ImportRawSource, RawSourceRef};
 use wiki_proto::review::ReviewItem;
 use wiki_proto::schema as stypes;
 use wiki_proto::search::{SearchHits, SearchOpts};
-use wiki_proto::pages as ptypes;
 use wiki_proto::service::events::EventsStreamSource;
 use wiki_proto::service::{
     Catalog, Graph, Ingest, Lint, Multimodal, Pages, RawLayer, Review, Schema, Search, Watcher,
@@ -361,8 +361,8 @@ impl Pages for WikiBackend {
         let w = self.resolve(wiki_id)?;
         let rel = sanitize_page_path(path)?;
         let abs = w.wiki_root().join(&rel);
-        let markdown = std::fs::read_to_string(&abs)
-            .map_err(|_| WikiError::NotFound(rel.clone()))?;
+        let markdown =
+            std::fs::read_to_string(&abs).map_err(|_| WikiError::NotFound(rel.clone()))?;
         Ok(ptypes::WikiPageDoc {
             path: rel,
             sha256: sha256_hex(markdown.as_bytes()),

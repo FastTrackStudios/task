@@ -25,8 +25,8 @@
 
 use std::collections::HashMap;
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::orgs::{OrgMeta, OrgSelection, home_slug};
@@ -170,7 +170,9 @@ pub fn use_org_theme_switcher_state() -> Signal<ThemeState> {
         let mode = *org_overrides.mode.read();
         // Resolve through the preset table so ""/unknown names compare
         // as "default" — what `state_from_preset_name` yields.
-        let resolved = theme_preset(&name).unwrap_or_else(default_theme_preset).name;
+        let resolved = theme_preset(&name)
+            .unwrap_or_else(default_theme_preset)
+            .name;
         let differs = {
             let state = switcher_state.peek();
             state.preset != resolved || state.mode != mode

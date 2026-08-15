@@ -15,8 +15,8 @@
 
 use std::collections::BTreeMap;
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -130,7 +130,10 @@ impl ServerRegistry {
         // Verified on desktop the load-from-disk path already works; this makes
         // the runtime add/select path work the same everywhere.
         crate::vox_session::set_active_server(id.and_then(|i| self.get(i)).map(|e| {
-            crate::vox_session::ActiveServer { url: e.server_url, token: e.session_token }
+            crate::vox_session::ActiveServer {
+                url: e.server_url,
+                token: e.session_token,
+            }
         }));
     }
 
@@ -356,7 +359,11 @@ fn data_dir() -> Option<std::path::PathBuf> {
     }
     let home = std::path::PathBuf::from(std::env::var_os("HOME")?);
     if cfg!(target_vendor = "apple") {
-        Some(home.join("Library").join("Application Support").join("task"))
+        Some(
+            home.join("Library")
+                .join("Application Support")
+                .join("task"),
+        )
     } else {
         Some(home.join(".local").join("share").join("task"))
     }

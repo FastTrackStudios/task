@@ -21,9 +21,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use architect_ui::lucide_dioxus::{Maximize, ZoomIn, ZoomOut};
 use dioxus::prelude::*;
 use dioxus_elements::geometry::WheelDelta;
-use architect_ui::lucide_dioxus::{Maximize, ZoomIn, ZoomOut};
 
 use crate::layout::{LayoutConfig, Position, bounds, layout, node_radius};
 use crate::model::{ColorMode, WikiGraph, community_color, kind_color};

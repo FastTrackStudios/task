@@ -16,8 +16,8 @@
 //! `PartialEq`). `RepoId` itself does derive `PartialEq`/`Hash`, so
 //! it's fine to thread through for the per-repo issue fetch.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use git_proto::RepoId;
 
 use crate::orgs::{OrgMeta, OrgSelection};

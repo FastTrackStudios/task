@@ -11,7 +11,6 @@
 
 use std::rc::Rc;
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     BookOpen, Brain, Briefcase, Calendar, ChefHat, ChevronRight, Church, DollarSign, Dumbbell,
     FileText, Flame, Globe, GraduationCap, Hash, Heart, HeartPulse, House, Leaf, ListTodo, MapPin,
@@ -19,6 +18,7 @@ use architect_ui::lucide_dioxus::{
     Utensils, Wrench,
 };
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::pages::vault::{TreeNode, build_tree, fetch_folder_index};
 use crate::routes::Route;

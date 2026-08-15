@@ -21,8 +21,8 @@
 //! account, and the presence status picker folded into the same
 //! popover as a "Status" section.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use auth_proto::{AuthServiceClient, AuthUser, SignInEmailPassword, SignUpEmailPassword};
@@ -785,8 +785,8 @@ fn account_from(user: AuthUser, email: &str, token: String) -> ActiveAccount {
 // task-ui-core::avatar so surfaces outside this crate (the review
 // rail in files-ui) render the SAME person the same way.
 
-pub use task_ui_core::avatar::{gradient_index, initials};
 use task_ui_core::avatar::AVATAR_GRADIENTS;
+pub use task_ui_core::avatar::{gradient_index, initials};
 
 /// Round initials avatar with a deterministic per-account gradient.
 /// `email` keys the gradient; when it's empty the name keys it

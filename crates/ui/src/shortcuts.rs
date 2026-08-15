@@ -90,33 +90,171 @@ pub struct Binding {
 /// (`space`, `space g`, `g`) are implied and drive the which-key groups.
 pub const BINDINGS: &[Binding] = &[
     // ── direct chords ──
-    Binding { seq: "ctrl+p", web: None, action: actions::PALETTE_TOGGLE, label: "Command palette", overrides_browser: true },
-    Binding { seq: "ctrl+k", web: None, action: actions::PALETTE_TOGGLE, label: "Command palette", overrides_browser: true },
-    Binding { seq: "ctrl+o", web: None, action: actions::PICKER_NOTES, label: "Find note", overrides_browser: true },
-    Binding { seq: "ctrl+\\", web: None, action: actions::TOGGLE_SIDEBAR, label: "Toggle sidebar", overrides_browser: false },
-    Binding { seq: "ctrl+shift+b", web: None, action: actions::TOGGLE_PANEL, label: "Toggle panel", overrides_browser: true },
-    Binding { seq: "ctrl+shift+z", web: None, action: actions::TOGGLE_ZEN, label: "Toggle zen", overrides_browser: true },
+    Binding {
+        seq: "ctrl+p",
+        web: None,
+        action: actions::PALETTE_TOGGLE,
+        label: "Command palette",
+        overrides_browser: true,
+    },
+    Binding {
+        seq: "ctrl+k",
+        web: None,
+        action: actions::PALETTE_TOGGLE,
+        label: "Command palette",
+        overrides_browser: true,
+    },
+    Binding {
+        seq: "ctrl+o",
+        web: None,
+        action: actions::PICKER_NOTES,
+        label: "Find note",
+        overrides_browser: true,
+    },
+    Binding {
+        seq: "ctrl+\\",
+        web: None,
+        action: actions::TOGGLE_SIDEBAR,
+        label: "Toggle sidebar",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "ctrl+shift+b",
+        web: None,
+        action: actions::TOGGLE_PANEL,
+        label: "Toggle panel",
+        overrides_browser: true,
+    },
+    Binding {
+        seq: "ctrl+shift+z",
+        web: None,
+        action: actions::TOGGLE_ZEN,
+        label: "Toggle zen",
+        overrides_browser: true,
+    },
     // Ctrl+N is browser-RESERVED on web → Ctrl+Alt+N there.
-    Binding { seq: "ctrl+n", web: Some("ctrl+alt+n"), action: actions::CAPTURE_FLEETING, label: "Capture", overrides_browser: false },
-    Binding { seq: "ctrl+shift+f", web: None, action: actions::CAPTURE_FLEETING, label: "Capture", overrides_browser: false },
-    Binding { seq: "ctrl+comma", web: None, action: actions::NAV_SETTINGS, label: "Settings", overrides_browser: false },
+    Binding {
+        seq: "ctrl+n",
+        web: Some("ctrl+alt+n"),
+        action: actions::CAPTURE_FLEETING,
+        label: "Capture",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "ctrl+shift+f",
+        web: None,
+        action: actions::CAPTURE_FLEETING,
+        label: "Capture",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "ctrl+comma",
+        web: None,
+        action: actions::NAV_SETTINGS,
+        label: "Settings",
+        overrides_browser: false,
+    },
     // ── `g` nav (vim-style) ──
-    Binding { seq: "g h", web: None, action: actions::NAV_HOME, label: "Home", overrides_browser: false },
-    Binding { seq: "g i", web: None, action: actions::NAV_INBOX, label: "Inbox", overrides_browser: false },
-    Binding { seq: "g t", web: None, action: actions::NAV_TASKS, label: "Tasks", overrides_browser: false },
+    Binding {
+        seq: "g h",
+        web: None,
+        action: actions::NAV_HOME,
+        label: "Home",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "g i",
+        web: None,
+        action: actions::NAV_INBOX,
+        label: "Inbox",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "g t",
+        web: None,
+        action: actions::NAV_TASKS,
+        label: "Tasks",
+        overrides_browser: false,
+    },
     // ── `<space>` leader ──
-    Binding { seq: "space space", web: None, action: actions::SEARCH_ALL, label: "Search everything", overrides_browser: false },
-    Binding { seq: "space n", web: None, action: actions::NEW_NOTE, label: "New note", overrides_browser: false },
-    Binding { seq: "space t", web: None, action: actions::NAV_TASKS, label: "Tasks", overrides_browser: false },
-    Binding { seq: "space c", web: None, action: actions::CAPTURE_FLEETING, label: "Capture", overrides_browser: false },
-    Binding { seq: "space p", web: None, action: actions::INBOX_PROCESS, label: "Process inbox", overrides_browser: false },
+    Binding {
+        seq: "space space",
+        web: None,
+        action: actions::SEARCH_ALL,
+        label: "Search everything",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space n",
+        web: None,
+        action: actions::NEW_NOTE,
+        label: "New note",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space t",
+        web: None,
+        action: actions::NAV_TASKS,
+        label: "Tasks",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space c",
+        web: None,
+        action: actions::CAPTURE_FLEETING,
+        label: "Capture",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space p",
+        web: None,
+        action: actions::INBOX_PROCESS,
+        label: "Process inbox",
+        overrides_browser: false,
+    },
     // ── `<space> g` go-to group ──
-    Binding { seq: "space g h", web: None, action: actions::NAV_HOME, label: "Home", overrides_browser: false },
-    Binding { seq: "space g i", web: None, action: actions::NAV_INBOX, label: "Inbox", overrides_browser: false },
-    Binding { seq: "space g t", web: None, action: actions::NAV_TASKS, label: "Tasks", overrides_browser: false },
-    Binding { seq: "space g p", web: None, action: actions::NAV_PROJECTS, label: "Projects", overrides_browser: false },
-    Binding { seq: "space g m", web: None, action: actions::NAV_TIMER, label: "Timer", overrides_browser: false },
-    Binding { seq: "space g v", web: None, action: actions::NAV_VAULT, label: "Vault", overrides_browser: false },
+    Binding {
+        seq: "space g h",
+        web: None,
+        action: actions::NAV_HOME,
+        label: "Home",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space g i",
+        web: None,
+        action: actions::NAV_INBOX,
+        label: "Inbox",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space g t",
+        web: None,
+        action: actions::NAV_TASKS,
+        label: "Tasks",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space g p",
+        web: None,
+        action: actions::NAV_PROJECTS,
+        label: "Projects",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space g m",
+        web: None,
+        action: actions::NAV_TIMER,
+        label: "Timer",
+        overrides_browser: false,
+    },
+    Binding {
+        seq: "space g v",
+        web: None,
+        action: actions::NAV_VAULT,
+        label: "Vault",
+        overrides_browser: false,
+    },
 ];
 
 /// The sequence this build actually binds: the web alternate on wasm,
@@ -205,11 +343,7 @@ pub fn derive_whichkey(prefix: &[String]) -> Option<WhichKeyView> {
         if toks.len() <= prefix.len() {
             continue;
         }
-        if !prefix
-            .iter()
-            .zip(&toks)
-            .all(|(p, t)| p.as_str() == *t)
-        {
+        if !prefix.iter().zip(&toks).all(|(p, t)| p.as_str() == *t) {
             continue;
         }
         let key = toks[prefix.len()].to_string();
@@ -239,7 +373,11 @@ pub fn derive_whichkey(prefix: &[String]) -> Option<WhichKeyView> {
         })
         .collect();
     Some(WhichKeyView {
-        prefix: prefix.iter().map(|t| token_display(t)).collect::<Vec<_>>().join(" "),
+        prefix: prefix
+            .iter()
+            .map(|t| token_display(t))
+            .collect::<Vec<_>>()
+            .join(" "),
         entries,
     })
 }
@@ -544,7 +682,10 @@ pub fn spawn_new_note(
         match crate::pages::vault::create_new_file(slug, name.clone()).await {
             Ok(_) => {
                 pending_title.set(Some(name.clone()));
-                nav.push(crate::routes::Route::VaultRoute { path: name, org: String::new() });
+                nav.push(crate::routes::Route::VaultRoute {
+                    path: name,
+                    org: String::new(),
+                });
             }
             Err(e) => tracing::warn!(%e, "new note failed"),
         }
@@ -824,8 +965,7 @@ mod tests {
     #[test]
     fn every_sequence_parses() {
         for b in BINDINGS {
-            input::parse_key_sequence(b.seq)
-                .unwrap_or_else(|e| panic!("bad seq {:?}: {e}", b.seq));
+            input::parse_key_sequence(b.seq).unwrap_or_else(|e| panic!("bad seq {:?}: {e}", b.seq));
             if let Some(web) = b.web {
                 input::parse_key_sequence(web)
                     .unwrap_or_else(|e| panic!("bad web alt {:?}: {e}", web));
@@ -869,11 +1009,19 @@ mod tests {
         let view = derive_whichkey(&["space".to_string()]).expect("leader has entries");
         assert_eq!(view.prefix, "SPC");
         // `g` under the leader is a branch (the go-to group).
-        let g = view.entries.iter().find(|e| e.key == "g").expect("g present");
+        let g = view
+            .entries
+            .iter()
+            .find(|e| e.key == "g")
+            .expect("g present");
         assert!(g.is_branch);
         assert_eq!(g.label, "Go to");
         // `n` is a leaf (new note).
-        let n = view.entries.iter().find(|e| e.key == "n").expect("n present");
+        let n = view
+            .entries
+            .iter()
+            .find(|e| e.key == "n")
+            .expect("n present");
         assert!(!n.is_branch);
     }
 
@@ -883,6 +1031,10 @@ mod tests {
             derive_whichkey(&["space".to_string(), "g".to_string()]).expect("go group entries");
         assert_eq!(view.prefix, "SPC g");
         assert!(view.entries.iter().all(|e| !e.is_branch));
-        assert!(view.entries.iter().any(|e| e.key == "h" && e.label == "Home"));
+        assert!(
+            view.entries
+                .iter()
+                .any(|e| e.key == "h" && e.label == "Home")
+        );
     }
 }

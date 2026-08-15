@@ -84,7 +84,8 @@ impl Store {
              LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![i64::from(limit)], |row| row.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Drain marks: flip `notified` on for the given ids. Returns
@@ -126,9 +127,14 @@ mod tests {
         assert!(store.notify_unnotified(10).unwrap().is_empty());
 
         // New message → exactly one mark.
-        let marked = store.notify_observe(["<a>", "<b>", "<c>"], 200, 50).unwrap();
+        let marked = store
+            .notify_observe(["<a>", "<b>", "<c>"], 200, 50)
+            .unwrap();
         assert_eq!(marked, vec!["<c>".to_string()]);
-        assert_eq!(store.notify_unnotified(10).unwrap(), vec!["<c>".to_string()]);
+        assert_eq!(
+            store.notify_unnotified(10).unwrap(),
+            vec!["<c>".to_string()]
+        );
 
         // Re-observing doesn't re-mark.
         assert!(store.notify_observe(["<c>"], 300, 50).unwrap().is_empty());

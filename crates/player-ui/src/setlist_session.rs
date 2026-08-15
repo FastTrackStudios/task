@@ -35,8 +35,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(target_arch = "wasm32")]
 mod imp {
-    use task_ui_core::format::duration_mmss;
     use std::rc::Rc;
+    use task_ui_core::format::duration_mmss;
 
     use dioxus::prelude::*;
 
@@ -231,7 +231,11 @@ mod imp {
     /// (from the note's `songs:` frontmatter). Rendered above the note editor
     /// (embedded) or inside the full-screen setlist Experience.
     #[component]
-    pub fn SetlistPlayer(songs: Vec<String>, org: String, #[props(default)] fullscreen: bool) -> Element {
+    pub fn SetlistPlayer(
+        songs: Vec<String>,
+        org: String,
+        #[props(default)] fullscreen: bool,
+    ) -> Element {
         // Current song in the set. Mirrored FROM the engine's `ACTIVE_INDICES`
         // (published by `SessionEventBridge`), and set optimistically by the
         // navigation callbacks so the UI responds immediately.
@@ -274,12 +278,11 @@ mod imp {
                     // load in a setlist exactly like the single-song player.
                     let manifest = media::load_song_manifest(&org, slug).await?;
                     let tok = crate::media_grant::suffix(&org, slug).await;
-                    let chart = media::fetch_text(&format!(
-                        "/org/{org}/media/songs/{slug}/chart.kf{tok}"
-                    ))
-                        .await
-                        .ok()
-                        .filter(|t| !t.is_empty());
+                    let chart =
+                        media::fetch_text(&format!("/org/{org}/media/songs/{slug}/chart.kf{tok}"))
+                            .await
+                            .ok()
+                            .filter(|t| !t.is_empty());
                     out.push((slug.clone(), manifest, chart));
                 }
                 Ok::<Vec<LoadedSong>, String>(out)
@@ -544,8 +547,7 @@ mod imp {
                 let target = clamp_into_song(idx, target);
                 if let Some(client) = crate::session_engine::client() {
                     spawn(async move {
-                        architect::platform::sleep(std::time::Duration::from_secs_f64(delay))
-                            .await;
+                        architect::platform::sleep(std::time::Duration::from_secs_f64(delay)).await;
                         if let Err(e) = client.seek_to_time(idx, target).await {
                             tracing::warn!(
                                 "setlist: quantized seek_to_time({idx}, {target:.2}) failed: {e:?}"
@@ -725,7 +727,6 @@ mod imp {
         }
     }
 
-
     /// The ready setlist player: a **navigator** of the whole set (left) beside
     /// the current song's transport + **Session / Chart** tabs (right). All the
     /// right-hand views follow the current song via the shared session-ui
@@ -819,8 +820,7 @@ mod imp {
 
         // ── session-ui mixer adapters (guid = stem file ↔ index) ──────────────
         let stems_for_lookup = manifest.stems.clone();
-        let index_of =
-            move |guid: &str| stems_for_lookup.iter().position(|s| s.file == guid);
+        let index_of = move |guid: &str| stems_for_lookup.iter().position(|s| s.file == guid);
         let mixer_volume: Callback<(String, f64)> = use_callback({
             let index_of = index_of.clone();
             move |(guid, v): (String, f64)| {
@@ -864,7 +864,11 @@ mod imp {
                 .get(idx)
                 .map(|s| {
                     let ts = s.time_signature.unwrap_or(TimeSignature::COMMON_TIME);
-                    (s.tempo.unwrap_or(120.0), ts.numerator() as f64, ts.denominator() as u8)
+                    (
+                        s.tempo.unwrap_or(120.0),
+                        ts.numerator() as f64,
+                        ts.denominator() as u8,
+                    )
                 })
                 .unwrap_or((120.0, 4.0, 4))
         };
@@ -888,10 +892,8 @@ mod imp {
                         pending_jump.set(Some(target));
                         let delay = (boundary - p).max(0.0) + 0.3;
                         spawn(async move {
-                            architect::platform::sleep(
-                                std::time::Duration::from_secs_f64(delay),
-                            )
-                            .await;
+                            architect::platform::sleep(std::time::Duration::from_secs_f64(delay))
+                                .await;
                             if *pending_jump.peek() == Some(target) {
                                 pending_jump.set(None);
                             }
@@ -1054,9 +1056,10 @@ mod imp {
         } else {
             (Vec::new(), 0.0)
         };
-        let on_measure_click: Callback<MusicalPosition> = use_callback(move |mp: MusicalPosition| {
-            seek.call(measure_section_start + mp.measure as f64 * seconds_per_measure);
-        });
+        let on_measure_click: Callback<MusicalPosition> =
+            use_callback(move |mp: MusicalPosition| {
+                seek.call(measure_section_start + mp.measure as f64 * seconds_per_measure);
+            });
 
         // ── Full-screen Experience layout ────────────────────────────────────
         // Progress on top, playlist navigator on the left, a switchable
@@ -1073,7 +1076,12 @@ mod imp {
                 let sl = SETLIST_STRUCTURE.read();
                 sl.songs
                     .get(idx)
-                    .map(|s| (s.chart_text.clone().unwrap_or_default(), s.project_guid.clone()))
+                    .map(|s| {
+                        (
+                            s.chart_text.clone().unwrap_or_default(),
+                            s.project_guid.clone(),
+                        )
+                    })
                     .unwrap_or_default()
             };
             let chart_present = !chart_src.trim().is_empty();
@@ -1611,7 +1619,6 @@ mod imp {
             target.max(0.0)
         }
     }
-
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1625,7 +1632,11 @@ mod stub {
     use dioxus::prelude::*;
 
     #[component]
-    pub fn SetlistPlayer(songs: Vec<String>, org: String, #[props(default)] fullscreen: bool) -> Element {
+    pub fn SetlistPlayer(
+        songs: Vec<String>,
+        org: String,
+        #[props(default)] fullscreen: bool,
+    ) -> Element {
         let _ = (&songs, fullscreen);
         rsx! {
             div { class: "mx-auto max-w-3xl px-4 py-10",

@@ -11,8 +11,8 @@
 
 use std::collections::BTreeMap;
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Funnel;
+use dioxus::prelude::*;
 
 use crate::filters::{GraphFilterState, apply_filters};
 use crate::model::{GraphEdge, GraphNode, kind_label};

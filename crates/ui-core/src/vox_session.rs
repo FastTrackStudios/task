@@ -219,7 +219,11 @@ pub fn guest_http_base() -> Option<String> {
         .url
         .replacen("wss://", "https://", 1)
         .replacen("ws://", "http://", 1);
-    Some(http.trim_end_matches("/vox").trim_end_matches('/').to_owned())
+    Some(
+        http.trim_end_matches("/vox")
+            .trim_end_matches('/')
+            .to_owned(),
+    )
 }
 
 /// Derive `ws(s)://<host>/vox` from the page's own origin. `None` only

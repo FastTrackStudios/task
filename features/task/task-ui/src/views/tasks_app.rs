@@ -1,8 +1,8 @@
 //! Top-level Tasks app. Owns the view-mode toggle + the
 //! currently-open detail panel; everything else is dumb.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::TaskInfo;

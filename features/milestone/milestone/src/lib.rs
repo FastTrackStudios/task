@@ -31,9 +31,9 @@ pub mod parse;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod write;
 
+pub use milestone_proto::MilestoneEvent;
 pub use model::{Milestone, Status, Tags};
 pub use service::{MilestoneError, MilestoneService};
-pub use milestone_proto::MilestoneEvent;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use backend::MilestoneBackend;

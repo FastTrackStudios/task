@@ -11,8 +11,8 @@
 //! Write-back of bar edits to the `TaskService` is a follow-up — the
 //! component is storage-agnostic, so mutations currently stay local.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use view::gantt::store::default_state;
 use view::gantt::{Gantt, GanttLink, GanttTask};
 

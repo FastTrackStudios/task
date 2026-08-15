@@ -261,8 +261,18 @@ fn row_to_parts(row: &rusqlite::Row<'_>) -> rusqlite::Result<Parts> {
 }
 
 fn parts_to_entry(account: &str, p: Parts) -> Result<OutboxEntry> {
-    let (id, status, draft_json, origin, created_ms, updated_ms, retries, next_attempt_ms, last_error, sent_message_id) =
-        p;
+    let (
+        id,
+        status,
+        draft_json,
+        origin,
+        created_ms,
+        updated_ms,
+        retries,
+        next_attempt_ms,
+        last_error,
+        sent_message_id,
+    ) = p;
     let status = OutboxStatus::parse(&status)
         .ok_or_else(|| StoreError::Parse(format!("bad outbox status {status:?}")))?;
     let draft: Draft = serde_json::from_str(&draft_json)?;
@@ -312,13 +322,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
 
-        let e = store.outbox_submit("acct", &draft(), "user", 1_000).unwrap();
+        let e = store
+            .outbox_submit("acct", &draft(), "user", 1_000)
+            .unwrap();
         assert_eq!(e.status, OutboxStatus::PendingApproval);
         assert_eq!(e.account, "acct");
         assert_eq!(e.origin, "user");
 
         // Not claimable while pending.
-        assert!(store.outbox_claim_due("acct", 2_000, 10).unwrap().is_empty());
+        assert!(
+            store
+                .outbox_claim_due("acct", 2_000, 10)
+                .unwrap()
+                .is_empty()
+        );
 
         let e = store.outbox_approve("acct", e.id, 2_000).unwrap();
         assert_eq!(e.status, OutboxStatus::Approved);
@@ -327,7 +344,12 @@ mod tests {
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].status, OutboxStatus::Sending);
         // Second claim finds nothing — no double delivery.
-        assert!(store.outbox_claim_due("acct", 3_000, 10).unwrap().is_empty());
+        assert!(
+            store
+                .outbox_claim_due("acct", 3_000, 10)
+                .unwrap()
+                .is_empty()
+        );
 
         let e = store
             .outbox_mark_sent("acct", claimed[0].id, "<m@x>", 4_000)
@@ -362,7 +384,12 @@ mod tests {
         }
 
         // Budget exhausted — never claimed again, however late.
-        assert!(store.outbox_claim_due("acct", i64::MAX, 10).unwrap().is_empty());
+        assert!(
+            store
+                .outbox_claim_due("acct", i64::MAX, 10)
+                .unwrap()
+                .is_empty()
+        );
 
         // Re-approval resets the budget.
         let e = store.outbox_approve("acct", e.id, 999).unwrap();

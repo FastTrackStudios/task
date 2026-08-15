@@ -11,11 +11,6 @@ use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 
-use scheduling_proto::{
-    AvailabilitySchedule, Booking, BookingId, BookingStatus, Bookings, CalEvent, CalendarEvents,
-    DayPlan, DayPlans, DayTemplate, DayTemplateId, DayTemplates, EventType, EventTypeId,
-    EventTypes, NewBooking, ScheduleId, Schedules, SchedulingError, SlotQuery, Slots, TimeSlot,
-};
 use crate::audit::{self, BookingAuditEntry};
 use crate::parse::{
     parse_booking, parse_cal_event, parse_day_plan, parse_day_template, parse_event_type,
@@ -26,6 +21,11 @@ use crate::slots;
 use crate::write::{
     serialize_booking, serialize_cal_event, serialize_day_plan, serialize_day_template,
     serialize_event_type, serialize_schedule,
+};
+use scheduling_proto::{
+    AvailabilitySchedule, Booking, BookingId, BookingStatus, Bookings, CalEvent, CalendarEvents,
+    DayPlan, DayPlans, DayTemplate, DayTemplateId, DayTemplates, EventType, EventTypeId,
+    EventTypes, NewBooking, ScheduleId, Schedules, SchedulingError, SlotQuery, Slots, TimeSlot,
 };
 
 // Scheduling content lives split across the vault: config under

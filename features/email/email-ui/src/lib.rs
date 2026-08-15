@@ -18,9 +18,9 @@
 
 mod offline;
 
+use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use email_proto::{Account, Addr, Draft, Envelope, OutboxEntry, OutboxStatus};
-use architect_ui::prelude::*;
 
 use task_ui_core::feeds;
 use task_ui_core::orgs::{OrgMeta, OrgSelection};
@@ -77,7 +77,9 @@ pub fn EmailView() -> Element {
     let account_list: Vec<Account> = match &*accounts.read() {
         Some(Ok(list)) => list.clone(),
         Some(Err(_)) => Vec::new(),
-        None => slug().and_then(|s| offline::get_accounts(&s)).unwrap_or_default(),
+        None => slug()
+            .and_then(|s| offline::get_accounts(&s))
+            .unwrap_or_default(),
     };
     use_effect(move || {
         if selected_account.peek().is_none() {
@@ -123,9 +125,7 @@ pub fn EmailView() -> Element {
 
     let envelopes = use_resource(move || async move {
         match (slug(), selected_account()) {
-            (Some(s), Some(acct)) => {
-                fetch_email_envelopes(&s, &acct, &selected_folder(), 50).await
-            }
+            (Some(s), Some(acct)) => fetch_email_envelopes(&s, &acct, &selected_folder(), 50).await,
             _ => Ok(Vec::new()),
         }
     });
@@ -135,9 +135,7 @@ pub fn EmailView() -> Element {
     // error.
     let message = use_resource(move || async move {
         match (slug(), selected_account(), open_message()) {
-            (Some(s), Some(acct), Some(id)) => {
-                fetch_email_message(&s, &acct, &id).await.map(Some)
-            }
+            (Some(s), Some(acct), Some(id)) => fetch_email_message(&s, &acct, &id).await.map(Some),
             _ => Ok(None),
         }
     });
@@ -274,34 +272,28 @@ pub fn EmailView() -> Element {
     };
     // Same for the reading pane: a body we have read before paints
     // immediately instead of after the failed call times out.
-    let (open_msg, msg_err): (Option<email_proto::Message>, Option<String>) =
-        match &*message.read() {
-            Some(Ok(m)) => (m.clone(), None),
-            Some(Err(e)) => (None, Some(e.clone())),
-            None => (
-                match (slug(), current.clone(), open_message()) {
-                    (Some(s), Some(acct), Some(id)) => offline::get_message(&s, &acct, &id),
-                    _ => None,
-                },
-                None,
-            ),
-        };
+    let (open_msg, msg_err): (Option<email_proto::Message>, Option<String>) = match &*message.read()
+    {
+        Some(Ok(m)) => (m.clone(), None),
+        Some(Err(e)) => (None, Some(e.clone())),
+        None => (
+            match (slug(), current.clone(), open_message()) {
+                (Some(s), Some(acct), Some(id)) => offline::get_message(&s, &acct, &id),
+                _ => None,
+            },
+            None,
+        ),
+    };
     // Only a *cold* open shows the spinner — with a cached body already
     // painted, "Opening…" would replace readable content with a
     // placeholder.
-    let msg_loading =
-        open_message().is_some() && message.read().is_none() && open_msg.is_none();
+    let msg_loading = open_message().is_some() && message.read().is_none() && open_msg.is_none();
     // Destination folders for the two filing actions. Role first, then
     // a name match, so plain-Maildir backends that report no roles
     // still get working buttons (and none at all if the folder is
     // genuinely absent — the button hides rather than erroring).
-    let archive_folder = folder_for_role(
-        &folder_list,
-        email_proto::FolderRole::Archive,
-        "Archive",
-    );
-    let trash_folder =
-        folder_for_role(&folder_list, email_proto::FolderRole::Trash, "Trash");
+    let archive_folder = folder_for_role(&folder_list, email_proto::FolderRole::Archive, "Archive");
+    let trash_folder = folder_for_role(&folder_list, email_proto::FolderRole::Trash, "Trash");
     // message_id → (urgency, tags) from the derivation cache.
     let deriv_map: std::collections::HashMap<String, (Option<u8>, Vec<String>)> = {
         let mut map = std::collections::HashMap::new();
@@ -702,7 +694,11 @@ fn ComposeForm(
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
-    let title = if in_reply_to.is_some() { "Reply" } else { "New message" };
+    let title = if in_reply_to.is_some() {
+        "Reply"
+    } else {
+        "New message"
+    };
 
     let submit = move |approve_now: bool| {
         let slug = slug.clone();
@@ -828,10 +824,7 @@ fn OutboxRow(
 ) -> Element {
     let mut busy = use_signal(|| false);
     let (badge, badge_variant) = status_badge(status);
-    let approvable = matches!(
-        status,
-        OutboxStatus::PendingApproval | OutboxStatus::Failed
-    );
+    let approvable = matches!(status, OutboxStatus::PendingApproval | OutboxStatus::Failed);
     let cancellable = matches!(
         status,
         OutboxStatus::Draft
@@ -1051,22 +1044,23 @@ fn MessageReader(
 
     // One shape for every action: run it, surface the error inline,
     // and let the `EmailChange` stream refresh the lists.
-    let run = move |fut: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>,
-                    close_after: bool| {
-        spawn(async move {
-            busy.set(true);
-            action_err.set(None);
-            match fut.await {
-                Ok(()) => {
-                    if close_after {
-                        on_close.call(());
+    let run =
+        move |fut: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>,
+              close_after: bool| {
+            spawn(async move {
+                busy.set(true);
+                action_err.set(None);
+                match fut.await {
+                    Ok(()) => {
+                        if close_after {
+                            on_close.call(());
+                        }
                     }
+                    Err(e) => action_err.set(Some(e)),
                 }
-                Err(e) => action_err.set(Some(e)),
-            }
-            busy.set(false);
-        });
-    };
+                busy.set(false);
+            });
+        };
 
     rsx! {
         article {
@@ -1713,7 +1707,10 @@ mod tests {
             assert!(!is_unread(&env_with(&[seen])), "{seen} should read as seen");
         }
         for star in [r"\Flagged", "Flagged", "F"] {
-            assert!(is_flagged(&env_with(&[star])), "{star} should read as starred");
+            assert!(
+                is_flagged(&env_with(&[star])),
+                "{star} should read as starred"
+            );
         }
         assert!(is_unread(&env_with(&[])));
         assert!(!is_flagged(&env_with(&["S"])));
@@ -1735,9 +1732,8 @@ mod tests {
         // The reader renders this into a `pre`, never as markup — but
         // script/style CONTENT is not display text either, and leaking
         // it would dump JS source into the reading pane.
-        let got = strip_html(
-            "<style>.x{color:red}</style><p>Body</p><script>alert('xss')</script>",
-        );
+        let got =
+            strip_html("<style>.x{color:red}</style><p>Body</p><script>alert('xss')</script>");
         assert_eq!(got, "Body");
         assert!(!got.contains("alert"), "{got}");
         assert!(!got.contains("color:red"), "{got}");
@@ -1774,7 +1770,10 @@ mod tests {
             attachments: Vec::new(),
             references: Vec::new(),
         };
-        assert_eq!(message_body(&mk(Some("plain"), Some("<p>rich</p>"))), "plain");
+        assert_eq!(
+            message_body(&mk(Some("plain"), Some("<p>rich</p>"))),
+            "plain"
+        );
         assert_eq!(message_body(&mk(None, Some("<p>rich</p>"))), "rich");
         // A whitespace-only text part must not win over real HTML.
         assert_eq!(message_body(&mk(Some("   "), Some("<p>rich</p>"))), "rich");

@@ -191,15 +191,14 @@ impl ProductBackend {
         // set, off the async thread in one hop.
         let backend = self.clone();
         let account_owned = account.to_string();
-        let (envelopes, missing) = tokio::task::spawn_blocking(
-            move || -> Result<_, EmailSyncError> {
+        let (envelopes, missing) =
+            tokio::task::spawn_blocking(move || -> Result<_, EmailSyncError> {
                 let envelopes = backend.inner.sync.fetch_envelopes(
                     &account_owned,
                     "INBOX",
                     SeqRange::Recent(TRIAGE_SCAN),
                 )?;
-                let ids: Vec<String> =
-                    envelopes.iter().map(|e| e.message_id.clone()).collect();
+                let ids: Vec<String> = envelopes.iter().map(|e| e.message_id.clone()).collect();
                 let store = backend.store(&account_owned)?;
                 let mut store = store.lock().expect("store mutex");
 
@@ -212,17 +211,18 @@ impl ProductBackend {
                 } else {
                     // First sight: everything pre-existing is
                     // seen-for-notification; fire nothing.
-                    store.notify_baseline(id_refs, now_ms()).map_err(map_store)?;
+                    store
+                        .notify_baseline(id_refs, now_ms())
+                        .map_err(map_store)?;
                 }
 
                 let missing = store
                     .derivations_missing(&ids, DerivationKind::Urgency, DERIVATION_VERSION)
                     .map_err(map_store)?;
                 Ok((envelopes, missing))
-            },
-        )
-        .await
-        .map_err(|e| EmailSyncError::Internal(e.to_string()))??;
+            })
+            .await
+            .map_err(|e| EmailSyncError::Internal(e.to_string()))??;
 
         if missing.is_empty() {
             return Ok(());
@@ -257,7 +257,10 @@ impl ProductBackend {
             })
             .await
             .map_err(|e| EmailSyncError::Internal(e.to_string()))?;
-            let headers_raw = message.as_ref().map(|m| m.headers_raw.as_str()).unwrap_or("");
+            let headers_raw = message
+                .as_ref()
+                .map(|m| m.headers_raw.as_str())
+                .unwrap_or("");
             let body_text = message.as_ref().and_then(|m| m.body_text.as_deref());
 
             let sender_known = envelope
@@ -342,31 +345,32 @@ impl ProductBackend {
             let account_owned = account.to_string();
             let id = entry.id;
             let retries = entry.retries;
-            let updated = tokio::task::spawn_blocking(move || -> Result<OutboxEntry, EmailSyncError> {
-                let store = backend.store(&account_owned)?;
-                let mut store = store.lock().expect("store mutex");
-                match outcome {
-                    Ok(message_id) => store
-                        .outbox_mark_sent(&account_owned, id, &message_id, now_ms())
-                        .map_err(map_store),
-                    Err(err) => {
-                        let backoff = BASE_BACKOFF
-                            .saturating_mul(2u32.saturating_pow(retries))
-                            .min(MAX_BACKOFF);
-                        store
-                            .outbox_mark_failed(
-                                &account_owned,
-                                id,
-                                &err.to_string(),
-                                now_ms(),
-                                now_ms() + backoff.as_millis() as i64,
-                            )
-                            .map_err(map_store)
+            let updated =
+                tokio::task::spawn_blocking(move || -> Result<OutboxEntry, EmailSyncError> {
+                    let store = backend.store(&account_owned)?;
+                    let mut store = store.lock().expect("store mutex");
+                    match outcome {
+                        Ok(message_id) => store
+                            .outbox_mark_sent(&account_owned, id, &message_id, now_ms())
+                            .map_err(map_store),
+                        Err(err) => {
+                            let backoff = BASE_BACKOFF
+                                .saturating_mul(2u32.saturating_pow(retries))
+                                .min(MAX_BACKOFF);
+                            store
+                                .outbox_mark_failed(
+                                    &account_owned,
+                                    id,
+                                    &err.to_string(),
+                                    now_ms(),
+                                    now_ms() + backoff.as_millis() as i64,
+                                )
+                                .map_err(map_store)
+                        }
                     }
-                }
-            })
-            .await
-            .map_err(|e| EmailSyncError::Internal(e.to_string()))??;
+                })
+                .await
+                .map_err(|e| EmailSyncError::Internal(e.to_string()))??;
 
             if updated.status == OutboxStatus::Failed {
                 tracing::warn!(
@@ -422,7 +426,9 @@ impl EmailProduct for ProductBackend {
     fn approve(&self, account: &str, id: u64) -> Result<OutboxEntry, EmailSyncError> {
         let entry = {
             let mut store = self.store(account)?.lock().expect("store mutex");
-            store.outbox_approve(account, id, now_ms()).map_err(map_store)?
+            store
+                .outbox_approve(account, id, now_ms())
+                .map_err(map_store)?
         };
         self.publish_outbox(account, &entry);
         // Deliver promptly — don't wait out the poller interval.
@@ -433,7 +439,9 @@ impl EmailProduct for ProductBackend {
     fn cancel(&self, account: &str, id: u64) -> Result<OutboxEntry, EmailSyncError> {
         let entry = {
             let mut store = self.store(account)?.lock().expect("store mutex");
-            store.outbox_cancel(account, id, now_ms()).map_err(map_store)?
+            store
+                .outbox_cancel(account, id, now_ms())
+                .map_err(map_store)?
         };
         self.publish_outbox(account, &entry);
         Ok(entry)

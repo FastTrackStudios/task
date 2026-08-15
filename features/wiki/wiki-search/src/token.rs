@@ -124,10 +124,7 @@ fn make_snippet(body: &str, terms: &[String]) -> String {
         }
     }
     let snippet = best.map_or_else(
-        || {
-            
-            body.lines().find(|l| !l.is_empty()).unwrap_or("")
-        },
+        || body.lines().find(|l| !l.is_empty()).unwrap_or(""),
         |(_, l)| l,
     );
     let s: String = snippet.chars().take(200).collect();

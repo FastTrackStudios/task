@@ -156,9 +156,6 @@ mod tests {
             default_project_path("Mobile  Push!"),
             "Projects/mobile-push.md"
         );
-        assert_eq!(
-            default_project_path("!!!"),
-            "Projects/untitled-project.md"
-        );
+        assert_eq!(default_project_path("!!!"), "Projects/untitled-project.md");
     }
 }

@@ -19,12 +19,12 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+mod backend;
 mod entity;
 mod error;
 mod frontmatter;
 mod link;
 mod parse;
-mod backend;
 mod store;
 mod walker;
 

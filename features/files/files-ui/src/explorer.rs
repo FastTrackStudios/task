@@ -16,15 +16,15 @@
 //! the inspector *below* the listing — a note column has no width for
 //! a sidebar.
 
-use dioxus::prelude::*;
-use files_proto::{
-    BrowseEntry, ChainEntry, DivergenceChoice, DivergenceInfo, FileRootInfo, FilesEvent,
-};
 use architect_ui::lucide_dioxus::{
     Box as BoxIcon, File, FileText, Film, Folder, Image as ImageIcon, LayoutGrid, List as ListIcon,
     Music, PanelRight, X,
 };
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
+use files_proto::{
+    BrowseEntry, ChainEntry, DivergenceChoice, DivergenceInfo, FileRootInfo, FilesEvent,
+};
 use uuid::Uuid;
 
 use crate::{

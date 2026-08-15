@@ -77,7 +77,6 @@ impl Backend {
         })
     }
 
-
     /// Announce a committed issue change. Call only after the
     /// forge accepted the write — subscribers re-read on the
     /// event, so a speculative one shows state that never was.

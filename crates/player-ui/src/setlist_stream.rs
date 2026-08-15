@@ -14,9 +14,9 @@
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod imp {
-    use task_ui_core::format::duration_mmss;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use task_ui_core::format::duration_mmss;
 
     use dioxus::prelude::*;
     use web_sys::HtmlAudioElement;
@@ -52,8 +52,7 @@ pub(crate) mod imp {
             // Colocated `song` folder (song.md) is authoritative; the legacy
             // manifest.json is only a fallback for songs not yet migrated, so
             // migrated songs can drop it (#57 manifest retirement).
-            let resolved = match crate::song_session::imp::fetch_kf_manifest(org, slug).await
-            {
+            let resolved = match crate::song_session::imp::fetch_kf_manifest(org, slug).await {
                 Ok(m) => Ok(m),
                 Err(_) => crate::song_session::imp::fetch_manifest(&url).await,
             };
@@ -125,7 +124,8 @@ pub(crate) mod imp {
         headless: bool,
     ) -> Element {
         // The live element (one at a time). Rc'd so callbacks share it.
-        let element: Rc<RefCell<Option<HtmlAudioElement>>> = use_hook(|| Rc::new(RefCell::new(None)));
+        let element: Rc<RefCell<Option<HtmlAudioElement>>> =
+            use_hook(|| Rc::new(RefCell::new(None)));
         let current = use_signal(|| None::<usize>);
         let playing = use_signal(|| false);
         let position = use_signal(|| 0.0f64);
@@ -149,7 +149,9 @@ pub(crate) mod imp {
                 let Some(Ok(list)) = &*tracks.read_unchecked() else {
                     return;
                 };
-                let Some(track) = list.get(i).cloned() else { return };
+                let Some(track) = list.get(i).cloned() else {
+                    return;
+                };
                 let Some(file) = track.reference.clone() else {
                     tracing::warn!("stream: `{}` has no reference stem", track.slug);
                     return;

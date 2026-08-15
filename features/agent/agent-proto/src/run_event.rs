@@ -40,7 +40,10 @@ pub enum RunEvent {
     /// activity" display.
     Activity(String),
     /// The verify command returned.
-    Verdict { passed: bool, exit_code: Option<i32> },
+    Verdict {
+        passed: bool,
+        exit_code: Option<i32>,
+    },
     /// The run asked a human something and is now blocked.
     Blocked { question_id: String },
 }

@@ -1,9 +1,9 @@
 //! Top toolbar — zoom + filter input + sort dropdown + scroll-to
 //! buttons.
 
+use architect_ui::prelude::*;
 use dioxus::document;
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 
 use crate::scales::x_for_date;
 use crate::store::{GanttEvent, SortDir, SortKey};

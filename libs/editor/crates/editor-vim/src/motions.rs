@@ -472,7 +472,11 @@ fn end_prev_word(state: &EditorState, pos: usize, n: usize) -> usize {
         if p == 0 {
             break;
         }
-        let started_on = if p < bytes.len() { classify(bytes[p]) } else { 0 };
+        let started_on = if p < bytes.len() {
+            classify(bytes[p])
+        } else {
+            0
+        };
         p -= 1;
         // If we're still inside the word we started in, back out
         // of it first.

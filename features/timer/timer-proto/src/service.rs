@@ -56,9 +56,7 @@ use crate::session::{WorkSession, WorkSessionFilter};
 ///   [`WorkSession`] — replace (or insert) the row with a matching
 ///   `id`. Idempotent re-application is harmless.
 /// - [`TimerEvent::Deleted`] — remove the row with that `id`.
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ::facet::Facet,
-)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ::facet::Facet)]
 #[repr(u8)]
 // Upserted carries the full WorkSession by design (idempotent
 // full-state payloads) — same trade-off as `task_proto::TaskEvent`.
@@ -160,10 +158,7 @@ pub trait TimerService {
     ) -> Result<ProjectMemberRate, TimerError>;
 
     /// Every org-level member rate configured for `org_id`.
-    async fn list_org_member_rates(
-        &self,
-        org_id: Uuid,
-    ) -> Result<Vec<OrgMemberRate>, TimerError>;
+    async fn list_org_member_rates(&self, org_id: Uuid) -> Result<Vec<OrgMemberRate>, TimerError>;
 
     /// Every per-member rate set on `project_id`.
     async fn list_project_member_rates(

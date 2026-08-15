@@ -1,8 +1,8 @@
 //! Blocker / relates-to chips. Titles are pre-resolved by the
 //! page layer; unresolved ids degrade to short-id chips.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{Link as LinkIcon, OctagonAlert};
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::views::detail_full::{LinkedTaskRef, SectionLabel, short_id};

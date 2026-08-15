@@ -127,8 +127,16 @@ impl Dav {
             .timeout(Duration::from_secs(30))
             .redirects(0) // we follow the well-known redirect by hand
             .build();
-        let auth = format!("Basic {}", base64_encode(format!("{}:{}", account.username, account.password).as_bytes()));
-        Ok(Self { agent, origin, base, auth })
+        let auth = format!(
+            "Basic {}",
+            base64_encode(format!("{}:{}", account.username, account.password).as_bytes())
+        );
+        Ok(Self {
+            agent,
+            origin,
+            base,
+            auth,
+        })
     }
 
     /// Resolve a (possibly relative) href against this account's origin.
@@ -145,7 +153,13 @@ impl Dav {
 
     /// Issue a request with a body, returning the response body text. A
     /// single redirect (well-known) is followed. Non-2xx → `Sync` error.
-    fn send(&self, method: &str, url: &str, depth: &str, body: &str) -> Result<String, ContactsError> {
+    fn send(
+        &self,
+        method: &str,
+        url: &str,
+        depth: &str,
+        body: &str,
+    ) -> Result<String, ContactsError> {
         let mut target = url.to_string();
         for _ in 0..4 {
             let resp = self
@@ -194,17 +208,19 @@ impl Dav {
         let xml = self
             .send("PROPFIND", &well_known, "0", principal_body)
             .or_else(|_| self.send("PROPFIND", &self.base, "0", principal_body))?;
-        let principal = first_href_for(&xml, "current-user-principal").ok_or_else(|| ContactsError::Sync {
-            message: "no current-user-principal in server response".into(),
-        })?;
+        let principal =
+            first_href_for(&xml, "current-user-principal").ok_or_else(|| ContactsError::Sync {
+                message: "no current-user-principal in server response".into(),
+            })?;
 
         // addressbook-home-set
         let home_body = r#"<?xml version="1.0" encoding="utf-8"?>
 <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav"><d:prop><c:addressbook-home-set/></d:prop></d:propfind>"#;
         let xml = self.send("PROPFIND", &self.absolute(&principal), "0", home_body)?;
-        let home = first_href_for(&xml, "addressbook-home-set").ok_or_else(|| ContactsError::Sync {
-            message: "no addressbook-home-set in server response".into(),
-        })?;
+        let home =
+            first_href_for(&xml, "addressbook-home-set").ok_or_else(|| ContactsError::Sync {
+                message: "no addressbook-home-set in server response".into(),
+            })?;
 
         // list collections; keep the ones whose resourcetype is addressbook
         let list_body = r#"<?xml version="1.0" encoding="utf-8"?>
@@ -249,7 +265,10 @@ fn addressbook_hrefs(xml: &str) -> Vec<String> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for resp in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "response") {
+    for resp in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "response")
+    {
         let is_book = resp
             .descendants()
             .any(|n| n.is_element() && n.tag_name().name() == "addressbook");
@@ -274,7 +293,10 @@ fn parse_multistatus(xml: &str) -> Vec<Card> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for resp in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "response") {
+    for resp in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "response")
+    {
         let href = resp
             .children()
             .find(|c| c.is_element() && c.tag_name().name() == "href")
@@ -356,11 +378,19 @@ pub fn vcard_to_contact(vcard: &str, etag: &str, source: &str, account: &str) ->
     // N = Family;Given;Additional;Prefixes;Suffixes
     if let Some(n) = first("N") {
         let parts: Vec<&str> = n.split(';').collect();
-        c.family_name = parts.first().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        c.given_name = parts.get(1).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        c.family_name = parts
+            .first()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        c.given_name = parts
+            .get(1)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
     }
     // ORG = Company;Unit;… → first component.
-    c.organization = first("ORG").map(|o| o.split(';').next().unwrap_or("").trim().to_string()).filter(|s| !s.is_empty());
+    c.organization = first("ORG")
+        .map(|o| o.split(';').next().unwrap_or("").trim().to_string())
+        .filter(|s| !s.is_empty());
     c.title = first("TITLE");
     c.notes = first("NOTE");
 
@@ -385,7 +415,11 @@ pub fn vcard_to_contact(vcard: &str, etag: &str, source: &str, account: &str) ->
     // ADR = pobox;ext;street;locality;region;postcode;country → the
     // non-empty components, one per line.
     if let Some(adr) = first("ADR") {
-        let lines: Vec<String> = adr.split(';').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let lines: Vec<String> = adr
+            .split(';')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         if !lines.is_empty() {
             c.address = Some(lines.join("\n"));
         }
@@ -470,8 +504,16 @@ fn base64_encode(input: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[(n >> 18 & 63) as usize] as char);
         out.push(TABLE[(n >> 12 & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6 & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -510,7 +552,13 @@ END:VCARD\r\n";
 
     #[test]
     fn maps_vcard_3() {
-        let c = vcard_to_contact(VCARD_3, "\"etag-abc\"", ContactSource::NEXTCLOUD, "Personal").unwrap();
+        let c = vcard_to_contact(
+            VCARD_3,
+            "\"etag-abc\"",
+            ContactSource::NEXTCLOUD,
+            "Personal",
+        )
+        .unwrap();
         assert_eq!(c.full_name, "Ada Lovelace");
         assert_eq!(c.uid.as_deref(), Some("urn:uuid:aaaa-3"));
         assert_eq!(c.etag.as_deref(), Some("etag-abc"));
@@ -523,7 +571,10 @@ END:VCARD\r\n";
         assert_eq!(c.email_list(), vec!["ada@example.com", "ada.l@work.com"]);
         assert_eq!(c.phone_list(), vec!["+1 555 0100"]);
         assert_eq!(c.group_list(), vec!["Engineering", "Friends"]);
-        assert_eq!(c.address.as_deref(), Some("12 Analytical Way\nLondon\nEC1\nUK"));
+        assert_eq!(
+            c.address.as_deref(),
+            Some("12 Analytical Way\nLondon\nEC1\nUK")
+        );
         assert_eq!(c.birthday.as_deref(), Some("1815-12-10"));
         assert_eq!(c.notes.as_deref(), Some("First programmer.\nLoved by all."));
         assert_eq!(c.photo_url.as_deref(), Some("https://example.com/ada.jpg"));
@@ -553,14 +604,23 @@ END:VCARD\r\n";
     #[test]
     fn base64_matches_known_vectors() {
         assert_eq!(base64_encode(b"user:pass"), "dXNlcjpwYXNz");
-        assert_eq!(base64_encode(b"Aladdin:open sesame"), "QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+        assert_eq!(
+            base64_encode(b"Aladdin:open sesame"),
+            "QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+        );
         assert_eq!(base64_encode(b""), "");
     }
 
     #[test]
     fn origin_extraction() {
-        assert_eq!(origin_of("https://cloud.example.com/remote.php/dav").as_deref(), Some("https://cloud.example.com"));
-        assert_eq!(origin_of("https://host:8443/x").as_deref(), Some("https://host:8443"));
+        assert_eq!(
+            origin_of("https://cloud.example.com/remote.php/dav").as_deref(),
+            Some("https://cloud.example.com")
+        );
+        assert_eq!(
+            origin_of("https://host:8443/x").as_deref(),
+            Some("https://host:8443")
+        );
         assert_eq!(origin_of("not a url"), None);
     }
 

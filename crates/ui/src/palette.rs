@@ -20,8 +20,8 @@
 //! The omni-picker ([`OmniPicker`], Ctrl+O) is the Notes section on its
 //! own: uncapped, fuzzy over the whole vault.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{FileText, Search};
+use dioxus::prelude::*;
 use nucleo_matcher::{
     Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
@@ -434,7 +434,10 @@ pub fn OmniPicker() -> Element {
         let ranked = ranked.clone();
         move |i: usize| {
             if let Some((_, path, org)) = ranked.get(i) {
-                nav.push(Route::VaultRoute { path: path.clone(), org: org.clone() });
+                nav.push(Route::VaultRoute {
+                    path: path.clone(),
+                    org: org.clone(),
+                });
             }
             close();
         }

@@ -7,7 +7,6 @@
 //! stored, so `list_messages` returns a real conversation (Codex
 //! only accumulates assistant deltas today).
 
-
 use agent_proto::error::AgentError;
 use agent_proto::event::{AgentEvent, AgentEventEnvelope, SessionEvents};
 use agent_proto::message::{ContentBlock, Message, Role};

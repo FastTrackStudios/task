@@ -56,12 +56,11 @@ pub(crate) mod imp {
         Song as SessionSong, SongChartHydration, SongId,
     };
     use session_ui::components::{
-        MixerView, ProgressSection, SectionProgressBar, SongProgressBar,
-        TransportControlBar,
+        MixerView, ProgressSection, SectionProgressBar, SongProgressBar, TransportControlBar,
     };
     use session_ui::{
-        PLAYBACK_STATE, SETLIST_STRUCTURE, SONG_CHARTS, SONG_TRANSPORT,
-        TransportState, apply_active_indices,
+        PLAYBACK_STATE, SETLIST_STRUCTURE, SONG_CHARTS, SONG_TRANSPORT, TransportState,
+        apply_active_indices,
     };
 
     use crate::session_chart_pane::SessionChartPane;
@@ -405,7 +404,10 @@ pub(crate) mod imp {
     /// track is the audible baseline.
     pub(crate) fn stem_spec_from_path(path: &str) -> StemSpec {
         let filename = path.rsplit('/').next().unwrap_or(path);
-        let stem = filename.rsplit_once('.').map(|(s, _)| s).unwrap_or(filename);
+        let stem = filename
+            .rsplit_once('.')
+            .map(|(s, _)| s)
+            .unwrap_or(filename);
         // Drop a leading `NN-` ordering prefix.
         let core = stem
             .split_once('-')
@@ -445,7 +447,9 @@ pub(crate) mod imp {
             || has_word(&["key"])
         {
             "Keys"
-        } else if has(&["drum", "perc", "kick", "snare", "hat", "cymbal", "tom", "shaker"]) {
+        } else if has(&[
+            "drum", "perc", "kick", "snare", "hat", "cymbal", "tom", "shaker",
+        ]) {
             "Drums"
         } else if has(&["vocal", "vox", "bgv", "choir", "harm"]) || has_word(&["lead", "bv"]) {
             "Vocals"
@@ -455,7 +459,11 @@ pub(crate) mod imp {
             "Stems"
         };
         StemSpec {
-            name: if name.is_empty() { core.to_string() } else { name },
+            name: if name.is_empty() {
+                core.to_string()
+            } else {
+                name
+            },
             group: Some(group.to_string()),
             file: path.to_string(),
             default_muted: is_guide,
@@ -555,10 +563,7 @@ pub(crate) mod imp {
             Ok(m) => Ok(m),
             Err(_) => {
                 let tok = crate::media_grant::suffix(org, slug).await;
-                fetch_manifest(&format!(
-                    "/org/{org}/media/songs/{slug}/manifest.json{tok}"
-                ))
-                .await
+                fetch_manifest(&format!("/org/{org}/media/songs/{slug}/manifest.json{tok}")).await
             }
         }
     }
@@ -584,8 +589,8 @@ pub(crate) mod imp {
         title: &str,
         front: &task_ui_core::frontmatter::SongFront,
     ) -> Result<(Manifest, Vec<StemSource>), String> {
-        use attachments_proto::ContentHashArg;
         use crate::vox_media_source::mse_supported;
+        use attachments_proto::ContentHashArg;
 
         let media = crate::media_client(org).await.ok();
         let mut sources = Vec::with_capacity(front.stems.len());
@@ -669,10 +674,7 @@ pub(crate) mod imp {
                 StemSource::Url(url) => HtmlAudioElement::new_with_src(url)
                     .map_err(|e| format!("audio element: {e:?}"))?,
                 StemSource::Vox { org, hash } => {
-                    crate::vox_media_source::audio_element_over_vox(
-                        org.clone(),
-                        hash.clone(),
-                    )?
+                    crate::vox_media_source::audio_element_over_vox(org.clone(), hash.clone())?
                 }
             };
             el.set_preload("auto");
@@ -681,7 +683,9 @@ pub(crate) mod imp {
             let node = ctx
                 .create_media_element_source(&el)
                 .map_err(|e| format!("media element source: {e:?}"))?;
-            let gain = ctx.create_gain().map_err(|e| format!("create_gain: {e:?}"))?;
+            let gain = ctx
+                .create_gain()
+                .map_err(|e| format!("create_gain: {e:?}"))?;
             // Deref coercion: &MediaElementAudioSourceNode / &GainNode → &AudioNode.
             let _ = node.connect_with_audio_node(&gain);
             let _ = gain.connect_with_audio_node(&dest);
@@ -882,7 +886,9 @@ pub(crate) mod imp {
         let measure = (beats_total / num).floor();
         let beat_in_measure = beats_total - measure * num;
         let beat = beat_in_measure.floor();
-        let subdivision = ((beat_in_measure - beat) * 1000.0).round().clamp(0.0, 999.0);
+        let subdivision = ((beat_in_measure - beat) * 1000.0)
+            .round()
+            .clamp(0.0, 999.0);
         MusicalPosition::new(measure as i32, beat as i32, subdivision as i32)
     }
 
@@ -981,7 +987,9 @@ pub(crate) mod imp {
                 let base = format!("/org/{org}/media/songs/{slug}");
                 let tok = crate::media_grant::suffix(&org, &slug).await;
                 fetch_text(&format!("{base}/song.md{tok}")).await.is_ok()
-                    || fetch_text(&format!("{base}/manifest.json{tok}")).await.is_ok()
+                    || fetch_text(&format!("{base}/manifest.json{tok}"))
+                        .await
+                        .is_ok()
             }
         }));
 
@@ -1051,8 +1059,7 @@ pub(crate) mod imp {
                 // resolver) is the last resort. Refs #56/#57/#59.
                 // Every stem URL below carries this song's grant.
                 let tok = crate::media_grant::suffix(&org, &slug).await;
-                let manifest_url =
-                    format!("/org/{org}/media/songs/{slug}/manifest.json{tok}");
+                let manifest_url = format!("/org/{org}/media/songs/{slug}/manifest.json{tok}");
                 let url_sources = |m: &Manifest| -> Vec<StemSource> {
                     m.stems
                         .iter()
@@ -1400,7 +1407,10 @@ pub(crate) mod imp {
 
         let musical = musical_at(count_in + pos, bpm, ts_num);
         let transport = TransportState {
-            position: Position::from_time_and_musical(PositionInSeconds::from_seconds(pos), musical),
+            position: Position::from_time_and_musical(
+                PositionInSeconds::from_seconds(pos),
+                musical,
+            ),
             bpm,
             time_sig_num: ts_num as i32,
             time_sig_denom: ts_denom as i32,

@@ -358,22 +358,22 @@ fn consume_recurrence_phrase(
         }
 
         let unit = &tokens[j];
-        let parsed = if unit.eq_ignore_ascii_case("weekday") || unit.eq_ignore_ascii_case("weekdays")
-        {
-            Some((
-                "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR".to_owned(),
-                "scheduled",
-                Some(next_weekday_or_today(today)),
-            ))
-        } else if let Some(w) = weekday_token(unit) {
-            Some((
-                format!("FREQ=WEEKLY;BYDAY={}", rrule_day(w)),
-                "scheduled",
-                Some(next_weekday(today, w)),
-            ))
-        } else {
-            freq_token(unit).map(|freq| (format!("FREQ={freq}"), "completion", Some(today)))
-        };
+        let parsed =
+            if unit.eq_ignore_ascii_case("weekday") || unit.eq_ignore_ascii_case("weekdays") {
+                Some((
+                    "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR".to_owned(),
+                    "scheduled",
+                    Some(next_weekday_or_today(today)),
+                ))
+            } else if let Some(w) = weekday_token(unit) {
+                Some((
+                    format!("FREQ=WEEKLY;BYDAY={}", rrule_day(w)),
+                    "scheduled",
+                    Some(next_weekday(today, w)),
+                ))
+            } else {
+                freq_token(unit).map(|freq| (format!("FREQ={freq}"), "completion", Some(today)))
+            };
 
         let Some((base, anchor, start)) = parsed else {
             // `every` followed by something we don't understand —

@@ -204,8 +204,7 @@ pub fn use_vault_fetch_worker(
                     // pass.
                     let (tx, osis) = rest.split_once('/').unwrap_or((DEFAULT_TRANSLATION, rest));
                     Ok(
-                        match scripture_ui::fetch_comparison(&slug, osis, vec![tx.to_owned()])
-                            .await
+                        match scripture_ui::fetch_comparison(&slug, osis, vec![tx.to_owned()]).await
                         {
                             Ok(cv) => {
                                 let joined = cv

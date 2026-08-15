@@ -201,7 +201,10 @@ mod tests {
             envelopes_key("org", "me@x.com", "INBOX"),
             envelopes_key("org", "me@x.com", "Archive")
         );
-        assert_ne!(bodies_key("orgA", "me@x.com"), bodies_key("orgB", "me@x.com"));
+        assert_ne!(
+            bodies_key("orgA", "me@x.com"),
+            bodies_key("orgB", "me@x.com")
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -224,7 +227,10 @@ mod tests {
 
         put_message(&slug, "acct", &msg("a"));
         assert_eq!(
-            get_message(&slug, "acct", "a").unwrap().body_text.as_deref(),
+            get_message(&slug, "acct", "a")
+                .unwrap()
+                .body_text
+                .as_deref(),
             Some("body a")
         );
         assert!(get_message(&slug, "acct", "never").is_none());

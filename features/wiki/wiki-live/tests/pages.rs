@@ -3,9 +3,9 @@
 
 use std::path::PathBuf;
 
+use wiki_live::WikiBackend;
 use wiki_proto::WikiError;
 use wiki_proto::service::Pages;
-use wiki_live::WikiBackend;
 
 /// Fresh scratch wiki root + backend. No tempfile dep in this
 /// crate — a pid+counter-suffixed dir under the target tmpdir is
@@ -13,10 +13,8 @@ use wiki_live::WikiBackend;
 fn scratch() -> (WikiBackend, PathBuf, DirGuard) {
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let root = std::env::temp_dir().join(format!(
-        "wiki-live-pages-test-{}-{n}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("wiki-live-pages-test-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let backend = WikiBackend::single("default", root.clone()).expect("backend");
     (backend, root.clone(), DirGuard(root))
@@ -103,7 +101,13 @@ fn list_excludes_raw_state_media_and_read_rejects_them() {
 #[test]
 fn path_traversal_and_non_markdown_rejected() {
     let (b, _root, _g) = scratch();
-    for bad in ["../escape.md", "a/../../escape.md", "/abs.md", "note.txt", ""] {
+    for bad in [
+        "../escape.md",
+        "a/../../escape.md",
+        "/abs.md",
+        "note.txt",
+        "",
+    ] {
         assert!(
             b.write_page("default", bad, "x", "").is_err(),
             "`{bad}` must be rejected"

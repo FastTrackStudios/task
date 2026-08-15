@@ -66,28 +66,30 @@ impl LocationsService for Store {
     fn rename(&self, id: &str, new_path: &str) -> Result<Location, LocationsError> {
         let uuid =
             Uuid::parse_str(id).map_err(|e| LocationsError::BadRequest(format!("id: {e}")))?;
-        self.inner.with_vault_mut(|guard| -> Result<Location, LocationsError> {
-            let idx = guard
-                .pages
-                .iter()
-                .position(|p| {
-                    looks_like_location(p) && parse_page(p).map(|l| l.id == uuid).unwrap_or(false)
-                })
-                .ok_or_else(|| LocationsError::NotFound(id.to_string()))?;
-            if guard.pages.iter().any(|p| p.rel_path == new_path) {
-                return Err(LocationsError::AlreadyExists(new_path.to_string()));
-            }
-            let old_path = guard.pages[idx].rel_path.clone();
-            let raw = guard.pages[idx].raw.clone();
-            vault::delete_page(&mut *guard, &old_path).map_err(map_io)?;
-            vault::create_page(&mut *guard, new_path, raw).map_err(map_io)?;
-            let new_page = guard
-                .pages
-                .iter()
-                .find(|p| p.rel_path == new_path)
-                .ok_or_else(|| LocationsError::Io("rename: page missing post-write".into()))?;
-            parse_page(new_page).map_err(|e| LocationsError::Io(e.to_string()))
-        })
+        self.inner
+            .with_vault_mut(|guard| -> Result<Location, LocationsError> {
+                let idx = guard
+                    .pages
+                    .iter()
+                    .position(|p| {
+                        looks_like_location(p)
+                            && parse_page(p).map(|l| l.id == uuid).unwrap_or(false)
+                    })
+                    .ok_or_else(|| LocationsError::NotFound(id.to_string()))?;
+                if guard.pages.iter().any(|p| p.rel_path == new_path) {
+                    return Err(LocationsError::AlreadyExists(new_path.to_string()));
+                }
+                let old_path = guard.pages[idx].rel_path.clone();
+                let raw = guard.pages[idx].raw.clone();
+                vault::delete_page(&mut *guard, &old_path).map_err(map_io)?;
+                vault::create_page(&mut *guard, new_path, raw).map_err(map_io)?;
+                let new_page = guard
+                    .pages
+                    .iter()
+                    .find(|p| p.rel_path == new_path)
+                    .ok_or_else(|| LocationsError::Io("rename: page missing post-write".into()))?;
+                parse_page(new_page).map_err(|e| LocationsError::Io(e.to_string()))
+            })
     }
 
     fn delete(&self, id: &str) -> Result<(), LocationsError> {

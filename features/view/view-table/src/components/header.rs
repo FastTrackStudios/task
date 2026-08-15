@@ -8,8 +8,8 @@
 //!
 //! The filter row sits directly below, one `<input>` per column.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{ChevronDown, ChevronUp};
+use dioxus::prelude::*;
 
 use crate::store::TableMutation;
 use crate::types::{Column, ColumnId, SortDir};

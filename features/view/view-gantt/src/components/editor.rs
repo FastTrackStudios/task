@@ -5,9 +5,9 @@
 //! [`GanttEvent`] so consumers see the same event stream as drag /
 //! resize.
 
+use architect_ui::prelude::*;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 
 use crate::store::GanttEvent;
 use crate::types::{TaskId, TaskType};

@@ -7,8 +7,8 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use editor_state::Doc;
 use editor_lsp::{DiagnosticsStore, LspClient, ServerMessage, Severity, Transport, Uri};
+use editor_state::Doc;
 
 /// Spawn rust-analyzer on a throwaway cargo project containing a
 /// type error, drive the didOpen flow, and wait for a non-empty

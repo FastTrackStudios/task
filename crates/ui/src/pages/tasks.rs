@@ -20,9 +20,9 @@
 //! live clock, and a complete button — the checkbox-timer made
 //! spatial. Idle (nothing running) renders no bar at all.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{Plus, SlidersHorizontal};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use task_ui::{QuickAdd, TaskInfo as UiTask, TaskMutation, TasksApp};
 
 use crate::chrome::{

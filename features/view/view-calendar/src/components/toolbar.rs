@@ -1,11 +1,11 @@
 //! Top toolbar — prev/next/today buttons, current range label,
 //! view-mode switch (Month/Week/Day), and a new-event button.
 
+use architect_ui::lucide_dioxus::{ChevronLeft, ChevronRight, Plus};
+use architect_ui::prelude::*;
 use chrono::{Datelike, NaiveDate, Weekday};
 use cycle::{FirstWeekRule, cycle_for_date, generate_year};
 use dioxus::prelude::*;
-use architect_ui::lucide_dioxus::{ChevronLeft, ChevronRight, Plus};
-use architect_ui::prelude::*;
 
 use crate::time::{week_days, week_start};
 use crate::types::ViewMode;

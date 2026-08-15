@@ -16,11 +16,11 @@
 //! Mobile-first, same shape as [`super::cook_mode`]: full-screen sheet,
 //! fat tap targets, a phase rail that ticks off as you go.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     Check, ChevronLeft, CirclePlus, ListChecks, Plus, RotateCcw, ShoppingCart, Store, X,
 };
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use mealplan_proto::{EntryStatus, ShoppingEntry, ShoppingList};
 
 use crate::orgs::{OrgMeta, OrgSelection};

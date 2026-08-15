@@ -2,8 +2,8 @@
 //! encrypted, come back decrypted, and upsert is keyed on
 //! `(home_user_id, remote_url, remote_slug)`.
 
-use identity::{Migrator, Store};
 use identity::store::LinkRecord;
+use identity::{Migrator, Store};
 use sea_orm::{ConnectionTrait, Database, Statement};
 use sea_orm_migration::MigratorTrait;
 use uuid::Uuid;

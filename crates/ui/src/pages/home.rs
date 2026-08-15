@@ -17,9 +17,11 @@
 //! task store, so the board and the dashboard can't disagree.
 
 use crate::format::status_variant;
-use dioxus::prelude::*;
-use architect_ui::lucide_dioxus::{ArrowRight, CalendarDays, CircleCheck, NotebookPen, Search, Zap};
+use architect_ui::lucide_dioxus::{
+    ArrowRight, CalendarDays, CircleCheck, NotebookPen, Search, Zap,
+};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use project_proto::ProjectInfo;
 use task_proto::TaskInfo as DbTask;
 

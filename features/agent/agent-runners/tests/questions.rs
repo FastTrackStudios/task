@@ -128,10 +128,17 @@ async fn answering_twice_is_a_conflict_not_an_overwrite() {
     s.answer_question(q.id.clone(), answer("table"))
         .await
         .unwrap();
-    assert!(s.answer_question(q.id.clone(), answer("column")).await.is_err());
+    assert!(
+        s.answer_question(q.id.clone(), answer("column"))
+            .await
+            .is_err()
+    );
 
     let stored = s.question_ticket(q.id).await;
-    assert!(stored.is_ok(), "the original must survive the second attempt");
+    assert!(
+        stored.is_ok(),
+        "the original must survive the second attempt"
+    );
 }
 
 #[tokio::test]
@@ -173,7 +180,10 @@ async fn the_run_that_raised_it_is_recorded_so_the_answer_can_resume() {
 
     assert_eq!(q.session_id, run.to_string());
     assert_eq!(
-        s.list_pending_questions(run.to_string()).await.unwrap().len(),
+        s.list_pending_questions(run.to_string())
+            .await
+            .unwrap()
+            .len(),
         1
     );
     assert!(

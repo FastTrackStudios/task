@@ -88,7 +88,11 @@ async fn registering_twice_updates_rather_than_duplicating() {
     s.upsert_backend(again).await.unwrap();
 
     let listed = s.list_backends().await.unwrap();
-    assert_eq!(listed.len(), 1, "a re-registering runner must not duplicate");
+    assert_eq!(
+        listed.len(),
+        1,
+        "a re-registering runner must not duplicate"
+    );
     assert_eq!(listed[0].runner.max_concurrent, 8);
 }
 
@@ -113,7 +117,9 @@ async fn a_capability_outside_the_closed_vocabulary_is_refused() {
     let mut bad = battleship();
     // `Repo("")` cannot be re-parsed from its own wire form, so it
     // is not in the vocabulary.
-    bad.runner.capabilities.push(Capability::Repo(String::new()));
+    bad.runner
+        .capabilities
+        .push(Capability::Repo(String::new()));
 
     let err = s.upsert_backend(bad).await.unwrap_err();
     assert!(
@@ -160,8 +166,9 @@ async fn a_heartbeat_makes_a_runner_healthy_and_routable() {
 async fn a_lapsed_heartbeat_goes_stale_and_stops_being_offered_work() {
     let s = store().await;
     let mut b = battleship();
-    b.last_seen =
-        Some(Utc::now() - ChronoDuration::from_std(STALE_AFTER).unwrap() - ChronoDuration::seconds(1));
+    b.last_seen = Some(
+        Utc::now() - ChronoDuration::from_std(STALE_AFTER).unwrap() - ChronoDuration::seconds(1),
+    );
     s.upsert_backend(b).await.unwrap();
 
     let health = s.backend_health("thebattleship".into()).await.unwrap();

@@ -25,9 +25,7 @@ use crate::recall_card::RecallCard;
 ///   review-reschedule, and archive all surface as upserts (they are
 ///   all `upsert_card` on the wire).
 /// - [`RecallEvent::Deleted`] — remove the row with that `id`.
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, facet::Facet,
-)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, facet::Facet)]
 #[repr(u8)]
 // Upserted carries the full RecallCard by design (idempotent
 // full-state payloads) — same trade-off as `task_proto::TaskEvent`.

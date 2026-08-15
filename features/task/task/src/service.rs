@@ -20,6 +20,6 @@ pub use task_proto::service::{
 // The `#[subscribe] fn events` stream sibling.
 #[cfg(feature = "vox")]
 pub use task_proto::service::{
-    TaskServiceStream, TaskServiceStreamClient, TaskServiceStreamSource, stream_layer, stream_serve,
-    task_service_stream_service_descriptor,
+    TaskServiceStream, TaskServiceStreamClient, TaskServiceStreamSource, stream_layer,
+    stream_serve, task_service_stream_service_descriptor,
 };

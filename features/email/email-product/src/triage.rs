@@ -242,7 +242,10 @@ fn derive_urgency(input: &DerivationInput<'_>, tags: &[String]) -> u8 {
         score += 1;
     }
     if action
-        || subject_matches(&env.subject, &["urgent", "asap", "immediately", "today", "eod"])
+        || subject_matches(
+            &env.subject,
+            &["urgent", "asap", "immediately", "today", "eod"],
+        )
     {
         score += 1;
     }
@@ -277,11 +280,7 @@ mod tests {
         }
     }
 
-    fn derive(
-        env: &Envelope,
-        headers: &str,
-        known: bool,
-    ) -> (u8, Vec<String>) {
+    fn derive(env: &Envelope, headers: &str, known: bool) -> (u8, Vec<String>) {
         let input = DerivationInput {
             account_address: "me@example.com",
             envelope: env,
@@ -330,7 +329,11 @@ mod tests {
 
     #[test]
     fn receipt_and_calendar_and_social_tags() {
-        let e = env("shop@store.com", "me@example.com", "Your order confirmation");
+        let e = env(
+            "shop@store.com",
+            "me@example.com",
+            "Your order confirmation",
+        );
         let (u, tags) = derive(&e, "", false);
         assert!(tags.contains(&"receipt".to_string()));
         assert_eq!(u, 0);
@@ -339,7 +342,11 @@ mod tests {
         let (_, tags) = derive(&e, "Content-Type: text/calendar\r\n", false);
         assert!(tags.contains(&"calendar".to_string()));
 
-        let e = env("notify@facebookmail.com", "me@example.com", "New friend request");
+        let e = env(
+            "notify@facebookmail.com",
+            "me@example.com",
+            "New friend request",
+        );
         let (u, tags) = derive(&e, "", false);
         assert!(tags.contains(&"social".to_string()));
         assert_eq!(u, 0);

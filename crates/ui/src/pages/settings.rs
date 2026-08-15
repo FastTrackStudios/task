@@ -3,8 +3,8 @@
 //! writes through `PrefsCtx::update`, so choices follow the account
 //! to any device.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::prefs::PrefsCtx;
 use crate::shortcuts::{BINDINGS, Binding, effective_sequence};

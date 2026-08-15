@@ -27,9 +27,7 @@ pub fn AppShell() -> Element {
     use_context_provider(|| Signal::new(files_ui::Selection::default()));
     let _ = use_context_provider(|| Signal::new(crate::chrome::RightPanelOpen(true)));
     let agent_panel = use_context_provider(|| Signal::new(crate::chrome::AgentPanelOpen(false)));
-    let _ = use_context_provider(|| {
-        Signal::new(crate::chrome::AgentPanelSelected(String::new()))
-    });
+    let _ = use_context_provider(|| Signal::new(crate::chrome::AgentPanelSelected(String::new())));
     let mut agent_width =
         use_context_provider(|| Signal::new(crate::chrome::AgentPanelWidth(416.0)));
     // Restore the persisted panel width once per shell mount.
@@ -221,8 +219,7 @@ fn NotificationTray() -> Element {
             armed.write().insert(key);
             let (id, count) = key;
             spawn(async move {
-                architect::platform::sleep(std::time::Duration::from_millis(u64::from(ttl)))
-                    .await;
+                architect::platform::sleep(std::time::Duration::from_millis(u64::from(ttl))).await;
                 notices.dismiss_if(id, count);
             });
         }

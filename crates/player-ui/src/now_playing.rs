@@ -22,8 +22,8 @@
 //!
 //! Future: a `video:` queue swaps the `<audio>` for a `<video>`.
 
-use task_ui_core::format::duration_mmss;
 use dioxus::prelude::*;
+use task_ui_core::format::duration_mmss;
 
 /// A transport command the [`NowPlayingTab`] UI posts to the headless
 /// [`GlobalNowPlayer`] engine. `Seek` carries a 0..1 fraction of duration.
@@ -329,7 +329,11 @@ mod imp {
 
         // Play a pending start once the queue's tracks load.
         use_effect(move || {
-            let ready = tracks.read().as_ref().map(|l| !l.is_empty()).unwrap_or(false);
+            let ready = tracks
+                .read()
+                .as_ref()
+                .map(|l| !l.is_empty())
+                .unwrap_or(false);
             let pending = *pending_start.peek();
             if ready {
                 if let Some(s) = pending {
@@ -354,7 +358,11 @@ mod imp {
                     k.0 == r.org && k.1 == r.songs
                 };
                 if same {
-                    let ready = tracks.peek().as_ref().map(|l| !l.is_empty()).unwrap_or(false);
+                    let ready = tracks
+                        .peek()
+                        .as_ref()
+                        .map(|l| !l.is_empty())
+                        .unwrap_or(false);
                     if ready {
                         if r.toggle {
                             toggle.call(());
@@ -412,7 +420,8 @@ mod imp {
                 let list = tracks.read();
                 let len = queue_key.read().1.len();
                 let qtitle = title();
-                match cur.and_then(|i| list.as_ref().and_then(|l| l.get(i)).map(|t| (i, t.clone()))) {
+                match cur.and_then(|i| list.as_ref().and_then(|l| l.get(i)).map(|t| (i, t.clone())))
+                {
                     Some((i, t)) => {
                         let label = if len > 1 {
                             format!("{qtitle} · {}/{}", i + 1, len)
@@ -423,7 +432,9 @@ mod imp {
                         ctl.queue_label.clone().set(label);
                         ctl.can_prev.clone().set(i > 0);
                         ctl.can_next.clone().set(i + 1 < len);
-                        ctl.current_slug.clone().set(queue_key.read().1.get(i).cloned());
+                        ctl.current_slug
+                            .clone()
+                            .set(queue_key.read().1.get(i).cloned());
                     }
                     None => {
                         ctl.track_title.clone().set(None);
@@ -439,7 +450,11 @@ mod imp {
                 let p = position();
                 ctl.pos.clone().set(p);
                 ctl.dur.clone().set(d);
-                ctl.frac.clone().set(if d > 0.0 { (p / d).clamp(0.0, 1.0) } else { 0.0 });
+                ctl.frac.clone().set(if d > 0.0 {
+                    (p / d).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                });
             });
         }
 
@@ -454,7 +469,11 @@ mod imp {
                         let (pos, dur, ended) = match element.borrow().as_ref() {
                             Some(el) => {
                                 let d = el.duration();
-                                (el.current_time(), if d.is_finite() { d } else { 0.0 }, el.ended())
+                                (
+                                    el.current_time(),
+                                    if d.is_finite() { d } else { 0.0 },
+                                    el.ended(),
+                                )
                             }
                             None => continue,
                         };
@@ -560,13 +579,18 @@ mod imp {
         };
         let amp_str = format!("{amp:.3}");
         for i in 0..rows.length() {
-            let Some(el) = rows.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok())
+            let Some(el) = rows
+                .item(i)
+                .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok())
             else {
                 continue;
             };
             let is_active = el
                 .get_attribute("data-href")
-                .and_then(|h| h.strip_prefix("song-play:").map(task_ui_core::frontmatter::slugify))
+                .and_then(|h| {
+                    h.strip_prefix("song-play:")
+                        .map(task_ui_core::frontmatter::slugify)
+                })
                 .as_deref()
                 == active_slug;
             if is_active {

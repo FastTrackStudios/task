@@ -6,8 +6,8 @@
 //! survives `position: absolute` parents without breaking our chart
 //! coordinates, so the menu is a small bespoke widget.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::store::GanttEvent;
 use crate::types::{TaskId, TaskType};

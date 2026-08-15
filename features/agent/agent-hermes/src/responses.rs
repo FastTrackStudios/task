@@ -458,7 +458,6 @@ mod tests {
         SessionEvents::tapped("s1")
     }
 
-
     fn state() -> RespState {
         RespState {
             outcome: TurnOutcome::default(),

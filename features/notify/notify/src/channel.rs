@@ -110,11 +110,8 @@ impl DeliveryChannel for Webhook {
         let body = Self::payload(org, n);
         let org = org.to_owned();
         tokio::spawn(async move {
-            let sent = tokio::time::timeout(
-                WEBHOOK_TIMEOUT,
-                client.post(&url).json(&body).send(),
-            )
-            .await;
+            let sent =
+                tokio::time::timeout(WEBHOOK_TIMEOUT, client.post(&url).json(&body).send()).await;
             match sent {
                 Ok(Ok(resp)) if resp.status().is_success() => {}
                 Ok(Ok(resp)) => {

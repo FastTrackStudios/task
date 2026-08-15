@@ -219,7 +219,10 @@ created_at = "2026-01-01T00:00:00Z"
 updated_at = "2026-01-01T00:00:00Z"
 "#;
         let m = OrgManifest::parse_str(pre_plugin, "org.toml").expect("old manifest parses");
-        assert!(m.disabled_plugins.is_empty(), "absent field = all plugins on");
+        assert!(
+            m.disabled_plugins.is_empty(),
+            "absent field = all plugins on"
+        );
 
         let out = toml::to_string(&m).expect("serialize");
         assert!(
@@ -230,7 +233,10 @@ updated_at = "2026-01-01T00:00:00Z"
         let mut off = m.clone();
         off.disabled_plugins = vec!["email".to_string()].into();
         let out = toml::to_string(&off).expect("serialize");
-        assert!(out.contains("disabled_plugins"), "non-empty list is written:\n{out}");
+        assert!(
+            out.contains("disabled_plugins"),
+            "non-empty list is written:\n{out}"
+        );
         let back = OrgManifest::parse_str(&out, "org.toml").expect("round-trip");
         assert_eq!(back.disabled_plugins, off.disabled_plugins);
     }

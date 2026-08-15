@@ -1,8 +1,10 @@
 //! One row in the list view. Checkbox · title · due pill ·
 //! priority badge · context / project chips.
 
+use architect_ui::lucide_dioxus::{
+    Ban, Check, CornerDownRight, Ellipsis, Flag, Hash, Trash2, Waypoints,
+};
 use dioxus::prelude::*;
-use architect_ui::lucide_dioxus::{Ban, Check, CornerDownRight, Ellipsis, Flag, Hash, Trash2, Waypoints};
 use uuid::Uuid;
 
 use task_proto::{Priority, Status};

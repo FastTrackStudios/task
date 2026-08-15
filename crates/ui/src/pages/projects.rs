@@ -16,11 +16,11 @@
 //! it tracks light/dark automatically — dark is the default.
 
 use crate::format::status_variant;
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     CalendarDays, Flag, FolderKanban, Layers, LayoutGrid, LayoutList, Plus, User,
 };
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use project_proto::ProjectInfo;
 
 use crate::routes::Route;

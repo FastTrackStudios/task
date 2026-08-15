@@ -28,11 +28,11 @@
 
 use std::rc::Rc;
 
+use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use editor::Editor;
 use editor::editor_view::slash::{SlashMenu, SlashState};
 use editor::editor_vim::VimState;
-use architect_ui::prelude::*;
 use vault_proto::{PageMeta, TagCount};
 
 use crate::document_session::{SaveStatus, use_document_session};

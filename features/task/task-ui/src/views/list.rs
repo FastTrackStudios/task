@@ -1,9 +1,9 @@
 //! Grouped list view — Overdue, Today, This week, Later, No
 //! due date, Done. Each section is collapsible.
 
+use architect_ui::lucide_dioxus::ChevronRight;
 use chrono::{Duration, NaiveDate};
 use dioxus::prelude::*;
-use architect_ui::lucide_dioxus::ChevronRight;
 use uuid::Uuid;
 
 use task_proto::{Priority, Status};

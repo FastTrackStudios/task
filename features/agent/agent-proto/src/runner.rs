@@ -186,11 +186,7 @@ impl RunnerProfile {
     /// # Errors
     ///
     /// The first reason it cannot.
-    pub fn can_take(
-        &self,
-        req: &TicketRequirements,
-        in_flight: u32,
-    ) -> Result<(), Unroutable> {
+    pub fn can_take(&self, req: &TicketRequirements, in_flight: u32) -> Result<(), Unroutable> {
         if !self.scope.admits(&req.org, req.project) {
             return Err(Unroutable::OutOfScope);
         }
@@ -219,9 +215,9 @@ pub fn unsatisfiable_capability(
     req.capabilities
         .iter()
         .find(|needed| {
-            !runners.iter().any(|r| {
-                r.scope.admits(&req.org, req.project) && r.capabilities.contains(needed)
-            })
+            !runners
+                .iter()
+                .any(|r| r.scope.admits(&req.org, req.project) && r.capabilities.contains(needed))
         })
         .map(Capability::as_string)
 }
@@ -288,10 +284,7 @@ mod tests {
     #[test]
     fn an_unknown_capability_is_rejected_at_registration() {
         for bad in ["compile", "repo:", "repo", "", "gpu"] {
-            assert!(
-                Capability::parse(bad).is_err(),
-                "`{bad}` should be refused"
-            );
+            assert!(Capability::parse(bad).is_err(), "`{bad}` should be refused");
         }
         let err = parse_capabilities(["records", "teleport"]).unwrap_err();
         assert_eq!(err, CapabilityError::Unknown("teleport".into()));
@@ -430,8 +423,14 @@ mod tests {
     #[test]
     fn a_ticket_no_runner_satisfies_names_the_missing_capability() {
         let req = needs(&[Capability::Build]);
-        assert_eq!(unsatisfiable_capability(&req, &[hermes()]), Some("build".into()));
-        assert_eq!(unsatisfiable_capability(&req, &[hermes(), battleship()]), None);
+        assert_eq!(
+            unsatisfiable_capability(&req, &[hermes()]),
+            Some("build".into())
+        );
+        assert_eq!(
+            unsatisfiable_capability(&req, &[hermes(), battleship()]),
+            None
+        );
     }
 
     #[test]

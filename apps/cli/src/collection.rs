@@ -464,11 +464,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
             let active = crate::org_ctx::resolve_active(org.as_deref())?;
             let org_slug = active.root.slug().to_string();
             let song_slug = slug(&title);
-            let song_root = active
-                .root
-                .resources_dir()
-                .join("songs")
-                .join(&song_slug);
+            let song_root = active.root.resources_dir().join("songs").join(&song_slug);
 
             let key: Key = match key.as_deref() {
                 Some(k) => k
@@ -544,10 +540,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
             if json {
                 return emit_json(&updated);
             }
-            println!(
-                "wrote song `{title}` → {}",
-                song_root.display()
-            );
+            println!("wrote song `{title}` → {}", song_root.display());
             println!("added song:{song_slug} to `{}`", updated.title);
             print_collection(&updated);
         }
@@ -711,7 +704,11 @@ async fn ingest_song_stems(args: IngestArgs) -> eyre::Result<()> {
             })
             .await
             .map_err(|e| eyre::eyre!("complete_upload `{}`: {e:?}", stem.name))?;
-        println!("uploaded {:<24} {}", stem.name, &content_hash[..16.min(content_hash.len())]);
+        println!(
+            "uploaded {:<24} {}",
+            stem.name,
+            &content_hash[..16.min(content_hash.len())]
+        );
         hashes.push(content_hash);
     }
 
@@ -803,7 +800,9 @@ fn discover_stems(dir: &Path) -> eyre::Result<Vec<IngestStem>> {
             let group = stem_group_for(&name);
             let default_muted = {
                 let hay = format!("{} {}", group.unwrap_or(""), name).to_ascii_lowercase();
-                ["click", "guide", "cue", "count"].iter().any(|k| hay.contains(k))
+                ["click", "guide", "cue", "count"]
+                    .iter()
+                    .any(|k| hay.contains(k))
             };
             // Only webm passes through untranscoded — the browser player's
             // vox-MSE path speaks audio/webm; ogg/opus fall back to HTTP.
@@ -992,8 +991,7 @@ fn attachment_ref(src: &Path, kind: &str) -> AttachmentRef {
 /// Copy `src` to `dest`, creating parent dirs. Errors if `src` is missing.
 fn copy_into(src: &Path, dest: &Path) -> eyre::Result<()> {
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("mkdir {}", parent.display()))?;
+        std::fs::create_dir_all(parent).wrap_err_with(|| format!("mkdir {}", parent.display()))?;
     }
     std::fs::copy(src, dest)
         .wrap_err_with(|| format!("copy {} → {}", src.display(), dest.display()))?;
@@ -1038,7 +1036,10 @@ mod tests {
     #[test]
     fn slug_is_ascii_only_and_diverges_from_vault_entity() {
         assert_eq!(slug("Café Sessions"), "caf-sessions");
-        assert_eq!(vault_entity::slugify("Café Sessions", "song"), "café-sessions");
+        assert_eq!(
+            vault_entity::slugify("Café Sessions", "song"),
+            "café-sessions"
+        );
         // Inside ASCII the two agree, which is why every existing path
         // is unaffected.
         for name in ["Great Are You Lord", "Don't Stop", "A---B"] {

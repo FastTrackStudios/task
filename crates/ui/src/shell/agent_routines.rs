@@ -11,9 +11,9 @@
 //! and tested in [`logic`].
 
 use agent_proto::service::routines::{NewRoutine, Routine};
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{CalendarClock, Pause, Play, Plus, Trash2};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 pub mod logic;
 use logic::{relative_when, runs_label, schedule_hint};

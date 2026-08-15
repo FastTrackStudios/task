@@ -7,10 +7,10 @@
 //! Every control is a 28px hit target with a 16px icon; every numeral
 //! is mono + tabular.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     Maximize, Pause as PauseIcon, Pencil, Play, Repeat, Undo2, Volume2, VolumeX, X,
 };
+use dioxus::prelude::*;
 
 use super::{DrawCtx, PlayerCtx, TimeFormat, pause, toggle_fullscreen, toggle_play, video_op};
 

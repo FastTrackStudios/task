@@ -211,7 +211,11 @@ pub fn commit_all(worktree: &Worktree, message: &str) -> Result<Option<String>, 
     }
     git(&worktree.path, "add", &["add", "-A"])?;
     git(&worktree.path, "commit", &["commit", "-m", message])?;
-    Ok(Some(git(&worktree.path, "rev-parse", &["rev-parse", "HEAD"])?))
+    Ok(Some(git(
+        &worktree.path,
+        "rev-parse",
+        &["rev-parse", "HEAD"],
+    )?))
 }
 
 /// Commits on this worktree's branch that are not on `base`.
@@ -244,7 +248,13 @@ pub fn merge_into(
     git(
         &workstream_worktree.path,
         "merge",
-        &["merge", "--no-ff", "-m", &format!("merge {ticket_branch}"), ticket_branch],
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            &format!("merge {ticket_branch}"),
+            ticket_branch,
+        ],
     )?;
     Ok(())
 }

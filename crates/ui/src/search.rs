@@ -10,8 +10,8 @@
 //! Toggled by the [`crate::chrome::SearchOpen`] context signal
 //! (`<space><space>` via `fts.search.all`, or the palette entry).
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{CircleCheck, FileText, Folder, Search, Zap};
+use dioxus::prelude::*;
 
 use crate::orgs::OrgMeta;
 use crate::routes::Route;
@@ -66,7 +66,11 @@ fn rank(query: &str, cands: &[Candidate]) -> Vec<Ranked> {
         return cands
             .iter()
             .take(MAX_RESULTS)
-            .map(|c| Ranked { cand: c.clone(), label_marks: Vec::new(), detail_marks: Vec::new() })
+            .map(|c| Ranked {
+                cand: c.clone(),
+                label_marks: Vec::new(),
+                detail_marks: Vec::new(),
+            })
             .collect();
     }
     let cfg = neo_frizbee::Config::default();
@@ -94,11 +98,12 @@ fn rank(query: &str, cands: &[Candidate]) -> Vec<Ranked> {
             // is the slow one — run it per visible row only). Char
             // indices into the combined haystack; split at the label
             // boundary.
-            let mut marks: Vec<usize> = neo_frizbee::match_list_indices(query, &[hays[i].as_str()], &cfg)
-                .into_iter()
-                .next()
-                .map(|mi| mi.indices.into_iter().collect())
-                .unwrap_or_default();
+            let mut marks: Vec<usize> =
+                neo_frizbee::match_list_indices(query, &[hays[i].as_str()], &cfg)
+                    .into_iter()
+                    .next()
+                    .map(|mi| mi.indices.into_iter().collect())
+                    .unwrap_or_default();
             marks.sort_unstable();
             let label_chars = cand.label.chars().count();
             let (label_marks, rest): (Vec<usize>, Vec<usize>) =
@@ -107,7 +112,11 @@ fn rank(query: &str, cands: &[Candidate]) -> Vec<Ranked> {
                 .into_iter()
                 .filter_map(|p| p.checked_sub(label_chars + 1))
                 .collect();
-            Ranked { cand, label_marks, detail_marks }
+            Ranked {
+                cand,
+                label_marks,
+                detail_marks,
+            }
         })
         .collect()
 }
@@ -187,7 +196,10 @@ pub fn SearchOverlay() -> Element {
             out.push(Candidate {
                 label: p.title.clone(),
                 detail: p.path.clone(),
-                hit: Hit::Note { path: p.path.clone(), slug: slug.clone() },
+                hit: Hit::Note {
+                    path: p.path.clone(),
+                    slug: slug.clone(),
+                },
             });
         }
         let project_names: std::collections::HashMap<uuid::Uuid, String> = project_store
@@ -224,7 +236,9 @@ pub fn SearchOverlay() -> Element {
             out.push(Candidate {
                 label: def.name.clone(),
                 detail: def.shortcut_hint.clone().unwrap_or_default(),
-                hit: Hit::Command { id: def.id.to_string() },
+                hit: Hit::Command {
+                    id: def.id.to_string(),
+                },
             });
         }
         out
@@ -246,9 +260,10 @@ pub fn SearchOverlay() -> Element {
         let sel = selected();
         async move {
             match sel {
-                Some(Candidate { hit: Hit::Note { path, slug }, .. }) => {
-                    fetch_note_preview(slug, path).await
-                }
+                Some(Candidate {
+                    hit: Hit::Note { path, slug },
+                    ..
+                }) => fetch_note_preview(slug, path).await,
                 _ => None,
             }
         }
@@ -261,7 +276,11 @@ pub fn SearchOverlay() -> Element {
         cursor.set(0);
         match cand.hit {
             Hit::Note { path, slug } => {
-                let org = if slug == active() { String::new() } else { slug };
+                let org = if slug == active() {
+                    String::new()
+                } else {
+                    slug
+                };
                 nav.push(Route::VaultRoute { path, org });
             }
             Hit::Task { id } => {

@@ -10,9 +10,9 @@
 //! button jumps there with the same session.
 
 use agent_proto::session::Session;
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{Bot, Maximize2, Plus};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::chrome::AgentPanelSelected;
 use crate::routes::Route;

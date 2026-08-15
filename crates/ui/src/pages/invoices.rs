@@ -20,9 +20,9 @@
 use crate::format::money;
 use std::collections::HashMap;
 
+use architect_ui::prelude::*;
 use chrono::Utc;
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 use uuid::Uuid;
 
 use contacts_proto::Contact;

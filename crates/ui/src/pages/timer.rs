@@ -25,9 +25,9 @@
 //! a real signed-in user through to the page.
 
 use architect::Id;
+use architect_ui::prelude::*;
 use chrono::{TimeZone, Utc};
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 use timer_proto::{LogSessionRequest, StartTimerRequest, WorkSession};
 use uuid::Uuid;
 

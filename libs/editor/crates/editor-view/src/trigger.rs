@@ -519,12 +519,14 @@ mod tests {
     fn accept_rejects_stale_state() {
         // Caret before the recorded trigger — stale offsets.
         let state = st("ab", 1);
-        assert!(accept_candidate(
-            &state,
-            &comp(CompletionKind::Tag, 5, "x"),
-            &Candidate::simple("t"),
-        )
-        .is_none());
+        assert!(
+            accept_candidate(
+                &state,
+                &comp(CompletionKind::Tag, 5, "x"),
+                &Candidate::simple("t"),
+            )
+            .is_none()
+        );
     }
 
     #[test]

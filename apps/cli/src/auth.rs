@@ -775,8 +775,8 @@ pub(crate) async fn run_auth(cmd: AuthCmd, org_override: Option<&str>) -> eyre::
                 // which reaches the org's own auth store — no
                 // direct auth.sqlite open.
                 let revoked: eyre::Result<()> = {
-                    let base = (entry.url != crate::session_store::LOCAL_URL)
-                        .then(|| entry.url.clone());
+                    let base =
+                        (entry.url != crate::session_store::LOCAL_URL).then(|| entry.url.clone());
                     let url = resolve_org_vox_url(base, &entry.slug);
                     match Box::pin(establish_for_url::<AuthServiceClient>(&url)).await {
                         Ok(client) => client
@@ -1004,7 +1004,9 @@ async fn resolve_target_user(
         return Ok(id);
     }
     let Some(email) = email else {
-        return Err(eyre::eyre!("pass --user <uuid> or --email <current address>"));
+        return Err(eyre::eyre!(
+            "pass --user <uuid> or --email <current address>"
+        ));
     };
     let members = client
         .list_org_members(token.to_owned())

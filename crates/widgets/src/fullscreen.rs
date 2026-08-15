@@ -12,8 +12,8 @@
 //! widget whose spec sets `fullscreen_owns_body` mounts this chrome
 //! while its [`WidgetCtx::fullscreen`](crate::WidgetCtx) signal is set.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Minimize2;
+use dioxus::prelude::*;
 
 /// Full-screen Experience chrome: a viewport overlay with a top bar
 /// (title + exit) that renders `children` beneath. `on_exit` fires on

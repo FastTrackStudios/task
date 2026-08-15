@@ -1,8 +1,8 @@
 //! Per-type cell renderer + inline editor.
 
+use architect_ui::prelude::*;
 use chrono::NaiveDate;
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 
 use crate::store::TableMutation;
 use crate::types::{CellValue, Column, ColumnId, ColumnType, RowId, SelectOption};

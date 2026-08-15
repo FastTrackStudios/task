@@ -1405,10 +1405,9 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                         if name.starts_with('.') {
                             continue;
                         }
-                        let rel = path.strip_prefix(&dir).map_or_else(
-                            |_| name.to_string(),
-                            |p| p.to_string_lossy().to_string(),
-                        );
+                        let rel = path
+                            .strip_prefix(&dir)
+                            .map_or_else(|_| name.to_string(), |p| p.to_string_lossy().to_string());
                         if exclude_substrings.iter().any(|sub| rel.contains(sub)) {
                             continue;
                         }
@@ -3465,7 +3464,10 @@ mod tests {
     #[test]
     fn archive_mime_for_filename_uses_only_the_final_extension() {
         // `.tar.gz`-style names must not match on an inner segment.
-        assert_eq!(archive_mime_for_filename("report.pdf.zip"), "application/zip");
+        assert_eq!(
+            archive_mime_for_filename("report.pdf.zip"),
+            "application/zip"
+        );
         assert_eq!(archive_mime_for_filename("a.zip.pdf"), "application/pdf");
     }
 

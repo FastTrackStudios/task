@@ -245,8 +245,7 @@ fn validate(backend: &AgentBackend) -> Result<(), AgentError> {
         // that cannot be re-parsed from its own wire form is not in
         // the vocabulary.
         let text = cap.as_string();
-        Capability::parse(&text)
-            .map_err(|e| AgentError::Invalid(e.to_string()))?;
+        Capability::parse(&text).map_err(|e| AgentError::Invalid(e.to_string()))?;
     }
     if backend.runner.id != backend.id {
         return Err(AgentError::Invalid(format!(
@@ -283,7 +282,11 @@ impl Backends for Store {
             } else {
                 "no heartbeat within the stale window".into()
             },
-            state: if live { "running".into() } else { "stale".into() },
+            state: if live {
+                "running".into()
+            } else {
+                "stale".into()
+            },
             active_agents: 0,
             platforms: Vec::new(),
             model: String::new(),

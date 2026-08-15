@@ -18,9 +18,9 @@
 //! sentinels), rollback + tray notification on failure.
 
 use architect::Id;
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::ShoppingCart;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use cookbook_proto::Recipe;

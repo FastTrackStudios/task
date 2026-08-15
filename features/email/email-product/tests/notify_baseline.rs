@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use email_proto::{Account, AccountId, EmailProduct, EmailSyncStreamSource};
 use email_product::{NoContacts, ProductAccount, ProductBackend};
+use email_proto::{Account, AccountId, EmailProduct, EmailSyncStreamSource};
 
 fn write_msg(dir: &std::path::Path, name: &str, msgid: &str, subject: &str) {
     std::fs::write(
@@ -37,8 +37,18 @@ async fn baseline_silences_history_then_marks_new_mail_once() {
     let mailbox = email_maildir::Backend::single(account, dir.path().to_path_buf()).unwrap();
 
     // Two messages of pre-existing history.
-    write_msg(&dir.path().join("new"), "1700000000.M1.h", "<old1@x>", "Old one");
-    write_msg(&dir.path().join("new"), "1700000001.M2.h", "<old2@x>", "Old two");
+    write_msg(
+        &dir.path().join("new"),
+        "1700000000.M1.h",
+        "<old1@x>",
+        "Old one",
+    );
+    write_msg(
+        &dir.path().join("new"),
+        "1700000001.M2.h",
+        "<old2@x>",
+        "Old two",
+    );
 
     let product = ProductBackend::new(
         [ProductAccount {
@@ -57,10 +67,19 @@ async fn baseline_silences_history_then_marks_new_mail_once() {
     assert!(product.unnotified("acct", 10).unwrap().is_empty());
 
     // New mail arrives.
-    write_msg(&dir.path().join("new"), "1700000002.M3.h", "<fresh@x>", "Fresh");
+    write_msg(
+        &dir.path().join("new"),
+        "1700000002.M3.h",
+        "<fresh@x>",
+        "Fresh",
+    );
     product.background_pass_once().await;
     let pending = product.unnotified("acct", 10).unwrap();
-    assert_eq!(pending, vec!["fresh@x".to_string()], "parser strips message-id brackets");
+    assert_eq!(
+        pending,
+        vec!["fresh@x".to_string()],
+        "parser strips message-id brackets"
+    );
 
     // Repeated passes never re-mark it.
     product.background_pass_once().await;

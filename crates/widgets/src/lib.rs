@@ -336,7 +336,10 @@ impl WidgetRegistry {
         let mut inner = self.specs.borrow_mut();
         for spec in specs {
             if inner.iter().any(|s| s.id == spec.id) {
-                tracing::warn!("widget spec `{}` registered twice; keeping the first", spec.id);
+                tracing::warn!(
+                    "widget spec `{}` registered twice; keeping the first",
+                    spec.id
+                );
                 continue;
             }
             inner.push(spec);
@@ -448,11 +451,7 @@ impl WidgetRegistry {
 }
 
 /// Note-claim ranking (see [`WidgetRegistry::note_matches`]).
-fn note_matches_inner(
-    specs: &[WidgetSpec],
-    note_type: Option<&str>,
-    doc: &str,
-) -> Vec<WidgetSpec> {
+fn note_matches_inner(specs: &[WidgetSpec], note_type: Option<&str>, doc: &str) -> Vec<WidgetSpec> {
     let experience = frontmatter_scalar(doc, "experience");
     let mut ranked: Vec<(u8, usize)> = Vec::new();
     for (i, spec) in specs.iter().enumerate() {
@@ -567,7 +566,10 @@ mod tests {
             spec("exp-only", vec![WidgetMatch::NoteExperience("setlist")]),
             spec(
                 "both",
-                vec![WidgetMatch::NoteFlag("tabs"), WidgetMatch::NoteType("event")],
+                vec![
+                    WidgetMatch::NoteFlag("tabs"),
+                    WidgetMatch::NoteType("event"),
+                ],
             ),
         ];
         let doc = "---\ntype: event\nexperience: setlist\ntabs: true\n---\n";

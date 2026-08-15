@@ -4,7 +4,6 @@
 
 use task_proto::{Priority, Status};
 
-
 /// Pill classes for a [`Status`] badge.
 #[must_use]
 pub fn status_pill(status: Status) -> &'static str {

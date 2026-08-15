@@ -10,8 +10,8 @@
 //! stream running behind the full screen. Collapsing re-resolves one
 //! server-side-cached rendition RPC — cheap.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Maximize2;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use super::progress::TimelineBand;

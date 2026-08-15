@@ -24,7 +24,6 @@
 //! context; the queue is resolved from the live note text + vault
 //! resolver at click time.
 
-
 use dioxus::prelude::*;
 use task_ui_core::frontmatter::{
     frontmatter_value, setlist_song_links_from_body, setlist_songs_from, slugify, song_slug_from,
@@ -58,7 +57,10 @@ pub fn widgets() -> Vec<WidgetSpec> {
         .plugin("fasttrackstudio"),
         WidgetSpec::new(
             "player.embed",
-            vec![WidgetMatch::EmbedType("song"), WidgetMatch::EmbedType("setlist")],
+            vec![
+                WidgetMatch::EmbedType("song"),
+                WidgetMatch::EmbedType("setlist"),
+            ],
         )
         .on_href(player_href)
         .plugin("fasttrackstudio"),
@@ -133,7 +135,11 @@ fn player_href(href: &str, ctx: &WidgetCtx) -> bool {
         // Play within the note's queue; a lone strip becomes a 1-song queue.
         let slug = slugify(name);
         let queue = queue_songs(ctx, &(ctx.doc)());
-        let songs = if queue.is_empty() { vec![slug.clone()] } else { queue };
+        let songs = if queue.is_empty() {
+            vec![slug.clone()]
+        } else {
+            queue
+        };
         let start = songs.iter().position(|s| *s == slug).unwrap_or(0);
         request_now_playing(ctx, songs, start, false);
         return true;

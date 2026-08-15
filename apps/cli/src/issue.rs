@@ -3047,7 +3047,10 @@ mod tests {
     #[test]
     fn parse_agent_ref_handles_the_three_forms() {
         // Bare name = an agent; `agent:` is the explicit spelling.
-        assert_eq!(parse_agent_ref("claude").unwrap(), parse_agent_ref("agent:claude").unwrap());
+        assert_eq!(
+            parse_agent_ref("claude").unwrap(),
+            parse_agent_ref("agent:claude").unwrap()
+        );
         assert_eq!(
             parse_agent_ref("claude@2").unwrap(),
             workflows_proto::AgentRef::agent_versioned("claude", "2")

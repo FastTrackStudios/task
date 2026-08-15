@@ -20,8 +20,8 @@
 //! "insert note at current time" (getCurrentTime → `## Notes`
 //! bullet) is the planned follow-up, see plans/wiki-archive.md.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 

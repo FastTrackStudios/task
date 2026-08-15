@@ -2,8 +2,8 @@
 //! horizontal flex row, forwards `KanbanEvent` upward, and offers a
 //! trailing "+ Add column" affordance.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Plus;
+use dioxus::prelude::*;
 
 use crate::store::KanbanEvent;
 use crate::types::{ColorTag, KanbanCard, KanbanColumn};

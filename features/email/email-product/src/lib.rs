@@ -26,6 +26,4 @@ mod backend;
 mod triage;
 
 pub use backend::{ProductAccount, ProductBackend};
-pub use triage::{
-    ContactLookup, DerivationEngine, DerivationInput, HeuristicEngine, NoContacts,
-};
+pub use triage::{ContactLookup, DerivationEngine, DerivationInput, HeuristicEngine, NoContacts};

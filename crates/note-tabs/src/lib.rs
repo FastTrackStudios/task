@@ -18,7 +18,7 @@
 
 use dioxus::prelude::*;
 use editor::state::EditorState;
-use editor::{Decoration, DecoratedRange};
+use editor::{DecoratedRange, Decoration};
 use task_widgets::{WidgetMatch, WidgetSpec};
 
 /// The section-tab widget specs.
@@ -32,14 +32,20 @@ pub fn widgets() -> Vec<WidgetSpec> {
     vec![
         WidgetSpec::new(
             "note-tabs",
-            vec![WidgetMatch::NoteType("event"), WidgetMatch::NoteFlag("tabs")],
+            vec![
+                WidgetMatch::NoteType("event"),
+                WidgetMatch::NoteFlag("tabs"),
+            ],
         )
         .decorations(event_tab_decorations)
         .on_href(|href, _ctx| handle_tab_href(href))
         .plugin("core"),
-        WidgetSpec::new("note-tabs.event-header", vec![WidgetMatch::NoteType("event")])
-            .hide_note_header()
-            .plugin("core"),
+        WidgetSpec::new(
+            "note-tabs.event-header",
+            vec![WidgetMatch::NoteType("event")],
+        )
+        .hide_note_header()
+        .plugin("core"),
     ]
 }
 
@@ -150,7 +156,10 @@ pub fn event_tab_decorations(state: &EditorState) -> Vec<DecoratedRange> {
             } else {
                 "md-note-tab"
             };
-            format!(r#"<span class="{cls}" data-href="event-tab:{name}">{name}</span>"#, name = name)
+            format!(
+                r#"<span class="{cls}" data-href="event-tab:{name}">{name}</span>"#,
+                name = name
+            )
         })
         .collect();
     out.push(Decoration::widget(

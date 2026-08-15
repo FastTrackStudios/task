@@ -27,8 +27,8 @@ pub fn parse_inbox_item(
     frontmatter_yaml: &str,
     body: &str,
 ) -> Result<InboxItem, ParseError> {
-    let map: serde_yaml::Mapping = serde_yaml::from_str(frontmatter_yaml)
-        .map_err(|e| ParseError::Yaml(e.to_string()))?;
+    let map: serde_yaml::Mapping =
+        serde_yaml::from_str(frontmatter_yaml).map_err(|e| ParseError::Yaml(e.to_string()))?;
 
     let id = yaml::str_at(&map, "id").unwrap_or_else(|| {
         std::path::Path::new(path)

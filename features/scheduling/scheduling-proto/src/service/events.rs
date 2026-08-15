@@ -38,9 +38,7 @@ use crate::time_block::DayTemplate;
 /// Subscribers that render only one sub-resource ignore the other
 /// variants — the stream is unfiltered by design (one subscription
 /// per client; filtering is client-side, like `TaskEvent`).
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ::facet::Facet,
-)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ::facet::Facet)]
 #[repr(u8)]
 // Upserted variants carry full records by design (idempotent
 // full-state payloads) — same trade-off as `task_proto::TaskEvent`.

@@ -941,7 +941,10 @@ fn colon_w_emits_save_event() {
     let spec = editor_vim::handle_key(
         &s,
         &mut vim,
-        &KeySpec { key: "Enter".into(), ..Default::default() },
+        &KeySpec {
+            key: "Enter".into(),
+            ..Default::default()
+        },
     )
     .expect(":w must produce a spec");
     assert_eq!(spec.user_event.as_deref(), Some("save"));

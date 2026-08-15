@@ -16,3 +16,6 @@ result-*
 apps/web/assets/tailwind.css
 apps/desktop/assets/tailwind.css
 apps/mobile/assets/tailwind.css
+
+# npm install --no-save tailwindcss in CI drops this here.
+/node_modules

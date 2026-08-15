@@ -156,7 +156,6 @@ impl Backend {
         }
     }
 
-
     /// Publish this backend's change events into `hub` instead of its
     /// own.
     ///
@@ -167,10 +166,7 @@ impl Backend {
     /// each sub-backend at build time instead. Call before the backend
     /// is cloned or used.
     #[must_use]
-    pub fn with_changes_hub(
-        mut self,
-        hub: architect::PubSub<email_proto::EmailChange>,
-    ) -> Self {
+    pub fn with_changes_hub(mut self, hub: architect::PubSub<email_proto::EmailChange>) -> Self {
         self.changes = hub;
         self
     }
@@ -231,10 +227,7 @@ impl Backend {
             if let Some(tx) = channels.read().await.get(&account) {
                 let _ = tx.send(ev.clone());
             }
-            this_changes.publish(email_proto::EmailChange {
-                account,
-                event: ev,
-            });
+            this_changes.publish(email_proto::EmailChange { account, event: ev });
         });
     }
 
@@ -915,14 +908,12 @@ mod tests {
             recipients: &'a [String],
             raw: &'a [u8],
             message_id: String,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>,
-        > {
-            self.calls.lock().unwrap().push((
-                from.to_string(),
-                recipients.to_vec(),
-                raw.to_vec(),
-            ));
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
+        {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((from.to_string(), recipients.to_vec(), raw.to_vec()));
             Box::pin(async move { Ok(message_id) })
         }
     }
@@ -1014,19 +1005,30 @@ mod tests {
         let (_dir, backend, acct) = fixture();
         // The fixture's INBOX message lives in `new/` — unread, and
         // with nowhere to record a flag until it moves to `cur/`.
-        let before = backend.fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10)).unwrap();
+        let before = backend
+            .fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10))
+            .unwrap();
         assert!(!before[0].flags.iter().any(|f| f == "S"), "starts unread");
 
         backend
             .set_flags(
                 &acct.id.0,
                 "a@example.com",
-                FlagDelta { add: vec!["\\Seen".into()], remove: Vec::new() },
+                FlagDelta {
+                    add: vec!["\\Seen".into()],
+                    remove: Vec::new(),
+                },
             )
             .unwrap();
 
-        let after = backend.fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10)).unwrap();
-        assert!(after[0].flags.iter().any(|f| f == "S"), "now seen: {:?}", after[0].flags);
+        let after = backend
+            .fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10))
+            .unwrap();
+        assert!(
+            after[0].flags.iter().any(|f| f == "S"),
+            "now seen: {:?}",
+            after[0].flags
+        );
     }
 
     #[test]
@@ -1037,11 +1039,15 @@ mod tests {
             .set_flags(
                 &acct.id.0,
                 id,
-                FlagDelta { add: vec!["\\Flagged".into()], remove: Vec::new() },
+                FlagDelta {
+                    add: vec!["\\Flagged".into()],
+                    remove: Vec::new(),
+                },
             )
             .unwrap();
         let seen = |b: &Backend| {
-            b.fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10)).unwrap()[0]
+            b.fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10))
+                .unwrap()[0]
                 .flags
                 .iter()
                 .any(|f| f == "F")
@@ -1051,7 +1057,10 @@ mod tests {
             .set_flags(
                 &acct.id.0,
                 id,
-                FlagDelta { add: Vec::new(), remove: vec!["\\Flagged".into()] },
+                FlagDelta {
+                    add: Vec::new(),
+                    remove: vec!["\\Flagged".into()],
+                },
             )
             .unwrap();
         assert!(!seen(&backend), "unstarred");
@@ -1073,7 +1082,9 @@ mod tests {
                 },
             )
             .unwrap();
-        let env = backend.fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10)).unwrap();
+        let env = backend
+            .fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10))
+            .unwrap();
         assert!(env[0].flags.iter().any(|f| f == "S"));
     }
 
@@ -1086,9 +1097,13 @@ mod tests {
             .move_message(&acct.id.0, "a@example.com", "Archive")
             .unwrap();
 
-        let inbox = backend.fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10)).unwrap();
+        let inbox = backend
+            .fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10))
+            .unwrap();
         assert!(inbox.is_empty(), "left the inbox");
-        let archived = backend.fetch_envelopes(&acct.id.0, "Archive", SeqRange::Recent(10)).unwrap();
+        let archived = backend
+            .fetch_envelopes(&acct.id.0, "Archive", SeqRange::Recent(10))
+            .unwrap();
         assert_eq!(archived.len(), 1);
         assert_eq!(archived[0].subject, "Hello");
         // And it is still reachable by id from its new home.
@@ -1101,7 +1116,9 @@ mod tests {
         backend
             .move_message(&acct.id.0, "a@example.com", "INBOX")
             .unwrap();
-        let inbox = backend.fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10)).unwrap();
+        let inbox = backend
+            .fetch_envelopes(&acct.id.0, "INBOX", SeqRange::Recent(10))
+            .unwrap();
         assert_eq!(inbox.len(), 1, "still there, not duplicated or lost");
     }
 
@@ -1127,7 +1144,10 @@ mod tests {
             backend.set_flags(
                 &acct.id.0,
                 "nope@example.com",
-                FlagDelta { add: vec!["\\Seen".into()], remove: Vec::new() },
+                FlagDelta {
+                    add: vec!["\\Seen".into()],
+                    remove: Vec::new()
+                },
             ),
             Err(EmailSyncError::NotFound)
         ));

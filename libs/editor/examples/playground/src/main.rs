@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 use editor::{
-    bracket_match, commands, editor_view, markdown, DecoratedRange, Editor, EditorState, Keymap,
+    DecoratedRange, Editor, EditorState, Keymap, bracket_match, commands, editor_view, markdown,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -82,7 +82,7 @@ fn main() {
 #[cfg(not(target_arch = "wasm32"))]
 fn init_tracing() {
     use tracing_subscriber::{
-        fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+        EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt,
     };
     // Logfile in the repo's target/ dir so it tags along with
     // builds and is gitignored. `daily` rolls without bound; for
@@ -431,7 +431,9 @@ fn App() -> Element {
         .with("Mod-b", commands::toggle_bold as _)
         .with("Mod-i", commands::toggle_italic as _)
         .with("Mod-k", commands::toggle_link as _)
-        .with("Mod-Shift-k", |s: &_| commands::add_block_id(s).map(|(t, _)| t))
+        .with("Mod-Shift-k", |s: &_| {
+            commands::add_block_id(s).map(|(t, _)| t)
+        })
         .with("Mod-l", commands::cycle_list as _)
         .with("Mod-t", commands::toggle_task as _)
         .with("Mod-1", |s: &_| commands::set_heading(s, 1))
@@ -626,7 +628,9 @@ fn VimStatus(vim: Signal<editor::editor_vim::VimState>) -> Element {
     let pending = format!(
         "{}{}{}",
         v.pending_count.map(|n| n.to_string()).unwrap_or_default(),
-        v.pending_register.map(|r| format!("\"{r:?}")).unwrap_or_default(),
+        v.pending_register
+            .map(|r| format!("\"{r:?}"))
+            .unwrap_or_default(),
         v.pending_operator
             .map(|op| format!("{op:?}").chars().next().unwrap().to_string())
             .unwrap_or_default(),

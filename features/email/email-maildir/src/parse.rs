@@ -111,7 +111,12 @@ pub fn message_from_bytes(
             .iter()
             .find(|h| h.name().eq_ignore_ascii_case("content-id"))
             .and_then(|h| h.value().as_text())
-            .map(|v| v.trim().trim_start_matches('<').trim_end_matches('>').to_owned())
+            .map(|v| {
+                v.trim()
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .to_owned()
+            })
             .filter(|v| !v.is_empty());
         attachments.push(AttachmentMeta {
             part: idx.to_string(),

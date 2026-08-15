@@ -18,8 +18,8 @@
 //! tray notification on failure.
 
 use architect::Id;
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use fitness_proto::body::BodyMetric;

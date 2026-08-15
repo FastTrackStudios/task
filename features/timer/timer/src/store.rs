@@ -24,10 +24,9 @@ use timer_proto::{
 use uuid::Uuid;
 
 use crate::entity::{
-    OrgMemberRateColumn, OrgMemberRateEntity, OrgMemberRateModel,
-    ProjectMemberRateActive, ProjectMemberRateColumn, ProjectMemberRateEntity,
-    ProjectMemberRateModel, WorkSessionActive, WorkSessionColumn, WorkSessionEntity,
-    WorkSessionModel,
+    OrgMemberRateColumn, OrgMemberRateEntity, OrgMemberRateModel, ProjectMemberRateActive,
+    ProjectMemberRateColumn, ProjectMemberRateEntity, ProjectMemberRateModel, WorkSessionActive,
+    WorkSessionColumn, WorkSessionEntity, WorkSessionModel,
 };
 use crate::error::TimerDbError;
 use crate::rate_cascade::{CascadeInputs, ResolvedRate, resolve};
@@ -624,10 +623,7 @@ impl TimerService for Store {
         Ok(project_member_rate_from_model(saved))
     }
 
-    async fn list_org_member_rates(
-        &self,
-        org_id: Uuid,
-    ) -> Result<Vec<OrgMemberRate>, TimerError> {
+    async fn list_org_member_rates(&self, org_id: Uuid) -> Result<Vec<OrgMemberRate>, TimerError> {
         let rows = OrgMemberRateEntity::find()
             .filter(OrgMemberRateColumn::OrgId.eq(org_id))
             .all(&self.conn)

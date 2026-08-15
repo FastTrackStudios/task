@@ -185,7 +185,11 @@ impl Runs for RunStore {
                 id.to_string().into(),
                 start.ticket.to_string().into(),
                 start.runner.into(),
-                start.parent.map(|p| p.to_string()).unwrap_or_default().into(),
+                start
+                    .parent
+                    .map(|p| p.to_string())
+                    .unwrap_or_default()
+                    .into(),
                 start.branch.into(),
                 start.worktree_path.into(),
                 start.session_path.into(),
@@ -198,7 +202,11 @@ impl Runs for RunStore {
         )
         .await?;
         let created = self.one(id).await?;
-        self.emit(created.id, created.ticket, RunEvent::Status(RunStatus::InProgress));
+        self.emit(
+            created.id,
+            created.ticket,
+            RunEvent::Status(RunStatus::InProgress),
+        );
         created_ok(created)
     }
 

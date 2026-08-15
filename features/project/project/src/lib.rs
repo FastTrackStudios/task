@@ -56,8 +56,8 @@ pub mod parse;
 pub mod scan;
 pub mod write;
 
-pub use model::{ProjectInfo, Status};
 pub use entity::Projects;
+pub use model::{ProjectInfo, Status};
 pub use parse::{ParseError, looks_like_project, parse_page, parse_str};
 pub use service::{ProjectError, ProjectEvent, ProjectService, ProjectServiceRpc};
 #[cfg(feature = "vox")]

@@ -12,8 +12,8 @@
 use crate::format::money;
 use std::collections::HashMap;
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use finance_proto::AccountBalance;

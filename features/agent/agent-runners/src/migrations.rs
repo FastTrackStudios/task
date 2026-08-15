@@ -205,7 +205,11 @@ mod m20260810_000003_create_agent_questions {
                                 .primary_key(),
                         )
                         .col(ColumnDef::new(AgentQuestions::Ticket).string().not_null())
-                        .col(ColumnDef::new(AgentQuestions::Resolved).integer().not_null())
+                        .col(
+                            ColumnDef::new(AgentQuestions::Resolved)
+                                .integer()
+                                .not_null(),
+                        )
                         .col(ColumnDef::new(AgentQuestions::Json).text().not_null())
                         .to_owned(),
                 )

@@ -239,9 +239,7 @@ fn wiki_bootstrap_and_health_over_embedded_vox() {
     // And the wiki really landed inside the org tree the embedded
     // server hosts.
     assert!(
-        tmp.path()
-            .join("orgs/t/wiki/Knowledge/schema.md")
-            .is_file(),
+        tmp.path().join("orgs/t/wiki/Knowledge/schema.md").is_file(),
         "org wiki scaffolded on disk"
     );
 }

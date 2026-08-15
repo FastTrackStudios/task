@@ -8,8 +8,8 @@
 //! this works for any `video:` / `sermon:` / `song:` node — the sermon is
 //! already a populated example (`sermon:god-restores-broken-people`).
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use links_proto::{
     Anchor, Confidence, NodeKind, NodeRef, Relation, TypedLink, Visibility, format_timecode,
 };

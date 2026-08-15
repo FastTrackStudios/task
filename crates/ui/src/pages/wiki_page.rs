@@ -11,8 +11,8 @@
 //! the wiki grows its own document-session transport (see
 //! plans/wiki-feature.md).
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use wiki_proto::pages::WikiPageDoc;
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};

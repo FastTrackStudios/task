@@ -9,9 +9,9 @@ pub use editor_state;
 mod bridge;
 mod editor;
 mod event;
+pub mod hover;
 #[cfg(feature = "native")]
 pub mod native;
-pub mod hover;
 pub mod slash;
 pub mod tile;
 pub mod trigger;

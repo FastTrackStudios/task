@@ -114,11 +114,7 @@ impl TabsState {
     pub fn sync_route(&mut self, route: &Route) {
         let title = tab_title(route);
         let idx = *self.active.peek();
-        let same_active = self
-            .tabs
-            .peek()
-            .get(idx)
-            .is_some_and(|t| &t.route == route);
+        let same_active = self.tabs.peek().get(idx).is_some_and(|t| &t.route == route);
         if same_active {
             let mut tabs = self.tabs.write();
             if tabs[idx].title != title {

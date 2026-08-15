@@ -37,12 +37,12 @@
 /// filmstrip scrub for an opened media file.
 pub mod review;
 
+use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use files_proto::{
     BrowseEntry, ChainEntry, DivergenceChoice, DivergenceInfo, FileRootInfo, FilesEvent,
     FilesServiceClient, FilesServiceStreamClient, ProjectVersion,
 };
-use architect_ui::prelude::*;
 use task_ui_core::orgs::{OrgMeta, OrgSelection};
 use task_widgets::{WidgetCtx, WidgetMatch, WidgetSpec, WidgetTarget};
 use uuid::Uuid;

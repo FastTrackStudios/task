@@ -195,11 +195,11 @@ async fn http_metrics(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    use std::sync::OnceLock;
     use architect_telemetry::otel::opentelemetry::{
         KeyValue, global,
         metrics::{Counter, Histogram},
     };
+    use std::sync::OnceLock;
 
     static INSTRUMENTS: OnceLock<(Histogram<f64>, Counter<u64>)> = OnceLock::new();
     let (duration, count) = INSTRUMENTS.get_or_init(|| {

@@ -39,7 +39,9 @@ pub fn apply(state: &mut TaskState, mu: &TaskMutation) {
                 // (group-routed, so custom names like `shipped`
                 // count) — list grouping by completion day works
                 // without re-reading the file mtime.
-                if project_proto::resolve_state_group(None, status) == project_proto::StateGroup::Completed {
+                if project_proto::resolve_state_group(None, status)
+                    == project_proto::StateGroup::Completed
+                {
                     t.completed_date = Some(chrono::Local::now().date_naive());
                 } else {
                     t.completed_date = None;

@@ -12,8 +12,8 @@
 
 use std::collections::HashSet;
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use view_knowledge_graph::{
     GraphFilterState, GraphFilters, KnowledgeGraphView, WikiGraph, apply_filters, build_link_graph,
 };

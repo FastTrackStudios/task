@@ -1,9 +1,9 @@
 //! Root Table component — composes header / filter row / body
 //! into a single CSS grid that keeps columns aligned.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{ChevronDown, ChevronRight, Plus};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::layout::{DisplayRow, layout};
 use crate::store::{TableMutation, TableState};

@@ -526,7 +526,10 @@ mod tests {
         // (past the first line + newline), never at a line-relative one.
         let state = EditorState::new("Cmaj7\nDm7".to_string());
         let decs = keyflow_decorations(&state);
-        assert!(decs.iter().any(|d| d.from >= 6), "second-line token should be at absolute offset >= 6");
+        assert!(
+            decs.iter().any(|d| d.from >= 6),
+            "second-line token should be at absolute offset >= 6"
+        );
     }
 
     #[test]
@@ -626,7 +629,9 @@ mod tests {
         );
         // The `5` should resolve to a G-rooted badge.
         assert!(
-            widgets.iter().any(|h| h.contains("kf-inlay") && h.contains('G')),
+            widgets
+                .iter()
+                .any(|h| h.contains("kf-inlay") && h.contains('G')),
             "expected a 'G' inlay badge for degree 5 in C; widgets = {widgets:?}"
         );
         // Doc-absolute placement: the badge sits right after the source `5`
@@ -685,7 +690,9 @@ mod tests {
         let badges: Vec<String> = keyflow_decorations(&EditorState::new(src.to_string()))
             .iter()
             .filter_map(|d| match &d.kind {
-                editor_state::DecorationKind::Widget { html } if html.contains("kf-section-inlay") => {
+                editor_state::DecorationKind::Widget { html }
+                    if html.contains("kf-section-inlay") =>
+                {
                     Some(html.clone())
                 }
                 _ => None,

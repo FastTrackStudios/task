@@ -26,9 +26,7 @@ use crate::inbox_item::InboxItem;
 ///   process, and archive all surface as upserts (they are all
 ///   `upsert_inbox_item` on the wire).
 /// - [`InboxEvent::Deleted`] — remove the row with that `id`.
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, facet::Facet,
-)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, facet::Facet)]
 #[repr(u8)]
 // Upserted carries the full InboxItem by design (idempotent
 // full-state payloads) — same trade-off as `task_proto::TaskEvent`.

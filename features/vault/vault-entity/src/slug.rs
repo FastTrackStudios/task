@@ -37,7 +37,12 @@ pub fn slugify(s: &str, fallback: &str) -> String {
 
 /// `<folder>/<slug>.md`, using `default_folder` when the caller has no
 /// override. Trailing slashes on either folder are tolerated.
-pub fn entity_path(name: &str, folder: Option<&str>, default_folder: &str, fallback: &str) -> String {
+pub fn entity_path(
+    name: &str,
+    folder: Option<&str>,
+    default_folder: &str,
+    fallback: &str,
+) -> String {
     let slug = slugify(name, fallback);
     let dir = folder.unwrap_or(default_folder).trim_end_matches('/');
     format!("{dir}/{slug}.md")

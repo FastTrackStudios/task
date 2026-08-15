@@ -127,7 +127,8 @@ mod tests {
     #[test]
     fn a_message_links_to_a_project_and_back() {
         let (_d, b) = backend();
-        b.link("<m1@example.com>", project("praise-set"), "user").unwrap();
+        b.link("<m1@example.com>", project("praise-set"), "user")
+            .unwrap();
 
         let by_target = b.links_for_target(project("praise-set")).unwrap();
         assert_eq!(by_target.len(), 1);
@@ -159,10 +160,14 @@ mod tests {
     #[test]
     fn a_message_can_belong_to_several_things() {
         let (_d, b) = backend();
-        b.link("m1@example.com", project("praise-set"), "user").unwrap();
+        b.link("m1@example.com", project("praise-set"), "user")
+            .unwrap();
         b.link(
             "m1@example.com",
-            LinkTarget { kind: "task".into(), id: "t-1".into() },
+            LinkTarget {
+                kind: "task".into(),
+                id: "t-1".into(),
+            },
             "user",
         )
         .unwrap();

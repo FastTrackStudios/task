@@ -40,13 +40,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cookbook_proto::{CookStep, Ingredient, Recipe, StepCookware, StepIngredient, StepLink};
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     ChevronLeft, Clock, CookingPot, ExternalLink, Flame, Hourglass, Info, Lock, Pencil,
     Timer as TimerIcon, Users,
 };
 use architect_ui::prelude::*;
+use cookbook_proto::{CookStep, Ingredient, Recipe, StepCookware, StepIngredient, StepLink};
+use dioxus::prelude::*;
 
 use super::cook_mode::scaled_qty;
 use crate::format::duration_hms;

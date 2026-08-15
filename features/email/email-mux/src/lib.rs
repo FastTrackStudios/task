@@ -291,7 +291,9 @@ impl EmailSync for Backend {
             }
         }
 
-        let envelopes = self.route(account)?.fetch_envelopes(account, folder, range)?;
+        let envelopes = self
+            .route(account)?
+            .fetch_envelopes(account, folder, range)?;
 
         if cacheable {
             if let Some(store) = self.stores.get(account) {
@@ -438,7 +440,6 @@ mod tests {
         tokio::task::spawn_blocking(f).await.expect("join")
     }
 
-
     /// A maildir account whose store is warmed, then whose maildir is
     /// emptied underneath it. A cached read still returns the rows; an
     /// invalidated one does not. That is the whole contract, and it is
@@ -537,11 +538,10 @@ mod tests {
         );
         // Not cacheable, so no freshness mark is recorded.
         let m = mux.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            m.fetch_envelopes("local", "INBOX", SeqRange::All)
-        })
-        .await
-        .unwrap();
+        let _ =
+            tokio::task::spawn_blocking(move || m.fetch_envelopes("local", "INBOX", SeqRange::All))
+                .await
+                .unwrap();
         assert!(!mux.listing_fresh("local", "INBOX"));
     }
 
@@ -553,7 +553,9 @@ mod tests {
         // Reachability isn't asserted (no server here) — routing is:
         // the call must reach IMAP and fail as a network/auth error,
         // not as UnknownAccount.
-        let err = blocking(move || mux.list_folders("gmail")).await.unwrap_err();
+        let err = blocking(move || mux.list_folders("gmail"))
+            .await
+            .unwrap_err();
         assert!(
             !matches!(err, EmailSyncError::UnknownAccount),
             "routed to imap, got {err:?}"

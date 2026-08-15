@@ -1,9 +1,9 @@
 //! Time section — logged vs estimated minutes + recurrence
 //! summary. Pure display; the timer feature owns mutation.
 
+use architect_ui::lucide_dioxus::{Repeat, Timer};
 use chrono::Utc;
 use dioxus::prelude::*;
-use architect_ui::lucide_dioxus::{Repeat, Timer};
 use task_proto::TimeEntry as DbTimeEntry;
 
 use crate::views::detail_full::SectionLabel;

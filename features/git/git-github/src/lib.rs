@@ -71,7 +71,6 @@ impl Backend {
         })
     }
 
-
     /// Announce a committed issue change. Call only after GitHub
     /// accepted the write — subscribers re-read on the event, so a
     /// speculative one shows state that never was.

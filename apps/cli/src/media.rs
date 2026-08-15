@@ -186,10 +186,7 @@ pub async fn run_media(cmd: MediaCmd) -> eyre::Result<()> {
     Ok(())
 }
 
-async fn client(
-    org: Option<&str>,
-    server: Option<String>,
-) -> eyre::Result<MediaServiceClient> {
+async fn client(org: Option<&str>, server: Option<String>) -> eyre::Result<MediaServiceClient> {
     let active = crate::org_ctx::resolve_active(org)?;
     let slug = active.root.slug().to_string();
     crate::establish_client::<MediaServiceClient>(server, &slug).await
@@ -269,7 +266,10 @@ mod tests {
         let note = "---\ntype: song\nstems:\n  - name: \"Click\"\n    group: Guide\n    default_muted: true\n    content_hash: aaa\n  - name: \"Bass\"\n    content_hash: bbb\nduration_sec: 12\n---\nbody";
         assert_eq!(
             stems_from_frontmatter(note),
-            vec![("Click".into(), "aaa".into()), ("Bass".into(), "bbb".into())]
+            vec![
+                ("Click".into(), "aaa".into()),
+                ("Bass".into(), "bbb".into())
+            ]
         );
     }
 }

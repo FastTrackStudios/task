@@ -102,7 +102,10 @@ pub fn native_selection_decoration(
             let start_line = rope.byte_to_line(r.from().min(rope.len_bytes()));
             let end_line = rope.byte_to_line(r.to().min(rope.len_bytes()));
             for line in start_line..=end_line {
-                out.push(DecoratedRange::line(rope.line_to_byte(line), "ed-selection-line"));
+                out.push(DecoratedRange::line(
+                    rope.line_to_byte(line),
+                    "ed-selection-line",
+                ));
             }
         } else {
             out.push(DecoratedRange::mark(r.from()..r.to(), "ed-selection"));
@@ -496,8 +499,14 @@ mod tests {
 
     #[test]
     fn arrows_clamp_at_doc_bounds() {
-        assert_eq!(nav_target(&at("abc", 0), &key("ArrowLeft")).unwrap().head, 0);
-        assert_eq!(nav_target(&at("abc", 3), &key("ArrowRight")).unwrap().head, 3);
+        assert_eq!(
+            nav_target(&at("abc", 0), &key("ArrowLeft")).unwrap().head,
+            0
+        );
+        assert_eq!(
+            nav_target(&at("abc", 3), &key("ArrowRight")).unwrap().head,
+            3
+        );
     }
 
     #[test]

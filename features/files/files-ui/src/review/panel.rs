@@ -7,10 +7,10 @@
 //! chip, detachable), and a pending drawing forces the pin: drawn
 //! feedback without its frame would be a lie.
 
-use dioxus::prelude::*;
-use files_proto::{NewReviewComment, ReviewComment};
 use architect_ui::lucide_dioxus::{Clock, Pencil, SendHorizontal, X};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
+use files_proto::{NewReviewComment, ReviewComment};
 
 use super::{
     DrawCtx, PlayerCtx, ReviewData, UNPINNED, avatar_css, display_author, display_timecode,

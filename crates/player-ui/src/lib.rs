@@ -67,6 +67,7 @@ pub mod song_session;
 pub mod vox_media_source;
 pub mod widgets;
 
+pub use self::widgets::widgets;
 pub use context::{NowPlaying, NowPlayingRequest, SongPlayRequest, provide_player_contexts};
 pub use now_playing::{
     GlobalNowPlayer, NowPlayingCtl, NowPlayingStripHighlighter, NowPlayingTab, NpCmd,
@@ -75,7 +76,6 @@ pub use now_playing::{
 pub use setlist_session::SetlistPlayer;
 pub use setlist_stream::SetlistStreamPlayer;
 pub use song_session::SongView;
-pub use self::widgets::widgets;
 
 /// An org's `MediaServiceClient` — content-addressed blob bytes
 /// streamed over the vox lane itself (`Tx<MediaChunk>`), no HTTP
@@ -83,9 +83,7 @@ pub use self::widgets::widgets;
 // Only the wasm (browser) build streams over these clients; native
 // compiles the module but never calls them.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) async fn media_client(
-    slug: &str,
-) -> Result<media_proto::MediaServiceClient, String> {
+pub(crate) async fn media_client(slug: &str) -> Result<media_proto::MediaServiceClient, String> {
     task_ui_core::vox_clients::establish_for::<media_proto::MediaServiceClient>(slug).await
 }
 

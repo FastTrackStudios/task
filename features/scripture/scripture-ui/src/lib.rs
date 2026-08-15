@@ -19,8 +19,8 @@
 
 use std::collections::BTreeMap;
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use scripture_proto::{
     Book, ChapterView, ComparisonView, ScriptureRef, VerseBacklinks, WordStudyReport,
 };
@@ -115,9 +115,7 @@ pub fn ScriptureView(reference: String) -> Element {
     // Installed translations for the picker.
     let translations = use_resource(move || async move {
         match slug() {
-            Some(s) => fetch_translations(&s)
-                .await
-                .unwrap_or_default(),
+            Some(s) => fetch_translations(&s).await.unwrap_or_default(),
             None => Vec::new(),
         }
     });
@@ -155,9 +153,7 @@ pub fn ScriptureView(reference: String) -> Element {
     // of translation, so it doesn't re-fetch when the edition changes.
     let backlinks = use_resource(move || async move {
         let s = slug()?;
-        fetch_chapter_backlinks(&s, &book(), chapter())
-            .await
-            .ok()
+        fetch_chapter_backlinks(&s, &book(), chapter()).await.ok()
     });
     let backlink_map: BTreeMap<u16, VerseBacklinks> = backlinks
         .read()
@@ -258,9 +254,7 @@ pub fn ScriptureView(reference: String) -> Element {
     let comparison = use_resource(move || async move {
         let (reference, txs) = compare_query()?;
         let s = slug()?;
-        fetch_comparison(&s, &reference, txs)
-            .await
-            .ok()
+        fetch_comparison(&s, &reference, txs).await.ok()
     });
     let comparison_view: Option<ComparisonView> = comparison.read().clone().flatten();
 
@@ -270,8 +264,7 @@ pub fn ScriptureView(reference: String) -> Element {
         .collect();
 
     let selected_osis = selected.read().as_ref().map(|s| s.osis.clone());
-    let study_report: Option<Result<WordStudyReport, String>> =
-        word_study.read().clone().flatten();
+    let study_report: Option<Result<WordStudyReport, String>> = word_study.read().clone().flatten();
 
     rsx! {
         div { class: "mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6 lg:p-10",
@@ -764,7 +757,8 @@ pub async fn fetch_chapter(
     chapter: u16,
 ) -> Result<scripture_proto::ChapterView, String> {
     let client =
-        task_ui_core::vox_clients::establish_for::<scripture_proto::ScriptureServiceClient>(slug).await?;
+        task_ui_core::vox_clients::establish_for::<scripture_proto::ScriptureServiceClient>(slug)
+            .await?;
     // The generated vox client takes owned `String` args.
     client
         .chapter(translation.to_owned(), book.to_owned(), chapter)

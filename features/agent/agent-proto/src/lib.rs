@@ -93,14 +93,14 @@ pub mod tool;
 
 pub use error::AgentError;
 pub use event::{AgentEvent, AgentEventEnvelope};
+pub use routing::{Refusal, TicketRef, malformed, requirements, takeable, unroutable};
 pub use run::{FinishRun, Run, RunFilter, RunStatus, StartRun};
 pub use run_event::{RunEvent, RunEventEnvelope, RunSnapshot, append_tail};
-pub use supervisor::{MAX_RESTARTS, NO_PROGRESS_AFTER, Recovery};
-pub use routing::{Refusal, TicketRef, malformed, requirements, takeable, unroutable};
 pub use runner::{
     Capability, CapabilityError, RunnerProfile, RunnerScope, TicketRequirements, Unroutable,
     parse_capabilities, unsatisfiable_capability,
 };
+pub use supervisor::{MAX_RESTARTS, NO_PROGRESS_AFTER, Recovery};
 
 // Convenience re-exports of the per-capability traits.
 // Concrete RPC scaffolding (per-trait `Rpc` mirror,

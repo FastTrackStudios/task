@@ -206,13 +206,22 @@ fn target_from(
     entity: Option<String>,
 ) -> eyre::Result<email_proto::LinkTarget> {
     if let Some(id) = project {
-        return Ok(email_proto::LinkTarget { kind: "project".into(), id });
+        return Ok(email_proto::LinkTarget {
+            kind: "project".into(),
+            id,
+        });
     }
     if let Some(id) = task {
-        return Ok(email_proto::LinkTarget { kind: "task".into(), id });
+        return Ok(email_proto::LinkTarget {
+            kind: "task".into(),
+            id,
+        });
     }
     if let Some(id) = note {
-        return Ok(email_proto::LinkTarget { kind: "note".into(), id });
+        return Ok(email_proto::LinkTarget {
+            kind: "note".into(),
+            id,
+        });
     }
     if let Some(raw) = entity {
         let (kind, id) = raw
@@ -221,7 +230,10 @@ fn target_from(
         if kind.is_empty() || id.is_empty() {
             eyre::bail!("--entity wants a non-empty kind and id");
         }
-        return Ok(email_proto::LinkTarget { kind: kind.into(), id: id.into() });
+        return Ok(email_proto::LinkTarget {
+            kind: kind.into(),
+            id: id.into(),
+        });
     }
     eyre::bail!("pass one of --project / --task / --note / --entity")
 }
@@ -312,8 +324,9 @@ fn mail_root(slug: &str) -> eyre::Result<std::path::PathBuf> {
     if let Ok(explicit) = std::env::var("TASK_SERVER_MAIL_ROOT") {
         return Ok(std::path::PathBuf::from(explicit));
     }
-    let root = org_proto::DataRoot::from_env()
-        .map_err(|e| eyre::eyre!("no data root ({e}) — set TASK_DATA_ROOT or run `task org init`"))?;
+    let root = org_proto::DataRoot::from_env().map_err(|e| {
+        eyre::eyre!("no data root ({e}) — set TASK_DATA_ROOT or run `task org init`")
+    })?;
     Ok(root.org(slug).path().join("vault").join("Mail"))
 }
 
@@ -412,22 +425,43 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
         }
         EmailCmd::Remove { id, purge_maildir } => remove(&root, &id, purge_maildir),
         EmailCmd::Test { id } => test(&root, &id).await,
-        EmailCmd::ToTask { message_id, account, title, project } => {
-            to_task(&slug, &root, &message_id, account, title, project).await
-        }
-        EmailCmd::Link { message_id, project, task, note, entity, by } => {
+        EmailCmd::ToTask {
+            message_id,
+            account,
+            title,
+            project,
+        } => to_task(&slug, &root, &message_id, account, title, project).await,
+        EmailCmd::Link {
+            message_id,
+            project,
+            task,
+            note,
+            entity,
+            by,
+        } => {
             let target = target_from(project, task, note, entity)?;
-            let client = crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
+            let client =
+                crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
             let link = client
                 .link(message_id, target, by)
                 .await
                 .map_err(|e| eyre::eyre!("link: {e:?}"))?;
-            println!("linked {} → {}:{}", link.message_id, link.target.kind, link.target.id);
+            println!(
+                "linked {} → {}:{}",
+                link.message_id, link.target.kind, link.target.id
+            );
             Ok(())
         }
-        EmailCmd::Unlink { message_id, project, task, note, entity } => {
+        EmailCmd::Unlink {
+            message_id,
+            project,
+            task,
+            note,
+            entity,
+        } => {
             let target = target_from(project, task, note, entity)?;
-            let client = crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
+            let client =
+                crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
             client
                 .unlink(message_id.clone(), target.clone())
                 .await
@@ -435,8 +469,16 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
             println!("unlinked {message_id} from {}:{}", target.kind, target.id);
             Ok(())
         }
-        EmailCmd::Links { message, project, task, note, entity, json } => {
-            let client = crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
+        EmailCmd::Links {
+            message,
+            project,
+            task,
+            note,
+            entity,
+            json,
+        } => {
+            let client =
+                crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
             let links = match message {
                 Some(id) => client
                     .links_for_message(id)
@@ -479,14 +521,9 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
     }
 }
 
-fn write_account(
-    root: &std::path::Path,
-    id: &str,
-    cfg: &AccountConfig,
-) -> eyre::Result<()> {
+fn write_account(root: &std::path::Path, id: &str, cfg: &AccountConfig) -> eyre::Result<()> {
     let dir = root.join(id);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| eyre::eyre!("create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| eyre::eyre!("create {}: {e}", dir.display()))?;
     let path = dir.join("account.json");
     let existed = path.exists();
     cfg.save_json(&path)
@@ -511,7 +548,9 @@ fn list(root: &std::path::Path, json: bool) -> eyre::Result<()> {
             let Some(id) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            let cfg = AccountConfig::load_json(&path.join("account.json")).ok().flatten();
+            let cfg = AccountConfig::load_json(&path.join("account.json"))
+                .ok()
+                .flatten();
             let (kind, address, host) = match cfg.as_ref().map(|c| (&c.backend, &c.address)) {
                 Some((BackendKind::Imap { host, port, .. }, addr)) => {
                     ("imap", addr.clone(), format!("{host}:{port}"))
@@ -560,14 +599,12 @@ fn remove(root: &std::path::Path, id: &str, purge_maildir: bool) -> eyre::Result
         eyre::bail!("no account {id:?} under {}", root.display());
     }
     if purge_maildir {
-        std::fs::remove_dir_all(&dir)
-            .map_err(|e| eyre::eyre!("remove {}: {e}", dir.display()))?;
+        std::fs::remove_dir_all(&dir).map_err(|e| eyre::eyre!("remove {}: {e}", dir.display()))?;
         println!("removed account {id} and its local maildir");
     } else {
         let cfg = dir.join("account.json");
         if cfg.exists() {
-            std::fs::remove_file(&cfg)
-                .map_err(|e| eyre::eyre!("remove {}: {e}", cfg.display()))?;
+            std::fs::remove_file(&cfg).map_err(|e| eyre::eyre!("remove {}: {e}", cfg.display()))?;
         }
         println!("removed account {id}'s config (local maildir kept)");
     }
@@ -615,7 +652,9 @@ async fn test(root: &std::path::Path, id: &str) -> eyre::Result<()> {
 
     println!("connected — {} folders:", folders.len());
     for f in folders {
-        let unread = f.unread_count.map_or(String::new(), |n| format!("  ({n} unread)"));
+        let unread = f
+            .unread_count
+            .map_or(String::new(), |n| format!("  ({n} unread)"));
         println!("  {}{unread}", f.name);
     }
     Ok(())
@@ -647,8 +686,7 @@ async fn to_task(
                 Some(a) => a,
                 None => sole_account(root)?,
             };
-            let mail =
-                crate::establish_client::<email_proto::EmailSyncClient>(None, slug).await?;
+            let mail = crate::establish_client::<email_proto::EmailSyncClient>(None, slug).await?;
             let msg = mail
                 .fetch_message(account, message_id.to_owned())
                 .await
@@ -699,7 +737,10 @@ async fn to_task(
         links
             .link(
                 message_id.to_owned(),
-                email_proto::LinkTarget { kind: "project".into(), id: p.clone() },
+                email_proto::LinkTarget {
+                    kind: "project".into(),
+                    id: p.clone(),
+                },
                 "user".to_owned(),
             )
             .await

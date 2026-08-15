@@ -308,9 +308,11 @@ mod tests {
         for i in [1usize, 3] {
             match &kids[i] {
                 Patch::Element { attrs, .. } => {
-                    assert!(attrs
-                        .iter()
-                        .any(|(k, v)| k == "class" && v == "cm-widgetBuffer"));
+                    assert!(
+                        attrs
+                            .iter()
+                            .any(|(k, v)| k == "class" && v == "cm-widgetBuffer")
+                    );
                     assert!(attrs.iter().any(|(k, v)| k == "data-tile-len" && v == "0"));
                 }
                 _ => panic!("expected buffer img"),

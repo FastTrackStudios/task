@@ -31,5 +31,9 @@ async fn focus_survives_click() {
     t.click_at(c.page().x as f32, c.page().y as f32);
     // Focus must still be the same (real) node, not fall back to root.
     // (Upstream Blitz blurred it on the click event — see module docs.)
-    assert_eq!(t.blitz_focus(), focus_before, "click must not blur the editor");
+    assert_eq!(
+        t.blitz_focus(),
+        focus_before,
+        "click must not blur the editor"
+    );
 }

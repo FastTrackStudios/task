@@ -17,9 +17,9 @@
 
 use std::collections::HashMap;
 
+use architect_ui::prelude::*;
 use chrono::{Datelike, NaiveDate, Utc};
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 use scheduling_proto::{BlockAssignment, BlockCategory, CalEvent};
 use view_calendar::{
     BlockEdit, Calendar, CalendarEvent, CalendarMutation, CalendarState, ColorTag, EventId,

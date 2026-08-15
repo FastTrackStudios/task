@@ -35,9 +35,9 @@ use agent_proto::message::{ContentBlock, Message, Role};
 use agent_proto::question::QuestionRequest;
 use agent_proto::service::discovery::{CapabilityFlag, ModelInfo, SkillInfo};
 use agent_proto::session::{Session, SessionStatus};
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{Bot, ChevronLeft, Copy, FileText, Info, Trash2};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use logic::{
     PromptHistory, Recall, ScrollMode, autoscroll_js, context_free_percent, context_ring_style,

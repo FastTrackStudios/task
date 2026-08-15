@@ -13,8 +13,8 @@
 //! tray notification on failure.
 
 use architect::Id;
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use milestone_proto::Milestone;
 use uuid::Uuid;
 

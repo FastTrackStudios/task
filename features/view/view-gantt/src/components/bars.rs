@@ -15,8 +15,8 @@
 //! shift extends (the gantt-root currently treats shift as toggle —
 //! true range needs an anchor signal, see follow-up).
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::scales::ScaleGrid;
 use crate::store::{GanttEvent, LaidOutTask, SelectMode, is_descendant};

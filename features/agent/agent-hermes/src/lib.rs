@@ -180,7 +180,10 @@ impl HermesBackend {
     /// Same, sharing an existing event hub — how a multi-backend
     /// router gets one `Subscriptions` stream over several backends.
     #[must_use]
-    pub fn with_events(config: HermesConfig, events: architect::PubSub<AgentEventEnvelope>) -> Self {
+    pub fn with_events(
+        config: HermesConfig,
+        events: architect::PubSub<AgentEventEnvelope>,
+    ) -> Self {
         Self {
             inner: Arc::new(HermesInner {
                 config,

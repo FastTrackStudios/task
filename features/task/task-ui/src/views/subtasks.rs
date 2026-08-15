@@ -19,7 +19,8 @@ pub fn subtask_summary(rows: &[SubtaskRow]) -> (usize, usize) {
     let done = rows
         .iter()
         .filter(|r| {
-            project_proto::resolve_state_group(None, &r.task.status) == project_proto::StateGroup::Completed
+            project_proto::resolve_state_group(None, &r.task.status)
+                == project_proto::StateGroup::Completed
         })
         .count();
     (done, rows.len())

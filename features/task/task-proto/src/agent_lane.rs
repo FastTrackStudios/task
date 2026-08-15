@@ -93,7 +93,11 @@ impl TriageLabel {
 /// silently picking a winner.
 #[must_use]
 pub fn triage_labels(t: &TaskInfo) -> Vec<TriageLabel> {
-    let mut found: Vec<TriageLabel> = t.tags.iter().filter_map(|s| TriageLabel::parse(s)).collect();
+    let mut found: Vec<TriageLabel> = t
+        .tags
+        .iter()
+        .filter_map(|s| TriageLabel::parse(s))
+        .collect();
     found.sort_unstable();
     found.dedup();
     found
@@ -130,9 +134,7 @@ pub fn is_untriaged(t: &TaskInfo) -> bool {
 /// Does this issue carry the given triage label?
 #[must_use]
 pub fn has_triage_label(t: &TaskInfo, label: TriageLabel) -> bool {
-    t.tags
-        .iter()
-        .any(|s| TriageLabel::parse(s) == Some(label))
+    t.tags.iter().any(|s| TriageLabel::parse(s) == Some(label))
 }
 
 /// Why an issue cannot be marked [`TriageLabel::ReadyForAgent`].
@@ -192,7 +194,11 @@ mod tests {
 
     fn tagged(tags: &[&str]) -> TaskInfo {
         let mut t = TaskInfo::new("x");
-        t.tags = tags.iter().map(|s| (*s).to_string()).collect::<Vec<_>>().into();
+        t.tags = tags
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>()
+            .into();
         t
     }
 

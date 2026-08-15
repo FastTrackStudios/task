@@ -18,10 +18,10 @@
 //! (these widgets, `/inbox`, `/timer`) updates the chips and the clock
 //! instantly — no refresh counter, no extra round-trips.
 
-use chrono::Utc;
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{ChevronDown, Feather, Inbox as InboxIcon, Pause, Play, Square};
 use architect_ui::prelude::*;
+use chrono::Utc;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::orgs::{OrgMeta, OrgSelection};
@@ -111,7 +111,11 @@ pub fn provide_chrome_contexts() {
     // hands the builder down (see `task_ui_core::nav`).
     use_context_provider(|| {
         task_ui_core::nav::NoteHref(Callback::new(|path: String| {
-            crate::routes::Route::VaultRoute { path, org: String::new() }.to_string()
+            crate::routes::Route::VaultRoute {
+                path,
+                org: String::new(),
+            }
+            .to_string()
         }))
     });
     use_context_provider(|| TimerResumeHint(Signal::new(None)));
@@ -940,10 +944,12 @@ fn TimerMenu(
         scored
             .into_iter()
             .map(|(_, row)| {
-                let project = row
-                    .task
-                    .project_id
-                    .and_then(|pid| project_rows.iter().map(|(_, p)| p).find(|p| p.project.id == pid));
+                let project = row.task.project_id.and_then(|pid| {
+                    project_rows
+                        .iter()
+                        .map(|(_, p)| p)
+                        .find(|p| p.project.id == pid)
+                });
                 TimerPick {
                     key: format!("task-{}", row.task.id),
                     title: row.task.title.clone(),

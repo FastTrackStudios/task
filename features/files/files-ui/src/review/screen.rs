@@ -6,9 +6,9 @@
 //! fixed overlay from the mini player. It never scrolls as a page —
 //! only the comment thread scrolls.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{ChevronDown, Columns2, Link as LinkIcon, X};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use super::panel::CommentsRail;

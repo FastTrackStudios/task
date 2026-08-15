@@ -291,7 +291,11 @@ fn is_typing(spec: &TransactionSpec) -> bool {
 fn single_change(changes: &Changes) -> Option<Change> {
     let mut it = changes.iter();
     let first = it.next()?.clone();
-    if it.next().is_some() { None } else { Some(first) }
+    if it.next().is_some() {
+        None
+    } else {
+        Some(first)
+    }
 }
 
 #[cfg(test)]

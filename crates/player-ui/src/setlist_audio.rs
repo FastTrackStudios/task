@@ -29,8 +29,8 @@ mod imp {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
         AudioBuffer, AudioContext, AudioWorkletNode, AudioWorkletNodeOptions, MessageEvent,
@@ -62,10 +62,8 @@ mod imp {
     // `Content-Type` (module loads hard-require a JS MIME), and the app's
     // service worker (scoped to `/assets/`) answers asset fetches with the
     // HTML shell. A Blob URL carries its own MIME and needs no server.
-    const WORKLET_GLUE: &str =
-        include_str!("../../../apps/web/assets/worklet/daw_standalone.js");
-    const WORKLET_PROC: &str =
-        include_str!("../../../apps/web/assets/worklet/processor.js");
+    const WORKLET_GLUE: &str = include_str!("../../../apps/web/assets/worklet/daw_standalone.js");
+    const WORKLET_PROC: &str = include_str!("../../../apps/web/assets/worklet/processor.js");
     const WORKLET_WASM: &[u8] =
         include_bytes!("../../../apps/web/assets/worklet/daw_standalone_bg.wasm");
 
@@ -170,7 +168,9 @@ mod imp {
                 .join("\n");
             // Processor: split at its `import` line — polyfills above, the
             // processor class below; glue goes in between.
-            let (pre, post) = match proc.lines().position(|l| l.trim_start().starts_with("import "))
+            let (pre, post) = match proc
+                .lines()
+                .position(|l| l.trim_start().starts_with("import "))
             {
                 Some(idx) => {
                     let lines: Vec<&str> = proc.lines().collect();
@@ -292,7 +292,10 @@ mod imp {
         /// assets, create the node, seed every song as its own project with a
         /// track per stem. PCM decoding is per-song, driven by
         /// [`select_song`](Self::select_song).
-        pub(crate) fn build(org: &str, songs_in: &[(String, Manifest)]) -> Result<SetlistAudio, String> {
+        pub(crate) fn build(
+            org: &str,
+            songs_in: &[(String, Manifest)],
+        ) -> Result<SetlistAudio, String> {
             let ctx = shared_ctx()?;
             let songs: Vec<SongStems> = songs_in
                 .iter()
@@ -679,8 +682,8 @@ mod imp {
                 .map_err(|e| format!("create_media_stream_destination: {e:?}"))?;
             node.connect_with_audio_node(&msd)
                 .map_err(|e| format!("connect worklet node: {e:?}"))?;
-            let sink = web_sys::HtmlAudioElement::new()
-                .map_err(|e| format!("HtmlAudioElement: {e:?}"))?;
+            let sink =
+                web_sys::HtmlAudioElement::new().map_err(|e| format!("HtmlAudioElement: {e:?}"))?;
             sink.set_src_object(Some(&msd.stream()));
             sink.set_autoplay(true);
             let _ = sink.play();

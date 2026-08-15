@@ -9,9 +9,9 @@
 //! in [`super::detail_full::TaskDetailFull`] — this sheet stays
 //! the quick-edit path for `/tasks` today.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Trash2;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::TaskInfo;

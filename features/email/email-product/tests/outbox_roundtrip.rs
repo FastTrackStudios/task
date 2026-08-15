@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
+use email_product::{ProductAccount, ProductBackend};
 use email_proto::{
     Account, AccountId, Addr, Draft, EmailChange, EmailEvent, EmailProductClient, EmailSync,
     EmailSyncStreamClient, EmailSyncStreamSource, OutboxStatus, SeqRange,
 };
-use email_product::{ProductAccount, ProductBackend};
 
 /// Recording mock transport: delivery "succeeds" without a wire.
 struct MockSubmit {
@@ -191,7 +191,10 @@ async fn submit_approve_deliver_roundtrip() {
     }
 
     // The outbox row is terminal + carries the sent Message-ID…
-    let entries = client.list_outbox("acct".into()).await.expect("list_outbox");
+    let entries = client
+        .list_outbox("acct".into())
+        .await
+        .expect("list_outbox");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].status, OutboxStatus::Sent);
     let mid = entries[0]

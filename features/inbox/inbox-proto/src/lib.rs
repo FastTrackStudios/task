@@ -41,6 +41,6 @@ pub use service::inbox::{
 #[cfg(feature = "vox")]
 pub use service::inbox::{
     InboxStream, InboxStreamClient, InboxStreamSource,
-    inbox_stream_service_descriptor as inbox_stream_descriptor,
-    stream_layer as inbox_stream_layer, stream_serve as inbox_stream_serve,
+    inbox_stream_service_descriptor as inbox_stream_descriptor, stream_layer as inbox_stream_layer,
+    stream_serve as inbox_stream_serve,
 };

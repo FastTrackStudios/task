@@ -203,7 +203,11 @@ impl DiagnosticsStore {
                 }
             }
         }
-        let items = published.diagnostics.iter().map(|d| resolve(doc, d)).collect();
+        let items = published
+            .diagnostics
+            .iter()
+            .map(|d| resolve(doc, d))
+            .collect();
         self.docs.insert(
             key,
             DocDiagnostics {
@@ -322,7 +326,11 @@ mod tests {
     fn store_accepts_fresh_and_versionless() {
         let doc = Doc::from_str("hello");
         let mut store = DiagnosticsStore::new();
-        assert!(store.apply(&published(Some(3), vec![raw((0, 0), (0, 5), "x")]), Some(3), &doc));
+        assert!(store.apply(
+            &published(Some(3), vec![raw((0, 0), (0, 5), "x")]),
+            Some(3),
+            &doc
+        ));
         assert_eq!(store.get(&uri()).len(), 1);
         // Versionless always accepted.
         assert!(store.apply(&published(None, vec![]), Some(9), &doc));
@@ -333,7 +341,11 @@ mod tests {
     fn store_drops_stale_versions() {
         let doc = Doc::from_str("hello");
         let mut store = DiagnosticsStore::new();
-        assert!(store.apply(&published(Some(5), vec![raw((0, 0), (0, 5), "v5")]), Some(5), &doc));
+        assert!(store.apply(
+            &published(Some(5), vec![raw((0, 0), (0, 5), "v5")]),
+            Some(5),
+            &doc
+        ));
         // Older than the client's current didChange version.
         assert!(!store.apply(&published(Some(4), vec![]), Some(5), &doc));
         // Older than the last accepted publish, even with no newer
@@ -346,7 +358,11 @@ mod tests {
     fn store_map_through_shifts_ranges() {
         let doc = Doc::from_str("let x = 1;");
         let mut store = DiagnosticsStore::new();
-        store.apply(&published(Some(1), vec![raw((0, 4), (0, 5), "unused")]), Some(1), &doc);
+        store.apply(
+            &published(Some(1), vec![raw((0, 4), (0, 5), "unused")]),
+            Some(1),
+            &doc,
+        );
         assert_eq!((store.get(&uri())[0].from, store.get(&uri())[0].to), (4, 5));
         // Insert "mut " at offset 4 — the squiggle slides right.
         store.map_through(&uri(), &Changes::insert(4, "mut "));
@@ -404,7 +420,10 @@ mod tests {
         use lsp_types::DiagnosticSeverity as S;
         assert_eq!(Severity::from_lsp(Some(S::ERROR)), Severity::Error);
         assert_eq!(Severity::from_lsp(Some(S::WARNING)), Severity::Warning);
-        assert_eq!(Severity::from_lsp(Some(S::INFORMATION)), Severity::Information);
+        assert_eq!(
+            Severity::from_lsp(Some(S::INFORMATION)),
+            Severity::Information
+        );
         assert_eq!(Severity::from_lsp(Some(S::HINT)), Severity::Hint);
         assert!(Severity::Error < Severity::Warning);
     }

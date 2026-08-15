@@ -10,10 +10,10 @@
 //! and knows nothing about food, which is what lets `/schedule` show the
 //! same view later without either surface owning the other's geometry.
 
-use chrono::{Local, NaiveDate};
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{ChevronLeft, ChevronRight, UtensilsCrossed};
 use architect_ui::prelude::*;
+use chrono::{Local, NaiveDate};
+use dioxus::prelude::*;
 use mealplan_proto::{Meal, Slot, Status};
 use std::collections::BTreeSet;
 use view_calendar::{ColorTag, SlotGrid, SlotItem, SlotRow};

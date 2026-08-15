@@ -9,8 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{ChevronRight, FileText, Folder};
+use dioxus::prelude::*;
 use vault_proto::PageMeta;
 
 use super::FileMeta;

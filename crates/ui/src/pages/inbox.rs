@@ -14,9 +14,9 @@
 //! leaving review mode needs no refetch: the store already reflects
 //! every decision.
 
+use architect_ui::prelude::*;
 use chrono::Utc;
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 use inbox_proto::{InboxItem, ReviewResponse, review};
 
 use crate::orgs::{OrgMeta, OrgSelection};

@@ -14,10 +14,10 @@
 //! current doc and locates the property by key, so a concurrent edit
 //! can never make a captured byte-range go stale.
 
+use architect_ui::lucide_dioxus::{Plus, X};
 use dioxus::prelude::*;
 use editor::markdown::{PropValue, parse_frontmatter, serialize_property};
 use editor::{Changes, EditorState, TransactionEvent, TransactionSpec, dispatch_spec};
-use architect_ui::lucide_dioxus::{Plus, X};
 
 /// Handle to the focused note's editor doc. The focused
 /// [`NoteView`](crate::pages::note_view) publishes this into context;

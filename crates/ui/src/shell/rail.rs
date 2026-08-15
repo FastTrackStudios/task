@@ -8,8 +8,8 @@
 //! the active org's initials chip at the very bottom (the org chip
 //! doubles as the brand spot; there is no separate logo).
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Feather;
+use dioxus::prelude::*;
 
 use crate::nav::{nav_tabs_for, tabs_match, use_active_plugins};
 use crate::routes::Route;
@@ -21,8 +21,22 @@ use crate::routes::Route;
 /// rail is it). Connections = the whole-vault graph. Settings renders
 /// in the foot cluster, not here.
 const RAIL_TABS: &[&str] = &[
-    "Home", "Inbox", "Email", "Recall", "Contacts", "Projects", "Tasks", "Schedule", "Timer",
-    "Invoices", "Files", "Members", "Wiki", "Agents", "Runners", "Connections",
+    "Home",
+    "Inbox",
+    "Email",
+    "Recall",
+    "Contacts",
+    "Projects",
+    "Tasks",
+    "Schedule",
+    "Timer",
+    "Invoices",
+    "Files",
+    "Members",
+    "Wiki",
+    "Agents",
+    "Runners",
+    "Connections",
 ];
 
 #[component]

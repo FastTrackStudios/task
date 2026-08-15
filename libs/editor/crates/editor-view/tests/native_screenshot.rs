@@ -29,7 +29,12 @@ async fn shot_descender() {
 #[tokio::test]
 async fn shot_visual_line_mode() {
     // V (line-wise) then j — whole lines must highlight.
-    let t = mount(Setup::text("first line here\nsecond line\nthird line\nfourth").caret(3).vim().theme(THEME));
+    let t = mount(
+        Setup::text("first line here\nsecond line\nthird line\nfourth")
+            .caret(3)
+            .vim()
+            .theme(THEME),
+    );
     t.press_key(Key::Character("V".into()), Modifiers::SHIFT);
     press(&t, &["j"]);
     t.pump().await.ok();
@@ -45,7 +50,12 @@ async fn shot_code_and_markers() {
 
 #[tokio::test]
 async fn shot_headings() {
-    let t = mount(Setup::text("# H1 heading\n## H2 heading\n### H3 heading\nnormal body text").caret(60).markdown().theme(THEME));
+    let t = mount(
+        Setup::text("# H1 heading\n## H2 heading\n### H3 heading\nnormal body text")
+            .caret(60)
+            .markdown()
+            .theme(THEME),
+    );
     t.render_png(out("editor_headings.png"));
 }
 
@@ -62,18 +72,36 @@ async fn shot_full_styles() {
 async fn shot_visual_selection() {
     // Enter visual mode and extend a few chars — the range must be
     // highlighted, not just the caret moved.
-    let t = mount(Setup::text("select this text
-and more").caret(0).vim().theme(THEME));
+    let t = mount(
+        Setup::text(
+            "select this text
+and more",
+        )
+        .caret(0)
+        .vim()
+        .theme(THEME),
+    );
     press(&t, &["v", "l", "l", "l", "l", "l"]);
     t.pump().await.ok();
     t.render_png(out("editor_selection.png"));
     // multi-line: extend down into the next line
-    let m = mount(Setup::text("select this text\nand more here").caret(7).vim().theme(THEME));
+    let m = mount(
+        Setup::text("select this text\nand more here")
+            .caret(7)
+            .vim()
+            .theme(THEME),
+    );
     press(&m, &["v", "j", "l", "l"]);
     m.pump().await.ok();
     m.render_png(out("editor_selection_multi.png"));
     // selection over BOLD text (markdown live-preview must be on)
-    let b = mount(Setup::text("a **bold** word").caret(0).vim().markdown().theme(THEME));
+    let b = mount(
+        Setup::text("a **bold** word")
+            .caret(0)
+            .vim()
+            .markdown()
+            .theme(THEME),
+    );
     press(&b, &["v", "l", "l", "l", "l", "l", "l", "l", "l"]);
     b.pump().await.ok();
     b.render_png(out("editor_selection_bold.png"));
@@ -84,13 +112,27 @@ async fn shot_mode_line_height() {
     // Normal (block) then Insert (bar) on the SAME 3-line doc; line 2/3
     // y-positions must be identical between the two — the caret must not
     // change line height.
-    let n = mount(Setup::text("line one
+    let n = mount(
+        Setup::text(
+            "line one
 line two
-line three").caret(2).vim().theme(THEME));
+line three",
+        )
+        .caret(2)
+        .vim()
+        .theme(THEME),
+    );
     n.render_png(out("editor_mode_normal.png"));
-    let i = mount(Setup::text("line one
+    let i = mount(
+        Setup::text(
+            "line one
 line two
-line three").caret(2).vim().theme(THEME));
+line three",
+        )
+        .caret(2)
+        .vim()
+        .theme(THEME),
+    );
     press(&i, &["i"]);
     i.render_png(out("editor_mode_insert.png"));
 }
@@ -100,8 +142,15 @@ async fn shot_shift_probe() {
     // Two identical lines; caret on the 'w' of the TOP line (offset 6).
     // If inline-block changes advance, "world" on top misaligns with the
     // bottom line's "world".
-    let t = mount(Setup::text("hello world
-hello world").caret(6).vim().theme(THEME));
+    let t = mount(
+        Setup::text(
+            "hello world
+hello world",
+        )
+        .caret(6)
+        .vim()
+        .theme(THEME),
+    );
     t.render_png(out("editor_shift.png"));
 }
 
@@ -110,13 +159,15 @@ async fn shot_empty_line_and_space_caret() {
     // Line 1, an EMPTY line, then more text; caret on the space in
     // "foo bar" (offset in the space between words).
     let t = mount(
-        Setup::text("first line
+        Setup::text(
+            "first line
 
 foo bar baz
-last")
-            .caret(15) // space between "foo" and "bar"
-            .vim()
-            .theme(THEME),
+last",
+        )
+        .caret(15) // space between "foo" and "bar"
+        .vim()
+        .theme(THEME),
     );
     t.render_png(out("editor_issues.png"));
 }
@@ -133,8 +184,15 @@ async fn shot_table() {
 #[tokio::test]
 async fn shot_caret_on_empty_line() {
     // Caret sits on the empty line (offset 11 = the empty line start).
-    let t = mount(Setup::text("first line
+    let t = mount(
+        Setup::text(
+            "first line
 
-after").caret(11).vim().theme(THEME));
+after",
+        )
+        .caret(11)
+        .vim()
+        .theme(THEME),
+    );
     t.render_png(out("editor_empty_caret.png"));
 }

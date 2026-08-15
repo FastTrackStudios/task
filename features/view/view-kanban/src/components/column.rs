@@ -6,9 +6,9 @@
 //! double-click on the title (mirrors janhesters/shadcn-kanban-board
 //! UX — no rename menu item, no extra modal).
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{Ellipsis, Trash2};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::store::KanbanEvent;

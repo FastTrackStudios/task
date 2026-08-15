@@ -36,9 +36,9 @@ use lsp_types::request::Request as RequestTrait;
 use lsp_types::{
     ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
-    PublishDiagnosticsClientCapabilities, PublishDiagnosticsParams,
-    TextDocumentClientCapabilities, TextDocumentIdentifier, TextDocumentItem, Uri,
-    VersionedTextDocumentIdentifier, WorkspaceFolder,
+    PublishDiagnosticsClientCapabilities, PublishDiagnosticsParams, TextDocumentClientCapabilities,
+    TextDocumentIdentifier, TextDocumentItem, Uri, VersionedTextDocumentIdentifier,
+    WorkspaceFolder,
 };
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -200,10 +200,7 @@ impl LspClient {
     /// sync and version-stamped `publishDiagnostics`. Returns the
     /// server's capabilities for the host to inspect (e.g. before
     /// wiring hover/completion later).
-    pub async fn initialize(
-        &self,
-        workspace_root: Option<Uri>,
-    ) -> Result<InitializeResult, Error> {
+    pub async fn initialize(&self, workspace_root: Option<Uri>) -> Result<InitializeResult, Error> {
         let params = InitializeParams {
             process_id: Some(std::process::id()),
             capabilities: ClientCapabilities {

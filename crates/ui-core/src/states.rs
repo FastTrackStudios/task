@@ -7,9 +7,9 @@
 //! reload. These give one consistent look across pages plus an
 //! optional retry affordance. (codeberg #27, item 1.)
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{Inbox, RotateCw, TriangleAlert};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 /// Classify a raw transport/store error string into human copy.
 /// Returns `(title, message, technical_detail)` — `technical_detail`

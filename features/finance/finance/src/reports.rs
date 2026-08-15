@@ -212,7 +212,10 @@ pub async fn weekly_summary(
 ) -> Result<WeeklySummary, sea_orm::DbErr> {
     let range = DateRange::week_of(week_of);
     let projects = hours_by_project(timer_conn, user_id, range).await?;
-    Ok(weekly_summary_from_rollups(projects, range.since.date_naive()))
+    Ok(weekly_summary_from_rollups(
+        projects,
+        range.since.date_naive(),
+    ))
 }
 
 /// Pure totals fold behind [`weekly_summary`] — pair with

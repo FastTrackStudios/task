@@ -7,9 +7,7 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(
-            m20260719_000001_create_linked_servers::Migration,
-        )]
+        vec![Box::new(m20260719_000001_create_linked_servers::Migration)]
     }
 }
 
@@ -33,17 +31,9 @@ mod m20260719_000001_create_linked_servers {
                                 .not_null()
                                 .primary_key(),
                         )
-                        .col(
-                            ColumnDef::new(LinkedServers::HomeUserId)
-                                .uuid()
-                                .not_null(),
-                        )
+                        .col(ColumnDef::new(LinkedServers::HomeUserId).uuid().not_null())
                         .col(ColumnDef::new(LinkedServers::Label).string().not_null())
-                        .col(
-                            ColumnDef::new(LinkedServers::RemoteUrl)
-                                .string()
-                                .not_null(),
-                        )
+                        .col(ColumnDef::new(LinkedServers::RemoteUrl).string().not_null())
                         .col(
                             ColumnDef::new(LinkedServers::RemoteSlug)
                                 .string()
@@ -56,7 +46,11 @@ mod m20260719_000001_create_linked_servers {
                                 .string()
                                 .not_null(),
                         )
-                        .col(ColumnDef::new(LinkedServers::ExpiresAt).big_integer().null())
+                        .col(
+                            ColumnDef::new(LinkedServers::ExpiresAt)
+                                .big_integer()
+                                .null(),
+                        )
                         .col(
                             ColumnDef::new(LinkedServers::CreatedAt)
                                 .big_integer()

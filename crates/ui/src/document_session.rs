@@ -153,9 +153,7 @@ pub fn use_document_session(home: Memo<String>) -> DocumentSession {
     // nothing else here is read outside the pane.
     let owner = try_use_context::<DocOwnerScope>();
     let state = use_hook(|| match owner {
-        Some(DocOwnerScope(scope)) => {
-            Signal::new_in_scope(EditorState::new(String::new()), scope)
-        }
+        Some(DocOwnerScope(scope)) => Signal::new_in_scope(EditorState::new(String::new()), scope),
         // Standalone mount (no vault page above): local ownership is
         // correct and `dispose_buffer` becomes a no-op.
         None => Signal::new(EditorState::new(String::new())),

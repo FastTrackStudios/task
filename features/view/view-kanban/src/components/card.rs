@@ -4,8 +4,8 @@
 //! While the input is focused, drag is suppressed so the user can
 //! select text inside the input.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::store::KanbanEvent;
 use crate::types::{CardId, ColumnId, KanbanCard};

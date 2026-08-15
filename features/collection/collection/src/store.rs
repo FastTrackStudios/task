@@ -277,10 +277,7 @@ mod tests {
             after: None,
         };
         s.add_item(p.clone()).unwrap();
-        assert!(matches!(
-            s.add_item(p),
-            Err(CollectionError::BadRequest(_))
-        ));
+        assert!(matches!(s.add_item(p), Err(CollectionError::BadRequest(_))));
     }
 
     #[test]

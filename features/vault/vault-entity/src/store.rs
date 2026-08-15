@@ -220,9 +220,8 @@ impl<E: VaultEntity> VaultEntityStore<E> {
     }
 
     fn index_of(vault: &Vault, id: Uuid) -> Option<usize> {
-        vault
-            .pages
-            .iter()
-            .position(|p| E::matches(p) && E::from_page(p).map(|m| E::id(&m) == id).unwrap_or(false))
+        vault.pages.iter().position(|p| {
+            E::matches(p) && E::from_page(p).map(|m| E::id(&m) == id).unwrap_or(false)
+        })
     }
 }

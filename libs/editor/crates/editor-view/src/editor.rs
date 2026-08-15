@@ -2079,10 +2079,9 @@ pub fn Editor(
                             // what a wikilink click means — e.g. a
                             // vault view navigates to the target note.
                             if other == "link-clicked" {
-                                if let (Some(cb), Some(href)) = (
-                                    on_link_click,
-                                    v.get("href").and_then(|h| h.as_str()),
-                                ) {
+                                if let (Some(cb), Some(href)) =
+                                    (on_link_click, v.get("href").and_then(|h| h.as_str()))
+                                {
                                     cb.call(href.to_string());
                                 }
                             }
@@ -2296,30 +2295,30 @@ pub fn Editor(
             // h/j/k/l with logical-line semantics instead.
             #[cfg(not(feature = "native"))]
             {
-            let vim_snap = vim_sig.peek().clone();
-            let is_visual_arrow_key = !vim_snap.is_inserting()
-                && vim_snap.pending_count.is_none()
-                && vim_snap.pending_operator.is_none()
-                && vim_snap.pending_motion_input.is_none()
-                && matches!(press.key.as_str(), "h" | "j" | "k" | "l")
-                && !press.ctrl
-                && !press.alt
-                && !press.meta;
-            if is_visual_arrow_key {
-                let direction = match press.key.as_str() {
-                    "h" => ("backward", "character"),
-                    "l" => ("forward", "character"),
-                    "k" => ("backward", "line"),
-                    "j" => ("forward", "line"),
-                    _ => unreachable!(),
-                };
-                let action = if vim_snap.is_visual() {
-                    "extend"
-                } else {
-                    "move"
-                };
-                let script = format!(
-                    r#"
+                let vim_snap = vim_sig.peek().clone();
+                let is_visual_arrow_key = !vim_snap.is_inserting()
+                    && vim_snap.pending_count.is_none()
+                    && vim_snap.pending_operator.is_none()
+                    && vim_snap.pending_motion_input.is_none()
+                    && matches!(press.key.as_str(), "h" | "j" | "k" | "l")
+                    && !press.ctrl
+                    && !press.alt
+                    && !press.meta;
+                if is_visual_arrow_key {
+                    let direction = match press.key.as_str() {
+                        "h" => ("backward", "character"),
+                        "l" => ("forward", "character"),
+                        "k" => ("backward", "line"),
+                        "j" => ("forward", "line"),
+                        _ => unreachable!(),
+                    };
+                    let action = if vim_snap.is_visual() {
+                        "extend"
+                    } else {
+                        "move"
+                    };
+                    let script = format!(
+                        r#"
                     (function() {{
                         const el = document.querySelector('[data-editor-id="{id}"]');
                         if (!el) return;
@@ -2355,15 +2354,15 @@ pub fn Editor(
                         }}
                     }})();
                     "#,
-                    id = editor_id_for_keys,
-                    action = action,
-                    dir = direction.0,
-                    gran = direction.1,
-                );
-                let _ = document::eval(&script);
-                evt.prevent_default();
-                return;
-            }
+                        id = editor_id_for_keys,
+                        action = action,
+                        dir = direction.0,
+                        gran = direction.1,
+                    );
+                    let _ = document::eval(&script);
+                    evt.prevent_default();
+                    return;
+                }
             } // end #[cfg(not(feature = "native"))] visual-arrow block
             // ── Frontmatter row-nav override ──────────────
             //
@@ -2599,17 +2598,18 @@ pub fn Editor(
                     if prev.kind == kind && prev.trigger_start == start
                     // Same trigger, query updated. Re-fetch and clamp
                     // the highlighted row to the new candidate count.
-                    && prev.query != q => {
-                        let candidates = source.run(&q, kind);
-                        let selected = prev.selected.min(candidates.len().saturating_sub(1));
-                        comp_sig.set(Some(crate::trigger::CompletionState {
-                            kind,
-                            trigger_start: start,
-                            query: q,
-                            selected,
-                            candidates,
-                        }));
-                    }
+                    && prev.query != q =>
+                {
+                    let candidates = source.run(&q, kind);
+                    let selected = prev.selected.min(candidates.len().saturating_sub(1));
+                    comp_sig.set(Some(crate::trigger::CompletionState {
+                        kind,
+                        trigger_start: start,
+                        query: q,
+                        selected,
+                        candidates,
+                    }));
+                }
                 (Some((kind, start, q)), _) => {
                     let candidates = source.run(&q, kind);
                     comp_sig.set(Some(crate::trigger::CompletionState {
@@ -2699,8 +2699,7 @@ pub fn Editor(
                     .count()
             };
             prev_line_hashes.set(new_hashes);
-            let shipped: &[crate::tile::patch::Patch] =
-                patch.get(first_changed..).unwrap_or(&[]);
+            let shipped: &[crate::tile::patch::Patch] = patch.get(first_changed..).unwrap_or(&[]);
 
             tracing::debug!(
                 doc_len,
@@ -2795,9 +2794,17 @@ pub fn Editor(
             .map(|src| src.run(&s))
             .unwrap_or_default();
         // Selection highlight FIRST so the caret decoration paints on top.
-        decos.extend(crate::native::native_selection_decoration(&s, vim, editor_focused));
+        decos.extend(crate::native::native_selection_decoration(
+            &s,
+            vim,
+            editor_focused,
+        ));
         decos.extend(modal_caret_decoration(&s, vim, editor_focused));
-        decos.extend(crate::native::native_caret_decoration(&s, vim, editor_focused));
+        decos.extend(crate::native::native_caret_decoration(
+            &s,
+            vim,
+            editor_focused,
+        ));
         decos.sort_by_key(|d| d.from);
         let (arena, root) = build_tiles(&s.doc.to_string(), &decos);
         // Click-to-position: Blitz has no contenteditable, so each rendered
@@ -2816,7 +2823,14 @@ pub fn Editor(
                     focused.set(true);
                 }
                 let cur = click_state.read().clone();
-                push_selection(&mut click_state, &cur, click_deco.as_ref(), click_sink, pos, pos);
+                push_selection(
+                    &mut click_state,
+                    &cur,
+                    click_deco.as_ref(),
+                    click_sink,
+                    pos,
+                    pos,
+                );
             })
         };
         crate::tile::render_dx::render_tile(&arena, root, on_click)

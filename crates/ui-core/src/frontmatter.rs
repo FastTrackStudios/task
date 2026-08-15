@@ -184,12 +184,7 @@ pub fn song_front_from(text: &str) -> SongFront {
     let sections = front_block_maps(text, "sections")
         .into_iter()
         .filter_map(|pairs| {
-            let get = |k: &str| {
-                pairs
-                    .iter()
-                    .find(|(pk, _)| pk == k)
-                    .map(|(_, v)| v.clone())
-            };
+            let get = |k: &str| pairs.iter().find(|(pk, _)| pk == k).map(|(_, v)| v.clone());
             Some(FrontSection {
                 name: get("name")?,
                 start_sec: get("start_sec")?.parse().ok()?,
@@ -216,7 +211,8 @@ pub fn song_front_from(text: &str) -> SongFront {
 /// basename. The slug selects `/media/songs/{slug}/…` (served same-origin).
 #[must_use]
 pub fn song_slug_from(text: &str, basename: &str) -> String {
-    if let Some(v) = frontmatter_value(text, "song_slug").or_else(|| frontmatter_value(text, "slug"))
+    if let Some(v) =
+        frontmatter_value(text, "song_slug").or_else(|| frontmatter_value(text, "slug"))
     {
         let v = v.trim().trim_matches(['"', '\'']).trim();
         if !v.is_empty() {

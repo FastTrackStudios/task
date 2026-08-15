@@ -5,8 +5,8 @@
 //! category) ship in a follow-up commit; this v1 surface establishes
 //! the visual + the prop shape the editor will inherit.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use scheduling_proto::{BlockCategory, DayTemplate, TimeBlock, TimeOfDay};
 

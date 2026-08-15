@@ -4,9 +4,9 @@
 //! handlers so a drag started on a bar survives the pointer drifting
 //! into the sidebar / toolbar / outside the chart pane.
 
+use architect_ui::prelude::*;
 use chrono::Duration;
 use dioxus::prelude::*;
-use architect_ui::prelude::*;
 
 use crate::store::{GanttEvent, GanttState, SelectMode, apply, descendants_of};
 use crate::time::add;

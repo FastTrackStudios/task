@@ -15,13 +15,13 @@
 use crate::format::duration_hms;
 use std::collections::HashSet;
 
-use cookbook_proto::{Recipe, RecipeTimer};
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     Check, CircleCheck, Clock, Flame, Play, Receipt, ShoppingCart, TriangleAlert, Users,
     UtensilsCrossed, X,
 };
 use architect_ui::prelude::*;
+use cookbook_proto::{Recipe, RecipeTimer};
+use dioxus::prelude::*;
 use mealplan_proto::{CookReceipt, Fulfillment, SkipReason};
 
 use crate::orgs::{OrgMeta, OrgSelection};

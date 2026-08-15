@@ -71,9 +71,9 @@ mod tree;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Folder;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use vault_proto::TagCount;
 use view_knowledge_graph::KnowledgeGraphView;
 

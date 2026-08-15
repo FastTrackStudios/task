@@ -56,7 +56,10 @@ pub fn status_variant(status: &str) -> StatusBadgeVariant {
 /// First non-empty line of `text`, trimmed — the one-line preview used
 /// in list rows.
 pub fn first_line(text: &str) -> &str {
-    text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("")
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
 }
 
 #[cfg(test)]

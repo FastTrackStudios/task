@@ -277,14 +277,12 @@ where
     for def in task_action_defs() {
         let sink = sink.clone();
         registry
-            .register(def, move |id: &ActionId| {
-                match intent_for(id.as_str()) {
-                    Some(intent) => {
-                        sink(intent);
-                        ActionResult::success()
-                    }
-                    None => ActionResult::failure(format!("no intent for {id}")),
+            .register(def, move |id: &ActionId| match intent_for(id.as_str()) {
+                Some(intent) => {
+                    sink(intent);
+                    ActionResult::success()
                 }
+                None => ActionResult::failure(format!("no intent for {id}")),
             })
             .await;
     }

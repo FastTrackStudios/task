@@ -43,6 +43,5 @@ pub use service::{
 pub use service::{
     MilestoneServiceStream, MilestoneServiceStreamClient, MilestoneServiceStreamSource,
     milestone_service_stream_service_descriptor as milestone_stream_descriptor,
-    stream_layer as milestone_service_stream_layer,
-    stream_serve as serve_milestone_service_stream,
+    stream_layer as milestone_service_stream_layer, stream_serve as serve_milestone_service_stream,
 };

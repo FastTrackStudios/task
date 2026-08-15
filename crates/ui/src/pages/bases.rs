@@ -7,8 +7,8 @@
 //! one table per view, with `groupBy` labels as section rows. Clicking a
 //! row opens that note in `/vault`.
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use vault_proto::BaseView;
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};

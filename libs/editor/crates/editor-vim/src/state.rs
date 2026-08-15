@@ -400,11 +400,8 @@ fn single_char_normal_command(
             // Insert after the caret's char — never past the
             // line's `\n`.
             let s = state.doc.to_string();
-            let pos =
-                motions::next_char_boundary(s.as_bytes(), caret(state)).min(motions::line_end(
-                    state,
-                    caret(state),
-                ));
+            let pos = motions::next_char_boundary(s.as_bytes(), caret(state))
+                .min(motions::line_end(state, caret(state)));
             vim.mode = Mode::Insert;
             vim.clear_pending();
             Some(TransactionSpec::new().selection(Selection::caret(pos)))
@@ -961,8 +958,7 @@ fn finish_pending_input(
                 // head sits ON the object's last char (visual is
                 // head-inclusive at operate time).
                 let s = state.doc.to_string();
-                let head =
-                    motions::prev_char_boundary(s.as_bytes(), range.end).max(range.start);
+                let head = motions::prev_char_boundary(s.as_bytes(), range.end).max(range.start);
                 vim.visual_anchor = Some(range.start);
                 vim.clear_pending();
                 return Some(
@@ -1367,7 +1363,9 @@ fn search_word_under_caret(
         whole_word: true,
     });
     vim.clear_pending();
-    Some(jump_to(&doc, &word, pos, forward, /*whole_word=*/ true))
+    Some(jump_to(
+        &doc, &word, pos, forward, /*whole_word=*/ true,
+    ))
 }
 
 /// `n` / `N` — repeat the last `*`/`#` search. `reverse=true`

@@ -6,8 +6,8 @@
 //! siblings (or reparent — dropping on the right-third of a row
 //! makes it a child of the target).
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::store::GanttEvent;

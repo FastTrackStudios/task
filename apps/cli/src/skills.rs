@@ -200,7 +200,10 @@ mod tests {
 
     #[test]
     fn placeholders_are_filled() {
-        let out = substitute("--org {{ORG}} --project {{PROJECT}} --verify {{VERIFY}}", &ctx());
+        let out = substitute(
+            "--org {{ORG}} --project {{PROJECT}} --verify {{VERIFY}}",
+            &ctx(),
+        );
         assert_eq!(
             out,
             "--org fasttrackstudios --project Task --verify cargo check -p task"

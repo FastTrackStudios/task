@@ -45,6 +45,6 @@ pub use goal_proto::{
 // `#[subscribe] fn events` stream sibling — live goal changes.
 #[cfg(feature = "vox")]
 pub use goal_proto::{
-    GoalServiceStream, GoalServiceStreamClient, GoalServiceStreamSource, goal_stream_descriptor,
-    goal_service_stream_layer, serve_goal_service_stream,
+    GoalServiceStream, GoalServiceStreamClient, GoalServiceStreamSource, goal_service_stream_layer,
+    goal_stream_descriptor, serve_goal_service_stream,
 };

@@ -448,7 +448,10 @@ mod tests {
         // Window touching the boundary of `a` (to is exclusive at 3).
         assert_eq!(classes(&set.overlapping(3, 5)), vec![]);
         // Window spanning all three.
-        assert_eq!(classes(&set.overlapping(0, 20)), vec![(0, 3), (5, 9), (12, 15)]);
+        assert_eq!(
+            classes(&set.overlapping(0, 20)),
+            vec![(0, 3), (5, 9), (12, 15)]
+        );
     }
 
     #[test]

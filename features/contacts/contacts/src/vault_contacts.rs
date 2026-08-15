@@ -176,7 +176,10 @@ impl Contacts for VaultContacts {
         let body = serialize_contact(contact).map_err(|e| ContactsError::Backend {
             message: e.to_string(),
         })?;
-        self.write_file(&format!("{CONTACTS_DIR}/{}.md", sanitize(&contact.id)), &body)?;
+        self.write_file(
+            &format!("{CONTACTS_DIR}/{}.md", sanitize(&contact.id)),
+            &body,
+        )?;
         // Publish only after the write landed — subscribers fold
         // these into state fetched via `list_contacts()`, so a
         // phantom event would desync them. `sync_account` funnels
@@ -194,8 +197,11 @@ impl Contacts for VaultContacts {
     }
 
     fn list_accounts(&self) -> Result<Vec<CardDavAccount>, ContactsError> {
-        let mut out: Vec<CardDavAccount> =
-            self.scan_accounts()?.iter().map(CardDavAccount::redacted).collect();
+        let mut out: Vec<CardDavAccount> = self
+            .scan_accounts()?
+            .iter()
+            .map(CardDavAccount::redacted)
+            .collect();
         out.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
         Ok(out)
     }
@@ -215,10 +221,9 @@ impl Contacts for VaultContacts {
                 to_store.password = existing.password;
             }
         }
-        let yaml =
-            serde_yaml::to_string(&to_store).map_err(|e| ContactsError::Backend {
-                message: e.to_string(),
-            })?;
+        let yaml = serde_yaml::to_string(&to_store).map_err(|e| ContactsError::Backend {
+            message: e.to_string(),
+        })?;
         self.write_file(
             &format!("{ACCOUNTS_DIR}/{}.md", sanitize(&account.id)),
             &format!("---\n{yaml}---\n"),
@@ -349,7 +354,12 @@ mod tests {
     #[test]
     fn accounts_redact_password_but_not_contacts() {
         let (_tmp, c) = fixture();
-        let mut acct = CardDavAccount::create("a1", "iCloud", CardDavProvider::ICLOUD, "2026-07-17T09:00:00Z");
+        let mut acct = CardDavAccount::create(
+            "a1",
+            "iCloud",
+            CardDavProvider::ICLOUD,
+            "2026-07-17T09:00:00Z",
+        );
         acct.username = "me@icloud.com".into();
         acct.password = "app-secret".into();
         c.upsert_account(&acct).unwrap();
@@ -360,7 +370,10 @@ mod tests {
         assert_eq!(listed[0].password, "");
         assert_eq!(listed[0].username, "me@icloud.com");
         // …but the stored secret survives.
-        assert_eq!(c.load_account("a1").unwrap().unwrap().password, "app-secret");
+        assert_eq!(
+            c.load_account("a1").unwrap().unwrap().password,
+            "app-secret"
+        );
         // Accounts never leak into the contact directory.
         assert!(c.list_contacts().unwrap().is_empty());
     }
@@ -368,7 +381,12 @@ mod tests {
     #[test]
     fn upsert_account_blank_password_preserves_secret() {
         let (_tmp, c) = fixture();
-        let mut acct = CardDavAccount::create("a1", "iCloud", CardDavProvider::ICLOUD, "2026-07-17T09:00:00Z");
+        let mut acct = CardDavAccount::create(
+            "a1",
+            "iCloud",
+            CardDavProvider::ICLOUD,
+            "2026-07-17T09:00:00Z",
+        );
         acct.password = "app-secret".into();
         c.upsert_account(&acct).unwrap();
         // Re-upsert with a blank password (the redacted round-trip).

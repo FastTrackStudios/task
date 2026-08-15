@@ -81,7 +81,10 @@ async fn ctrl_arrows_jump_word_groups() {
 #[tokio::test]
 async fn ctrl_shift_arrow_extends_by_word() {
     let t = mount(Setup::text("foo bar").caret(0));
-    t.press_key(parse_key("ArrowRight"), Modifiers::CONTROL | Modifiers::SHIFT);
+    t.press_key(
+        parse_key("ArrowRight"),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
     expect_probe(&t, "anchor", "0").await;
     expect_probe(&t, "head", "3").await;
 }

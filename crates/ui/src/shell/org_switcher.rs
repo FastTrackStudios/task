@@ -6,10 +6,10 @@
 //! context (discovered at app start). The Palette button is the
 //! per-org theme picker, unchanged.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Palette;
 use architect_ui::prelude::*;
 use architect_ui::primitives::{ContentAlign, ContentSide};
+use dioxus::prelude::*;
 
 use crate::orgs::{OrgMeta, OrgSelection};
 use crate::theming::use_org_theme_switcher_state;

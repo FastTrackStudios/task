@@ -523,17 +523,14 @@ pub fn live_preview_with_lookups(
             if span.class == "md-wikilink" && !cursor_touches(primary, span.outer.clone()) {
                 if let Some(h2) = href.as_deref() {
                     let page_part = h2.split(['#', '|']).next().unwrap_or(h2).trim();
-                    let line_start =
-                        text[..span.outer.start].rfind('\n').map_or(0, |i| i + 1);
+                    let line_start = text[..span.outer.start].rfind('\n').map_or(0, |i| i + 1);
                     let line_end = text[span.outer.end..]
                         .find('\n')
                         .map_or(text.len(), |i| span.outer.end + i);
                     let standalone = text[line_start..span.outer.start].trim().is_empty()
                         && text[span.outer.end..line_end].trim().is_empty();
                     if standalone {
-                        if let Some(setlist) =
-                            vault.and_then(|v| v.lookup_setlist(page_part))
-                        {
+                        if let Some(setlist) = vault.and_then(|v| v.lookup_setlist(page_part)) {
                             out.push(Decoration::replace(span.outer.clone()));
                             out.push(Decoration::widget(
                                 span.outer.start,
@@ -542,9 +539,7 @@ pub fn live_preview_with_lookups(
                             out.push(Decoration::atomic(span.outer.clone()));
                             continue;
                         }
-                        if let Some(song) =
-                            vault.and_then(|v| v.lookup_song(page_part))
-                        {
+                        if let Some(song) = vault.and_then(|v| v.lookup_song(page_part)) {
                             let ctx = strip_runs
                                 .get_or_insert_with(|| song_strip_runs(&text, vault))
                                 .get(&line_start)
@@ -590,16 +585,11 @@ pub fn live_preview_with_lookups(
                     if resolved {
                         // Kind-specific styling: contact links render as
                         // person chips wherever they appear (inline too).
-                        match vault
-                            .and_then(|v| v.lookup_note_kind(page_part))
-                            .as_deref()
-                        {
+                        match vault.and_then(|v| v.lookup_note_kind(page_part)).as_deref() {
                             Some("contact") => "md-wikilink md-contact-chip",
                             _ => "md-wikilink",
                         }
-                    } else if let Some(sc) =
-                        vault.and_then(|v| v.lookup_scripture(page_part))
-                    {
+                    } else if let Some(sc) = vault.and_then(|v| v.lookup_scripture(page_part)) {
                         // Scripture reference: resolved chip, verse text
                         // as hover tooltip once it lands.
                         scripture_hit = Some(sc);
@@ -783,16 +773,34 @@ fn song_strip_runs(
 /// inherits the role chip's color.
 fn role_icon_svg(kind: &str) -> String {
     let body = match kind {
-        "drum" => r#"<path d="m2 2 8 8"/><path d="m22 2-8 8"/><ellipse cx="12" cy="9" rx="10" ry="5"/><path d="M7 13.4v7.9"/><path d="M12 14v8"/><path d="M17 13.4v7.9"/><path d="M2 9v8a10 5 0 0 0 20 0V9"/>"#,
-        "guitar" => r#"<circle cx="8" cy="16" r="5"/><path d="m11.8 12.2 7.2-7.2"/><path d="m18 3 3 3"/><path d="m19 4-2.5 2.5"/>"#,
-        "keys" => r#"<rect x="2" y="6" width="20" height="12" rx="1"/><path d="M7 6v7"/><path d="M12 6v7"/><path d="M17 6v7"/>"#,
-        "mic" => r#"<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>"#,
-        "sliders" => r#"<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>"#,
-        "bulb" => r#"<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>"#,
-        "monitor" => r#"<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>"#,
-        "video" => r#"<path d="m16 13 5.2 3.5a.5.5 0 0 0 .8-.4V7.9a.5.5 0 0 0-.8-.4L16 11"/><rect x="2" y="6" width="14" height="12" rx="2"/>"#,
+        "drum" => {
+            r#"<path d="m2 2 8 8"/><path d="m22 2-8 8"/><ellipse cx="12" cy="9" rx="10" ry="5"/><path d="M7 13.4v7.9"/><path d="M12 14v8"/><path d="M17 13.4v7.9"/><path d="M2 9v8a10 5 0 0 0 20 0V9"/>"#
+        }
+        "guitar" => {
+            r#"<circle cx="8" cy="16" r="5"/><path d="m11.8 12.2 7.2-7.2"/><path d="m18 3 3 3"/><path d="m19 4-2.5 2.5"/>"#
+        }
+        "keys" => {
+            r#"<rect x="2" y="6" width="20" height="12" rx="1"/><path d="M7 6v7"/><path d="M12 6v7"/><path d="M17 6v7"/>"#
+        }
+        "mic" => {
+            r#"<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>"#
+        }
+        "sliders" => {
+            r#"<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>"#
+        }
+        "bulb" => {
+            r#"<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>"#
+        }
+        "monitor" => {
+            r#"<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>"#
+        }
+        "video" => {
+            r#"<path d="m16 13 5.2 3.5a.5.5 0 0 0 .8-.4V7.9a.5.5 0 0 0-.8-.4L16 11"/><rect x="2" y="6" width="14" height="12" rx="2"/>"#
+        }
         // "music" and anything unrecognized.
-        _ => r#"<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>"#,
+        _ => {
+            r#"<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>"#
+        }
     };
     format!(
         r#"<svg class="md-role-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{body}</svg>"#
@@ -852,7 +860,9 @@ fn emit_roster_rows(
         pos += line.len();
         let line_to = line_from + content.len();
         let t = content.trim();
-        let Some(dash) = t.find(" - [[") else { continue };
+        let Some(dash) = t.find(" - [[") else {
+            continue;
+        };
         let role = t[..dash].trim();
         if role.is_empty() || role.starts_with('#') || role.starts_with('[') {
             continue;
@@ -861,7 +871,9 @@ fn emit_roster_rows(
         let mut rest = &t[dash + 3..];
         let mut people: Vec<(String, &'static str, &'static str, &'static str)> = Vec::new();
         while let Some(open) = rest.find("[[") {
-            let Some(close_rel) = rest[open..].find("]]") else { break };
+            let Some(close_rel) = rest[open..].find("]]") else {
+                break;
+            };
             let name = rest[open + 2..open + close_rel].trim();
             let name = name.split(['#', '|']).next().unwrap_or(name).trim();
             rest = &rest[open + close_rel + 2..];
@@ -934,7 +946,9 @@ fn emit_status_pills(text: &str, primary: Range, out: &mut Vec<DecoratedRange>) 
         let line_from = pos;
         pos += line.len();
         let trimmed_end = content.trim_end();
-        let Some(open_rel) = trimmed_end.rfind('(') else { continue };
+        let Some(open_rel) = trimmed_end.rfind('(') else {
+            continue;
+        };
         let Some(inner) = trimmed_end[open_rel..]
             .strip_prefix('(')
             .and_then(|r| r.strip_suffix(')'))
@@ -1017,10 +1031,7 @@ fn setlist_card_html(target: &str, setlist: &VaultSetlistHit) -> String {
 fn split_title_artist(raw: &str, fallback: Option<&str>) -> (String, Option<String>) {
     if let Some((t, a)) = raw.split_once(" - ") {
         let a = a.trim();
-        (
-            t.trim().to_string(),
-            (!a.is_empty()).then(|| a.to_string()),
-        )
+        (t.trim().to_string(), (!a.is_empty()).then(|| a.to_string()))
     } else {
         (raw.trim().to_string(), fallback.map(|s| s.to_string()))
     }
@@ -1035,7 +1046,12 @@ fn song_strip_html(target: &str, song: &VaultSongHit, ctx: StripRunCtx) -> Strin
     let (disp_title, disp_artist) = split_title_artist(&song.title, song.artist.as_deref());
     let title = html_escape(&disp_title);
     let artist = disp_artist
-        .map(|a| format!(r#"<span class="md-song-strip-artist">{}</span>"#, html_escape(&a)))
+        .map(|a| {
+            format!(
+                r#"<span class="md-song-strip-artist">{}</span>"#,
+                html_escape(&a)
+            )
+        })
         .unwrap_or_default();
     let mut cls = String::from("md-song-strip");
     if ctx.joined_above {
@@ -1048,8 +1064,14 @@ fn song_strip_html(target: &str, song: &VaultSongHit, ctx: StripRunCtx) -> Strin
         cls.push_str(" md-song-strip--alt");
     }
     let idx = ctx.index.max(1);
-    let initial =
-        html_escape(&disp_title.chars().next().unwrap_or('♪').to_uppercase().to_string());
+    let initial = html_escape(
+        &disp_title
+            .chars()
+            .next()
+            .unwrap_or('♪')
+            .to_uppercase()
+            .to_string(),
+    );
     format!(
         r#"<span class="{cls}" data-href="song-play:{safe}"><span class="md-song-strip-num" data-href="song-play:{safe}"><span class="md-ss-idx">{idx}</span><svg class="md-ss-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span><span class="md-ss-art"><span class="md-ss-art-i">{initial}</span><span class="md-ss-eq"><i></i><i></i><i></i><i></i></span></span><span class="md-ss-titles"><span class="md-song-strip-title">{title}</span>{artist}</span><span class="md-ss-open" data-href="{safe}" title="Open song"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg></span><span class="md-ss-more" data-href="song-more:{safe}"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg></span></span>"#
     )
@@ -1649,13 +1671,25 @@ fn scan_blocks(
                     if let Some((show_source, has_chart)) = kf_kind {
                         // Chart (kf/kf+) needs a successful engrave;
                         // source-only (kf-) always renders.
-                        let svg = if has_chart { render_keyflow(body) } else { None };
+                        let svg = if has_chart {
+                            render_keyflow(body)
+                        } else {
+                            None
+                        };
                         if has_chart && svg.is_none() {
                             // Bad chart source — leave the raw fence
                             // (falls through to the code path below).
                         } else {
-                            let show = if show_source { " md-keyflow-show-source" } else { "" };
-                            let only = if has_chart { "" } else { " md-keyflow-source-only" };
+                            let show = if show_source {
+                                " md-keyflow-show-source"
+                            } else {
+                                ""
+                            };
+                            let only = if has_chart {
+                                ""
+                            } else {
+                                " md-keyflow-source-only"
+                            };
                             // Header (fence tag + copy, plus the source
                             // toggle when a chart is present). It lives
                             // INSIDE the display block — the chart's
@@ -3717,7 +3751,10 @@ mod tests {
             _ => None,
         });
         let html = widget.expect("kf fence should engrave a chart widget");
-        assert!(html.contains("<svg"), "widget should embed the engraved SVG");
+        assert!(
+            html.contains("<svg"),
+            "widget should embed the engraved SVG"
+        );
         // Rendered-only default: the source ships hidden behind the
         // `</>` toggle (CSS hides .md-keyflow-source until
         // md-keyflow-show-source is on the widget).
@@ -3737,7 +3774,10 @@ mod tests {
         // chart renders full width, not boxed like code.
         assert!(has_line_class(&decs, 0, "md-keyflow-bare"), "opener bare");
         let close_at = "```kf\nCmaj7 | F#m7b5 | Bbmaj9 | G7b9\n".len();
-        assert!(has_line_class(&decs, close_at, "md-keyflow-bare"), "closer bare");
+        assert!(
+            has_line_class(&decs, close_at, "md-keyflow-bare"),
+            "closer bare"
+        );
     }
 
     #[test]
@@ -3754,13 +3794,25 @@ mod tests {
             _ => None,
         });
         let html = widget.expect("kf- should widgetize a source block");
-        assert!(html.contains("md-keyflow-source-only"), "kf- is source-only");
-        assert!(html.contains("class=\"kf-root\""), "kf- source is keyflow-highlighted");
+        assert!(
+            html.contains("md-keyflow-source-only"),
+            "kf- is source-only"
+        );
+        assert!(
+            html.contains("class=\"kf-root\""),
+            "kf- source is keyflow-highlighted"
+        );
         assert!(!html.contains("<svg"), "kf- has NO chart");
-        assert!(!html.contains("md-keyflow-toggle"), "kf- has no source toggle");
+        assert!(
+            !html.contains("md-keyflow-toggle"),
+            "kf- has no source toggle"
+        );
         // Header with the tag + copy button.
         assert!(html.contains("md-keyflow-header"), "kf- carries a header");
-        assert!(html.contains("md-code-copy"), "kf- header has a copy button");
+        assert!(
+            html.contains("md-code-copy"),
+            "kf- header has a copy button"
+        );
         // Sheds the code frame like the other keyflow fences.
         assert!(has_line_class(&decs, 0, "md-keyflow-bare"), "kf- is bare");
     }
@@ -3780,11 +3832,17 @@ mod tests {
             _ => None,
         });
         let html = widget.expect("kf+ fence should engrave a chart widget");
-        assert!(html.contains("md-keyflow-show-source"), "kf+ starts with source visible");
+        assert!(
+            html.contains("md-keyflow-show-source"),
+            "kf+ starts with source visible"
+        );
         assert!(html.contains("<svg"), "kf+ still embeds the engraved SVG");
         // The source block is keyflow-highlighted (not plain text) and
         // wrapped for the stacked layout — never the old flex split.
-        assert!(html.contains("class=\"kf-root\""), "source is kf-highlighted");
+        assert!(
+            html.contains("class=\"kf-root\""),
+            "source is kf-highlighted"
+        );
         assert!(html.contains("md-keyflow-source"), "source block present");
         assert!(!html.contains("md-keyflow-split"), "no side-by-side split");
         // Source comes BEFORE the rendered chart in the DOM (stacked).
@@ -3849,9 +3907,14 @@ mod tests {
             })
             .collect();
         assert_eq!(widgets.len(), 2, "both refs should render widgets");
-        assert!(widgets.iter().any(|h| h.contains("Space")), "resolved ref shows keys");
         assert!(
-            widgets.iter().any(|h| h.contains("md-kbd-unbound") && h.contains("@99999")),
+            widgets.iter().any(|h| h.contains("Space")),
+            "resolved ref shows keys"
+        );
+        assert!(
+            widgets
+                .iter()
+                .any(|h| h.contains("md-kbd-unbound") && h.contains("@99999")),
             "unresolved ref renders the unbound cap"
         );
     }

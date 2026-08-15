@@ -175,9 +175,9 @@ impl RecallCard {
         }
         match self.due.as_deref() {
             None => true,
-            Some(due) => Self::parse_day(due).zip(Self::parse_day(today)).is_none_or(
-                |(due, today)| due <= today,
-            ),
+            Some(due) => Self::parse_day(due)
+                .zip(Self::parse_day(today))
+                .is_none_or(|(due, today)| due <= today),
         }
     }
 

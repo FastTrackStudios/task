@@ -498,9 +498,7 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
                 // The triage queue — the exact complement of what
                 // `--relevant` keeps, so the two flags partition the
                 // open set between them.
-                .filter(|t| {
-                    !untriaged || (task::status_is_open(&t.status) && task::is_unfiled(t))
-                })
+                .filter(|t| !untriaged || (task::status_is_open(&t.status) && task::is_unfiled(t)))
                 .collect();
             // Same business logic the web store applies — one
             // relevance implementation (task::relevance), two

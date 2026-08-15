@@ -322,7 +322,10 @@ async fn no_selection_highlight_without_visual() {
     // A plain caret (Normal mode) must not paint a selection.
     let t = mount(Setup::text("select this").vim());
     let html = t.query(".editor-root").immediately().unwrap().outer_html();
-    assert!(!html.contains("ed-selection"), "no selection in Normal mode");
+    assert!(
+        !html.contains("ed-selection"),
+        "no selection in Normal mode"
+    );
 }
 
 #[tokio::test]

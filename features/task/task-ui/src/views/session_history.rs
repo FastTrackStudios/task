@@ -4,11 +4,11 @@
 //! order == creation order; we sort on the id (timestamp as the
 //! tiebreak for any legacy v4 rows).
 
-use chrono::{DateTime, Utc};
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     ArrowRight, ExternalLink, GitCommitHorizontal, Handshake, MessageSquare, StickyNote, Wrench,
 };
+use chrono::{DateTime, Utc};
+use dioxus::prelude::*;
 use uuid::Uuid;
 use workflows_proto::{Activity, ActivityKind, Transition};
 

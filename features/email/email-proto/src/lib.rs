@@ -67,8 +67,8 @@ pub use service::{
 // `EmailSyncStreamClient::changes(tx)` (see `architect::use_stream`).
 #[cfg(feature = "vox")]
 pub use service::{
-    EmailSyncStreamClient, EmailSyncStreamSource, stream_layer, stream_serve,
-    email_sync_stream_service_descriptor as stream_descriptor,
+    EmailSyncStreamClient, EmailSyncStreamSource,
+    email_sync_stream_service_descriptor as stream_descriptor, stream_layer, stream_serve,
 };
 
 // `EmailProduct` vox bits — the outbox / product surface. Mounted

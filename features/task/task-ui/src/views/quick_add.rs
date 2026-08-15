@@ -4,8 +4,8 @@
 //! consumer's create path, which re-captures that title through
 //! `task_proto::capture`.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Plus;
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::TaskInfo;

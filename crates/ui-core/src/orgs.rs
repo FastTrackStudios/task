@@ -312,10 +312,7 @@ mod my_orgs_tests {
     fn all_selection_spans_only_my_orgs() {
         // `selected_slugs` is the choke point every multi-org fetch uses,
         // so this is what actually stops the anonymous-style fan-out.
-        let orgs = [
-            org("someone-elses", Some(false)),
-            org("home", Some(true)),
-        ];
+        let orgs = [org("someone-elses", Some(false)), org("home", Some(true))];
         let spanned = selected_slugs(&OrgSelection::All, &orgs);
         assert_eq!(spanned, vec!["home".to_string()]);
     }

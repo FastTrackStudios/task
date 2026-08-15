@@ -4,8 +4,8 @@
 //! messages + composers. Props in, `EventHandler` out — the hosting page
 //! owns the data + fetching (per the dumb-component rule).
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use threads_proto::{Message, Thread};
 use uuid::Uuid;
 

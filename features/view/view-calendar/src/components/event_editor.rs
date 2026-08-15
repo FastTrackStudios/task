@@ -2,10 +2,10 @@
 //! window + color + all-day flag + description, and offers a
 //! destructive delete.
 
-use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Trash2;
 use architect_ui::prelude::*;
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
+use dioxus::prelude::*;
 
 use crate::store::CalendarMutation;
 use crate::types::{CalendarEvent, ColorTag, EventId};

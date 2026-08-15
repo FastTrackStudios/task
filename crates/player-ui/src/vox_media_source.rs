@@ -45,8 +45,7 @@ pub(crate) fn audio_element_over_vox(
     el.set_loop(false);
 
     let ms = MediaSource::new().map_err(|e| format!("MediaSource: {e:?}"))?;
-    let src =
-        Url::create_object_url_with_source(&ms).map_err(|e| format!("object url: {e:?}"))?;
+    let src = Url::create_object_url_with_source(&ms).map_err(|e| format!("object url: {e:?}"))?;
     el.set_src(&src);
 
     wasm_bindgen_futures::spawn_local(async move {

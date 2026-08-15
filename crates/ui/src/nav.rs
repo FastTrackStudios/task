@@ -3,13 +3,13 @@
 //! `NavTab` is the shared shape; `nav_tabs()` is the desktop set
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Dumbbell,
     Flag, FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Mail, MapPin, Notebook,
     Package, ReceiptText, Scale, Settings as SettingsIcon, Target, Timer, Users, Utensils, Wallet,
     Waypoints, Youtube,
 };
+use dioxus::prelude::*;
 
 use crate::routes::Route;
 

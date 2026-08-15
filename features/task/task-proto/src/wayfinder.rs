@@ -307,7 +307,10 @@ Containers.
         let m = MapBody::parse(FULL);
         assert_eq!(m.section(Section::Destination), "A working agent lane.");
         assert_eq!(m.section(Section::Notes), "Use the task skill.");
-        assert_eq!(m.section(Section::NotYetSpecified), "How cleanup is scheduled.");
+        assert_eq!(
+            m.section(Section::NotYetSpecified),
+            "How cleanup is scheduled."
+        );
         assert_eq!(m.section(Section::OutOfScope), "Containers.");
         assert_eq!(m.decisions().len(), 2);
     }
@@ -360,8 +363,14 @@ Containers.
         m.append_decision("[Streaming is CRDT](t/3) — per run");
         let decisions = m.decisions();
         assert_eq!(decisions.len(), 3);
-        assert_eq!(decisions[0], "- [Runner is a backend](t/1) — grown, not added");
-        assert_eq!(decisions[1], "- [Ticket is the unit](t/2) — one worktree each");
+        assert_eq!(
+            decisions[0],
+            "- [Runner is a backend](t/1) — grown, not added"
+        );
+        assert_eq!(
+            decisions[1],
+            "- [Ticket is the unit](t/2) — one worktree each"
+        );
         assert_eq!(decisions[2], "- [Streaming is CRDT](t/3) — per run");
     }
 
@@ -378,7 +387,8 @@ Containers.
 
     #[test]
     fn appending_to_a_map_without_the_section_creates_it_in_canonical_order() {
-        let mut m = MapBody::parse("## Destination\n\nShip it.\n\n## Out of scope\n\nContainers.\n");
+        let mut m =
+            MapBody::parse("## Destination\n\nShip it.\n\n## Out of scope\n\nContainers.\n");
         m.append_decision("[First](t/1) — a start");
         let order: Vec<_> = m
             .render()
@@ -400,12 +410,17 @@ Containers.
         m.append_decision("[X](t/1) — y");
         assert_eq!(m.decisions(), vec!["- [X](t/1) — y"]);
         m.append_decision("- [Z](t/2) — w");
-        assert_eq!(m.decisions()[1], "- [Z](t/2) — w", "an existing bullet is not doubled");
+        assert_eq!(
+            m.decisions()[1],
+            "- [Z](t/2) — w",
+            "an existing bullet is not doubled"
+        );
     }
 
     #[test]
     fn an_unknown_heading_survives_verbatim_and_in_place() {
-        let src = "## Destination\n\nShip.\n\n## Prior art\n\nSee the other repo.\n\n## Notes\n\nn.\n";
+        let src =
+            "## Destination\n\nShip.\n\n## Prior art\n\nSee the other repo.\n\n## Notes\n\nn.\n";
         let m = MapBody::parse(src);
         assert_eq!(m.render(), src);
         assert_eq!(m.section(Section::Destination), "Ship.");
@@ -454,6 +469,9 @@ Containers.
     fn a_map_reads_off_a_task() {
         let mut t = TaskInfo::new("Agent lane");
         t.details = FULL.to_string();
-        assert_eq!(map_body(&t).section(Section::Destination), "A working agent lane.");
+        assert_eq!(
+            map_body(&t).section(Section::Destination),
+            "A working agent lane."
+        );
     }
 }

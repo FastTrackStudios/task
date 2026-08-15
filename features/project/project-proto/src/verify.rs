@@ -149,7 +149,11 @@ mod tests {
         let child = project("cargo test -p task-proto", Some(parent.id));
         let child_id = child.id;
         assert_eq!(
-            resolve(Some("cargo test -p task-proto verify"), Some(child_id), &[parent, child]),
+            resolve(
+                Some("cargo test -p task-proto verify"),
+                Some(child_id),
+                &[parent, child]
+            ),
             Some("cargo test -p task-proto verify".into())
         );
     }
@@ -168,7 +172,10 @@ mod tests {
         // rather than silently leaving the ticket unverifiable.
         let p = project("cargo check", None);
         let id = p.id;
-        assert_eq!(resolve(Some("   "), Some(id), &[p]), Some("cargo check".into()));
+        assert_eq!(
+            resolve(Some("   "), Some(id), &[p]),
+            Some("cargo check".into())
+        );
     }
 
     #[test]

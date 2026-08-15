@@ -43,14 +43,14 @@ use std::cell::{Cell, RefCell};
 use daw::service::{ExtState as _, ProjectContext, ProjectInfo};
 use daw_standalone::bootstrap::{InProcessDaw, build_in_process_daw};
 use daw_standalone::sync::Standalone;
-use session::setlist::service::demo::{
-    DemoSection, DemoSong, demo_chart_for, demo_songs_base, stamp_song_with_default_tempo_native,
-};
+use session::keyflow::actions::SectionKind;
 use session::services::setlist_service::{
     SetlistServiceStreamClient, setlist_service_stream_service_descriptor,
     stream_serve as setlist_service_stream_serve,
 };
-use session::keyflow::actions::SectionKind;
+use session::setlist::service::demo::{
+    DemoSection, DemoSong, demo_chart_for, demo_songs_base, stamp_song_with_default_tempo_native,
+};
 use session::{
     SetlistServiceClient, SetlistServiceImpl, serve_setlist_service,
     setlist_service_service_descriptor,
@@ -298,21 +298,25 @@ async fn build_demo() -> eyre::Result<SessionEngine> {
 /// standalone project per song (stable slug-derived guid, zero-padded name for
 /// authored order), then assemble the in-process RPC engine — the SAME
 /// pipeline the demo uses, just fed from manifests.
-async fn build_setlist(org: String, slugs: Vec<String>, key: String) -> eyre::Result<SessionEngine> {
-    tracing::info!("session engine: seeding setlist from {} song(s) …", slugs.len());
+async fn build_setlist(
+    org: String,
+    slugs: Vec<String>,
+    key: String,
+) -> eyre::Result<SessionEngine> {
+    tracing::info!(
+        "session engine: seeding setlist from {} song(s) …",
+        slugs.len()
+    );
     let standalone = Standalone::new();
     let mut song_guids: Vec<String> = Vec::with_capacity(slugs.len());
     for (i, slug) in slugs.iter().enumerate() {
         // Fetch this song's manifest (+ optional chart) from `/media`.
         let tok = crate::media_grant::suffix(&org, slug).await;
-        let manifest = media::fetch_manifest(&format!(
-            "/org/{org}/media/songs/{slug}/manifest.json{tok}"
-        ))
-            .await
-            .map_err(|e| eyre::eyre!("fetch manifest for {slug}: {e}"))?;
-        let chart = media::fetch_text(&format!(
-            "/org/{org}/media/songs/{slug}/chart.kf{tok}"
-        ))
+        let manifest =
+            media::fetch_manifest(&format!("/org/{org}/media/songs/{slug}/manifest.json{tok}"))
+                .await
+                .map_err(|e| eyre::eyre!("fetch manifest for {slug}: {e}"))?;
+        let chart = media::fetch_text(&format!("/org/{org}/media/songs/{slug}/chart.kf{tok}"))
             .await
             .ok()
             .filter(|t| !t.is_empty());
@@ -355,8 +359,12 @@ fn seed_song(
         name: name.to_owned(),
         path: String::new(),
     });
-    stamp_song_with_default_tempo_native(standalone, ProjectContext::Project(guid.to_owned()), song)
-        .map_err(|e| eyre::eyre!("stamp song {name}: {e:?}"))?;
+    stamp_song_with_default_tempo_native(
+        standalone,
+        ProjectContext::Project(guid.to_owned()),
+        song,
+    )
+    .map_err(|e| eyre::eyre!("stamp song {name}: {e:?}"))?;
     if let Some(chart) = chart {
         standalone
             .set_project(
@@ -599,9 +607,7 @@ pub fn SessionEventBridge() -> Element {
         match client.setlist().await {
             Ok(setlist) => {
                 let songs = setlist.songs.clone();
-                session_ui::apply_setlist_event(
-                    &session::SetlistEvent::SetlistChanged(setlist),
-                );
+                session_ui::apply_setlist_event(&session::SetlistEvent::SetlistChanged(setlist));
                 // Charts are stripped from the Setlist/Song structural payload
                 // and only ride the `SongChartHydrated` deltas — whose startup
                 // publish this late subscriber also missed. Backfill each song's
@@ -633,7 +639,9 @@ pub fn SessionEventBridge() -> Element {
 
     // ── Active-indices stream: the cursor (which song/section is current) ─
     use_future(move || async move {
-        let Some((client, stream_client)) = wait_for_engine().await else { return };
+        let Some((client, stream_client)) = wait_for_engine().await else {
+            return;
+        };
 
         let (tx, mut rx) = vox::channel::<session_proto::ActiveIndices>();
         spawn(async move {

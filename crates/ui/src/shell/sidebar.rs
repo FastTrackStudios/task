@@ -2,9 +2,9 @@
 //! shell (commit 78c5622). Workspace nav up top, org switcher
 //! at the bottom.
 
+use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use dioxus_router::Navigator;
-use architect_ui::prelude::*;
 
 use crate::nav::{NavTab, nav_tabs_for, tabs_match, use_active_plugins};
 use crate::routes::Route;

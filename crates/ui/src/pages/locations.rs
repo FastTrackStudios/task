@@ -13,8 +13,8 @@
 //! and surface in the notification tray.
 
 use architect::Id;
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use locations_proto::Location;
 use uuid::Uuid;
 

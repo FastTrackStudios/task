@@ -1,9 +1,9 @@
 //! Workflow section — estimate picker, cycle chip, assignee
 //! list, claim button. Dumb: resolved labels in, intent out.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{Bot, User};
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use task_proto::model::Estimate;
 use uuid::Uuid;
 use workflows_proto::AgentRef;

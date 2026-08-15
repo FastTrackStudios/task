@@ -13,8 +13,8 @@
 //! Collapsed by default. The count is the point — a number you want to
 //! drive to zero, not a section you read every morning.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::{ChevronRight, Inbox};
+use dioxus::prelude::*;
 use uuid::Uuid;
 
 use crate::{TaskInfo, TaskMutation};

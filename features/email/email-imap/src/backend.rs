@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use email_config::{BackendKind, FolderAliases, SmtpConfig, TlsMode};
 use email_proto::{
-    Account, Draft, EmailEvent, EmailSync, EmailSyncError, Envelope, FlagDelta, Folder,
-    FolderRole, Message, SeqRange,
+    Account, Draft, EmailEvent, EmailSync, EmailSyncError, Envelope, FlagDelta, Folder, FolderRole,
+    Message, SeqRange,
 };
 use futures::StreamExt;
 use tokio::sync::{Mutex, RwLock, broadcast};
@@ -127,7 +127,6 @@ impl Backend {
         })
     }
 
-
     /// Publish this backend's change events into `hub` instead of its
     /// own.
     ///
@@ -138,10 +137,7 @@ impl Backend {
     /// each sub-backend at build time instead. Call before the backend
     /// is cloned or used.
     #[must_use]
-    pub fn with_changes_hub(
-        mut self,
-        hub: architect::PubSub<email_proto::EmailChange>,
-    ) -> Self {
+    pub fn with_changes_hub(mut self, hub: architect::PubSub<email_proto::EmailChange>) -> Self {
         self.changes = hub;
         self
     }
@@ -389,7 +385,6 @@ impl Backend {
         envs.sort_by(|a, b| b.date_ms.cmp(&a.date_ms));
         Ok(envs)
     }
-
 
     /// `(backend folder, uid)` for a Message-ID we listed earlier.
     ///

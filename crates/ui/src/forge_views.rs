@@ -8,8 +8,8 @@
 //! write. Comments map to `(author, body)` tuples so rows stay
 //! `PartialEq`-clean (the proto DTOs aren't).
 
-use dioxus::prelude::*;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 use git_proto::{IssueState, MergeMethod, PullRequestState, RepoId};
 
 /// Map a forge issue state onto a status-badge variant.

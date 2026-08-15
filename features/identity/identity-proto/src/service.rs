@@ -142,9 +142,5 @@ pub trait IdentityService {
 
     /// Remove a linked server by id, scoped to the authenticated
     /// caller so a user can't delete another user's link.
-    fn unlink_server(
-        &self,
-        session_token: String,
-        id: Uuid,
-    ) -> Result<(), IdentityServiceError>;
+    fn unlink_server(&self, session_token: String, id: Uuid) -> Result<(), IdentityServiceError>;
 }

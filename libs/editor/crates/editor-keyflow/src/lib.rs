@@ -306,9 +306,15 @@ mod tests {
         let html = highlight_html("Cmaj7 | F#m7b5 | Bbmaj9 | G7b9");
         // Roots/qualities/extensions each get their own kf-* span
         // (a chord is split per token, not wrapped whole).
-        assert!(html.contains("class=\"kf-root\""), "root token span: {html}");
+        assert!(
+            html.contains("class=\"kf-root\""),
+            "root token span: {html}"
+        );
         assert!(html.contains("class=\"kf-quality\""), "quality token span");
-        assert!(html.contains("class=\"kf-extension\""), "extension token span");
+        assert!(
+            html.contains("class=\"kf-extension\""),
+            "extension token span"
+        );
         // Every character of the source survives (nothing dropped):
         // stripping tags leaves the original text.
         let stripped = strip_tags(&html);

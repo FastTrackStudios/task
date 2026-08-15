@@ -7,12 +7,12 @@
 
 use auth::crypto::{decrypt_secret, encrypt_secret};
 use chrono::Utc;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use uuid::Uuid;
 
-use crate::entity::{LinkedServerActive, LinkedServerColumn, LinkedServerEntity, LinkedServerModel};
+use crate::entity::{
+    LinkedServerActive, LinkedServerColumn, LinkedServerEntity, LinkedServerModel,
+};
 use crate::error::IdentityDbError;
 
 /// A linked-server record with its token in **plaintext** — the
@@ -57,10 +57,7 @@ impl Store {
     /// All links owned by `home_user_id`, tokens decrypted. A decrypt
     /// failure on any row is surfaced as an error, never silently
     /// dropped.
-    pub async fn list_links(
-        &self,
-        home_user_id: Uuid,
-    ) -> Result<Vec<LinkRecord>, IdentityDbError> {
+    pub async fn list_links(&self, home_user_id: Uuid) -> Result<Vec<LinkRecord>, IdentityDbError> {
         let rows = LinkedServerEntity::find()
             .filter(LinkedServerColumn::HomeUserId.eq(home_user_id))
             .all(&self.conn)
@@ -127,11 +124,7 @@ impl Store {
 
     /// Delete a link by `id`, scoped to `home_user_id` so a user can't
     /// delete another user's row.
-    pub async fn delete_link(
-        &self,
-        home_user_id: Uuid,
-        id: Uuid,
-    ) -> Result<(), IdentityDbError> {
+    pub async fn delete_link(&self, home_user_id: Uuid, id: Uuid) -> Result<(), IdentityDbError> {
         LinkedServerEntity::delete_many()
             .filter(LinkedServerColumn::Id.eq(id))
             .filter(LinkedServerColumn::HomeUserId.eq(home_user_id))

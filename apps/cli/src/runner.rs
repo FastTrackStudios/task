@@ -609,11 +609,7 @@ pub(crate) async fn run_runner(cmd: RunnerCmd) -> eyre::Result<()> {
                 None => None,
                 Some(p) => {
                     let pc = crate::project::connect_project_client(&url).await?;
-                    Some(
-                        crate::json_out::resolve_project_flexible(&pc, p)
-                            .await?
-                            .id,
-                    )
+                    Some(crate::json_out::resolve_project_flexible(&pc, p).await?.id)
                 }
             };
             let in_scope = |t: &task::TaskInfo| scope.is_none_or(|s| t.project_id == Some(s));
@@ -690,7 +686,11 @@ pub(crate) async fn run_runner(cmd: RunnerCmd) -> eyre::Result<()> {
             }
             for t in review {
                 let branch = agent_worktree::branch_for(&crate::shared::short_uuid(&t.id));
-                println!("  {}  {}  {branch}", crate::shared::short_uuid(&t.id), t.title);
+                println!(
+                    "  {}  {}  {branch}",
+                    crate::shared::short_uuid(&t.id),
+                    t.title
+                );
             }
         }
 
@@ -711,7 +711,11 @@ pub(crate) async fn run_runner(cmd: RunnerCmd) -> eyre::Result<()> {
                         .find(|r| r.id.to_string().starts_with(prefix.trim()))
                         .ok_or_else(|| eyre::eyre!("no run matching `{prefix}`"))?;
                     let snap = rs.snapshot(hit.id).await?;
-                    println!("run {}  [{}]", crate::shared::short_uuid(&snap.run), snap.status.as_str());
+                    println!(
+                        "run {}  [{}]",
+                        crate::shared::short_uuid(&snap.run),
+                        snap.status.as_str()
+                    );
                     if !snap.activity.is_empty() {
                         println!("activity: {}", snap.activity);
                     }
@@ -725,7 +729,8 @@ pub(crate) async fn run_runner(cmd: RunnerCmd) -> eyre::Result<()> {
             };
 
             // …then fold.
-            let (tx, mut rx) = architect::vox::channel::<agent_proto::run_event::RunEventEnvelope>();
+            let (tx, mut rx) =
+                architect::vox::channel::<agent_proto::run_event::RunEventEnvelope>();
             let events: agent_proto::service::run_stream::RunStreamStreamClient =
                 establish_for_url(&url).await?;
             let subscribed = events.run_events(tx);
@@ -869,10 +874,7 @@ pub(crate) async fn run_runner(cmd: RunnerCmd) -> eyre::Result<()> {
                 multi_select: false,
             };
             block_on_question(&url, id, run, vec![question]).await?;
-            println!(
-                "{} → needs-input (asked)",
-                crate::shared::short_uuid(&id)
-            );
+            println!("{} → needs-input (asked)", crate::shared::short_uuid(&id));
         }
 
         RunnerCmd::Questions { org, server } => {
@@ -1078,7 +1080,9 @@ async fn mark_needs_review(
         .0
         .retain(|tag| task::TriageLabel::parse(tag) != Some(task::TriageLabel::ReadyForAgent));
     if !task::has_triage_label(&t, task::TriageLabel::NeedsReview) {
-        t.tags.0.push(task::TriageLabel::NeedsReview.as_str().into());
+        t.tags
+            .0
+            .push(task::TriageLabel::NeedsReview.as_str().into());
     }
     client
         .update(t)
@@ -1213,7 +1217,9 @@ async fn run_workstream(job: &Job, workstream: &str) -> eyre::Result<()> {
 /// answers a question and never declares work done. See
 /// `agent_proto::supervisor`.
 async fn supervise(job: &Job) -> eyre::Result<()> {
-    use agent_proto::supervisor::{MAX_RESTARTS, NO_PROGRESS_AFTER, Recovery, decide, is_supervisable};
+    use agent_proto::supervisor::{
+        MAX_RESTARTS, NO_PROGRESS_AFTER, Recovery, decide, is_supervisable,
+    };
 
     let runs: RunsClient = establish_for_url(&job.url).await?;
 
@@ -1230,8 +1236,8 @@ async fn supervise(job: &Job) -> eyre::Result<()> {
 
     let now = chrono::Utc::now();
     for run in mine.iter().filter(|r| is_supervisable(r.status)) {
-        let attempts =
-            u32::try_from(mine.iter().filter(|r| r.ticket == run.ticket).count()).unwrap_or(u32::MAX);
+        let attempts = u32::try_from(mine.iter().filter(|r| r.ticket == run.ticket).count())
+            .unwrap_or(u32::MAX);
 
         match decide(run, now, NO_PROGRESS_AFTER, attempts, MAX_RESTARTS) {
             Recovery::Leave => {}
@@ -1378,11 +1384,7 @@ enum Outcome {
 ///
 /// `in_flight` is how many this runner already holds, so a serving
 /// runner stops offering itself work past its declared concurrency.
-async fn work_one(
-    job: &Job,
-    want_ticket: Option<&str>,
-    in_flight: u32,
-) -> eyre::Result<Outcome> {
+async fn work_one(job: &Job, want_ticket: Option<&str>, in_flight: u32) -> eyre::Result<Outcome> {
     let backends: BackendsClient = establish_for_url(&job.url).await?;
     let me = backends
         .list_backends()
@@ -1486,7 +1488,13 @@ async fn work_one(
 
     if let Some(cmd) = &job.agent_cmd {
         let prompt = format!("{}\n\n{}", chosen.title, chosen.details);
-        let status = run_agent(cmd, &wt.path, &chosen.id.to_string(), &chosen.title, &prompt)?;
+        let status = run_agent(
+            cmd,
+            &wt.path,
+            &chosen.id.to_string(),
+            &chosen.title,
+            &prompt,
+        )?;
         println!("agent exited {status}");
     } else {
         println!("(no --agent-cmd; skipping the agent)");
@@ -1577,9 +1585,7 @@ async fn agent_ready_tickets(url: &str) -> eyre::Result<Vec<task::TaskInfo>> {
         .filter(|t| task::has_triage_label(t, task::TriageLabel::ReadyForAgent))
         .filter(|t| {
             // Unclaimed.
-            t.workflow
-                .as_ref()
-                .is_none_or(|w| w.assignees.0.is_empty())
+            t.workflow.as_ref().is_none_or(|w| w.assignees.0.is_empty())
         })
         .filter(|t| {
             // Every blocker closed.

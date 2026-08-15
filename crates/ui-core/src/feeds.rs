@@ -73,7 +73,11 @@ macro_rules! feeds {
 /// Fan one org-scoped list call out across `slugs`, concatenating the
 /// rows. Per-org failures are tolerated (a down or empty org doesn't
 /// blank the whole view); an error surfaces only if *nothing* came back.
-pub async fn fan_out<C, T, E, F, Fut>(slugs: &[String], what: &str, call: F) -> Result<Vec<T>, String>
+pub async fn fan_out<C, T, E, F, Fut>(
+    slugs: &[String],
+    what: &str,
+    call: F,
+) -> Result<Vec<T>, String>
 where
     C: vox_core::FromVoxLane + Clone + 'static,
     F: Fn(C) -> Fut,
@@ -125,7 +129,6 @@ where
     });
     collect(futures_util::future::join_all(futs).await)
 }
-
 
 /// Flatten per-org results: concat the successes; surface an error only
 /// if every org failed *and* nothing came back.

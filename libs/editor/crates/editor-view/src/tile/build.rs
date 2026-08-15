@@ -800,10 +800,7 @@ mod tests {
         );
         let mut marks = collect_marks(&arena, doc);
         marks.sort();
-        assert_eq!(
-            marks,
-            vec![("sel".to_string(), 3), ("sel".to_string(), 4)]
-        );
+        assert_eq!(marks, vec![("sel".to_string(), 3), ("sel".to_string(), 4)]);
     }
 
     #[test]

@@ -66,11 +66,7 @@ pub struct Refusal {
 /// capability list does not parse are skipped — they are bad tickets,
 /// surfaced by [`malformed`], not routing failures.
 #[must_use]
-pub fn takeable(
-    runner: &RunnerProfile,
-    tickets: &[TicketRef<'_>],
-    in_flight: u32,
-) -> Vec<Uuid> {
+pub fn takeable(runner: &RunnerProfile, tickets: &[TicketRef<'_>], in_flight: u32) -> Vec<Uuid> {
     let mut held = in_flight;
     let mut out = Vec::new();
     for t in tickets {
@@ -90,19 +86,18 @@ pub fn takeable(
 /// The diagnostic counterpart to [`takeable`] — "why is my runner
 /// idle?" is otherwise unanswerable.
 #[must_use]
-pub fn refusals(
-    runner: &RunnerProfile,
-    tickets: &[TicketRef<'_>],
-    in_flight: u32,
-) -> Vec<Refusal> {
+pub fn refusals(runner: &RunnerProfile, tickets: &[TicketRef<'_>], in_flight: u32) -> Vec<Refusal> {
     tickets
         .iter()
         .filter_map(|t| {
             let req = requirements(*t).ok()?;
-            runner.can_take(&req, in_flight).err().map(|reason| Refusal {
-                ticket: t.id,
-                reason,
-            })
+            runner
+                .can_take(&req, in_flight)
+                .err()
+                .map(|reason| Refusal {
+                    ticket: t.id,
+                    reason,
+                })
         })
         .collect()
 }
@@ -125,7 +120,10 @@ pub fn unroutable(tickets: &[TicketRef<'_>], runners: &[RunnerProfile]) -> Vec<(
             if runners.is_empty() {
                 return Some((t.id, Stuck::NoLiveRunners));
             }
-            if !runners.iter().any(|r| r.scope.admits(&req.org, req.project)) {
+            if !runners
+                .iter()
+                .any(|r| r.scope.admits(&req.org, req.project))
+            {
                 return Some((t.id, Stuck::OutOfEveryScope));
             }
             crate::runner::unsatisfiable_capability(&req, runners)
@@ -153,9 +151,7 @@ impl core::fmt::Display for Stuck {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NoLiveRunners => f.write_str("no live runners — has anything heartbeated?"),
-            Self::OutOfEveryScope => {
-                f.write_str("no live runner is scoped to this org/project")
-            }
+            Self::OutOfEveryScope => f.write_str("no live runner is scoped to this org/project"),
             Self::NobodyOffers(cap) => write!(f, "no live runner offers `{cap}`"),
         }
     }

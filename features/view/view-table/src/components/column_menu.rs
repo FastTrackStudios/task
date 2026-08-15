@@ -1,8 +1,8 @@
 //! Column-visibility + group-by menu, anchored to a toolbar button.
 
-use dioxus::prelude::*;
 use architect_ui::lucide_dioxus::Columns3;
 use architect_ui::prelude::*;
+use dioxus::prelude::*;
 
 use crate::store::TableMutation;
 use crate::types::{Column, ColumnId};
