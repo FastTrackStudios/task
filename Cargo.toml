@@ -376,35 +376,35 @@ spaced-repetition = { path = "libs/spaced-repetition" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
 
 # ── FastTrackStudio monorepo — the music-production domains ───────────
 # These stay in the FTS monorepo; Task consumes them cross-repo. REPIN
 # from `branch = "main"` to a tag as soon as the FTS repo is tagged —
 # a branch dep means every `cargo update` can move the whole domain
 # surface underneath this tree.
-actions-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-actions-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-daw = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-daw-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-daw-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-dioxus-test = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-engraver = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main", default-features = false }
-input = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-keyflow = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-keyflow-text = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-session = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-session-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
-session-ui = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main", default-features = false }
-song = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+actions-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+actions-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+daw = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+daw-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+daw-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+dioxus-test = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+engraver = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0", default-features = false }
+input = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+keyflow = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+keyflow-text = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+session = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+session-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+session-ui = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0", default-features = false }
+song = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
 
 # ── Facet reflection + vox RPC — the rc.5 fleet pins ──────────────────
 facet = { version = "0.50.0-rc.5", features = ["reflect", "chrono", "uuid"] }

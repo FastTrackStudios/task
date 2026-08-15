@@ -30,6 +30,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
+      # committed, and asset!() resolves them at compile time — so they have
+      # to exist before cargo runs. dx builds them during `dx serve`/`dx
+      # build`, but CI drives plain cargo.
+      - uses: taiki-e/install-action@just
+      - name: tailwind
+        run: |
+          npm install -g @tailwindcss/cli
+          just --justfile apps/Justfile --working-directory apps css
+
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -50,6 +60,13 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+
+      # Same reason as the native job: asset!() needs the generated sheets.
+      - uses: taiki-e/install-action@just
+      - name: tailwind
+        run: |
+          npm install -g @tailwindcss/cli
+          just --justfile apps/Justfile --working-directory apps css
 
       # The browser build is a first-class target: the UI crate and the
       # vault/proto slices must stay wasm-clean or the web app stops building.
