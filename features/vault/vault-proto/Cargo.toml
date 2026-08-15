@@ -1,0 +1,36 @@
+[package]
+name = "vault-proto"
+description = "Wire contract for the vault feature: `#[architect::rpc] trait VaultSync` (byte-level file replication) plus payload + event types. `ManifestEntry` is an `architect::Entity` (String PK on path); SeaORM Model emitted under `--features server` for vaults large enough that scanning the full manifest on every diff gets expensive."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+# Per-file collab doc ids are uuid v5 of (vault_id, path) —
+# see `src/collab.rs`. `js` keeps the wasm build happy (the ui
+# crate reaches this through the default `vox` feature).
+uuid = { workspace = true, features = ["v5", "js"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

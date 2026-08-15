@@ -1,0 +1,40 @@
+[package]
+name = "agent-proto"
+description = "Wire contract for the `agent/` feature — LLM-agent integration (Hermes, Codex CLI, Claude CLI, Pi, custom). Models projects/sessions/threads/messages/tools/approvals/kanban, plus the streaming `AgentEvent` union. Backends implement the trait by either embedding an agent in-process (hermes-webui style) or monitoring an external CLI's on-disk logs (CodexMonitor style)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Server-side: enables architect's SeaORM emission for the
+# `#[derive(architect::Entity)]` structs (agent-task queues +
+# rows). Pulls `sea-orm` into the dep graph; wasm clients leave
+# this off.
+server = ["architect/server-seaorm", "dep:sea-orm"]
+# Adds `fake::Dummy` derives to architect-emitted structs.
+# The Entity derive emits `#[cfg_attr(feature = "fake", ...)]`
+# attributes unconditionally, so the host crate has to define
+# the feature even when it's off by default.
+fake = ["dep:fake", "architect/fake"]
+
+[lints]
+workspace = true

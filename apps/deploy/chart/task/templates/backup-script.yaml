@@ -1,0 +1,84 @@
+{{- if .Values.backup.git.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "task.fullname" . }}-git-backup
+  labels: {{- include "task.labels" . | nindent 4 }}
+data:
+  snapshot.sh: |
+    #!/bin/sh
+    # Trigger a SERVER-NATIVE git snapshot cycle.
+    #
+    # The heavy lifting moved into task-server itself (the
+    # org-snapshot engine): the server quiesces writes behind a
+    # global gate, runs `PRAGMA wal_checkpoint(TRUNCATE)` on every
+    # open sqlite handle, commits the detached git repos under
+    # /data/.gitstate/ (same layout this job used to write — one
+    # repo per org continuing its pre-existing history, plus the
+    # full-state repo), then pushes to $TASK_BACKUP_REMOTE_BASE.
+    # The committed sqlite files are therefore CONSISTENT, not
+    # best-effort live copies.
+    #
+    # This job is now just the scheduler: an authenticated POST
+    # against the in-cluster service. Auth reuses the same backup
+    # secret the server holds (GIT_TOKEN).
+    #
+    # Restore / branch / log are server verbs too:
+    #   task admin snapshot|log|branch <name>|restore <commit>
+    # (against <server>/server/vox).
+    set -eu
+    URL="$SNAPSHOT_URL"
+    echo "triggering server-native snapshot: POST $URL"
+    if out=$(wget -q -O- --header="Authorization: Bearer $GIT_TOKEN" \
+        --post-data='' "$URL" 2>&1); then
+      echo "$out"
+      echo "snapshot cycle complete"
+    else
+      echo "$out" >&2
+      echo "ERROR: snapshot trigger failed." >&2
+      echo "  - a 404 means the task-server image predates the native" >&2
+      echo "    /server/snapshot endpoint — upgrade the server image" >&2
+      echo "    (the old in-job git script was removed in this chart" >&2
+      echo "    version; pin the previous chart to get it back)." >&2
+      echo "  - a 401 means GIT_TOKEN does not match the server's" >&2
+      echo "    TASK_BACKUP_GIT_TOKEN (same secret — check the env" >&2
+      echo "    wiring on the server deployment)." >&2
+      echo "  - a 503 means the server has no TASK_BACKUP_GIT_TOKEN" >&2
+      echo "    configured (backup.git.existingSecret)." >&2
+      exit 1
+    fi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "task.fullname" . }}-git-backup
+  labels: {{- include "task.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.git.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: git-backup
+              image: {{ .Values.backup.git.image }}
+              command: ["/bin/sh", "/scripts/snapshot.sh"]
+              env:
+                - name: SNAPSHOT_URL
+                  value: http://{{ include "task.fullname" . }}-server/server/snapshot
+              envFrom:
+                - secretRef:
+                    name: {{ required "backup.git.existingSecret is required (GIT_USER + GIT_TOKEN)" .Values.backup.git.existingSecret }}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+          volumes:
+            - name: scripts
+              configMap:
+                name: {{ include "task.fullname" . }}-git-backup
+{{- end }}

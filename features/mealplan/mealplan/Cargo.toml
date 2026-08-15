@@ -1,0 +1,68 @@
+[package]
+name = "mealplan"
+description = "Mealplan feature — meals on a calendar that reference cookbook recipes and deduct from pantry stock when cooked. Facade crate for the `features/mealplan/` slice: re-exports `cookbook` + `pantry` so consumers (and the future `fitness` feature) depend on just this crate. Meals live as markdown pages (`type: meal`) in a `vault::Vault`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+vault = { workspace = true }
+cookbook = { workspace = true }
+pantry = { workspace = true }
+inventory = { workspace = true }
+# Wire model (`Meal`) + `MealplanService` trait + fulfillment wire
+# types live here; this native crate re-exports them and keeps the
+# cook + fulfillment domain logic.
+mealplan-proto = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+serde_json = { workspace = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = [
+    "dep:vox",
+    "dep:vox-types",
+    "architect/vox",
+    "architect/dispatch-tokio",
+    "cookbook/vox",
+    "pantry/vox",
+    "mealplan-proto/vox",
+]
+server = [
+    "architect/server-seaorm",
+    "dep:sea-orm",
+    "cookbook/server",
+    "pantry/server",
+    "inventory/server",
+    "mealplan-proto/server",
+]
+fake = [
+    "dep:fake",
+    "architect/fake",
+    "cookbook/fake",
+    "pantry/fake",
+    "inventory/fake",
+    "mealplan-proto/fake",
+]
+full = ["vox", "server", "fake"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

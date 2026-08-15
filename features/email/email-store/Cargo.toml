@@ -1,0 +1,29 @@
+[package]
+name = "email-store"
+description = "Local cache for the email feature: Maildir on disk + SQLite FTS5 index. Sits in front of one-or-more `email_proto::EmailSync` backends; clients read envelopes + search bodies via FTS5 without round-tripping to the server. The Maildir is canonical, the index is disposable (rebuildable by walking the tree)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Bundled SQLite so we never accidentally link against a system
+# build that's missing FTS5. `modern_sqlite` unlocks the post-3.35
+# query helpers we use (RETURNING, etc).
+rusqlite = { version = "0.32", features = ["bundled", "modern_sqlite"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# Snippet extraction + thread-subject normalization.
+mail-parser = "0.11"
+
+[dev-dependencies]
+tempfile = "3"
+proptest = "1"
+
+[lints]
+workspace = true

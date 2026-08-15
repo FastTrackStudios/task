@@ -1,0 +1,36 @@
+[package]
+name = "files-storage"
+description = "Files placement layer, server side (issue #262/ADR 0001): the deployment-scoped Storage Location registry, per-org Storage grants (capability classes, logical-byte quota, path prefix), root placement across two axes (live tree + blob replicas), and the storage-agent protocol with its in-server hosting — an agent that creates a root's live tree, initializes the authoritative version-store repo, measures logical bytes, and carries blob replication between locations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+files-proto = { workspace = true, features = ["vox"] }
+files-storage-proto = { workspace = true, features = ["vox"] }
+blake3 = { workspace = true }
+task-files-chunk-store = { workspace = true }
+task-files-util = { workspace = true }
+task-files-version-store = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+jj-lib = { workspace = true }
+pollster = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+vox = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+architect = { workspace = true, features = ["local"] }
+
+[lints]
+workspace = true

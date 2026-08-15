@@ -1,0 +1,45 @@
+[package]
+name = "project-proto"
+description = "Wire contract for the project feature: the `ProjectInfo` entity (identity, status, roadmap, billing + agent-dispatch knobs), the per-project state registry (`StateGroup` / `StateDef` / `StatesConfig`) and the `#[architect::rpc] trait ProjectService` CRUD surface. Wasm-clean (the web UI binds to it directly); the sibling `project` crate owns the vault-backed parse / write / scan / backend side."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). Enable the `vox` feature to
+# pull in the architect-emitted RPC client + dispatcher.
+[dependencies]
+architect = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+# No default `vox`: `project` itself defaults to the bare
+# wire/file-format surface, so the proto matches (consumers that
+# want the RPC client opt in, exactly as before the split).
+default = []
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impls UI crates key their entity caches
+# on. Pulls Dioxus via architect-atom, so it stays opt-in (UI-only).
+atom = ["architect/atom"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[dev-dependencies]
+serde_yaml = { workspace = true }
+
+[lints]
+workspace = true

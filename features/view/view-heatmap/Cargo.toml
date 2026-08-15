@@ -1,0 +1,25 @@
+[package]
+name = "view-heatmap"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Heatmap — habit / activity visualization. Two variants:
+#   - Grid:  GitHub-contributions style, 53 weeks × 7 days, color by
+#            intensity bucket. Great for "did I do X this year?"
+#   - Bars:  CodexMonitor style, one bar per day for a single week,
+#            prev/next week chevrons. Great for magnitude detail.
+# Dumb UI: feed `points: Vec<(NaiveDate, u32)>` in via props.
+
+[dependencies]
+dioxus = { workspace = true }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

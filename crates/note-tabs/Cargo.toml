@@ -1,0 +1,17 @@
+[package]
+name = "task-note-tabs"
+description = "In-note section tabs as a Task note widget: `# Section` headings of a `type: event` (or `tabs: true`) note render as a tab bar, with the inactive sections hidden by replace-decorations. A pure widget provider — depends on the widget contract, never on the shell."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+editor = { workspace = true }
+task-widgets = { workspace = true }
+
+[lints]
+workspace = true

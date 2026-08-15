@@ -1,0 +1,34 @@
+[package]
+name = "notify-proto"
+description = "Wire contract for the notifications feature: the `Notification` record (kind + title/body + typed source with a click-through href), `NotifyError`, and `#[architect::rpc] trait Notify` (list / mark_read / mark_all_read / delete + the `#[subscribe]` events stream). The server-side notifier materializes rows from the org's event hubs; every UI consumes them through this contract."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). Enable the `vox` feature to
+# pull in the architect-emitted RPC client + dispatcher.
+[dependencies]
+facet = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impl UI crates key their entity caches on.
+# Pulls Dioxus via architect-atom, so it stays opt-in (UI-only).
+atom = ["architect/atom"]
+
+[lints]
+workspace = true

@@ -1,0 +1,24 @@
+[package]
+name = "example-email-client"
+description = "Standalone Dioxus harness for the email feature. Built so we can iterate on backends + storage without pulling in the full task-ui shell. Mirrors the editor's `playground` example."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "email-client"
+path = "src/main.rs"
+
+[dependencies]
+email-proto = { workspace = true }
+email-store = { workspace = true }
+email-maildir = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true

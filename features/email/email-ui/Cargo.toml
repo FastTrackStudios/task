@@ -1,0 +1,42 @@
+[package]
+name = "email-ui"
+description = "Dioxus page for the mail reader (`/email`) — account list plus the selected account's recent envelopes. Owns its own `EmailSync` calls; the shell only routes to it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+architect-ui.workspace = true
+# The shared UI seam: org scoping, the `feeds!` call macro over the
+# per-org vox connection, and the loading / error / empty phases.
+task-ui-core.workspace = true
+email-proto = { workspace = true, features = ["vox"] }
+# Offline read cache: fetched envelopes + opened message bodies are
+# kept as JSON so the mailbox is readable with the server unreachable.
+serde_json = { workspace = true }
+# `use_stream` — holds the `EmailSync` change stream open and
+# re-establishes it across reconnects.
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+# Envelope date formatting in the local zone.
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+
+# Per-platform backing for the offline cache. These tables MUST stay
+# below every shared dependency — a `[target.…]` header ends
+# `[dependencies]`, so anything after it silently stops being a
+# dependency of the normal build.
+#
+# Web keeps the cache in localStorage…
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = ["Window", "Storage"] }
+
+# …and desktop in a file under the OS cache dir, which is where
+# offline actually matters (a laptop off the network).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs = "5"
+
+[lints]
+workspace = true

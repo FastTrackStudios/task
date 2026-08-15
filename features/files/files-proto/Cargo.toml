@@ -1,0 +1,33 @@
+[package]
+name = "files-proto"
+description = "Wire contract for the Files feature (issue #255/ADR 0001): the File Root / browse-entry / version-chain-entry / checkpoint-info wire types and the `#[architect::rpc] trait FilesService` (create_root / list_roots / browse / drive_browse / chain / checkpoint_now) + `#[subscribe] events` surface. Wasm-clean; the sibling `files` crate owns the vault-backed / version-store-backed side (issue #259)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+[package]
+name = "agent-codex"
+description = "Codex agent backend — implements `agent_proto::Agents` against the official `codex app-server` daemon. Vendors CodexMonitor's `app_server.rs` + sibling modules (events, process_core, codex/args) under `vendor/`; the wrapper at `src/` bridges its `WorkspaceSession` + `EventSink` surface to our trait, types, and broadcast channels."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-proto = { workspace = true }
+architect = { workspace = true, features = ["dispatch-tokio"] }
+chrono = { workspace = true, features = ["clock", "serde"] }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+shell-words = "1"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+vox = { workspace = true }
+
+[lints]
+workspace = true

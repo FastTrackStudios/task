@@ -1,0 +1,20 @@
+[application]
+name = "task-app-web"
+default_platform = "web"
+
+[web.app]
+title = "Task"
+
+# Dev proxy: the players fetch song media same-origin — the current
+# colocated layout under `/org/{slug}/media/...`, plus the legacy `/media`
+# and attachment `/blobs`. Forward them to the local task-server (18080) so
+# `dx serve` and the data act same-origin. (Vox connects directly to
+# ws://127.0.0.1:18080 via DEFAULT_VOX_URL, so it isn't proxied here.)
+[[web.proxy]]
+backend = "http://127.0.0.1:18080/org"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:18080/media"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:18080/blobs"

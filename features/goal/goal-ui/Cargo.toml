@@ -1,0 +1,25 @@
+[package]
+name = "goal-ui"
+description = "Dioxus page for goals (`/goals`) — the multi-org goal list with its cycle labels. Owns its own `GoalService` fan-out; the shell only routes to it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+architect-ui.workspace = true
+# The shared UI seam: org scoping, the multi-org `fan_out` helper over
+# the per-org vox connection, and the loading / error / empty phases.
+task-ui-core.workspace = true
+# Wire types + RPC client only — wasm-clean by construction.
+goal-proto = { workspace = true, features = ["vox"] }
+# Resolves a goal's `cycle_id` to a displayable year/quarter/ordinal label.
+cycle = { workspace = true, default-features = false }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+uuid = { workspace = true, features = ["v4", "js"] }
+
+[lints]
+workspace = true

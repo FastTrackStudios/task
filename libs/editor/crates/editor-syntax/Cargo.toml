@@ -1,0 +1,35 @@
+[package]
+name = "editor-syntax"
+description = "Token-level syntax highlighting for code fences via Arborium tree-sitter."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arborium = { workspace = true }
+arborium-tree-sitter = { workspace = true }
+arborium-theme = { workspace = true }
+
+[features]
+default = []
+default-langs = [
+    "lang-rust",
+    "lang-typescript",
+    "lang-javascript",
+    "lang-python",
+    "lang-json",
+    "lang-bash",
+    "lang-markdown",
+]
+lang-rust = ["arborium/lang-rust"]
+lang-typescript = ["arborium/lang-typescript"]
+lang-javascript = ["arborium/lang-javascript"]
+lang-python = ["arborium/lang-python"]
+lang-json = ["arborium/lang-json"]
+lang-bash = ["arborium/lang-bash"]
+lang-markdown = ["arborium/lang-markdown"]
+
+[lints]
+workspace = true

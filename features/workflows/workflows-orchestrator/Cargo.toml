@@ -1,0 +1,22 @@
+[package]
+name = "workflows-orchestrator"
+description = "Concrete coding-workflow runtime over workflows-proto: opens WorkSessions, records Transitions + Activities, parks/resumes with full ResumeContext assembly. Native (file-store backed); no generic Workflow trait yet — extracted when a second domain arrives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+workflows-proto = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+You are cleaning up a stale review queue for a personal wiki.
+After recent ingests, some review items may no longer be valid because the missing page now exists, the duplicate was resolved, or the referenced concept has been added.
+
+Current wiki pages (filename, optional title):
+{page_list}
+
+Pending review items to judge:
+{review_items}
+
+For each review item, decide whether the underlying condition has been RESOLVED by the current wiki state.
+Be conservative: only mark as resolved if you are confident the concern no longer applies.
+For contradictions, confirmations, or human-judgment items, default to keeping them pending.
+
+Respond with ONLY a JSON object in this exact shape: {"resolved": ["id1", "id2"]}
+If none of the items are resolved, return exactly: {"resolved": []}
+Do not wrap in markdown fences. Do not add commentary.

@@ -1,0 +1,38 @@
+[package]
+name = "scheduling"
+description = "Scheduling feature: parse + write personal day templates, cal.com-style event types, availability schedules, and bookings as markdown files in a `vault::Vault`. Includes an in-memory `SchedulingService` backend for tests + demo routes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Native-only: the vault round-trip reads from disk. wasm builds
+# use scheduling-proto + scheduling-ui directly.
+
+[dependencies]
+# `vox` pulls in the architect-emitted dispatcher so the server can
+# mount `VaultScheduler` as a `DayTemplates` vox service (mirrors how
+# `timer` enables `timer-proto`'s vox feature).
+scheduling-proto = { workspace = true, features = ["vox"] }
+# `DayTemplates` is a *sync* rpc trait, so its backend must provide a
+# `HasDispatcher` impl. `dispatch-tokio` gives the `spawn_blocking`
+# dispatcher the server uses (same as `task` / `project` backends).
+architect = { workspace = true, features = ["dispatch-tokio"] }
+chrono = { workspace = true, features = ["clock", "std", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+# Booking audit trail — one JSON object per line, appended in place.
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+indexmap = { workspace = true, features = ["serde"] }
+vault = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

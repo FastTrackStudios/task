@@ -1,0 +1,60 @@
+[package]
+name = "files"
+description = "Files feature server-side backend (issue #259/ADR 0001): `FilesBackend` implements `files-proto`'s `FilesService` over `task-files-version-store`'s jj-lib-on-CAS engine — create a File Root from an existing folder (marker file + stable id), browse its live tree, derive a file's version chain, and trigger a Session checkpoint on demand."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+files-proto = { workspace = true, features = ["vox"] }
+task-files-util = { workspace = true }
+task-files-version-store = { workspace = true }
+task-files-chunk-store = { workspace = true }
+async-trait = "0.1"
+chrono = { workspace = true, features = ["clock", "serde"] }
+gix = { workspace = true }
+globset = { workspace = true }
+jj-lib = { workspace = true }
+# crates.io `notify`, renamed: the workspace-dependency name `notify` is
+# the in-tree notifications feature. The Files cadence engine uses it for
+# activity *hints* only (a stat-scan certifies every capture).
+notify-fs = { workspace = true }
+futures-util = { workspace = true, features = ["io"] }
+pollster = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+# Atomic stub/hydration writes (issue #263): content is restored to a
+# temp file in the target's own directory and renamed into place.
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+# Named / Project Versions are Vault entities (issue #261/ADR 0001):
+# markdown pages under the org vault, read and written through the
+# shared vault-entity slice layer.
+vault = { workspace = true }
+vault-entity = { workspace = true }
+# Derived media (issue #269): proxies/peaks/filmstrips generated from
+# source media and cached in the CAS. The transcoder is injected, so
+# this crate takes no ffmpeg dependency.
+files-transcode = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
+tokio-util = { workspace = true, features = ["compat"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+vox = { workspace = true }
+
+[dev-dependencies]
+files-transcode = { workspace = true, features = ["test-transcoder"] }
+tempfile = "3"
+# Chunk-level survival after a GC pass is invisible at the RPC seam —
+# the spec's "secondary harness" (issue #261's AC 2).
+task-files-chunk-store = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+architect = { workspace = true, features = ["local"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,42 @@
+[package]
+name = "task-proto"
+description = "Wire contract for the task feature: the `TaskInfo` entity (TaskNotes-shape frontmatter model + `WorkflowAttrs` / `Estimate` / relations), the pure domain rules over it (status classification, the merged relation graph, contextual relevance, natural-language capture) and the `#[architect::rpc] trait TaskService` CRUD + `#[subscribe] events` surface. Wasm-clean (the web UI binds to it directly); the sibling `task` crate owns the vault-backed parse / write / scan / backend side."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). Enable the `vox` feature to
+# pull in the architect-emitted RPC client + dispatcher + the
+# `events` stream sibling.
+[dependencies]
+architect = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+# `AgentRef` (task assignees / claims) is workflows' wire type.
+workflows-proto = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impls UI crates key their entity caches
+# on. Pulls Dioxus via architect-atom, so it stays opt-in (UI-only).
+atom = ["architect/atom"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake", "workflows-proto/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

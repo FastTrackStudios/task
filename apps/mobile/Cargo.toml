@@ -1,0 +1,28 @@
+[package]
+name = "task-app-mobile"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["router"] }
+ui.workspace = true
+# `otel` so shipped clients export traces/logs/metrics through the
+# server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
+architect-telemetry = { workspace = true, features = ["otel"] }
+tracing = { workspace = true }
+
+# Apple Watch config bridge (`src/watch_sync.rs`) — pure-Rust WCSession
+# host over the objc2 ecosystem, iOS builds only.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-watch-connectivity = "0.3"
+
+[features]
+default = ["mobile"]
+mobile = ["dioxus/mobile", "dioxus/launch"]
+
+[lints]
+workspace = true

@@ -1,0 +1,279 @@
+[package]
+name = "ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Workspace member. Sharing the lockfile + dep graph with the
+# server/CLI crates avoids the dioxus / dioxus-router version drift
+# that bit us before. wasm-only call sites (web-sys::WebSocket, etc.)
+# are gated with `#[cfg(target_arch = "wasm32")]` so this crate
+# compiles cleanly on the native target too — `cargo check
+# --workspace` works inside the nix dev shell.
+
+[dependencies]
+dioxus = { workspace = true, features = ["router"] }
+dioxus-router.workspace = true
+architect-ui = { workspace = true, features = ["router"] }
+# Icon foundation: dioxus-icons (Lucide-as-components) is the default
+# set; `tag-proto::TagIcon` is the persisted user choice the render
+# helper maps to a component. See plans/tagging-and-icons.md.
+dioxus-icons.workspace = true
+tag-proto.workspace = true
+
+# The editor + the byte⇄scalar adapter for its CRDT host: the
+# vault page wires `Editor`'s `on_transaction` sink through
+# `editor-crdt` into a per-file Loro doc (`src/collab.rs`).
+editor.workspace = true
+editor-crdt.workspace = true
+view.workspace = true
+view-calendar.workspace = true
+# Knowledge-graph view (the `/wiki` graph) — force-directed map of the
+# vault's `[[wikilink]]` web, built client-side from file contents.
+view-knowledge-graph.workspace = true
+task-ui.workspace = true
+
+# The shared Task UI seam — vox endpoint + per-org connection root,
+# display formatting, vault frontmatter reads. Re-exported from `lib.rs`
+# as `crate::format` / `crate::vox_session`.
+task-ui-core.workspace = true
+# Plugin vocabulary — nav/route gating on the active org's enabled set.
+task-plugin.workspace = true
+# `type: song` / `type: setlist` vault views — the browser multitrack
+# session player, extracted whole into its own crate. ONE dependency
+# instead of the audio stack: `session-ui`, `session-proto`, `daw-proto`,
+# `keyflow` (engraver), `editor-keyflow{,-lang}` and — on wasm — `daw`,
+# `daw-standalone` and `session` are all its business now, not ours.
+task-player-ui.workspace = true
+# The note-widget contract: the registry the note view consults, the
+# WidgetCtx it builds, and the shared FullscreenExperience chrome. The
+# provider crates below are named ONLY at the app-root registration
+# site (app.rs).
+task-widgets.workspace = true
+# Widget provider: in-note section tabs (type: event / tabs: true).
+task-note-tabs.workspace = true
+# The Files explorer: the `/files` pane AND the note-embedded explorer
+# widget (`type: file-root` notes and embeds of them). Owns its own
+# `FilesService` calls — the shell only routes and registers.
+files-ui.workspace = true
+share-proto = { workspace = true }
+# `vox` for the `DayTemplatesClient` the schedule page calls to load
+# the day-plan overlay. Wasm-clean (serde-only client side).
+scheduling-proto = { workspace = true, features = ["vox", "atom"] }
+inbox-proto = { workspace = true, features = ["vox", "atom"] }
+# Notifications — the bell in the top bar (store + live fold + feeds).
+notify-proto = { workspace = true, features = ["vox", "atom"] }
+# Recall wire surface — `RecallCard` + `RecallService` client for the
+# `/recall` spaced-repetition deck. Wasm-clean (serde + the pure FSRS
+# scheduler); `vox` + `atom` for the optimistic store.
+recall-proto = { workspace = true, features = ["vox", "atom"] }
+# Contacts wire surface — `Contact` + `CardDavAccount` + `ContactsClient`
+# for the `/contacts` people directory. Wasm-clean; `vox` + `atom` for
+# the optimistic store.
+contacts-proto = { workspace = true, features = ["vox", "atom"] }
+# The FSRS scheduler the review flow drives client-side.
+spaced-repetition = { workspace = true }
+threads = { workspace = true, features = ["vox", "ui", "atom"] }
+locations-proto = { workspace = true, features = ["vox", "atom"] }
+# Inventory wire surface — `Item` model + `InventoryService`
+# client for the `/inventory` route. Wasm-clean (serde-only
+# client side), `vox` feature only.
+inventory-proto = { workspace = true, features = ["vox", "atom"] }
+# Scripture wire surface — `ScriptureService` client + verse DTOs
+# for the `/scripture` reader. Read-only, `vox` feature only.
+scripture-proto = { workspace = true, features = ["vox"] }
+# Typed-link wire surface — `LinksService` client + `TypedLink`/`NodeRef`
+# for the `/connections` graph (verse↔song↔sermon↔topic web). `vox` only.
+links-proto = { workspace = true, features = ["vox"] }
+# Resource Library wire surface — `ResourcesService` client + transcript
+# DTOs for the `/watch` synced transcript. `vox` only.
+resources-proto = { workspace = true, features = ["vox"] }
+milestone-proto = { workspace = true, features = ["vox", "atom"] }
+finance-proto = { workspace = true, features = ["vox"] }
+# Fitness suite wire surface — body / exercises / workouts /
+# intake service clients for the `/fitness` route. Wasm-clean
+# (serde-only client side), `vox` feature only.
+fitness-proto = { workspace = true, features = ["vox", "atom"] }
+# Mealplan suite wire surface — cookbook (recipes) / pantry
+# (ingredient stock) / mealplan (planned meals) service clients
+# for the `/mealplan` route. Wasm-clean (serde-only client side),
+# `vox` feature only (no `native` → never pulls `inventory`).
+base64 = { workspace = true }
+cookbook-proto = { workspace = true, features = ["vox", "atom"] }
+pantry-proto = { workspace = true, features = ["vox", "atom"] }
+mealplan-proto = { workspace = true, features = ["vox"] }
+scheduling-ui.workspace = true
+# Extracted feature pages — the shell routes to them, they own their
+# own protos and RPC calls. See crates/task/ui/ARCHITECTURE.md.
+links-ui.workspace = true
+email-ui.workspace = true
+goal-ui.workspace = true
+scripture-ui.workspace = true
+# Architect-generated vox clients for project + task, plus their
+# wire models and the pure domain rules the stores apply
+# client-side (relevance, relation cascade, capture). The
+# workspace pins vox to `default-features = false,
+# features = ["runtime"]` which is wasm-clean (no tcp /
+# tokio[net]). Pattern lifted from `vox/rust/wasm-browser-tests`.
+# The vault-backed `project` / `task` crates stay out of the
+# browser graph entirely — the protos are the whole contract.
+project-proto = { workspace = true, features = ["vox"] }
+task-proto = { workspace = true, features = ["vox"] }
+# Goal wire model + `GoalService(Stream)Client` for the live goal
+# store behind `/goals`. The goal crate is its own proto (wasm-clean
+# model + rpc trait; the vault-backed modules are cfg'd off on wasm).
+goal-proto = { workspace = true, features = ["vox"] }
+# Timer service client for the `/timer` time-tracking page.
+timer-proto = { workspace = true, features = ["vox"] }
+# Agent service clients for the `/agents` page — `SessionsClient`
+# lists agent sessions, `TurnDispatchClient` kicks off turns. `vox`
+# feature only (no `server`), so it stays wasm-clean.
+agent-proto = { workspace = true, features = ["vox"] }
+# Vault file-replication wire surface — manifest / get_file /
+# put_file. The `/vault` route drives `editor::Editor` over the
+# auto-emitted `VaultSyncClient`. `vox` feature only (no
+# `server`/`full`), so it stays wasm-clean like the others.
+vault-proto = { workspace = true, features = ["vox"] }
+# Wiki raw-source wire surface — `RawLayerClient` for the
+# `/wiki/sources` list + `/wiki/source/:name` SourceViewer
+# (archived articles + ^t-anchored video transcripts). `vox`
+# feature only, wasm-clean like the other proto clients.
+wiki-proto = { workspace = true, features = ["vox"] }
+# Forge wire surface — `RepoCatalog` / `IssueTracker` clients the
+# `/repos` page binds to list repos + their issues for the
+# selected org. `vox` feature only, wasm-clean like the others.
+git-proto = { workspace = true, features = ["vox"] }
+# architect-auth wire surface — `AuthServiceClient` + the session
+# bundle types for the account switcher's real sign-in flow
+# (`src/auth.rs`). `vox` feature only (no `server`), wasm-clean
+# like the other proto clients above.
+auth-proto = { workspace = true, features = ["vox"] }
+prefs-proto = { workspace = true, features = ["vox"] }
+# identity-locker wire surface — `IdentityServiceClient` for
+# client-side multi-server sync (`src/auth.rs`): pull linked servers
+# from the home locker on sign-in, push new links up. `vox` feature
+# only (no `server`), wasm-clean like the other proto clients above.
+identity-proto = { workspace = true, features = ["vox"] }
+
+# App-wide keyboard shortcuts (src/shortcuts.rs): trie-based key
+# dispatch (multi-key `g h` sequences, chord parsing, keymap config).
+# Wasm-clean core crate; the DOM wiring lives in shortcuts.rs.
+input.workspace = true
+
+# The shared actions framework (src/actions.rs): `ActionDefinition`s +
+# the `StandaloneActions` registry the command palette and the shortcut
+# dispatcher both execute through. Both crates are wasm-clean
+# (actions-standalone uses async-lock, not tokio).
+actions-proto.workspace = true
+actions-standalone.workspace = true
+
+# Fuzzy ranking for the Ctrl+P command palette — same matcher the
+# architect-ui combobox filter uses, kept here so the palette can rank (not
+# just filter) results.
+nucleo-matcher.workspace = true
+# The `<space><space>` everything-search window's matcher (the same
+# scorer the fff finder embeds).
+neo_frizbee.workspace = true
+
+uuid = { workspace = true, features = ["v4", "js"] }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+fake.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Desktop side of the org-discovery boot cache (web uses localStorage).
+dirs = "5"
+
+# Browser glue. Compiles cleanly on native too; the source uses
+# them only inside `cfg(target_arch = "wasm32")` blocks.
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "Window",
+    "MediaQueryList",
+    "Location",
+    "History",
+    "Navigator",
+    "MediaQueryList",
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+    "Blob",
+    "Event",
+    "CloseEvent",
+    "ErrorEvent",
+    # Document-level shortcut-engine listeners (src/shortcuts.rs):
+    # capture-phase keydown/keyup + the activeElement typing guard.
+    "Document",
+    "EventTarget",
+    "KeyboardEvent",
+    "Element",
+    "HtmlElement",
+    # Now-playing setlist-row highlighter: toggle a class + set a `--amp`
+    # custom property on the matching row (waveform over the artwork).
+    "DomTokenList",
+    "CssStyleDeclaration",
+    "Storage",
+    "Clipboard",
+    "console",
+    "Response",
+] }
+futures-channel.workspace = true
+futures-util.workspace = true
+
+# Vox runtime (gives `#[vox::service]` clients). The transport +
+# connection root live in `task-ui-core`; the shell only needs the
+# generated client traits its own protos expose.
+vox.workspace = true
+vox-core.workspace = true
+
+
+# Client-state framework: Connection/use_connect_reactive (per-org vox
+# caller), notifications + reactivity registries, optimistic Store +
+# AtomResult as pages migrate. `client` = vox + atom + form, wasm-clean.
+# `platform` adds the cross-target `architect::sleep` the presence
+# module's idle/poll tickers use (crdt's `dioxus` feature pulls it in
+# anyway; declared explicitly so our direct uses don't lean on feature
+# unification).
+architect = { workspace = true, features = ["client", "platform", "local"] }
+
+# Org-wide presence (`src/presence.rs`): `use_presence_channel` +
+# `Presence` over the fixed org doc id, riding the shared per-org
+# connection. `dioxus` implies the `vox` sync transport; presence is
+# ephemeral, so the `indexeddb` persistence feature is NOT needed.
+crdt = { workspace = true, features = ["dioxus"] }
+
+# Browser-only timers for the live elapsed-time tick on the timer
+# page. Wasm-only — used inside `cfg(target_arch = "wasm32")` blocks.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { workspace = true, features = ["futures"] }
+
+# Native session-token persistence (desktop/mobile) — architect-auth's
+# FileTokenStore, used in `cfg(not(target_arch = "wasm32"))` blocks in auth.rs.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+architect-auth = { workspace = true, features = ["client"] }
+# Native org discovery (desktop/mobile/iOS) — `window.fetch` is wasm-only,
+# so `orgs::fetch_orgs` uses reqwest (rustls) for the `.well-known` GET.
+reqwest.workspace = true
+# Direct Sentry capture at the org-discovery failure (native only).
+sentry.workspace = true
+# vox-websocket pulls tokio-tungstenite WITHOUT any TLS backend, so native
+# `wss://` dials fail with "TLS support not compiled in" (the first time the
+# native app connects to a TLS server, not a local `ws://`). Enable rustls on
+# the *shared* tokio-tungstenite via feature unification so `connect_async`
+# handles `wss://`. Mirrors `apps/task/cli`.
+tokio-tungstenite = { version = "0.29", default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-webpki-roots",
+] }
+
+[features]
+default = []
+# Opt-in WASM bundle splitting along route variants.
+wasm-split = ["dioxus-router/wasm-split"]
+
+[lints]
+workspace = true

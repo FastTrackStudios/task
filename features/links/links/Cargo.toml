@@ -1,0 +1,36 @@
+[package]
+name = "links"
+description = "Backing store for the generalized typed-link primitive. File-backed (JSONL) store of `links_proto::TypedLink`s with confidence + visibility, serving the `#[architect::rpc] LinksService`. See plans/knowledge-primitives.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+links-proto = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+chrono = { workspace = true, features = ["clock"] }
+thiserror = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "links-proto/vox"]
+full = ["vox"]
+
+[dev-dependencies]
+tempfile = "3"
+# `sync_vault_links` example: parse note wikilinks → typed links.
+vault-obsidian = { workspace = true }
+vault-live = { workspace = true }
+scripture-proto = { workspace = true, default-features = false }
+
+[lints]
+workspace = true

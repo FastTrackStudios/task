@@ -1,0 +1,131 @@
+[package]
+name = "task-player-ui"
+description = "The browser multitrack session player that the Task app mounts on `type: song` / `type: setlist` notes — single-song view, setlist player, per-setlist audio graph, synced keyflow chart pane + editor, the global Now Playing engine, and the wasm-hosted daw-standalone session engine. Split out of the `ui` shell so the productivity app doesn't carry the audio stack."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+architect-ui.workspace = true
+
+# The shared Task UI seam: `establish_for::<C>` against an org's vox
+# endpoint, `format::duration_mmss`, and the `type: song` frontmatter
+# shape (`SongFront`). Deliberately the ONLY task-shell dependency —
+# everything else here is session/daw domain.
+task-ui-core.workspace = true
+# The note-widget contract: this crate PROVIDES the `type: song` /
+# `type: setlist` note widgets + embed href handling (`src/widgets.rs`)
+# that the shell's note view mounts through the registry.
+task-widgets.workspace = true
+
+# Presentational session components + the global signals the player
+# drives each tick (mixer, transport, progress bars, chart view state).
+# Same crate the fasttrackstudio wasm remote renders.
+session-ui = { workspace = true, features = ["web"] }
+session-proto = { workspace = true }
+daw-proto = { workspace = true }
+
+# Chart rendering: the CPU engraver (keyflow layout → inline SVG +
+# `@font-face` glyphs) and the editor with keyflow syntax highlighting.
+keyflow = { workspace = true, features = ["engraver", "text"] }
+editor = { workspace = true }
+# `@font-face` glyph payload for the engraved chart SVG.
+editor-keyflow = { workspace = true }
+editor-keyflow-lang = { workspace = true }
+
+# Stem sources: signed blob download URLs (attachments) and the
+# media-over-vox forward path (MediaService `Tx<MediaChunk>`).
+attachments-proto = { workspace = true, features = ["vox"] }
+media-proto = { workspace = true, features = ["vox"] }
+
+vox.workspace = true
+vox-core.workspace = true
+
+# `architect::platform::sleep` (the cross-target tick) plus, on wasm,
+# `LocalServer` + `Scope` for the in-tab session engine.
+architect = { workspace = true, features = ["client", "platform", "local"] }
+
+tracing.workspace = true
+eyre.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Parses the song.md / arrangement.md frontmatter (the `song` folder
+# schema) when playing a manifest-less colocated song.
+serde_yaml.workspace = true
+
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "Window",
+    "Location",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "EventTarget",
+    "Event",
+    "DomTokenList",
+    "CssStyleDeclaration",
+    "Response",
+    "Storage",
+    "console",
+    # Web Audio multitrack. Each stem is streamed via an
+    # HTMLAudioElement (progressive Opus/ogg, low memory) routed
+    # through a per-stem GainNode for the mixer.
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioNode",
+    "AudioParam",
+    "GainNode",
+    "AudioDestinationNode",
+    # Per-stem VU metering tap (post-gain analyser → peak level).
+    "AnalyserNode",
+    # Engine-fed audio: a ScriptProcessorNode drives daw-standalone's
+    # WebRenderer, and decodeAudioData → AudioBuffer supplies stem PCM.
+    "ScriptProcessorNode",
+    "AudioProcessingEvent",
+    "AudioBuffer",
+    "OscillatorNode",
+    # AudioWorklet render pump (setlist_audio.rs): the queue-player
+    # processor ships inline via a Blob URL; blocks stream over the
+    # node's MessagePort.
+    "AudioWorklet",
+    "AudioWorkletNode",
+    "AudioWorkletNodeOptions",
+    "Worklet",
+    "MessagePort",
+    "Blob",
+    "BlobPropertyBag",
+    "HtmlAudioElement",
+    "HtmlMediaElement",
+    "MediaElementAudioSourceNode",
+    "MediaStream",
+    "MediaStreamAudioDestinationNode",
+    # Media-over-vox playback: MediaSource-backed <audio> fed by
+    # MediaService chunks (src/vox_media_source.rs).
+    "MediaSource",
+    "SourceBuffer",
+    "MediaSourceReadyState",
+    "Url",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { workspace = true, features = ["futures"] }
+
+# The in-tab session engine (`src/session_engine.rs`, wasm-only): a
+# headless daw-standalone setlist player hosted in the browser via
+# architect's in-process LocalServer. Wasm target table ONLY — native
+# task builds (desktop/mobile/server) never pull them (they carry
+# REAPER/audio backends), keeping the native footprint unchanged.
+session = { workspace = true }
+daw = { workspace = true }
+daw-standalone = { workspace = true, features = ["decode", "web", "bootstrap"] }
+
+[lints]
+workspace = true

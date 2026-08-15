@@ -1,0 +1,46 @@
+[package]
+name = "cookbook"
+description = "Cookbook feature — cooklang-native recipe storage. `Recipe` is an `architect::Entity` (String PK on vault-relative `path`). `Ingredient` + `Nutrition` are JsonField value types so they survive both YAML/serde and SeaORM. Recipes are `.cook` files under `<wiki>/Cookbook/` (typically `<org>/wiki/Knowledge/Cookbook/`) parsed by the `cooklang` crate; ingredient names ARE wikilink targets so the recipe knows nothing about pantry IDs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+architect = { workspace = true }
+cookbook-proto = { workspace = true }
+cooklang = { workspace = true }
+walkdir = { workspace = true }
+vault-entity = { workspace = true }
+recipe-import = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "architect/dispatch-tokio", "cookbook-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "cookbook-proto/server"]
+fake = ["dep:fake", "architect/fake", "cookbook-proto/fake"]
+full = ["vox", "server", "fake"]
+
+[[bin]]
+name = "migrate-md-to-cook"
+path = "src/bin/migrate_md_to_cook.rs"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+flowchart LR
+  Hub{Router}
+  A[Search]
+  B[Billing]
+  C[Notifications]
+  D[Fraud]
+  E[Profile]
+  F[Analytics]
+  G[Support]
+
+  Hub --> A
+  Hub --> B
+  Hub --> C
+  Hub --> D
+  Hub --> E
+  Hub --> F
+  Hub --> G
+  B --> Hub
+  D --> Hub
+  F --> Hub

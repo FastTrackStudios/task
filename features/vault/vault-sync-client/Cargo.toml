@@ -1,0 +1,24 @@
+[package]
+name = "vault-sync-client"
+description = "Pull/push/sync orchestration on top of `vault_proto::VaultSync`. Walks a local vault root, computes a sha-256 manifest, diffs against the remote server's manifest, and applies the deltas via `get_file` / `put_file` / `delete_file`. Inspired by `cooklang/cooklang-sync`'s indexer + syncer split but without content-defined chunking (Task vaults are markdown-heavy; full-file transfer is fine until measured otherwise)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vault-proto = { workspace = true, features = ["vox"] }
+chrono = { workspace = true, features = ["clock"] }
+sha2 = "0.10"
+walkdir = "2"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

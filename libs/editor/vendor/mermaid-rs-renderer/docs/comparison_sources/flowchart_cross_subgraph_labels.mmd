@@ -1,0 +1,21 @@
+flowchart LR
+  subgraph Client["Client"]
+    A[Browser] --> B[SDK]
+  end
+
+  subgraph Services["Services"]
+    C[Edge] --> D[App]
+    D --> E[(Cache)]
+  end
+
+  subgraph Storage["Storage"]
+    F[(Primary)]
+    G[(Archive)]
+  end
+
+  B -->|JWT| C
+  C -->|stream| D
+  D -->|read-through| E
+  D -->|write| F
+  E -->|rehydrate| D
+  F -->|cold sync| G

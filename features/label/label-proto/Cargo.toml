@@ -1,0 +1,28 @@
+[package]
+name = "label-proto"
+description = "Label entity — colored tag scoped to a workspace. Tasks reference labels by id via a join table; the join lives in label-config (next slice). Same shape across forge + Task — when a TaskInfo links to a forge Issue, labels with a matching name on the forge side mirror automatically."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+sea-orm = { workspace = true, optional = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true, features = ["clock", "serde"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+default = []
+server = ["architect/server-seaorm", "dep:sea-orm"]
+
+[lints]
+workspace = true

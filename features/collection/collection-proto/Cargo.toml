@@ -1,0 +1,28 @@
+[package]
+name = "collection-proto"
+description = "Wasm-clean wire contract for the generic ordered-collection primitive: a `Collection { kind, items }` is an ordered list of `links_proto::NodeRef` items, each carrying a lexorank sort key. A song Library, a Setlist, a Show, or a Playlist are all instances of this with a different `CollectionKind`. See plans/knowledge-primitives.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+links-proto = { workspace = true, default-features = false }
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "links-proto/vox"]
+full = ["vox"]
+
+[lints]
+workspace = true

@@ -1,0 +1,38 @@
+[package]
+name = "email-smtp"
+description = "SMTP submission for the email feature. Composed by backends (`email-imap`, `email-nextcloud`) to satisfy the `EmailSync::send` end of the trait. Stalwart's `mail-send` + `mail-builder` for the wire format — the same stack pairs cleanly with `mail-parser` already used elsewhere in the email-* crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+email-config = { workspace = true }
+email-secret = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Stalwart's matched pair. `mail-builder` constructs RFC5322
+# with inline attachments + threading headers cleanly;
+# `mail-send` submits over async SMTP with STARTTLS / implicit
+# TLS / XOAUTH2. Both Apache-2.0/MIT.
+mail-builder = "0.4"
+mail-send = "0.5"
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[features]
+default = []
+# Allow TlsMode::None on send. NEVER enable in production —
+# credentials go over plaintext when this is on. Tests use it
+# to drive against an in-process mock SMTP server bound to
+# 127.0.0.1.
+test-plaintext = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "io-util", "net"] }
+email-smtp = { path = ".", features = ["test-plaintext"] }
+
+[lints]
+workspace = true

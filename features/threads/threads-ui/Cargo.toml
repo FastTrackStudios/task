@@ -1,0 +1,22 @@
+[package]
+name = "threads-ui"
+description = "Dumb Dioxus components for the threads feature — a ConversationsPanel (topic list + selected thread's messages + composer) bound to `threads-proto` types. Data in via props, events out via EventHandler; the hosting page owns the repo + fetching."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+threads-proto = { workspace = true, default-features = false }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

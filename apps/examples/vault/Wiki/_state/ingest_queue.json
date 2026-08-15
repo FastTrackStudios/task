@@ -1,0 +1,65 @@
+{
+  "tasks": [
+    {
+      "id": "ingest-17845147969343ccb5cb6c511797b7cd",
+      "source_path": "raw/sources/karpathy-llm-wiki-ed5319e5.md",
+      "kind": "created",
+      "status": "done",
+      "source_sha256": "ed5319e5270ea782c49577f77d2cac8a50b4947e3f820744cb7978c033e70c3d",
+      "analysis": "## Key Entities\n\n| Entity | Type | Role | Likely in Wiki? |\n|---|---|---:|---|\n| Andrej Karpathy | Person | Source author; originator of the LLM Wiki design note | No |\n| LLM Wiki | Project / method | Central subject: persistent wiki maintained by LLMs | Yes: [[LLM Wiki]] |\n| Obsidian | Tool / PKM app | Operational environment for browsing/editing the wiki | Yes: [[Obsidian]] |\n| LLM | Tool / model class | Agent that ingests, updates, queries, and lints the wiki | Partly, via [[LLM Wiki]] |\n| Markdown | Format | Storage format for wiki pages and logs | Partly: [[Markdown frontmatter]], [[Wikilink]] |\n| RAG | Technique / architecture | Main contrast case: query-time retrieval from raw documents | No |\n| `index.md` | Wiki artifact | Content-oriented navigation catalog | Related to [[Source]] / [[LLM Wiki]], but probably no standalone page |\n| `log.md` | Wiki artifact | Chronological operation ledger | Likely no |\n| `schema.md` / `purpose.md` | Wiki governance files | Shared contract between user and LLM | Related to [[Source]] and [[LLM Wiki]] |\n\n## Key Concepts\n\n| Concept | Definition | Why It Matters | Likely in Wiki? |\n|---|---|---|---|\n| LLM-maintained wiki | A persistent markdown knowledge base incrementally maintained by an LLM | Core proposal of the source | Yes: [[LLM Wiki]] |\n| Retrieval-Augmented Generation | Answering queries by retrieving chunks from source documents at runtime | Presented as the weaker baseline because it does not accumulate synthesis | No |\n| Persistent compounding artifact | A knowledge structure that improves with each ingest or filed query | Central justification for the approach | Partly in [[LLM Wiki]] |\n| Ingest | Process of reading a new source and updating relevant wiki pages | One of the three main operations | Likely in [[LLM Wiki]] |\n| Query | Asking questions against the wiki, then optionally filing answers back | Shows how exploration can compound | Likely in [[LLM Wiki]] |\n| Lint | Periodic health check for contradictions, stale claims, orphan pages, and missing links | Important maintenance operation | Likely in [[LLM Wiki]] |\n| Raw source / wiki / schema layers | Three-layer architecture: immutable inputs, generated knowledge, shared conventions | Defines governance and separation of responsibilities | Likely in [[LLM Wiki]] |\n| Wikilink knowledge graph | Emergent graph from interlinked markdown pages | Connects the design to graph visualization and PKM | Yes: [[Knowledge graph]], [[Wikilink]] |\n| Zettelkasten | Atomic note-taking method | Related method, but human-curated and smaller-grained | Yes: [[Zettelkasten]] |\n\n## Main Arguments & Findings\n\nThe source argues that conventional RAG over personal documents repeatedly re-derives knowledge at query time. This creates friction for subtle questions that require connecting multiple sources, because the system must rediscover and reassemble fragments on every interaction.\n\nThe proposed alternative is an LLM-maintained wiki: when new material arrives, the LLM extracts key information and integrates it into a persistent markdown knowledge base. The wiki becomes an intermediate compiled layer between raw sources and future queries.\n\nThe strongest claim is that knowledge work compounds when summaries, cross-references, contradictions, and synthesis are preserved as durable artifacts. The evidence is primarily design reasoning rather than empirical evaluation. It is persuasive as an architectural argument, but not backed by benchmark data, user studies, or measured comparisons against RAG systems.\n\nThe source also defines a useful operational model:\n\n- `Ingest`: integrate a source across many pages.\n- `Query`: answer from existing wiki pages, with citations, and optionally save the result.\n- `Lint`: audit the wiki for contradictions, stale claims, gaps, and orphan pages.\n\n## Connections to Existing Wiki\n\nThis source most directly extends [[LLM Wiki]]. It provides a clear architectural rationale, operational vocabulary, and maintenance model.\n\nIt also relates to:\n\n- [[Knowledge graph]]: the wiki’s wikilinks become graph structure.\n- [[Wikilink]]: links are the connective tissue of the system.\n- [[Zettelkasten]]: comparable atomic-note tradition, but with LLM-driven maintenance.\n- [[Obsidian]]: positioned as the browsing/editing IDE for the wiki.\n- [[Source]]: source tracking is central to reliable ingest and citation.\n- [[Spaced repetition]]: mentioned as a downstream use for memorizing synthesized knowledge.\n\nThe source strengthens existing wiki knowledge by giving [[LLM Wiki]] a more explicit architecture: raw sources, generated wiki, and shared schema/purpose contract.\n\n## Contradictions & Tensions\n\nNo direct contradiction with the provided wiki index is visible.\n\nImportant tensions:\n\n- The source criticizes RAG, but the proposed wiki still depends on retrieval/search over wiki pages during query. The distinction is not “no retrieval,” but retrieval over curated synthesis rather than raw chunks.\n- The LLM owns wiki maintenance, but accuracy and source fidelity still require user oversight.\n- Compounding can also compound errors if linting and citation discipline are weak.\n- Updating 10–15 pages per source may improve integration but creates maintenance overhead and risk of inconsistent edits.\n- The source emphasizes markdown files and Obsidian, which fits local-first PKM well, but may not directly handle multi-user conflict resolution without CRDT-backed storage.\n\n## Recommendations\n\nCreate or update:\n\n- Update [[LLM Wiki]] with the three-layer model, three operations, and index/log conventions.\n- Create [[Retrieval-Augmented Generation]] as a concept page, especially to contrast raw-source query-time retrieval with persistent synthesis.\n- Consider creating [[Wiki linting]] or adding a section to [[LLM Wiki]] covering contradiction checks, stale claims, orphan pages, and missing cross-references.\n- Update [[Knowledge graph]] with a note that LLM-maintained wikilinks form a graph useful for visualization and navigation.\n- Update [[Obsidian]] with its role as a local markdown IDE for LLM-assisted wiki workflows.\n- Update [[Source]] with source-ingest expectations: immutable raw source, summary page, related page updates, citations, and log entry.\n\nEmphasize:\n\n- Persistent synthesis as the central advantage.\n- The distinction between raw sources and generated wiki pages.\n- The role of `index.md` and `log.md` as operational infrastructure.\n- Linting as essential, not optional.\n\nDe-emphasize:\n\n- The “LLM as programmer, wiki as codebase” metaphor except as a brief explanatory analogy.\n- Broad application examples unless they are relevant to Task’s local-first PKM goals.\n\nOpen questions:\n\n- What citation standard should every generated wiki claim follow?\n- Should query answers always be filed back, or only when they introduce reusable reference knowledge?\n- How should CRDT-backed collaborative editing interact with LLM-driven multi-page updates?\n- What lint rules should be automated for this wiki: stale claims, orphan pages, duplicate concepts, weak citations, or contradictory summaries?",
+      "pages_written": [
+        "sources/karpathy-llm-wiki.md",
+        "entities/andrej-karpathy.md",
+        "concepts/retrieval-augmented-generation.md",
+        "concepts/wiki-linting.md",
+        "entities/llm-wiki.md",
+        "index.md",
+        "log.md",
+        "overview.md"
+      ],
+      "retries": 0,
+      "last_error": null,
+      "enqueued_at": "2026-05-22T07:49:20.427567376Z",
+      "updated_at": "2026-05-22T07:50:33.447386531Z"
+    },
+    {
+      "id": "ingest-20260522104100c42f5e5b78902cd3",
+      "source_path": "raw/sources/cst360-church-history-syllabus.pdf",
+      "kind": "created",
+      "status": "pending",
+      "source_sha256": "c42f5e5b78902cd3a0a9e2dc555fc626a01abe6ddd4462b06b2ab6a0759b9248",
+      "analysis": null,
+      "pages_written": [],
+      "retries": 0,
+      "last_error": null,
+      "enqueued_at": "2026-05-22T10:41:00.000000000Z",
+      "updated_at": "2026-05-22T10:41:00.000000000Z"
+    },
+    {
+      "id": "ingest-202605221041007b1b743556",
+      "source_path": "raw/sources/diatonic-chords.pdf",
+      "kind": "created",
+      "status": "pending",
+      "source_sha256": "7b1b7435564c8621d99546d1622807d6a195cde9205add845dd40eb2edc486d9",
+      "analysis": null,
+      "pages_written": [],
+      "retries": 0,
+      "last_error": null,
+      "enqueued_at": "2026-05-22T10:41:00.000000000Z",
+      "updated_at": "2026-05-22T10:41:00.000000000Z"
+    },
+    {
+      "id": "ingest-20260522104100f0ae4e7652",
+      "source_path": "raw/sources/living-faith-james-plummer.pdf",
+      "kind": "created",
+      "status": "analyzing",
+      "source_sha256": "f0ae4e765236c9c7a35365b935c4a79ac1a808ed4dad2106621d00f1eae3d303",
+      "analysis": null,
+      "pages_written": [],
+      "retries": 0,
+      "last_error": null,
+      "enqueued_at": "2026-05-22T10:41:00.000000000Z",
+      "updated_at": "2026-05-22T10:42:30.000000000Z"
+    }
+  ]
+}

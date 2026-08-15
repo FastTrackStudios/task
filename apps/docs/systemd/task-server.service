@@ -1,0 +1,26 @@
+[Unit]
+Description=Task server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=task
+Group=task
+WorkingDirectory=/srv/task
+Environment=TASK_VAULT=/srv/task/vault
+Environment=TASK_DB_PATH=/var/lib/task-server/task.sqlite
+Environment=TASK_NEXTCLOUD_CONFIG=/etc/task/nextcloud.toml
+Environment=TASK_HOST=0.0.0.0
+Environment=TASK_PORT=3456
+ExecStart=/usr/local/bin/task-server
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/task /var/lib/task-server
+
+[Install]
+WantedBy=multi-user.target

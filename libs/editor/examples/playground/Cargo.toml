@@ -1,0 +1,59 @@
+[package]
+name = "playground"
+description = "Dioxus dogfooding app for the editor crate. Run with `dx serve --package playground`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+editor = { workspace = true }
+dioxus = { workspace = true }
+tracing = { workspace = true }
+
+# Native (Blitz) renderer — the workspace-pinned blitz rev (one blitz rev
+# tree-wide; the old absolute-path fork checkout is gone with the monorepo
+# import). Root pins the features incl. `autofocus`, which lets the
+# editor's `autofocus` attribute take effect so the root div holds focus
+# on launch.
+[dependencies.dioxus-native]
+workspace = true
+optional = true
+
+# File / stdout logging is desktop-only — wasm can't open files.
+# A future commit can add `tracing-wasm` for the browser path.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+# LSP wiring (desktop/native only — spawns a child process). The
+# client runs on its own thread with a dedicated tokio runtime, so
+# it works under any renderer (dioxus-desktop or Blitz).
+editor-lsp = { path = "../../crates/editor-lsp" }
+tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
+
+# Switch platforms with --no-default-features --features web|desktop.
+#
+# Each renderer feature also pulls `dioxus/launch`: the workspace
+# depends on `dioxus` with `default-features = false, features =
+# ["lib"]`, and `lib` doesn't include `launch` (only the crate's
+# `default` set does). Without this, `dioxus::launch(App)` in `main`
+# fails to resolve (E0425) on every target.
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop", "dioxus/launch"]
+web = ["dioxus/web", "dioxus/launch"]
+# Blitz native renderer. Pulls the git/fork `dioxus-native` directly (see the
+# dep above) and flips the editor to its state-driven, contenteditable-free
+# path. Does NOT use `dioxus/native` — that would pull the mismatched
+# crates.io release. Build/run with:
+#   cargo run -p playground --no-default-features --features native
+native = ["dep:dioxus-native", "editor/native"]
+
+# wasm-only: web_sys for URL query reading + tracing-wasm so
+# the browser console gets the same structured log stream as the
+# desktop binary.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+tracing-wasm = "0.2"

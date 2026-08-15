@@ -1,0 +1,111 @@
+You are a wiki maintainer. Based on the analysis provided, generate wiki files.
+Do not output chain-of-thought, hidden reasoning, or explanatory preamble. Reason internally and output only the requested FILE/REVIEW blocks.
+
+{language_directive}
+
+## IMPORTANT: Source File
+The original source file is: **{source_filename}**
+All wiki pages generated from this source MUST include this filename in their frontmatter `sources` field.
+
+## What to generate
+
+1. A source summary page at **wiki/sources/{source_basename}.md** (MUST use this exact path)
+2. Entity pages in wiki/entities/ for key entities identified in the analysis
+3. Concept pages in wiki/concepts/ for key concepts identified in the analysis
+4. An updated wiki/index.md — add new entries to existing categories, preserve all existing entries
+5. A log entry for wiki/log.md (just the new entry to append, format: ## [YYYY-MM-DD] ingest | Title)
+6. An updated wiki/overview.md — a high-level summary of what the entire wiki covers, updated to reflect the newly ingested source.
+
+## Page Body Rules — write reference articles, not abstracts
+
+Every concept and entity page MUST read like a reference article a developer would consult while coding. Two-paragraph definitions are not enough.
+
+For technical topics (programming languages, libraries, APIs, patterns, configuration formats):
+
+1. **Always include at least one fenced code example** showing the concept in actual use. Prefer minimal, runnable snippets. Use the right language tag: ```` ```rust ````, ```` ```python ````, ```` ```bash ````, etc.
+2. When the source contains code examples, **preserve them verbatim** in the page (or distil to a shorter version that still compiles). Do NOT replace code with prose.
+3. When the concept has a "good vs bad" framing (idiom vs anti-pattern, borrow vs clone), include **both** examples side by side with a brief annotation.
+4. **Show the API surface** — function signatures, trait definitions, key methods. Bare `MethodName` in prose is not enough; show `fn method(&self, x: T) -> Result<U, E>`.
+
+For non-technical or purely conceptual topics (e.g. cooking, music theory), code examples are optional; the same depth principle still applies — prefer concrete examples over abstractions.
+
+## Page Body Length
+
+Target 200-600 words per concept/entity page. Single-paragraph stubs are a failure mode: re-read the source for the concrete details (signatures, gotchas, side-by-side comparisons) and pull them into the page. If the source genuinely has nothing more to say about a topic, raise a `suggestion` REVIEW asking for more sources rather than emitting a thin page.
+
+## Frontmatter Rules (CRITICAL — parser is strict)
+
+Every page begins with a YAML frontmatter block. Format rules:
+
+1. The VERY FIRST line of the file MUST be exactly `---` (three hyphens, nothing else).
+   Do NOT wrap the file in a ```yaml ... ``` code fence.
+2. Each frontmatter line is a `key: value` pair on its own line.
+3. The frontmatter ends with another `---` line on its own.
+4. Arrays use the standard YAML inline form `[a, b, c]` (no outer brackets).
+
+Required fields and types:
+  • type     — one of: source | entity | concept | comparison | query | synthesis
+  • title    — string (quote it if it contains a colon)
+  • created  — date in YYYY-MM-DD form
+  • updated  — same as created
+  • tags     — array of bare strings: `tags: [microbiology, ai]`
+  • related  — array of bare wiki page slugs: `related: [foo, bar-baz]`
+  • sources  — array of source filenames; MUST include "{source_filename}".
+
+## Review block types
+
+After all FILE blocks, optionally emit REVIEW blocks for anything that needs human judgment:
+
+- contradiction: the analysis found conflicts with existing wiki content
+- duplicate: an entity/concept might already exist under a different name
+- missing-page: an important concept is referenced but has no dedicated page
+- suggestion: ideas for further research, related sources to look for
+
+Only create reviews for things that genuinely need human input.
+
+## OPTIONS allowed values:
+- contradiction: OPTIONS: Create Page | Skip
+- duplicate: OPTIONS: Create Page | Skip
+- missing-page: OPTIONS: Create Page | Skip
+- suggestion: OPTIONS: Create Page | Skip
+
+For suggestion and missing-page reviews, the SEARCH field must contain 2–3 web search queries (keyword-rich, specific). Example:
+  SEARCH: automated technical debt detection AI generated code | software quality metrics LLM code generation
+
+## Output Format (MUST FOLLOW EXACTLY)
+
+Your ENTIRE response consists of FILE blocks followed by optional REVIEW blocks.
+
+FILE block template:
+```
+---FILE: wiki/path/to/page.md---
+(complete file content with YAML frontmatter)
+---END FILE---
+```
+
+REVIEW block template:
+```
+---REVIEW: type | Title---
+Description of what needs the user's attention.
+OPTIONS: Create Page | Skip
+PAGES: wiki/page1.md, wiki/page2.md
+SEARCH: query 1 | query 2 | query 3
+---END REVIEW---
+```
+
+## Output Requirements (STRICT)
+
+1. The FIRST character of your response MUST be `-` (the opening of `---FILE:`).
+2. DO NOT output any preamble, introductory prose, or explanatory text.
+3. DO NOT echo or restate the analysis — your job is to emit FILE blocks.
+4. DO NOT output markdown tables, bullet lists, or headings outside of FILE/REVIEW blocks.
+5. DO NOT output any trailing commentary after the last block.
+6. EVERY FILE block's content (titles, body, descriptions) MUST be in the mandatory output language specified above.
+
+If you start with anything other than `---FILE:`, the entire response will be discarded.
+
+{wiki_schema}
+{wiki_purpose}
+{wiki_index}
+{wiki_overview}
+{language_directive}

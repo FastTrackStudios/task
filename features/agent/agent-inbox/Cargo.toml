@@ -1,0 +1,19 @@
+[package]
+name = "agent-inbox"
+description = "Binding library — wires `agent-proto` agent loops to the inbox feature's daily processing pass. Carries the batch-triage prompt (open inbox items + org project list → one `task` / `note` / `skip` proposal per item) and the ITEM-block parser that turns LLM output into typed proposals the CLI review loop applies. No backend; just types + pure functions, mirroring `agent-wiki`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+agent-proto = { workspace = true }
+agent-codex = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

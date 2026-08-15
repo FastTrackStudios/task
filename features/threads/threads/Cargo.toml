@@ -1,0 +1,33 @@
+[package]
+name = "threads"
+description = "Facade for the threads feature — the universal conversation primitive (topics + messages anchored to any entity). Re-exports `threads-proto` always, the SeaORM backend `threads-db` under `server`, and `threads-ui` under `ui`. Consumers depend on this crate with the features they need; it is wasm-clean with `default`/`vox`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+threads-proto = { workspace = true, default-features = false }
+threads-db = { workspace = true, optional = true }
+threads-ui = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+# Client surface (vox-generated `ThreadsServiceClient` + service descriptors).
+vox = ["threads-proto/vox"]
+# Client-side optimistic store (`architect::StoreEntity` impls on
+# `Thread` / `Message`) -- UI-only, pulls Dioxus via architect-atom.
+atom = ["threads-proto/atom"]
+# Server surface — the SeaORM `Store` + `Migrator` from `threads-db`, and
+# the proto's server-side SeaORM emission.
+server = ["threads-proto/server", "dep:threads-db"]
+# Dumb Dioxus components.
+ui = ["dep:threads-ui"]
+# Fake-data derives for seeding.
+fake = ["threads-proto/fake"]
+full = ["vox", "server", "fake", "ui"]
+
+[lints]
+workspace = true

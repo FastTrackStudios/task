@@ -1,0 +1,239 @@
+# Deploys — pure-Nix OCI images pushed to the in-cluster registry,
+# rolled out by ArgoCD + argocd-image-updater (digest strategy on the
+# channel tag).
+#
+# GitHub-native deploy. The in-cluster registry (registry.starcommand.live)
+# is NOT reachable from GitHub-hosted runners, so this runs on a SELF-HOSTED
+# runner labeled `nix-host` — THEBATTLESHIP, the LAN box that also holds the
+# local mirror at $FTS_LOCAL_REPO. Register the runner once (repo → Settings →
+# Actions → Runners → self-hosted, label `nix-host`; or declare it as a NixOS
+# `services.github-runners` unit in the THEBATTLESHIP fleet config).
+#
+# Trigger: pushes to GitHub `main`. The old `.forgejo/workflows/deploy.yml`
+# (Codeberg-mirror trigger) is the fallback until this runner is confirmed
+# green — then delete it and you can stop mirroring to Codeberg.
+#
+#   task  -> registry.starcommand.live:30050/task-{server,web,ui-lab}
+#   site  -> registry.starcommand.live:30050/fts-site
+#
+# CHANGE-GATED: a push only deploys an app when files that feed that
+# app's images actually changed (diff of the pushed range; see the
+# `changes` job). workflow_dispatch can force either app.
+#
+# The monorepo only has main, so main pushes both channel tags
+# (`latest` AND `dev`) — the dev/prod split returns when a dev branch
+# exists. Verify-live: a green run means the deployment SERVES this
+# commit (version endpoints must report the pushed sha), not just
+# "images pushed".
+
+name: deploy
+
+# NOT YET VERIFIED IN THIS REPO — manual trigger only.
+#
+# This workflow came across from the monorepo, where it deployed BOTH
+# task-server and fts-site and used path filters to decide which. The
+# site half now belongs to the fasttrackstudio repo; the filters are
+# meaningless here because every commit in this repo is a Task commit.
+#
+# Push-triggering is deliberately disabled until someone runs it by hand
+# against the self-hosted runner and confirms:
+#   - FTS_LOCAL_REPO still points somewhere valid for this repo
+#   - the `changes` job's task_paths regex (monorepo-shaped prefixes like
+#     ^apps/task/) is replaced, since paths are now apps/ crates/ features/
+#   - verify-live still reports the pushed sha
+# Restore `on: push: branches: [main]` once that is true.
+on:
+  workflow_dispatch:
+    inputs:
+      force_task:
+        description: "Deploy task images even without changes"
+        required: false
+        default: "true"
+
+# Never cancel a deploy mid-push; queue instead.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.starcommand.live:30050
+  # Newer skopeo rejects the host's v1 registries.conf; we name the
+  # registry explicitly everywhere, so use an empty (valid) config.
+  CONTAINERS_REGISTRIES_CONF: /dev/null
+  FTS_LOCAL_REPO: /run/media/Development/FastTrackStudio
+
+jobs:
+  changes:
+    runs-on: [self-hosted, nix-host]
+    outputs:
+      task: ${{ steps.filter.outputs.task }}
+      site: ${{ steps.filter.outputs.site }}
+    steps:
+      # Local-first, but the local mirror can LAG the forge: merge
+      # commits created forge-side (API merges, web-UI squash/rebase
+      # merges) don't exist in the mirror until someone pulls. After a
+      # local-first clone `origin` IS the mirror, so the old
+      # `git fetch origin $sha` could never retrieve such commits — its
+      # failure was swallowed (`|| true`) and the checkout then died,
+      # failing this job and skipping every deploy. Fix: when the sha is
+      # missing locally, fetch it from the FORGE URL explicitly (with
+      # retries — codeberg transfers intermittently reset). The clone is
+      # full-depth, so a plain fetch brings the sha's complete ancestry:
+      # HEAD~1 and the diff base below always resolve.
+      - name: Checkout (local-first, full history for the diff)
+        run: |
+          set -eu
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          sha="${GITHUB_SHA:-}"
+          if [ -n "$FTS_LOCAL_REPO" ]; then
+            git config --global --add safe.directory "$FTS_LOCAL_REPO" 2>/dev/null || true
+            git config --global --add safe.directory "$FTS_LOCAL_REPO/.git" 2>/dev/null || true
+          fi
+          # The runner reuses its _work dir across jobs, and this step
+          # replaces actions/checkout (which would clean), so wipe any
+          # prior job's tree before cloning into '.'.
+          find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+          git clone --quiet "$FTS_LOCAL_REPO" . || git clone "$url" .
+          if [ -n "$sha" ] && ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            echo "$sha not in the local mirror — fetching from the forge"
+            attempt=1
+            until git fetch --no-tags "$url" "$sha"; do
+              [ "$attempt" -ge 8 ] && { echo "fetch $sha from forge failed"; exit 1; }
+              echo "fetch attempt $attempt failed — retrying in 15s"
+              attempt=$((attempt + 1)); sleep 15
+            done
+          fi
+          git checkout --quiet --detach "$sha"
+          echo "checked out $(git rev-parse --short HEAD)"
+
+      - name: Detect changed apps
+        id: filter
+        run: |
+          base="${{ github.event.before }}"
+          # The previous tip can ALSO be a forge-only commit the mirror
+          # never saw — try fetching it from the forge before giving up.
+          if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ] \
+              && ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            git fetch --no-tags "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "$base" 2>/dev/null || true
+          fi
+          # First push / force-push / dispatch / unfetchable base: fall
+          # back to one commit (HEAD~1 always exists — the checkout step
+          # guarantees full ancestry of HEAD).
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+              || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-parse HEAD~1)"
+          fi
+          git diff --name-only "$base" HEAD > /tmp/changed
+          echo "diff ${base}..HEAD: $(wc -l < /tmp/changed) files"
+
+          # NOTE: the workspace-root Cargo.{toml,lock} feed EVERY image
+          # (a lockfile bump can change the built binary), so a change to
+          # them must redeploy — otherwise a deps-only fix silently skips
+          # the gate and prod lags (this is what stranded the dioxus-icons
+          # task-web build fix). Member-crate manifests are already covered
+          # by the path prefixes above.
+          # `crates/session/` and `libs/architect-ui/` are REAL task deps, not
+          # incidental: task-player-ui depends on session + session-ui +
+          # session-proto, and both task UI crates depend on architect-ui. Their
+          # absence here is the same failure the note above describes — a
+          # session-only commit that FIXED the task-web wasm build did not
+          # redeploy task, so the fix sat on main while prod stayed broken.
+          # `nix/` for the same reason as flake.nix: the root flake is
+          # dendritic, so the build plumbing that produces these images
+          # lives in nix/modules/ (crane.nix, packages/task-server.nix),
+          # not in flake.nix itself. Third instance of this bug — the
+          # commit that unbroke the image build (mold in the sandbox) did
+          # not itself redeploy, so prod stayed on the last good image.
+          task_paths='^apps/task/|^crates/task/|^features/task/|^crates/session/|^libs/architect/|^libs/editor/|^libs/architect-ui/|^Cargo\.(toml|lock)$|^flake\.(nix|lock)$|^nix/|^\.github/workflows/deploy\.yml$'
+          site_paths='^apps/site/|^libs/editor/|^libs/architect-ui/|^crates/keyflow/|^features/engraver/|^crates/input/input-config-proto/|^features/reaper/reaper-input/config/|^Cargo\.(toml|lock)$|^flake\.(nix|lock)$|^nix/|^\.github/workflows/deploy\.yml$'
+
+          task=false; site=false
+          grep -qE "$task_paths" /tmp/changed && task=true
+          grep -qE "$site_paths" /tmp/changed && site=true
+          [ "${{ inputs.force_task }}" = "true" ] && task=true
+          [ "${{ inputs.force_site }}" = "true" ] && site=true
+          echo "task=$task" >> "$GITHUB_OUTPUT"
+          echo "site=$site" >> "$GITHUB_OUTPUT"
+          echo "deploy: task=$task site=$site"
+
+  deploy-task:
+    runs-on: [self-hosted, nix-host]
+    needs: changes
+    if: needs.changes.outputs.task == 'true'
+    # Registers a GitHub Deployment so runs show up under the repo's
+    # Deployments panel / Environments tab. The environment URL is the
+    # live app; the deployment goes green only after Verify live passes,
+    # so "Active" in GitHub means the cluster actually serves this sha.
+    environment:
+      name: task-production
+      url: https://task.starcommand.live
+    steps:
+      # Same forge-fallback as the changes job: the local mirror may not
+      # have forge-side merge commits; `origin` of a local-first clone is
+      # the mirror, so missing shas must be fetched from the forge URL.
+      - name: Checkout (local-first)
+        run: |
+          set -eu
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          sha="${GITHUB_SHA:-}"
+          if [ -n "$FTS_LOCAL_REPO" ]; then
+            git config --global --add safe.directory "$FTS_LOCAL_REPO" 2>/dev/null || true
+            git config --global --add safe.directory "$FTS_LOCAL_REPO/.git" 2>/dev/null || true
+          fi
+          # The runner reuses its _work dir across jobs, and this step
+          # replaces actions/checkout (which would clean), so wipe any
+          # prior job's tree before cloning into '.'.
+          find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+          git clone --quiet "$FTS_LOCAL_REPO" . || git clone "$url" .
+          if [ -n "$sha" ] && ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            echo "$sha not in the local mirror — fetching from the forge"
+            attempt=1
+            until git fetch --no-tags "$url" "$sha"; do
+              [ "$attempt" -ge 8 ] && { echo "fetch $sha from forge failed"; exit 1; }
+              echo "fetch attempt $attempt failed — retrying in 15s"
+              attempt=$((attempt + 1)); sleep 15
+            done
+          fi
+          git checkout --quiet --detach "$sha"
+          echo "checked out $(git rev-parse --short HEAD)"
+
+      - name: Compute tags
+        id: tags
+        run: |
+          echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Push task images
+        run: |
+          set -euo pipefail
+          for img in task-server task-web task-ui-lab; do
+            echo "── $img ──"
+            streamer="$(nix build .#${img}-image --no-link --print-out-paths)"
+            "$streamer" | nix run nixpkgs#skopeo -- --insecure-policy copy \
+              --dest-tls-verify=false --dest-no-creds docker-archive:/dev/stdin \
+              "docker://${REGISTRY}/${img}:latest"
+            for tag in dev "${{ steps.tags.outputs.sha }}"; do
+              nix run nixpkgs#skopeo -- --insecure-policy copy \
+                --src-tls-verify=false --src-no-creds --dest-tls-verify=false --dest-no-creds \
+                "docker://${REGISTRY}/${img}:latest" \
+                "docker://${REGISTRY}/${img}:${tag}"
+            done
+          done
+
+      - name: Verify live
+        run: |
+          url="https://task.starcommand.live"
+          want="${GITHUB_SHA}"
+          echo "waiting for $url to serve $want"
+          for i in $(seq 1 60); do
+            web="$(curl -sf --max-time 10 "$url/version.json" | sed -n 's/.*"rev":"\([^"]*\)".*/\1/p' || true)"
+            srv="$(curl -sf --max-time 10 "$url/.well-known/task-server.json" | sed -n 's/.*"build":"\([^"]*\)".*/\1/p' || true)"
+            echo "  poll $i: web=${web:-?} server=${srv:-?}"
+            if [ "$web" = "$want" ] && [ "$srv" = "$want" ]; then
+              echo "LIVE: $url serves $want"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "TIMED OUT: $url never served $want — check argocd-image-updater / rollouts"
+          exit 1
+

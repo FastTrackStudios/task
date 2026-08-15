@@ -1,0 +1,8 @@
+[nextcloud]
+url = "https://cloud.example.com"
+username = "agent"
+password_file = "/run/secrets/task-nextcloud-password"
+projects_path = "Projects/"
+calendar = "tasks"
+event_calendar = "events"
+deck_enabled = true

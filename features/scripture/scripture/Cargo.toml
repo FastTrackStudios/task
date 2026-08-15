@@ -1,0 +1,41 @@
+[package]
+name = "scripture"
+description = "Read-only Bible spine: USFM ingest + an in-memory `Bible` store keyed by `scripture_proto::VerseId`. Parses USFM (eBible/WEB-style markup, incl. `\\w …|strong=…\\w*` word tags) into clean verse text. Bible text is never user-editable — other features link in by stable verse id. See plans/bible-study.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Native-only (mirrors `locations`): ingest/store run server-side and
+# serve the wasm-clean `scripture-proto` surface. The proto crate is the
+# part the web reader binds to directly.
+[dependencies]
+scripture-proto = { workspace = true }
+architect = { workspace = true }
+regex = { workspace = true }
+thiserror = { workspace = true }
+# API-backed editions (ESV / NIV) fetch over HTTP.
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# OSHB ships as OSIS XML; roxmltree is a light read-only DOM parser.
+roxmltree = "0.20"
+# Entity datasets (BibleData) ship as quoted CSV.
+csv = "1"
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "scripture-proto/vox"]
+full = ["vox"]
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[lints]
+workspace = true

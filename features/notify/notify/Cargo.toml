@@ -1,0 +1,30 @@
+[package]
+name = "notify"
+description = "Server-side notifications store + delivery channels. SeaORM-backed impl of `notify-proto`'s `Notify` (list / mark_read / mark_all_read / delete + the events hub), the migrations for the per-org `notify.sqlite`, and the `DeliveryChannel` trait with the shipped channels: `InApp` (persist + stream — the bell) and `Webhook` (ntfy-style JSON POST from `TASK_NOTIFY_WEBHOOK`)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+notify-proto = { workspace = true, features = ["vox"] }
+# The `events` fan-out hub (`architect::PubSub`) behind the
+# `#[subscribe]` stream lives on the `Store`.
+architect = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { workspace = true, features = ["rt", "time"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

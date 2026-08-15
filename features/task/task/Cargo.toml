@@ -1,0 +1,58 @@
+[package]
+name = "task"
+description = "First-party task feature for Task. `TaskInfo` is an `architect::Entity` — markdown frontmatter at `tasks/<slug>.md` is the source of truth today (TaskNotes-shape so Obsidian vaults round-trip); SeaORM Model emitted under `--features server`. Parser backfills `id: Uuid` for legacy task pages that don't have one yet."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+# The wasm-clean wire contract: `TaskInfo` + its enums, the pure
+# domain rules (relations / relevance / capture) and the
+# `TaskService` RPC trait. This crate is the vault-backed half
+# sitting on top of it, and re-exports every proto item at its
+# historical `task::…` path.
+task-proto = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+workflows-proto.workspace = true
+# `VaultPage` lives in vault-proto (wasm-clean wire shape); the
+# richer `vault::Vault` is the filesystem walker. Plain deps now:
+# this crate is the server-side half of the slice, and browser
+# consumers take `task-proto` instead — nothing wasm reaches it,
+# so the old `cfg(not(target_arch = "wasm32"))` dance is gone.
+vault-proto = { workspace = true, default-features = false }
+vault = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "task-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "task-proto/server"]
+fake = ["dep:fake", "architect/fake", "workflows-proto/fake", "task-proto/fake"]
+full = ["vox", "server", "fake"]
+# Forwarded so `task`-shaped consumers can still opt the wire
+# model into the client-side optimistic store.
+atom = ["task-proto/atom"]
+
+[dev-dependencies]
+tempfile = "3"
+# The events-stream integration test serves the backend over the
+# in-process vox link (`architect::LocalServer`, native-only).
+architect = { workspace = true, features = ["local"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

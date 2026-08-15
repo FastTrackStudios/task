@@ -1,0 +1,17 @@
+{
+  "name": "task-multiplayer-conformance",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multiplayer conformance suites: 5-way editor convergence + 20-peer presence churn. Run from the repo dev shell (`nix develop`) via `./run.sh` (builds server/CLI/wasm first) or `pnpm test` against prebuilt artifacts.",
+  "scripts": {
+    "test": "playwright test",
+    "test:convergence": "playwright test convergence.spec.js",
+    "test:churn": "playwright test presence-churn.spec.js",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "playwrightPinNote": "@playwright/test must match nixpkgs#playwright-driver.version, which supplies PLAYWRIGHT_BROWSERS_PATH in the dev shell — a mismatched pin looks for a browser build that isn't in the store and every test fails at launch. Same pin as libs/editor/tests. Check with `nix eval --raw nixpkgs#playwright-driver.version`.",
+  "devDependencies": {
+    "@playwright/test": "1.59.1"
+  }
+}

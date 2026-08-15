@@ -1,0 +1,40 @@
+[package]
+name = "editor"
+description = "Umbrella crate. Re-exports editor-state + editor-view + editor-vim, and ships an `EditorApp` Dioxus component that mounts a working markdown editor (live preview, vim, slash menu) with one rsx call."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+editor-state = { workspace = true }
+editor-view = { workspace = true }
+editor-vim = { workspace = true }
+# Used by `app::EditorApp` — the turnkey-shell Dioxus component
+# the rest of the codebase mounts. `editor-view` already pulls
+# dioxus in transitively; declaring it here just makes the
+# component's source compile cleanly.
+dioxus = { workspace = true }
+
+# Renderer seam, forwarded to `editor-view`. `native` selects the Blitz /
+# `dioxus-native` path (rsx-rendered tile tree, state-driven input); the
+# default `web` path keeps the contenteditable + JS bridge for browser and
+# desktop-webview builds. See `editor-view`'s feature docs.
+[features]
+default = []
+native = ["editor-view/native"]
+web = ["editor-view/web"]
+
+[dev-dependencies]
+# The blitz_minimal example — a real dioxus-native window. Dev-dep only;
+# library consumers never pull the renderer through the umbrella.
+dioxus-native = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[example]]
+name = "blitz_minimal"
+required-features = ["native"]
+
+[lints]
+workspace = true

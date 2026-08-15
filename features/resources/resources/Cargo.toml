@@ -1,0 +1,32 @@
+[package]
+name = "resources"
+description = "Resource Library + annotations: read-only primary sources (songs, PDFs, books, videos) that the vault/wiki annotate and link into without editing. Loads `type: resource` manifests, reads/writes the per-resource annotation sidecar (`<slug>.annotations.json`, Logseq's `.edn`-sidecar pattern), and turns annotation specs into `links_proto::TypedLink`s. The anchor string keys the graph; geometry lives in the sidecar. See plans/resource-annotations.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+links-proto = { workspace = true }
+resources-proto = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "resources-proto/vox"]
+
+[dev-dependencies]
+links = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

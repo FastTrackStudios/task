@@ -1,0 +1,22 @@
+[package]
+name = "editor-mermaid"
+description = "Mermaid SVG rendering for the Editor. Wraps mermaid-rs-renderer with a small wasm-friendly API + thread-local LRU cache, matching the shape of `editor-typst::Compiler`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Pure-Rust Mermaid parser + layout + SVG renderer. `default-
+# features = false` drops the optional CLI / PNG-via-resvg
+# stack; we only need the SVG pipeline, which is wasm-friendly.
+mermaid-rs-renderer = { version = "0.2", default-features = false }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true

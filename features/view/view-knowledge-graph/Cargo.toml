@@ -1,0 +1,36 @@
+[package]
+name = "view-knowledge-graph"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Knowledge-graph view — force-directed map of a wiki's wikilink web.
+# Ported from nashsu/llm_wiki `features/view` (graph-view.tsx + the
+# graph-* libs). The TS app leans on graphology + sigma + a web worker;
+# we replace all of that with a self-contained Rust layer:
+#
+#   model      — GraphNode / GraphEdge / CommunityInfo + node kinds/palette
+#   build      — markdown wiki  →  graph (frontmatter, [[wikilinks]])
+#   relevance  — retrieval graph + edge relevance scoring (4 signals)
+#   community  — community detection + cohesion (Louvain → label-prop port)
+#   layout     — Fruchterman–Reingold force layout (replaces forceAtlas2)
+#   filters    — structural/isolated/type/id visibility filtering
+#   search     — token AND-match over label/id/type/path
+#   insights   — surprising connections + knowledge-gap detection
+#   components — dumb Dioxus SVG renderer (props in, callbacks out)
+#
+# Everything outside `components` is pure + FS-free + unit-testable: the
+# caller hands us file contents, we hand back a laid-out graph.
+
+[dependencies]
+dioxus = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+# Typed links → graph edges (relation + confidence). Wasm-clean types.
+links-proto = { workspace = true, default-features = false }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

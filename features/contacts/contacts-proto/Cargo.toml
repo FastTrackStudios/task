@@ -1,0 +1,37 @@
+[package]
+name = "contacts-proto"
+description = "Wire contract for the contacts feature: the `Contact` entity (a vCard-mapped person record) + `#[architect::rpc] trait Contacts` CRUD surface, plus the CardDAV sync-account model. Backs a vault-note contact directory (Records/contacts/<id>.md) that unifies /contacts, /members (linked_user_id) and /invoices (linked_party_id). Mirrors `recall-proto`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). Enable the `vox` feature to
+# pull in the architect-emitted RPC client + dispatcher.
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impls UI crates key their entity caches on.
+atom = ["architect/atom"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+target/
+**/playground.log*
+Cargo.lock
+**/*.rs.bk
+.DS_Store
+/.direnv
+/result
+/result-*
+
+# Playwright
+tests/node_modules
+tests/playwright-report
+tests/test-results
+tests/.playwright

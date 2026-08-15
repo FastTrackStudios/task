@@ -1,0 +1,27 @@
+[package]
+name = "agent-tasks"
+description = "Server-side persistence + lifecycle layer for agent-task queues. Re-exports the SeaORM bits emitted by `architect::Entity` on `agent-proto`'s Queue/AgentTask/Link/Comment, bundles the migrations, and implements the slim `AgentTaskQueue` trait — claim, complete, set-status — that can't be expressed as plain CRUD."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-proto = { workspace = true, features = ["server", "vox"] }
+async-trait = "0.1"
+chrono = { workspace = true, features = ["clock", "serde"] }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

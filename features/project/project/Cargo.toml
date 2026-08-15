@@ -1,0 +1,64 @@
+[package]
+name = "project"
+description = "First-party project feature for Task. `ProjectInfo` is the canonical project entity (`architect::Entity`-derived for schema-flexibility) — today it serializes to/from a markdown vault page's YAML frontmatter via the bundled parser + writer; under the `server` feature it also emits the SeaORM Model/Repo so the same schema can mount to SQLite without rewrite. Billing fields (client, currency, default rate, billable default) live on the project so downstream features (`timer`, `finance`, `agent-dispatch`) can resolve them by reading the file or the DB. Per `feedback_architect_entity_default`: schema-first, persistence-flexible."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+# The wasm-clean wire contract: `ProjectInfo` / `Status`, the
+# per-project state registry, and the `ProjectService` RPC trait.
+# This crate is the vault-backed half sitting on top of it, and
+# re-exports every proto item at its historical `project::…` path.
+project-proto = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+# `VaultPage` lives in vault-proto (wasm-clean wire shape).
+# The richer `vault::Vault` + `vault-live::VaultPage` are
+# server-only; parsers consume the proto shape so they
+# work everywhere.
+vault-proto = { workspace = true, default-features = false }
+# `vault::Vault` walks std::fs (and pulls a file watcher). Plain
+# deps now: this crate is the server-side half of the slice, and
+# browser consumers take `project-proto` instead — nothing wasm
+# reaches it, so the old `cfg(not(target_arch = "wasm32"))` dance
+# is gone.
+vault = { workspace = true }
+vault-entity = { workspace = true }
+
+# Server-only: SeaORM emissions from the architect derive.
+# Gated so wasm clients never pull SeaORM.
+sea-orm = { workspace = true, optional = true }
+
+# vox for the auto-generated `ProjectServiceClient` +
+# server bridge. Opt-in so the wire/file-format path
+# (`ProjectInfo`-only consumers) doesn't pull the
+# WebSocket runtime.
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = []
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "project-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "project-proto/server"]
+fake = ["dep:fake", "architect/fake", "project-proto/fake"]
+full = ["vox", "server", "fake"]
+# Forwarded so `project`-shaped consumers can still opt the wire
+# model into the client-side optimistic store.
+atom = ["project-proto/atom"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

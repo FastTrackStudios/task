@@ -1,0 +1,22 @@
+filters:
+  and:
+    - { property: type, equals: scheduling-booking }
+
+views:
+  - name: All bookings
+    type: table
+    sort: [{ property: start_utc, direction: asc }]
+    columns: [attendee_name, event_type_id, start_utc, status]
+  - name: Confirmed only
+    type: table
+    filter:
+      and:
+        - { property: status, equals: confirmed }
+    sort: [{ property: start_utc, direction: asc }]
+    columns: [attendee_name, event_type_id, start_utc, note]
+  - name: Cancelled
+    type: table
+    filter:
+      and:
+        - { property: status, equals: cancelled }
+    columns: [attendee_name, start_utc, note]

@@ -1,0 +1,27 @@
+[package]
+name = "task-files-version-store"
+description = "Files platform (issue #255) version-store engine: jj-lib's Backend trait implemented over the CAS chunk store (task-files-chunk-store), per ADR 0001 (apps/task/docs/adr/0001-files-version-store-jj-cas.md). Per-file version chains, recorded renames (CopyHistory), and divergent concurrent writes riding jj's own op-log. See issue #257."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-files-chunk-store.workspace = true
+jj-lib.workspace = true
+blake3.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio-util.workspace = true
+pollster.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

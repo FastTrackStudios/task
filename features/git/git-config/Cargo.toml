@@ -1,0 +1,23 @@
+[package]
+name = "git-config"
+description = "Persisted bindings for the git feature: `RepoBinding` (project_id -> forge+owner+repo, many-to-many) and `IssueLink` (task_id -> issue/pr number, many-to-many). Storage layer matches `email-config` shape — types live here; backends call in to look up which forge serves a given task or project."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-proto = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

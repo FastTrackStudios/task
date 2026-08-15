@@ -1,0 +1,59 @@
+[package]
+name = "workstream"
+description = "Workstream feature — the project-scoped parent-with-swarm construct (lead + members + status + dates) that replaces the 'epic' tag. Tasks attach via `workflow.workstream`; progress is a derived rollup (done/total/in-progress/blocked + estimate sum), never stored. Markdown-backed at `Projects/<project-slug>/workstreams/<ws-slug>.md`; SeaORM Model emitted under `--features server`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+workstream-proto = { workspace = true }
+workflows-proto = { workspace = true }
+# The rollup engine derives progress from `task::TaskInfo` rows
+# (`workflow.workstream` attachment + status + estimate +
+# blockers). task's model/parse modules are wasm-clean; we don't
+# need its vox client here.
+task = { workspace = true, default-features = false }
+# Status -> StateGroup resolution (`project::states`) — the
+# rollup classifies done / in-progress / blocked via canonical
+# state groups so per-project custom status names roll up
+# correctly. Model + states modules are wasm-clean.
+project = { workspace = true, default-features = false }
+# Wasm-clean wire shape for `VaultPage`.
+vault-proto = { workspace = true, default-features = false }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "workstream-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "workstream-proto/server"]
+fake = ["dep:fake", "architect/fake", "workstream-proto/fake"]
+full = ["vox", "server", "fake"]
+
+# `vault::Vault` is server-only. Wasm UI consumers get only
+# wire types + RPC client; parser / backend / writer all
+# gate on non-wasm.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vault = { workspace = true }
+vault-entity = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+[package]
+name = "scripture-proto"
+description = "Wasm-clean verse-addressing keystone + read-only RPC surface for the Bible-study feature: the 66-book canon, `VerseId` (OSIS + sortable BBCCCVVV keys), reference parsing, the translation/licensing registry, and the `#[architect::rpc] trait ScriptureService` the reader binds to. The sibling `scripture` crate owns USFM ingest + the backend store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Pure value types (book/reference/translation) carry no IO and no
+# architect surface. The `service` module adds the wasm-clean RPC
+# contract (Facet wire DTOs + the rpc trait); the architect-emitted vox
+# client / dispatcher / serve helpers come in under the `vox` feature.
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+full = ["vox"]
+
+[lints]
+workspace = true

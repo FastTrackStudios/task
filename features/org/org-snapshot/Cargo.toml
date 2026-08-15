@@ -1,0 +1,24 @@
+[package]
+name = "org-snapshot"
+description = "Server-native git snapshot engine over the Task data root. Operates the SAME detached-git-dir layout the chart's CronJob script established (live in production): one repo per org at `<data_root>/.gitstate/orgs/<slug>.git` (work-tree `orgs/<slug>`, continuing users' pre-existing vault histories — never re-inited) plus a full-state repo at `<data_root>/.gitstate/full.git` (work-tree `<data_root>`, excluding `.gitstate/` + `lost+found/`). Shells out to `git` (subprocess-wrapper precedent: wiki-archive's yt-dlp/curl/pdftotext). The push target is deliberately one narrow function — `SnapshotEngine::push` — so a second storage backend (Nextcloud/WebDAV/NAS via rclone-style remotes) can slot in without touching the commit machinery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+org-proto = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "macros", "rt", "time"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true, features = ["clock", "std"] }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

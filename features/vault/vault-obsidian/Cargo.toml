@@ -1,0 +1,70 @@
+[package]
+name = "vault-obsidian"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Obsidian translation layer — a `vault-proto::VaultSync` backend
+# rooted at an Obsidian-shaped directory. Native-only. Disk is the
+# runtime source of truth — pages, bases, attachments, frontmatter
+# all read/written directly to `.md` / `.base` files. No CRDT.
+#
+# Mirrors Obsidian's built-in CLI surface (`obsidian help`) so a
+# scripted workflow can use either interchangeably. This is the
+# import / interop seam: open an existing Obsidian vault on disk
+# and serve it through the same wire trait as the primary `vault`
+# backend.
+#
+# Layout:
+#   vault.rs          — in-memory snapshot (Vault::open)
+#   walker.rs         — Obsidian-shaped FS walk (skip .obsidian, .trash, …)
+#   config.rs         — read .obsidian/app.json
+#   guard.rs          — SelfWriteGuard (debounces watcher echo)
+#   watcher.rs        — notify-debouncer-mini stream
+#   links.rs          — wikilink index (backlinks / orphans / unresolved / links)
+#   outline.rs        — page heading outlines
+#   properties.rs     — frontmatter key aggregation across the vault
+#   aliases.rs        — alias enumeration
+#   tasks.rs          — `- [ ]` task scan
+#   wordcount.rs      — words / chars / pages stats
+#   base_query.rs     — execute a parsed Bases view against vault pages
+#   mutate.rs         — create / append / prepend / delete / move / property ops
+
+[dependencies]
+# Internal sibling deps — vault-obsidian lives inside the vault
+# feature, so it talks to `vault-live` (the impl crate)
+# directly rather than going through the public `vault` facade.
+# `vault-live` ships the canonical `VaultSync` backend +
+# in-memory snapshot; vault-obsidian translates obsidian-shaped
+# directories into that shape.
+vault-live.workspace = true
+vault-proto = { workspace = true, features = ["vox"] }
+# `graph.rs` — the `VaultGraph` RPC backend needs the
+# `architect::HasDispatcher` derive so the bridge can marshal
+# sync method calls (same shape as vault-live's sync Backend).
+architect.workspace = true
+chrono.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tracing.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+futures.workspace = true
+walkdir.workspace = true
+notify = "8"
+notify-debouncer-mini = "0.6"
+regex.workspace = true
+# Needed by the migrated `obsidian_parse` module — preserves
+# frontmatter key order and round-trips YAML scalars.
+indexmap = { workspace = true }
+serde_yaml = { workspace = true }
+facet.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+
+[lints]
+workspace = true

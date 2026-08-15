@@ -1,0 +1,24 @@
+{
+  "name": "@bearcove/vox-wire",
+  "version": "0.2.0",
+  "private": false,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bearcove/vox-postcard": "workspace:*"
+  },
+  "license": "MIT OR Apache-2.0",
+  "description": "Wire message codecs and helpers for Vox",
+  "repository": "https://github.com/bearcove/vox",
+  "homepage": "https://github.com/bearcove/vox",
+  "keywords": [
+    "vox",
+    "ipc",
+    "rpc",
+    "typescript",
+    "shared-memory"
+  ],
+  "readme": "README.md"
+}

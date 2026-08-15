@@ -1,0 +1,29 @@
+[package]
+name = "task-widgets"
+description = "The note-widget extension contract for the Task shell: widget specs keyed by note type / embed target / fenced-block language, the registry the shell consults, and the shared fullscreen-experience chrome. Provider crates (task-player-ui, task-note-tabs, …) depend on this and task-ui-core — never on the shell."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Plugin vocabulary — the registry drops specs whose owning plugin is
+# disabled for the active org (`WidgetRegistry::set_plugin_set`).
+task-plugin.workspace = true
+dioxus = { workspace = true }
+# `EditorState` / `DecoratedRange` for the decoration-pass hook — the
+# same types the shell's own decoration source produces.
+editor = { workspace = true }
+architect-ui.workspace = true
+# Frontmatter reads for match evaluation (`experience:` / flag keys).
+task-ui-core.workspace = true
+tracing = { workspace = true }
+
+# The fullscreen chrome's double-Esc disarm timer (wasm-only path).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { workspace = true, features = ["futures"] }
+
+[lints]
+workspace = true

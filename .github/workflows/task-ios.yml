@@ -1,0 +1,133 @@
+# Task iOS TestFlight — build the Task iPhone app + its embedded watchOS
+# companion and upload to TestFlight on every push to main that touches Task
+# or its dependencies.
+#
+# Runs on the SAME self-hosted airlock Mac as the audio app's `ios.yml`, and
+# shares its `ios-testflight` concurrency group so the single Mac never runs
+# two iOS builds at once (Task and audio builds queue behind each other).
+#
+# This does NOT add a new build script — it reuses the proven, parameterized
+# `apps/fasttrackstudio/ios/deploy-testflight.sh` with Task's env overrides
+# (documented in that script's header + `apps/watchos/project.yml`):
+#   DX_PACKAGE=task-app-mobile, DX_APP_DIR=apps/mobile, Task bundle ids,
+#   WATCH_APP=apps/watchos. The watch companion is embedded in the iOS
+#   build so it installs on the paired watch and auto-updates.
+#
+# CHANGE-GATED by the push `paths:` filter (Task app + its Rust deps).
+# workflow_dispatch forces a build regardless of what changed.
+
+name: task-ios
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "crates/task/**"
+      - "features/task/**"
+      - "libs/architect/**"
+      - "libs/editor/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/task-ios.yml"
+      - "apps/fasttrackstudio/ios/**"
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: "CFBundleShortVersionString (e.g. 0.0.2)"
+        required: false
+        default: "0.0.1"
+
+# Serialize with the audio iOS build too — one iOS build at a time on the
+# single Mac. Shared group name across both workflows; queue, never cancel.
+concurrency:
+  # Per-WORKFLOW, not shared across the three Apple workflows.
+  #
+  # They used to share one `ios-testflight` group, intending to stop the
+  # single Mac running two Apple builds at once. The effect was the
+  # opposite of the intent: a concurrency group holds only ONE pending
+  # run, so task-ios and task-macos evicted each other — every merge
+  # fires both, the later arrival takes the pending slot, and the other
+  # is CANCELLED. task-ios lost that race every time, which is why
+  # TestFlight went stale while every run showed "cancelled".
+  #
+  # The serialization they wanted is already guaranteed: airlock is a
+  # SINGLE self-hosted runner and runs one job at a time, so two Apple
+  # builds cannot overlap regardless. The shared group added nothing
+  # except mutual cancellation.
+  #
+  # Keeping the group per-workflow preserves the useful half — a newer
+  # run of the SAME workflow supersedes an older queued one.
+  group: ios-testflight-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    runs-on: [self-hosted, macos, airlock]
+    # Fail loudly when the airlock Mac isn't there. Without this a job
+    # with no available runner just QUEUES, and is eventually cancelled —
+    # which reads as "cancelled", not "failed", so nothing alerts and
+    # nobody looks. That is exactly how TestFlight silently missed every
+    # merge from 2026-08-09 onward while the runner was offline: four
+    # cancelled runs in a row, discovered only by picking up the phone.
+    # A timeout turns a missing runner into a red X within the hour.
+    timeout-minutes: 90
+    steps:
+      # clean:false keeps target/ between runs so nix+cargo build incrementally.
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Build, sign, and upload Task to TestFlight
+        env:
+          KEYCHAIN: fts-build.keychain
+          KEYCHAIN_PW: fts-build
+          MARKETING_VER: ${{ inputs.marketing_version || '0.0.2' }}
+          # 26.6 GM builds/signs/uploads; the beta's actool compiles the icon
+          # catalog (26.6's actool can't produce Assets.car on macOS 27).
+          ACTOOL_DEVELOPER_DIR: /Applications/Xcode-beta.app/Contents/Developer
+          # Sentry DSN baked into the build at compile time (option_env! in
+          # architect-telemetry). Sourced from the repo secret — never committed
+          # (public repo). Empty when the secret is unset → telemetry no-op.
+          TASK_SENTRY_DSN: ${{ secrets.TASK_SENTRY_DSN }}
+          # OTLP export, baked the same way (option_env! in architect-telemetry).
+          # The endpoint is task-server's authenticated /otlp proxy, not the
+          # collector — the collector is a ClusterIP on purpose. The token is
+          # a static ingest bearer: an OTLP exporter is constructed at process
+          # start, before anyone signs in, so a session token can't be the
+          # credential. Both empty → the client stays telemetry-free.
+          TASK_OTLP_ENDPOINT: ${{ vars.TASK_OTLP_ENDPOINT }}
+          TASK_OTLP_TOKEN: ${{ secrets.TASK_OTLP_TOKEN }}
+          # ── Task product overrides (see deploy-testflight.sh header) ──
+          DX_PACKAGE: task-app-mobile
+          DX_APP_DIR: apps/mobile
+          # Explicitly empty = Task's default cargo features (honored: the
+          # script uses `${DX_FEATURES-<default>}`, not `:-`).
+          DX_FEATURES: ""
+          DX_BUNDLE_ID: app.fasttrackstudio.task
+          # Home-screen name. Without this the device shows
+          # "TaskAppMobile" (dx derives it from the Dioxus.toml
+          # `[application] name`). The watch companion already sets its
+          # own CFBundleDisplayName to Task.
+          APP_DISPLAY_NAME: Task
+          # Relative to DX_APP_DIR. The three Task apps share ONE tailwind
+          # input at apps/tailwind.css (each app's assets/tailwind.css
+          # is generated, gitignored output).
+          DX_TAILWIND: ../tailwind.css
+          ICONS_DIR: ${{ github.workspace }}/apps/mobile/ios/Assets.xcassets
+          # ── Embedded watchOS companion (apps/watchos/project.yml) ──
+          WATCH_APP: apps/watchos
+          WATCH_SCHEME: TaskWatch
+          WATCH_PRODUCT: Task
+          WATCH_BUNDLE_ID: app.fasttrackstudio.task.watch
+        run: |
+          set -euo pipefail
+          export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+          export NIX=/nix/var/nix/profiles/default/bin/nix
+          bash apps/fasttrackstudio/ios/deploy-testflight.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Task iOS TestFlight" >> "$GITHUB_STEP_SUMMARY"
+          echo "commit \`$(git rev-parse --short HEAD)\` → Task app + watch companion uploaded (see log for build number)." >> "$GITHUB_STEP_SUMMARY"

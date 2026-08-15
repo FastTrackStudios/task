@@ -1,0 +1,33 @@
+[package]
+name = "email-mux"
+description = "Account-dispatching `EmailSync` backend. One org can mix a local Maildir account with one or more remote IMAP accounts, but the server mounts exactly one `EmailSync` service — this routes each call to the backend that owns the named account, and gives every sub-backend the same change hub so subscribers see one stream."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+email-config = { workspace = true }
+email-maildir = { workspace = true }
+email-imap = { workspace = true }
+# The sqlite+FTS5 index that backs the envelope-listing cache.
+email-store = { workspace = true }
+email-smtp = { workspace = true }
+# `dispatch-tokio`: the IMAP backend's sync methods wrap
+# `runtime.block_on`, which panics on a runtime worker thread — they
+# must land on architect's tokio BLOCKING dispatcher.
+architect = { workspace = true, features = ["dispatch-tokio"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# Routing tests construct IMAP configs and need a runtime, since
+# `email_imap::Backend::from_configs` captures the current handle.
+email-secret = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+tempfile = "3"
+
+[lints]
+workspace = true

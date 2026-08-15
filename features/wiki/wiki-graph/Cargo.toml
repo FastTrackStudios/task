@@ -1,0 +1,29 @@
+[package]
+name = "wiki-graph"
+description = "Pure-computation graph layer for the wiki feature. Walks `<vault>/Wiki/`, parses frontmatter + wikilinks, builds nodes + edges weighted by llm_wiki's 4-signal model (direct ×3, source-overlap ×4, Adamic-Adar ×1.5, type-affinity ×1). Surfaces knowledge gaps (orphans, missing-page, sparse cluster). No LLM, no agent — runnable today against any wiki on disk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+walkdir = { workspace = true }
+wiki-proto = { workspace = true }
+
+# Tree-sitter for code-graph extraction (PR 2 of
+# `plans/wiki-graph-parity.md`). Rust grammar to start;
+# TS/JS/Python land in subsequent PRs.
+arborium = { workspace = true, features = ["lang-rust", "lang-typescript", "lang-javascript"] }
+arborium-tree-sitter = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

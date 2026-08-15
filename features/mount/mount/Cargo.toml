@@ -1,0 +1,27 @@
+[package]
+name = "mount"
+description = "Per-machine project content mount registry. Loads/writes `~/.config/task/mounts.toml`, exposes the canonical [`Filesystem`] [`ContentBackend`] impl, and resolves a `project_id` to the active backend for callers (CLI, server, UI). Backends in other transports (Nextcloud, vox-proxy) live in sibling crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mount-proto = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+toml = "0.8"
+uuid = { workspace = true, features = ["v4", "serde"] }
+thiserror = { workspace = true }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = []
+
+[lints]
+workspace = true

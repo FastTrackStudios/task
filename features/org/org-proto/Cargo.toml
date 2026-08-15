@@ -1,0 +1,41 @@
+[package]
+name = "org-proto"
+description = "Wire contract for the org feature. An `OrgManifest` is one self-contained federated node's identity record — slug, display name, federation URL, is_home flag. Every persisted type is `#[derive(architect::Entity)]` so the SeaORM `Model` + `RepoStorage` get emitted under the `server` feature; today the manifest is written as `org.toml` for portability/human-readability, but the schema is DB-ready when we want it. Per `plans/federated-task-platform.md`: schema-first, persistence-flexible."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+facet = { workspace = true }
+chrono = { workspace = true, features = ["clock", "std", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde", "js"] }
+toml = "0.8"
+eyre.workspace = true
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+# Server-only: SeaORM emissions from the architect derive.
+sea-orm = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "dep:serde_json"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

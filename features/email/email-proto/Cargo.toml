@@ -1,0 +1,32 @@
+[package]
+name = "email-proto"
+description = "Wire contract for the email feature: `#[architect::rpc] trait EmailSync` (fetch/send/flag/subscribe) plus payload + event types. Backends — `email-imap`, `email-jmap`, `email-maildir`, `email-nextcloud` — all impl this trait; `email-store` aggregates and caches behind the same surface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (just Facet types). Enable the `vox`
+# feature for `#[vox::service]` + `vox-types::Reborrow` impls;
+# the server crate and both transport clients all enable it.
+# Mirrors `vault-proto`.
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+# `email-config` persists `Account`/`AccountId` via serde, so the
+# proto types need to round-trip through JSON/TOML in addition to
+# the vox wire format. Wasm-clean.
+serde = { workspace = true, features = ["derive"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+
+[lints]
+workspace = true

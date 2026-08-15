@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Invoice {{ number }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 18mm 22mm 18mm;
+      @bottom-center {
+        content: counter(page) " / " counter(pages);
+        font: 9pt "Helvetica", sans-serif;
+        color: #888;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: "Helvetica", "Arial", sans-serif;
+      font-size: 10pt;
+      color: #222;
+      margin: 0;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid #222;
+      padding-bottom: 12pt;
+      margin-bottom: 18pt;
+    }
+
+    .header h1 {
+      font-size: 22pt;
+      margin: 0;
+      letter-spacing: 1pt;
+    }
+
+    .meta {
+      text-align: right;
+      font-size: 9pt;
+      line-height: 1.5;
+    }
+    .meta .num { font-size: 12pt; font-weight: bold; color: #444; }
+    .meta .status {
+      display: inline-block;
+      padding: 2pt 6pt;
+      border-radius: 3pt;
+      font-size: 8pt;
+      letter-spacing: 0.5pt;
+      text-transform: uppercase;
+      background: #eee;
+      color: #555;
+    }
+    .meta .status.paid { background: #d6f3df; color: #1f6b3a; }
+    .meta .status.sent { background: #dde9ff; color: #2a4d8f; }
+    .meta .status.void { background: #f3d6d6; color: #6b1f1f; }
+
+    .parties {
+      display: flex;
+      justify-content: space-between;
+      gap: 24pt;
+      margin-bottom: 18pt;
+    }
+    .party { width: 48%; }
+    .party h3 {
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 1pt;
+      color: #999;
+      margin: 0 0 6pt 0;
+    }
+    .party .name { font-weight: bold; font-size: 11pt; }
+    .party .field { font-size: 9pt; color: #555; }
+
+    table.lines {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 12pt;
+    }
+    table.lines thead { display: table-header-group; }
+    table.lines tr { page-break-inside: avoid; }
+    table.lines th {
+      text-align: left;
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 0.5pt;
+      color: #777;
+      border-bottom: 1px solid #ccc;
+      padding: 6pt 4pt;
+    }
+    table.lines td {
+      padding: 6pt 4pt;
+      border-bottom: 1px solid #eee;
+      vertical-align: top;
+    }
+    table.lines td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    table.lines th.num { text-align: right; }
+    table.lines td.desc { width: 44%; }
+    table.lines td.who { color: #444; font-size: 9pt; white-space: nowrap; }
+
+    .overview-breakdown {
+      margin-bottom: 14pt;
+    }
+    .overview-breakdown .layout {
+      display: flex;
+      gap: 14pt;
+      align-items: flex-start;
+    }
+    .overview-breakdown .layout > table { flex: 1; }
+    .overview-breakdown .charts {
+      display: flex;
+      flex-direction: column;
+      gap: 8pt;
+      align-items: center;
+      width: 130pt;
+    }
+    .overview-totals { margin-bottom: 14pt; }
+    .overview-totals .totals { margin-left: auto; width: 50%; }
+    .people-summary {
+      margin: 14pt 0;
+      page-break-inside: avoid;
+    }
+    .people-summary h3 {
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 1pt;
+      color: #999;
+      margin: 0 0 6pt 0;
+    }
+    .people-summary .assignees { width: 60%; }
+    .overview-breakdown h3 {
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 1pt;
+      color: #999;
+      margin: 0 0 6pt 0;
+    }
+
+    .detail { page-break-before: always; }
+    .detail-title {
+      font-size: 10pt;
+      text-transform: uppercase;
+      letter-spacing: 1pt;
+      color: #777;
+      margin: 0 0 8pt 0;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: 4pt;
+    }
+
+    .breakdown {
+      display: flex;
+      gap: 18pt;
+      margin: 18pt 0 6pt 0;
+      page-break-inside: avoid;
+    }
+    .breakdown .charts {
+      display: flex;
+      gap: 12pt;
+      align-items: center;
+    }
+    .breakdown h3 {
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 1pt;
+      color: #999;
+      margin: 0 0 6pt 0;
+    }
+    table.assignees {
+      flex: 1;
+      border-collapse: collapse;
+      font-size: 9pt;
+    }
+    table.assignees th {
+      text-align: left;
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 0.5pt;
+      color: #777;
+      border-bottom: 1px solid #ccc;
+      padding: 4pt 6pt;
+    }
+    table.assignees td {
+      padding: 4pt 6pt;
+      border-bottom: 1px solid #eee;
+      vertical-align: middle;
+    }
+    table.assignees .swatch {
+      display: inline-block;
+      width: 9pt;
+      height: 9pt;
+      border-radius: 2pt;
+      margin-right: 5pt;
+      vertical-align: -1pt;
+    }
+    table.assignees td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    table.assignees th.num { text-align: right; }
+
+    .totals {
+      margin-left: auto;
+      width: 40%;
+      font-size: 10pt;
+    }
+    .totals .row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4pt 0;
+    }
+    .totals .row.sub { border-top: 1px solid #ccc; }
+    .totals .row.total {
+      border-top: 2px solid #222;
+      font-size: 12pt;
+      font-weight: bold;
+      padding-top: 6pt;
+    }
+    .totals .row.balance {
+      color: #b34a00;
+      font-weight: bold;
+    }
+    .totals .label { color: #555; }
+
+    .notes {
+      margin-top: 24pt;
+      font-size: 9pt;
+      line-height: 1.5;
+      color: #444;
+    }
+    .notes h3 {
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 1pt;
+      color: #999;
+      margin-bottom: 4pt;
+    }
+
+    .footer-msg {
+      margin-top: 18pt;
+      text-align: center;
+      font-size: 8pt;
+      color: #888;
+      border-top: 1px solid #eee;
+      padding-top: 6pt;
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>INVOICE</h1>
+    <div style="font-size:9pt;color:#888;margin-top:4pt;">{{ from.name }}</div>
+  </div>
+  <div class="meta">
+    <div class="num">{{ number }}</div>
+    {% if status %}<div><span class="status {{ status }}">{{ status }}</span></div>{% endif %}
+    <div>Issued: <strong>{{ issue_date }}</strong></div>
+    {% if due_date %}<div>Due: <strong>{{ due_date }}</strong></div>{% endif %}
+    {% if period_start and period_end %}<div>Period: <strong>{{ period_start }}</strong> → <strong>{{ period_end }}</strong></div>{% endif %}
+    <div>Currency: {{ currency }}</div>
+  </div>
+</div>
+
+<div class="parties">
+  <div class="party">
+    <h3>From</h3>
+    <div class="name">{{ from.name }}</div>
+    {% if from.address %}<div class="field">{{ from.address }}</div>{% endif %}
+    {% if from.email %}<div class="field">{{ from.email }}</div>{% endif %}
+    {% if from.phone %}<div class="field">{{ from.phone }}</div>{% endif %}
+    {% if from.tax_id %}<div class="field">Tax ID: {{ from.tax_id }}</div>{% endif %}
+  </div>
+  <div class="party">
+    <h3>Bill to</h3>
+    <div class="name">{{ to.name }}</div>
+    {% if to.address %}<div class="field">{{ to.address }}</div>{% endif %}
+    {% if to.email %}<div class="field">{{ to.email }}</div>{% endif %}
+    {% if to.phone %}<div class="field">{{ to.phone }}</div>{% endif %}
+    {% if to.tax_id %}<div class="field">Tax ID: {{ to.tax_id }}</div>{% endif %}
+  </div>
+</div>
+
+{% if assignees %}
+<div class="overview-breakdown">
+  <h3>Time by task</h3>
+  <div class="layout">
+    <table class="assignees">
+      <thead>
+        <tr>
+          <th>Task</th>
+          <th class="num">Hours</th>
+          <th class="num">Share</th>
+          <th class="num">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in assignees %}
+        <tr>
+          <td><span class="swatch" style="background:{{ a.color }}"></span>{{ a.name }}</td>
+          <td class="num">{{ a.hours }}</td>
+          <td class="num">{{ a.pct }}%</td>
+          <td class="num">{{ currency_symbol }}{{ a.amount }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="charts">
+      {% if donut_svg %}<div>{{ donut_svg | safe }}</div>{% endif %}
+      {% if bars_svg %}<div>{{ bars_svg | safe }}</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if people %}
+<div class="people-summary">
+  <h3>Per person</h3>
+  <table class="assignees">
+    <thead>
+      <tr>
+        <th>Member</th>
+        <th class="num">Hours</th>
+        <th class="num">Share</th>
+        <th class="num">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in people %}
+      <tr>
+        <td><span class="swatch" style="background:{{ p.color }}"></span>{{ p.name }}</td>
+        <td class="num">{{ p.hours }}</td>
+        <td class="num">{{ p.pct }}%</td>
+        <td class="num">{{ currency_symbol }}{{ p.amount }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="overview-totals">
+  <div class="totals">
+    <div class="row sub">
+      <span class="label">Subtotal</span>
+      <span>{{ currency_symbol }}{{ subtotal }}</span>
+    </div>
+    {% if tax %}
+    <div class="row">
+      <span class="label">Tax</span>
+      <span>{{ currency_symbol }}{{ tax }}</span>
+    </div>
+    {% endif %}
+    <div class="row total">
+      <span>Total</span>
+      <span>{{ currency_symbol }}{{ total }} {{ currency }}</span>
+    </div>
+    {% if balance_due %}
+    <div class="row balance">
+      <span>Balance due</span>
+      <span>{{ currency_symbol }}{{ balance_due }}</span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if notes %}
+<div class="notes">
+  <h3>Notes</h3>
+  <p>{{ notes }}</p>
+</div>
+{% endif %}
+{% if terms %}
+<div class="notes">
+  <h3>Terms</h3>
+  <p>{{ terms }}</p>
+</div>
+{% endif %}
+
+<div class="detail">
+  <h2 class="detail-title">Line items</h2>
+  <table class="lines">
+    <thead>
+      <tr>
+        <th class="desc">Description</th>
+        <th>Assignee</th>
+        <th class="num">Qty</th>
+        <th class="num">Unit price</th>
+        <th class="num">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line in lines %}
+      <tr>
+        <td class="desc">{{ line.description }}</td>
+        <td class="who">{{ line.assignee }}</td>
+        <td class="num">{{ line.quantity }}{% if line.unit %} {{ line.unit }}{% endif %}</td>
+        <td class="num">{{ line.unit_price }}</td>
+        <td class="num">{{ line.amount }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if footer %}
+<div class="footer-msg">{{ footer }}</div>
+{% endif %}
+
+</body>
+</html>

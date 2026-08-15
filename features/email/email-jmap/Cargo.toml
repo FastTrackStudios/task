@@ -1,0 +1,26 @@
+[package]
+name = "email-jmap"
+description = "JMAP backend implementing `email_proto::EmailSync` via `stalwartlabs/jmap-client`. Talks to Fastmail / Stalwart / any RFC 8620+8621 server. Pairs naturally with the rest of the Stalwart stack (`mail-parser`, `mail-builder`, `mail-send`) already used elsewhere in email-*."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+email-config = { workspace = true }
+email-secret = { workspace = true }
+architect = { workspace = true, features = ["dispatch-tokio"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Stalwart's JMAP client. Default features pull in async +
+# EventSource (push) + websockets; aws_lc_rs is the modern
+# TLS backend. Apache-2.0/MIT.
+jmap-client = "0.4"
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+futures = { workspace = true }
+
+[lints]
+workspace = true

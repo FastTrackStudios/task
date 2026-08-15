@@ -1,0 +1,31 @@
+[package]
+name = "tag"
+description = "Tag feature backend: the per-org tag registry (name → icon/color) persisted as `Records/tags.json` in the vault and served over the TagService vox RPC. Native-only — the round-trip touches disk; the UI uses tag-proto directly on wasm. Mirrors the `inbox` crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Native-only: the vault round-trip reads from disk.
+
+[dependencies]
+# `vox` pulls in the architect-emitted dispatcher so the server can
+# mount `VaultTags` as a `TagService` vox service (mirrors `inbox`).
+tag-proto = { workspace = true, features = ["vox"] }
+# `TagService` is a *sync* rpc trait, so its backend must provide a
+# `HasDispatcher` impl — `dispatch-tokio` gives the `spawn_blocking`
+# dispatcher the server uses.
+architect = { workspace = true, features = ["dispatch-tokio"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

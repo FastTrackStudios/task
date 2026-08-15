@@ -1,0 +1,63 @@
+# EXAMPLE values — the fasttrackstudio.app deployment: the SAME task
+# chart, second release, FTS branding. Songs/setlists are notes; the
+# session player streams stems from the server's blob route, so the
+# whole app is the task images behind a different host.
+#
+#   helm upgrade --install fts ./deploy/chart/task \
+#     -n fasttrackstudio --create-namespace \
+#     -f deploy/chart/values-fasttrackstudio.yaml
+#
+# Same-origin is load-bearing: the wasm app derives its vox URL from
+# the page origin (same_origin_vox_url), so ingress.serverPaths MUST
+# ride the same host that serves the bundle. The chart's ingress
+# already does that (serverPaths → server, everything else → web).
+
+server:
+  image:
+    tag: latest
+  publicUrl: https://fasttrackstudio.app
+  # REQUIRED for prod: a Secret with TASK_SERVER_SEALING_KEY.
+  # existingSecret: fts-env
+  env:
+    # The FTS org that owns the song library + setlists.
+    TASK_SERVER_ORG: fasttrackstudio
+    # Traces + logs + metrics → the cluster's OTel collector, which fans
+    # out to Tempo / Loki / Prometheus. Unset this to go telemetry-dark.
+    # Commented until the collector actually exists in the cluster (see
+    # apps/task/plans/observability.md) — pointing at a missing service
+    # just burns export retries. Uncomment to light it up:
+    # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-opentelemetry-collector.observability.svc:4318
+    # OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+    # Interim song-media dir (stems + manifest.json) served at /media.
+    # Goes away once stems are content-addressed attachments on the
+    # song notes (issue #30 item 2) — then the /blobs route carries
+    # the audio and this env can be dropped.
+    # TASK_SERVER_MEDIA_DIR: /data/orgs/fasttrackstudio/vault/resources
+  # Stems are big; size for the multitrack library.
+  persistence:
+    size: 100Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+web:
+  image:
+    tag: latest
+
+uiLab:
+  enabled: false
+
+ingress:
+  className: traefik
+  host: fasttrackstudio.app
+  serverPaths:
+    - /vox
+    - /org
+    - /server
+    - /blobs
+    - /.well-known
+    # Interim song media (see TASK_SERVER_MEDIA_DIR above).
+    - /media

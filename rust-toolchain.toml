@@ -1,0 +1,6 @@
+# Matches the FastTrackStudio fleet pin. architect and fasttrackstudio pin
+# the same toolchain; keep these in lockstep when bumping.
+[toolchain]
+channel = "1.94.0"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["wasm32-unknown-unknown"]

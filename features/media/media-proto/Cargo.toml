@@ -1,0 +1,27 @@
+[package]
+name = "media-proto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Wire contract for the `media` feature — first-class media streaming
+# over vox. Where attachments-proto hands out signed HTTP URLs (bytes
+# travel out-of-band), MediaService streams the blob bytes themselves
+# through the vox lane (`Tx<MediaChunk>`), so every client — browser,
+# native, CLI — reaches song stems and other large media through the
+# ONE architect surface with no HTTP side-channel.
+
+[dependencies]
+facet.workspace = true
+thiserror.workspace = true
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types"]
+
+[lints]
+workspace = true

@@ -1,0 +1,24 @@
+[package]
+name = "git-forgejo"
+description = "Forgejo (Gitea-compatible) backend for `git-proto`. Implements `RepoCatalog`, `IssueTracker`, `ReviewSurface` against a self-hosted Forgejo REST API via `reqwest` + `serde_json`. PAT auth via `Authorization: token <PAT>` header. Same `architect::HasDispatcher` + `block_on` shape as `git-github`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-proto = { workspace = true }
+architect = { workspace = true, features = ["dispatch-tokio"] }
+vox = { workspace = true }
+vox-types = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

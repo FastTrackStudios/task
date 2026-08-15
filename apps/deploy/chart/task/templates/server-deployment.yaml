@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "task.fullname" . }}-server
+  labels:
+    {{- include "task.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ .Values.server.replicas }}
+  # Single-writer sqlite + one PVC: never run two servers against the
+  # same data dir mid-rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "task.selectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "task.selectorLabels" (dict "ctx" . "component" "server") | nindent 8 }}
+      {{- with .Values.server.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: server
+          image: {{ include "task.image" (dict "ctx" . "img" .Values.server.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: TASK_DATA_ROOT
+              value: /data
+            - name: TASK_SERVER_BIND
+              value: 0.0.0.0:8080
+            {{- with (include "task.publicUrl" .) }}
+            - name: TASK_SERVER_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- range $name, $value := .Values.server.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- if .Values.backup.git.enabled }}
+            # Server-native git snapshots: the server runs the
+            # snapshot/push cycle itself (POST /server/snapshot +
+            # the SnapshotService verbs at /server/vox). The backup
+            # secret's GIT_USER/GIT_TOKEN map through to the
+            # TASK_BACKUP_* names the server reads.
+            - name: TASK_BACKUP_REMOTE_BASE
+              value: {{ .Values.backup.git.remoteBase | quote }}
+            - name: TASK_BACKUP_FULL_REPO
+              value: {{ .Values.backup.git.fullRepo | quote }}
+            - name: TASK_BACKUP_ORG_REPO_PREFIX
+              value: {{ .Values.backup.git.orgRepoPrefix | quote }}
+            # `optional: true` on BOTH: a missing backup secret must not
+            # stop the server booting. Without it the kubelet refuses to
+            # create the container at all — `CreateContainerConfigError`,
+            # which takes the whole deployment down for a feature that is
+            # off by default. That happened twice on 2026-08-10, both
+            # times because the live Argo Application had
+            # backup.git.enabled=true (drift; git says false) pointing at
+            # a secret that was never created.
+            #
+            # The server already handles the token being absent: it
+            # disables the snapshot endpoint and says so
+            # (`/server/snapshot` → 503 "TASK_BACKUP_GIT_TOKEN is not
+            # configured"). The chart was simply stricter than the app,
+            # turning a degraded feature into an outage.
+            - name: TASK_BACKUP_GIT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "backup.git.existingSecret is required (GIT_USER + GIT_TOKEN)" .Values.backup.git.existingSecret }}
+                  key: GIT_USER
+                  optional: true
+            - name: TASK_BACKUP_GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backup.git.existingSecret }}
+                  key: GIT_TOKEN
+                  optional: true
+            {{- end }}
+          {{- with .Values.server.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            {{- range .Values.server.mediaMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /.well-known/task-server.json
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /.well-known/task-server.json
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.server.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.server.persistence.existingClaim | default (printf "%s-data" (include "task.fullname" .)) }}
+        {{- range .Values.server.mediaMounts }}
+        - name: {{ .name }}
+          {{- if .nfs }}
+          nfs:
+            server: {{ .nfs.server }}
+            path: {{ .nfs.path }}
+          {{- else if .hostPath }}
+          hostPath:
+            path: {{ .hostPath }}
+            type: Directory
+          {{- end }}
+        {{- end }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

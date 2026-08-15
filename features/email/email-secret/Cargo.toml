@@ -1,0 +1,32 @@
+[package]
+name = "email-secret"
+description = "Credential resolution for the email feature: `Secret { Raw, Keyring, Command, EnvVar }`. Lifted in shape (not code) from pimalaya's `core/secret`. Lets accounts keep credentials out of plain config — pull from `pass show foo`, the OS keyring, an environment variable, or (for tests + scripted use) a literal string. Wasm-clean baseline; the `command` + `keyring` features add the native resolvers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+zeroize = { version = "1", features = ["derive"] }
+
+# `keyring` is platform-aware but native-only. We gate it behind a
+# cargo feature so wasm builds stay clean; the resolver returns
+# `Unsupported` when called without the feature.
+keyring = { version = "3", optional = true, default-features = false, features = ["linux-native", "apple-native", "windows-native"] }
+
+# `tokio::process::Command` for shelling out. Native-only; same gating.
+tokio = { workspace = true, optional = true, features = ["process", "io-util", "time"] }
+
+[features]
+default = ["command", "keyring"]
+command = ["dep:tokio"]
+keyring = ["dep:keyring"]
+
+[lints]
+workspace = true

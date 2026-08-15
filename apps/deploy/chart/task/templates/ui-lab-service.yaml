@@ -1,0 +1,17 @@
+{{- if .Values.uiLab.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "task.fullname" . }}-ui-lab
+  labels:
+    {{- include "task.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-lab
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "task.selectorLabels" (dict "ctx" . "component" "ui-lab") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+{{- end }}

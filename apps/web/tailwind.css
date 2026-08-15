@@ -1,0 +1,11 @@
+/* dx auto-detects a `tailwind.css` at the crate root and runs the
+ * Tailwind watcher itself (Dioxus 0.7), compiling it to
+ * `assets/tailwind.css` — the path `asset!()` resolves.
+ *
+ * The real input is one file shared by all three Task front-ends. This
+ * shim exists only so dx finds it: `asset!()` cannot reach outside the
+ * crate root, and neither can dx's detection.
+ *
+ * `@source` paths inside the shared file resolve relative to THAT file
+ * (apps/task/), not to this one. */
+@import "../tailwind.css";

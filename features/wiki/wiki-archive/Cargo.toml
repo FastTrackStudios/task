@@ -1,0 +1,85 @@
+[package]
+name = "wiki-archive"
+description = "URL archiving front-end for the wiki feature. Routes a URL (or local file) to a content extractor — readability articles, Google Docs export, yt-dlp video transcripts — and emits provenance-stamped markdown ready for the unchanged raw→ingest pipeline. Also hosts the bookmark-service importers (Readwise, Karakeep, Pocket, Netscape HTML) as batch front-ends to the same router."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# `serde` feature: the health ledger serializes its
+# last-success/failure instants.
+chrono = { workspace = true, features = ["serde"] }
+# Extractor-health ledger (`task wiki archive health`) is a
+# small serde JSON file.
+serde = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# WHATWG URL parsing — the router's canonicalization (host
+# normalization, tracking-param strip, provider-specific
+# rewrites) needs a real URL model, not string hacks.
+url = "2.5"
+# Readability-style article extraction — the maintained
+# winner among the Rust readability ports (html5ever-based,
+# mozilla/readability test-suite parity). `TextMode::Markdown`
+# emits markdown straight from the cleaned DOM.
+dom_smoothie = "0.18"
+# turndown-style HTML→Markdown. Used where the HTML is
+# *already* reader-clean (Readwise Reader `html_content`,
+# Karakeep `htmlContent`, dom_smoothie's cleaned-HTML
+# fallback) and running full readability again would
+# wrongly re-prune content.
+htmd = "0.5"
+# Article + subtitle-track fetches. Workspace config =
+# rustls, no openssl. `multipart` is for the Groq
+# transcription backfill (audio file upload).
+reqwest = { workspace = true, features = ["multipart"] }
+# Podcast RSS feeds are XML (with CDATA + the podcasting-2.0
+# `podcast:transcript` namespace) — scraper/html5ever would
+# silently mangle them; quick-xml parses them properly.
+quick-xml = "0.38"
+# Podcast Index API auth is sha1(key+secret+date) in an
+# Authorization header. RustCrypto sibling of the sha2 we
+# already carry.
+sha1 = "0.10"
+# yt-dlp `-J` probe output + json3 subtitle tracks + the
+# importer API payloads (Readwise/Karakeep) are all JSON.
+serde_json = { workspace = true }
+# yt-dlp runs as an async subprocess (`tokio::process`) with
+# a hard timeout — never let a stuck extractor wedge the CLI.
+tokio = { workspace = true }
+# Netscape bookmarks HTML is famously malformed (unclosed
+# <DT>/<DD> everywhere); scraper rides html5ever, whose
+# error recovery parses it the way browsers do.
+scraper = "0.27"
+# Pocket exports are a zip of CSV part files + annotation
+# JSON. Same pure-Rust `zip` config as wiki-extract.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Pocket's CSV has quoted titles with embedded commas and a
+# legacy column variant — header-name driven parsing via a
+# real CSV reader, not split(',').
+csv = "1.3"
+
+# PDF text via pdfium — same feature-gate shape as
+# wiki-extract: optional dep, dynamic library binding at
+# runtime (nothing bundled; TASK_PDFIUM or system lib).
+pdfium-render = { version = "0.8", optional = true }
+
+# Local whisper transcription. The repo MOVED to codeberg
+# (github.com/tazz4843/whisper-rs is archived) — pinned to a
+# codeberg rev, not crates.io, per the move. Compiling this
+# builds whisper.cpp via cmake, hence the off-by-default
+# feature: the `<podcast:transcript>` fast path and the Groq
+# backfill cover most episodes without any local model.
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs", rev = "129b9826dc8c385f6a28198bdc4f8a275385fe85", optional = true }
+
+[features]
+default = []
+pdf = ["dep:pdfium-render"]
+whisper = ["dep:whisper-rs"]
+
+[lints]
+workspace = true

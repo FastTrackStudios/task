@@ -1,0 +1,44 @@
+{{- if .Values.uiLab.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "task.fullname" . }}-ui-lab
+  labels:
+    {{- include "task.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-lab
+spec:
+  replicas: {{ .Values.uiLab.replicas }}
+  selector:
+    matchLabels:
+      {{- include "task.selectorLabels" (dict "ctx" . "component" "ui-lab") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "task.selectorLabels" (dict "ctx" . "component" "ui-lab") | nindent 8 }}
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: ui-lab
+          image: {{ include "task.image" (dict "ctx" . "img" .Values.uiLab.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /index.html
+              port: http
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /index.html
+              port: http
+            periodSeconds: 10
+          {{- with .Values.uiLab.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

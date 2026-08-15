@@ -1,0 +1,32 @@
+[package]
+name = "git-proto"
+description = "Wire contract for the git feature: three `#[architect::rpc]` traits (`RepoCatalog`, `IssueTracker`, `ReviewSurface`) plus payload + event types. Backends — `git-github`, `git-forgejo` — impl these traits over their respective forge APIs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (just Facet types). Enable the `vox`
+# feature for `#[vox::service]` + `vox-types::Reborrow` impls;
+# the server crate and both transport clients all enable it.
+# Mirrors `email-proto` / `vault-proto`.
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+# Forge bindings + caller code persists `RepoId` / `IssueLink`
+# through serde, so the proto types need to round-trip through
+# JSON/TOML as well as the vox wire format.
+serde = { workspace = true, features = ["derive"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+
+[lints]
+workspace = true

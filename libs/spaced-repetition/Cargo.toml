@@ -1,0 +1,15 @@
+[package]
+name = "spaced-repetition"
+description = "FSRS (Free Spaced Repetition Scheduler) — the modern SM-2 successor. A pure, clock-free scheduler over `chrono::NaiveDate`: rate a card Again/Hard/Good/Easy and get back its updated stability/difficulty + next due date from a desired retention. No I/O, no persistence — the `recall` feature owns the vault round-trip."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+
+[lints]
+workspace = true

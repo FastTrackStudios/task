@@ -1,0 +1,108 @@
+# Task macOS TestFlight — build the Task desktop app (task-app-desktop, a
+# Dioxus/dx macOS app) and upload it to TestFlight for Mac on every push to
+# main that touches Task or its dependencies. The macOS mirror of
+# task-ios.yml; testers' Macs then auto-update via the TestFlight app.
+#
+# Runs on the SAME self-hosted airlock Mac as the iOS workflows and shares
+# their `ios-testflight` concurrency group, so the single Mac never runs two
+# Apple builds at once (they queue behind each other and don't fight over
+# target/ or the keychain).
+#
+# The build script is apps/desktop/macos/deploy-testflight-macos.sh
+# (keychain unlock → ASC-API provisioning profile → dx build → App-Sandbox
+# codesign → installer .pkg → altool upload). One-time machine setup is
+# apps/desktop/macos/setup-macos.sh (signing identities in the build
+# keychain); see apps/docs/macos-testflight.md for the runbook.
+#
+# CHANGE-GATED by the push `paths:` filter (Task app + its Rust deps).
+# workflow_dispatch forces a build regardless of what changed.
+
+name: task-macos
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "crates/task/**"
+      - "features/task/**"
+      - "libs/architect/**"
+      - "libs/editor/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/task-macos.yml"
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: "CFBundleShortVersionString (e.g. 0.0.2) — keep in step with the iOS build's"
+        required: false
+        default: "0.0.1"
+
+# Serialize with the iOS builds — one Apple build at a time on the single
+# Mac. Shared group name across the workflows; queue, never cancel.
+concurrency:
+  # Per-WORKFLOW, not shared across the three Apple workflows.
+  #
+  # They used to share one `ios-testflight` group, intending to stop the
+  # single Mac running two Apple builds at once. The effect was the
+  # opposite of the intent: a concurrency group holds only ONE pending
+  # run, so task-ios and task-macos evicted each other — every merge
+  # fires both, the later arrival takes the pending slot, and the other
+  # is CANCELLED. task-ios lost that race every time, which is why
+  # TestFlight went stale while every run showed "cancelled".
+  #
+  # The serialization they wanted is already guaranteed: airlock is a
+  # SINGLE self-hosted runner and runs one job at a time, so two Apple
+  # builds cannot overlap regardless. The shared group added nothing
+  # except mutual cancellation.
+  #
+  # Keeping the group per-workflow preserves the useful half — a newer
+  # run of the SAME workflow supersedes an older queued one.
+  group: ios-testflight-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    runs-on: [self-hosted, macos, airlock]
+    # Fail loudly when the airlock Mac isn't there. Without this a job
+    # with no available runner just QUEUES, and is eventually cancelled —
+    # which reads as "cancelled", not "failed", so nothing alerts and
+    # nobody looks. That is exactly how TestFlight silently missed every
+    # merge from 2026-08-09 onward while the runner was offline: four
+    # cancelled runs in a row, discovered only by picking up the phone.
+    # A timeout turns a missing runner into a red X within the hour.
+    timeout-minutes: 90
+    steps:
+      # clean:false keeps target/ between runs so nix+cargo build incrementally.
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Build, sign, and upload Task (macOS) to TestFlight
+        env:
+          KEYCHAIN: fts-build.keychain
+          KEYCHAIN_PW: fts-build
+          MARKETING_VER: ${{ inputs.marketing_version || '0.0.2' }}
+          # Sentry DSN baked in at compile time (option_env! in
+          # architect-telemetry). Sourced from the repo secret — never committed
+          # (public repo). Empty when the secret is unset → telemetry no-op.
+          TASK_SENTRY_DSN: ${{ secrets.TASK_SENTRY_DSN }}
+          # OTLP export, baked the same way (option_env! in architect-telemetry).
+          # The endpoint is task-server's authenticated /otlp proxy, not the
+          # collector — the collector is a ClusterIP on purpose. The token is
+          # a static ingest bearer: an OTLP exporter is constructed at process
+          # start, before anyone signs in, so a session token can't be the
+          # credential. Both empty → the client stays telemetry-free.
+          TASK_OTLP_ENDPOINT: ${{ vars.TASK_OTLP_ENDPOINT }}
+          TASK_OTLP_TOKEN: ${{ secrets.TASK_OTLP_TOKEN }}
+        run: |
+          set -euo pipefail
+          export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+          export NIX=/nix/var/nix/profiles/default/bin/nix
+          bash apps/desktop/macos/deploy-testflight-macos.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Task macOS TestFlight" >> "$GITHUB_STEP_SUMMARY"
+          echo "commit \`$(git rev-parse --short HEAD)\` → Task desktop app uploaded (see log for build number)." >> "$GITHUB_STEP_SUMMARY"

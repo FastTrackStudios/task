@@ -1,0 +1,16 @@
+# cargo-nextest config — runs ahead of `cargo test` on every recipe
+# that touches tests. Mirrors architect's profile shape.
+
+[profile.default]
+fail-fast = true
+status-level = "pass"
+slow-timeout = { period = "2s", terminate-after = 2 }
+
+[profile.ci]
+fail-fast = false
+status-level = "all"
+final-status-level = "flaky"
+slow-timeout = { period = "5s", terminate-after = 3 }
+
+[profile.patient]
+slow-timeout = { period = "30s", terminate-after = 4 }

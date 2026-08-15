@@ -1,0 +1,29 @@
+[package]
+name = "view-table"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Table — Dioxus port of an Airtable/Notion/Bases-style data grid.
+# Dumb UI: feed `columns` + `rows` in via props, receive mutations
+# via `EventHandler<TableMutation>`. No CRDT awareness; wire to a
+# real repo at the route layer.
+#
+# Out of scope for v1: virtualized scroll, multi-cell selection,
+# undo/redo, formula cells, formula-driven columns, kanban-from-
+# select (defer to a `view-kanban` adapter), CSV import/export.
+
+[dependencies]
+dioxus = { workspace = true }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
+uuid = { workspace = true, features = ["v4", "js", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

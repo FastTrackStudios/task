@@ -1,0 +1,31 @@
+[package]
+name = "email-sync"
+description = "Per-account sync engine for the email feature. Owns one watcher task per account: drives an `email_proto::EmailSync` backend through periodic folder/envelope reconciliation, writes results into `email-store`, and broadcasts merged change events. Models pimalaya's split of `neverest` (sync) + `mirador` (watch) out of himalaya — sync isn't baked into the backend's request surface; it's a layer above. Mirrors `vault::sync::Backend`'s watcher-broadcast pattern."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+# Cache layer the engine writes through on each cycle.
+# Optional at the engine level — callers without persistence
+# (tests, ephemeral demos) just leave it unset.
+email-store = { workspace = true }
+email-config = { workspace = true }
+architect = { workspace = true, features = ["dispatch-tokio"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+email-maildir = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

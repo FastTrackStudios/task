@@ -1,0 +1,28 @@
+[package]
+name = "attachments-proto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Wire contract for the `attachments` feature.
+#
+# Phase 7 — small surface: AttachmentService trait, a handful of
+# Facet-derived request/response types. The actual blob bytes
+# travel over HTTP (PUT for upload, GET for download) against
+# signed URLs the service hands out — they don't go through vox.
+
+[dependencies]
+facet.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, features = ["js", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types"]
+
+[lints]
+workspace = true

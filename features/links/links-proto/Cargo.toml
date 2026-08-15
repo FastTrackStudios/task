@@ -1,0 +1,27 @@
+[package]
+name = "links-proto"
+description = "Wasm-clean wire contract for the generalized typed-link primitive: a link is a first-class object {source, target, relation, confidence, visibility, provenance} between any two nodes (verse / note / wiki page / topic / entity). The model the whole knowledge graph hangs on — verses↔verses, notes↔verses, ideas↔wiki entries — with confidence + visibility for quality filtering and private-vs-public publishing. See plans/knowledge-primitives.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+full = ["vox"]
+
+[lints]
+workspace = true

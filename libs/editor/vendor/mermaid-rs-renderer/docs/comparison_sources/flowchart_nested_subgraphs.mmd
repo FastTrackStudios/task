@@ -1,0 +1,22 @@
+flowchart TD
+  subgraph Platform["Platform"]
+    direction LR
+    subgraph Ingress["Ingress"]
+      direction TB
+      A[Gateway] --> B[Auth]
+    end
+    subgraph Core["Core"]
+      direction TB
+      C[API] --> D[Worker]
+      D --> E[(Queue)]
+    end
+    B --> C
+  end
+
+  subgraph Data["Data"]
+    direction TB
+    F[(Primary DB)] --> G[(Replica)]
+  end
+
+  E --> F
+  D --> G

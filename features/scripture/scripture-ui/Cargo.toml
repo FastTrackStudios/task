@@ -1,0 +1,22 @@
+[package]
+name = "scripture-ui"
+description = "Dioxus page for the scripture reader (`/scripture`) — chapter text, translation comparison, interlinear + word study, cross references, topics, and vault backlinks. Owns its own `ScriptureService` calls; the shell only routes to it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["router"] }
+architect-ui.workspace = true
+# The shared UI seam: org scoping, the `feeds!` call macro over the
+# per-org vox connection, the loading / error / empty phases, and the
+# href builder that links a backlink to its vault note without naming
+# the shell's `Route` enum.
+task-ui-core.workspace = true
+scripture-proto = { workspace = true, features = ["vox"] }
+
+[lints]
+workspace = true

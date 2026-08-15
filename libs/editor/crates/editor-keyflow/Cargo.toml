@@ -1,0 +1,26 @@
+[package]
+name = "editor-keyflow"
+description = "Keyflow (.kf) chart → inline SVG for the Editor. Wraps engraver's CPU-only `svg` tier (no wgpu/vello/PDF) with a small wasm-friendly render_svg API, matching the shape of editor-mermaid / editor-typst."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# CPU-only layout + SVG export from keyflow's engraver. `svg` drops
+# the wgpu/vello GPU stack and the PDF deps, leaving a pure-Rust path
+# (kurbo/peniko/skrifa/smufl) that compiles for wasm32.
+engraver = { workspace = true, default-features = false, features = ["svg"] }
+# Keyflow syntax highlighter (re-exported through keyflow-text's
+# wasm-clean `highlighting` feature — keyflow-syntax only, no facade/
+# tokio). Powers `highlight_html` for source-visible fences.
+keyflow-text = { workspace = true, features = ["highlighting"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true

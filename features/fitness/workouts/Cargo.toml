@@ -1,0 +1,38 @@
+[package]
+name = "workouts"
+description = "Workouts feature. `Routine` (template) and `WorkoutSession` (performed) are both `architect::Entity`s — markdown frontmatter stays the source of truth; SeaORM Model emitted under `--features server`. Nested types (RoutineDay/RoutineSlot/LoggedSet) live inline as JSON columns. Modeled on wger's `Routine` / `Day` / `Slot` / `WorkoutSession` / `WorkoutLog` tables, flattened onto two page types in the vault."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+vault = { workspace = true }
+vault-entity = { workspace = true }
+fitness-proto = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "fitness-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "fitness-proto/server"]
+fake = ["dep:fake", "architect/fake", "fitness-proto/fake"]
+full = ["vox", "server", "fake"]
+
+[dev-dependencies]
+tempfile = "3"

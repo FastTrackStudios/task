@@ -1,0 +1,33 @@
+[package]
+name = "files-webdav"
+description = "The Files WebDAV compat bridge (issue #274/#255): `dav-server` over a custom filesystem view of a File Root's live tree — current heads only, read-write, never the sync path. Serves the org's visible roots as one collection; a per-root policy hides a root from WebDAV."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+files = { workspace = true }
+files-proto = { workspace = true }
+task-files-util = { workspace = true }
+dav-server = { version = "0.11", default-features = false, features = ["localfs"] }
+futures-util = { workspace = true }
+http = "1"
+http-body = "1"
+bytes = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[dev-dependencies]
+chrono = { workspace = true, features = ["clock"] }
+http-body-util = "0.1"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

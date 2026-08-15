@@ -1,0 +1,23 @@
+[package]
+name = "prefs"
+description = "Server-side per-user preferences. SeaORM-backed impl of `prefs-proto`'s `UserPrefs` entity + the slim `PrefsService` (get-with-defaults / upsert set). Owns the `user_prefs` migrations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+prefs-proto = { workspace = true, features = ["server", "vox"] }
+async-trait = "0.1"
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

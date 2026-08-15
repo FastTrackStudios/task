@@ -1,0 +1,69 @@
+[package]
+name = "task-ui-core"
+description = "The seam every Task UI crate shares: vox endpoint resolution + the cached per-org connection root, display formatting, and vault-note frontmatter parsing. Deliberately tiny and proto-free — feature UI crates and the player depend on this instead of on the `ui` shell, which is what makes the shell splittable at all."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared phase components (`states`) and the badge-variant mapping
+# for the status ladder (`format::status_variant`).
+dioxus.workspace = true
+architect-ui.workspace = true
+
+# `OrgMeta::id` — the org's stable UUID from the well-known endpoint.
+uuid = { workspace = true, features = ["v4", "js", "serde"] }
+# `OrgMeta` is persisted to the shell's boot cache as JSON.
+serde = { workspace = true, features = ["derive"] }
+
+# Plugin vocabulary — `plugin_set_for` resolves an org's deny-list to
+# the enabled set the shell gates nav/widgets/routes on. Wasm-clean.
+task-plugin.workspace = true
+
+# Vox runtime + the WebSocket transport the per-org connection root dials.
+vox-core.workspace = true
+vox-websocket.workspace = true
+
+# `media_grant` — the signed-URL grants any media-URL-building surface
+# (stem player, review player) mints and caches here.
+media-proto = { workspace = true, features = ["vox"] }
+
+tracing.workspace = true
+futures-channel.workspace = true
+# `join_all` for the multi-org fan-out (`feeds::fan_out`).
+futures-util.workspace = true
+
+wasm-bindgen.workspace = true
+# `js_sys::Array` — the WebSocket subprotocol list, which is how the
+# session token reaches the server on a browser handshake (a browser can
+# set no headers, and the token must not ride the URL).
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "Window",
+    "Location",
+    "WebSocket",
+    "BinaryType",
+    "Event",
+    "CloseEvent",
+] }
+
+# Native dial (`dial_ws_native`). `WsLink::connect` takes only a URL, and
+# native clients need to present `Authorization: Bearer` on the upgrade,
+# so we build the stream ourselves and hand it to the public
+# `WsLink::new`. Same trick as `ui` and the CLI: vox-websocket never
+# enables tokio-tungstenite's TLS features itself, so these feature flags
+# unify TLS into the SHARED tokio-tungstenite instance and keep `wss://`
+# working.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-webpki-roots",
+] }
+
+[lints]
+workspace = true

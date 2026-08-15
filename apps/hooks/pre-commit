@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Format the tree with capn before the commit lands.
+#
+# `capn` must be on PATH (or pointed at by $CAPN_BIN). If it isn't
+# installed the hook is a no-op rather than a wall — formatting is
+# also enforced by `just ci`.
+#
+# NOTE: this repo does NOT use beads/`bd` or any external ticket
+# tracker (see AGENTS.md § Tracking). Do not reintroduce a
+# `bd hooks run` call here.
+
+CAPN_BIN="${CAPN_BIN:-$(command -v capn 2>/dev/null || true)}"
+
+if [ -z "$CAPN_BIN" ]; then
+  echo >&2 "pre-commit: capn not found on PATH — skipping fmt."
+  echo >&2 "            install capn or set CAPN_BIN to its path."
+  exit 0
+fi
+
+exec "$CAPN_BIN" fmt

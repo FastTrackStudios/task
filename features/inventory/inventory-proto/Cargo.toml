@@ -1,0 +1,39 @@
+[package]
+name = "inventory-proto"
+description = "Wire contract for the inventory feature: the `Item` gear/equipment entity (+ canonical `Condition` / `Status` enums) and the `#[architect::rpc] trait InventoryService` CRUD surface. Wasm-clean (the UI binds to it directly); the sibling `inventory` crate owns the vault-backed parse / write / scan / store side and re-exports this proto. Mirrors the `locations-proto` split."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). Enable the `vox` feature to
+# pull in the architect-emitted RPC client + dispatcher.
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impls UI crates key their entity caches on.
+# Pulls Dioxus via architect-atom, so it stays opt-in (UI-only).
+atom = ["architect/atom"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

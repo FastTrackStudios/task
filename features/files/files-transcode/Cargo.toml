@@ -1,0 +1,34 @@
+[package]
+name = "files-transcode"
+version = "0.1.0"
+edition = "2024"
+description = "Files transcode pipeline (issue #269): server-side derived media — H.264 proxies, AAC audio, waveform peaks, filmstrip thumbnails — generated from source media (ffmpeg behind a trait), cached in the CAS keyed by (source FileId, recipe version, kind), GC-tied to their source."
+
+[features]
+default = []
+# The real ffmpeg/ffprobe driver. Off by default so the library (and
+# its consumers) build without the ffmpeg toolchain; the server turns
+# it on.
+ffmpeg = []
+# Expose the deterministic FakeTranscoder outside cfg(test) — the
+# `files` crate's RPC-seam tests use it.
+test-transcoder = []
+vox = ["dep:facet"]
+
+[dependencies]
+async-trait = { workspace = true }
+blake3 = { workspace = true }
+facet = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+task-files-chunk-store = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "process"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

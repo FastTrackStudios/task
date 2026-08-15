@@ -1,0 +1,42 @@
+[package]
+name = "email-maildir"
+description = "Local Maildir backend implementing `email_proto::EmailSync`. Read/write a Maildir tree on disk. First backend implemented — lets the rest of the stack develop against a fixture mailbox with no network. Mirrors `vault::sync::Backend` in shape."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+# Folder alias map (steal #3 from himalaya). Backends translate
+# between the wire/UI folder name the user sees and whatever
+# weird name the server actually uses.
+email-config = { workspace = true }
+# RFC5322 build (`build_message`) + the `SmtpSender` transport
+# behind the account's optional `Submit` submitter — the send
+# path composes SMTP submission into this maildir backend.
+email-smtp = { workspace = true }
+# `dispatch-tokio` gives us `TokioBlockingDispatcher`, which
+# marshals the sync `EmailSync` methods onto the tokio
+# blocking pool — same shape used by `vault::sync::Backend`.
+architect = { workspace = true, features = ["dispatch-tokio"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Maildir layout helpers — cur/new/tmp + unique-key handling.
+# Format is stable; we use only the small surface we need.
+maildir = "0.6"
+# Stalwart's parser. Fastest + most-forgiving RFC5322/MIME
+# parser on crates.io. Apache-2.0/MIT.
+mail-parser = "0.11"
+# Broadcast channels for `subscribe`. Same shape as
+# `vault::sync::Backend`.
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

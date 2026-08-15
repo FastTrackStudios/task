@@ -1,0 +1,56 @@
+[package]
+name = "vault-live"
+description = "Live filesystem-backed vault implementation: in-memory snapshot, block-id index, debounced watcher, and the canonical `vault_proto::VaultSync` backend. Consumers outside `features/vault/` should depend on the `vault` facade instead of this crate directly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Vault is native-only (file IO + watching). The `#![cfg(not(wasm))]`
+# at the crate root keeps wasm builds happy.
+walkdir = { workspace = true }
+notify = "8"
+notify-debouncer-mini = "0.7"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+# Parallel file reads. ~4x speedup on the cold-open scan for
+# the 8k-page Observatory vault (350ms → ~80ms on M-class
+# hardware with 8 cores).
+rayon = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# `refs.rs` types derive `Facet` so they're wire-friendly (same
+# convention as `vault-proto`'s payload types). Pulled in here
+# rather than gated behind a feature since the parsers are
+# default in vault-live.
+facet = { workspace = true }
+# `editor-state::markdown::parse_frontmatter` + the block-id
+# parser. We depend on the editor for the *parsing*; the vault
+# owns the file storage + index layer above it.
+editor-state = { workspace = true }
+# Used by the migrated `property_schema` module (preserves
+# frontmatter key order across round-trips) and YAML serialization
+# in the `bases` query DSL parser.
+indexmap = { workspace = true }
+serde_yaml = { workspace = true }
+# `bases.rs` uses `regex` for its filter-expression tokenizer.
+regex = { workspace = true }
+# `VaultSync` wire trait + payload types. The `sync` module impls
+# `vault_proto::VaultSync` on the backend, making this crate the
+# canonical filesystem backend mounted on a `task-server` vox route.
+vault-proto = { workspace = true, features = ["vox"] }
+architect = { workspace = true, features = ["dispatch-tokio"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

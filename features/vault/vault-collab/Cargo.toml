@@ -1,0 +1,29 @@
+[package]
+name = "vault-collab"
+description = "Vault-file ⇄ CRDT reconciliation: per-file Loro docs served through architect's DocRegistry, with a debounced server write-behind into `vault_live::Backend::put_file` and an inbound listener merging external file writes (watcher / non-CRDT put_file) into open docs via character-level text diffs. Native-only — mounted by `task-server` next to the plain `VaultSync` service."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The doc-id scheme + container-name constants + `CollabAck`.
+vault-proto = { workspace = true, features = ["vox"] }
+# `Backend` (put_file / get_file / collab_route / broadcast channel).
+vault-live = { workspace = true }
+# `CrdtDoc` + `DocRegistry` + `FilePersistence`. `vox` because the
+# registry implements the DocSync/DocPresence service traits.
+crdt = { workspace = true, features = ["vox"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+tracing = { workspace = true }
+sha2 = "0.10"
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

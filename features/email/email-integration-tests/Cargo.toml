@@ -1,0 +1,39 @@
+[package]
+name = "email-integration-tests"
+description = "Cross-cutting integration tests for the email feature against a real `mailpit` server spun up via testcontainers. mailpit speaks SMTP + IMAP + an HTTP API in one binary, so a single container exercises `email-imap`, `email-smtp`, and (via the HTTP API) round-trip assertions about messages we sent. Gated behind `--features integration` so `cargo test` defaults stay docker-free."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+# Enable to actually run the suite. Tests are `#[ignore]` by
+# default — `cargo test --features integration -- --ignored`
+# picks them up.
+integration = []
+
+[dependencies]
+email-proto = { workspace = true }
+email-config = { workspace = true }
+email-secret = { workspace = true }
+email-imap = { workspace = true, features = ["test-plaintext"] }
+email-smtp = { workspace = true, features = ["test-plaintext"] }
+email-maildir = { workspace = true }
+email-store = { workspace = true }
+email-sync = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing = { workspace = true }
+testcontainers = "0.27"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "mount-proto"
+description = "Wire contract for the mount feature — per-machine project content mounts. Defines the `Mount` architect::Entity (UUID PK on `project_id`), the `BackendKind` enum (Filesystem / Nextcloud / VoxProxy), and the sync `ContentBackend` trait that backend impls in sibling crates satisfy. `mounts.toml` registry resolution lives in the `mount` facade. See `plans/federated-task-platform.md` Phase 2."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = []
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["server", "fake"]
+
+[lints]
+workspace = true

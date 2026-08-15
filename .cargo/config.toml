@@ -1,0 +1,28 @@
+# Repo-root cargo config. This was `apps/task/.cargo/config.toml` in the
+# monorepo, where `apps/task/` was the product root; here the product root
+# IS the repo root, so it has to live at the top or cargo never reads it.
+#
+# `cargo xtask <command>` runs the Task xtask binary (crates/xtask/).
+#
+# KNOWN STALE: `cargo xtask build` (Obsidian plugin) targets
+# `integrations/obsidian/plugin`, which was deleted; and `cargo xtask
+# codegen` writes to `<xtask-manifest-dir>/../ui-lab/src/generated`, which
+# resolves to `crates/ui-lab` rather than the real `apps/ui-lab`. Both need
+# a fix in crates/xtask/src/main.rs.
+
+[alias]
+xtask = "run --package xtask --release --"
+
+# Matters more than it used to: this repo has three git-dep remotes
+# (architect, vendor, FastTrackStudio), so fetches must use the git CLI
+# for SSH/credentials to work the way they do outside cargo.
+[net]
+git-fetch-with-cli = true
+
+# getrandom 0.3 (transitive via fake -> rand) needs its backend selected
+# explicitly on wasm. Paired with the `wasm_js` feature in apps/web.
+# `dx` sets the same cfg on its own builds; declaring it here makes plain
+# `cargo check --target wasm32-unknown-unknown` agree.
+# See docs.rs/getrandom/#webassembly-support.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

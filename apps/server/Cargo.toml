@@ -1,0 +1,279 @@
+[package]
+name = "task-server"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# task-server — the canonical vox endpoint.
+#
+# Vertical-slice scope: `/health` + `/vox`. The vox handler accepts
+# per-entity Repo dispatchers emitted by architect on the project
+# feature trio (Project / Task / Cycle / Milestone). Each dispatcher
+# wraps a `*RepoLoro` constructed against the shared workspace
+# `CrdtDoc` opened over `crdt-seaorm`.
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+# `ReaderStream` — the rendition route streams a duplex pipe as its
+# response body instead of buffering the window in RAM.
+tokio-util = { workspace = true, features = ["io"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+# Forwarding client for the OTLP proxy (src/otlp.rs).
+reqwest = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+architect-telemetry = { workspace = true, features = ["otel"] }
+eyre.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+base64 = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+# `link_sync`: parse note `[[wikilinks]]` to keep note→verse links live.
+regex = { workspace = true }
+
+# architect-auth uses sea-orm for its sqlite auth tables; the server
+# inherits that through the full feature.
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+
+attachments-proto = { workspace = true }
+# Media streamed over vox — read-side view over the attachment blobs.
+media-proto = { workspace = true }
+vault-proto = { workspace = true, features = ["vox"] }
+vault = { workspace = true }
+wiki-proto = { workspace = true, optional = true }
+wiki-live = { workspace = true, optional = true }
+agent-proto = { workspace = true, features = ["server", "vox"], optional = true }
+agent-tasks = { workspace = true, optional = true }
+agent-runners = { workspace = true, optional = true }
+agent-dispatch = { workspace = true, optional = true }
+# Codex backend — in-process agent session/turn host. Mounted for
+# the `Sessions` + `TurnDispatch` vox services (the /agents surface).
+agent-codex = { workspace = true, optional = true }
+agent-hermes = { workspace = true, optional = true }
+task = { workspace = true, features = ["vox"] }
+# Forge webhook receiver — IssueLink lookup maps an inbound
+# forge issue/PR event back to the local TaskInfo to mutate.
+git-config = { workspace = true, optional = true }
+# Forge services mounted on `/org/<slug>/vox`: RepoCatalog +
+# IssueTracker + ReviewSurface, served by the Forgejo backend
+# (the org's primary forge). `git-proto` carries the wire
+# contract; `git-forgejo` the REST-backed impl.
+git-proto = { workspace = true, optional = true }
+git-forgejo = { workspace = true, optional = true }
+project = { workspace = true, features = ["vox"] }
+goal = { workspace = true, features = ["vox"] }
+milestone = { workspace = true, features = ["vox"] }
+workstream = { workspace = true, features = ["vox"] }
+# Files RPC surface v1 (issue #259/ADR 0001): create-root / browse /
+# chain / checkpoint-now over `task-files-version-store`.
+files = { workspace = true }
+files-webdav = { workspace = true }
+files-storage = { workspace = true }
+# The real ffmpeg/ffprobe rendition driver (issue #269) — wired at org
+# boot when the toolchain is on PATH.
+files-transcode = { workspace = true, features = ["ffmpeg"] }
+# Wire types the share serving routes name directly (issue #271):
+# BrowseEntry listings and RenditionKind tags.
+files-proto = { workspace = true, features = ["vox"] }
+# `TryStreamExt::map_err` — the share upload streams its body to disk.
+futures-util = { workspace = true }
+pollster = { workspace = true }
+# Entity-CRUD services additionally mounted on `/org/<slug>/vox`.
+# All four expose architect-generated clients agents + the CLI
+# consume directly.
+locations = { workspace = true, features = ["vox"], optional = true }
+inventory = { workspace = true, features = ["vox"], optional = true }
+scripture = { workspace = true, features = ["vox"], optional = true }
+links = { workspace = true, features = ["vox"] }
+# Ordered-collection primitive (song Library / Setlist / Show /
+# Playlist) — one `CollectionService` mounted per org, JSONL-backed.
+collection = { workspace = true, features = ["vox"], optional = true }
+resources = { workspace = true, features = ["vox"] }
+resources-proto = { workspace = true, features = ["vox"] }
+cookbook = { workspace = true, features = ["vox"], optional = true }
+mealplan = { workspace = true, features = ["vox"], optional = true }
+pantry = { workspace = true, features = ["vox"], optional = true }
+# Fitness suite — body metrics, exercise library, workout
+# routines+sessions, food intake. All four mount per-org.
+body = { workspace = true, features = ["vox"], optional = true }
+exercises = { workspace = true, features = ["vox"], optional = true }
+workouts = { workspace = true, features = ["vox"], optional = true }
+intake = { workspace = true, features = ["vox"], optional = true }
+# Org-root layout: this server picks one org's dir at boot
+# and routes all its sqlites + vault through OrgRoot. PR 4
+# will scan + serve every org under <data_root>/orgs/.
+org-proto = { workspace = true }
+# Plugin vocabulary: mount ownership (`permits::Mount::plugin`) + the
+# per-org enabled-set resolution from `OrgManifest.disabled_plugins`.
+task-plugin = { workspace = true }
+# Server-native git snapshots over the data root — the engine
+# behind the `SnapshotService` verbs + `POST /server/snapshot`.
+org-snapshot = { workspace = true }
+# `GatedRouter`'s `vox::Handler` impl names `facet::Shape` in a
+# method signature.
+facet = { workspace = true }
+timer-proto = { workspace = true, features = ["server", "vox"] }
+timer = { workspace = true }
+threads = { workspace = true, features = ["server", "vox"] }
+prefs-proto = { workspace = true, features = ["server", "vox"] }
+prefs = { workspace = true }
+# Identity locker: the home org's per-user encrypted linked-server
+# tokens, exposed as the server-level `IdentityService` RPC.
+identity-proto = { workspace = true, features = ["vox"] }
+identity = { workspace = true }
+# Scheduling: day-template service mounted over vox so the app can
+# overlay the daily plan on the calendar. Read-mostly; bookings/slots
+# use in-memory stores until they're surfaced.
+scheduling-proto = { workspace = true, features = ["vox"], optional = true }
+scheduling = { workspace = true, optional = true }
+inbox-proto = { workspace = true, features = ["vox"] }
+inbox = { workspace = true }
+# Notifications: the per-org store mounted as `Notify` + its stream,
+# fed in-process by the notifier (`src/notifier.rs`). Core plugin —
+# never optional.
+notify-proto = { workspace = true, features = ["vox"] }
+notify = { workspace = true }
+recall-proto = { workspace = true, features = ["vox"], optional = true }
+recall = { workspace = true, optional = true }
+contacts-proto = { workspace = true, features = ["vox"], optional = true }
+contacts = { workspace = true, optional = true }
+tag-proto = { workspace = true, features = ["vox"] }
+tag = { workspace = true }
+# Finance: SQLite + migrations only at this slice; service
+# traits (Invoicing / Ledger) get mounted in a follow-up
+# once their SeaORM-backed impls land.
+finance-proto = { workspace = true, features = ["server", "vox"], optional = true }
+finance-db = { workspace = true, optional = true }
+finance = { workspace = true, optional = true }
+# Email: the canonical `EmailSync` wire trait + a Maildir-backed
+# backend impl. Mounted per-org so the app can list synced
+# accounts + envelopes. The Maildir root lives under the org's
+# vault (`Mail/`); an unconfigured org just serves an empty
+# account set.
+email-proto = { workspace = true, features = ["vox"], optional = true }
+email-maildir = { workspace = true, optional = true }
+# Remote IMAP accounts (Gmail, Fastmail, …) and the account-dispatching
+# backend that lets one org mix them with a local Maildir.
+email-imap = { workspace = true, optional = true }
+email-mux = { workspace = true, optional = true }
+# Message↔entity links (email on a project / task).
+email-link = { workspace = true, optional = true }
+# `FolderAliases` for the per-account Maildir registration.
+email-config = { workspace = true, optional = true }
+# SMTP submitter wired into discovered maildir accounts whose
+# `account.json` carries a `submit` endpoint — makes
+# `EmailSync::send` real for those accounts.
+email-smtp = { workspace = true, optional = true }
+# The email product layer: staged-send outbox (`EmailProduct`)
+# with human-in-the-loop approval + the delivery poller.
+email-product = { workspace = true, optional = true }
+vox = { workspace = true }
+# Org-wide presence: `crdt::sync::PresenceHost` + the `DocPresence`
+# vox service mounted per org (`vox` feature = the sync/presence
+# transport; no Dioxus, no persistence backends).
+crdt = { workspace = true, features = ["vox"] }
+# Vault-file ⇄ CRDT reconciliation: per-file docs over the crdt
+# DocRegistry + server write-behind into the vault backend.
+# Mounted per org as the `DocSync` service (and the per-file half
+# of `DocPresence` — see `presence::PresenceRouter`).
+vault-collab = { workspace = true }
+chrono.workspace = true
+architect = { workspace = true, features = ["server", "local"] }
+architect-auth = { workspace = true, features = ["full"] }
+architect-permissions.workspace = true
+architect-permissions-proto.workspace = true
+share-proto.workspace = true
+
+[features]
+# One feature per non-core plugin (`task_plugin::CATALOG` ids with the
+# `plugin-` prefix). Default = everything, so a plain build is
+# byte-identical in behaviour to the pre-feature tree; a deploy that
+# wants a smaller binary opts out (`--no-default-features --features
+# plugin-wiki,…`). Gating removes the crates, the `OrgAppState`
+# fields/backends, the router mounts, and the permit-table entries —
+# `permits_cover_router` proves the three views stay in lockstep under
+# any feature set. See apps/task/plans/plugin-system.md.
+default = [
+    "plugin-mealplan",
+    "plugin-fitness",
+    "plugin-fasttrackstudio",
+    "plugin-wiki",
+    "plugin-scripture",
+    "plugin-email",
+    "plugin-forge",
+    "plugin-agent",
+    "plugin-scheduling",
+    "plugin-finance",
+    "plugin-contacts",
+    "plugin-recall",
+    "plugin-home",
+]
+plugin-mealplan = ["dep:cookbook", "dep:mealplan", "dep:pantry"]
+plugin-fitness = ["dep:body", "dep:exercises", "dep:workouts", "dep:intake"]
+plugin-fasttrackstudio = ["dep:collection"]
+plugin-wiki = ["dep:wiki-proto", "dep:wiki-live"]
+plugin-scripture = ["dep:scripture"]
+plugin-email = [
+    "dep:email-proto",
+    "dep:email-maildir",
+    "dep:email-imap",
+    "dep:email-mux",
+    "dep:email-link",
+    "dep:email-config",
+    "dep:email-smtp",
+    "dep:email-product",
+]
+plugin-forge = ["dep:git-proto", "dep:git-forgejo", "dep:git-config"]
+plugin-agent = [
+    "dep:agent-proto",
+    "dep:agent-tasks",
+    "dep:agent-runners",
+    "dep:agent-dispatch",
+    "dep:agent-codex",
+    "dep:agent-hermes",
+]
+plugin-scheduling = ["dep:scheduling-proto", "dep:scheduling"]
+plugin-finance = ["dep:finance-proto", "dep:finance-db", "dep:finance"]
+plugin-contacts = ["dep:contacts-proto", "dep:contacts"]
+plugin-recall = ["dep:recall-proto", "dep:recall"]
+plugin-home = ["dep:locations", "dep:inventory"]
+
+[dev-dependencies]
+vox = { workspace = true, features = ["transport-websocket"] }
+futures = { workspace = true }
+attachments-proto = { workspace = true }
+architect = { workspace = true, features = ["local"] }
+chrono = { workspace = true }
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+walkdir = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+vault-proto = { workspace = true, features = ["vox"] }
+project = { workspace = true, features = ["vox"] }
+collection-proto = { workspace = true, features = ["vox"] }
+media-proto = { workspace = true, features = ["vox"] }
+# The rendition-route e2e drives the deterministic `FakeTranscoder`
+# (no ffmpeg) and names wire `RenditionKind`s directly.
+files-proto = { workspace = true, features = ["vox"] }
+files-transcode = { workspace = true, features = ["ffmpeg", "test-transcoder"] }
+vox-core = { workspace = true }
+# `connection_identity` dials with a hand-built handshake (subprotocol /
+# Authorization header) — `vox::connect_lane` only takes a URL.
+vox-websocket = { workspace = true }
+tokio-tungstenite = { version = "0.29", default-features = false, features = [
+    "connect",
+    "handshake",
+] }
+
+[lints]
+workspace = true

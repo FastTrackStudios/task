@@ -1,0 +1,49 @@
+[package]
+name = "goal"
+description = "Goal feature — long-term aspirations + their decomposition. `Goal` is an `architect::Entity` (UUID PK); markdown frontmatter stays the source of truth, SeaORM Model emitted under `--features server`. Distinct from `ProjectInfo`: a goal carries a `target_date` and `kind` (lifetime / yearly / quarterly / cycle / weekly) and uses `parent_id` to decompose larger ambitions into smaller milestones."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+goal-proto = { workspace = true }
+# Wasm-clean wire shape for `VaultPage`.
+vault-proto = { workspace = true, default-features = false }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "goal-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "goal-proto/server"]
+fake = ["dep:fake", "architect/fake", "goal-proto/fake"]
+full = ["vox", "server", "fake"]
+
+# Native-only crate: wasm UI consumers take `goal-proto` directly,
+# so the vault stack is an unconditional dependency here.
+[dependencies.vault]
+workspace = true
+
+[dependencies.vault-entity]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

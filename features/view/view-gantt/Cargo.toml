@@ -1,0 +1,26 @@
+[package]
+name = "view-gantt"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Dioxus port of svar-widgets/gantt — a self-contained dumb UI crate.
+#
+# No proto/crdt/db. Consumer feeds tasks/links via props and receives
+# events back via `EventHandler<GanttEvent>`. Wire to TaskRepoLoro at
+# the route layer (see /views/gantt in task-ui).
+
+[dependencies]
+dioxus = { workspace = true }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
+uuid = { workspace = true, features = ["v4", "js", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

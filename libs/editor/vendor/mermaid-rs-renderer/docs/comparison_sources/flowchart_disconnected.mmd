@@ -1,0 +1,10 @@
+flowchart LR
+  A[Client] --> B[Gateway]
+  C[Worker] --> D[(Store)]
+  E[Cache] --> F[Notifier]
+
+  subgraph Batch
+    G[Collect] --> H{Ready?}
+    H -->|yes| I[Dispatch]
+    H -->|no| J[Retry]
+  end

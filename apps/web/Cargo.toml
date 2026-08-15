@@ -1,0 +1,32 @@
+[package]
+name = "task-app-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace dioxus dep with no platform features; this crate's
+# `default = ["web"]` toggles `dioxus/web` + `dioxus/launch` on so
+# `dx serve` builds it correctly. Lifted from dioxus-flake's
+# packages/web pattern.
+dioxus = { workspace = true, features = ["router"] }
+ui.workspace = true
+
+# getrandom 0.3 (pulled transitively via fake → rand → rand_core)
+# needs its `wasm_js` backend feature enabled on wasm32, paired with
+# the `--cfg getrandom_backend="wasm_js"` flag set in
+# `.cargo/config.toml`. Both are required (the feature alone or the
+# cfg alone errors). See docs.rs/getrandom/#webassembly-support.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[features]
+default = ["web"]
+web = ["dioxus/web", "dioxus/launch"]
+# Bundle-split the wasm binary along route variants. Requires
+# running `dx serve --wasm-split`.
+wasm-split = ["ui/wasm-split"]
+
+[lints]
+workspace = true

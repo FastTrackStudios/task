@@ -1,0 +1,42 @@
+[package]
+name = "task-ui"
+description = "Dioxus UI for the `task` feature — list / kanban / quick-add / detail. Dumb components (no fs / no RPC); consumers feed `task_proto::TaskInfo` rows in via props and handle `TaskMutation` callbacks. Binds to the wire contract directly — there is no UI-side mirror of the persistence shape."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["router"] }
+architect-ui = { workspace = true }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+# Best-effort preview of `Activity::payload` (opaque JSON) in
+# the session-history feed.
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "js", "serde"] }
+# THE model every component in this crate renders — the wire
+# contract itself, not a mirror of it. Wasm-clean and RPC-free
+# (the workspace entry pins `default-features = false`, so no
+# vox): components stay dumb, the page layer hands its
+# authoritative rows straight in.
+task-proto = { workspace = true }
+# Status -> StateGroup resolution (`project_proto::states`) —
+# progress classification ("is this done?") routes through
+# canonical state groups so custom status names classify
+# correctly. `Status` stays the display enum for pills / columns;
+# groups only decide progress.
+project-proto = { workspace = true }
+# Transition / Activity / AgentRef for the session-history feed
+# + assignee chips.
+workflows-proto = { workspace = true }
+# Markdown → rsx for the task `details` body. Already a
+# workspace dep (wasm-clean, no simd); we render the event
+# stream natively rather than via `dangerously_set_inner_html`
+# so raw HTML in task bodies stays inert.
+pulldown-cmark = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,43 @@
+[package]
+name = "editor-state"
+description = "Document, transactions, selections, and decorations for the Editor."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+editor-syntax = { workspace = true, features = ["default-langs"] }
+editor-typst = { workspace = true }
+editor-mermaid = { workspace = true }
+ropey = { workspace = true }
+serde = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Block-id generator. `v7` gives time-prefixed IDs (Logseq's
+# `squuid` model — refs naturally sort by creation order,
+# stays friendly to any future b-tree index for version
+# tracking). `js` routes through `crypto.getRandomValues` on
+# `wasm32-unknown-unknown` for the random tail.
+uuid = { version = "1", features = ["v7", "js"] }
+
+# Keyflow chart → SVG for ```` ```kf ```` fences. All targets:
+# editor-keyflow wraps engraver's CPU-only `svg` tier (kurbo/peniko/
+# skrifa — default-features off drops the wgpu/vello GPU stack and the
+# PDF deps), which compiles cleanly to wasm32-unknown-unknown. (The
+# old native-only gate predated engraver's `svg` feature split.)
+editor-keyflow = { workspace = true }
+
+# wasm-only: `performance.now()` for the live-preview perf
+# trace (native uses `Instant`, which traps on wasm32-unknown-
+# unknown).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Performance"] }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[lints]
+workspace = true

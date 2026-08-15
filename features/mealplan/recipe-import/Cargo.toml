@@ -1,0 +1,47 @@
+[package]
+name = "recipe-import"
+description = "`task recipe import <url>` — webpage → cooklang. Fetch (browser UA, bot-protection detection), extract schema.org/Recipe structured data into a NormalizedRecipe via cooklang-import's JSON-LD → microdata → HTML-class extractor chain, then synthesize a `.cook` file: LLM-primary (Anthropic Messages API, parser-validated, one retry with diagnostics) with a deterministic heuristic fallback (`ingredient`-crate qty/unit parse + first-occurrence annotation; never drops ingredients, always parser-valid, frontmatter `import: needs-review`). The CLI saves through the existing CookbookService create/update path — this crate never touches the vault."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+
+# The in-tree cooklang parser (same config as `cookbook::parse`) —
+# every synthesized `.cook` is validated before it leaves this crate.
+cooklang = { workspace = true }
+
+# Dep-audit (issue 44fe504f): ACCEPTED. MIT, official cooklang org,
+# actively maintained. We use only the structured extractors
+# (JSON-LD → microdata → HTML classes) on HTML we fetch ourselves —
+# its own fetcher/LLM converters stay unused (no config file, no
+# env-key reads on our path). Tree cost: whatlang + config +
+# env_logger + html-escape + a second scraper (0.20 vs wiki-archive's
+# 0.27, so two html5ever trees in the lock). Acceptable for a
+# CLI-only, native-only crate; rejected hand-rolling ~200 lines of
+# @graph / HowToSection / ISO-8601 handling the dep already covers
+# with tests (case-insensitive types, SeriousEats duration objects,
+# German recipes, microdata).
+cooklang-import = "0.9.9"
+# Must match cooklang-import's scraper minor — `ParsingContext.document`
+# is a scraper `Html`, so a version skew would be a type error.
+scraper = "0.20"
+
+# Offline heuristic: qty/unit/name parse of free-text ingredient lines
+# ("1 1/2 cups flour, sifted"). nom-based, infallible API.
+ingredient = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+node_modules/
+test-results/
+playwright-report/
+playwright/.cache/
+screenshots/
+
+# This suite uses pnpm — pnpm-lock.yaml is the committed lockfile.
+# npm/yarn lockfiles are accidents; keep them out of the tree.
+package-lock.json
+yarn.lock
+
+# Ad-hoc probe scripts. Agents keep dropping one-off `.cjs` drivers in
+# here to poke the running app (nav.cjs, probe-login.cjs, song-flow.cjs,
+# …). They are scratch, not tests — the real suites are `*.spec.js`.
+# Ignore every .cjs, then re-allow the committed ones.
+*.cjs
+!console-check.cjs

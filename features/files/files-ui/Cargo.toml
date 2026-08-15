@@ -1,0 +1,35 @@
+[package]
+name = "files-ui"
+description = "The Files explorer surface (issue #266): a standalone pane over the Files RPC surface — roots, root browsing, and Drive — plus the note-embedded explorer widget scoped to a root or a slice. Renders stub / divergence / Project Version badges from live RPC data and folds `FilesEvent`s in as they happen."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+architect-ui.workspace = true
+# The shared UI seam: org scoping (`orgs::active_slug`), the per-org
+# vox connection (`vox_clients::establish_for`), and frontmatter reads
+# for the note-embedded widget's `root:` / `slice:` keys.
+task-ui-core.workspace = true
+# The note-widget contract — this crate is a widget provider; the shell
+# only names it at the app-root registration site.
+task-widgets.workspace = true
+# Wire types + RPC client only — wasm-clean by construction.
+files-proto = { workspace = true, features = ["vox"] }
+# Minting share links for slices and Named Versions (issue #271).
+share-proto = { workspace = true, features = ["vox"] }
+# Copy-minted-link-to-clipboard on the web build.
+wasm-bindgen.workspace = true
+web-sys = { workspace = true, features = ["Window", "Navigator", "Clipboard"] }
+# `use_stream` — holds the `FilesService` event stream open and
+# re-establishes it across reconnects.
+architect = { workspace = true, features = ["client", "vox", "platform"] }
+uuid = { workspace = true, features = ["v4", "js"] }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+
+[lints]
+workspace = true

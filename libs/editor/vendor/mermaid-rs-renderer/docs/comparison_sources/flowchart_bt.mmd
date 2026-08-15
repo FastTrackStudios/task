@@ -1,0 +1,7 @@
+flowchart BT
+  Done([Done]) --> Ship[Ship Artifact]
+  Ship --> Test{Tests Pass?}
+  Test -->|yes| Build[Build]
+  Test -->|no| Fix[Fix Issue]
+  Build --> Source[(Source)]
+  Fix --> Source

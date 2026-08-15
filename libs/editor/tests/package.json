@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "name": "editor-playwright",
+  "description": "Browser tests for the Editor playground. @playwright/test version must match nixpkgs#playwright-driver.version (run `nix eval --raw nixpkgs#playwright-driver.version` to check).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1"
+  }
+}

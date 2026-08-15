@@ -1,0 +1,11 @@
+## Archived timestamped media source
+
+This source is an archived {content_type} transcript produced by `task wiki archive`. Its `## Transcript` section is split into paragraph blocks and every block ends with a `^t<seconds>` anchor (for example `^t870` = 14:30 into the media). Those anchors are stable deep-link targets: `[[{source_basename}#^t870]]` opens the source at that block, and the SourceViewer seeks the player to that second.
+
+Extra rules for THIS source (on top of everything above):
+
+1. The source summary page (wiki/sources/{source_basename}.md) MUST be **chaptered**: an `## Overview` paragraph, then one `### <chapter title>` section per major segment. Derive chapters from the source's `## Chapters` list when present; otherwise segment the transcript yourself by topic shift.
+2. Every chapter section and every substantive claim taken from the media MUST cite its timestamp as a `[mm:ss]` link to the transcript anchor, like: `([12:45](<{source_filename}#^t765>))` or the wikilink form `[[{source_basename}#^t765|12:45]]`. Convert seconds to mm:ss yourself (765 → 12:45). Use the NEAREST transcript block anchor at or before the moment you are citing — anchors only exist where the transcript has them; never invent `^t` values that do not appear in the source.
+3. End the source summary page with a `## Notes` section. If the page already exists and has a `## Notes` section, preserve its bullets verbatim — curators write notes there as `- [mm:ss] <text> ^t<sec>-note<N>` blocks and they must survive regeneration. If there are no notes yet, emit the heading followed by `_No notes yet._`.
+4. Entity/concept pages generated from this source cite it the same way — `[[{source_basename}#^t<sec>|mm:ss]]` — wherever a specific moment backs the statement. Whole-source citations stay in the `sources:` frontmatter as usual.
+5. Do NOT copy the transcript wholesale into any generated page; quote at most a sentence or two per citation. The raw transcript stays in raw/sources/ — the wiki pages distill it.

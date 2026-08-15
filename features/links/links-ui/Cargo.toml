@@ -1,0 +1,22 @@
+[package]
+name = "links-ui"
+description = "Dioxus page for the typed-link graph (`/connections`) — the verse↔song↔sermon↔topic web, grouped by relation. Owns its own `LinksService` calls; the shell only routes to it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+architect-ui.workspace = true
+# The shared UI seam: org scoping, the `feeds!` call macro over the
+# per-org vox connection, and the loading / error / empty phases.
+task-ui-core.workspace = true
+links-proto = { workspace = true, features = ["vox"] }
+# The force-directed graph builder + the dumb KnowledgeGraphView.
+view-knowledge-graph.workspace = true
+
+[lints]
+workspace = true

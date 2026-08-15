@@ -1,0 +1,39 @@
+[package]
+name = "email-link"
+description = "Cross-entity link layer for the email feature. Connects a message in the email store to one or more entities elsewhere in Task (tasks, projects, notes, people, etc) so a Project page can render every email about it, and an email's reader pane can show every Task/Project it's linked to. Many-to-many; frontmatter on the entity's markdown file is canonical (Obsidian-compat), the SQLite index is a disposable reverse-lookup cache."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# `EmailLinks` runs on architect's tokio BLOCKING dispatcher — the
+# service methods are sync and touch sqlite.
+architect = { workspace = true, features = ["dispatch-tokio"] }
+email-proto = { workspace = true }
+email-store = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled", "modern_sqlite"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# Wikilink parser. Same regex shape `knowledge-proto` uses for
+# `[[entity://...]]` cross-references — we extend it for emails.
+regex = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
+# YAML frontmatter on Task / Project / Note markdown files.
+# Same crate the rest of the workspace uses for Obsidian
+# round-trip; we deserialize the `emails:` list directly.
+serde_yaml = { workspace = true }
+# Recursive vault walk. `walkdir` already lives at the workspace
+# level for the same reason — used by `vault` + `knowledge-proto`.
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

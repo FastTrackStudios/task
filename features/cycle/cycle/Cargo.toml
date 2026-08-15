@@ -1,0 +1,33 @@
+[package]
+name = "cycle"
+description = "Cyclic life-calendar — `Cycle` + `Quarter` entities + a pure-function date generator that turns a start year + first-day-of-week into 4 quarters × (3 cycles × 4 weeks + 1 reset week). Goals, tasks, and reflections anchor to a `Cycle.id` so the cyclic structure is first-class in queries. See `plans/cyclic-life-calendar.md`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v5", "serde"] }
+architect = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

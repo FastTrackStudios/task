@@ -1,0 +1,49 @@
+[package]
+name = "finance-proto"
+description = "Wire contract for the finance feature: ledger (books, accounts, transactions, splits), parties (clients + vendors), invoicing (invoices, line items, payments, recurring), and expenses. Every persisted type is `#[derive(architect::Entity)]` so the SeaORM `Model` + `Entity` + `<Name>RepoStorage<C>` get auto-emitted under the `server` feature; standard CRUD lives on the emitted `<Name>Repo` traits. Capability traits in `service::*` (`#[architect::rpc]`) carry only non-CRUD workflow operations (post_transaction, mark_sent, record_payment, run_schedule_once, …)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet + architect wire types). Real
+# `Uuid` + `DateTime<Utc>` on every entity — architect handles
+# the SeaORM column mapping under the `server` feature.
+[dependencies]
+architect = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true, features = ["clock", "std", "serde"] }
+uuid = { workspace = true, features = ["v4", "serde", "js"] }
+timer-proto = { workspace = true, default-features = false }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+# Server-only: referenced by paths emitted from the architect
+# derive when the `server` feature is on. Optional + gated so
+# wasm clients never pull SeaORM.
+sea-orm = { workspace = true, optional = true }
+# `architect::JsonField` emits code that round-trips through
+# `serde_json::to_value` / `from_value`. Gated on the same
+# `server` feature.
+serde_json = { workspace = true, optional = true }
+
+# Test-data generation. Adds `Dummy` derives to the wire +
+# emitted structs when the `fake` feature is on.
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Pull in architect's server-side emissions (SeaORM Model,
+# RepoStorage, From impls).
+server = ["architect/server-seaorm", "dep:sea-orm", "dep:serde_json"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

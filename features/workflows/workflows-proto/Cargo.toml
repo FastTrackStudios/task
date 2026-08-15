@@ -1,0 +1,30 @@
+[package]
+name = "workflows-proto"
+description = "Cross-domain workflow primitives: WorkSession, Transition, Activity, Handoff, AgentRef. Domain-specific workflows (coding, writing, music, …) depend on this crate for the shared state machine + audit-log shape. Mirrors the proto-crate pattern of email-proto / vault-proto / wiki-proto."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline. Server + UI crates enable the `server`
+# feature for SeaORM Model emission.
+[dependencies]
+architect = { workspace = true }
+sea-orm = { workspace = true, optional = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = []
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+
+[lints]
+workspace = true

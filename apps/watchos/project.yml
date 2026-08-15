@@ -1,0 +1,39 @@
+# XcodeGen manifest for the Task watch app. `xcodegen generate` → TaskWatch.xcodeproj.
+# Built + embedded into the Task iOS TestFlight build by deploy-testflight.sh's
+# WATCH_APP path (WATCH_APP=apps/task/watchos WATCH_BUNDLE_ID=app.fasttrackstudio.task.watch).
+name: TaskWatch
+options:
+  bundleIdPrefix: app.fasttrackstudio.task
+  deploymentTarget:
+    watchOS: "11.0"
+  createIntermediateGroups: true
+
+targets:
+  TaskWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - TaskWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.fasttrackstudio.task.watch
+        PRODUCT_NAME: Task
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        SWIFT_VERSION: "6.0"
+        # App-icon catalog (TaskWatch/Assets.xcassets). Required — altool
+        # rejects a watch app with no icon. watchOS icons must have no alpha.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_TEAM: 28C2G63DA7
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: TaskWatch/Info.plist
+      properties:
+        CFBundleDisplayName: Task
+        WKApplication: true
+        # Embedded companion — rides the Task iPhone app's TestFlight build so
+        # it installs on the paired watch and auto-updates.
+        WKCompanionAppBundleIdentifier: app.fasttrackstudio.task
+        # Talks HTTP(S) to the Task server's /watch/v1 bridge.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true

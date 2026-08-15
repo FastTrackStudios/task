@@ -1,0 +1,31 @@
+[package]
+name = "prefs-proto"
+description = "Wire contract for the `prefs/` feature — per-user app preferences. One `UserPrefs` row per user per org (default page, task-board filter defaults, last \"I'm at\" location), `#[derive(architect::Entity)]`-emitted, plus a slim `PrefsService` (get with defaults / set upsert)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+
+[lints]
+workspace = true

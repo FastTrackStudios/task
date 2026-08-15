@@ -1,0 +1,21 @@
+{{- if not .Values.server.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "task.fullname" . }}-data
+  labels:
+    {{- include "task.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  annotations:
+    # Survive `helm uninstall` — this volume IS the instance.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.server.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.server.persistence.size }}
+  {{- with .Values.server.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}

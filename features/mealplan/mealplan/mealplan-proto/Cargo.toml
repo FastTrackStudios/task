@@ -1,0 +1,34 @@
+[package]
+name = "mealplan-proto"
+description = "Wire contract for the mealplan facade: the `Meal` calendar model (+ `PantryDeduction` / `Slot` / `Status`), the recipe-fulfillment wire types (`Fulfillment` / `Shortage` / `SubstitutionSuggestion`), and the `MealplanService` `#[architect::rpc]` trait. Wasm-clean (the web UI binds the client directly); the sibling `mealplan` crate owns the vault-backed store + cook/fulfillment domain logic and re-exports this proto. References `pantry-proto::SubReason` for the substitution-suggestion reasons. Mirrors the `cookbook-proto` / `pantry-proto` split."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+facet = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+pantry-proto = { workspace = true, default-features = false }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "pantry-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "pantry-proto/server"]
+fake = ["dep:fake", "architect/fake", "pantry-proto/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

@@ -1,0 +1,645 @@
+# task — ONE root workspace.
+#
+# Extracted from the FastTrackStudio monorepo into its own repo. Every
+# crate in the tree (apps/, crates/, features/, libs/) is a member here;
+# one lockfile, one target/, one [workspace.dependencies] table carrying
+# every intra-repo path dep exactly once.
+#
+# Three sibling repos supply what used to be path deps in the monorepo:
+#   architect  — the entity/RPC framework + architect-ui + telemetry
+#   vendor     — patched third-party (phon, phon-jit, styx-format)
+#   FastTrackStudio — the music-production domains (daw / session /
+#                     keyflow / engraver / input) Task consumes read-only
+
+[workspace]
+resolver = "2"
+members = [
+    # ── apps ──────────────────────────────────────────────────────────
+    "apps/cli",
+    "apps/desktop",
+    "apps/mobile",
+    "apps/server",
+    "apps/web",
+    # ── crates/ — small shared crates ─────────────────────────────────
+    "crates/files-chunk-store",
+    "crates/files-util",
+    "crates/files-version-store",
+    "crates/note-tabs",
+    "crates/player-ui",
+    "crates/plugin",
+    "crates/ui",
+    "crates/ui-core",
+    "crates/widgets",
+    "crates/xtask",
+    # ── features/ — the feature slices ────────────────────────────────
+    "features/agent/agent-codex",
+    "features/agent/agent-dispatch",
+    "features/agent/agent-hermes",
+    "features/agent/agent-inbox",
+    "features/agent/agent-proto",
+    "features/agent/agent-runners",
+    "features/agent/agent-tasks",
+    "features/agent/agent-wiki",
+    "features/agent/agent-worktree",
+    "features/attachments/attachments-proto",
+    "features/collection/collection",
+    "features/collection/collection-proto",
+    "features/contacts/contacts",
+    "features/contacts/contacts-proto",
+    "features/cycle/cycle",
+    "features/email/email-autoconfig",
+    "features/email/email-config",
+    "features/email/email-imap",
+    "features/email/email-integration-tests",
+    "features/email/email-jmap",
+    "features/email/email-link",
+    "features/email/email-maildir",
+    "features/email/email-mux",
+    "features/email/email-product",
+    "features/email/email-proto",
+    "features/email/email-secret",
+    "features/email/email-smtp",
+    "features/email/email-store",
+    "features/email/email-sync",
+    "features/email/email-ui",
+    # Email feature harness — standalone Dioxus binary exercising the
+    # email-* crates without the full task-ui shell.
+    "features/email/examples/email-client",
+    "features/files/files",
+    "features/files/files-daemon",
+    "features/files/files-proto",
+    "features/files/files-storage",
+    "features/files/files-storage-proto",
+    "features/files/files-sync",
+    "features/files/files-transcode",
+    "features/files/files-ui",
+    "features/files/files-webdav",
+    "features/finance/finance",
+    "features/finance/finance-db",
+    "features/finance/finance-proto",
+    "features/fitness/body",
+    "features/fitness/exercises",
+    "features/fitness/fitness",
+    "features/fitness/fitness-proto",
+    "features/fitness/intake",
+    "features/fitness/workouts",
+    "features/git/git-config",
+    "features/git/git-forgejo",
+    "features/git/git-github",
+    "features/git/git-proto",
+    "features/goal/goal",
+    "features/goal/goal-proto",
+    "features/goal/goal-ui",
+    "features/identity/identity",
+    "features/identity/identity-proto",
+    "features/inbox/inbox",
+    "features/inbox/inbox-proto",
+    "features/inventory/inventory",
+    "features/inventory/inventory-proto",
+    "features/label/label-proto",
+    "features/links/links",
+    "features/links/links-proto",
+    "features/links/links-ui",
+    "features/locations/locations",
+    "features/locations/locations-proto",
+    "features/mealplan/cookbook",
+    "features/mealplan/cookbook/cookbook-proto",
+    "features/mealplan/mealplan",
+    "features/mealplan/mealplan/mealplan-proto",
+    "features/mealplan/pantry",
+    "features/mealplan/pantry/pantry-proto",
+    "features/mealplan/recipe-import",
+    "features/media/media-proto",
+    "features/milestone/milestone",
+    "features/milestone/milestone-proto",
+    "features/mount/mount",
+    "features/mount/mount-proto",
+    "features/notify/notify",
+    "features/notify/notify-proto",
+    "features/org/org-proto",
+    "features/org/org-snapshot",
+    "features/prefs/prefs",
+    "features/prefs/prefs-proto",
+    "features/project/project",
+    "features/project/project-proto",
+    "features/recall/recall",
+    "features/recall/recall-proto",
+    "features/resources/resources",
+    "features/resources/resources-proto",
+    "features/scheduling/scheduling",
+    "features/scheduling/scheduling-proto",
+    "features/scheduling/scheduling-ui",
+    "features/scripture/scripture",
+    "features/scripture/scripture-proto",
+    "features/scripture/scripture-ui",
+    "features/share/share-proto",
+    "features/tag/tag",
+    "features/tag/tag-proto",
+    "features/task/task",
+    "features/task/task-proto",
+    "features/task/task-ui",
+    "features/threads/threads",
+    "features/threads/threads-db",
+    "features/threads/threads-proto",
+    "features/threads/threads-ui",
+    "features/timer/timer",
+    "features/timer/timer-proto",
+    "features/vault/vault",
+    "features/vault/vault-collab",
+    "features/vault/vault-entity",
+    "features/vault/vault-live",
+    "features/vault/vault-obsidian",
+    "features/vault/vault-proto",
+    "features/vault/vault-sync-client",
+    "features/view/view",
+    "features/view/view-calendar",
+    "features/view/view-gantt",
+    "features/view/view-heatmap",
+    "features/view/view-kanban",
+    "features/view/view-knowledge-graph",
+    "features/view/view-table",
+    "features/wiki/wiki-archive",
+    "features/wiki/wiki-extract",
+    "features/wiki/wiki-graph",
+    "features/wiki/wiki-live",
+    "features/wiki/wiki-proto",
+    "features/wiki/wiki-search",
+    "features/workflows/workflows-orchestrator",
+    "features/workflows/workflows-proto",
+    "features/workstream/workstream",
+    "features/workstream/workstream-proto",
+    # ── libs/editor — the text/markdown/keyflow editor stack ──────────
+    "libs/editor/crates/editor",
+    "libs/editor/crates/editor-crdt",
+    "libs/editor/crates/editor-keyflow",
+    "libs/editor/crates/editor-keyflow-lang",
+    "libs/editor/crates/editor-lsp",
+    "libs/editor/crates/editor-mermaid",
+    "libs/editor/crates/editor-state",
+    "libs/editor/crates/editor-syntax",
+    "libs/editor/crates/editor-typst",
+    "libs/editor/crates/editor-view",
+    "libs/editor/crates/editor-vim",
+    "libs/editor/examples/playground",
+    # Editor's vendored mermaid fork (see [patch.crates-io] below).
+    "libs/editor/vendor/mermaid-rs-renderer",
+    # ── libs/ ─────────────────────────────────────────────────────────
+    "libs/spaced-repetition",
+]
+exclude = [
+    # Quarantined pdf renderer (fulgur/stylo trips a rustc trait-solver
+    # recursion limit inside the big workspace graph); it keeps its own
+    # [workspace]. `task-pdf-render` is the stdin/stdout interop point.
+    "apps/libs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+authors = ["FastTrack Studio"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/FastTrackStudios/task"
+
+[workspace.dependencies]
+# ── Internal — every crate in this repo, path declared ONCE ───────────
+# `-proto` crates that ship a wasm-clean surface keep
+# `default-features = false` (the consumer opts into `vox`/`server`/
+# `native`). Note that cargo ignores a member's `default-features = false`
+# on a workspace dependency unless the workspace entry sets it too.
+# crates/
+task-files-chunk-store = { path = "crates/files-chunk-store" }
+task-files-util = { path = "crates/files-util" }
+task-files-version-store = { path = "crates/files-version-store" }
+task-note-tabs = { path = "crates/note-tabs" }
+task-player-ui = { path = "crates/player-ui" }
+task-plugin = { path = "crates/plugin" }
+task-ui-core = { path = "crates/ui-core" }
+task-widgets = { path = "crates/widgets" }
+ui = { path = "crates/ui" }
+# features/agent — LLM-agent integration
+agent-codex = { path = "features/agent/agent-codex" }
+agent-dispatch = { path = "features/agent/agent-dispatch" }
+agent-hermes = { path = "features/agent/agent-hermes" }
+agent-inbox = { path = "features/agent/agent-inbox" }
+agent-proto = { path = "features/agent/agent-proto" }
+agent-runners = { path = "features/agent/agent-runners" }
+agent-tasks = { path = "features/agent/agent-tasks" }
+agent-wiki = { path = "features/agent/agent-wiki" }
+agent-worktree = { path = "features/agent/agent-worktree" }
+# features/files — the Files platform (CAS chunk store, version store,
+# RPC surface, placement, sync, transcode, WebDAV bridge)
+files = { path = "features/files/files" }
+files-proto = { path = "features/files/files-proto", default-features = false }
+files-storage = { path = "features/files/files-storage" }
+files-storage-proto = { path = "features/files/files-storage-proto", default-features = false }
+files-sync = { path = "features/files/files-sync" }
+files-transcode = { path = "features/files/files-transcode" }
+files-ui = { path = "features/files/files-ui" }
+files-webdav = { path = "features/files/files-webdav" }
+# features/vault — file-backed vault layer + CRDT reconciliation
+vault = { path = "features/vault/vault" }
+vault-collab = { path = "features/vault/vault-collab" }
+vault-entity = { path = "features/vault/vault-entity" }
+vault-live = { path = "features/vault/vault-live" }
+vault-obsidian = { path = "features/vault/vault-obsidian" }
+vault-proto = { path = "features/vault/vault-proto", default-features = false }
+vault-sync-client = { path = "features/vault/vault-sync-client" }
+# features/wiki — LLM-wiki (proto / live backend / graph / search)
+wiki-archive = { path = "features/wiki/wiki-archive" }
+wiki-extract = { path = "features/wiki/wiki-extract" }
+wiki-graph = { path = "features/wiki/wiki-graph" }
+wiki-live = { path = "features/wiki/wiki-live" }
+wiki-proto = { path = "features/wiki/wiki-proto" }
+wiki-search = { path = "features/wiki/wiki-search" }
+# features/email — EmailSync proto + backends
+email-config = { path = "features/email/email-config" }
+email-imap = { path = "features/email/email-imap" }
+email-link = { path = "features/email/email-link" }
+email-maildir = { path = "features/email/email-maildir" }
+email-mux = { path = "features/email/email-mux" }
+email-product = { path = "features/email/email-product" }
+email-proto = { path = "features/email/email-proto" }
+email-secret = { path = "features/email/email-secret" }
+email-smtp = { path = "features/email/email-smtp" }
+email-store = { path = "features/email/email-store" }
+email-sync = { path = "features/email/email-sync" }
+email-ui = { path = "features/email/email-ui" }
+# features/ — work primitives + the vault-superset slices
+attachments-proto = { path = "features/attachments/attachments-proto" }
+body = { path = "features/fitness/body" }
+collection = { path = "features/collection/collection" }
+collection-proto = { path = "features/collection/collection-proto", default-features = false }
+contacts = { path = "features/contacts/contacts" }
+contacts-proto = { path = "features/contacts/contacts-proto", default-features = false }
+cookbook = { path = "features/mealplan/cookbook" }
+cookbook-proto = { path = "features/mealplan/cookbook/cookbook-proto", default-features = false }
+cycle = { path = "features/cycle/cycle", default-features = false }
+exercises = { path = "features/fitness/exercises" }
+finance = { path = "features/finance/finance" }
+finance-db = { path = "features/finance/finance-db" }
+finance-proto = { path = "features/finance/finance-proto", default-features = false }
+fitness-proto = { path = "features/fitness/fitness-proto", default-features = false }
+git-config = { path = "features/git/git-config" }
+git-forgejo = { path = "features/git/git-forgejo" }
+git-github = { path = "features/git/git-github" }
+git-proto = { path = "features/git/git-proto" }
+goal = { path = "features/goal/goal" }
+goal-proto = { path = "features/goal/goal-proto", default-features = false }
+goal-ui = { path = "features/goal/goal-ui" }
+identity = { path = "features/identity/identity" }
+identity-proto = { path = "features/identity/identity-proto" }
+inbox = { path = "features/inbox/inbox" }
+inbox-proto = { path = "features/inbox/inbox-proto", default-features = false }
+intake = { path = "features/fitness/intake" }
+inventory = { path = "features/inventory/inventory" }
+inventory-proto = { path = "features/inventory/inventory-proto", default-features = false }
+label-proto = { path = "features/label/label-proto" }
+links = { path = "features/links/links" }
+links-proto = { path = "features/links/links-proto", default-features = false }
+links-ui = { path = "features/links/links-ui" }
+locations = { path = "features/locations/locations" }
+locations-proto = { path = "features/locations/locations-proto", default-features = false }
+mealplan = { path = "features/mealplan/mealplan" }
+mealplan-proto = { path = "features/mealplan/mealplan/mealplan-proto", default-features = false }
+media-proto = { path = "features/media/media-proto" }
+milestone = { path = "features/milestone/milestone" }
+milestone-proto = { path = "features/milestone/milestone-proto", default-features = false }
+mount = { path = "features/mount/mount" }
+mount-proto = { path = "features/mount/mount-proto" }
+# features/notify — notifications (server-side notifier + the bell).
+# NOTE: this name shadows crates.io `notify`, which is renamed `notify-fs`
+# in the external block below.
+notify = { path = "features/notify/notify" }
+notify-proto = { path = "features/notify/notify-proto", default-features = false }
+org-proto = { path = "features/org/org-proto" }
+org-snapshot = { path = "features/org/org-snapshot" }
+pantry = { path = "features/mealplan/pantry" }
+pantry-proto = { path = "features/mealplan/pantry/pantry-proto", default-features = false }
+prefs = { path = "features/prefs/prefs" }
+prefs-proto = { path = "features/prefs/prefs-proto" }
+project = { path = "features/project/project", default-features = false }
+project-proto = { path = "features/project/project-proto", default-features = false }
+recall = { path = "features/recall/recall" }
+recall-proto = { path = "features/recall/recall-proto", default-features = false }
+recipe-import = { path = "features/mealplan/recipe-import" }
+resources = { path = "features/resources/resources" }
+resources-proto = { path = "features/resources/resources-proto", default-features = false }
+scheduling = { path = "features/scheduling/scheduling" }
+scheduling-proto = { path = "features/scheduling/scheduling-proto", default-features = false }
+scheduling-ui = { path = "features/scheduling/scheduling-ui" }
+scripture = { path = "features/scripture/scripture" }
+scripture-proto = { path = "features/scripture/scripture-proto", default-features = false }
+scripture-ui = { path = "features/scripture/scripture-ui" }
+share-proto = { path = "features/share/share-proto" }
+tag = { path = "features/tag/tag" }
+tag-proto = { path = "features/tag/tag-proto" }
+task = { path = "features/task/task", default-features = false }
+task-proto = { path = "features/task/task-proto", default-features = false }
+task-ui = { path = "features/task/task-ui" }
+task-server = { path = "apps/server" }
+threads = { path = "features/threads/threads" }
+threads-db = { path = "features/threads/threads-db" }
+threads-proto = { path = "features/threads/threads-proto", default-features = false }
+threads-ui = { path = "features/threads/threads-ui" }
+timer = { path = "features/timer/timer" }
+timer-proto = { path = "features/timer/timer-proto", default-features = false }
+workflows-orchestrator = { path = "features/workflows/workflows-orchestrator" }
+workflows-proto = { path = "features/workflows/workflows-proto" }
+workouts = { path = "features/fitness/workouts" }
+workstream = { path = "features/workstream/workstream" }
+workstream-proto = { path = "features/workstream/workstream-proto", default-features = false }
+# features/view — view components
+view = { path = "features/view/view" }
+view-calendar = { path = "features/view/view-calendar" }
+view-gantt = { path = "features/view/view-gantt" }
+view-heatmap = { path = "features/view/view-heatmap" }
+view-kanban = { path = "features/view/view-kanban" }
+view-knowledge-graph = { path = "features/view/view-knowledge-graph" }
+view-table = { path = "features/view/view-table" }
+# libs/editor — the text/markdown/keyflow editor stack
+editor = { path = "libs/editor/crates/editor" }
+editor-crdt = { path = "libs/editor/crates/editor-crdt" }
+editor-keyflow = { path = "libs/editor/crates/editor-keyflow" }
+editor-keyflow-lang = { path = "libs/editor/crates/editor-keyflow-lang" }
+editor-lsp = { path = "libs/editor/crates/editor-lsp" }
+editor-mermaid = { path = "libs/editor/crates/editor-mermaid" }
+editor-state = { path = "libs/editor/crates/editor-state" }
+editor-syntax = { path = "libs/editor/crates/editor-syntax" }
+editor-typst = { path = "libs/editor/crates/editor-typst" }
+editor-view = { path = "libs/editor/crates/editor-view" }
+editor-vim = { path = "libs/editor/crates/editor-vim" }
+# libs/spaced-repetition — the FSRS scheduler the recall deck runs on
+spaced-repetition = { path = "libs/spaced-repetition" }
+
+# ── architect — the entity/RPC framework, its own repo ────────────────
+# Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
+# monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
+# `architect-telemetry`.
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.0" }
+
+# ── FastTrackStudio monorepo — the music-production domains ───────────
+# These stay in the FTS monorepo; Task consumes them cross-repo. REPIN
+# from `branch = "main"` to a tag as soon as the FTS repo is tagged —
+# a branch dep means every `cargo update` can move the whole domain
+# surface underneath this tree.
+actions-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+actions-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+daw = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+daw-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+daw-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+dioxus-test = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+engraver = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main", default-features = false }
+input = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+keyflow = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+keyflow-text = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+session = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+session-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+session-ui = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main", default-features = false }
+song = { git = "https://github.com/FastTrackStudios/FastTrackStudio", branch = "main" }
+
+# ── Facet reflection + vox RPC — the rc.5 fleet pins ──────────────────
+facet = { version = "0.50.0-rc.5", features = ["reflect", "chrono", "uuid"] }
+vox = { version = "0.10.0-rc.5", default-features = false, features = ["runtime"] }
+vox-core = "0.10.0-rc.5"
+vox-types = "0.10.0-rc.5"
+vox-websocket = "0.10.0-rc.5"
+# `cargo xtask` TS-type generation (crates/xtask).
+vox-codegen = "0.10.0-rc.5"
+
+# ── UI framework ──────────────────────────────────────────────────────
+# dioxus 0.8 line — git rev pinned; it must stay in lockstep across every
+# dioxus-* entry AND the FTS fork branches that pin the same rev.
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false, features = ["lib"] }
+dioxus-native = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", features = ["prelude", "system-fonts", "svg", "autofocus", "incremental", "data-uri"] }
+dioxus-router = { git = "https://github.com/DioxusLabs/dioxus", rev = "f717a8e184a522d078b70bb4b4d62a5f9a99ddfc", default-features = false }
+dioxus-icons = { git = "https://github.com/FastTrackStudios/dioxus-icons", branch = "main" }
+neo_frizbee = { version = "0.11", features = ["match_end_col"] }
+nucleo-matcher = "0.3"
+
+# ── Editor stack externals ────────────────────────────────────────────
+arborium = { version = "2.16.0", default-features = false }
+arborium-theme = "2.16.0"
+arborium-tree-sitter = "2.16.0"
+ropey = "1.6"
+
+# ── Server / storage ──────────────────────────────────────────────────
+axum = { version = "0.8", features = ["ws"] }
+sea-orm = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
+sea-orm-migration = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+octocrab = "0.46"
+
+# ── Files platform (ADR 0001) ─────────────────────────────────────────
+# Streaming FastCDC content-defined chunking, blake3 content addressing,
+# iroh-blobs as the local blob store.
+fastcdc = { version = "4", features = ["tokio"] }
+iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
+blake3 = "1.8"
+# Whole-file placement: reflink where the filesystem clones extents,
+# hardlink otherwise (see ChunkStore::write_path).
+reflink-copy = "0.1"
+# Files version-store engine: jj-lib's `Backend` trait, implemented over
+# the chunk store above. Pinned (jj-lib is pre-1.0 per the ADR).
+jj-lib = "=0.44.0"
+# Software File Roots are colocated git: the `files` feature talks to the
+# root's real `.git` directly alongside jj-lib's `GitBackend`. Same version
+# jj-lib itself pins, so there is one gix in the tree.
+gix = { version = "0.85", default-features = false, features = ["index", "max-performance-safe", "sha1"] }
+
+# ── Filesystem watching ───────────────────────────────────────────────
+# crates.io `notify`, used by the Files cadence engine for activity
+# *hints*. Renamed: `notify` is already taken by the in-tree
+# features/notify member, and one name can only mean one crate here.
+notify-fs = { package = "notify", version = "8" }
+globset = "0.4"
+walkdir = "2"
+
+# ── Async runtime ─────────────────────────────────────────────────────
+tokio = { version = "1.48", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+futures = "0.3"
+futures-channel = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+async-trait = "0.1"
+pollster = "0.4.0"
+
+# ── Serialization ─────────────────────────────────────────────────────
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "2.0"
+eyre = "0.6"
+
+# ── Observability ─────────────────────────────────────────────────────
+tracing = { version = "0.1", features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+# Sentry error/crash telemetry — rustls (not native-tls) for iOS.
+sentry = { version = "0.44", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
+
+# ── wasm / browser ────────────────────────────────────────────────────
+web-sys = "0.3.98"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+# ── Utilities ─────────────────────────────────────────────────────────
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "wasmbind"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
+base64 = "0.22"
+sha2 = "0.10"
+indexmap = "2"
+regex = "1"
+rrule = "0.11"
+rust_decimal = "1.39"
+cooklang = "0.18"
+pulldown-cmark = { version = "0.10", default-features = false }
+libc = "0.2"
+
+# ── Test / dev ────────────────────────────────────────────────────────
+fake = { version = "4", features = ["derive", "uuid", "chrono"] }
+proptest = "1"
+tempfile = "3"
+
+# ── Patches ───────────────────────────────────────────────────────────
+[patch.crates-io]
+# Blitz from the FTS fork (0.3.0-beta.1 line, upstream 02523b83 +
+# fts-focus: focus-follows-pointerdown for all focusable content —
+# upstream only click-focuses text inputs, leaving the editor's tabindex
+# div unfocusable by mouse). dioxus git pins `=0.3.0-beta.1`. One rev
+# across all blitz crates.
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
+blitz-traits = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
+blitz-paint = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
+blitz-shell = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
+blitz-net = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
+blitz-html = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd238000515c44c758845b9a17e9b48eb0087" }
+# Vendored one-line fix: quote scalars containing `<`/`>` — upstream
+# styx-format emits them bare but styx-parse rejects them, so serialized
+# keybind configs (`keys "<C-s>"`) could not be re-parsed.
+styx-format = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
+# Vendored phon rc.5 + derive support for parse/display opaque scalars
+# (Uuid, chrono DateTime/NaiveDate, url, …). Upstream rc.5 PANICS (and the
+# reply path aborts the process) the first time a vox RPC reply contains
+# such a field — every task-server list/stats call died.
+phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
+# Vendored phon-jit rc.5 with a one-line build.rs fix: force the stable,
+# call-based stencils (upstream's nightly detection misfires on the pinned
+# stable toolchain → E0658 on `become`).
+phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
+# Editor's vendored mermaid-rs-renderer fork (web_time::Instant so the
+# layouter works on wasm32) — see libs/editor/vendor/.
+mermaid-rs-renderer = { path = "libs/editor/vendor/mermaid-rs-renderer" }
+
+# ── Lints ─────────────────────────────────────────────────────────────
+[workspace.lints.rust]
+dead_code = "warn"
+unused = "warn"
+unused_unsafe = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "allow"
+private_intra_doc_links = "allow"
+redundant_explicit_links = "allow"
+
+[workspace.lints.clippy]
+field_reassign_with_default = "allow"
+redundant_closure = "allow"
+nonminimal_bool = "allow"
+clone_on_copy = "allow"
+useless_vec = "allow"
+type_complexity = "allow"
+manual_clamp = "allow"
+needless_range_loop = "allow"
+not_unsafe_ptr_arg_deref = "allow"
+only_used_in_recursion = "allow"
+unnecessary_sort_by = "allow"
+unusual_byte_groupings = "allow"
+manual_c_str_literals = "allow"
+branches_sharing_code = "allow"
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
+collapsible_if = "allow"
+map_clone = "allow"
+unnecessary_map_or = "allow"
+if_same_then_else = "allow"
+redundant_locals = "allow"
+large_enum_variant = "allow"
+explicit_counter_loop = "allow"
+manual_strip = "allow"
+too_many_arguments = "allow"
+double_must_use = "allow"
+vec_init_then_push = "allow"
+collapsible_match = "allow"
+filter_next = "allow"
+
+# ── Profiles ──────────────────────────────────────────────────────────
+[profile.dev]
+opt-level = 1
+
+# Debuginfo discipline. Full DWARF was the single biggest cost in the
+# monorepo: a `debug` test binary measured 1.62 GB, of which 98% was
+# `.debug_*` sections, copied into every artifact on every relink.
+#
+#   line-tables-only  keeps file:line in backtraces + profiler symbols
+#                     (samply/perf still work); drops variable/type DWARF,
+#                     so a *debugger* can't inspect locals.
+#   unpacked          leaves the remaining DWARF in the .o files under
+#                     deps/ instead of copying it into each artifact.
+#
+# Need a real debugger session? Build with `--profile dev-dbg`.
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+# Escape hatch: full DWARF for stepping in gdb/lldb.
+[profile.dev-dbg]
+inherits = "dev"
+debug = 2
+split-debuginfo = "packed"
+
+# dx web builds: native debuginfo in the wasm module blew past Chrome's
+# 1 GiB WebAssembly module cap (1.14 GB observed). Wasm dev builds don't
+# need it — strip it and dev bundles come back to a loadable size.
+[profile.wasm-dev]
+inherits = "dev"
+debug = false
+strip = "debuginfo"
+
+[profile.wasm-dev.package."*"]
+opt-level = 3
+
+# Dependencies at opt-level 1: gets rid of the pathological O0 debug
+# codegen at a fraction of the compile cost. Applies to dependencies only
+# — workspace members are governed by profile.dev's base opt-level.
+[profile.dev.package."*"]
+opt-level = 1
+
+# phon's JIT engine — generates and runs the DSP graph itself. Reaches
+# this tree transitively through vox.
+[profile.dev.package.phon]
+opt-level = 3
+[profile.dev.package.phon-jit]
+opt-level = 3
+
+# Files CAS: blake3 hashes every chunk on ingest, so it is on the hot path
+# of every checkpoint and every import.
+[profile.dev.package.blake3]
+opt-level = 3
+
+# Build scripts + proc macros and their deps. `package."*"` does NOT cover
+# these — cargo routes them through build-override, where they land at
+# opt-level 0 with full debuginfo. This tree leans hard on derive macros
+# (facet, architect, dioxus rsx), executed thousands of times per build.
+[profile.dev.build-override]
+opt-level = 3
+debug = false

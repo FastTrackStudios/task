@@ -1,0 +1,11 @@
+flowchart LR
+  Entry([Entry]) --> A[Fetch]
+  A --> B{Healthy?}
+  B -->|yes| C[Serve]
+  C --> D{Cache warm?}
+  D -->|no| A
+  D -->|yes| Exit([Exit])
+  B -->|no| Repair[Repair]
+  Repair --> A
+  C --> Audit[Audit]
+  Audit --> Exit

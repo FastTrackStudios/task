@@ -1,0 +1,45 @@
+[package]
+name = "fitness"
+description = "Fitness feature facade. Re-exports the 4 sibling crates (exercises / workouts / body / intake) and adds a unified `DailySummary` that combines intake calories, workout volume, and latest body metrics. Consumer surface for apps + agent integrations — depend on this crate alone, not the sub-crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+vault = { workspace = true }
+mealplan = { workspace = true }
+
+exercises = { workspace = true }
+workouts = { workspace = true }
+body = { workspace = true }
+intake = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = [
+    "dep:vox",
+    "dep:vox-types",
+    "architect/vox",
+    "mealplan/vox",
+    "exercises/vox",
+    "workouts/vox",
+    "body/vox",
+    "intake/vox",
+]
+
+[dev-dependencies]
+tempfile = "3"

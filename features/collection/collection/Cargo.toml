@@ -1,0 +1,32 @@
+[package]
+name = "collection"
+description = "Backing store for the generic ordered-collection primitive. File-backed (JSONL) store of `collection_proto::Collection`s, serving the `#[architect::rpc] CollectionService`. Item ordering reuses vault-live's lexorank fractional-index keys so inserts/reorders stay local. See plans/knowledge-primitives.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+collection-proto = { workspace = true }
+vault-live = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+thiserror = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "collection-proto/vox"]
+full = ["vox"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

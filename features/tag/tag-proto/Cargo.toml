@@ -1,0 +1,31 @@
+[package]
+name = "tag-proto"
+description = "Wire contract for the tagging feature: the `Tag` registry entity (name + user-chosen `TagIcon` + color) and the `#[architect::rpc] trait TagService` CRUD surface. Tags are referenced by NAME from markdown frontmatter; this registry decorates those names with an icon + color. Evolved from the half-built `label` feature. See plans/tagging-and-icons.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). Enable `vox` for the
+# architect-emitted RPC client + dispatcher.
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impl UI crates key their tag cache on.
+atom = ["architect/atom"]
+
+[lints]
+workspace = true

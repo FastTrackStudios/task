@@ -1,0 +1,24 @@
+[package]
+name = "email-config"
+description = "Account configuration types for the email feature: backend choice, credentials (via `email-secret`), folder aliases. Mutated by the UI (add-account wizard, OAuth refresh) and persisted to disk. Shape lifted from pimalaya — folder aliases as a case-insensitive `BTreeMap<Alias, BackendId>` so Gmail's `[Gmail]/Sent Mail` stops being a UX problem."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+email-secret = { workspace = true }
+facet = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+toml = "0.8"
+
+[lints]
+workspace = true

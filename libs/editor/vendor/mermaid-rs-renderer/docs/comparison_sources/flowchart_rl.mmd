@@ -1,0 +1,8 @@
+flowchart RL
+  Start([Start]) --> Validate{Valid?}
+  Validate -->|yes| Queue[Queue Job]
+  Validate -->|no| Reject[Reject]
+  Queue --> Persist[(Persist)]
+  Reject --> Audit[Audit Log]
+  Persist --> Done([Done])
+  Audit --> Done

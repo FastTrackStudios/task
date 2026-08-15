@@ -1,0 +1,33 @@
+[package]
+name = "inbox"
+description = "Inbox feature backend: parse + write captured InboxItems as markdown files in a vault (Records/inbox/<id>.md) and serve them over the Inbox vox RPC. Native-only — the round-trip touches disk; the UI uses inbox-proto directly on wasm."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Native-only: the vault round-trip reads from disk.
+
+[dependencies]
+# `vox` pulls in the architect-emitted dispatcher so the server can
+# mount `VaultInbox` as an `Inbox` vox service (mirrors `scheduling`).
+inbox-proto = { workspace = true, features = ["vox"] }
+# `Inbox` is a *sync* rpc trait, so its backend must provide a
+# `HasDispatcher` impl — `dispatch-tokio` gives the `spawn_blocking`
+# dispatcher the server uses.
+architect = { workspace = true, features = ["dispatch-tokio"] }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }
+vault-entity = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { workspace = true, features = ["clock", "std", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

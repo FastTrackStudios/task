@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-push wrapper around `capn pre-push`. Capn builds the workspace
+# before letting the push through, which requires every system lib
+# the workspace touches — notably `pango`, `webkitgtk_4_1`, and the
+# rest of the Dioxus desktop stack pulled in by `apps/task/desktop`.
+#
+# Outside a nix shell the host's `PKG_CONFIG_PATH` probably doesn't
+# carry those libs, so capn fails with `No package 'pango' found`.
+# The fix is to enter this repo's `nix develop` shell (the default
+# one already bundles every Linux GTK + WebView dep dioxus-desktop
+# needs) before running capn. When already inside a nix shell we
+# skip re-entry — capn just runs in the current env.
+#
+# Skip switch: `NO_CAPN=1 git push …` bypasses capn entirely. Reach
+# for that only when the failure is unrelated to your diff (e.g. an
+# infra-only issue you're going to fix in a follow-up). Otherwise
+# fix the root cause and let capn keep doing its job.
+
+if [ "${NO_CAPN:-0}" = "1" ]; then
+  exit 0
+fi
+
+CAPN_BIN="${CAPN_BIN:-$(command -v capn 2>/dev/null || true)}"
+
+if [ -z "$CAPN_BIN" ]; then
+  echo >&2 "pre-push: capn not found on PATH — skipping pre-push checks."
+  echo >&2 "          install capn or set CAPN_BIN to its path."
+  exit 0
+fi
+
+# Probe the current env. If `pkg-config` already sees the desktop
+# libs capn needs (pango, libsoup-3.0), we're in a shell that has
+# everything — run capn directly. Otherwise, re-enter this repo's
+# `nix develop` even if `IN_NIX_SHELL` is set: it just means we're
+# in *some* nix shell, not necessarily this project's. Avoids the
+# trap of inheriting an agent's pre-existing shell that only has
+# openssl on `PKG_CONFIG_PATH`.
+have_libs=0
+if command -v pkg-config >/dev/null 2>&1; then
+  if pkg-config --exists pango libsoup-3.0 2>/dev/null; then
+    have_libs=1
+  fi
+fi
+
+if [ "$have_libs" = "1" ]; then
+  exec "$CAPN_BIN" pre-push
+fi
+
+# Re-enter the repo's default shell so capn sees pango + webkitgtk +
+# the rest. Fall back to running capn raw only if `nix` itself is
+# missing — let capn fail loudly with the actual missing-dep error
+# rather than silently skipping.
+if command -v nix >/dev/null 2>&1; then
+  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  exec nix develop "${REPO_ROOT}" -c "$CAPN_BIN" pre-push
+fi
+
+exec "$CAPN_BIN" pre-push

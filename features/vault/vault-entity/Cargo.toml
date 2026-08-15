@@ -1,0 +1,34 @@
+[package]
+name = "vault-entity"
+description = "Shared support layer for vault-backed markdown entities. Frontmatter split/parse/serialize, YAML accessors, slugs, a generic `VaultEntityStore<E>` over `vault::Vault`, and one error vocabulary — the pattern every entity slice (task, project, goal, inventory, locations, milestone, fitness/*, mealplan/*, workstream, …) used to hand-copy."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The `store` feature is what pulls `vault` in — and with it `vault-live`,
+# `notify` and `mio`, none of which build for wasm32. The parsing half
+# (frontmatter / yaml / slug / error) has no such dependency, and slices
+# whose `parse` is wasm-visible need exactly that half. So a wasm consumer
+# takes `default-features = false` and still gets the readers.
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+architect = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+vault = { workspace = true, optional = true }
+
+[features]
+default = ["store"]
+# `VaultEntity` + `VaultEntityStore` — generic CRUD over a `vault::Vault`.
+# Native only.
+store = ["dep:vault", "dep:architect", "dep:tracing"]
+
+[lints]
+workspace = true

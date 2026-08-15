@@ -1,0 +1,28 @@
+[package]
+name = "files-storage-proto"
+description = "Wire contract for the Files placement layer (issue #262/#255): deployment-scoped Storage Locations, per-org Storage grants (capability classes, logical-byte quota, path prefix), root placement (live tree + blob replicas), and the storage-agent protocol (announce / approve / directives). Three `#[architect::rpc]` traits — `StorageAdminService` (operator lane), `StorageService` (org lane), `StorageAgentService` (agent lane). Wasm-clean; the sibling `files-storage` crate owns the server-side implementation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+
+[lints]
+workspace = true

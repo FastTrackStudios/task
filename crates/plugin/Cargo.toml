@@ -1,0 +1,19 @@
+[package]
+name = "task-plugin"
+description = "The plugin vocabulary for Task: plugin ids, the catalog of known plugins, and PluginSet — the resolution from an org's manifest to the enabled set. Wasm-clean and dependency-light; the per-surface contribution types (server mounts, UI nav/widgets/stores) live with their surfaces and key off these ids. See apps/task/plans/plugin-system.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+[package]
+name = "wiki-extract"
+description = "Phase-1 image extraction for the wiki feature. Decodes images out of raw sources (PDFs via pdfium, PPTX/DOCX via zip+XML, images via direct decode) so the agent's vision-caption step has bytes to caption. No LLM here — pure decode + filter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wiki-proto = { workspace = true }
+# PPTX / DOCX are zip files with images under /ppt/media/
+# or /word/media/. `zip` is pure Rust.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Inline image decoders — needed only to read dimensions
+# for filter cuts. Pure Rust; off-by-default features.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+
+# pdfium-render pulls a heavy C lib. Behind a feature flag
+# so the cheap zip+image path is the default.
+pdfium-render = { version = "0.8", optional = true }
+
+[features]
+default = []
+pdf = ["dep:pdfium-render"]
+
+[lints]
+workspace = true

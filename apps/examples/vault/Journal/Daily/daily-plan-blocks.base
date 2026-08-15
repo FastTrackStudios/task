@@ -1,0 +1,14 @@
+filters:
+  and:
+    - { property: type, equals: scheduling-day-template }
+
+views:
+  - name: All day templates
+    type: table
+    columns: [title, id, name]
+  - name: Weekday blocks
+    type: table
+    filter:
+      and:
+        - { property: id, equals: weekday }
+    columns: [name, description]

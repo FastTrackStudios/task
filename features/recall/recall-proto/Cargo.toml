@@ -1,0 +1,41 @@
+[package]
+name = "recall-proto"
+description = "Wire contract for the recall feature: the `RecallCard` learning-card entity + `#[architect::rpc] trait Recall` surface. Backs a general, project-filterable spaced-repetition deck on an FSRS scheduler — reviewed in a flashcard flow. Mirrors `inbox-proto`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). Enable the `vox` feature to
+# pull in the architect-emitted RPC client + dispatcher.
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+# The FSRS scheduler this deck runs on. Pure + wasm-clean (chrono only),
+# so the UI can reschedule a card client-side via the conversion helpers
+# on `RecallCard` without a server round-trip.
+spaced-repetition = { workspace = true }
+chrono = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impls UI crates key their entity caches on.
+atom = ["architect/atom"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

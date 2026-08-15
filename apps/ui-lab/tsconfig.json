@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+
+    /* Vendored vox packages import each other with explicit .ts
+       extensions (`./transport.ts`); fine under a bundler. */
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    "strict": true,
+    /* noUnusedLocals/Parameters stay off: tsc applies them to every
+       file in the program and the vendored vox sources (compiled with
+       their own config upstream) don't pass them. They're lint rules,
+       not part of `strict`. */
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+    "verbatimModuleSyntax": true,
+
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "scripts", "vite.config.ts"]
+}

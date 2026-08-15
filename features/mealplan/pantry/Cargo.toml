@@ -1,0 +1,50 @@
+[package]
+name = "pantry"
+description = "Pantry feature — typed view of food-on-hand pages in a `vault::Vault`. A pantry page IS an inventory page (`type: item`, tags include `pantry`) so one physical thing maps to one row visible in both the gear `inventory` list and the pantry list. PantryItem composes inventory::Item and adds food-specific fields: qty / unit / expiry / opened / brand / nutrition-per-unit. The cookbook crate's `Nutrition` shape is reused so recipes + pantry + (future) fitness all speak the same nutrition currency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+vault = { workspace = true }
+vault-entity = { workspace = true }
+inventory = { workspace = true }
+cookbook = { workspace = true }
+# Wire model + `PantryService` trait live here; this native crate
+# enables the `native` feature for the `inventory::Item` interop.
+pantry-proto = { workspace = true, features = ["native"] }
+
+# OpenFoodFacts external barcode lookup. Blocking client keeps
+# the sync `architect::rpc` trait surface uniform — barcode
+# scans are infrequent and the call site is happy to wait.
+reqwest = { workspace = true, features = ["blocking"] }
+serde_json = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "architect/dispatch-tokio", "pantry-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "cookbook/server", "inventory/server", "pantry-proto/server"]
+fake = ["dep:fake", "architect/fake", "cookbook/fake", "inventory/fake", "pantry-proto/fake"]
+full = ["vox", "server", "fake"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

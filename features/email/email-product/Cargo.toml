@@ -1,0 +1,31 @@
+[package]
+name = "email-product"
+description = "The email product layer served next to `EmailSync`: the staged-send outbox with human-in-the-loop approval (agents draft, only the user's approval releases delivery via a backoff poller). Backed by `email-store`'s per-account sqlite; events ride the shared `EmailChange` hub."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-proto = { workspace = true }
+email-store = { workspace = true }
+# `dispatch-tokio` for `TokioBlockingDispatcher` — the sync
+# `EmailProduct` methods hit sqlite, so they run on the blocking
+# pool like every other email backend.
+architect = { workspace = true, features = ["dispatch-tokio"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+email-maildir = { workspace = true }
+email-config = { workspace = true }
+# in-process vox link (`architect::LocalServer`, native-only).
+architect = { workspace = true, features = ["local"] }
+vox = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

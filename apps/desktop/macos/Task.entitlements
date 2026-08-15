@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- App Sandbox is MANDATORY for TestFlight / Mac App Store distribution.
+       The deploy script merges the provisioning profile's entitlements
+       (com.apple.application-identifier, com.apple.developer.team-identifier)
+       on top of this base at sign time — do not hardcode them here. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+
+  <!-- Task desktop is a vox client: WebSocket/HTTP to task-server
+       (task.starcommand.live or a self-hosted instance) plus whatever the
+       WKWebView loads. Outbound only — the desktop app embeds no server. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Powerbox-mediated open/save panels: WKWebView file uploads
+       (<input type=file> → attachments, imports) and downloads. Grants
+       access ONLY to files the user explicitly picks in the panel.
+       Note: the app's own state (auth tokens, server registry under
+       $XDG_DATA_HOME/task/, which resolves inside the sandbox container)
+       needs no entitlement. If a future feature must scan a user vault
+       FOLDER continuously, this covers the initial pick but persistent
+       access will additionally need security-scoped bookmarks
+       (com.apple.security.files.bookmarks.app-scope). -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+</dict>
+</plist>

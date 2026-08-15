@@ -1,0 +1,25 @@
+[package]
+name = "identity"
+description = "Server-side identity locker. SeaORM-backed store for `identity-proto`'s `LinkedServer` entity — holds, per home-org user, the encrypted session tokens for other servers they've linked. Owns the `linked_servers` migrations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+identity-proto = { workspace = true, features = ["server", "vox"] }
+auth = { workspace = true }
+async-trait = "0.1"
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+chrono = { workspace = true, features = ["clock", "std", "serde"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

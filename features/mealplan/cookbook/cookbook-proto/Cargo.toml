@@ -1,0 +1,40 @@
+[package]
+name = "cookbook-proto"
+description = "Wasm-clean nutrition shape shared across the mealplan + fitness slices. Holds `cookbook::Nutrition` — a `#[architect(json)]`-able value type referenced by `pantry`, `intake`, and the `fitness` facade. Split out so the web UI (and any wasm-clean proto, e.g. `fitness-proto`) can bind to `Nutrition` without pulling the vault-backed `cookbook` crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Wasm-clean baseline (Facet types). The `vox` feature pulls in
+# the architect-emitted glue; `Nutrition` itself needs none of it,
+# but the features are kept for shape-parity with the other proto
+# crates.
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+facet = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# Client-side optimistic store (`architect::Store`): adds the
+# `architect::StoreEntity` impls UI crates key their entity caches on.
+# Pulls Dioxus via architect-atom, so it stays opt-in (UI-only).
+atom = ["architect/atom"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+full = ["vox", "server", "fake"]
+
+[lints]
+workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "resources-proto"
+description = "Wasm-clean wire contract for the Resource Library — the `#[architect::rpc] ResourcesService` that reads server-side resource sidecars (transcripts, …) for the in-app watch/reader views. See plans/resource-annotations.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+full = ["vox"]
+
+[lints]
+workspace = true

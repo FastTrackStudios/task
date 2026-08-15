@@ -1,0 +1,21 @@
+[package]
+name = "scheduling-ui"
+description = "Dioxus components for the scheduling feature: personal day-template editor, plus stubs for the cal.com-style event-type editor and public booking page (filled in over follow-up commits)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { workspace = true }
+scheduling-proto = { workspace = true, default-features = false }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

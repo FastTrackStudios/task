@@ -1,0 +1,24 @@
+[package]
+name = "git-github"
+description = "GitHub backend for `git-proto`. Implements `RepoCatalog`, `IssueTracker`, `ReviewSurface` against the github.com REST API via `octocrab`. First-pass scope wires `list_issues` + `get_issue` end-to-end; other methods compile as `todo!()` stubs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-proto = { workspace = true }
+architect = { workspace = true, features = ["dispatch-tokio"] }
+vox = { workspace = true }
+vox-types = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+octocrab = { workspace = true }
+thiserror = { workspace = true }
+# octocrab uses rustls but doesn't install a process-level
+# CryptoProvider; we install ring once in `from_token`.
+rustls = { version = "0.23", features = ["ring"] }
+
+[lints]
+workspace = true

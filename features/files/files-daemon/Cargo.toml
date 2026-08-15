@@ -1,0 +1,43 @@
+[package]
+name = "files-daemon"
+version = "0.1.0"
+edition = "2024"
+description = "Files sync daemon (issue #265): the reconcile engine shipped as a headless agent with a persistent device identity, plus DaemonControlService — the local-socket RPC the desktop app and CLI drive for rich per-file sync status, selective-sync choices, pause/resume, hydrate, and checkpoint-now."
+
+[[bin]]
+name = "fts-files-daemon"
+required-features = ["daemon-bin"]
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "architect/vox"]
+# The headless binary — pulls in the ws server transport + an axum
+# host. Kept behind a feature so the library (and the app embed) don't
+# drag the server stack.
+daemon-bin = ["vox", "architect/server", "dep:axum", "dep:tracing-subscriber"]
+
+[dependencies]
+architect = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+facet = { workspace = true }
+files = { workspace = true }
+files-proto = { workspace = true }
+files-sync = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+vox = { workspace = true, optional = true }
+# Headless-binary-only (behind `daemon-bin`).
+axum = { workspace = true, features = ["ws"], optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[dev-dependencies]
+architect = { workspace = true, features = ["local"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

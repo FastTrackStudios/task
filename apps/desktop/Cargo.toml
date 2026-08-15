@@ -1,0 +1,20 @@
+[package]
+name = "task-app-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["router"] }
+ui.workspace = true
+# `otel` so shipped clients export traces/logs/metrics through the
+# server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
+architect-telemetry = { workspace = true, features = ["otel"] }
+
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop", "dioxus/launch"]
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+[application]
+name = "task-app-desktop"
+default_platform = "desktop"
+
+[desktop]
+title = "Task"
+
+# macOS/Linux bundle identity (CFBundleIdentifier / .deb package). Same product
+# id as the iOS app.
+[bundle]
+identifier = "app.fasttrackstudio.task"
+publisher = "FastTrackStudio"

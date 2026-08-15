@@ -1,0 +1,9 @@
+flowchart RL
+  A[Publish] --> B[Review]
+  B --> C{Approved?}
+  C -->|yes| D[Release]
+  C -->|changes| E[Revise]
+  E --> B
+  D --> F[Announce]
+  F --> G[(Metrics)]
+  G --> B

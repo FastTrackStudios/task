@@ -1,0 +1,12 @@
+/target
+**/target
+/dist
+**/dist
+.direnv/
+result
+result-*
+*.profraw
+.DS_Store
+
+# NOTE: apps/{web,desktop,mobile}/assets/tailwind.css ARE committed — dx
+# generates them, but the build expects them present. Do not ignore them.

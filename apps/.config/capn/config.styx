@@ -1,0 +1,21 @@
+@schema {id crate:capn-config@1, cli capn}
+
+// Capn configuration
+// Most options default to true. Set to false to disable.
+
+pre-commit {
+  rustfmt true
+  cargo-lock true
+  arborium true
+  edition-2024 false
+  external-path-deps false
+  internal-dev-deps-release-plz false
+}
+
+pre-push {
+  clippy true
+  nextest false
+  doc-tests false
+  docs false
+  cargo-shear false
+}

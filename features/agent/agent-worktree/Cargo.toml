@@ -1,0 +1,19 @@
+[package]
+name = "agent-worktree"
+description = "The mechanics a runner performs for one ticket: a git worktree and branch, the verify command, the commit, and cleanup. Pure git/process work with no Task or vox dependency, so it is testable against a temporary repository."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

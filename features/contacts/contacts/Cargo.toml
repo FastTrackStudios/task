@@ -1,0 +1,39 @@
+[package]
+name = "contacts"
+description = "Contacts feature backend: parse + write contacts as markdown files in a vault (Records/contacts/<id>.md), manage CardDAV sync accounts, and (one-way) import addressbooks from Nextcloud / iCloud over the Contacts vox RPC. Native-only — the round-trip + sync touch disk and network; the UI uses contacts-proto directly on wasm."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Native-only: the vault round-trip reads from disk, and CardDAV sync
+# hits the network.
+
+[dependencies]
+# `vox` pulls in the architect-emitted dispatcher so the server can
+# mount `VaultContacts` as a `Contacts` vox service (mirrors `recall`).
+contacts-proto = { workspace = true, features = ["vox"] }
+# `Contacts` is a *sync* rpc trait, so its backend must provide a
+# `HasDispatcher` impl — `dispatch-tokio` gives the `spawn_blocking`
+# dispatcher the server uses.
+architect = { workspace = true, features = ["dispatch-tokio"] }
+serde = { workspace = true, features = ["derive"] }
+serde_yaml = { workspace = true }
+vault-entity = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { workspace = true, features = ["clock", "std", "serde"] }
+# CardDAV pull: blocking HTTP (fits the spawn_blocking sync dispatcher),
+# a light XML reader for the DAV multistatus, and a vCard 3.0/4.0 parser.
+ureq = "2.12"
+roxmltree = "0.20"
+ical = { version = "0.11", default-features = false, features = ["vcard"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

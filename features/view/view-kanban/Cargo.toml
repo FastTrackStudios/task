@@ -1,0 +1,26 @@
+[package]
+name = "view-kanban"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Kanban board — Dioxus port inspired by janhesters/shadcn-kanban-board.
+#
+# Dumb UI crate: feed `columns` + `cards` in via props, receive
+# mutations back via `EventHandler<KanbanEvent>`. No CRDT/DB awareness.
+# Wire to a real repo at the route layer (see /views/kanban in
+# task-ui).
+
+[dependencies]
+dioxus = { workspace = true }
+uuid = { workspace = true, features = ["v4", "js", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

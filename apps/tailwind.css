@@ -1,0 +1,73 @@
+/*
+ * THE Tailwind input for every Task front-end.
+ *
+ * desktop/, mobile/ and web/ used to carry three near-identical copies
+ * of this file (desktop and mobile were byte-identical; web added two
+ * @source lines). They are one file now — each app's build script
+ * compiles THIS input to its own `assets/tailwind.css`, because
+ * `asset!()` resolves relative to the crate root and cannot reach
+ * outside it.
+ *
+ * @source / @import paths below are relative to THIS file
+ * (apps/task/), not to the app directories.
+ */
+
+/* `source(none)` disables Tailwind v4's automatic content detection,
+ * which is rooted at the working directory and therefore made the
+ * output depend on where the build ran from. Everything the sheet needs
+ * is declared explicitly below, so the result is identical from any
+ * cwd — which is what lets `dx` own this build. */
+@import "tailwindcss" source(none);
+/* Task's palette: the canonical architect-ui design tokens plus the Obsidian
+ * overrides. See apps/task/fts-theme.css. */
+@import "./fts-theme.css";
+
+/* The app crates themselves (main.rs is a thin shell — kept so a stray
+ * utility class in one of them still compiles). */
+@source "./*/src/**/*.{rs,html,css}";
+
+/* Paths track the monorepo dissolve (c1c5754ce): the Task crates now
+ * live at <root>/crates/task/* and <root>/features/task/*.
+ *
+ * The glob is `crates/task/*` rather than naming `ui` alone: the shell
+ * split produced `ui-core` and `player-ui`, and naming one crate meant
+ * their classes were only reaching the sheet via Tailwind's automatic
+ * (cwd-rooted) scan. That scan is off — see `source(none)` above — so
+ * every source has to be named. */
+@source "../../crates/task/*/src/**/*.rs";
+@source "../../features/task/*/*-ui/src/**/*.rs";
+@source "../../features/task/view/view-*/src/**/*.rs";
+/* architect-ui primitives (Button/Sheet/Badge/…) — their variant classes
+ * must exist in the compiled sheet too. In-tree since the monorepo
+ * merge, so the pure-Nix image build sees it as well. */
+@source "../../libs/architect-ui/architect-ui/src/**/*.rs";
+/* session-ui (mixer / transport / progress bars) + dock classes used by the
+ * `type: song` session player embedded in the vault page — keep their
+ * utility classes from being purged (the "unstyled player" bug).
+ * These two were web-only before the merge; desktop and mobile render
+ * the same player, so they had the same latent bug. */
+@source "../../crates/session/ui/src/**/*.rs";
+@source "../../libs/dock/*/src/**/*.rs";
+
+@theme {
+    --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@layer base {
+    html { color-scheme: dark; }
+
+    /* Thin, theme-tinted scrollbars everywhere — the default fat
+     * gutters fight the shell. Track is invisible; the thumb is the
+     * border token, brightening on hover. */
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in oklch, var(--border) 85%, transparent) transparent;
+    }
+    *::-webkit-scrollbar { width: 7px; height: 7px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb {
+        background: color-mix(in oklch, var(--border) 85%, transparent);
+        border-radius: 9999px;
+    }
+    *::-webkit-scrollbar-thumb:hover { background: var(--border); }
+}

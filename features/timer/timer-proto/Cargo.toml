@@ -1,0 +1,32 @@
+[package]
+name = "timer-proto"
+description = "Wire contract for the `timer/` feature — billable time tracking modeled on SolidTime. One struct per entity (Client, Engagement, WorkSession, Tag, Rate), `#[derive(architect::Entity)]`-emitted CRUD repos, plus a slim `TimerService` for start/stop/active-lookup that CRUD can't express. Money is integer cents. Currency is ISO 4217."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm"]
+fake = ["dep:fake", "architect/fake"]
+
+[lints]
+workspace = true

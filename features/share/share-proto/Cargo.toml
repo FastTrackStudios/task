@@ -1,0 +1,28 @@
+[package]
+name = "share-proto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Wire contract for the `share` feature — sharing a group of notes with
+# named people or links (view / comment / edit), Samply-style: every link
+# is tracked, individually configurable, and revocable after the fact.
+# Design: apps/task/plans/collaboration-sharing.md.
+
+[dependencies]
+architect.workspace = true
+facet.workspace = true
+thiserror.workspace = true
+vox = { workspace = true, optional = true }
+# Files targets (issue #271): a slice names its root by id, and the
+# stored link round-trips through the server's JSON store.
+uuid = { workspace = true, features = ["v4", "js", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "architect/vox"]
+
+[lints]
+workspace = true

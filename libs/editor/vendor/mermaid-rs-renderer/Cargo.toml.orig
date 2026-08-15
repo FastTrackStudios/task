@@ -1,0 +1,55 @@
+[package]
+name = "mermaid-rs-renderer"
+version = "0.2.2"
+edition = "2024"
+description = "Fast Mermaid diagram renderer in pure Rust - 23 diagram types, 100-1400x faster than mermaid-cli"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/1jehuang/mermaid-rs-renderer"
+homepage = "https://github.com/1jehuang/mermaid-rs-renderer"
+keywords = ["mermaid", "diagram", "svg", "renderer", "cli"]
+categories = ["command-line-utilities", "visualization"]
+exclude = [
+    "node_modules/",
+    "tmp/",
+    "docs/",
+    "scripts/",
+    ".github/",
+    "package.json",
+    "package-lock.json",
+    "*.png",
+    "*.html",
+]
+
+[features]
+default = ["cli", "png"]
+# CLI support (adds clap dependency)
+cli = ["dep:clap"]
+# PNG output support (adds resvg/usvg dependencies)
+png = ["dep:resvg", "dep:usvg"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"], optional = true }
+regex = "1.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+json5 = "1.3"
+thiserror = "2.0"
+once_cell = "1.19"
+fontdb = "0.23"
+ttf-parser = "0.25"
+resvg = { version = "0.46", optional = true }
+usvg = { version = "0.46", optional = true }
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "renderer"
+harness = false
+
+[[bin]]
+name = "mmdr"
+path = "src/main.rs"
+required-features = ["cli"]

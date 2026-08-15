@@ -1,0 +1,37 @@
+[package]
+name = "view-calendar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Calendar — Dioxus calendar component (month / week / day) modelled
+# on Google Calendar's surface. Dumb UI: feed events in via props,
+# receive mutations via `EventHandler<CalendarMutation>`. No CRDT
+# awareness; wire to a real repo at the route layer.
+#
+# Out of scope for v1: recurrence (RRULE), multiple calendars,
+# timezones, year view, mini-calendar, attendees.
+
+[dependencies]
+dioxus = { workspace = true }
+dioxus-sdk-time = { git = "https://github.com/FastTrackStudios/sdk", branch = "main" }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind", "serde"] }
+uuid = { workspace = true, features = ["v4", "js", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+# RRULE expansion delegates to the shared engine in
+# `scheduling_proto::recurrence` (no vox — stays wasm-clean).
+scheduling-proto = { workspace = true, default-features = false }
+# Cyclic life-calendar — pure-function date generator powers
+# the cycle overlay (toolbar label, reset-week background).
+# `default-features = false` skips vox so the calendar stays
+# wasm-clean.
+cycle = { workspace = true, default-features = false }
+
+architect-ui.workspace = true
+
+[lints]
+workspace = true

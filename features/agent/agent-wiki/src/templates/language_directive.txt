@@ -1,0 +1,7 @@
+## ⚠️ MANDATORY OUTPUT LANGUAGE: {language}
+
+You MUST write your entire response (including wiki page titles, content, descriptions, summaries, and any generated text) in **{language}**.
+The source material or wiki content may be in a different language, but this is IRRELEVANT to your output language.
+Ignore the language of any source content. Generate everything in {language} only.
+Proper nouns should use standard {language} transliteration when appropriate.
+DO NOT use any other language. This overrides all other instructions.

@@ -1,0 +1,27 @@
+[package]
+name = "agent-dispatch"
+description = "Bridge between TaskNotes (`features/task/task`) and agent task queues (`features/agent/agent-tasks`). Dispatches a task note as one or more agent tasks, writes the cross-link both ways, and on completion folds the agent's result back into the task note's `complete_instances` (recurring) or `completed_date` (one-shot). Server-side."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-proto = { workspace = true, features = ["server", "vox"] }
+agent-tasks = { workspace = true }
+sea-orm-migration = { workspace = true }
+task = { workspace = true, features = ["vox"] }
+chrono = { workspace = true, features = ["clock", "serde"] }
+sea-orm = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+
+[lints]
+workspace = true

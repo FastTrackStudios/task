@@ -1,0 +1,24 @@
+[package]
+name = "agent-hermes"
+description = "Hermes agent backend — drives a hermes-agent gateway (NousResearch) over its OpenAI-compatible HTTP API. Sessions map 1:1 onto Hermes session keys (`X-Hermes-Session-Key`) so the gateway's own memory/skill state scopes per Task session; turns stream SSE `chat.completion.chunk`s translated into `agent_proto::AgentEvent`s."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-proto = { workspace = true }
+architect = { workspace = true, features = ["dispatch-tokio"] }
+chrono = { workspace = true, features = ["clock", "serde"] }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+vox = { workspace = true }
+
+[lints]
+workspace = true

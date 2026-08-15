@@ -1,0 +1,32 @@
+[package]
+name = "timer"
+description = "Server-side billable time-tracking. SeaORM-backed impl of `timer-proto`'s entities + the slim `TimerService` (start/stop/active/switch/log/resolve_rate). Owns the partial-unique-index that enforces 'at most one open session per user', the rate-cascade lookup over per-project / project-default / per-org tables (with project defaults read from `features/project::ProjectInfo`), and the migrations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+timer-proto = { workspace = true, features = ["server", "vox"] }
+# The `events` fan-out hub (`architect::PubSub`) behind the
+# `#[subscribe]` stream lives on the `Store`.
+architect = { workspace = true }
+project = { workspace = true }
+async-trait = "0.1"
+chrono = { workspace = true, features = ["clock", "serde"] }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+
+[lints]
+workspace = true

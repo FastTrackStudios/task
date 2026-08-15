@@ -1,0 +1,4 @@
+msrv = "1.90"
+
+# Common patterns we accept across the workspace.
+allow-comparison-to-zero = true

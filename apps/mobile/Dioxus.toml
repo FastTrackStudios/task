@@ -1,0 +1,10 @@
+[application]
+name = "task-app-mobile"
+default_platform = "android"
+
+# App identity for iOS/TestFlight (CFBundleIdentifier). Task is one product
+# under the FastTrackStudio umbrella; the watch app is a separate companion
+# record (app.fasttrackstudio.task.watch), same as FTS.
+[bundle]
+identifier = "app.fasttrackstudio.task"
+publisher = "FastTrackStudio"

@@ -1,0 +1,32 @@
+[package]
+name = "email-autoconfig"
+description = "ISP autoconfiguration for the email feature. Given an email address, return the matching IMAP/SMTP/JMAP endpoints. Three sources, in order: (1) Mozilla ISPDB (`autoconfig.thunderbird.net`), (2) the provider's own `autoconfig.<domain>` Thunderbird XML, (3) DNS SRV records (RFC 6186). Onboarding becomes \"enter email, click next.\" Shape lifted from pimalaya's `core/email::autoconfig` + io-discovery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+email-config = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Tiny XML pull-parser. Thunderbird autoconfig XML is small +
+# well-shaped — no need for full DOM. MIT.
+quick-xml = { version = "0.40", features = ["serialize"] }
+# HTTP client for the ISPDB + provider lookups. rustls-only so
+# we don't drag native-tls into a leaf crate.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+# DNS SRV lookups (RFC 6186 — `_submission._tcp`, `_imap._tcp`,
+# `_imaps._tcp`). hickory-resolver is the maintained successor
+# to trust-dns.
+hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime", "system-config"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,48 @@
+[package]
+name = "milestone"
+description = "Milestone feature — project-scoped, GitHub-Projects-style rollup target. A milestone is bound to a project (`project_id`, required) and optionally to a life-goal (`goal_id`). Tasks point at milestones via `milestone_id`. Markdown-backed at `Projects/<project-slug>/milestones/<ms-slug>.md`; SeaORM Model emitted under `--features server`. Designed to sync 1:1 with Forgejo / GitHub milestones (title, description, due_on, state) when the federation layer ships."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+facet = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+architect = { workspace = true }
+milestone-proto = { workspace = true }
+# Wasm-clean wire shape for `VaultPage`.
+vault-proto = { workspace = true, default-features = false }
+
+vox = { workspace = true, optional = true }
+vox-types = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"] }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "milestone-proto/vox"]
+server = ["architect/server-seaorm", "dep:sea-orm", "milestone-proto/server"]
+fake = ["dep:fake", "architect/fake", "milestone-proto/fake"]
+full = ["vox", "server", "fake"]
+
+# `vault::Vault` is server-only. Wasm UI consumers get only
+# wire types + RPC client; parser / backend / writer all
+# gate on non-wasm.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vault = { workspace = true }
+vault-entity = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

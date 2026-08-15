@@ -1,0 +1,47 @@
+/*
+ * Task palette — an OVERRIDE LAYER over the canonical FTS design tokens.
+ *
+ * The canonical sheet is libs/architect-ui/architect-ui/assets/fts-theme.css and is
+ * imported verbatim below; this file adds only the handful of tokens
+ * where the Task product deliberately departs from the shadcn defaults.
+ * Everything else — the light palette, the `@theme inline` mappings, the
+ * signal-* tokens, the keyframes — comes from the canonical sheet, so a
+ * change there reaches Task automatically.
+ *
+ * Previously this sheet was vendored three times (desktop/, mobile/,
+ * web/) with a header explaining that a relative @import "climbs out of
+ * the Task repo". That stopped being true when architect-ui was merged into
+ * this monorepo — the Task tailwind input already `@source`s
+ * ../../libs/architect-ui/architect-ui/src, and the pure-Nix image build (nix/
+ * modules/packages/web-bundles.nix) builds from the whole tree. One
+ * copy, one place to edit.
+ *
+ * Do NOT re-vendor. Add product overrides here instead.
+ */
+
+@import "../../libs/architect-ui/architect-ui/assets/fts-theme.css";
+
+/* Obsidian dark: editor #1e1e1e, panels #161616 (2026-07-03).
+ * These 9 tokens are the entire Task departure from the canonical dark
+ * palette; the block mirrors the canonical `@media (prefers-color-scheme:
+ * dark) { :root { … } }` so it layers at identical specificity and wins
+ * on source order. Light mode is untouched.
+ *
+ * `--primary-foreground` is listed even though it looks like a shadcn
+ * default: canonical dark pairs a near-white `--primary` with a
+ * near-BLACK foreground, whereas Task's primary is the purple #7f6df2
+ * and needs near-white text on top. Dropping it flips button labels to
+ * black-on-purple. Keep these two in sync as a pair. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #1e1e1e;
+    --foreground: #dadada;
+    --card: #161616;
+    --card-foreground: #dadada;
+    --popover: #1e1e1e;
+    --popover-foreground: #dadada;
+    --primary: #7f6df2;
+    --primary-foreground: oklch(0.985 0 0);
+    --sidebar: #161616;
+  }
+}

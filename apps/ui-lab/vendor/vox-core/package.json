@@ -1,0 +1,25 @@
+{
+  "name": "@bearcove/vox-core",
+  "version": "0.2.0",
+  "private": false,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bearcove/vox-postcard": "workspace:*",
+    "@bearcove/vox-wire": "workspace:*"
+  },
+  "license": "MIT OR Apache-2.0",
+  "description": "Core protocol runtime and transport abstractions for Vox",
+  "repository": "https://github.com/bearcove/vox",
+  "homepage": "https://github.com/bearcove/vox",
+  "keywords": [
+    "vox",
+    "ipc",
+    "rpc",
+    "typescript",
+    "shared-memory"
+  ],
+  "readme": "README.md"
+}

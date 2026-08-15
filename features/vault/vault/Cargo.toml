@@ -1,0 +1,39 @@
+[package]
+name = "vault"
+description = "Vault feature facade. Re-exports the wire trait (`vault-proto`) unconditionally and the live filesystem impl + obsidian translation layer behind feature flags. Every consumer outside `features/vault/` should depend on this crate — the sibling impl crates are internal."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Pure facade — no source other than `pub use`s in `lib.rs`. All real
+# code lives in the sibling impl crates.
+#
+# Feature gates:
+#   default  — `live` + `obsidian` + `vox`. Right for native apps
+#              (desktop / cli / server / playground).
+#   live     — pull in vault-live (fs backend, watcher, in-memory
+#              snapshot, block index). Native-only.
+#   obsidian — pull in vault-obsidian (translation layer + parsed
+#              helpers). Native-only.
+#   vox      — propagate vault-proto's `vox` feature for the
+#              architect-emitted client + dispatcher.
+#
+# wasm consumers (`apps/web` etc.) should set
+# `default-features = false, features = ["vox"]` to get only the
+# wire types + the generated `VaultSyncClient`.
+[dependencies]
+vault-proto = { workspace = true, default-features = false }
+vault-live = { workspace = true, optional = true }
+vault-obsidian = { workspace = true, optional = true }
+
+[features]
+default = ["live", "obsidian", "vox"]
+live = ["dep:vault-live"]
+obsidian = ["dep:vault-obsidian", "live"]
+vox = ["vault-proto/vox"]
+
+[lints]
+workspace = true
