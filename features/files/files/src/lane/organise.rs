@@ -78,7 +78,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use files_domain::cadence::Journal;
@@ -92,26 +92,92 @@ use crate::backend::FilesBackend;
 
 // ── In-memory state ────────────────────────────────────────────────
 
-/// Hand-organisation for this process: who tagged what, and whose
-/// shortlist a path is on.
+/// Hand-organisation for one org: who tagged what, and whose shortlist a
+/// path is on.
 ///
-/// Not durable — see the module doc. Tags are org-wide because a tag is a
-/// shared view ("everything for the client edit"); favourites are keyed
-/// by principal because a shortlist is one person's.
-#[derive(Debug, Default)]
+/// Tags are org-wide because a tag is a shared view ("everything for the
+/// client edit"); favourites are keyed by principal because a shortlist
+/// is one person's.
+///
+/// Persisted per org — see [`crate::durable`]. It is keyed by the
+/// backend's data directory rather than held in a process-wide static,
+/// which is what stops one org's `all_tags` answering with another's.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(from = "Wire", into = "Wire")]
 struct Organised {
     /// Canonical (lowercased) tags per marked path.
     tags: BTreeMap<(RootId, RootPath), BTreeSet<String>>,
     favourites: BTreeSet<(PrincipalId, RootId, RootPath)>,
 }
 
-fn state() -> &'static Mutex<Organised> {
-    static STATE: OnceLock<Mutex<Organised>> = OnceLock::new();
-    STATE.get_or_init(Mutex::default)
+/// The on-disk shape.
+///
+/// JSON has no representation for a composite map key, and the in-memory
+/// maps are keyed by `(root, path)` because that is what every lookup
+/// here wants. Rather than degrade the runtime types to fit the file
+/// format, the file format is a list of rows and the conversion is here.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Wire {
+    tags: Vec<TagRow>,
+    favourites: Vec<FavouriteRow>,
 }
 
-fn with_state<T>(f: impl FnOnce(&mut Organised) -> T) -> T {
-    f(&mut state().lock().expect("organise state lock poisoned"))
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TagRow {
+    root: RootId,
+    path: RootPath,
+    tags: BTreeSet<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FavouriteRow {
+    principal: PrincipalId,
+    root: RootId,
+    path: RootPath,
+}
+
+impl From<Wire> for Organised {
+    fn from(w: Wire) -> Self {
+        Self {
+            tags: w
+                .tags
+                .into_iter()
+                .map(|r| ((r.root, r.path), r.tags))
+                .collect(),
+            favourites: w
+                .favourites
+                .into_iter()
+                .map(|r| (r.principal, r.root, r.path))
+                .collect(),
+        }
+    }
+}
+
+impl From<Organised> for Wire {
+    fn from(o: Organised) -> Self {
+        Self {
+            tags: o
+                .tags
+                .into_iter()
+                .map(|((root, path), tags)| TagRow { root, path, tags })
+                .collect(),
+            favourites: o
+                .favourites
+                .into_iter()
+                .map(|(principal, root, path)| FavouriteRow {
+                    principal,
+                    root,
+                    path,
+                })
+                .collect(),
+        }
+    }
+}
+
+static ORGANISED: crate::durable::Scoped<Organised> = crate::durable::Scoped::new("organise");
+
+fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut Organised) -> T) -> T {
+    ORGANISED.write(backend, f)
 }
 
 /// The principal this process speaks for. See the module doc for why it
@@ -258,7 +324,7 @@ impl OrganiseService for FilesBackend {
     async fn marks(&self, root_id: RootId, path: RootPath) -> Result<Marks, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
-        Ok(with_state(|s| {
+        Ok(with_state(self, |s| {
             marks_of(s, root_id, &path, this_principal())
         }))
     }
@@ -280,7 +346,7 @@ impl OrganiseService for FilesBackend {
         // before its content has synced. Existence is the tree's question,
         // and answering it here would put a stat on every tag edit while
         // making an offline device unable to organise what it can see.
-        Ok(with_state(|s| {
+        Ok(with_state(self, |s| {
             let key = (root_id, path.clone());
             if canonical.is_empty() {
                 s.tags.remove(&key);
@@ -301,7 +367,7 @@ impl OrganiseService for FilesBackend {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
         let who = this_principal();
-        Ok(with_state(|s| {
+        Ok(with_state(self, |s| {
             let key = (who, root_id, path.clone());
             if favourite {
                 s.favourites.insert(key);
@@ -324,7 +390,7 @@ impl OrganiseService for FilesBackend {
         let wanted = canonical_all(&tags)?;
         let who = this_principal();
 
-        Ok(with_state(|s| {
+        Ok(with_state(self, |s| {
             s.tags
                 .iter()
                 .filter(|((root, _), _)| root_id.is_none_or(|id| id == *root))
@@ -342,7 +408,7 @@ impl OrganiseService for FilesBackend {
         if let Some(id) = root_id {
             crate::lane::root_or_fault(self, id)?;
         }
-        Ok(with_state(|s| {
+        Ok(with_state(self, |s| {
             s.tags
                 .iter()
                 .filter(|((root, _), _)| root_id.is_none_or(|id| id == *root))

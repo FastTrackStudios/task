@@ -29,6 +29,7 @@ pub mod watcher;
 pub mod certify;
 mod checkpoint;
 mod consts;
+mod durable;
 mod content;
 mod entity;
 mod error;

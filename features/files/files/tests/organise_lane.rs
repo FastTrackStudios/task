@@ -358,3 +358,102 @@ async fn a_feed_is_scoped_to_a_root_that_exists() {
         FilesFault::RootNotFound(_)
     ));
 }
+
+/// Tags survive a restart.
+///
+/// `storage.tier.authored` puts anything a human chose in durable
+/// storage; a tag is chosen. Before this, tags died with the process —
+/// which meant the feature demonstrated and did not work.
+#[tokio::test(flavor = "multi_thread")]
+async fn tags_survive_a_restart() {
+    let tmp = tempfile::tempdir().expect("data tempdir");
+    let dir = tmp.path().join("album");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("take.wav"), b"one").unwrap();
+
+    let adopt = |backend: &FilesBackend| {
+        let path = dir.to_string_lossy().into_owned();
+        let backend = backend.clone();
+        async move {
+            backend
+                .adopt(AdoptRequest {
+                    path,
+                    name: "Album".into(),
+                    flavor: RootFlavor::Media,
+                    hash_content: true,
+                })
+                .await
+        }
+    };
+
+    let take = RootPath::parse("take.wav").unwrap();
+    let root = {
+        let first = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+        let root = RootId::new(adopt(&first).await.expect("adopt").id);
+        first
+            .set_tags(root, take.clone(), vec![Tag("keeper".into())])
+            .await
+            .expect("tag");
+        root
+    };
+
+    // A second backend over the same data directory is what a restart
+    // looks like to this lane.
+    let second = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("restart");
+    let marks = second.marks(root, take).await.expect("marks after restart");
+    assert!(
+        marks.tags.iter().any(|t| t.0 == "keeper"),
+        "a tag a human chose must outlive the process that recorded it"
+    );
+}
+
+/// One org's tags are not another's.
+///
+/// The lane state used to be a process-wide `static`, but `FilesBackend`
+/// is constructed once per org — so `all_tags` was answering with every
+/// org's vocabulary on the server.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_orgs_tags_are_not_anothers() {
+    async fn org(name: &str) -> (tempfile::TempDir, FilesBackend, RootId, RootPath) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join(name);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("take.wav"), b"one").unwrap();
+        let backend = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+        let root = backend
+            .adopt(AdoptRequest {
+                path: dir.to_string_lossy().into_owned(),
+                name: name.into(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            })
+            .await
+            .expect("adopt");
+        (
+            tmp,
+            backend,
+            RootId::new(root.id),
+            RootPath::parse("take.wav").unwrap(),
+        )
+    }
+
+    let (_a_tmp, a, a_root, a_path) = org("alpha").await;
+    let (_b_tmp, b, b_root, b_path) = org("beta").await;
+
+    a.set_tags(a_root, a_path, vec![Tag("alpha-only".into())])
+        .await
+        .expect("tag a");
+    b.set_tags(b_root, b_path, vec![Tag("beta-only".into())])
+        .await
+        .expect("tag b");
+
+    let a_vocab = a.all_tags(None).await.expect("a vocabulary");
+    let b_vocab = b.all_tags(None).await.expect("b vocabulary");
+
+    assert!(a_vocab.iter().any(|t| t.0 == "alpha-only"));
+    assert!(
+        !a_vocab.iter().any(|t| t.0 == "beta-only"),
+        "one org must not see another's tag vocabulary: {a_vocab:?}"
+    );
+    assert!(!b_vocab.iter().any(|t| t.0 == "alpha-only"));
+}
