@@ -95,7 +95,7 @@ struct RootRuntime {
 /// content differs from the checkpoint head — is an outcome, not an
 /// error: the policy apply pass classifies it structurally and moves
 /// on, rather than matching error-message substrings (PR #289 review).
-enum DehydrateOutcome {
+pub(crate) enum DehydrateOutcome {
     Done(BrowseEntry),
     Dirty,
 }
@@ -103,7 +103,7 @@ enum DehydrateOutcome {
 /// Which kind of capture a write is — the one difference that decides
 /// what it parents on and how it is recorded (issue #260).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CaptureKind {
+pub(crate) enum CaptureKind {
     /// Ephemeral auto-snapshot: parented on the snapshot branch, never
     /// a chain entry.
     Snapshot,
@@ -1027,7 +1027,7 @@ impl FilesBackend {
             .clone()
     }
 
-    fn create_root_inner(
+    pub(crate) fn create_root_inner(
         &self,
         path: String,
         name: String,
@@ -1208,7 +1208,7 @@ impl FilesBackend {
     /// symlink inside the root pointing outside it is caught by the
     /// same prefix check — resolving the true escape, not just the
     /// textual one.
-    fn browse_inner(&self, root_id: Uuid, subpath: String) -> Result<Vec<BrowseEntry>, Error> {
+    pub(crate) fn browse_inner(&self, root_id: Uuid, subpath: String) -> Result<Vec<BrowseEntry>, Error> {
         let root = self.get_root_info(root_id)?;
         let root_path = PathBuf::from(&root.path);
         let requested = if subpath.is_empty() {
@@ -1324,7 +1324,7 @@ impl FilesBackend {
         Ok(entries)
     }
 
-    fn drive_browse_inner(&self, path: String) -> Result<Vec<BrowseEntry>, Error> {
+    pub(crate) fn drive_browse_inner(&self, path: String) -> Result<Vec<BrowseEntry>, Error> {
         let confined = self.confine(Path::new(&path))?;
         let metadata = std::fs::metadata(&confined)?;
         if !metadata.is_dir() {
@@ -1333,7 +1333,7 @@ impl FilesBackend {
         Self::list_dir(&confined, false, false)
     }
 
-    fn chain_inner(&self, root_id: Uuid, path: String) -> Result<Vec<ChainEntry>, Error> {
+    pub(crate) fn chain_inner(&self, root_id: Uuid, path: String) -> Result<Vec<ChainEntry>, Error> {
         let root = self.get_root_info(root_id)?;
         let (repo, head) = self.ensure_repo(&root)?;
         // Both flavors derive chains through the same DAG walk, against
@@ -1472,7 +1472,7 @@ impl FilesBackend {
         Ok((commit_id, commit.change_id))
     }
 
-    fn name_version_inner(
+    pub(crate) fn name_version_inner(
         &self,
         root_id: Uuid,
         commit_id: String,
@@ -1499,7 +1499,7 @@ impl FilesBackend {
         )
     }
 
-    fn unname_version_inner(&self, id: Uuid) -> Result<NamedVersion, Error> {
+    pub(crate) fn unname_version_inner(&self, id: Uuid) -> Result<NamedVersion, Error> {
         let named = self.versions.named_version(id)?;
         let lock = self.root_lock(named.root_id);
         let _guard = lock.lock().expect("root lock poisoned");
@@ -1518,7 +1518,7 @@ impl FilesBackend {
     /// which this lookup cannot see through. FUTURE: content-id rename
     /// detection in the scan checkpoint closes that gap for reviews and
     /// chains alike.
-    fn find_review_inner(
+    pub(crate) fn find_review_inner(
         &self,
         root_id: Uuid,
         file_path: &str,
@@ -1544,7 +1544,7 @@ impl FilesBackend {
     /// Get-or-create the review for `(root, file_path)` (issue #270).
     /// Returns `(review, created)` so the RPC wrapper knows whether to
     /// publish `ReviewCreated`.
-    fn review_for_file_inner(
+    pub(crate) fn review_for_file_inner(
         &self,
         root_id: Uuid,
         file_path: String,
@@ -1606,7 +1606,7 @@ impl FilesBackend {
         Ok(added)
     }
 
-    fn add_review_comment_inner(
+    pub(crate) fn add_review_comment_inner(
         &self,
         review_id: Uuid,
         comment: files_proto::NewReviewComment,
@@ -1645,7 +1645,7 @@ impl FilesBackend {
     /// current commit) and fall back to the recorded `commit_id`.
     /// Either way the answer is one exact change in this root's store,
     /// or [`Error::NotFound`].
-    fn resolve_named_version_inner(&self, id: Uuid) -> Result<VersionRef, Error> {
+    pub(crate) fn resolve_named_version_inner(&self, id: Uuid) -> Result<VersionRef, Error> {
         let named = self.versions.named_version(id)?;
         let root = self.get_root_info(named.root_id)?;
         let (repo, _head) = self.ensure_repo(&root)?;
@@ -1682,7 +1682,7 @@ impl FilesBackend {
         })
     }
 
-    fn start_project_version_inner(
+    pub(crate) fn start_project_version_inner(
         &self,
         root_id: Uuid,
         label: Option<String>,
@@ -1787,7 +1787,7 @@ impl FilesBackend {
         Ok(out)
     }
 
-    fn gc_root_inner(
+    pub(crate) fn gc_root_inner(
         &self,
         root_id: Uuid,
         keep_newer_secs: Option<u64>,
@@ -1861,7 +1861,7 @@ impl FilesBackend {
     /// developer shares would be a surprise in `git log`. The cadence
     /// engine still checkpoints software roots at quiescence — that is
     /// an ordinary commit on the checked-out branch.
-    fn capture_inner(
+    pub(crate) fn capture_inner(
         &self,
         root_id: Uuid,
         kind: CaptureKind,
@@ -2018,7 +2018,7 @@ impl FilesBackend {
         Ok(captured)
     }
 
-    fn checkpoint_now_inner(
+    pub(crate) fn checkpoint_now_inner(
         &self,
         root_id: Uuid,
         description: Option<String>,
@@ -2069,21 +2069,21 @@ impl FilesBackend {
         })
     }
 
-    fn snapshots_inner(&self, root_id: Uuid) -> Result<Vec<SnapshotInfo>, Error> {
+    pub(crate) fn snapshots_inner(&self, root_id: Uuid) -> Result<Vec<SnapshotInfo>, Error> {
         let root = self.get_root_info(root_id)?;
         Ok(Self::journal_of(&root)?.snapshot_infos(root_id))
     }
 
-    fn hint_activity_inner(&self, root_id: Uuid, paths: Vec<String>) -> Result<u32, Error> {
+    pub(crate) fn hint_activity_inner(&self, root_id: Uuid, paths: Vec<String>) -> Result<u32, Error> {
         self.hints().note(root_id, &paths)
     }
 
-    fn ignore_set_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
+    pub(crate) fn ignore_set_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
         ignore::stored_patterns(&repo_open::store_dir(Path::new(&root.path)))
     }
 
-    fn set_ignore_set_inner(
+    pub(crate) fn set_ignore_set_inner(
         &self,
         root_id: Uuid,
         patterns: Vec<String>,
@@ -2177,7 +2177,7 @@ impl FilesBackend {
         Ok(())
     }
 
-    fn dehydrate_inner(&self, root_id: Uuid, path: String) -> Result<BrowseEntry, Error> {
+    pub(crate) fn dehydrate_inner(&self, root_id: Uuid, path: String) -> Result<BrowseEntry, Error> {
         match self.try_dehydrate_inner(root_id, &path)? {
             DehydrateOutcome::Done(entry) => Ok(entry),
             DehydrateOutcome::Dirty => Err(Error::BadRequest(format!(
@@ -2190,7 +2190,7 @@ impl FilesBackend {
     /// outcome instead of an error, so the policy apply pass classifies
     /// it structurally rather than by matching error-message substrings
     /// (PR #289 review).
-    fn try_dehydrate_inner(&self, root_id: Uuid, path: &str) -> Result<DehydrateOutcome, Error> {
+    pub(crate) fn try_dehydrate_inner(&self, root_id: Uuid, path: &str) -> Result<DehydrateOutcome, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "dehydrate")?;
         let (disk_path, repo_path) = self.resolve_root_file(&root, path)?;
@@ -2271,7 +2271,7 @@ impl FilesBackend {
         Ok(DehydrateOutcome::Done(Self::entry_for(&disk_path, path)?))
     }
 
-    fn hydrate_inner(&self, root_id: Uuid, path: String) -> Result<BrowseEntry, Error> {
+    pub(crate) fn hydrate_inner(&self, root_id: Uuid, path: String) -> Result<BrowseEntry, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "hydrate")?;
         let (disk_path, repo_path) = self.resolve_root_file(&root, &path)?;
@@ -2381,12 +2381,12 @@ impl FilesBackend {
         Ok(())
     }
 
-    fn hydration_policy_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
+    pub(crate) fn hydration_policy_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
         hydration::stored_policy(&repo_open::store_dir(Path::new(&root.path)))
     }
 
-    fn set_hydration_policy_inner(
+    pub(crate) fn set_hydration_policy_inner(
         &self,
         root_id: Uuid,
         patterns: Vec<String>,
@@ -2396,7 +2396,7 @@ impl FilesBackend {
         hydration::save_policy(&repo_open::store_dir(Path::new(&root.path)), patterns)
     }
 
-    fn apply_hydration_policy_inner(&self, root_id: Uuid) -> Result<HydrationReport, Error> {
+    pub(crate) fn apply_hydration_policy_inner(&self, root_id: Uuid) -> Result<HydrationReport, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "hydration policy")?;
         let store_dir = repo_open::store_dir(Path::new(&root.path));
@@ -2622,7 +2622,7 @@ impl FilesBackend {
 /// through the ordinary scan machinery, so the flip is just data other
 /// subscribers — and replicas, #264 — receive as events).
 impl FilesBackend {
-    fn restart_inner(
+    pub(crate) fn restart_inner(
         &self,
         root_id: Uuid,
         mode: files_proto::RestartMode,
@@ -2951,7 +2951,7 @@ impl FilesBackend {
         Ok(pv)
     }
 
-    fn browse_at_inner(
+    pub(crate) fn browse_at_inner(
         &self,
         root_id: Uuid,
         commit_ref: String,
@@ -2992,7 +2992,7 @@ impl FilesBackend {
         Ok(out)
     }
 
-    fn copy_forward_inner(
+    pub(crate) fn copy_forward_inner(
         &self,
         root_id: Uuid,
         commit_ref: String,
@@ -3113,7 +3113,7 @@ impl FilesBackend {
 impl FilesBackend {
     /// Every `(path, per-head state)` where the visible heads disagree,
     /// journal-line head first. Empty for a single-head root.
-    fn divergences_inner(&self, root_id: Uuid) -> Result<Vec<files_proto::DivergenceInfo>, Error> {
+    pub(crate) fn divergences_inner(&self, root_id: Uuid) -> Result<Vec<files_proto::DivergenceInfo>, Error> {
         let root = self.get_root_info(root_id)?;
         let Some((repo, head)) = self.reload_existing_repo(&root)? else {
             return Ok(Vec::new());
@@ -3255,7 +3255,7 @@ impl FilesBackend {
         }
     }
 
-    fn resolve_divergence_inner(
+    pub(crate) fn resolve_divergence_inner(
         &self,
         root_id: Uuid,
         path: String,
@@ -3570,7 +3570,7 @@ impl FilesBackend {
             .map_err(to_files_error)
     }
 
-    fn adopt_replica_inner(
+    pub(crate) fn adopt_replica_inner(
         &self,
         root_id: Uuid,
         name: &str,
@@ -3879,7 +3879,7 @@ impl FilesBackend {
         self.materialize_head_inner(root_id).map_err(to_files_error)
     }
 
-    fn materialize_head_inner(&self, root_id: Uuid) -> Result<MaterializeReport, Error> {
+    pub(crate) fn materialize_head_inner(&self, root_id: Uuid) -> Result<MaterializeReport, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "materialize")?;
         let root_path = PathBuf::from(&root.path);

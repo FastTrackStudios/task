@@ -158,6 +158,31 @@ impl IgnoreSet {
         None
     }
 
+    /// The patterns one layer contributes.
+    ///
+    /// Exposed because the wire type reports the layers separately, and a
+    /// caller that cannot read them ends up mirroring these lists — which
+    /// is two sources of truth for a rule that decides what a user can
+    /// see. `Layer::Platform` also reports the AppleDouble rule, which is
+    /// a predicate rather than a pattern, spelled here as the `._*` it
+    /// approximates.
+    #[must_use]
+    pub fn patterns(&self, layer: Layer) -> Vec<String> {
+        match layer {
+            Layer::Platform => std::iter::once("._*")
+                .chain(PLATFORM.iter().copied())
+                .map(str::to_string)
+                .collect(),
+            Layer::Capability => self
+                .capabilities
+                .iter()
+                .flat_map(|c| capability_patterns(*c))
+                .map(|p| (*p).to_string())
+                .collect(),
+            Layer::Project => self.project.clone(),
+        }
+    }
+
     #[must_use]
     pub fn is_ignored(&self, path: &str) -> bool {
         self.ignored(path).is_some()
@@ -242,6 +267,37 @@ mod tests {
         let music = IgnoreSet::new([Capability::MusicProduction]);
         assert_eq!(music.ignored("01 ALL THAT I AM 2.1 Somma.ptx"), None);
         assert_eq!(music.ignored("01 All That I Am.RPP"), None);
+    }
+
+    #[test]
+    // t[verify files.ignore.layers]
+    fn every_reported_pattern_is_one_that_is_actually_enforced() {
+        // The wire type reports layers separately, so a caller reads
+        // these rather than mirroring them. A pattern that is reported
+        // but not enforced would be a lie about what is hidden.
+        let s = IgnoreSet::new([Capability::MusicProduction]);
+        assert!(s.patterns(Layer::Platform).contains(&".DS_Store".to_string()));
+        assert!(s.patterns(Layer::Capability).contains(&"*.rpp-bak".to_string()));
+        for p in s.patterns(Layer::Capability) {
+            let sample = p.replace('*', "x");
+            assert_eq!(
+                s.ignored(&sample),
+                Some(Layer::Capability),
+                "{p} is reported but does not ignore {sample}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_layer_reports_only_what_its_capabilities_bring() {
+        let none = IgnoreSet::default();
+        assert!(none.patterns(Layer::Capability).is_empty());
+        let video = IgnoreSet::new([Capability::VideoProduction]);
+        assert!(
+            !video
+                .patterns(Layer::Capability)
+                .contains(&"*.rpp-bak".to_string())
+        );
     }
 
     #[test]

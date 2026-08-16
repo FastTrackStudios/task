@@ -26,8 +26,30 @@ pub mod tree;
 pub mod version;
 
 use files_proto::error::FilesFault;
+use files_proto::id::RootId;
+use files_proto::model::FileRootInfo;
 
+use crate::backend::FilesBackend;
 use crate::error::Error;
+
+/// The root, or a typed `RootNotFound` carrying the id.
+///
+/// A free function rather than an inherent method on purpose: four lanes
+/// each adding their own `impl FilesBackend { fn root_or_fault }` would
+/// make every call site ambiguous, which is exactly what happened before
+/// this was hoisted (the lanes had grown four names for it —
+/// `root_or_fault`, `known_root`, `sync_root`, `root_of`).
+///
+/// Checking up front is what lets a `NotFound` coming back from a lane
+/// mean the *path* rather than the root.
+pub(crate) fn root_or_fault(
+    backend: &FilesBackend,
+    root_id: RootId,
+) -> Result<FileRootInfo, FilesFault> {
+    backend
+        .registry_get(root_id.get())
+        .ok_or(FilesFault::RootNotFound(root_id))
+}
 
 /// Run blocking work on the pool, mapping to the v2 fault type.
 ///

@@ -79,7 +79,7 @@ impl FilesBackend {
             .snapshot(root_id)
             .map_or_else(
                 || {
-                    self.root_or_fault(root_id).map(|_| AdoptionProgress {
+                    crate::lane::root_or_fault(self, root_id).map(|_| AdoptionProgress {
                         root_id,
                         phase: AdoptionPhase::Complete,
                         entries_seen: 0,
@@ -95,10 +95,6 @@ impl FilesBackend {
             )
     }
 
-    fn root_or_fault(&self, root_id: RootId) -> Result<FileRootInfo, FilesFault> {
-        self.registry_get(root_id.get())
-            .ok_or(FilesFault::RootNotFound(root_id))
-    }
 }
 
 impl RootsService for FilesBackend {
@@ -122,7 +118,7 @@ impl RootsService for FilesBackend {
 
     // t[impl files.adopt.resumable]
     async fn resume_adoption(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault> {
-        self.root_or_fault(root_id)?;
+        crate::lane::root_or_fault(self, root_id)?;
         self.adoptions()
             .with(root_id, |a| {
                 a.resume(Utc::now());
@@ -132,7 +128,7 @@ impl RootsService for FilesBackend {
     }
 
     async fn pause_adoption(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault> {
-        self.root_or_fault(root_id)?;
+        crate::lane::root_or_fault(self, root_id)?;
         self.adoptions()
             .with(root_id, |a| {
                 a.pause(Utc::now());
@@ -151,7 +147,7 @@ impl RootsService for FilesBackend {
     }
 
     async fn get(&self, root_id: RootId) -> Result<FileRootInfo, FilesFault> {
-        let root = self.root_or_fault(root_id)?;
+        let root = crate::lane::root_or_fault(self, root_id)?;
         let this = self.clone();
         crate::lane::blocking(move || {
             Ok(this
@@ -166,7 +162,7 @@ impl RootsService for FilesBackend {
         if name.trim().is_empty() {
             return Err(FilesFault::invalid("a root's name may not be empty"));
         }
-        let mut root = self.root_or_fault(root_id)?;
+        let mut root = crate::lane::root_or_fault(self, root_id)?;
         root.name = name;
         let this = self.clone();
         let updated = root.clone();
@@ -179,7 +175,7 @@ impl RootsService for FilesBackend {
 
     /// Stop tracking the root. Its bytes are untouched.
     async fn release(&self, root_id: RootId) -> Result<(), FilesFault> {
-        self.root_or_fault(root_id)?;
+        crate::lane::root_or_fault(self, root_id)?;
         let this = self.clone();
         crate::lane::blocking(move || {
             this.registry_remove(root_id.get())?;
