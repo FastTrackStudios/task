@@ -1,16 +1,14 @@
 #!/usr/bin/env ruby
-# Mint a MAC_APP_STORE provisioning profile via the App Store Connect API
-# and install it — the profile deploy-testflight-macos.sh embeds in the Task
-# desktop .app for TestFlight-for-Mac.
+# Mint an iOS development provisioning profile via the App Store Connect API
+# and install it, so `codesign`/dx can sign the app for a physical device.
 #
-# This is a copy of the iOS mint-dev-profile.rb specialized
-# for macOS; the iOS original stays untouched so the proven iOS flow cannot
-# regress. Differences: defaults flipped to MAC_APP_STORE + DISTRIBUTION +
-# the Task bundle id, and the App-Store-profile check treats MAC_APP_STORE
-# like IOS_APP_STORE (deviceless — the device-registration branch is dead
-# code here, kept to minimize divergence from the original).
+# Registers the target device if needed, finds the team's Development
+# certificate, ensures the bundle id exists, then creates (replacing any
+# same-named) an IOS_APP_DEVELOPMENT profile covering every registered iOS
+# device. Writes the .mobileprovision into Xcode's profiles dir and prints
+# its path.
 #
-#   ruby mint-mas-profile.rb - [bundle-id] [profile-name]
+#   ruby mint-dev-profile.rb <device-udid> [bundle-id] [profile-name]
 #
 # Reads ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH from the environment
 # (source ~/.appstoreconnect/config.env first).
@@ -22,15 +20,15 @@ require "net/http"
 require "uri"
 require "securerandom"
 
-DEVICE_UDID = ARGV[0] or abort("usage: mint-mas-profile.rb <device-udid|-> [bundle-id] [name]")
-BUNDLE_ID = ARGV[1] || "app.fasttrackstudio.task"
-# Defaults are the Mac App Store pair; overridable for parity with the
-# original script.
-PROFILE_TYPE = ENV["PROFILE_TYPE"] || "MAC_APP_STORE"
-CERT_TYPE = ENV["CERT_TYPE"] || "DISTRIBUTION"
-# Both IOS_APP_STORE and MAC_APP_STORE are deviceless App Store profiles.
-APP_STORE = PROFILE_TYPE.end_with?("APP_STORE")
-PROFILE_NAME = ARGV[2] || "Task macOS App Store"
+DEVICE_UDID = ARGV[0] or abort("usage: mint-dev-profile.rb <device-udid|-> [bundle-id] [name]")
+BUNDLE_ID = ARGV[1] || "app.fasttrackstudio"
+# Profile/cert type: development (device install) by default; set
+# PROFILE_TYPE=IOS_APP_STORE + CERT_TYPE=DISTRIBUTION for a TestFlight
+# upload profile (no device list needed there).
+PROFILE_TYPE = ENV["PROFILE_TYPE"] || "IOS_APP_DEVELOPMENT"
+CERT_TYPE = ENV["CERT_TYPE"] || "DEVELOPMENT"
+APP_STORE = PROFILE_TYPE == "IOS_APP_STORE"
+PROFILE_NAME = ARGV[2] || (APP_STORE ? "FTS App Store" : "FTS Dev")
 
 KEY_ID = ENV.fetch("ASC_KEY_ID")
 ISSUER_ID = ENV.fetch("ASC_ISSUER_ID")

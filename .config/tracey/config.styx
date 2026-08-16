@@ -19,7 +19,7 @@ specs (
     {
         name task
         include (
-            features/files/spec/files.md
+            features/**/spec/*.md
             docs/spec/**/*.md
         )
         impls (

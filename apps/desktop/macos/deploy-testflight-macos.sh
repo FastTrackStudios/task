@@ -2,10 +2,10 @@
 # Build the Task macOS desktop app (dx/Dioxus), App-Sandbox it, wrap it in a
 # signed installer .pkg, and upload to TestFlight for Mac — the macOS mirror
 # of the Task iOS flow (.github/workflows/task-ios.yml →
-# apps/fasttrackstudio/ios/deploy-testflight.sh). TestFlight then keeps the
+# apps/mobile/ios/deploy-testflight.sh). TestFlight then keeps the
 # app auto-updated on testers' Macs.
 #
-# Distinct from apps/fasttrackstudio/ios/deploy-macos.sh (which this script
+# Distinct from the FastTrackStudio repo's deploy-macos.sh (which this script
 # started from): that one makes a Developer-ID .dmg for direct download
 # (hardened runtime + notarization); this one targets TestFlight / the Mac
 # App Store — App Sandbox entitlements, "Apple Distribution" on the .app,
@@ -41,12 +41,12 @@ DX_APP_DIR="${DX_APP_DIR:-apps/desktop}"
 DX_BUNDLE_ID="${DX_BUNDLE_ID:-app.fasttrackstudio.task}"
 PRODUCT_NAME="${PRODUCT_NAME:-Task}"
 PROFILE_NAME="${PROFILE_NAME:-Task macOS App Store}"
-# The three Task apps share ONE tailwind input at apps/task/tailwind.css
+# The three Task apps share ONE tailwind input at apps/tailwind.css
 # (each app's assets/tailwind.css is generated output). Relative to DX_APP_DIR;
 # no colon so an explicitly-empty DX_TAILWIND is honored.
 DX_TAILWIND="${DX_TAILWIND-../tailwind.css}"
 # 1024px master the .icns is generated from (same art as the iOS app icon).
-ICON_1024="${ICON_1024:-$ROOT/apps/task/mobile/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png}"
+ICON_1024="${ICON_1024:-$ROOT/apps/mobile/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png}"
 
 # shellcheck disable=SC1090
 source "$HOME/.appstoreconnect/config.env"
@@ -70,14 +70,14 @@ KEYCHAIN_PW="${KEYCHAIN_PW:-}"
 # (it obtains + installs whatever is absent, no Xcode UI needed).
 SIGN_ID="$(security find-identity -v -p codesigning "$KEYCHAIN" \
     | awk -F'"' '/Apple Distribution/{print $2; exit}')"
-[ -n "$SIGN_ID" ] || { echo "ERROR: no Apple Distribution identity in $KEYCHAIN — run apps/task/desktop/macos/setup-macos.sh first." >&2; exit 1; }
+[ -n "$SIGN_ID" ] || { echo "ERROR: no Apple Distribution identity in $KEYCHAIN — run apps/desktop/macos/setup-macos.sh first." >&2; exit 1; }
 echo "=== app signing identity: $SIGN_ID (keychain: $KEYCHAIN) ==="
 
 # Installer identities are not codesigning identities — list with the default
 # policy (they never show up under -p codesigning).
 INSTALLER_ID="$(security find-identity -v "$KEYCHAIN" \
     | awk -F'"' '/3rd Party Mac Developer Installer|Mac Installer Distribution/{print $2; exit}')"
-[ -n "$INSTALLER_ID" ] || { echo "ERROR: no Mac Installer Distribution identity in $KEYCHAIN — run apps/task/desktop/macos/setup-macos.sh first." >&2; exit 1; }
+[ -n "$INSTALLER_ID" ] || { echo "ERROR: no Mac Installer Distribution identity in $KEYCHAIN — run apps/desktop/macos/setup-macos.sh first." >&2; exit 1; }
 echo "=== pkg signing identity: $INSTALLER_ID ==="
 
 # ── Mac App Store provisioning profile (embedded in the .app below) ──────────
@@ -108,7 +108,7 @@ else
         # DX_TAILWIND is relative to DX_APP_DIR. Build it from the input's
         # own directory: Tailwind v4's automatic content detection is rooted
         # at the working directory, so the wrong cwd silently drops rules.
-        # Matches apps/task/tailwind_build.rs.
+        # Matches apps/tailwind_build.rs.
         ${DX_TAILWIND:+(cd \"\$(dirname '$DX_TAILWIND')\" && tailwindcss -i \"\$(basename '$DX_TAILWIND')\" -o '$ROOT/$DX_APP_DIR/assets/tailwind.css')}
         dx build --platform macos --release
     " > /tmp/task-macos-build.log 2>&1 || true
