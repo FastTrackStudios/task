@@ -73,42 +73,86 @@ struct IrohRemotes {
     known: Arc<Mutex<HashMap<String, iroh::EndpointAddr>>>,
 }
 
-#[async_trait::async_trait]
-impl files::lane::federation::RemoteFiles for IrohRemotes {
-    async fn browse_offered(
+impl IrohRemotes {
+    /// Dial an origin and open its federation lane.
+    ///
+    /// A connection per call, which a demo can afford and a deployment
+    /// would not — pooling belongs here, and its absence is why a
+    /// relayed read costs a handshake per chunk below.
+    async fn dial(
         &self,
         origin: &EndpointId,
-        secret: &str,
-        path: &RootPath,
-    ) -> Result<Vec<files_proto::model::BrowseEntry>, files_proto::FilesFault> {
+    ) -> Result<files_proto::FederationServiceClient, files_proto::FilesFault> {
         let addr = self
             .known
             .lock()
             .expect("known peers")
             .get(&origin.0)
             .cloned()
-            .ok_or_else(|| {
-                files_proto::FilesFault::Unavailable { path: path.clone() }
+            .ok_or_else(|| files_proto::FilesFault::Unavailable {
+                path: RootPath::root(),
             })?;
-
         let link = iroh_link::connect(&self.endpoint, addr)
             .await
             .map_err(|e| files_proto::FilesFault::Io(format!("dial {origin}: {e}")))?;
         // `establish` does the handshake and opens the service lane in
         // one step — the same call the CLI makes over a WebSocket, with
         // only the link underneath it different.
-        let client: files_proto::FederationServiceClient = vox_core::initiator_on(link)
+        vox_core::initiator_on(link)
             .establish()
             .await
-            .map_err(|e| files_proto::FilesFault::Io(format!("establish: {e}")))?;
+            .map_err(|e| files_proto::FilesFault::Io(format!("establish: {e}")))
+    }
+}
 
-        client
+/// Unwrap a vox error into the fault the origin actually raised.
+fn fault(e: vox::VoxError<files_proto::FilesFault>) -> files_proto::FilesFault {
+    match e {
+        vox::VoxError::User(fault) => *fault,
+        other => files_proto::FilesFault::Io(other.to_string()),
+    }
+}
+
+#[async_trait::async_trait]
+impl files::lane::federation::RemoteFiles for IrohRemotes {
+    async fn read_offered(
+        &self,
+        origin: &EndpointId,
+        secret: &str,
+        path: &RootPath,
+    ) -> Result<files_proto::service::media::ByteTicket, files_proto::FilesFault> {
+        self.dial(origin)
+            .await?
+            .read_offered(secret.to_string(), path.clone())
+            .await
+            .map_err(fault)
+    }
+
+    async fn fetch_offered(
+        &self,
+        origin: &EndpointId,
+        secret: &str,
+        token: &str,
+        range: files_proto::service::federation::ByteRange,
+    ) -> Result<Vec<u8>, files_proto::FilesFault> {
+        self.dial(origin)
+            .await?
+            .fetch_offered(secret.to_string(), token.to_string(), range)
+            .await
+            .map_err(fault)
+    }
+
+    async fn browse_offered(
+        &self,
+        origin: &EndpointId,
+        secret: &str,
+        path: &RootPath,
+    ) -> Result<Vec<files_proto::model::BrowseEntry>, files_proto::FilesFault> {
+        self.dial(origin)
+            .await?
             .browse_offered(secret.to_string(), path.clone())
             .await
-            .map_err(|e| match e {
-                vox::VoxError::User(fault) => *fault,
-                other => files_proto::FilesFault::Io(other.to_string()),
-            })
+            .map_err(fault)
     }
 }
 
@@ -470,6 +514,50 @@ async fn main() {
             Err(format!("expected both halves, got {composed:?}"))
         },
     );
+
+    // Stream a deliverable across the boundary. VNT holds none of these
+    // bytes; `files.peering.serving` says it answers anyway, fetching
+    // from the host that has them. The caller makes the ordinary `read`
+    // call and gets an ordinary local ticket.
+    let audio = RootPath::parse("vox.wav").unwrap();
+    match files_proto::service::media::MediaService::read(&vnt.backend, sessions, audio.clone())
+        .await
+    {
+        Ok(ticket) => {
+            let mut played = Vec::new();
+            let redeemed = vnt
+                .backend
+                .redeem_bytes(&ticket.token, None, &mut played)
+                .await;
+            // A preview seeks. The whole point of a relayed ticket being
+            // seekable is that scrubbing a 4 GB reel transfers the part
+            // you scrubbed to, not the part before it.
+            let mut scrubbed = Vec::new();
+            let seek = vnt
+                .backend
+                .redeem_bytes(&ticket.token, Some((4, 7)), &mut scrubbed)
+                .await;
+            stage(
+                "files.peering.serving (stream)",
+                match (redeemed, seek) {
+                    (Ok(()), Ok(())) if played == b"vox take one" && scrubbed == b"take" => Ok(
+                        format!(
+                            "VNT served {} bytes it does not hold; range 4-7 = {:?}",
+                            played.len(),
+                            String::from_utf8_lossy(&scrubbed)
+                        ),
+                    ),
+                    (Ok(()), Ok(())) => Err(format!(
+                        "relayed the wrong bytes: {:?} / {:?}",
+                        String::from_utf8_lossy(&played),
+                        String::from_utf8_lossy(&scrubbed)
+                    )),
+                    (Err(e), _) | (_, Err(e)) => Err(format!("{e}")),
+                },
+            );
+        }
+        Err(e) => stage("files.peering.serving (stream)", Err(format!("{e}"))),
+    }
 
     // ── Peering ──────────────────────────────────────────────────
     //

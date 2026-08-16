@@ -520,10 +520,15 @@ table!(FILES_MEDIA_STREAM, "files-media-stream", "files/**", [dl "bytes"]);
 // receiver and authenticates a secret rather than a session, so it is a
 // read that carries an audit line — the one call on this surface whose
 // caller is not a member of this org.
+//
+// `read_offered` and `fetch_offered` are the same case with bytes
+// attached: `fetch_offered` is the second method on the v2 surface that
+// moves file content, and it does so to a caller on another server, so
+// `dl` here is the tier it would have earned even without the audit.
 table!(FILES_FEDERATION, "files-federation", "files/**", [
     wa "offer", wa "withdraw", rd "offered",
     wa "accept", rd "remotes", wa "forget",
-    dl "browse_offered",
+    dl "browse_offered", dl "read_offered", dl "fetch_offered",
 ]);
 
 table!(FILES_ORGANISE, "files-organise", "files/**", [

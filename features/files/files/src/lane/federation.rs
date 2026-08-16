@@ -38,7 +38,10 @@ use files_proto::id::{GrantId, RootId};
 use files_proto::model::BrowseEntry;
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
-use files_proto::service::federation::{EndpointId, FederationService, Offer, Remote};
+use files_proto::service::federation::{
+    ByteRange, EndpointId, FederationService, Offer, Remote,
+};
+use files_proto::service::media::ByteTicket;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -60,6 +63,31 @@ pub trait RemoteFiles: Send + Sync + std::fmt::Debug + 'static {
         secret: &str,
         path: &RootPath,
     ) -> Result<Vec<BrowseEntry>, FilesFault>;
+
+    /// Ask `origin` to mint a ticket for a file inside the granted
+    /// subtree. Gives this server length and content type so it can
+    /// answer its own caller truthfully.
+    async fn read_offered(
+        &self,
+        origin: &EndpointId,
+        secret: &str,
+        path: &RootPath,
+    ) -> Result<ByteTicket, FilesFault>;
+
+    /// Pull one bounded chunk of a ticket `origin` minted.
+    ///
+    /// Bounded is the point: this server is relaying, so an unbounded
+    /// read would put the whole object through its memory on the way
+    /// past — the failure `files.scale.large-media` exists to prevent,
+    /// and it does not stop being that failure because the bytes are
+    /// someone else's.
+    async fn fetch_offered(
+        &self,
+        origin: &EndpointId,
+        secret: &str,
+        token: &str,
+        range: ByteRange,
+    ) -> Result<Vec<u8>, FilesFault>;
 }
 
 /// What the origin keeps about an offer it has made.
@@ -113,6 +141,48 @@ fn mint_secret() -> String {
 }
 
 impl FilesBackend {
+    /// The offer a secret stands for, if it is still good for reading.
+    ///
+    /// Every origin-side entry point goes through here, which is what
+    /// makes a withdrawal land on the *next call of any kind* rather
+    /// than only on the one whose author remembered to check. A relayed
+    /// transfer therefore stops mid-file, not at the next file.
+    fn live_offer(&self, secret: &str, path: &RootPath) -> Result<Offered, FilesFault> {
+        let Some(offered) = read(self, |f| f.offers.get(secret).cloned()) else {
+            // Unknown and withdrawn answer alike, so a prober cannot
+            // learn whether a secret was ever real.
+            return Err(FilesFault::invalid("no such offer"));
+        };
+        if offered.withdrawn {
+            return Err(FilesFault::invalid("no such offer"));
+        }
+        if let Some(expiry) = offered.offer.expires_at
+            && expiry <= Utc::now()
+        {
+            return Err(FilesFault::invalid("no such offer"));
+        }
+        if !offered.offer.capabilities.contains(&Capability::Read) {
+            return Err(FilesFault::denied("read", path.clone()));
+        }
+        Ok(offered)
+    }
+
+    /// Resolve a receiver's path inside the subtree it was granted.
+    ///
+    /// The receiver's path is relative to what it was given, so `..`
+    /// cannot walk above it — and `RootPath::parse` already refused
+    /// `..` anyway, which makes this belt and braces on the one check
+    /// that must not fail.
+    fn inside(offered: &Offered, path: &RootPath) -> Result<RootPath, FilesFault> {
+        Ok(if offered.path.is_root() {
+            path.clone()
+        } else if path.is_root() {
+            offered.path.clone()
+        } else {
+            RootPath::parse(format!("{}/{}", offered.path, path))?
+        })
+    }
+
     /// Whether a root here is one this server accepted from elsewhere.
     ///
     /// The tree lane asks before it walks: a remote root has no live
@@ -128,6 +198,42 @@ impl FilesBackend {
     }
 
     /// Resolve a remote browse through the port, or say why not.
+    /// Mint a ticket for a file on a root accepted from elsewhere.
+    ///
+    /// The receiving half of `files.peering.serving`: this server holds
+    /// none of these bytes and still answers `read`, because a host
+    /// without the content fetches it from a host that has it. The
+    /// caller gets an ordinary local ticket and never learns the object
+    /// is somewhere else — handing back the origin's own token would
+    /// turn a first-class federated file into a download link to
+    /// another server.
+    pub(crate) async fn read_remote(
+        &self,
+        root_id: RootId,
+        path: &RootPath,
+    ) -> Result<ByteTicket, FilesFault> {
+        let Some((origin, secret)) = self.remote_of(root_id) else {
+            return Err(FilesFault::RootNotFound(root_id));
+        };
+        let Some(port) = self.remote_files() else {
+            return Err(FilesFault::Unavailable { path: path.clone() });
+        };
+        match port.read_offered(&origin, &secret, path).await {
+            Ok(remote) => {
+                self.mark_reachable(root_id, true);
+                // A local ticket standing for a remote object. Redemption
+                // relays chunk by chunk, so nothing here is downloaded
+                // up front — a preview that plays the first second of a
+                // 4 GB reel transfers the first second.
+                Ok(self.mint_relay_ticket(origin, secret, remote))
+            }
+            Err(fault) => {
+                self.mark_reachable(root_id, false);
+                Err(fault)
+            }
+        }
+    }
+
     pub(crate) async fn browse_remote(
         &self,
         root_id: RootId,
@@ -307,40 +413,52 @@ impl FederationService for FilesBackend {
     /// The origin side of a receiver's browse.
     // t[impl files.topology.federation] — the secret is the authority
     // t[impl files.access.granularity] — resolved inside the offer, never above it
+    async fn read_offered(
+        &self,
+        secret: String,
+        path: RootPath,
+    ) -> Result<ByteTicket, FilesFault> {
+        let path = path.validate()?;
+        let offered = self.live_offer(&secret, &path)?;
+        let within = Self::inside(&offered, &path)?;
+
+        // Through the media lane, so a federated read is pinned to a
+        // content address exactly as a local one is: a checkpoint
+        // landing mid-transfer cannot change the bytes under a
+        // half-served response on either side of the boundary.
+        <Self as files_proto::service::media::MediaService>::read(self, offered.root_id, within)
+            .await
+            .map_err(|_| FilesFault::PathNotFound(path))
+    }
+
+    async fn fetch_offered(
+        &self,
+        secret: String,
+        token: String,
+        range: ByteRange,
+    ) -> Result<Vec<u8>, FilesFault> {
+        // Re-checked on every chunk, not once per file: a grant
+        // withdrawn during a large transfer has to stop that transfer,
+        // or revocation means "after this 244 GB finishes".
+        self.live_offer(&secret, &RootPath::root())?;
+
+        let range = ByteRange::new(range.offset, range.len);
+        let last = range.offset.saturating_add(u64::from(range.len)).saturating_sub(1);
+        let mut buf = Vec::new();
+        self.redeem_bytes(&token, Some((range.offset, last)), &mut buf)
+            .await?;
+        Ok(buf)
+    }
+
     async fn browse_offered(
         &self,
         secret: String,
         path: RootPath,
     ) -> Result<Vec<BrowseEntry>, FilesFault> {
         let path = path.validate()?;
-        let Some(offered) = read(self, |f| f.offers.get(&secret).cloned()) else {
-            // Unknown and withdrawn answer alike, so a prober cannot
-            // learn whether a secret was ever real.
-            return Err(FilesFault::invalid("no such offer"));
-        };
-        if offered.withdrawn {
-            return Err(FilesFault::invalid("no such offer"));
-        }
-        if let Some(expiry) = offered.offer.expires_at
-            && expiry <= Utc::now()
-        {
-            return Err(FilesFault::invalid("no such offer"));
-        }
-        if !offered.offer.capabilities.contains(&Capability::Read) {
-            return Err(FilesFault::denied("read", path));
-        }
+        let offered = self.live_offer(&secret, &path)?;
 
-        // Resolve *inside* the offered subtree. The receiver's path is
-        // relative to what it was given, so `..` cannot walk above it —
-        // and `RootPath::parse` already refused `..` anyway, which makes
-        // this belt and braces on the one check that must not fail.
-        let within = if offered.path.is_root() {
-            path.clone()
-        } else if path.is_root() {
-            offered.path.clone()
-        } else {
-            RootPath::parse(format!("{}/{}", offered.path, path))?
-        };
+        let within = Self::inside(&offered, &path)?;
 
         // Through the tree lane, not the legacy browse.
         //

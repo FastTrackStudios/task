@@ -78,6 +78,7 @@ use files_proto::error::FilesFault;
 use files_proto::id::{ContentId, RootId, VersionId};
 use files_proto::model::{RenditionInfo, RenditionKind};
 use files_proto::path::RootPath;
+use files_proto::service::federation::{ByteRange, EndpointId};
 use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::media::{ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService};
 use serde::{Deserialize, Serialize};
@@ -133,6 +134,24 @@ enum ByteSource {
     /// That is a weaker promise, made explicitly rather than by
     /// accident.
     Archive { root_id: Uuid, paths: Vec<String> },
+    /// An object on another server, pulled through as it is read.
+    ///
+    /// `files.peering.serving`: a host without the content still answers
+    /// `read`, fetching from a host that has it. The token here is the
+    /// *origin's*, never handed to our caller — they hold an ordinary
+    /// local ticket, which is what keeps a federated file first-class
+    /// rather than a redirect.
+    ///
+    /// Immutable like the others: the origin pinned a content address
+    /// when it minted, so what this relays cannot change underneath a
+    /// half-served response either.
+    Relay {
+        origin: EndpointId,
+        /// Our authority at the origin, presented on every chunk — which
+        /// is what makes a revocation land mid-transfer.
+        secret: String,
+        token: String,
+    },
 }
 
 /// A minted grant. The wire [`ByteTicket`] is a projection of this.
@@ -349,6 +368,44 @@ impl FilesBackend {
                 .read_rendition_range(*root_id, file_id, start, len, dest)
                 .await
                 .map_err(fault),
+            ByteSource::Relay {
+                origin,
+                secret,
+                token,
+            } => {
+                let Some(port) = self.remote_files() else {
+                    return Err(FilesFault::Unavailable {
+                        path: files_proto::path::RootPath::root(),
+                    });
+                };
+                // Chunk at a time, so relaying a 4 GB reel costs one
+                // buffer here rather than 4 GB. This is the same bound
+                // the origin enforces; doing it on both sides means
+                // neither has to trust the other's arithmetic.
+                use tokio::io::AsyncWriteExt as _;
+                let mut sent = 0u64;
+                while sent < len {
+                    let want = u32::try_from((len - sent).min(u64::from(ByteRange::MAX_LEN)))
+                        .unwrap_or(ByteRange::MAX_LEN);
+                    let chunk = port
+                        .fetch_offered(origin, secret, token, ByteRange::new(start + sent, want))
+                        .await?;
+                    if chunk.is_empty() {
+                        // The origin ran out early. Truncating is the
+                        // only signal left once bytes are on the wire,
+                        // so say so rather than pad.
+                        return Err(FilesFault::Io(format!(
+                            "{origin}: relay ended {} bytes short",
+                            len - sent
+                        )));
+                    }
+                    sent += chunk.len() as u64;
+                    dest.write_all(&chunk)
+                        .await
+                        .map_err(|e| FilesFault::Io(format!("relay write: {e}")))?;
+                }
+                Ok(())
+            }
             ByteSource::Archive { root_id, paths } => {
                 if range.is_some() {
                     // The ticket said `seekable: false`. Refusing is the
@@ -462,6 +519,36 @@ impl FilesBackend {
     ///
     /// Called by [`crate::lane::write`], which owns `archive` on the
     /// wire but has no ticket store of its own.
+    /// Turn an origin's ticket into one of ours.
+    ///
+    /// Length and content type come from the origin — it read them from
+    /// its own store — so our caller is told the truth about an object
+    /// we do not hold. Expiry is ours and shorter is fine: re-minting
+    /// costs one round trip and a stale relay grant is worth less than
+    /// a fresh one.
+    pub(crate) fn mint_relay_ticket(
+        &self,
+        origin: EndpointId,
+        secret: String,
+        remote: ByteTicket,
+    ) -> ByteTicket {
+        self.mint(Grant {
+            source: ByteSource::Relay {
+                origin,
+                secret,
+                token: remote.token,
+            },
+            offset: 0,
+            // An origin that could not state a length minted an archive
+            // or a generated stream; relaying one is not supported, and
+            // a zero-length grant refuses every range rather than
+            // half-serving.
+            length: remote.length.unwrap_or(0),
+            content_type: remote.content_type,
+            expires_at: Utc::now() + Duration::hours(1),
+        })
+    }
+
     pub(crate) fn mint_archive(
         &self,
         root_id: RootId,
@@ -542,6 +629,13 @@ impl MediaService for FilesBackend {
     /// readable through this lane.
     // t[impl files.scale.large-media]
     async fn read(&self, root_id: RootId, path: RootPath) -> Result<ByteTicket, FilesFault> {
+        // A root accepted from elsewhere has no live tree on this disk,
+        // so resolving it locally would report a missing path for a file
+        // that exists. The tree lane asks the same question before it
+        // walks, for the same reason.
+        if self.remote_of(root_id).is_some() {
+            return self.read_remote(root_id, &path).await;
+        }
         self.source_ticket(root_id, &path, None).await
     }
 

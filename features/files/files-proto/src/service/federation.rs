@@ -38,6 +38,7 @@ use crate::error::FilesFault;
 use crate::id::{GrantId, RootId};
 use crate::path::RootPath;
 use crate::service::access::Capability;
+use crate::service::media::ByteTicket;
 
 /// Where a server is, as a peer rather than an address.
 ///
@@ -104,6 +105,33 @@ pub struct Remote {
     pub accepted_at: DateTime<Utc>,
 }
 
+/// A bounded window of an object, for a relayed read.
+///
+/// Half-open: `[offset, offset + len)`. `len` is what keeps a relay's
+/// memory flat regardless of how large the object is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct ByteRange {
+    pub offset: u64,
+    pub len: u32,
+}
+
+impl ByteRange {
+    /// The largest chunk an origin will serve in one call.
+    ///
+    /// A relay's memory ceiling, so it is enforced on the serving side
+    /// rather than trusted from the caller.
+    pub const MAX_LEN: u32 = 1 << 20;
+
+    #[must_use]
+    pub fn new(offset: u64, len: u32) -> Self {
+        Self {
+            offset,
+            len: len.min(Self::MAX_LEN),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(u8)]
 pub enum FederationEvent {
@@ -155,6 +183,41 @@ pub trait FederationService {
     /// Stop tracking a remote. The origin keeps its content; this only
     /// forgets the way back to it.
     async fn forget(&self, root_id: RootId) -> Result<(), FilesFault>;
+
+    /// Answer a receiver's call: mint a byte ticket inside an offered
+    /// subtree.
+    ///
+    /// The origin side of a read. The receiver gets length and content
+    /// type so it can answer its own caller's `read` truthfully, plus a
+    /// token to pull against — it does not get a path it could redeem
+    /// for anything else.
+    ///
+    /// The ticket is the origin's, redeemable only at the origin. That
+    /// is why this is paired with [`Self::fetch_offered`] rather than
+    /// handed onward: `files.peering.serving` says a host without the
+    /// content *fetches* it, and passing the token to the receiver's
+    /// caller would make federated media a download link to another
+    /// server, which is the outcome `files.topology.federation` refuses.
+    async fn read_offered(
+        &self,
+        secret: String,
+        path: RootPath,
+    ) -> Result<ByteTicket, FilesFault>;
+
+    /// Serve one bounded chunk of a ticket minted by
+    /// [`Self::read_offered`].
+    ///
+    /// Bounded because the receiver is relaying: an unbounded read would
+    /// put a 244 GB object through its memory on the way past, which is
+    /// the allocation failure the whole ticket design exists to avoid.
+    /// The secret is re-checked here, so a revocation lands mid-transfer
+    /// rather than at the next file.
+    async fn fetch_offered(
+        &self,
+        secret: String,
+        token: String,
+        range: ByteRange,
+    ) -> Result<Vec<u8>, FilesFault>;
 
     /// Answer a receiver's call: list a path inside an offered subtree.
     ///
