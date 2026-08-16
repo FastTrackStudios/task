@@ -339,6 +339,49 @@ visible-but-forbidden.
 
 ---
 
+## Review
+
+The guest lane. Everywhere else the caller is a member of the org and the
+backend carries their identity; here the caller is anonymous and the link *is*
+the authorisation. The client-facing experience above this belongs to charter
+[#14](https://github.com/FastTrackStudios/task/issues/14); these are what Files
+owes it.
+
+### A link authorises one review and nothing else
+
+t[files.review.scope]
+A share link resolves to exactly one review, and is re-resolved on every call so
+that disabling or expiring it binds immediately rather than at the next
+connection. It conveys no ability to browse, list or reach anything the review
+does not contain. Where download is withheld, a guest is served a proxy
+rendition and never the source bytes — a rule the serving path applies as a
+property of the scope, not as a check each method remembers to make.
+
+---
+
+### A comment belongs to the version it was made against
+
+t[files.review.version-anchored]
+Feedback records the version the reviewer was watching. A new version landing
+never silently re-points existing comments, because a note that says "the edit
+at 0:42 is wrong" is about a cut that may no longer be there. A region a comment
+cannot anchor — a page number against a video — is refused rather than flattened
+to the start of the file.
+
+---
+
+### A link identifies a review, not a person
+
+t[files.review.anonymity]
+Two visitors holding one link are indistinguishable, so nothing on the guest
+lane may depend on knowing which of them is acting. In particular no guest may
+remove feedback: a link holder cannot be shown to have written what they ask to
+delete, and deleting on the comment's id alone would let any of them remove an
+org member's. Attribution records the link, which is what the sender actually
+knows.
+
+---
+
 ## Concurrency
 
 ### What cannot be merged is flagged, not refused

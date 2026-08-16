@@ -21,8 +21,11 @@
 
 pub mod access;
 pub mod curation;
+pub mod media;
 pub mod organise;
+pub mod review;
 pub mod roots;
+pub mod search;
 pub mod sync;
 pub mod tree;
 pub mod upload;
