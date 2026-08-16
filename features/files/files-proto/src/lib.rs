@@ -73,3 +73,81 @@ pub use service::legacy::{
     files_service_stream_service_descriptor as files_stream_descriptor,
     stream_layer as files_service_stream_layer, stream_serve as serve_files_service_stream,
 };
+
+// The v2 lanes' architect-emitted vox bits, one group per module.
+// Each lane mounts independently — a descriptor plus `serve` stitched
+// into the org router — so migrating one does not disturb the rest.
+// A lane is granted in `permits.rs` in the same change that mounts it,
+// or every one of its methods fails closed in production.
+#[cfg(feature = "vox")]
+pub use service::roots::{
+    RootsServiceClient, RootsServiceRpcDispatcher as RootsDispatcher,
+    roots_service_rpc_service_descriptor as roots_descriptor,
+    layer as roots_layer, serve as serve_roots,
+};
+#[cfg(feature = "vox")]
+pub use service::tree::{
+    TreeServiceClient, TreeServiceRpcDispatcher as TreeDispatcher,
+    tree_service_rpc_service_descriptor as tree_descriptor,
+    layer as tree_layer, serve as serve_tree,
+};
+#[cfg(feature = "vox")]
+pub use service::write::{
+    WriteServiceClient, WriteServiceRpcDispatcher as WriteDispatcher,
+    write_service_rpc_service_descriptor as write_descriptor,
+    layer as write_layer, serve as serve_write,
+};
+#[cfg(feature = "vox")]
+pub use service::upload::{
+    UploadServiceClient, UploadServiceRpcDispatcher as UploadDispatcher,
+    upload_service_rpc_service_descriptor as upload_descriptor,
+    layer as upload_layer, serve as serve_upload,
+};
+#[cfg(feature = "vox")]
+pub use service::version::{
+    VersionServiceClient, VersionServiceRpcDispatcher as VersionDispatcher,
+    version_service_rpc_service_descriptor as version_descriptor,
+    layer as version_layer, serve as serve_version,
+};
+#[cfg(feature = "vox")]
+pub use service::curation::{
+    CurationServiceClient, CurationServiceRpcDispatcher as CurationDispatcher,
+    curation_service_rpc_service_descriptor as curation_descriptor,
+    layer as curation_layer, serve as serve_curation,
+};
+#[cfg(feature = "vox")]
+pub use service::sync::{
+    SyncServiceClient, SyncServiceRpcDispatcher as SyncDispatcher,
+    sync_service_rpc_service_descriptor as sync_descriptor,
+    layer as sync_layer, serve as serve_sync,
+};
+#[cfg(feature = "vox")]
+pub use service::media::{
+    MediaServiceClient, MediaServiceRpcDispatcher as MediaDispatcher,
+    media_service_rpc_service_descriptor as media_descriptor,
+    layer as media_layer, serve as serve_media,
+};
+#[cfg(feature = "vox")]
+pub use service::search::{
+    SearchServiceClient, SearchServiceRpcDispatcher as SearchDispatcher,
+    search_service_rpc_service_descriptor as search_descriptor,
+    layer as search_layer, serve as serve_search,
+};
+#[cfg(feature = "vox")]
+pub use service::access::{
+    AccessServiceClient, AccessServiceRpcDispatcher as AccessDispatcher,
+    access_service_rpc_service_descriptor as access_descriptor,
+    layer as access_layer, serve as serve_access,
+};
+#[cfg(feature = "vox")]
+pub use service::organise::{
+    OrganiseServiceClient, OrganiseServiceRpcDispatcher as OrganiseDispatcher,
+    organise_service_rpc_service_descriptor as organise_descriptor,
+    layer as organise_layer, serve as serve_organise,
+};
+#[cfg(feature = "vox")]
+pub use service::review::{
+    ReviewServiceClient, ReviewServiceRpcDispatcher as ReviewDispatcher,
+    review_service_rpc_service_descriptor as review_descriptor,
+    layer as review_layer, serve as serve_review,
+};
