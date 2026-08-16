@@ -465,7 +465,7 @@ where
                 .map(|o| o.path.clone())
                 .collect();
             if let Ok(root) = crate::lane::root_or_fault(backend, root_id) {
-                crate::lane::tree::note_write(&root, &touched, &removed);
+                crate::lane::tree::note_write(backend, &root, &touched, &removed);
             }
             Ok(WriteReceipt {
                 root_id,

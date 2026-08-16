@@ -27,14 +27,24 @@ use files_proto::path::RootPath;
 use files_proto::service::tree::{CatalogueEntry, Cursor, Freshness, Hydration};
 
 /// A change, as a client sees it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Change {
     Upserted(CatalogueEntry),
     Removed(RootPath),
 }
 
 /// One root's structure, plus the change log a client resumes from.
-#[derive(Debug, Clone)]
+///
+/// Serialisable as a whole, including the log. `storage.tier.derived`
+/// says derived state is disposable and this is still derived — a walk
+/// rebuilds it — but two things need it to *survive* anyway:
+/// `files.catalogue.offline` promises a browse with the filesystem
+/// absent, which a cold process cannot honour if the first question
+/// walks the disk to answer it; and `files.peering.replication` needs a
+/// host that holds no content to hold structure, which is precisely a
+/// catalogue with nothing under it. Disposable means safe to lose, not
+/// obliged to be lost.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 // t[impl files.catalogue.complete]
 pub struct Catalogue {
     root_id: RootId,

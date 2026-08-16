@@ -14,29 +14,36 @@
 //! implementation of the same rules, and the second one is the one that
 //! drifts.
 //!
-//! ## The catalogue is in-memory and rebuilt per process
+//! ## The catalogue is durable, and still derived
 //!
-//! Nothing populates a `Catalogue` yet — adoption writes entries to the
-//! version store, not to a replicated structure log. So this lane builds
-//! one lazily, per root, by walking the live tree the first time a
-//! catalogue question is asked, and holds it in a process-global map.
+//! Nothing populates a `Catalogue` from a replicated log yet, so this
+//! lane builds one by walking the live tree the first time a catalogue
+//! question is asked. What is new is that the result and its change log
+//! are written to disk ([`CATALOGUES_ON_DISK`]) and read back before any
+//! walk, with the process-global map in front as a cache.
 //!
-//! Be clear about what that does and does not give us:
+//! That ordering — disk, then tree — is the whole point. While the walk
+//! came first, "the holding location is gone" and "the folder is empty"
+//! produced the same answer, so `files.catalogue.offline` could not hold
+//! from a cold process and a host holding structure without content had
+//! nothing to serve. [`FilesBackend::browse_catalogued`] is the branch
+//! that distinguishes them.
 //!
-//! - It is **honest about structure**: every path the walk reached has an
-//!   entry, marked `Resident`, `Stub` or `Unavailable`, so the offline and
-//!   completeness properties hold against what was walked.
-//! - It is **not replicated, not persisted, and not incremental**. A
-//!   restart loses the catalogue and the change log with it, so a client's
-//!   cursor from before the restart resyncs from the start. That is the
-//!   safe direction (the domain's `changes_since` sends everything for a
-//!   cursor it cannot place), but it is not `files.catalogue.concurrent`
-//!   in full — convergence across servers needs the log to outlive the
-//!   process.
-//! - Nothing invalidates it. A file written after the first walk is
-//!   invisible to the catalogue until the process restarts. The watcher is
-//!   the thing that should be feeding upserts in, and wiring it is the
-//!   next piece of work, not this one.
+//! It stays *derived* under `storage.tier.derived`: deleting the file
+//! costs a walk, never data. Disposable means safe to lose, not obliged
+//! to be lost.
+//!
+//! What is still missing:
+//!
+//! - **Convergence across servers.** The log now outlives the process,
+//!   which was the prerequisite, but `Cursor` is a per-process `u64`
+//!   that restarts at zero — two hosts' cursors are incomparable, and
+//!   there is no merge rule for two servers upserting one path.
+//!   `files.peering.replication` needs both.
+//! - **Invalidation.** A file written by something other than the write
+//!   lane is invisible to the catalogue until it is rebuilt. `note_write`
+//!   folds in this crate's own mutations; the filesystem watcher is what
+//!   should feed the rest, and wiring it is separate work.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -54,6 +61,7 @@ use files_proto::service::tree::{
 use files_proto::{FilesError, FilesService};
 
 use crate::backend::FilesBackend;
+use crate::durable::Scoped;
 
 /// How many changes one page of a catalogue delta carries.
 ///
@@ -69,9 +77,34 @@ const PAGE: usize = 512;
 /// elsewhere and this lane may not grow it a field yet. Roots are keyed by
 /// `RootId`, which is a v4 UUID, so two backends in one process (the test
 /// suite does this constantly) never collide.
+///
+/// The in-memory copy is a cache over [`CATALOGUES_ON_DISK`], which is
+/// the authority across restarts. Keeping both is what lets a hot
+/// process answer without touching the disk and a cold one answer
+/// without touching the *tree*.
 fn catalogues() -> &'static Mutex<HashMap<RootId, Catalogue>> {
     static CATALOGUES: OnceLock<Mutex<HashMap<RootId, Catalogue>>> = OnceLock::new();
     CATALOGUES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The durable catalogue, per org.
+///
+/// `storage.tier.derived` says derived state is disposable, and this
+/// stays derived — losing the file costs a walk, not data. But
+/// `files.catalogue.offline` promises a browse works with the
+/// filesystem absent, and a process that rebuilds by walking on first
+/// use cannot honour that from cold. Disposable means safe to lose, not
+/// obliged to be lost.
+static CATALOGUES_ON_DISK: Scoped<HashMap<RootId, Catalogue>> = Scoped::new("catalogue");
+
+/// Write a root's catalogue through to disk.
+///
+/// Called wherever the in-memory copy changes, so the two cannot drift
+/// into a state where the durable answer is older than the served one.
+fn persist(backend: &FilesBackend, root_id: RootId, cat: &Catalogue) {
+    CATALOGUES_ON_DISK.write(backend, |book| {
+        book.insert(root_id, cat.clone());
+    });
 }
 
 /// The registered root, or the typed fault naming the id we could not
@@ -293,10 +326,60 @@ fn with_catalogue<T>(
         return Ok(f(cat));
     }
 
+    // Disk before tree. A restart must not have to walk 48,000 files to
+    // answer its first question, and a host holding structure without
+    // content has no tree to walk at all — the walk below would report
+    // its whole catalogue as empty rather than as elsewhere.
+    if let Some(stored) = CATALOGUES_ON_DISK.read(backend, |book| book.get(&root_id).cloned()) {
+        let mut guard = catalogues().lock().expect("catalogue lock poisoned");
+        let cat = guard.entry(root_id).or_insert(stored);
+        return Ok(f(cat));
+    }
+
     let built = walk(&root, Utc::now());
+    persist(backend, root_id, &built);
     let mut guard = catalogues().lock().expect("catalogue lock poisoned");
     let cat = guard.entry(root_id).or_insert(built);
     Ok(f(cat))
+}
+
+impl FilesBackend {
+    /// List from the catalogue, with no filesystem underneath.
+    ///
+    /// Everything comes back marked `Unavailable` rather than
+    /// `Resident`: the entries are real and their bytes are not here, so
+    /// claiming residency would send a caller to open a file that is not
+    /// on this machine. `files.catalogue.offline` says a location being
+    /// down is not a fact about the tree — it is a fact about the
+    /// content, and this is where that distinction is made concrete.
+    fn browse_catalogued(
+        &self,
+        root_id: RootId,
+        path: &RootPath,
+    ) -> Result<Vec<BrowseEntry>, FilesFault> {
+        with_catalogue(self, root_id, |cat| {
+            cat.children(path)
+                .into_iter()
+                .map(|e| BrowseEntry {
+                    name: e
+                        .path
+                        .components()
+                        .next_back()
+                        .unwrap_or_default()
+                        .to_string(),
+                    is_dir: matches!(e.kind, EntryKind::Directory),
+                    // The real size, from the catalogue rather than
+                    // from a file that is not here. A host that
+                    // answers "how big is this project" with zeroes
+                    // because it holds no bytes is worse than one that
+                    // refuses — it is confidently wrong.
+                    size: (!matches!(e.kind, EntryKind::Directory)).then_some(e.size),
+                    stub: true,
+                    divergent: false,
+                })
+                .collect()
+        })
+    }
 }
 
 impl TreeService for FilesBackend {
@@ -323,6 +406,22 @@ impl TreeService for FilesBackend {
         }
 
         let root = crate::lane::root_or_fault(self, root_id)?;
+
+        // No tree on this disk, and not a remote root either: this host
+        // holds the org's *structure* and not its content
+        // (`files.peering.replication`), or the holding location is
+        // simply down (`files.catalogue.offline`). Both are the same
+        // situation from here — we know what is there and cannot see it
+        // — and the catalogue is exactly the answer.
+        //
+        // Distinguished from an empty directory on purpose. Walking a
+        // path that is not there returns nothing, which reads as "this
+        // folder is empty" when the truth is "this folder is
+        // elsewhere", and that is the failure the rule names.
+        if !Path::new(&root.path).exists() {
+            return self.browse_catalogued(root_id, &path);
+        }
+
         let mut listed = <Self as FilesService>::browse(
             self,
             root_id.get(),
@@ -502,26 +601,38 @@ fn record_of(root: &FileRootInfo, path: &RootPath, now: DateTime<Utc>) -> Option
 /// first read and see the write then. Nothing here builds one, because a
 /// write must not pay for a full walk of a tree nobody has browsed.
 // t[impl files.catalogue.concurrent] — a write arrives as a delta
-pub(crate) fn note_write(root: &FileRootInfo, touched: &[RootPath], removed: &[RootPath]) {
+pub(crate) fn note_write(
+    backend: &FilesBackend,
+    root: &FileRootInfo,
+    touched: &[RootPath],
+    removed: &[RootPath],
+) {
     let root_id = RootId::new(root.id);
-    let mut guard = catalogues().lock().expect("catalogue lock poisoned");
-    let Some(cat) = guard.get_mut(&root_id) else {
-        return;
-    };
-    let now = Utc::now();
+    let updated = {
+        let mut guard = catalogues().lock().expect("catalogue lock poisoned");
+        let Some(cat) = guard.get_mut(&root_id) else {
+            return;
+        };
+        let now = Utc::now();
 
-    for path in removed {
-        cat.remove(path);
-    }
-    for path in touched {
-        // A touched path that is gone was moved away or deleted; the
-        // caller may not have distinguished the two, so resolve it here
-        // rather than requiring them to.
-        match record_of(root, path, now) {
-            Some(entry) => cat.upsert(entry),
-            None => cat.remove(path),
+        for path in removed {
+            cat.remove(path);
         }
-    }
+        for path in touched {
+            // A touched path that is gone was moved away or deleted; the
+            // caller may not have distinguished the two, so resolve it
+            // here rather than requiring them to.
+            match record_of(root, path, now) {
+                Some(entry) => cat.upsert(entry),
+                None => cat.remove(path),
+            }
+        }
+        cat.clone()
+    };
+    // Outside the lock, and unconditional: a durable copy that lags the
+    // served one is worse than none, because a restart would answer
+    // confidently with a tree that is one write out of date.
+    persist(backend, root_id, &updated);
 }
 
 #[cfg(test)]
