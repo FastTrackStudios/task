@@ -4,7 +4,7 @@
 # needs — "Apple Distribution" (signs the .app; shared with the iOS flow)
 # and "Mac Installer Distribution" (signs the App Store .pkg wrapper).
 #
-# The keychain part mirrors apps/fasttrackstudio/ios/setup-keychain.sh (see
+# The keychain part mirrors the iOS setup-keychain.sh (see
 # its comments for why a dedicated keychain is required over SSH); this
 # script additionally mints whatever key/cert material is missing via the
 # App Store Connect API helpers (mint-dist-cert.rb / mint-mac-installer.rb),
@@ -12,15 +12,15 @@
 #
 # Idempotent: safe to re-run; existing identities are left untouched.
 #
-#   bash apps/task/desktop/macos/setup-macos.sh
+#   bash apps/desktop/macos/setup-macos.sh
 #
 # Env: KEYCHAIN (default fts-build.keychain), KEYCHAIN_PW (default fts-build).
 # Needs ~/.appstoreconnect/config.env (ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_PATH).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-IOS_DIR="$ROOT/apps/fasttrackstudio/ios"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+IOS_DIR="$ROOT/apps/mobile/ios"
 
 KEYCHAIN="${KEYCHAIN:-fts-build.keychain}"
 KEYCHAIN_PW="${KEYCHAIN_PW:-fts-build}"

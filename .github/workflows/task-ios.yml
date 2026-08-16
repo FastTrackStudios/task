@@ -7,7 +7,7 @@
 # two iOS builds at once (Task and audio builds queue behind each other).
 #
 # This does NOT add a new build script — it reuses the proven, parameterized
-# `apps/fasttrackstudio/ios/deploy-testflight.sh` with Task's env overrides
+# `apps/mobile/ios/deploy-testflight.sh` with Task's env overrides
 # (documented in that script's header + `apps/watchos/project.yml`):
 #   DX_PACKAGE=task-app-mobile, DX_APP_DIR=apps/mobile, Task bundle ids,
 #   WATCH_APP=apps/watchos. The watch companion is embedded in the iOS
@@ -124,7 +124,7 @@ jobs:
           set -euo pipefail
           export PATH="/nix/var/nix/profiles/default/bin:$PATH"
           export NIX=/nix/var/nix/profiles/default/bin/nix
-          bash apps/fasttrackstudio/ios/deploy-testflight.sh
+          bash apps/mobile/ios/deploy-testflight.sh
 
       - name: Summary
         if: always()

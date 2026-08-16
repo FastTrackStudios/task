@@ -1,0 +1,42 @@
+// Tracey — requirement traceability for Task.
+//
+// Specs live beside the feature they describe, at features/<name>/spec/<name>.md,
+// with cross-cutting specs under docs/spec/. Requirements are t[feature.topic.id]
+// headings; code references them with t[impl id] / t[verify id].
+//
+// Each spec answers to a charter issue on the tracker — the charter is the
+// high-level map of hard requirements, the spec is the testable detail.
+//
+// Run `tracey_status` / `tracey_uncovered` / `tracey_untested` for coverage.
+//
+// Two traps, both of which fail the whole config silently-ish:
+//   - styx comments are `//`, not `#`. A `#` line parses as an entry and
+//     errors with "entry has too many atoms".
+//   - `prefix` is deprecated as of tracey 1.3. The prefix is inferred from
+//     the markers in the spec files themselves (here: `t[...]`).
+
+specs (
+    {
+        name task
+        include (
+            features/files/spec/files.md
+            docs/spec/**/*.md
+        )
+        impls (
+            {
+                name rust
+                include (
+                    features/**/*.rs
+                    crates/**/*.rs
+                    libs/**/*.rs
+                    apps/**/*.rs
+                )
+                exclude (
+                    target/**
+                    **/target/**
+                    libs/editor/vendor/**
+                )
+            }
+        )
+    }
+)

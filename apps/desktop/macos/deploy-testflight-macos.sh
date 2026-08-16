@@ -13,7 +13,7 @@
 #
 # Runs on airlock (headless) with the dedicated keychain:
 #   KEYCHAIN=fts-build.keychain KEYCHAIN_PW=fts-build \
-#     bash apps/task/desktop/macos/deploy-testflight-macos.sh
+#     bash apps/desktop/macos/deploy-testflight-macos.sh
 #
 # Env knobs (all optional):
 #   MARKETING_VER  CFBundleShortVersionString (default 0.0.2) — keep in step
@@ -33,11 +33,11 @@
 # mint-mas-profile.rb, exactly like the iOS flow re-mints its profile.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"        # apps/task/desktop/macos
-ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"      # repo root
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"        # apps/desktop/macos
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"      # repo root
 
 DX_PACKAGE="${DX_PACKAGE:-task-app-desktop}"
-DX_APP_DIR="${DX_APP_DIR:-apps/task/desktop}"
+DX_APP_DIR="${DX_APP_DIR:-apps/desktop}"
 DX_BUNDLE_ID="${DX_BUNDLE_ID:-app.fasttrackstudio.task}"
 PRODUCT_NAME="${PRODUCT_NAME:-Task}"
 PROFILE_NAME="${PROFILE_NAME:-Task macOS App Store}"
