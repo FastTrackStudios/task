@@ -151,3 +151,13 @@ pub use service::review::{
     review_service_rpc_service_descriptor as review_descriptor,
     layer as review_layer, serve as serve_review,
 };
+
+// The byte lane's stream sibling. Bytes ride vox like everything else;
+// the browser's service-worker adapter binds this client and answers
+// `Range` from it, and a native client needs no HTTP at all.
+#[cfg(feature = "vox")]
+pub use service::media::{
+    MediaServiceStream, MediaServiceStreamClient, MediaServiceStreamSource,
+    media_service_stream_service_descriptor as media_stream_descriptor,
+    stream_layer as media_stream_layer, stream_serve as serve_media_stream,
+};

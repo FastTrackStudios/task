@@ -221,3 +221,102 @@ async fn history_is_reachable_over_the_wire() {
         .expect("chain over vox");
     assert!(!chain.is_empty(), "a checkpointed file has a chain");
 }
+
+/// Real bytes, over vox, through the byte lane.
+///
+/// This is the transport claim the whole design rests on: bytes ride vox
+/// like every other call, so a native client needs no HTTP at all. The
+/// signed-URL rendition route is a fallback for cold guest links, not the
+/// mechanism.
+#[tokio::test(flavor = "multi_thread")]
+async fn bytes_cross_vox_and_arrive_intact() {
+    use files_proto::MediaServiceStreamClient;
+    use files_proto::service::media::{ByteFrame, ByteRequest, MediaService};
+
+    let tmp = tempfile::tempdir().expect("data tempdir");
+    let dir = tmp.path().join("mix-session");
+    std::fs::create_dir(&dir).unwrap();
+    // Big enough to span several frames, so this exercises the streaming
+    // path rather than a single-shot send.
+    let payload: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.join("mix.wav"), &payload).unwrap();
+
+    let backend = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+    let scope = Scope::new();
+    let local = LocalServer::serve(
+        LayerRouter::new()
+            .merge(files_proto::roots_layer(backend.clone()))
+            .merge(files_proto::version_layer(backend.clone()))
+            .merge(files_proto::media_layer(backend.clone()))
+            .merge(files_proto::media_stream_layer(backend.clone())),
+        scope,
+    );
+
+    let roots: RootsServiceClient = local.establish().await.expect("roots client");
+    let root = RootId::new(
+        roots
+            .adopt(AdoptRequest {
+                path: dir.to_string_lossy().into_owned(),
+                name: "Mix Session".into(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            })
+            .await
+            .expect("adopt")
+            .id,
+    );
+
+    // A ticket names an object in the store, so the content has to be
+    // checkpointed before it can be read.
+    let version: VersionServiceClient = local.establish().await.expect("version client");
+    version
+        .checkpoint(root, Some("first".into()))
+        .await
+        .expect("checkpoint");
+
+    let ticket = backend
+        .read(root, RootPath::parse("mix.wav").unwrap())
+        .await
+        .expect("mint a ticket");
+    assert_eq!(ticket.length, Some(payload.len() as u64));
+
+    let stream: MediaServiceStreamClient = local.establish().await.expect("byte lane client");
+    let (tx, mut rx) = vox::channel::<ByteFrame>();
+    let request = ByteRequest {
+        token: ticket.token.clone(),
+        range: None,
+    };
+    tokio::spawn(async move {
+        let _ = stream.bytes(request, tx).await;
+    });
+
+    let mut got = Vec::new();
+    let mut opened = None;
+    let mut done = false;
+    while let Ok(Ok(Some(frame))) =
+        tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
+    {
+        let mut copied = None;
+        let _ = frame.map(|f| copied = Some(f));
+        match copied.expect("frame") {
+            ByteFrame::Opened { length, total, .. } => opened = Some((length, total)),
+            ByteFrame::Chunk { offset, bytes } => {
+                assert_eq!(offset as usize, got.len(), "frames arrive in order");
+                got.extend_from_slice(&bytes);
+            }
+            ByteFrame::Done => {
+                done = true;
+                break;
+            }
+            ByteFrame::Failed(f) => panic!("byte lane failed: {f:?}"),
+        }
+    }
+
+    assert_eq!(
+        opened,
+        Some((payload.len() as u64, payload.len() as u64)),
+        "the stream announces its length before any bytes"
+    );
+    assert!(done, "the stream says it finished rather than just stopping");
+    assert_eq!(got, payload, "every byte arrived, in order, unaltered");
+}

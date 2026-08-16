@@ -60,6 +60,59 @@ pub enum Region {
     Whole,
 }
 
+
+/// A byte range, inclusive at both ends, relative to a ticket.
+///
+/// Inclusive because HTTP's `Range` is, and the browser adapter's whole
+/// job is to answer `Range` without translating a convention twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct ByteRange {
+    pub first: u64,
+    pub last: u64,
+}
+
+/// What to read, and how much of it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct ByteRequest {
+    /// A token from [`ByteTicket`].
+    pub token: String,
+    /// `None` reads the whole ticket.
+    pub range: Option<ByteRange>,
+}
+
+/// One frame of a byte stream.
+///
+/// A frame rather than a bare `Vec<u8>` because a stream has to be able
+/// to say three things a raw byte sequence cannot: how long it will be,
+/// that it finished, and that it did not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(u8)]
+pub enum ByteFrame {
+    /// Always first. Carries what an HTTP adapter needs for its headers
+    /// before any body arrives.
+    Opened {
+        /// Length of what will follow, honouring the request's range.
+        length: u64,
+        /// Length of the whole object, for a `Content-Range`.
+        total: u64,
+        content_type: String,
+    },
+    /// Bytes at `offset`, relative to the start of the request.
+    Chunk { offset: u64, bytes: Vec<u8> },
+    /// Everything asked for was sent.
+    Done,
+    /// It stopped part way.
+    ///
+    /// This is why bytes ride vox rather than the fallback HTTP route:
+    /// there, the status is already on the wire when the read begins, so
+    /// a mid-stream failure can only truncate the body and the client
+    /// sees a short read it must infer from `Content-Length`. Here the
+    /// stream says so.
+    Failed(crate::error::FilesFault),
+}
+
 /// Where a handoff should land.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
 #[repr(u8)]
@@ -144,4 +197,22 @@ pub trait MediaService {
         target: HandoffTarget,
         items: Vec<HandoffItem>,
     ) -> Result<Handoff, FilesFault>;
+
+    /// **The byte lane.** Redeem a [`ByteTicket`] as a stream of frames.
+    ///
+    /// Bytes ride vox like everything else, which is the design's whole
+    /// transport claim: a native client — CLI, desktop, iOS, TS — needs
+    /// no HTTP at all, and peer-to-peer rides the same iroh/QUIC the
+    /// chunk store already uses. The browser is the one exception, and
+    /// it is a transport *adapter* rather than an API: a service worker
+    /// intercepts `fetch`, answers `Range` itself, and feeds a
+    /// `ReadableStream` from this.
+    ///
+    /// Flow control is vox's, and it is the reason this is safe on a
+    /// 244 GB file: the channel carries a fixed credit, and the sink's
+    /// `send` awaits when the mailbox is full, so a client that stops
+    /// reading stops the server producing. A stream that pushed without
+    /// waiting would move the memory blow-up from the client to us.
+    #[subscribe]
+    fn bytes(&self, request: ByteRequest) -> ByteFrame;
 }

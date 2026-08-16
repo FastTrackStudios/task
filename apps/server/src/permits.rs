@@ -502,6 +502,11 @@ table!(FILES_ACCESS, "files-access", "files/**", [
 // Tagging is an ordinary write: `files.organise.manual` says a tag
 // produces a view and never folder membership, so it moves nothing and
 // changes no path. `activity` is a read of the feed.
+// The byte lane's stream sibling. `dl` — this IS bulk content leaving
+// the server, and it is the only method on the whole v2 surface that
+// moves file bytes.
+table!(FILES_MEDIA_STREAM, "files-media-stream", "files/**", [dl "bytes"]);
+
 table!(FILES_ORGANISE, "files-organise", "files/**", [
     rd "marks", wr "set_tags", wr "set_favourite", rd "tagged", rd "all_tags",
     rd "activity",
@@ -973,6 +978,7 @@ pub fn mounts() -> Vec<Mount> {
         m("core", files_proto::sync_descriptor(), FILES_SYNC),
         m("core", files_proto::access_descriptor(), FILES_ACCESS),
         m("core", files_proto::organise_descriptor(), FILES_ORGANISE),
+        m("core", files_proto::media_stream_descriptor(), FILES_MEDIA_STREAM),
         m(
             "core",
             files_storage::storage_service_descriptor(),

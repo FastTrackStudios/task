@@ -65,6 +65,27 @@ records a new version rather than discarding the old.
 
 ---
 
+### Bytes ride the same transport as everything else
+
+t[files.scale.transport]
+Content moves over the same RPC transport structural calls use, with the
+same flow control. A native client — CLI, desktop, iOS, TS — needs no second
+protocol to read a file, and peer-to-peer rides the same QUIC the chunk store
+already does.
+
+A browser is the one exception, and it is a transport *adapter* rather than an
+API of its own: a service worker answers `Range` itself and feeds a stream from
+the same lane. Any signed-URL route is a fallback for a cold guest link, never
+the mechanism.
+
+The stream carries flow control, and a client that stops reading stops the
+server producing — a lane that pushed without waiting would move the
+memory blow-up from the client to us rather than removing it. It also says
+when it has finished and when it has failed, so a truncated read is never
+mistaken for a complete one.
+
+---
+
 ## Adoption
 
 Most content does not arrive through an upload. It is already on disk, written
