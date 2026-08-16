@@ -59,6 +59,21 @@ impl Registry {
         self.persist(&roots)
     }
 
+    /// Stop tracking a root, returning what was tracked.
+    ///
+    /// Removes the index entry and nothing else: the directory, its bytes
+    /// and its `.fts-files/` history all stay exactly where they are.
+    /// Releasing is not deleting — re-adopting the same path recovers the
+    /// history, because the history lives in the tree rather than here.
+    pub fn remove(&self, id: Uuid) -> Result<Option<FileRootInfo>> {
+        let mut roots = self.roots.lock().expect("registry lock poisoned");
+        let removed = roots.remove(&id);
+        if removed.is_some() {
+            self.persist(&roots)?;
+        }
+        Ok(removed)
+    }
+
     pub fn get(&self, id: Uuid) -> Option<FileRootInfo> {
         self.roots
             .lock()

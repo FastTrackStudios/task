@@ -37,4 +37,26 @@ impl From<files_domain::cadence::Error> for Error {
     }
 }
 
+/// Onto the v2 fault type.
+///
+/// The v1 `FilesError` had four `String` variants, so this was lossy by
+/// construction. `FilesFault` carries what a caller branches on, and the
+/// variants that still arrive as prose are the ones that genuinely are —
+/// an io error and a jj backend failure describe themselves.
+impl From<Error> for files_proto::error::FilesFault {
+    fn from(err: Error) -> Self {
+        use files_proto::error::FilesFault as F;
+        match err {
+            Error::Io(e) => F::Io(e.to_string()),
+            Error::Json(e) => F::Internal(e.to_string()),
+            Error::VersionStore(e) => F::Store(e.to_string()),
+            Error::JjBackend(e) => F::Store(e.to_string()),
+            Error::Repo(m) => F::Store(m),
+            Error::NotFound(m) => F::Invalid(m),
+            Error::AlreadyExists(m) => F::AlreadyRoot(m),
+            Error::BadRequest(m) => F::Invalid(m),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;

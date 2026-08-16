@@ -228,6 +228,8 @@ pub struct FilesBackend {
     /// Storage Location works tomorrow".
     boundaries: Option<Arc<dyn LocationBoundaries>>,
     registry: Arc<Registry>,
+    /// Adoptions this process is watching (v2 `RootsService`).
+    adoptions: Arc<crate::lane::roots::Adoptions>,
     /// The org vault holding the curated version entities (issue
     /// #261). Separate from `data_dir`: a File Root's *content* is
     /// never vault-replicated, but the Named / Project Version pages
@@ -380,6 +382,7 @@ impl FilesBackend {
             confine_root,
             boundaries: None,
             registry: Arc::new(registry),
+            adoptions: Arc::new(crate::lane::roots::Adoptions::default()),
             versions: VaultVersions::new(vault_root),
             repos: Arc::new(Mutex::new(HashMap::new())),
             root_locks: Arc::new(Mutex::new(HashMap::new())),
@@ -465,6 +468,37 @@ impl FilesBackend {
     /// Every registered root, unprojected — the org-tree resolver's
     /// join input (the lineage overlay is browse-time garnish it
     /// doesn't need).
+    /// In-flight adoptions, for the v2 roots lane.
+    pub(crate) fn adoptions(&self) -> &crate::lane::roots::Adoptions {
+        self.adoptions.as_ref()
+    }
+
+    pub(crate) fn registry_get(&self, id: Uuid) -> Option<FileRootInfo> {
+        self.registry.get(id)
+    }
+
+    pub(crate) fn registry_insert(&self, root: FileRootInfo) -> Result<(), Error> {
+        self.registry.insert(root)
+    }
+
+    pub(crate) fn registry_remove(&self, id: Uuid) -> Result<(), Error> {
+        self.registry.remove(id).map(|_| ())
+    }
+
+    /// Adopt an existing directory as a root, in place.
+    ///
+    /// The v1 `create_root` under its v2 name — the operation was always
+    /// adoption, since it takes an *existing* folder and never creates
+    /// one.
+    pub(crate) fn create_root_in_place(
+        &self,
+        path: String,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<FileRootInfo, Error> {
+        self.create_root_inner(path, name, flavor)
+    }
+
     pub(crate) fn registry_list(&self) -> Vec<FileRootInfo> {
         self.registry.list()
     }
@@ -639,7 +673,7 @@ impl FilesBackend {
     /// list, not one per root, and a vault that can't be read degrades
     /// to un-badged roots rather than failing the listing: the badge is
     /// decoration on a registry-owned answer.
-    fn with_project_version(&self, mut roots: Vec<FileRootInfo>) -> Vec<FileRootInfo> {
+    pub(crate) fn with_project_version(&self, mut roots: Vec<FileRootInfo>) -> Vec<FileRootInfo> {
         let mut current: HashMap<Uuid, ProjectVersion> = HashMap::new();
         match self.versions.all_project_versions() {
             Ok(all) => {

@@ -34,6 +34,7 @@ mod entity;
 mod error;
 mod git_root;
 pub mod hydration;
+pub mod lane;
 pub mod ignore;
 mod org_tree;
 mod registry;
