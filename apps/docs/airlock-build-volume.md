@@ -78,12 +78,26 @@ Both looked well-supported and both were wrong.
 ## Automount
 
 Every path above depends on `/Volumes/build-disk` being mounted. After a
-reboot or power cut where it does not mount, the runner fails in exactly
-the silent way described above, and the three symlinks dangle with
-confusing "no such file" errors rather than an obvious "disk missing".
+reboot or power cut where it does not mount, the three symlinks dangle and
+the runner's work dir vanishes — producing "no such file" errors rather
+than an obvious "disk missing".
 
-Add an `/etc/fstab` entry (`vifs`) or a LaunchDaemon that mounts it before
-the runner agent starts.
+Volume UUID: `E8235673-ED45-47BF-834A-83AC63019904`.
+
+**What guards this today:** both Mac workflows open with a *Preflight —
+build volume mounted* step that fails with the reason if
+`/Volumes/build-disk` is absent. That lives in git, so it survives runner
+reinstalls and `svc.sh` regenerating the LaunchAgent plist.
+
+Two things deliberately NOT used:
+
+- **`/etc/fstab`** — on macOS this is mostly for *suppressing* automount
+  (`noauto`, `nobrowse`), not compelling it. diskarbitrationd already
+  mounts external volumes at boot without a login session, which is why
+  this works on a headless box at all.
+- **`KeepAlive`/`PathState` in the runner's plist** — the correct launchd
+  mechanism, but `svc.sh install` regenerates that plist from a template,
+  so the edit disappears the next time the runner is reconfigured.
 
 ## Reclaiming more space
 

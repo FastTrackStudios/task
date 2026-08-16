@@ -73,6 +73,21 @@ jobs:
     # A timeout turns a missing runner into a red X within the hour.
     timeout-minutes: 90
     steps:
+      # The runner's work dir lives on an external SSD (/Volumes/build-disk).
+      # If that volume is not mounted — after a reboot or a power cut — the
+      # runner's checkout path simply does not exist, and every later step
+      # fails with a confusing "no such file" instead of "the disk is gone".
+      # Fail here, with the reason.
+      - name: Preflight — build volume mounted
+        run: |
+          if [ ! -d /Volumes/build-disk ]; then
+            echo "ERROR: /Volumes/build-disk is not mounted on this runner." >&2
+            echo "  The runner's _work dir and ~/fts, ~/.cargo and" >&2
+            echo "  ~/task-macos-deploy all live there (see" >&2
+            echo "  apps/docs/airlock-build-volume.md). Remount it, then re-run." >&2
+            exit 1
+          fi
+          df -h /Volumes/build-disk | tail -1
       # clean:false keeps target/ between runs so nix+cargo build incrementally.
       - uses: actions/checkout@v4
         with:
