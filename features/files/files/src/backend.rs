@@ -230,6 +230,18 @@ pub struct FilesBackend {
     registry: Arc<Registry>,
     /// Adoptions this process is watching (v2 `RootsService`).
     adoptions: Arc<crate::lane::roots::Adoptions>,
+    /// How to reach another server, when something can.
+    ///
+    /// `None` on a backend with no transport wired — every test, and
+    /// any single-server deployment. Remote content then answers
+    /// `Unavailable`, which is the same shape as an origin being down:
+    /// one degradation path rather than two.
+    remotes: Option<Arc<dyn crate::lane::federation::RemoteFiles>>,
+    /// This server's own endpoint id, for the offers it mints.
+    ///
+    /// A `String` because `files` has no business depending on a
+    /// transport crate to hold a public key it only ever passes on.
+    endpoint_id: Option<String>,
     /// The org vault holding the curated version entities (issue
     /// #261). Separate from `data_dir`: a File Root's *content* is
     /// never vault-replicated, but the Named / Project Version pages
@@ -383,6 +395,8 @@ impl FilesBackend {
             boundaries: None,
             registry: Arc::new(registry),
             adoptions: Arc::new(crate::lane::roots::Adoptions::default()),
+            remotes: None,
+            endpoint_id: None,
             versions: VaultVersions::new(vault_root),
             repos: Arc::new(Mutex::new(HashMap::new())),
             root_locks: Arc::new(Mutex::new(HashMap::new())),
@@ -468,6 +482,31 @@ impl FilesBackend {
     /// Every registered root, unprojected — the org-tree resolver's
     /// join input (the lineage overlay is browse-time garnish it
     /// doesn't need).
+    /// Wire the port that reaches other servers, and this server's id.
+    ///
+    /// Called by whoever owns the transport — the federation example
+    /// does it with iroh, and the server will. Same seam as
+    /// `LocationBoundaries`: `files` states what it needs of a remote
+    /// and never learns how a connection is made.
+    #[must_use]
+    pub fn with_remotes(
+        mut self,
+        endpoint_id: impl Into<String>,
+        remotes: Arc<dyn crate::lane::federation::RemoteFiles>,
+    ) -> Self {
+        self.endpoint_id = Some(endpoint_id.into());
+        self.remotes = Some(remotes);
+        self
+    }
+
+    pub(crate) fn remote_files(&self) -> Option<Arc<dyn crate::lane::federation::RemoteFiles>> {
+        self.remotes.clone()
+    }
+
+    pub(crate) fn endpoint_id(&self) -> Option<String> {
+        self.endpoint_id.clone()
+    }
+
     /// In-flight adoptions, for the v2 roots lane.
     pub(crate) fn adoptions(&self) -> &crate::lane::roots::Adoptions {
         self.adoptions.as_ref()

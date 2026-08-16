@@ -21,6 +21,7 @@
 //! | [`upload`] | `UploadService` | `files.write.upload` |
 //! | [`version`] | `VersionService` | `files.version.*`, `files.concurrency.*` |
 //! | [`curation`] | `CurationService` | named and project versions |
+//! | [`federation`] | `FederationService` | `files.topology.federation` |
 //! | [`sync`] | `SyncService` | `files.facet.*`, `files.ignore.*`, `files.sync.*`, `files.device.*` |
 //! | [`media`] | `MediaService` | renditions, `files.handoff.*` |
 //! | [`search`] | `SearchService` | `files.index.*` |
@@ -59,6 +60,7 @@
 
 pub mod access;
 pub mod curation;
+pub mod federation;
 pub mod legacy;
 pub mod media;
 pub mod organise;
@@ -79,6 +81,7 @@ pub use legacy::{FilesError, FilesEvent as LegacyFilesEvent, FilesService};
 
 pub use access::AccessService;
 pub use curation::CurationService;
+pub use federation::FederationService;
 pub use media::MediaService;
 pub use organise::OrganiseService;
 pub use review::ReviewService;
@@ -107,6 +110,7 @@ pub enum FilesEvent {
     Upload(upload::UploadEvent),
     Version(version::VersionEvent),
     Curation(curation::CurationEvent),
+    Federation(federation::FederationEvent),
     Sync(sync::SyncEvent),
     Media(media::MediaEvent),
     Search(search::SearchEvent),

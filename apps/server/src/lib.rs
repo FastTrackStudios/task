@@ -3399,6 +3399,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             files_proto::organise_descriptor(),
             files_proto::serve_organise(org.files.clone()),
         )
+        // Federation. Mounted like any other lane: an offered subtree is
+        // reached by a peer dialling this server's iroh endpoint, and
+        // `browse_offered` is the only method here whose caller is not a
+        // member of this org.
+        .with(
+            files_proto::federation_descriptor(),
+            files_proto::serve_federation(org.files.clone()),
+        )
         // Placement — Storage Locations this org was granted, where its
         // roots live, and blob replicas (issue #262). The operator and
         // agent lanes of the same layer sit on the SERVER router, not

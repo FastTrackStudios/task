@@ -513,6 +513,19 @@ table!(FILES_ACCESS, "files-access", "files/**", [
 // moves file bytes.
 table!(FILES_MEDIA_STREAM, "files-media-stream", "files/**", [dl "bytes"]);
 
+// Content across a server boundary. `offer` and `withdraw` are audited
+// without exception, for the same reason every mutation in the access
+// lane is: they change who can reach an org's content, and here the
+// "who" is on someone else's server. `browse_offered` answers a remote
+// receiver and authenticates a secret rather than a session, so it is a
+// read that carries an audit line — the one call on this surface whose
+// caller is not a member of this org.
+table!(FILES_FEDERATION, "files-federation", "files/**", [
+    wa "offer", wa "withdraw", rd "offered",
+    wa "accept", rd "remotes", wa "forget",
+    dl "browse_offered",
+]);
+
 table!(FILES_ORGANISE, "files-organise", "files/**", [
     rd "marks", wr "set_tags", wr "set_favourite", rd "tagged", rd "all_tags",
     rd "activity",
@@ -984,6 +997,7 @@ pub fn mounts() -> Vec<Mount> {
         m("core", files_proto::sync_descriptor(), FILES_SYNC),
         m("core", files_proto::access_descriptor(), FILES_ACCESS),
         m("core", files_proto::organise_descriptor(), FILES_ORGANISE),
+        m("core", files_proto::federation_descriptor(), FILES_FEDERATION),
         m("core", files_proto::media_stream_descriptor(), FILES_MEDIA_STREAM),
         m(
             "core",

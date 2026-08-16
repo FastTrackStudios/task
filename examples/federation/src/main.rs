@@ -39,6 +39,9 @@
 
 use std::path::Path;
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use architect::{LayerRouter, iroh_link};
 use files::FilesBackend;
 use files_proto::model::RootFlavor;
@@ -46,8 +49,68 @@ use files_proto::service::roots::AdoptRequest;
 use files_proto::service::tree::TreeService;
 use files_proto::service::version::VersionService;
 use files_proto::service::write::WriteService;
+use files_proto::service::access::Capability;
+use files_proto::service::federation::{EndpointId, FederationService};
 use files_proto::service::{media::MediaService, roots::RootsService};
 use files_proto::{RootId, RootPath};
+
+
+/// The `RemoteFiles` port, over iroh.
+///
+/// `files` states what it needs of another server; this supplies it. The
+/// backend never learns that a connection exists, let alone how one is
+/// made — the same seam placement uses for storage boundaries.
+///
+/// Dialling per call is deliberate for a demo: it makes each browse
+/// obviously a real network round trip rather than a warm cache. A
+/// server pools connections.
+#[derive(Debug)]
+struct IrohRemotes {
+    endpoint: iroh::Endpoint,
+    /// Endpoint id → address. A demo stands in for the address lookup a
+    /// deployment gets from iroh's discovery; the id is still the only
+    /// thing a user ever handles.
+    known: Arc<Mutex<HashMap<String, iroh::EndpointAddr>>>,
+}
+
+#[async_trait::async_trait]
+impl files::lane::federation::RemoteFiles for IrohRemotes {
+    async fn browse_offered(
+        &self,
+        origin: &EndpointId,
+        secret: &str,
+        path: &RootPath,
+    ) -> Result<Vec<files_proto::model::BrowseEntry>, files_proto::FilesFault> {
+        let addr = self
+            .known
+            .lock()
+            .expect("known peers")
+            .get(&origin.0)
+            .cloned()
+            .ok_or_else(|| {
+                files_proto::FilesFault::Unavailable { path: path.clone() }
+            })?;
+
+        let link = iroh_link::connect(&self.endpoint, addr)
+            .await
+            .map_err(|e| files_proto::FilesFault::Io(format!("dial {origin}: {e}")))?;
+        // `establish` does the handshake and opens the service lane in
+        // one step — the same call the CLI makes over a WebSocket, with
+        // only the link underneath it different.
+        let client: files_proto::FederationServiceClient = vox_core::initiator_on(link)
+            .establish()
+            .await
+            .map_err(|e| files_proto::FilesFault::Io(format!("establish: {e}")))?;
+
+        client
+            .browse_offered(secret.to_string(), path.clone())
+            .await
+            .map_err(|e| match e {
+                vox::VoxError::User(fault) => *fault,
+                other => files_proto::FilesFault::Io(other.to_string()),
+            })
+    }
+}
 
 /// One server: an org's Files backend, served over its own iroh endpoint.
 struct Server {
@@ -64,17 +127,34 @@ impl Server {
     /// server persists it (`EngineHost::iroh(key_path, id_path)`) so its
     /// id survives a restart — which is the entire point of registering
     /// a device against an id rather than an address.
-    async fn start(name: &'static str, fixture: impl Fn(&Path)) -> Self {
+    async fn start(
+        name: &'static str,
+        known: Arc<Mutex<HashMap<String, iroh::EndpointAddr>>>,
+        fixture: impl Fn(&Path),
+    ) -> Self {
         let data = tempfile::tempdir().expect("data dir");
         let tree = data.path().join("tree");
         std::fs::create_dir_all(&tree).expect("tree");
         fixture(&tree);
 
-        let backend =
-            FilesBackend::new(data.path(), data.path().join("vault")).expect("files backend");
-
         let key = iroh::SecretKey::generate();
         let endpoint = iroh_link::bind_endpoint(key).await.expect("bind endpoint");
+        known
+            .lock()
+            .expect("known peers")
+            .insert(endpoint.id().to_string(), endpoint.addr());
+
+        // The backend reaches other servers through the port, and knows
+        // its own id so the offers it mints say where to come back to.
+        let backend = FilesBackend::new(data.path(), data.path().join("vault"))
+            .expect("files backend")
+            .with_remotes(
+                endpoint.id().to_string(),
+                Arc::new(IrohRemotes {
+                    endpoint: endpoint.clone(),
+                    known: Arc::clone(&known),
+                }),
+            );
 
         let router = LayerRouter::new()
             .merge(files_proto::roots_layer(backend.clone()))
@@ -82,7 +162,8 @@ impl Server {
             .merge(files_proto::write_layer(backend.clone()))
             .merge(files_proto::version_layer(backend.clone()))
             .merge(files_proto::media_layer(backend.clone()))
-            .merge(files_proto::media_stream_layer(backend.clone()));
+            .merge(files_proto::media_stream_layer(backend.clone()))
+            .merge(files_proto::federation_layer(backend.clone()));
 
         let serving = endpoint.clone();
         tokio::spawn(async move {
@@ -114,7 +195,8 @@ async fn main() {
     println!("\n── Two servers, addressed by public key ──────────────────\n");
 
     // The studio server: an audio session, as a mix engineer's tree.
-    let studio = Server::start("studio", |tree| {
+    let known = Arc::new(Mutex::new(HashMap::new()));
+    let studio = Server::start("studio", Arc::clone(&known), |tree| {
         let session = tree.join("Song");
         std::fs::create_dir_all(session.join("Audio Files")).unwrap();
         std::fs::write(session.join("Song.rpp"), b"REAPER project (fixture)").unwrap();
@@ -127,7 +209,7 @@ async fn main() {
     .await;
 
     // The post server: the video half of the same job, a different org.
-    let post = Server::start("post", |tree| {
+    let post = Server::start("post", Arc::clone(&known), |tree| {
         let cut = tree.join("Cut");
         std::fs::create_dir_all(cut.join("Proxies")).unwrap();
         std::fs::write(cut.join("Cut.drp"), b"Resolve project (fixture)").unwrap();
@@ -267,15 +349,71 @@ async fn main() {
         )),
     );
 
-    // Federation. Nothing implements it yet, and the scenario says so
-    // rather than skipping the stage.
+    // Federation. The studio offers its session subtree to the post
+    // server, which accepts it and browses it — over iroh, by endpoint
+    // id, with the secret standing for the grant.
+    let offer = studio
+        .backend
+        .offer(
+            studio_root,
+            RootPath::parse("Audio Files").unwrap(),
+            EndpointId(post.endpoint.id().to_string()),
+            vec![Capability::Read],
+        )
+        .await
+        .expect("offer");
+
+    let accepted = post.backend.accept(offer.clone()).await.expect("accept");
+
+    // The accepted offer is an ordinary root here: `TreeService::browse`
+    // is the same call the post server makes against its own content,
+    // and it does not know this one is not local.
+    match post.backend.browse(accepted.root_id, RootPath::root()).await {
+        Ok(entries) => {
+            let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+            stage(
+                "files.topology.federation",
+                Ok(format!("post browsed studio's subtree: {names:?}")),
+            );
+        }
+        Err(e) => stage("files.topology.federation", Err(format!("{e}"))),
+    }
+
+    // A grant stays revocable from the originating side, and binds on
+    // the receiver's next call rather than on its cooperation.
+    studio
+        .backend
+        .withdraw(offer.grant)
+        .await
+        .expect("withdraw");
+    let after = post.backend.browse(accepted.root_id, RootPath::root()).await;
     stage(
-        "files.topology.federation",
-        Err("no cross-server grant exists — files.topology.federation".into()),
+        "files.topology.federation (revoke)",
+        if after.is_err() {
+            Ok("withdrawn at the origin, refused on the next call".into())
+        } else {
+            Err("a withdrawn offer still served content".into())
+        },
     );
+
+    // An unreachable origin costs its own content and nothing else.
+    let local_still_fine = studio
+        .backend
+        .browse(studio_root, RootPath::root())
+        .await
+        .is_ok();
+    stage(
+        "project.location.degraded",
+        if local_still_fine {
+            Ok("local content unaffected by the remote's state".into())
+        } else {
+            Err("a remote's state reached local content".into())
+        },
+    );
+
     stage(
         "project.location.composed",
-        Err("a project cannot yet span two servers' roots".into()),
+        Err("one project spanning both servers' roots — project.location.composed".into()),
     );
 
     println!("\n── Both servers still serving ───────────────────────────\n");

@@ -7146,11 +7146,14 @@ name = "example-federation"
 version = "0.1.0"
 dependencies = [
  "architect",
+ "async-trait",
  "files",
  "files-proto",
  "iroh",
  "tempfile",
  "tokio",
+ "vox",
+ "vox-core",
 ]
 
 [[package]]

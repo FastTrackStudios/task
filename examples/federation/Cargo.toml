@@ -14,6 +14,9 @@ architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
 files-proto = { workspace = true, features = ["vox"] }
 iroh = { workspace = true }
+async-trait = { workspace = true }
+vox = { workspace = true }
+vox-core = "0.10.0-rc.5"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

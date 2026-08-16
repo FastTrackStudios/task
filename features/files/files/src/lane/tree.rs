@@ -311,6 +311,17 @@ impl TreeService for FilesBackend {
         // Re-validate: the type is transparent on the wire, so a hostile
         // peer's `..` arrives having never seen `parse`.
         let path = path.validate()?;
+
+        // A root accepted from another server has no live tree on this
+        // disk. Walking its path would list an empty directory as though
+        // the subtree were empty, rather than elsewhere — so it resolves
+        // through its origin instead, and the caller cannot tell the
+        // difference. That is what `files.topology.federation` means by
+        // "a first-class item, not a download link".
+        if self.remote_of(root_id).is_some() {
+            return self.browse_remote(root_id, &path).await;
+        }
+
         let root = crate::lane::root_or_fault(self, root_id)?;
         let mut listed = <Self as FilesService>::browse(
             self,

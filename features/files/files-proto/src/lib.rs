@@ -110,6 +110,12 @@ pub use service::version::{
     layer as version_layer, serve as serve_version,
 };
 #[cfg(feature = "vox")]
+pub use service::federation::{
+    FederationServiceClient, FederationServiceRpcDispatcher as FederationDispatcher,
+    federation_service_rpc_service_descriptor as federation_descriptor,
+    layer as federation_layer, serve as serve_federation,
+};
+#[cfg(feature = "vox")]
 pub use service::curation::{
     CurationServiceClient, CurationServiceRpcDispatcher as CurationDispatcher,
     curation_service_rpc_service_descriptor as curation_descriptor,
