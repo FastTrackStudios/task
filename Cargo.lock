@@ -1641,6 +1641,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "attohttpc"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16e2cdb6d5ed835199484bb92bb8b3edd526effe995c61732580439c1a67e2e9"
+dependencies = [
+ "base64 0.22.1",
+ "http",
+ "log",
+ "url",
+]
+
+[[package]]
 name = "auth"
 version = "0.1.0"
 source = "git+https://github.com/FastTrackStudios/architect?tag=v0.1.1#5cde23a3d3e319deb790979b2f2edaded9ce39fa"
@@ -4825,7 +4837,7 @@ dependencies = [
  "url",
  "uuid",
  "xml-rs 1.0.0",
- "xmltree",
+ "xmltree 0.12.0",
 ]
 
 [[package]]
@@ -9995,19 +10007,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2295ed2f9c31e471e1428a8f88a3f0e1f4b27c15049592138d1eebe9c35b183"
 dependencies = [
  "async-trait",
+ "bytes",
  "cfg-if",
  "data-encoding",
  "futures-channel",
  "futures-io",
  "futures-util",
+ "h2",
  "hickory-proto 0.26.1",
+ "http",
  "idna",
  "ipnet",
  "jni 0.22.4",
  "rand 0.10.2",
+ "rustls",
  "thiserror 2.0.20",
  "tinyvec",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "url",
 ]
@@ -10150,10 +10167,12 @@ dependencies = [
  "parking_lot",
  "rand 0.10.2",
  "resolv-conf",
+ "rustls",
  "smallvec 1.15.2",
  "system-configuration",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tracing",
 ]
 
@@ -10854,6 +10873,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd62e6b5e86ea8eeeb8db1de02880a6abc01a397b2ebb64b5d74ac255318f5cb"
 
 [[package]]
+name = "igd-next"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de7238d487a9aff61f81b5ab41c0a841532a115a398b5fa92a2fadd0885e2581"
+dependencies = [
+ "attohttpc",
+ "bytes",
+ "futures",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "rand 0.10.2",
+ "tokio",
+ "url",
+ "xmltree 0.10.3",
+]
+
+[[package]]
 name = "im"
 version = "15.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11266,6 +11305,7 @@ dependencies = [
  "papaya",
  "pin-project",
  "portable-atomic",
+ "portmapper",
  "rand 0.10.2",
  "reqwest 0.13.4",
  "rustc-hash 2.1.3",
@@ -14729,6 +14769,7 @@ dependencies = [
  "lru-slab",
  "rand 0.10.2",
  "rand_pcg",
+ "ring",
  "rustc-hash 2.1.3",
  "rustls",
  "rustls-pki-types",
@@ -16853,6 +16894,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "portmapper"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb3713e4977408279158444a18c1a01ac9bf2e7eaf1fbfd1a19ac9cd18d90721"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "derive_more 2.1.1",
+ "hyper-util",
+ "igd-next",
+ "iroh-metrics",
+ "libc",
+ "n0-error",
+ "n0-future",
+ "netwatch",
+ "num_enum 0.7.6",
+ "rand 0.10.2",
+ "serde",
+ "smallvec 1.15.2",
+ "socket2 0.6.5",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower-layer",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -22281,6 +22351,7 @@ dependencies = [
  "http",
  "httparse",
  "rand 0.10.2",
+ "ring",
  "rustls-pki-types",
  "sha1_smol",
  "simdutf8",
@@ -23987,6 +24058,15 @@ dependencies = [
  "passfd",
  "tokio",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "vox-iroh"
+version = "0.1.0"
+dependencies = [
+ "iroh",
+ "tokio",
+ "vox-stream",
 ]
 
 [[package]]
@@ -26239,6 +26319,15 @@ name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
+
+[[package]]
+name = "xmltree"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
+dependencies = [
+ "xml-rs 0.8.29",
+]
 
 [[package]]
 name = "xmltree"

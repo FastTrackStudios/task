@@ -22,6 +22,7 @@ members = [
     "apps/web",
     # ── crates/ — small shared crates ─────────────────────────────────
     "crates/note-tabs",
+    "crates/vox-iroh",
     "crates/player-ui",
     "crates/plugin",
     "crates/ui",
@@ -440,6 +441,9 @@ octocrab = "0.46"
 # Streaming FastCDC content-defined chunking, blake3 content addressing,
 # iroh-blobs as the local blob store.
 fastcdc = { version = "4", features = ["tokio"] }
+iroh = { version = "1.0" }
+vox-stream = "0.10.0-rc.5"
+vox-iroh = { path = "crates/vox-iroh" }
 iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
 blake3 = "1.8"
 # Whole-file placement: reflink where the filesystem clones extents,

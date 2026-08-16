@@ -1,0 +1,20 @@
+[package]
+name = "vox-iroh"
+description = "vox over iroh: a QUIC transport where a peer is a public key rather than an address. `vox-stream::StreamLink` already speaks any AsyncRead+AsyncWrite pair and an iroh bidirectional stream is one, so this is a protocol handler and a dial helper and nothing more — no change to vox or architect was needed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iroh.workspace = true
+vox-stream.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
