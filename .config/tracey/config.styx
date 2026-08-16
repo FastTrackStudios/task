@@ -20,6 +20,7 @@ specs (
         name task
         include (
             features/**/spec/*.md
+            docs/spec/*.md
             docs/spec/**/*.md
         )
         impls (

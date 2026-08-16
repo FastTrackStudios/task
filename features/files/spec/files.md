@@ -65,6 +65,97 @@ records a new version rather than discarding the old.
 
 ---
 
+## Adoption
+
+Most content does not arrive through an upload. It is already on disk, written
+by the applications that made it, and has to become ours without ceasing to be
+theirs.
+
+### A tree is adopted where it lies
+
+t[files.adopt.in-place]
+Adopting an existing tree as a root moves, copies and renames nothing. The
+applications already reading and writing that tree keep doing so throughout, and
+adoption never requires quiescing them or taking the tree offline.
+
+---
+
+### Structure first, content addresses later
+
+t[files.adopt.catalogue-first]
+Adoption publishes catalogue entries from what the filesystem already knows —
+name, size, timestamps — so a tree is browsable within seconds of starting
+whatever its size, long before its bytes have been read. Content addresses are
+computed in the background, and an entry whose address is not yet known is
+marked unverified rather than withheld.
+
+---
+
+### Adoption resumes, and tolerates writers
+
+t[files.adopt.resumable]
+Interrupting adoption loses only the work in flight; resuming continues rather
+than restarting. A file modified while it is being hashed is re-hashed rather
+than recorded wrongly, and no application is ever blocked so that adoption can
+finish.
+
+---
+
+## Facets
+
+### A facet is a named class of content
+
+t[files.facet.vocabulary]
+A facet names a class of content a project holds — sessions, stems, mixes,
+footage, proxies, renders. Facets are the unit of both selective sync
+(`files.sync.selective`) and placement policy (`files.scale.capacity`): one
+vocabulary serves both, and a capability declares the facets its work produces.
+
+---
+
+### Tool layouts belong to the capability
+
+t[files.facet.tool-layout]
+Where an application always produces the same layout, that mapping belongs to
+the capability rather than to any project. Pro Tools always writes `Audio
+Files`, `Bounced Files` and `Session File Backups`; Reaper always writes `Media`
+and `Backups`. Any project holding the capability recognises them with no
+configuration.
+
+---
+
+### A project maps what its tools did not create
+
+t[files.facet.project-override]
+Directories that reflect a project's own conventions rather than a tool's are
+mapped to facets by the project. An unmapped directory belongs to no facet,
+syncs with the project's default, and is reported so the mapping can be
+supplied. It is never hidden, and its facet is never guessed.
+
+---
+
+## Ignoring
+
+### Ignoring has two independent layers
+
+t[files.ignore.layers]
+A platform layer covers what an operating system leaves behind — `.DS_Store`,
+AppleDouble `._*` files, thumbnail caches — and applies everywhere regardless of
+capability. A capability layer covers what an application leaves behind (see
+`files.version.native`). Neither layer can be defeated by the other, and a file
+matching either is ignored.
+
+---
+
+### Ignored is not deleted
+
+t[files.ignore.retained]
+An ignored file is absent from user-facing listings and from history, and
+remains present on disk and synced wherever the user chose to sync the directory
+holding it. Ignoring changes what is shown and versioned, never what exists.
+
+---
+
 ## Liveness
 
 ### Changes appear instantly, everywhere
@@ -117,6 +208,66 @@ The federation model — identity, addressing, and who grants trust between
 servers — belongs to charter
 [#22](https://github.com/FastTrackStudios/task/issues/22); this rule is what
 Files does once that boundary exists.
+
+---
+
+## Catalogue
+
+Structure replicates everywhere; content replicates selectively. The catalogue
+is the replicated structure — what exists, of what kind, of what size, held
+where — and it is what makes a tree spanning several servers browsable at all.
+It is authoritative about structure and about nothing else.
+
+### The catalogue covers everything reachable
+
+t[files.catalogue.complete]
+Every file and folder the principal may reach has a catalogue entry, whatever
+its hydration state and whichever server or location holds it. An entry carries
+name, path, kind, size, content address, current version, the locations holding
+it, and hydration state. It does not carry content, renditions or extracted
+text — those are heavier and fetched on demand.
+
+---
+
+### The tree browses with no network
+
+t[files.catalogue.offline]
+The full tree — including content on servers currently unreachable — lists,
+sorts, opens to metadata and resolves links with the network entirely absent.
+What cannot be fetched is visibly unavailable rather than missing: a folder
+never appears empty because its server is down.
+
+---
+
+### The catalogue scales with file count, not bytes
+
+t[files.catalogue.bounded]
+Catalogue size is proportional to the number of files, never to their size, and
+stays small enough for a phone to hold a working set — an order of tens of
+megabytes for a tree of a hundred thousand files. A client may hold the
+catalogue for a subtree rather than the whole org, and holding a subtree
+constrains what it can browse, never what it can be told exists.
+
+---
+
+### Staleness is visible, never silent
+
+t[files.catalogue.staleness]
+Every entry records when its structure was last confirmed against its holding
+location. A client can tell what it is looking at as of when, and a view over a
+location it has not heard from says so. The catalogue is allowed to be stale; it
+is not allowed to look current when it is not.
+
+---
+
+### Structure merges; it is not last-writer-wins
+
+t[files.catalogue.concurrent]
+Structural changes made offline — create, rename, move, delete — converge with
+changes made concurrently elsewhere rather than one silently overwriting the
+other. Where intent genuinely conflicts, both are preserved and surfaced (see
+`files.version.keep-both`). Reconnecting requires no user action and no
+re-listing of the tree.
 
 ---
 
@@ -294,6 +445,17 @@ auto-backups, `.rpp-bak`, peak and render caches, internal project versions.
 These are recognised and either folded into history or excluded, never shown as
 user-facing versions. Excluding them from history does not exclude them from
 sync.
+
+---
+
+### Human version markers are labels, not lineage
+
+t[files.version.labels]
+Version markers people put in filenames — `2.1 Somma`, `v3`, `FINAL`, `Copy of
+Copy of` — are surfaced as labels on the file and never interpreted as version
+history. Ordering, ancestry and currency are never inferred from a name: a
+convention we did not define is one we can only read, since the first file that
+breaks the pattern would otherwise be silently misfiled.
 
 ---
 
