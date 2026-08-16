@@ -27,7 +27,7 @@ use files_proto::{SavePoint, SnapshotInfo};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::Result;
+use super::Result;
 
 /// Filename of the journal inside a root's store dir.
 pub const JOURNAL_FILE: &str = "cadence.json";

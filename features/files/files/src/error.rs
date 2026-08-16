@@ -28,4 +28,13 @@ pub enum Error {
     BadRequest(String),
 }
 
+impl From<files_domain::cadence::Error> for Error {
+    fn from(err: files_domain::cadence::Error) -> Self {
+        match err {
+            files_domain::cadence::Error::Io(e) => Self::Io(e),
+            files_domain::cadence::Error::Json(e) => Self::Json(e),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;

@@ -32,12 +32,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use files_proto::{RootFlavor, SavePoint};
-use jj_lib::gitignore::GitIgnoreFile;
+use files_proto::SavePoint;
 use uuid::Uuid;
 
 use super::clock::Clock;
-use crate::ignore;
+use super::filter::ActivityFilter;
 use std::sync::Arc;
 
 /// The tunables of the cadence (spec #255: "~10 min" snapshots,
@@ -193,13 +192,12 @@ impl CadenceEngine {
         &self,
         root_id: Uuid,
         paths: &[String],
-        ignores: &GitIgnoreFile,
-        flavor: RootFlavor,
+        filter: &impl ActivityFilter,
     ) -> u32 {
         let now = self.clock.now();
         let live: Vec<&String> = paths
             .iter()
-            .filter(|p| !ignore::is_ignored(ignores, p))
+            .filter(|p| !filter.is_ignored(p))
             .collect();
         if live.is_empty() {
             return 0;
@@ -211,7 +209,7 @@ impl CadenceEngine {
         state.last_activity_at = now;
         state.uncaptured_activity = true;
         for path in &live {
-            if ignore::is_project_file(path, flavor) {
+            if filter.is_project_file(path) {
                 state.pending_save_points.push(SavePoint {
                     path: (*path).clone(),
                     at: now,
@@ -388,6 +386,7 @@ impl CadenceEngine {
 mod tests {
     use super::*;
     use crate::cadence::clock::TestClock;
+    use crate::cadence::filter::SuffixFilter;
 
     fn engine() -> (Arc<TestClock>, CadenceEngine) {
         let clock = Arc::new(TestClock::default());
@@ -397,13 +396,15 @@ mod tests {
         )
     }
 
+    /// Stands in for a media root's Ignore set. The real one is jj's,
+    /// built in `files::ignore`; the engine only ever asked it these two
+    /// questions.
+    fn media_filter() -> SuffixFilter {
+        SuffixFilter::new([".rpp-bak", ".reapeaks", ".wfm"], [".rpp", ".ptx"])
+    }
+
     fn write(engine: &CadenceEngine, root: Uuid, path: &str) {
-        let n = engine.note_activity(
-            root,
-            &[path.to_string()],
-            &ignore::seed(RootFlavor::Media).unwrap(),
-            RootFlavor::Media,
-        );
+        let n = engine.note_activity(root, &[path.to_string()], &media_filter());
         assert_eq!(n, 1, "{path} should have survived the ignore set");
     }
 
@@ -449,13 +450,10 @@ mod tests {
     fn ignored_paths_never_open_a_session() {
         let (clock, engine) = engine();
         let root = Uuid::new_v4();
-        let ignores = ignore::seed(RootFlavor::Media).unwrap();
-
         let accepted = engine.note_activity(
             root,
             &["El Artisa.rpp-bak".into(), "Audio/kick.reapeaks".into()],
-            &ignores,
-            RootFlavor::Media,
+            &media_filter(),
         );
         assert_eq!(accepted, 0);
         assert!(!engine.session_open(root), "backup churn is not a session");

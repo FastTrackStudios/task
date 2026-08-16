@@ -15,11 +15,14 @@ files-store.workspace = true
 # and testable with no transport in the graph.
 files-proto = { workspace = true, default-features = false }
 chrono = { workspace = true, features = ["clock", "serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+uuid = { workspace = true, features = ["v4", "serde"] }
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-uuid = { workspace = true, features = ["v4"] }
 
 [lints]
 workspace = true

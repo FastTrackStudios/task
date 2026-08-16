@@ -16,6 +16,7 @@
 //! | Module | Spec |
 //! |---|---|
 //! | [`adopt`] | `files.adopt.*` — structure first, addresses later |
+//! | [`cadence`] | `files.version.cadence` — quiescence, save points, snapshots |
 //! | [`catalogue`] | `files.catalogue.*` — entries, staleness, cursors |
 //! | [`facet`] | `files.facet.*` — tool layouts, project overrides, unmapped |
 //! | [`hydration`] | `files.sync.selective`, `files.device.control` |
@@ -31,6 +32,7 @@
 //! version chains and divergence, and the cadence engine.
 
 pub mod adopt;
+pub mod cadence;
 pub mod catalogue;
 pub mod facet;
 pub mod hydration;
@@ -38,6 +40,7 @@ pub mod ignore;
 pub mod labels;
 
 pub use adopt::Adoption;
+pub use cadence::{CadenceConfig, CadenceEngine, Clock, SystemClock, TestClock};
 pub use catalogue::{Catalogue, Change};
 pub use facet::{Binding, Capability, Facet, FacetMap, Source};
 pub use hydration::{Decision, Reason, Subscription};

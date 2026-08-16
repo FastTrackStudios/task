@@ -273,6 +273,36 @@ pub fn is_ignored(ignores: &GitIgnoreFile, rel_path: &str) -> bool {
     }
 }
 
+/// The real Ignore set, as the cadence engine sees it.
+///
+/// The engine asks two questions about a path — is it ignored, and is it
+/// the project document — and used to be handed a `&GitIgnoreFile` and a
+/// `RootFlavor` to answer them itself. That put jj's gitignore machinery
+/// inside a state machine about time. It now takes a
+/// [`files_domain::cadence::ActivityFilter`]; this is the implementation
+/// backed by the genuine set.
+pub struct RootFilter {
+    ignores: Arc<GitIgnoreFile>,
+    flavor: RootFlavor,
+}
+
+impl RootFilter {
+    #[must_use]
+    pub fn new(ignores: Arc<GitIgnoreFile>, flavor: RootFlavor) -> Self {
+        Self { ignores, flavor }
+    }
+}
+
+impl files_domain::cadence::ActivityFilter for RootFilter {
+    fn is_ignored(&self, rel_path: &str) -> bool {
+        is_ignored(&self.ignores, rel_path)
+    }
+
+    fn is_project_file(&self, rel_path: &str) -> bool {
+        is_project_file(rel_path, self.flavor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

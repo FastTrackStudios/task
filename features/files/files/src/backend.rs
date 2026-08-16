@@ -54,10 +54,8 @@ use uuid::Uuid;
 
 use crate::badges;
 use crate::cadence::journal::{CheckpointRecord, SnapshotRecord};
-use crate::cadence::{
-    ActivitySink, CadenceConfig, CadenceEngine, Clock, Due, DueKind, Journal, RootWatcher,
-    SystemClock,
-};
+use crate::cadence::{CadenceConfig, CadenceEngine, Clock, Due, DueKind, Journal, SystemClock};
+use crate::watcher::{ActivitySink, RootWatcher};
 use crate::certify::MidHashHook;
 use crate::checkpoint::Capture;
 use crate::consts::{GIT_DIR, MARKER_FILE, STORE_DIR};
@@ -176,14 +174,15 @@ impl Hints {
             .registry
             .get(root_id)
             .ok_or_else(|| Error::NotFound(root_id.to_string()))?;
-        let ignores = Self::ignore_of(&self.ignores, &root)?;
-        Ok(self
-            .cadence
-            .note_activity(root_id, paths, &ignores, root.flavor))
+        let filter = crate::ignore::RootFilter::new(
+            Self::ignore_of(&self.ignores, &root)?,
+            root.flavor,
+        );
+        Ok(self.cadence.note_activity(root_id, paths, &filter))
     }
 }
 
-/// Watcher hints land here (see [`crate::cadence::watcher`]): the
+/// Watcher hints land here (see [`crate::watcher`]): the
 /// backend is what knows a root's flavor and Ignore set, so it is what
 /// turns a raw path list into cadence activity.
 impl ActivitySink for Hints {
@@ -868,7 +867,7 @@ impl FilesBackend {
 
     /// The root's cadence journal (issue #260).
     fn journal_of(root: &FileRootInfo) -> Result<Journal, Error> {
-        Journal::load(&repo_open::store_dir(Path::new(&root.path)))
+        Ok(Journal::load(&repo_open::store_dir(Path::new(&root.path)))?)
     }
 
     /// The tip of the root's auto-snapshot branch, if its session has
@@ -2512,7 +2511,7 @@ impl FilesBackend {
     }
 
     /// Start the server-side watcher for `root_id` — activity hints
-    /// into the cadence engine (see [`crate::cadence::watcher`]).
+    /// into the cadence engine (see [`crate::watcher`]).
     /// Idempotent: watching an already-watched root is a no-op.
     ///
     /// Blocking: establishing a recursive watch walks the whole tree

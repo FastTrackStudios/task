@@ -17,7 +17,7 @@
 //! that resolves those references into the version store's protect
 //! set, which is what makes a named deliverable immortal.
 //!
-//! Issue #260 adds the automatic half: [`cadence`] decides when a
+//! Issue #260 adds the automatic half: `files_domain::cadence` decides when a
 //! root's session takes an auto-snapshot and when it ends in a Session
 //! checkpoint, [`ignore`] holds the per-root Ignore set that keeps junk
 //! out of the store entirely, and [`certify`] is the stat sandwich that
@@ -25,7 +25,7 @@
 
 mod backend;
 mod badges;
-pub mod cadence;
+pub mod watcher;
 pub mod certify;
 mod checkpoint;
 mod consts;
@@ -49,7 +49,12 @@ mod transcode;
 mod versions;
 
 pub use backend::{Captured, FilesBackend, LocationBoundaries, MaterializeReport, SyncTreeMeta};
-pub use cadence::{CadenceConfig, CadenceEngine, Clock, SystemClock, TestClock};
+// The cadence engine moved to `files-domain`: it is a state machine
+// about time, and needs neither jj-lib nor the version store. Re-exported
+// here so callers and mount sites are unaffected.
+pub use files_domain::cadence;
+pub use files_domain::cadence::{CadenceConfig, CadenceEngine, Clock, SystemClock, TestClock};
+pub use watcher::{ActivitySink, RootWatcher};
 pub use entity::{NamedVersions, ProjectVersions};
 pub use error::{Error, Result};
 pub use files_proto::service;

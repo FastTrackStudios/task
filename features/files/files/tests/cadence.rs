@@ -665,8 +665,10 @@ async fn a_write_during_a_capture_keeps_the_session_alive() {
             cadence.note_activity(
                 root_id,
                 &["Audio Files/vox.wav".to_string()],
-                &ignore::seed(RootFlavor::Media).unwrap(),
-                RootFlavor::Media,
+                &files::ignore::RootFilter::new(
+                    ignore::seed(RootFlavor::Media).unwrap(),
+                    RootFlavor::Media,
+                ),
             );
         })));
 

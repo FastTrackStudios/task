@@ -7515,6 +7515,7 @@ dependencies = [
  "architect",
  "async-trait",
  "chrono",
+ "files-domain",
  "files-proto",
  "files-store",
  "files-transcode",
@@ -7567,8 +7568,11 @@ dependencies = [
  "chrono",
  "files-proto",
  "files-store",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tracing",
  "uuid",
 ]
 

@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 files-store.workspace = true
 architect = { workspace = true }
+files-domain.workspace = true
 files-proto = { workspace = true, features = ["vox"] }
 async-trait = "0.1"
 chrono = { workspace = true, features = ["clock", "serde"] }
