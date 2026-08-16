@@ -10,7 +10,7 @@ pub enum Error {
     #[error("registry json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("version store: {0}")]
-    VersionStore(#[from] task_files_version_store::Error),
+    VersionStore(#[from] files_store::version::Error),
     /// A failure reported by a jj backend itself — this crate talks to
     /// both Root flavors' backends through the `Backend` trait (ADR
     /// 0001: media on the CAS store, software on stock git), so their

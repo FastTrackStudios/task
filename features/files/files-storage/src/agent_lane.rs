@@ -49,7 +49,7 @@ impl StorageAgentBackend {
         T: Send + 'static,
     {
         let core = self.core.clone();
-        task_files_util::blocking(move || f(core), panicked).await
+        files_store::blocking(move || f(core), panicked).await
     }
 }
 

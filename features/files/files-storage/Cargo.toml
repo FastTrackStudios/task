@@ -9,13 +9,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+files-store.workspace = true
 architect = { workspace = true }
 files-proto = { workspace = true, features = ["vox"] }
 files-storage-proto = { workspace = true, features = ["vox"] }
 blake3 = { workspace = true }
-task-files-chunk-store = { workspace = true }
-task-files-util = { workspace = true }
-task-files-version-store = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 jj-lib = { workspace = true }
 pollster = { workspace = true }

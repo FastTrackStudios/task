@@ -63,16 +63,15 @@ members = [
     # email-* crates without the full task-ui shell.
     "features/email/examples/email-client",
     "features/files/files",
-    "features/files/files-chunk-store",
     "features/files/files-daemon",
+    "features/files/files-domain",
     "features/files/files-proto",
     "features/files/files-storage",
+    "features/files/files-store",
     "features/files/files-storage-proto",
     "features/files/files-sync",
     "features/files/files-transcode",
     "features/files/files-ui",
-    "features/files/files-util",
-    "features/files/files-version-store",
     "features/files/files-webdav",
     "features/finance/finance",
     "features/finance/finance-db",
@@ -227,16 +226,15 @@ agent-worktree = { path = "features/agent/agent-worktree" }
 # features/files — the Files platform (CAS chunk store, version store,
 # RPC surface, placement, sync, transcode, WebDAV bridge)
 files = { path = "features/files/files" }
-task-files-chunk-store = { path = "features/files/files-chunk-store" }
+files-domain = { path = "features/files/files-domain" }
 files-proto = { path = "features/files/files-proto", default-features = false }
 files-storage = { path = "features/files/files-storage" }
 files-storage-proto = { path = "features/files/files-storage-proto", default-features = false }
+files-store = { path = "features/files/files-store" }
 files-sync = { path = "features/files/files-sync" }
 files-transcode = { path = "features/files/files-transcode" }
 files-ui = { path = "features/files/files-ui" }
 files-webdav = { path = "features/files/files-webdav" }
-task-files-util = { path = "features/files/files-util" }
-task-files-version-store = { path = "features/files/files-version-store" }
 # features/vault — file-backed vault layer + CRDT reconciliation
 vault = { path = "features/vault/vault" }
 vault-collab = { path = "features/vault/vault-collab" }

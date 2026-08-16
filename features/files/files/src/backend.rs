@@ -1,6 +1,6 @@
 //! [`FilesBackend`]: server-side [`FilesService`] impl. Wraps
 //! [`Registry`] (root identity) and one
-//! `task_files_version_store::VersionStoreBackend`-backed jj repo per
+//! `files_store::version::VersionStoreBackend`-backed jj repo per
 //! root (opened lazily, cached for the process's lifetime — see
 //! [`crate::repo_open`]).
 //!
@@ -49,7 +49,7 @@ use jj_lib::backend::{Backend, ChangeId, CommitId};
 use jj_lib::object_id::{HexPrefix, ObjectId as _, PrefixResolution};
 use jj_lib::repo::{ReadonlyRepo, Repo as _};
 use jj_lib::repo_path::{RepoPath, RepoPathBuf};
-use task_files_version_store::VersionStoreBackend;
+use files_store::version::VersionStoreBackend;
 use uuid::Uuid;
 
 use crate::badges;
@@ -305,9 +305,9 @@ impl std::fmt::Debug for FilesBackend {
 
 /// A shared-confinement refusal, in this crate's vocabulary. A rejected
 /// or escaping path is a bad request; an I/O fault underneath is one.
-fn confinement(err: task_files_util::PathError) -> Error {
+fn confinement(err: files_store::PathError) -> Error {
     match err {
-        task_files_util::PathError::Io(e) => Error::BadRequest(e.to_string()),
+        files_store::PathError::Io(e) => Error::BadRequest(e.to_string()),
         other => Error::BadRequest(other.to_string()),
     }
 }
@@ -338,7 +338,7 @@ where
     F: FnOnce() -> Result<T, Error> + Send + 'static,
     T: Send + 'static,
 {
-    task_files_util::blocking(f, |e| Error::Io(std::io::Error::other(e)))
+    files_store::blocking(f, |e| Error::Io(std::io::Error::other(e)))
         .await
         .map_err(to_files_error)
 }
@@ -442,7 +442,7 @@ impl FilesBackend {
     /// `is_confined(path) -> bool` helper so that other surfaces over
     /// the same roots — the WebDAV bridge (`files-webdav`, issue #274)
     /// checks a root's live tree before handing a filesystem view of it
-    /// to a network client — can call [`task_files_util::confine`]
+    /// to a network client — can call [`files_store::confine`]
     /// directly and *keep the error kind*. A `bool` collapses
     /// `PathError::Escapes` (a genuine confinement breach, alert-worthy)
     /// into `PathError::Io` (a temporarily-unmounted volume, EIO), and
@@ -547,7 +547,7 @@ impl FilesBackend {
         side_b: &[u8],
     ) -> Result<(), FilesError> {
         use jj_lib::repo_path::RepoPathBuf;
-        use task_files_version_store::checkpoint::{Change, checkpoint};
+        use files_store::version::checkpoint::{Change, checkpoint};
 
         let this = self.clone();
         let path = path.to_string();
@@ -672,7 +672,7 @@ impl FilesBackend {
     /// itself must exist as a directory, checked by the caller first)
     /// and `drive_browse`.
     ///
-    /// The check itself is `task_files_util::confine`, shared with
+    /// The check itself is `files_store::confine`, shared with
     /// `files-storage`'s grant-prefix enforcement: it was written three
     /// times across the platform, so a hardening fix to one copy left
     /// the others escapable (PR #284 review).
@@ -733,13 +733,13 @@ impl FilesBackend {
     }
 
     fn confine(&self, requested: &Path) -> Result<PathBuf, Error> {
-        let own = task_files_util::confine(requested, &self.confine_root);
+        let own = files_store::confine(requested, &self.confine_root);
         if own.is_ok() {
             return own.map_err(confinement);
         }
         if let Some(boundaries) = &self.boundaries {
             for boundary in boundaries.permitted() {
-                if let Ok(path) = task_files_util::confine(requested, &boundary) {
+                if let Ok(path) = files_store::confine(requested, &boundary) {
                     return Ok(path);
                 }
             }
@@ -1210,8 +1210,8 @@ impl FilesBackend {
             // confinement check (PR #284 review) rather than an inline
             // prefix compare — same guard `files-storage` applies to a
             // Storage grant's prefix, so a hardening fix reaches both.
-            task_files_util::confine(target, &root_path).map_err(|e| match e {
-                task_files_util::PathError::Escapes { .. } => {
+            files_store::confine(target, &root_path).map_err(|e| match e {
+                files_store::PathError::Escapes { .. } => {
                     Error::BadRequest(format!("subpath escapes the root: {subpath}"))
                 }
                 other => Error::BadRequest(other.to_string()),
@@ -1310,7 +1310,7 @@ impl FilesBackend {
         let backend = repo.store().backend();
         let repo_path = RepoPathBuf::from_internal_string(&path)
             .map_err(|e| Error::BadRequest(format!("{path:?}: {e}")))?;
-        let entries = pollster::block_on(task_files_version_store::chain::version_chain(
+        let entries = pollster::block_on(files_store::version::chain::version_chain(
             backend, &head, &repo_path,
         ))?;
         // Curated metadata (issue #261): the Vault, not the store, is
@@ -1802,7 +1802,7 @@ impl FilesBackend {
             ))
             .unwrap_or(std::time::UNIX_EPOCH);
 
-        let stats = pollster::block_on(task_files_version_store::gc::sweep(
+        let stats = pollster::block_on(files_store::version::gc::sweep(
             backend,
             repo.readonly_index().as_index(),
             keep_newer,
@@ -2085,7 +2085,7 @@ impl FilesBackend {
         let root_path = PathBuf::from(&root.path);
         let disk_path = root_path.join(repo_path.as_internal_file_string());
         if let Ok(canonical) = disk_path.canonicalize() {
-            task_files_util::confine(&canonical, &root_path).map_err(confinement)?;
+            files_store::confine(&canonical, &root_path).map_err(confinement)?;
         }
         Ok((disk_path, repo_path))
     }
@@ -2105,7 +2105,7 @@ impl FilesBackend {
                     jj_lib::backend::BackendError::Other("conflicted root tree".into())
                 })?;
             let tree = backend.read_tree(RepoPath::root(), &tree_id).await?;
-            task_files_version_store::chain::lookup_dyn(backend, &tree, repo_path).await
+            files_store::version::chain::lookup_dyn(backend, &tree, repo_path).await
         })
         .map_err(|e| Error::Repo(format!("reading head tree: {e}")))?;
         Ok(match value {
@@ -2725,7 +2725,7 @@ impl FilesBackend {
             if !disk.exists() {
                 continue;
             }
-            let Some(existing) = pollster::block_on(task_files_version_store::chain::lookup_dyn(
+            let Some(existing) = pollster::block_on(files_store::version::chain::lookup_dyn(
                 backend, &head_tree, repo_path,
             ))?
             else {
@@ -3011,7 +3011,7 @@ impl FilesBackend {
         for p in &paths {
             let (disk, repo_path) = self.resolve_root_file(&root, p)?;
             let Some(jj_lib::backend::TreeValue::File { id, executable, .. }) = pollster::block_on(
-                task_files_version_store::chain::lookup_dyn(backend, &source_tree, &repo_path),
+                files_store::version::chain::lookup_dyn(backend, &source_tree, &repo_path),
             )?
             else {
                 return Err(Error::NotFound(format!(
@@ -3023,7 +3023,7 @@ impl FilesBackend {
                 // only content that is already versioned. Unversioned
                 // work is refused, never clobbered.
                 let head_id = match pollster::block_on(
-                    task_files_version_store::chain::lookup_dyn(backend, &head_tree, &repo_path),
+                    files_store::version::chain::lookup_dyn(backend, &head_tree, &repo_path),
                 )? {
                     Some(jj_lib::backend::TreeValue::File { id, .. }) => Some(id),
                     _ => None,
@@ -3287,7 +3287,7 @@ impl FilesBackend {
                 .map_err(|_| Error::Repo("conflicted tree".into()))?;
             let tree = pollster::block_on(backend.read_tree(RepoPath::root(), &tree_id))?;
             Ok(pollster::block_on(
-                task_files_version_store::chain::lookup_dyn(backend, &tree, p),
+                files_store::version::chain::lookup_dyn(backend, &tree, p),
             )?)
         };
 
@@ -3430,7 +3430,7 @@ impl FilesBackend {
                 continue;
             }
             if let Some(disk_id) = content.probe(&disk)? {
-                let known = match task_files_chunk_store::FileId::from_hex(&disk_id.hex()) {
+                let known = match files_store::chunk::FileId::from_hex(&disk_id.hex()) {
                     Ok(fid) => self
                         .with_version_store(root_id, |vs| pollster::block_on(vs.chunks().has(fid)))
                         .map_err(|e| Error::Repo(e.to_string()))?,
@@ -3737,12 +3737,12 @@ impl FilesBackend {
         let expected = chunk_file_id_from_hex(file_id_hex)?;
         let mut refs = Vec::with_capacity(chunks.len());
         for (hash_hex, len) in chunks {
-            refs.push(task_files_chunk_store::ChunkRef {
+            refs.push(files_store::chunk::ChunkRef {
                 hash: chunk_hash_from_hex(&hash_hex)?,
                 len,
             });
         }
-        let manifest = task_files_chunk_store::Manifest::new(refs);
+        let manifest = files_store::chunk::Manifest::new(refs);
         if manifest.file_id() != expected {
             return Err(FilesError::BadRequest(format!(
                 "manifest re-derives to {}, peer claimed {file_id_hex}",
@@ -3886,7 +3886,7 @@ impl FilesBackend {
                     // manifest for it) is versioned SOMEWHERE — safe to
                     // move aside; unknown content is unversioned work
                     // and stays untouched.
-                    let known = match task_files_chunk_store::FileId::from_hex(&cur.hex()) {
+                    let known = match files_store::chunk::FileId::from_hex(&cur.hex()) {
                         Ok(cur_id) => self
                             .with_version_store(root_id, |vs| {
                                 pollster::block_on(vs.chunks().has(cur_id))
@@ -3984,7 +3984,7 @@ impl FilesBackend {
             self.restore_content(repo, path, &disk, want_id, false)?;
             report.written.push(rel);
         } else {
-            let file_id = task_files_chunk_store::FileId::from_hex(&want_id.hex())
+            let file_id = files_store::chunk::FileId::from_hex(&want_id.hex())
                 .map_err(|e| Error::VersionStore(e.into()))?;
             let size = self
                 .with_version_store(root.id, |vs| {
@@ -4048,13 +4048,13 @@ fn hex_bytes(hex: &str) -> Result<Vec<u8>, FilesError> {
         .collect()
 }
 
-fn chunk_hash_from_hex(hex: &str) -> Result<task_files_chunk_store::blake3::Hash, FilesError> {
-    task_files_chunk_store::blake3::Hash::from_hex(hex)
+fn chunk_hash_from_hex(hex: &str) -> Result<files_store::chunk::blake3::Hash, FilesError> {
+    files_store::chunk::blake3::Hash::from_hex(hex)
         .map_err(|e| FilesError::BadRequest(format!("{hex}: {e}")))
 }
 
-fn chunk_file_id_from_hex(hex: &str) -> Result<task_files_chunk_store::FileId, FilesError> {
-    task_files_chunk_store::FileId::from_hex(hex)
+fn chunk_file_id_from_hex(hex: &str) -> Result<files_store::chunk::FileId, FilesError> {
+    files_store::chunk::FileId::from_hex(hex)
         .map_err(|e| FilesError::BadRequest(format!("{hex}: {e}")))
 }
 
@@ -4062,7 +4062,7 @@ fn chunk_file_id_from_hex(hex: &str) -> Result<task_files_chunk_store::FileId, F
 /// is `NotFound` (the streaming route's 404), anything else is `Io`.
 fn rendition_read_err(file_id_hex: &str, e: files_transcode::Error) -> FilesError {
     match e {
-        files_transcode::Error::ChunkStore(task_files_chunk_store::Error::UnknownFileId(_)) => {
+        files_transcode::Error::ChunkStore(files_store::chunk::Error::UnknownFileId(_)) => {
             FilesError::NotFound(format!("rendition {file_id_hex}"))
         }
         other => FilesError::Io(format!("rendition {file_id_hex}: {other}")),
@@ -4124,8 +4124,8 @@ impl FilesBackend {
         at: Option<&str>,
     ) -> Result<
         (
-            Arc<task_files_chunk_store::ChunkStore>,
-            task_files_chunk_store::FileId,
+            Arc<files_store::chunk::ChunkStore>,
+            files_store::chunk::FileId,
             PathBuf,
         ),
         Error,
@@ -4143,7 +4143,7 @@ impl FilesBackend {
                 "{path}: not tracked by that version"
             )));
         };
-        let source_fid = task_files_chunk_store::FileId::from_hex(&source_id.hex())
+        let source_fid = files_store::chunk::FileId::from_hex(&source_id.hex())
             .map_err(|e| Error::Repo(format!("source file id: {e}")))?;
         let chunks = self
             .with_version_store(root_id, |vs| vs.chunks().clone())
@@ -4255,13 +4255,13 @@ impl FilesBackend {
         &self,
         root_id: Uuid,
         head: &CommitId,
-    ) -> Result<Vec<task_files_chunk_store::FileId>, Error> {
+    ) -> Result<Vec<files_store::chunk::FileId>, Error> {
         let (repo, _) = self.ensure_repo(&self.get_root_info(root_id)?)?;
         let backend = repo.store().backend();
         let files = Self::tree_files_of(backend, head)?;
         let mut out = Vec::new();
         for (_path, id) in files {
-            if let Ok(fid) = task_files_chunk_store::FileId::from_hex(&id.hex()) {
+            if let Ok(fid) = files_store::chunk::FileId::from_hex(&id.hex()) {
                 out.push(fid);
             }
         }
@@ -4281,7 +4281,7 @@ impl FilesBackend {
             .rendition_store(root_id, Path::new(&root.path))
             .await
             .map_err(to_files_error)?;
-        let fid = task_files_chunk_store::FileId::from_hex(file_id_hex)
+        let fid = files_store::chunk::FileId::from_hex(file_id_hex)
             .map_err(|e| FilesError::BadRequest(format!("{file_id_hex}: {e}")))?;
         Ok(store.has_content(fid).await)
     }
@@ -4305,7 +4305,7 @@ impl FilesBackend {
             .rendition_store(root_id, Path::new(&root.path))
             .await
             .map_err(to_files_error)?;
-        let fid = task_files_chunk_store::FileId::from_hex(file_id_hex)
+        let fid = files_store::chunk::FileId::from_hex(file_id_hex)
             .map_err(|e| FilesError::BadRequest(format!("{file_id_hex}: {e}")))?;
         store
             .read_to(fid, dest)
@@ -4321,7 +4321,7 @@ impl FilesBackend {
             .rendition_store(root_id, Path::new(&root.path))
             .await
             .map_err(to_files_error)?;
-        let fid = task_files_chunk_store::FileId::from_hex(file_id_hex)
+        let fid = files_store::chunk::FileId::from_hex(file_id_hex)
             .map_err(|e| FilesError::BadRequest(format!("{file_id_hex}: {e}")))?;
         store
             .content_len(fid)
@@ -4348,7 +4348,7 @@ impl FilesBackend {
             .rendition_store(root_id, Path::new(&root.path))
             .await
             .map_err(to_files_error)?;
-        let fid = task_files_chunk_store::FileId::from_hex(file_id_hex)
+        let fid = files_store::chunk::FileId::from_hex(file_id_hex)
             .map_err(|e| FilesError::BadRequest(format!("{file_id_hex}: {e}")))?;
         store
             .read_range(fid, start, len, dest)
@@ -4502,7 +4502,7 @@ impl FilesBackend {
                 .await
                 .map_err(|e| Error::Repo(format!("rendition sources: {e}")))?
             {
-                if let Ok(fid) = task_files_chunk_store::FileId::from_hex(&src_hex)
+                if let Ok(fid) = files_store::chunk::FileId::from_hex(&src_hex)
                     && chunks.has(fid).await
                 {
                     live.insert(src_hex);

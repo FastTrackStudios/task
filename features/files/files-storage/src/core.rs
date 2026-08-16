@@ -401,7 +401,7 @@ impl StorageCore {
         // The prefix is a path the org's whole subtree hangs off; it must
         // itself be a safe relative path, or "the org's own subtree"
         // means nothing.
-        task_files_util::safe_relative(&spec.path_prefix).map_err(path_err)?;
+        files_store::safe_relative(&spec.path_prefix).map_err(path_err)?;
 
         let grant = self.registry.write(|state| {
             let location = state.location(spec.location_id).cloned().ok_or_else(|| {
@@ -513,7 +513,7 @@ impl StorageCore {
                     // yields no boundary rather than a boundary that
                     // escapes the location — the same rule `place_root`
                     // enforces via `safe_relative`.
-                    let prefix = task_files_util::safe_relative(&grant.path_prefix).ok()?;
+                    let prefix = files_store::safe_relative(&grant.path_prefix).ok()?;
                     Some(Path::new(&location.root_path).join(prefix))
                 })
                 .collect()
@@ -582,17 +582,17 @@ impl StorageCore {
         // a grant that is already full.
         self.require_headroom(org, &grant, 0)?;
 
-        let relative = task_files_util::safe_relative(relative_path).map_err(path_err)?;
-        let prefix = task_files_util::safe_relative(&grant.path_prefix).map_err(path_err)?;
+        let relative = files_store::safe_relative(relative_path).map_err(path_err)?;
+        let prefix = files_store::safe_relative(&grant.path_prefix).map_err(path_err)?;
         let boundary = Path::new(&location.root_path).join(prefix);
         let target = ConfinedPath {
-            boundary: task_files_util::to_utf8(&boundary).map_err(path_err)?,
-            relative: task_files_util::to_utf8(&relative).map_err(path_err)?,
+            boundary: files_store::to_utf8(&boundary).map_err(path_err)?,
+            relative: files_store::to_utf8(&relative).map_err(path_err)?,
         };
         // What the agent is expected to resolve. The agent's own answer
         // is authoritative (it holds the filesystem); this is only used
         // to spot two roots aiming at one tree before either is created.
-        let expected = task_files_util::to_utf8(&boundary.join(&relative)).map_err(path_err)?;
+        let expected = files_store::to_utf8(&boundary.join(&relative)).map_err(path_err)?;
 
         let directive = AgentDirective {
             id: Uuid::new_v4(),
@@ -697,17 +697,17 @@ impl StorageCore {
         // bytes; refuse before moving any of them.
         self.require_headroom(org, &grant, placement.logical_bytes)?;
 
-        let prefix = task_files_util::safe_relative(&grant.path_prefix).map_err(path_err)?;
+        let prefix = files_store::safe_relative(&grant.path_prefix).map_err(path_err)?;
         let boundary = Path::new(&location.root_path).join(prefix);
         let dest = ConfinedPath {
-            boundary: task_files_util::to_utf8(&boundary).map_err(path_err)?,
-            relative: task_files_util::to_utf8(
+            boundary: files_store::to_utf8(&boundary).map_err(path_err)?,
+            relative: files_store::to_utf8(
                 &PathBuf::from(REPLICA_DIR).join(root_id.to_string()),
             )
             .map_err(path_err)?,
         };
         let expected =
-            task_files_util::to_utf8(&boundary.join(&dest.relative)).map_err(path_err)?;
+            files_store::to_utf8(&boundary.join(&dest.relative)).map_err(path_err)?;
 
         let directive = AgentDirective {
             id: Uuid::new_v4(),
@@ -1060,7 +1060,7 @@ fn verify_within(reported: &str, boundary: Option<&str>) -> std::result::Result<
     // When the path is visible from here (a local agent), resolve it too
     // — a textual prefix says nothing about symlinks.
     if reported_path.exists() {
-        task_files_util::confine(reported_path, Path::new(boundary)).map_err(|e| e.to_string())?;
+        files_store::confine(reported_path, Path::new(boundary)).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

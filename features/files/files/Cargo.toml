@@ -9,11 +9,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+files-store.workspace = true
 architect = { workspace = true }
 files-proto = { workspace = true, features = ["vox"] }
-task-files-util = { workspace = true }
-task-files-version-store = { workspace = true }
-task-files-chunk-store = { workspace = true }
 async-trait = "0.1"
 chrono = { workspace = true, features = ["clock", "serde"] }
 gix = { workspace = true }
@@ -52,7 +50,6 @@ files-transcode = { workspace = true, features = ["test-transcoder"] }
 tempfile = "3"
 # Chunk-level survival after a GC pass is invisible at the RPC seam —
 # the spec's "secondary harness" (issue #261's AC 2).
-task-files-chunk-store = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 architect = { workspace = true, features = ["local"] }
 

@@ -1,5 +1,5 @@
 //! Streaming Session checkpoint commit — replaces
-//! `task_files_version_store::checkpoint::checkpoint`'s in-memory
+//! `files_store::version::checkpoint::checkpoint`'s in-memory
 //! `Change::Write { content: Vec<u8> }` shape for `checkpoint_now`'s
 //! full-scan write (PR #280 review finding: reading every file into a
 //! `Vec<u8>` before handing it to `checkpoint()` peaks RSS at the
@@ -42,7 +42,7 @@ use jj_lib::object_id::ObjectId as _;
 use jj_lib::repo::{ReadonlyRepo, Repo as _};
 use jj_lib::repo_path::{RepoPath, RepoPathBuf};
 use jj_lib::tree_builder::TreeBuilder;
-use task_files_version_store::chain::lookup_dyn;
+use files_store::version::chain::lookup_dyn;
 
 use crate::certify::{MidHashHook, Settled, StatGuard};
 use crate::content::ContentStore;

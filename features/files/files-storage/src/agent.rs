@@ -14,7 +14,7 @@
 //! **The agent is where confinement is enforced**, not the coordinator:
 //! a directive carries the boundary its work must stay inside
 //! ([`ConfinedPath`]), and every path is created through
-//! [`task_files_util::create_confined`] — which refuses to traverse a
+//! [`files_store::create_confined`] — which refuses to traverse a
 //! symlink *before* the first `mkdir`. A coordinator-side check after
 //! the fact can only report an escape that already happened, and could
 //! never apply to a remote hosting at all (PR #284 review).
@@ -23,7 +23,7 @@
 //! wherever it touches the version store / chunk store — jj-lib's futures
 //! are not `Send` on every path, so they must never be awaited from
 //! inside an `#[architect::rpc]` method's own future. Callers run these
-//! on the blocking pool ([`task_files_util::blocking`]).
+//! on the blocking pool ([`files_store::blocking`]).
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -36,8 +36,8 @@ use files_storage_proto::{
 use jj_lib::backend::TreeValue;
 use jj_lib::object_id::ObjectId as _;
 use jj_lib::repo::{ReadonlyRepo, Repo as _};
-use task_files_chunk_store::{ChunkStore, FileId};
-use task_files_version_store::VersionStoreBackend;
+use files_store::chunk::{ChunkStore, FileId};
+use files_store::version::VersionStoreBackend;
 use uuid::Uuid;
 
 use crate::error::{Result, io, path as path_err, store};
@@ -126,7 +126,7 @@ impl InServerAgent {
         let mut held = slot.lock().expect("agent repo slot poisoned");
         let repo = match held.as_ref() {
             Some(repo) => pollster::block_on(repo.loader().load_at_head()).map_err(store)?,
-            None => task_files_version_store::repo::open_or_init_repo_blocking(&store_dir)
+            None => files_store::version::repo::open_or_init_repo_blocking(&store_dir)
                 .map_err(store)?,
         };
         *held = Some(repo.clone());
@@ -266,8 +266,8 @@ impl InServerAgent {
 /// Turn a directive's [`ConfinedPath`] into a real directory, enforcing
 /// the boundary before anything is created.
 fn resolve(target: &ConfinedPath) -> Result<PathBuf> {
-    let relative = task_files_util::safe_relative(&target.relative).map_err(path_err)?;
-    task_files_util::create_confined(Path::new(&target.boundary), &relative).map_err(path_err)
+    let relative = files_store::safe_relative(&target.relative).map_err(path_err)?;
+    files_store::create_confined(Path::new(&target.boundary), &relative).map_err(path_err)
 }
 
 /// Stream one file from `source` into `target` without ever holding it
@@ -308,7 +308,7 @@ impl LocalAgent for InServerAgent {
         }
         match &directive.kind {
             DirectiveKind::HostLiveTree { target, .. } => match self.host_live_tree(target) {
-                Ok(path) => match task_files_util::to_utf8(&path) {
+                Ok(path) => match files_store::to_utf8(&path) {
                     Ok(absolute_path) => DirectiveOutcome::Hosted {
                         repo_initialized: true,
                         absolute_path,
@@ -329,7 +329,7 @@ impl LocalAgent for InServerAgent {
             DirectiveKind::ReplicateBlobs {
                 source_path, dest, ..
             } => match self.replicate(Path::new(source_path), dest) {
-                Ok((m, dir)) => match task_files_util::to_utf8(&dir) {
+                Ok((m, dir)) => match files_store::to_utf8(&dir) {
                     Ok(absolute_path) => DirectiveOutcome::Replicated {
                         files_present: m.files.len() as u64,
                         logical_bytes: m.logical_bytes,

@@ -1,0 +1,33 @@
+[package]
+name = "files-store"
+description = "The Files storage engines: content-addressed chunk store (streaming FastCDC v2020 + BLAKE3 over an iroh-blobs FsStore, with Files-owned rebuildable manifests), the jj-lib Backend implemented over it per ADR 0001 (per-file version chains, recorded renames, divergent concurrent writes on jj's op-log), and the single-copy path confinement both depend on. Knows nothing of RPC, architect or the org."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# chunk
+fastcdc.workspace = true
+iroh-blobs.workspace = true
+blake3.workspace = true
+reflink-copy.workspace = true
+futures.workspace = true
+# version
+jj-lib.workspace = true
+async-trait.workspace = true
+tokio-util.workspace = true
+pollster.workspace = true
+# shared
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

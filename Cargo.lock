@@ -7516,6 +7516,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "files-proto",
+ "files-store",
  "files-transcode",
  "futures-util",
  "gix",
@@ -7526,9 +7527,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "task-files-chunk-store",
- "task-files-util",
- "task-files-version-store",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -7563,6 +7561,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "files-domain"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "files-proto",
+ "files-store",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "files-proto"
 version = "0.1.0"
 dependencies = [
@@ -7588,13 +7597,11 @@ dependencies = [
  "chrono",
  "files-proto",
  "files-storage-proto",
+ "files-store",
  "jj-lib",
  "pollster 0.4.0",
  "serde",
  "serde_json",
- "task-files-chunk-store",
- "task-files-util",
- "task-files-version-store",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -7616,6 +7623,25 @@ dependencies = [
  "uuid",
  "vox",
  "vox-types",
+]
+
+[[package]]
+name = "files-store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "fastcdc",
+ "futures",
+ "iroh-blobs",
+ "jj-lib",
+ "pollster 0.4.0",
+ "proptest",
+ "reflink-copy",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -7642,9 +7668,9 @@ dependencies = [
  "async-trait",
  "blake3",
  "facet",
+ "files-store",
  "serde",
  "serde_json",
- "task-files-chunk-store",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -7677,13 +7703,13 @@ dependencies = [
  "dav-server",
  "files",
  "files-proto",
+ "files-store",
  "futures-util",
  "http",
  "http-body",
  "http-body-util",
  "serde",
  "serde_json",
- "task-files-util",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -21460,45 +21486,6 @@ dependencies = [
  "workflows-proto",
  "workouts",
  "workstream",
-]
-
-[[package]]
-name = "task-files-chunk-store"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "fastcdc",
- "futures",
- "iroh-blobs",
- "proptest",
- "reflink-copy",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "task-files-util"
-version = "0.1.0"
-dependencies = [
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "task-files-version-store"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "blake3",
- "futures",
- "jj-lib",
- "pollster 0.4.0",
- "task-files-chunk-store",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]

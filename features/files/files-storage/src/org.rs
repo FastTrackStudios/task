@@ -60,7 +60,7 @@ impl StorageBackend {
     {
         let core = self.core.clone();
         let org = self.org.clone();
-        task_files_util::blocking(move || f(core, org), panicked).await
+        files_store::blocking(move || f(core, org), panicked).await
     }
 }
 

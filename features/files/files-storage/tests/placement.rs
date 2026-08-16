@@ -207,7 +207,7 @@ impl Harness {
 /// real.
 fn checkpoint_into(agent: &InServerAgent, live_tree: &Path, name: &str, content: &[u8]) {
     use jj_lib::repo::Repo as _;
-    use task_files_version_store::checkpoint::{Change, checkpoint};
+    use files_store::version::checkpoint::{Change, checkpoint};
 
     let repo = agent.repo_at_head(live_tree).expect("authoritative repo");
     let parent = repo

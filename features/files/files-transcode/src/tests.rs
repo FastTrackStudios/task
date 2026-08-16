@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use task_files_chunk_store::ChunkStore;
+use files_store::chunk::ChunkStore;
 
 use crate::pipeline::TranscodePipeline;
 use crate::recipe::{RECIPE_VERSION, RenditionKind};
@@ -25,7 +25,7 @@ async fn put_source(
     chunks: &ChunkStore,
     prefix: &[u8],
     body: &[u8],
-) -> task_files_chunk_store::FileId {
+) -> files_store::chunk::FileId {
     let mut bytes = prefix.to_vec();
     bytes.extend_from_slice(body);
     chunks.write_stream(&bytes[..]).await.unwrap()

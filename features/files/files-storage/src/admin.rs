@@ -90,7 +90,7 @@ impl StorageAdminBackend {
     {
         self.auth.authorize(session_token).await?;
         let core = self.core.clone();
-        task_files_util::blocking(move || f(core), panicked).await
+        files_store::blocking(move || f(core), panicked).await
     }
 }
 

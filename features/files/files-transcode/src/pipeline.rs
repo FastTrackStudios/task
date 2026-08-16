@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use task_files_chunk_store::{ChunkStore, FileId};
+use files_store::chunk::{ChunkStore, FileId};
 
 use crate::error::{Error, Result};
 use crate::recipe::{MediaClass, RECIPE_VERSION, RenditionKind};

@@ -137,7 +137,7 @@ pub struct SnapshotInfo {
 
 /// One entry in a file's version chain (glossary "File version
 /// chain"), newest first — the wire projection of
-/// `task_files_version_store::chain::VersionEntry`.
+/// `files_store::version::chain::VersionEntry`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(C)]
 pub struct ChainEntry {

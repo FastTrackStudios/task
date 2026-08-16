@@ -35,7 +35,7 @@ pub const JOURNAL_FILE: &str = "cadence.json";
 /// How long an auto-snapshot stays listed (spec #255: "expire after 14
 /// days"). Pruning the record here stops an expired snapshot being
 /// offered for recovery; reclaiming its objects is GC's half of
-/// retention (`task_files_version_store::gc`, issue #258).
+/// retention (`files_store::version::gc`, issue #258).
 pub const SNAPSHOT_RETENTION: TimeDelta = TimeDelta::days(14);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

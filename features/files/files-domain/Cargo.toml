@@ -1,0 +1,24 @@
+[package]
+name = "files-domain"
+description = "The Files domain layer: facet resolution (capability tool layouts vs project overrides vs unmapped), the two-layer ignore set, human version labels, and — as they move out of the 4,860-line FilesBackend — root identity and adoption, catalogue and staleness, namespace resolution, version chains and hydration. Pure rules over `files-store`, testable without a server; knows nothing of architect, vox or the org."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+files-store.workspace = true
+# Shared vocabulary only — ids, paths, errors, model. `default-features
+# = false` keeps the RPC machinery out: the domain must stay buildable
+# and testable with no transport in the graph.
+files-proto = { workspace = true, default-features = false }
+chrono = { workspace = true, features = ["clock", "serde"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

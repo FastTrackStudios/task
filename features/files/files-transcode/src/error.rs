@@ -5,7 +5,7 @@ pub enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("chunk store: {0}")]
-    ChunkStore(#[from] task_files_chunk_store::Error),
+    ChunkStore(#[from] files_store::chunk::Error),
     #[error("rendition index: {0}")]
     Index(String),
     #[error("transcode: {0}")]

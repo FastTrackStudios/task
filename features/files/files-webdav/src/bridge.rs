@@ -205,12 +205,12 @@ impl WebdavBridge {
         // `Io` is a temporarily-unmounted volume or an EIO and is a 5xx.
         // Reporting the second as the first was both a false alarm and
         // the wrong status (PR #287 review).
-        let base = match task_files_util::confine(
+        let base = match files_store::confine(
             std::path::Path::new(&root.path),
             self.backend.confine_root(),
         ) {
             Ok(base) => base,
-            Err(task_files_util::PathError::Io(e)) => {
+            Err(files_store::PathError::Io(e)) => {
                 tracing::warn!(
                     target: "files_webdav::bridge",
                     root = %root.id,

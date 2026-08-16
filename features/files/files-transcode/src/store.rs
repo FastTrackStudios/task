@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use task_files_chunk_store::{ChunkStore, ChunkerConfig, FileId, GcConfig};
+use files_store::chunk::{ChunkStore, ChunkerConfig, FileId, GcConfig};
 
 use crate::error::{Error, Result};
 use crate::recipe::{RECIPE_VERSION, RenditionKind};

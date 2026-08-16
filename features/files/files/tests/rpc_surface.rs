@@ -20,7 +20,7 @@
 use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::service::FilesServiceStreamSource as _;
+use files::FilesServiceStreamSource as _;
 use files::{
     FileRootInfo, FilesBackend, FilesEvent, FilesServiceClient, FilesServiceStreamClient,
     RootFlavor, files_service_layer, files_service_stream_layer,
@@ -885,7 +885,7 @@ async fn browse_reports_pointer_stubs_for_non_resident_paths() {
 #[tokio::test(flavor = "multi_thread")]
 async fn browse_reports_divergent_versions_from_concurrent_saves() {
     use jj_lib::repo_path::RepoPathBuf;
-    use task_files_version_store::checkpoint::{Change, checkpoint};
+    use files_store::version::checkpoint::{Change, checkpoint};
 
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let root_dir = data_dir.path().join("split-session");

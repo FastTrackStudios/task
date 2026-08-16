@@ -9,7 +9,7 @@
 //! directly; these helpers are the only translation left.
 
 use files_storage_proto::StorageError;
-use task_files_util::PathError;
+use files_store::PathError;
 
 /// I/O failure, with the operation that caused it.
 pub fn io(context: &str, err: impl std::fmt::Display) -> StorageError {
@@ -31,7 +31,7 @@ pub fn store(err: impl std::fmt::Display) -> StorageError {
     StorageError::Io(format!("version store: {err}"))
 }
 
-/// The panic mapper for [`task_files_util::blocking`].
+/// The panic mapper for [`files_store::blocking`].
 pub fn panicked(message: String) -> StorageError {
     StorageError::Io(format!("blocking task panicked: {message}"))
 }

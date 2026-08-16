@@ -16,12 +16,12 @@ test-transcoder = []
 vox = ["dep:facet"]
 
 [dependencies]
+files-store.workspace = true
 async-trait = { workspace = true }
 blake3 = { workspace = true }
 facet = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-task-files-chunk-store = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "process"] }

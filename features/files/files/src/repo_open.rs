@@ -1,6 +1,6 @@
 //! Opens the jj repo backing one File Root — either flavor (ADR 0001).
 //!
-//! - **Media** roots wrap `task_files_version_store::repo::init_repo`
+//! - **Media** roots wrap `files_store::version::repo::init_repo`
 //!   (first touch) with a reopen path through jj-lib's own `RepoLoader`
 //!   (every subsequent touch, including after a process restart) — the
 //!   version-store crate owns both halves for media roots
@@ -37,7 +37,7 @@ use jj_lib::git_backend::GitBackend;
 use jj_lib::repo::{ReadonlyRepo, RepoLoader};
 use jj_lib::settings::UserSettings;
 use jj_lib::signing::Signer;
-use task_files_version_store::VersionStoreBackend;
+use files_store::version::VersionStoreBackend;
 
 use crate::consts::{GIT_DIR, STORE_DIR};
 use crate::error::{Error, Result};
@@ -102,7 +102,7 @@ pub fn open_or_init_repo(root_path: &Path, flavor: RootFlavor) -> Result<Arc<Rea
     } else {
         match flavor {
             RootFlavor::Media => {
-                task_files_version_store::repo::open_or_init_repo_blocking(&repo_path)
+                files_store::version::repo::open_or_init_repo_blocking(&repo_path)
                     .map_err(Error::from)?
             }
             RootFlavor::Software => init_software_repo(&repo_path, root_path)?,
@@ -127,7 +127,7 @@ pub fn open_or_init_repo(root_path: &Path, flavor: RootFlavor) -> Result<Arc<Rea
 /// forge render them as a blank author. Files authors checkpoints as
 /// itself; a human's own commits through `git` are untouched by this.
 fn software_settings() -> Result<UserSettings> {
-    let mut config = task_files_version_store::repo::default_settings()
+    let mut config = files_store::version::repo::default_settings()
         .map_err(|e| Error::Repo(e.to_string()))?
         .config()
         .clone();
@@ -143,7 +143,7 @@ fn software_settings() -> Result<UserSettings> {
 
 fn settings_for(flavor: RootFlavor) -> Result<UserSettings> {
     match flavor {
-        RootFlavor::Media => task_files_version_store::repo::default_settings()
+        RootFlavor::Media => files_store::version::repo::default_settings()
             .map_err(|e| Error::Repo(e.to_string())),
         RootFlavor::Software => software_settings(),
     }
@@ -197,7 +197,7 @@ fn open_existing(repo_path: &Path, flavor: RootFlavor) -> Result<Arc<ReadonlyRep
     // this once `already_initialized` holds, so the shared function's
     // init branch is unreachable from here.
     if flavor == RootFlavor::Media {
-        return task_files_version_store::repo::open_or_init_repo_blocking(repo_path)
+        return files_store::version::repo::open_or_init_repo_blocking(repo_path)
             .map_err(Error::from);
     }
     let settings = settings_for(flavor)?;

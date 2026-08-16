@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
 use chrono::TimeDelta;
-use files::service::FilesServiceStreamSource as _;
+use files::FilesServiceStreamSource as _;
 use files::{
     CadenceConfig, FileRootInfo, FilesBackend, FilesEvent, FilesServiceClient,
     FilesServiceStreamClient, RootFlavor, TestClock, files_service_layer,

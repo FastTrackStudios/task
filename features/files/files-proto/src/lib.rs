@@ -1,6 +1,11 @@
 // architect's Entity/rpc derives emit cfg-gated blocks; allow at crate
 // scope (same convention as `milestone-proto` / `task-proto`).
 #![allow(unexpected_cfgs)]
+// `#[architect::rpc]` writes `async fn` into its traits. Without the
+// `vox` feature the macro leaves them bare, so the lint fires once per
+// method — 119 times — for traits only ever implemented in this
+// workspace, which is the case the lint's own note says to suppress.
+#![allow(async_fn_in_trait)]
 
 //! Wire contract for the Files feature (GitHub issue #255, ADR 0001 —
 //! `apps/task/docs/adr/0001-files-version-store-jj-cas.md`). This

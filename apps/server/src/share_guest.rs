@@ -441,7 +441,7 @@ impl FilesService for GuestFilesService {
     }
 }
 
-impl files_proto::service::FilesServiceStreamSource for GuestFilesService {
+impl files_proto::service::legacy::FilesServiceStreamSource for GuestFilesService {
     fn events_hub(&self) -> &architect::PubSub<FilesEvent> {
         &self.hub
     }

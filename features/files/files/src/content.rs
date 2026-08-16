@@ -49,7 +49,7 @@ pub enum ContentStore<'a> {
     /// below); the trait object alone still writes fine.
     Cas {
         backend: &'a dyn Backend,
-        version_store: Option<&'a task_files_version_store::VersionStoreBackend>,
+        version_store: Option<&'a files_store::version::VersionStoreBackend>,
     },
     /// Software roots: the colocated git object database, written
     /// directly (see the module doc for why not through jj).
@@ -67,7 +67,7 @@ impl<'a> ContentStore<'a> {
                 backend,
                 version_store: repo
                     .store()
-                    .backend_impl::<task_files_version_store::VersionStoreBackend>(),
+                    .backend_impl::<files_store::version::VersionStoreBackend>(),
             }),
         }
     }

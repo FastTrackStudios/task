@@ -25,7 +25,7 @@ use jj_lib::backend::{
 use jj_lib::merge::Merge;
 use jj_lib::object_id::ObjectId as _;
 use jj_lib::repo_path::{RepoPath, RepoPathComponentBuf};
-use task_files_version_store::VersionStoreBackend;
+use files_store::version::VersionStoreBackend;
 
 /// A backend plus the two directories it straddles: the org's files
 /// area (root content + version stores) and the org vault (the curated
@@ -266,7 +266,7 @@ async fn write_unreachable_commit(
     vs: &VersionStoreBackend,
     name: &str,
     content: &[u8],
-) -> (CommitId, task_files_chunk_store::FileId) {
+) -> (CommitId, files_store::chunk::FileId) {
     let path = RepoPath::from_internal_string(name).unwrap();
     let chunk_id = vs
         .chunks()
@@ -797,7 +797,7 @@ async fn commit_behind_the_cache(
     repo: &std::sync::Arc<jj_lib::repo::ReadonlyRepo>,
     name: &str,
     content: &[u8],
-) -> (CommitId, task_files_chunk_store::FileId) {
+) -> (CommitId, files_store::chunk::FileId) {
     use jj_lib::repo::Repo as _;
 
     let vs = repo
