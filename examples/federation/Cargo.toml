@@ -1,0 +1,21 @@
+[package]
+name = "example-federation"
+description = "Two servers and two clients, all over iroh: registration is an endpoint id rather than an address. Runs the Files scenario against tiny committed fixtures, printing `ok` for what holds and `PENDING` — naming the requirement — for what is not implemented yet."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+architect = { workspace = true, features = ["iroh", "vox"] }
+files = { workspace = true }
+files-proto = { workspace = true, features = ["vox"] }
+iroh = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

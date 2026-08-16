@@ -16,13 +16,13 @@ resolver = "2"
 members = [
     # ── apps ──────────────────────────────────────────────────────────
     "apps/cli",
+    "examples/federation",
     "apps/desktop",
     "apps/mobile",
     "apps/server",
     "apps/web",
     # ── crates/ — small shared crates ─────────────────────────────────
     "crates/note-tabs",
-    "crates/vox-iroh",
     "crates/player-ui",
     "crates/plugin",
     "crates/ui",
@@ -375,7 +375,7 @@ spaced-repetition = { path = "libs/spaced-repetition" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1", features = ["iroh"] }
 architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
 architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
 architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
@@ -442,8 +442,6 @@ octocrab = "0.46"
 # iroh-blobs as the local blob store.
 fastcdc = { version = "4", features = ["tokio"] }
 iroh = { version = "1.0" }
-vox-stream = "0.10.0-rc.5"
-vox-iroh = { path = "crates/vox-iroh" }
 iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
 blake3 = "1.8"
 # Whole-file placement: reflink where the filesystem clones extents,

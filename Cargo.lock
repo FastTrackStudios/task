@@ -825,6 +825,7 @@ dependencies = [
  "fake",
  "futures",
  "gloo-timers",
+ "iroh",
  "sea-orm",
  "thiserror 2.0.20",
  "tokio",
@@ -7138,6 +7139,18 @@ dependencies = [
  "email-store",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "example-federation"
+version = "0.1.0"
+dependencies = [
+ "architect",
+ "files",
+ "files-proto",
+ "iroh",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -24058,15 +24071,6 @@ dependencies = [
  "passfd",
  "tokio",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "vox-iroh"
-version = "0.1.0"
-dependencies = [
- "iroh",
- "tokio",
- "vox-stream",
 ]
 
 [[package]]

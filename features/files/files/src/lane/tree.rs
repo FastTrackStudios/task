@@ -302,6 +302,7 @@ fn with_catalogue<T>(
 impl TreeService for FilesBackend {
     /// The live tree, not the catalogue — this is the listing that
     /// answers for what is on disk this instant.
+    // t[impl files.ignore.retained] — ignored is absent from listings too
     async fn browse(
         &self,
         root_id: RootId,
@@ -310,10 +311,39 @@ impl TreeService for FilesBackend {
         // Re-validate: the type is transparent on the wire, so a hostile
         // peer's `..` arrives having never seen `parse`.
         let path = path.validate()?;
-        crate::lane::root_or_fault(self, root_id)?;
-        <Self as FilesService>::browse(self, root_id.get(), path.as_str().to_string())
-            .await
-            .map_err(|e| fault_of(e, &path))
+        let root = crate::lane::root_or_fault(self, root_id)?;
+        let mut listed = <Self as FilesService>::browse(
+            self,
+            root_id.get(),
+            path.as_str().to_string(),
+        )
+        .await
+        .map_err(|e| fault_of(e, &path))?;
+
+        // The Ignore set governs listings, not only captures.
+        //
+        // `files.ignore.retained` says an ignored file is absent from
+        // user-facing listings AND from history. It was only ever applied
+        // to the second: the set decided what entered a version, and a
+        // browse returned the raw directory — so a Mac writing to the NAS
+        // put a `._name` beside every file a user could see, which is
+        // most of what a 14,671-file album contains.
+        //
+        // `drive_browse` deliberately does NOT filter: it shows the raw
+        // tree, internals included, which is the distinction the glossary
+        // draws between the two.
+        let store = crate::repo_open::store_dir(std::path::Path::new(&root.path));
+        if let Ok(ignores) = crate::ignore::for_root(&store, root.flavor) {
+            listed.retain(|entry| {
+                let rel = if path.is_root() {
+                    entry.name.clone()
+                } else {
+                    format!("{}/{}", path.as_str(), entry.name)
+                };
+                !crate::ignore::is_ignored(&ignores, &rel)
+            });
+        }
+        Ok(listed)
     }
 
     /// The org tree — one resolver behind both the explorer and the
