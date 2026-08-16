@@ -51,6 +51,7 @@ use files_proto::service::version::VersionService;
 use files_proto::service::write::WriteService;
 use files_proto::service::access::Capability;
 use files_proto::service::federation::{EndpointId, FederationService};
+use files_proto::service::sync::{FacetName, SyncService};
 use files_proto::service::{media::MediaService, roots::RootsService};
 use files_proto::{RootId, RootPath};
 
@@ -557,6 +558,164 @@ async fn main() {
             );
         }
         Err(e) => stage("files.peering.serving (stream)", Err(format!("{e}"))),
+    }
+
+    // ── A device that syncs part of the project ──────────────────
+    //
+    // An editor's laptop, carrying the same composed project: the audio
+    // company's sessions and the video company's cut. It subscribes to
+    // facets, not to path globs — `files.sync.selective` — so what it
+    // keeps resident is a statement about the *kind* of work it does,
+    // and stays true when a folder is renamed or a new one appears.
+    println!("\n── A laptop, syncing the audio and not the footage ──────\n");
+
+    let laptop_dir = tempfile::tempdir().expect("laptop data dir");
+    let laptop = FilesBackend::new(laptop_dir.path(), laptop_dir.path().join("vault"))
+        .expect("laptop backend");
+
+    // The project as it lands on a device: both halves, under the names
+    // the composition gave them.
+    let tree = laptop_dir.path().join("Album");
+    std::fs::create_dir_all(tree.join("Sessions").join("Audio Files")).unwrap();
+    std::fs::create_dir_all(tree.join("Footage").join("Proxies")).unwrap();
+    std::fs::write(tree.join("Sessions").join("Song.rpp"), b"REAPER project (fixture)").unwrap();
+    std::fs::write(
+        tree.join("Sessions").join("Audio Files").join("vox.wav"),
+        b"vox take one",
+    )
+    .unwrap();
+    // Deliberately the largest thing here: it is what the laptop is
+    // trying not to carry.
+    std::fs::write(
+        tree.join("Footage").join("Proxies").join("reel.mov"),
+        vec![0u8; 64 * 1024],
+    )
+    .unwrap();
+
+    let album = files::FilesService::create_root(
+        &laptop,
+        tree.to_string_lossy().into_owned(),
+        "Album".into(),
+        RootFlavor::Media,
+    )
+    .await
+    .expect("adopt the project on the laptop");
+    let album = RootId::new(album.id);
+    // Content into the store, so dehydrating is dropping a local copy
+    // rather than losing the file.
+    files::FilesService::checkpoint_now(&laptop, album.into(), None)
+        .await
+        .expect("checkpoint");
+
+    // Nobody told it what these folders are. `files.facet.tool-layout`
+    // reads the layout the tools themselves impose — `Audio Files` is a
+    // REAPER session's media, `Proxies` is a Resolve proxy directory —
+    // so the vocabulary is there before anyone configures anything.
+    match laptop.facets(album).await {
+        Ok(found) => {
+            let mut named: Vec<String> = found
+                .iter()
+                .filter_map(|b| b.facet.as_ref().map(|f| format!("{}={}", b.path, f.0)))
+                .collect();
+            named.sort();
+            stage(
+                "files.facet.tool-layout",
+                if named.is_empty() {
+                    Err("no facet was recognised from the tools' own layout".into())
+                } else {
+                    Ok(format!("{named:?}"))
+                },
+            );
+        }
+        Err(e) => stage("files.facet.tool-layout", Err(format!("{e}"))),
+    }
+
+    // Subscribe to the audio work and nothing else.
+    match laptop
+        .subscribe(album, vec![FacetName("sessions".into())])
+        .await
+    {
+        Ok(_) => {
+            let audio = laptop
+                .browse(album, RootPath::parse("Sessions/Audio Files").unwrap())
+                .await
+                .unwrap_or_default();
+            let footage = laptop
+                .browse(album, RootPath::parse("Footage/Proxies").unwrap())
+                .await
+                .unwrap_or_default();
+
+            let audio_resident = audio.iter().all(|e| !e.stub);
+            let reel = footage.iter().find(|e| e.name == "reel.mov");
+            stage(
+                "files.sync.selective",
+                match reel {
+                    // The stub keeps its real name and size. That is the
+                    // clause that matters: a placeholder that lies about
+                    // size makes "how big is this project" wrong on every
+                    // device that did not sync it.
+                    Some(entry)
+                        if entry.stub
+                            && audio_resident
+                            && entry.size == Some(64 * 1024) =>
+                    {
+                        Ok(format!(
+                            "sessions resident ({} files); reel.mov a stub still reporting {} bytes",
+                            audio.len(),
+                            entry.size.unwrap_or(0)
+                        ))
+                    }
+                    Some(entry) if !entry.stub => {
+                        Err("the footage stayed resident on a device that did not ask for it".into())
+                    }
+                    Some(entry) => Err(format!(
+                        "stub lost its metadata: size {:?}, audio resident {audio_resident}",
+                        entry.size
+                    )),
+                    None => Err("the footage vanished rather than becoming a stub".into()),
+                },
+            );
+
+            // The laptop's own disk is the check that matters: a stub
+            // that still costs 64 KB has saved nothing, whatever the
+            // catalogue says about it.
+            let on_disk = std::fs::metadata(tree.join("Footage").join("Proxies").join("reel.mov"))
+                .map(|m| m.len())
+                .unwrap_or(u64::MAX);
+            stage(
+                "files.sync.selective (space)",
+                if on_disk < 64 * 1024 {
+                    Ok(format!("reel.mov costs {on_disk} bytes on the laptop, not 65536"))
+                } else {
+                    Err(format!("the file still occupies {on_disk} bytes"))
+                },
+            );
+
+            // Hydrating on access. Unsubscribed does not mean unreachable
+            // — it means not carried.
+            match laptop
+                .hydrate(album, vec![RootPath::parse("Footage/Proxies/reel.mov").unwrap()], true)
+                .await
+            {
+                Ok(_) => {
+                    let back = std::fs::metadata(
+                        tree.join("Footage").join("Proxies").join("reel.mov"),
+                    )
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                    stage(
+                        "files.sync.selective (hydrate)",
+                        if back == 64 * 1024 {
+                            Ok("opened the reel; it came back whole".into())
+                        } else {
+                            Err(format!("hydrated to {back} bytes, not 65536"))
+                        },
+                    );
+                }
+                Err(e) => stage("files.sync.selective (hydrate)", Err(format!("{e}"))),
+            }
+        }
+        Err(e) => stage("files.sync.selective", Err(format!("{e}"))),
     }
 
     // ── Peering ──────────────────────────────────────────────────

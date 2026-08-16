@@ -36,8 +36,9 @@
 //! **A project's capabilities are derived from its `RootFlavor`.** Facets
 //! come from capabilities, capabilities come from a project declaration,
 //! and that declaration is not yet wired to roots — see
-//! [`capability_of`]. The interim mapping is right for a music project
-//! and wrong for a video one.
+//! [`capability_of`]. A media root therefore takes *every* media
+//! capability's layouts rather than a guess at which one it holds, which
+//! is the widest correct answer while the narrow one is unavailable.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -218,9 +219,28 @@ fn read_state<T>(backend: &FilesBackend, f: impl FnOnce(&SyncState) -> T) -> T {
 /// and `CacheClip` directories reported as unmapped rather than
 /// recognised — reported, note, not guessed at, so the failure is
 /// visible and recoverable by `map_facet` rather than silent.
+/// The capabilities whose tool layouts apply to a root.
+///
+/// Both, for a media root. `project.capability` makes capability a
+/// *set* precisely because a collaborative album is music production
+/// and video production at once, and a root cannot know which half of
+/// such a project it holds — flavour distinguishes media from source,
+/// not audio from video.
+///
+/// Reading it as one capability meant Resolve's layouts never applied
+/// anywhere, so `Proxies` was unclassifiable and a laptop that declined
+/// footage was declining *unmapped* content instead. The two
+/// vocabularies are disjoint — nothing in Pro Tools, REAPER or Logic
+/// names a directory Resolve also names — so the union classifies
+/// strictly more and reclassifies nothing.
+///
+/// The honest fix is upstream: capabilities belong to the project
+/// declaration (`project.identity.declaration`), not to a root's
+/// flavour. Until that seam exists this is the widest correct answer
+/// rather than a guess at the narrow one.
 fn capability_of(root: &FileRootInfo) -> Vec<Capability> {
     match root.flavor {
-        RootFlavor::Media => vec![Capability::MusicProduction],
+        RootFlavor::Media => vec![Capability::MusicProduction, Capability::VideoProduction],
         // A software root holds source, not sessions or footage. No
         // tool layout applies and nothing here classifies it.
         RootFlavor::Software => Vec::new(),

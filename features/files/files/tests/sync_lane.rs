@@ -30,6 +30,10 @@ async fn album(name: &str) -> (tempfile::TempDir, FilesBackend, RootId) {
         "01 Song/Bounced Files",
         "Proxies",
         "Project Assembly",
+        // A second unmapped directory, so the "reported for a decision"
+        // case does not rest on one name that a future tool table might
+        // legitimately claim.
+        "Client Notes",
     ] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
@@ -38,6 +42,7 @@ async fn album(name: &str) -> (tempfile::TempDir, FilesBackend, RootId) {
     std::fs::write(dir.join("01 Song/Bounced Files/rough.wav"), b"rough mix").unwrap();
     std::fs::write(dir.join("Proxies/reel.mov"), b"footage bytes here").unwrap();
     std::fs::write(dir.join("Project Assembly/click.wav"), b"click track").unwrap();
+    std::fs::write(dir.join("Client Notes/brief.md"), b"# brief").unwrap();
     // Junk both layers must swallow.
     std::fs::write(dir.join(".DS_Store"), b"finder").unwrap();
     std::fs::write(dir.join("01 Song/01 Song.rpp-bak"), b"reaper backup").unwrap();
@@ -201,9 +206,17 @@ async fn unmapped_directories_are_reported_rather_than_guessed() {
     assert_eq!(bounces.facet, Some(FacetName("mixes".into())));
     assert!(!bounces.atomic);
 
-    // Conventions of this particular job. Reported for a decision —
-    // never hidden, and never guessed at.
-    for path in ["Proxies", "Project Assembly"] {
+    // Resolve's layouts apply to a media root too: a collaborative
+    // album is music production and video production at once, so the
+    // capability set is both and `Proxies` is a tool directory rather
+    // than a convention of this job.
+    let proxies = find("Proxies");
+    assert_eq!(proxies.source, FacetSource::ToolLayout);
+    assert_eq!(proxies.facet, Some(FacetName("proxies".into())));
+
+    // Conventions of this particular job — named by nobody's tool.
+    // Reported for a decision, never hidden and never guessed at.
+    for path in ["Project Assembly", "Client Notes"] {
         let b = find(path);
         assert_eq!(b.source, FacetSource::Unmapped, "{path}");
         assert_eq!(b.facet, None, "{path}: guessing is how footage lands on the wrong tier");
