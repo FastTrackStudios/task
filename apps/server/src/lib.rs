@@ -3347,6 +3347,58 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // `#[subscribe]` stream sibling, served from the hub on the
         // `FilesBackend` above.
         .merge(files::files_service_stream_layer(org.files.clone()))
+        // The v2 lanes (`files_proto::service`), one mount per trait.
+        //
+        // Every one is served by the SAME `FilesBackend` as v1 above —
+        // they are `impl XService for FilesBackend`, not separate
+        // objects — so a root adopted through `RootsService` is the root
+        // `TreeService` browses, with no state to keep in step.
+        //
+        // v1 stays mounted beside them until its last caller moves. The
+        // two surfaces disagree about nothing because they are the same
+        // backend; where a method exists on both (`browse`, `chain`,
+        // `hydrate`), the v2 one adds typed ids, typed faults and path
+        // confinement and delegates to the same inner method.
+        //
+        // Each lane's permits live in `permits.rs` — mounting without
+        // granting fails every method closed, which is the failure this
+        // ordering exists to prevent.
+        .with(
+            files_proto::roots_descriptor(),
+            files_proto::serve_roots(org.files.clone()),
+        )
+        .with(
+            files_proto::tree_descriptor(),
+            files_proto::serve_tree(org.files.clone()),
+        )
+        .with(
+            files_proto::write_descriptor(),
+            files_proto::serve_write(org.files.clone()),
+        )
+        .with(
+            files_proto::upload_descriptor(),
+            files_proto::serve_upload(org.files.clone()),
+        )
+        .with(
+            files_proto::version_descriptor(),
+            files_proto::serve_version(org.files.clone()),
+        )
+        .with(
+            files_proto::curation_descriptor(),
+            files_proto::serve_curation(org.files.clone()),
+        )
+        .with(
+            files_proto::sync_descriptor(),
+            files_proto::serve_sync(org.files.clone()),
+        )
+        .with(
+            files_proto::access_descriptor(),
+            files_proto::serve_access(org.files.clone()),
+        )
+        .with(
+            files_proto::organise_descriptor(),
+            files_proto::serve_organise(org.files.clone()),
+        )
         // Placement — Storage Locations this org was granted, where its
         // roots live, and blob replicas (issue #262). The operator and
         // agent lanes of the same layer sit on the SERVER router, not

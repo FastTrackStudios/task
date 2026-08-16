@@ -393,6 +393,120 @@ table!(FILES, "files", "files/**", [
     cm "add_review_comment", wa "delete_review_comment",
 ]);
 table!(FILES_STREAM, "files-stream", "files/**", [rd "events"]);
+
+// ── Files v2 lanes ───────────────────────────────────────────────────────
+//
+// One table per lane, mirroring `files_proto::service`'s split and the
+// spec sections each lane owns (`features/files/spec/files.md`). The v1
+// `FILES` table above stays until the last caller moves off it.
+//
+// Tiering is decided per method from what the method DOES, not from its
+// name. The rules applied here:
+//   `rd` — reads nothing but structure or metadata out.
+//   `wr` — changes state, recoverable from history.
+//   `wa` — audited: destroys, displaces, grants, or reaches outside.
+//   `dl` — bulk content leaving the server.
+
+// Root lifecycle and adoption (`files.adopt.*`).
+// 
+// `adopt` is a write rather than an audited one: it moves, copies and
+// renames nothing (`files.adopt.in-place`), so the worst it does is
+// start reading a tree. `release` IS audited — it removes the org's
+// record of a root, and although every byte survives on disk, the org
+// stops being able to find them.
+table!(FILES_ROOTS, "files-roots", "files/**", [
+    wr "adopt", wr "resume_adoption", wr "pause_adoption", rd "adoption_progress",
+    rd "list", rd "get", wr "rename_root", wa "release",
+]);
+
+// The namespace and the replicated catalogue (`files.catalogue.*`).
+// Structure out, nothing in — every method is a read.
+table!(FILES_TREE, "files-tree", "files/**", [
+    rd "browse", rd "resolve", rd "entry", rd "catalogue", rd "changes_since",
+    rd "freshness",
+]);
+
+// The write surface (`files.write.surface`) — the lane that did not
+// exist at all until now.
+// 
+// `delete_paths` is audited even though deletion is a checkpoint and the
+// content survives in history: the live tree is what every other
+// application on that NAS sees, and making a file vanish from it is the
+// act a human needs to be able to trace. `archive` is `dl` — a selection
+// can be a whole root, and that is bulk content leaving the server.
+table!(FILES_WRITE, "files-write", "files/**", [
+    wr "create_dirs", wr "rename", wr "move_paths", wr "copy_paths",
+    wa "delete_paths", dl "archive",
+]);
+
+// Getting content in (`files.write.upload`).
+// 
+// `complete` is audited because it can displace an existing file:
+// `OnConflict::Replace` checkpoints the outgoing content first, so
+// nothing is lost, but a file at a path stopped being the file that was
+// there. The rest of the lane is planning and accounting.
+table!(FILES_UPLOAD, "files-upload", "files/**", [
+    wr "begin", rd "progress", wa "complete", wr "abort", rd "pending",
+]);
+
+// History, divergence and restore (`files.version.*`,
+// `files.concurrency.*`).
+// 
+// `hold` is a write and not a read: it publishes a signal other clients
+// act on. It is emphatically NOT audited — an advisory signal that
+// generated an audit line every heartbeat would drown the log it shares
+// with the acts that matter. `restore` and `resolve_divergence` are
+// audited because both rewrite live-tree files.
+table!(FILES_VERSION, "files-version", "files/**", [
+    rd "chain", wr "checkpoint", rd "snapshots", wr "hold", rd "occupancy",
+    rd "divergences", wa "resolve_divergence", wa "restore", wr "keep_snapshot",
+]);
+
+// Named and Project Versions.
+// 
+// `unname_version` is audited because a name is what exempts a version
+// from retention collection — dropping one can end an object's
+// protection. `restart_project_version` reshapes the whole live tree.
+table!(FILES_CURATION, "files-curation", "files/**", [
+    wr "name_version", wa "unname_version", rd "named_versions", rd "resolve_name",
+    wr "start_project_version", rd "project_versions", wa "restart_project_version",
+]);
+
+// Facets, ignoring, hydration and devices (`files.facet.*`,
+// `files.ignore.*`, `files.sync.selective`, `files.device.control`).
+// 
+// `hydrate` carries a `resident` flag, so the same method both fetches
+// and releases; the releasing half replaces live-tree content with a
+// stub, which is the one write here that makes files non-resident —
+// audited for the same reason v1's `dehydrate` was. `revoke_device` cuts
+// a device off AND destroys its local copy of org content.
+table!(FILES_SYNC, "files-sync", "files/**", [
+    rd "facets", wr "map_facet", rd "ignore_set", wr "set_project_ignores",
+    rd "subscription", wr "subscribe", wr "pin", wa "hydrate",
+    rd "devices", wr "set_transfer_policy", wa "revoke_device",
+]);
+
+// Who may see and change what (`files.access.*`).
+// 
+// Every mutation here is audited without exception: granting, revoking
+// and minting a link all change who can reach an org's content, and
+// `files.access.granularity` makes the blast radius of a wrong grant a
+// whole subtree. `effective` is a read of the caller's own permissions.
+table!(FILES_ACCESS, "files-access", "files/**", [
+    wa "grant", wa "revoke", rd "grants", rd "effective",
+    wa "create_share", wa "set_share_disabled", rd "shares",
+]);
+
+// Hand-organisation and accountability (`files.organise.*`).
+// 
+// Tagging is an ordinary write: `files.organise.manual` says a tag
+// produces a view and never folder membership, so it moves nothing and
+// changes no path. `activity` is a read of the feed.
+table!(FILES_ORGANISE, "files-organise", "files/**", [
+    rd "marks", wr "set_tags", wr "set_favourite", rd "tagged", rd "all_tags",
+    rd "activity",
+]);
+
 // The Files placement layer's ORG lane (issue #262). The operator and
 // agent lanes are not here on purpose: they live on the server router,
 // which this gate does not cover, because the Storage Location registry
@@ -850,6 +964,15 @@ pub fn mounts() -> Vec<Mount> {
         ),
         m("core", files::files_service_descriptor(), FILES),
         m("core", files::files_stream_descriptor(), FILES_STREAM),
+        m("core", files_proto::roots_descriptor(), FILES_ROOTS),
+        m("core", files_proto::tree_descriptor(), FILES_TREE),
+        m("core", files_proto::write_descriptor(), FILES_WRITE),
+        m("core", files_proto::upload_descriptor(), FILES_UPLOAD),
+        m("core", files_proto::version_descriptor(), FILES_VERSION),
+        m("core", files_proto::curation_descriptor(), FILES_CURATION),
+        m("core", files_proto::sync_descriptor(), FILES_SYNC),
+        m("core", files_proto::access_descriptor(), FILES_ACCESS),
+        m("core", files_proto::organise_descriptor(), FILES_ORGANISE),
         m(
             "core",
             files_storage::storage_service_descriptor(),

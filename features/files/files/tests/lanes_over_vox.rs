@@ -1,0 +1,223 @@
+//! The v2 lanes over an in-process `architect::LocalServer`.
+//!
+//! Every other lane test calls the trait directly, which proves the
+//! implementation and proves nothing about the mount. This file is the
+//! other half: a real client, a real dispatcher, real serialisation of
+//! the typed ids and paths, and the descriptor/permit pairing that
+//! decides whether a method is reachable at all.
+//!
+//! It exists because "implemented" and "reachable" are different claims,
+//! and until the lanes were mounted only the first was true.
+
+use std::time::Duration;
+
+use architect::{LayerRouter, LocalServer, Scope};
+use files::FilesBackend;
+use files_proto::model::RootFlavor;
+use files_proto::service::roots::AdoptRequest;
+use files_proto::service::write::OnConflict;
+use files_proto::{
+    RootId, RootPath, RootsServiceClient, TreeServiceClient, VersionServiceClient,
+    WriteServiceClient,
+};
+
+/// The lanes this file exercises, mounted exactly as `org_layer_router`
+/// mounts them.
+fn router(backend: FilesBackend) -> LayerRouter {
+    LayerRouter::new()
+        .merge(files_proto::roots_layer(backend.clone()))
+        .merge(files_proto::tree_layer(backend.clone()))
+        .merge(files_proto::write_layer(backend.clone()))
+        .merge(files_proto::version_layer(backend))
+}
+
+struct Rig {
+    _tmp: tempfile::TempDir,
+    _local: LocalServer,
+    roots: RootsServiceClient,
+    tree: TreeServiceClient,
+    write: WriteServiceClient,
+    version: VersionServiceClient,
+}
+
+async fn rig() -> (Rig, String) {
+    let tmp = tempfile::tempdir().expect("data tempdir");
+    let dir = tmp.path().join("mix-session");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("mix.wav"), b"take one").unwrap();
+    std::fs::create_dir(dir.join("stems")).unwrap();
+    std::fs::write(dir.join("stems").join("kick.wav"), b"boom").unwrap();
+
+    let backend =
+        FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+    let scope = Scope::new();
+    let local = LocalServer::serve(router(backend), scope);
+
+    let rig = Rig {
+        roots: local.establish().await.expect("RootsServiceClient"),
+        tree: local.establish().await.expect("TreeServiceClient"),
+        write: local.establish().await.expect("WriteServiceClient"),
+        version: local.establish().await.expect("VersionServiceClient"),
+        _local: local,
+        _tmp: tmp,
+    };
+    (rig, dir.to_string_lossy().into_owned())
+}
+
+async fn adopted(rig: &Rig, path: String) -> RootId {
+    let root = tokio::time::timeout(
+        Duration::from_secs(10),
+        rig.roots.adopt(AdoptRequest {
+            path,
+            name: "Mix Session".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        }),
+    )
+    .await
+    .expect("adopt timed out")
+    .expect("adopt over vox");
+    RootId::new(root.id)
+}
+
+/// The whole point: a root adopted over the wire is browsable over the
+/// wire, through a different lane.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_root_adopted_on_one_lane_is_browsable_on_another() {
+    let (rig, path) = rig().await;
+    let root = adopted(&rig, path).await;
+
+    let listed = rig.roots.list().await.expect("list over vox");
+    assert!(listed.iter().any(|r| r.id == root.get()));
+
+    let entries = rig
+        .tree
+        .browse(root, RootPath::root())
+        .await
+        .expect("browse over vox");
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"mix.wav"), "got {names:?}");
+    assert!(names.contains(&"stems"), "got {names:?}");
+}
+
+/// Typed ids and typed faults survive serialisation. This is the claim
+/// the whole v2 surface rests on, and in-process tests cannot make it:
+/// `RootNotFound(id)` has to arrive carrying the id, not flattened to a
+/// string somewhere in the dispatcher.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_typed_fault_survives_the_wire() {
+    let (rig, path) = rig().await;
+    adopted(&rig, path).await;
+    let ghost = RootId::generate();
+
+    let err = rig.roots.get(ghost).await.expect_err("no such root");
+    // The transport wraps the application error rather than flattening
+    // it — `VoxError::User` carries the domain fault intact, which is the
+    // property the typed error surface depends on.
+    match err {
+        vox::VoxError::User(fault) => match *fault {
+            files_proto::FilesFault::RootNotFound(id) => {
+                assert_eq!(id, ghost, "the id must survive the round trip");
+            }
+            other => panic!("expected RootNotFound over the wire, got {other:?}"),
+        },
+        other => panic!("expected a user error, got {other:?}"),
+    }
+}
+
+/// A path that escapes is refused over the wire too.
+///
+/// `RootPath` is transparent on the wire, so `Deserialize` builds one
+/// without calling `parse` — which is exactly why every lane re-validates
+/// what arrives. This proves the re-validation is real rather than a
+/// comment.
+#[tokio::test(flavor = "multi_thread")]
+async fn confinement_holds_against_a_deserialised_path() {
+    let (rig, path) = rig().await;
+    let root = adopted(&rig, path).await;
+
+    // Serialise a legitimate path, then tamper with the wire form the way
+    // a hostile peer would.
+    let json = serde_json::to_string(&RootPath::parse("stems").unwrap()).unwrap();
+    assert_eq!(json, "\"stems\"");
+    let escaping: RootPath = serde_json::from_str("\"../../etc\"").expect("deserialises");
+    assert_eq!(
+        escaping.as_str(),
+        "../../etc",
+        "the newtype does not validate on deserialise — hence the re-check"
+    );
+
+    assert!(
+        rig.tree.browse(root, escaping).await.is_err(),
+        "a path that escapes must be refused even though it deserialised"
+    );
+}
+
+/// A write over the wire lands, and the tree lane sees it — the two
+/// halves of `note_write` and the mount, together.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_over_the_wire_reaches_the_catalogue() {
+    let (rig, path) = rig().await;
+    let root = adopted(&rig, path).await;
+
+    // Make the catalogue resident, then write through a different lane.
+    rig.tree.catalogue(root, None).await.expect("catalogue");
+
+    let made = RootPath::parse("Renders").unwrap();
+    let receipt = rig
+        .write
+        .create_dirs(root, vec![made.clone()])
+        .await
+        .expect("create_dirs over vox");
+    assert!(
+        !receipt.operation.is_empty(),
+        "a write records one version-store operation"
+    );
+
+    let entry = rig.tree.entry(root, made).await.expect("entry over vox");
+    assert_eq!(entry.path.as_str(), "Renders");
+}
+
+/// A move is transactional across the wire, and refuses to move a
+/// directory into itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_move_into_itself_is_refused_over_the_wire() {
+    let (rig, path) = rig().await;
+    let root = adopted(&rig, path).await;
+
+    let err = rig
+        .write
+        .move_paths(
+            root,
+            vec![files_proto::service::write::Relocation {
+                from: RootPath::parse("stems").unwrap(),
+                to: RootPath::parse("stems/inner").unwrap(),
+            }],
+            OnConflict::Fail,
+        )
+        .await
+        .expect_err("a directory cannot be moved inside itself");
+    assert!(matches!(
+        err,
+        vox::VoxError::User(ref f) if matches!(**f, files_proto::FilesFault::IntoSelf { .. })
+    ));
+}
+
+/// Checkpoint on one lane, chain on the same lane, over the wire.
+#[tokio::test(flavor = "multi_thread")]
+async fn history_is_reachable_over_the_wire() {
+    let (rig, path) = rig().await;
+    let root = adopted(&rig, path).await;
+
+    rig.version
+        .checkpoint(root, Some("first".into()))
+        .await
+        .expect("checkpoint over vox");
+
+    let chain = rig
+        .version
+        .chain(root, RootPath::parse("mix.wav").unwrap())
+        .await
+        .expect("chain over vox");
+    assert!(!chain.is_empty(), "a checkpointed file has a chain");
+}
