@@ -104,6 +104,30 @@ pub trait RootsService {
     /// Where an adoption has got to.
     async fn adoption_progress(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault>;
 
+    /// Host a root's structure without holding its content.
+    ///
+    /// `files.peering.replication`: an org's structure converges across
+    /// every server hosting it, and content moves only where placement
+    /// says. This is the receiving side of that — the root becomes real
+    /// here, with the same id it has everywhere, and no tree underneath
+    /// it.
+    ///
+    /// Not adoption. [`Self::adopt`] takes a folder that is already on
+    /// this disk and gives it an identity; this takes an identity that
+    /// already exists elsewhere and gives it a presence here. The id is
+    /// the caller's, because it is the id in the folder's own marker on
+    /// whichever host does hold the tree, and minting a new one would
+    /// make the same root two roots.
+    ///
+    /// Idempotent: hosting a root already hosted is not an error, which
+    /// is what lets a peer re-run reconciliation without checking first.
+    async fn host_structure(
+        &self,
+        root_id: RootId,
+        name: String,
+        flavor: crate::model::RootFlavor,
+    ) -> Result<FileRootInfo, FilesFault>;
+
     /// Every root this org can reach.
     async fn list(&self) -> Result<Vec<FileRootInfo>, FilesFault>;
 

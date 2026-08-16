@@ -50,6 +50,29 @@ use crate::error::Error;
 ///
 /// Checking up front is what lets a `NotFound` coming back from a lane
 /// mean the *path* rather than the root.
+/// This root's tree on this host, or the fault for a host that holds
+/// its structure and not its content.
+///
+/// `Unavailable` rather than a not-found: the path exists and is known,
+/// and the only thing missing is a copy of its bytes on this machine.
+/// `files.catalogue.offline` draws exactly that line — a location being
+/// down is a fact about content, never about the tree — and a host that
+/// holds structure by design is the same situation arrived at
+/// deliberately.
+///
+/// Every filesystem call in the lanes goes through here, because
+/// treating an unplaced root as a path is silently wrong rather than
+/// loudly: `Path::new("").join("Stems")` is *relative*, and a missed
+/// site would resolve against the process's working directory.
+pub(crate) fn lane_tree(
+    root: &files_proto::model::FileRootInfo,
+) -> Result<&std::path::Path, files_proto::error::FilesFault> {
+    root.local_tree()
+        .ok_or_else(|| files_proto::error::FilesFault::Unavailable {
+            path: files_proto::path::RootPath::root(),
+        })
+}
+
 pub(crate) fn root_or_fault(
     backend: &FilesBackend,
     root_id: RootId,

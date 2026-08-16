@@ -350,7 +350,7 @@ impl FilesBackend {
         root: &FileRootInfo,
         ignores: &DomainIgnores,
     ) -> Result<Listing, FilesFault> {
-        let base = std::path::PathBuf::from(&root.path);
+        let base = crate::lane::lane_tree(&root)?.to_path_buf();
         let ignores = ignores.clone();
         crate::lane::blocking(move || {
             let mut out = Listing::default();
@@ -742,7 +742,7 @@ mod tests {
         let root = FileRootInfo {
             id: uuid::Uuid::nil(),
             name: "src".into(),
-            path: "/nowhere".into(),
+            path: Some("/nowhere".into()),
             flavor: RootFlavor::Software,
             created_at: Utc::now(),
             project_version: None,

@@ -47,6 +47,17 @@ use task_ui_core::orgs::{OrgMeta, OrgSelection};
 use task_widgets::{WidgetCtx, WidgetMatch, WidgetSpec, WidgetTarget};
 use uuid::Uuid;
 
+/// What to show where a root's local path goes.
+///
+/// A root this host holds the structure of has no path here, and a
+/// blank line reads as a bug. Naming the state is also the only cue a
+/// user gets that opening a file will reach for another host.
+pub(crate) fn placement_label(root: &files_proto::model::FileRootInfo) -> String {
+    root.path
+        .clone()
+        .unwrap_or_else(|| "structure only — content on another host".to_owned())
+}
+
 /// The note frontmatter `type:` that makes a note a File Root page.
 const NOTE_TYPE: &str = "file-root";
 
@@ -442,7 +453,7 @@ pub fn FilesSidebar() -> Element {
                             Badge { variant: BadgeVariant::Secondary, "v{badge.number}" }
                         }
                     }
-                    div { class: "truncate text-xs text-muted-foreground", "{root.path}" }
+                    div { class: "truncate text-xs text-muted-foreground", "{placement_label(&root)}" }
                 }
             }
             button {
@@ -564,7 +575,7 @@ pub fn FilesPane() -> Element {
                                 Badge { variant: BadgeVariant::Secondary, "v{badge.number}" }
                             }
                         }
-                        div { class: "truncate text-xs text-muted-foreground", "{root.path}" }
+                        div { class: "truncate text-xs text-muted-foreground", "{placement_label(&root)}" }
                     }
                 }
                 button {
@@ -905,7 +916,7 @@ mod tests {
         let roots = vec![FileRootInfo {
             id,
             name: "El Artisa".to_owned(),
-            path: "/srv/files/el-artisa".to_owned(),
+            path: Some("/srv/files/el-artisa".to_owned()),
             flavor: files_proto::RootFlavor::Media,
             created_at: chrono::Utc::now(),
             project_version: None,

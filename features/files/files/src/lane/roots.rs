@@ -141,6 +141,34 @@ impl RootsService for FilesBackend {
         self.adoption_or_complete(root_id)
     }
 
+    // t[impl files.peering.replication] — structure here, content elsewhere
+    async fn host_structure(
+        &self,
+        root_id: RootId,
+        name: String,
+        flavor: files_proto::model::RootFlavor,
+    ) -> Result<FileRootInfo, FilesFault> {
+        // Idempotent, so a peer can re-run reconciliation without
+        // asking first. Returning what is already here rather than
+        // overwriting also means a host that *does* hold the tree does
+        // not lose its placement to a peer's structure push.
+        if let Some(known) = self.registry_get(root_id.get()) {
+            return Ok(known);
+        }
+        let root = FileRootInfo {
+            id: root_id.get(),
+            name,
+            // The whole point: known, and nowhere here.
+            path: None,
+            flavor,
+            created_at: chrono::Utc::now(),
+            project_version: None,
+        };
+        self.registry_insert(root.clone())
+            .map_err(|e| FilesFault::Io(e.to_string()))?;
+        Ok(root)
+    }
+
     async fn list(&self) -> Result<Vec<FileRootInfo>, FilesFault> {
         let this = self.clone();
         crate::lane::blocking(move || Ok(this.with_project_version(this.registry_list()))).await

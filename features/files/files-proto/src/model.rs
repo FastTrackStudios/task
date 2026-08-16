@@ -31,16 +31,32 @@ pub enum RootFlavor {
 }
 
 /// A File Root: a folder tree with a stable identity (ADR 0001 /
-/// glossary "File Root"). `path` is the root's live tree on the
-/// storage location hosting it — v1 is single-machine, so this is a
-/// plain local filesystem path; the Storage Location registry (ADR's
-/// out-of-scope-for-#259 placement axis) is future work.
+/// glossary "File Root").
+///
+/// **Identity and placement are separate.** `id` is the root, the same
+/// on every host that knows it — it is the id in the folder's own
+/// `.fts-root.json` marker, which travels with the folder. `path` is
+/// only where that root's tree happens to sit *on this host*, and two
+/// hosts holding the same root will disagree about it.
+///
+/// That separation is what `files.peering.replication` needs: a host
+/// may hold an org's structure and none of its content, and such a host
+/// knows the root without having anywhere to put it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(C)]
 pub struct FileRootInfo {
     pub id: Uuid,
     pub name: String,
-    pub path: String,
+    /// This root's live tree **on this host**, absent when the host
+    /// holds structure without content.
+    ///
+    /// `Option` rather than an empty string on purpose: every operation
+    /// needing a tree must be made to handle its absence, and an empty
+    /// path is worse than no path — `Path::new("").join("Stems")` is
+    /// *relative*, so a missed site would silently resolve against the
+    /// process's working directory and read or write the wrong files.
+    #[facet(default)]
+    pub path: Option<String>,
     pub flavor: RootFlavor,
     pub created_at: DateTime<Utc>,
     /// The root's CURRENT lineage: its highest-numbered
@@ -54,6 +70,26 @@ pub struct FileRootInfo {
     /// instead of failing the decode plan.
     #[facet(default)]
     pub project_version: Option<ProjectVersion>,
+}
+
+impl FileRootInfo {
+    /// This root's tree on this host, if it has one.
+    ///
+    /// The single place `path` is turned into something a filesystem
+    /// call can use. A `None` here is not an error — it is a host that
+    /// hosts the org's structure — so callers that genuinely need bytes
+    /// answer `FilesFault::Unavailable`, and callers that only need
+    /// structure carry on without touching a disk.
+    #[must_use]
+    pub fn local_tree(&self) -> Option<&std::path::Path> {
+        self.path.as_deref().map(std::path::Path::new)
+    }
+
+    /// Whether this host holds the root's tree.
+    #[must_use]
+    pub fn is_placed(&self) -> bool {
+        self.path.is_some()
+    }
 }
 
 /// One entry in a directory listing — either a root-scoped

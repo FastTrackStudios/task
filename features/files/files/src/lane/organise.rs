@@ -77,7 +77,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::Path;
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
@@ -441,7 +440,7 @@ impl OrganiseService for FilesBackend {
     ) -> Result<Vec<Activity>, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         let under = under.map(|u| u.validate()).transpose()?;
-        let store_dir = crate::repo_open::store_dir(Path::new(&root.path));
+        let store_dir = crate::repo_open::store_dir(crate::lane::lane_tree(&root)?);
         let created_at = root.created_at;
 
         let mut rows = crate::lane::blocking(move || {

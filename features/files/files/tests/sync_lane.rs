@@ -108,10 +108,11 @@ async fn a_mix_engineer_takes_sessions_and_leaves_footage_as_stubs() {
 
     // The whole rule: unsubscribed is a stub, never absent.
     for path in ["Proxies/reel.mov", "01 Song/Bounced Files/rough.wav"] {
-        let disk = std::path::Path::new(&FilesService::get_root(&backend, root.get())
+        let disk = FilesService::get_root(&backend, root.get())
             .await
             .expect("root")
-            .path)
+            .local_tree()
+            .expect("a placed root")
             .join(path);
         assert!(disk.exists(), "{path} must still be present, sized and browsable");
     }
@@ -302,8 +303,8 @@ async fn the_three_ignore_layers_are_reported_and_only_one_is_settable() {
         .await
         .expect("root")
         .path;
-    assert!(std::path::Path::new(&path).join(".DS_Store").exists());
-    assert!(std::path::Path::new(&path).join("01 Song/01 Song.rpp-bak").exists());
+    assert!(std::path::Path::new(path.as_deref().expect("a placed root")).join(".DS_Store").exists());
+    assert!(std::path::Path::new(path.as_deref().expect("a placed root")).join("01 Song/01 Song.rpp-bak").exists());
 }
 
 // t[verify files.device.control]

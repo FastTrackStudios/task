@@ -215,7 +215,7 @@ impl FilesBackend {
         let root_dirs: Vec<PathBuf> = self
             .registry_list()
             .into_iter()
-            .filter_map(|r| PathBuf::from(r.path).canonicalize().ok())
+            .filter_map(|r| r.local_tree()?.canonicalize().ok())
             .collect();
         let mut entries = Self::list_dir(&dir, true, true)?;
         entries.retain(|e| {

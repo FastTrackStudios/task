@@ -121,7 +121,8 @@ impl Registry {
             .lock()
             .expect("registry lock poisoned")
             .values()
-            .find(|r| path == Path::new(&r.path))
+            // An unplaced root matches no path: it has none here.
+            .find(|r| r.local_tree() == Some(path))
             .cloned()
     }
 }

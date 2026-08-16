@@ -61,6 +61,28 @@ use crate::checkpoint::Capture;
 use crate::consts::{GIT_DIR, MARKER_FILE, STORE_DIR};
 use crate::error::Error;
 use crate::git_root;
+
+/// This root's tree on this host, or the refusal for a host that holds
+/// its structure and not its content.
+///
+/// The chokepoint. Every filesystem operation in this file goes through
+/// it, because the alternative — treating an unplaced root as a path —
+/// is silently catastrophic: `Path::new("").join("Stems")` is
+/// *relative*, so a missed site would resolve against the process's
+/// working directory and read or write somebody else's files.
+///
+/// An unplaced root is not an error state. It is a host doing exactly
+/// what `files.peering.replication` describes, and its structure
+/// questions are answered from the catalogue without ever arriving
+/// here.
+fn tree_of(root: &FileRootInfo) -> Result<&Path, Error> {
+    root.local_tree().ok_or_else(|| {
+        Error::BadRequest(format!(
+            "root {} ({}) is hosted here for its structure; its content lives on another host",
+            root.id, root.name
+        ))
+    })
+}
 use crate::hydration;
 use crate::ignore;
 use crate::registry::{Registry, RootMarker, read_root_marker};
@@ -159,7 +181,7 @@ impl Hints {
         {
             return Ok(set.clone());
         }
-        let set = ignore::for_root(&repo_open::store_dir(Path::new(&root.path)), root.flavor)?;
+        let set = ignore::for_root(&repo_open::store_dir(tree_of(&root)?), root.flavor)?;
         ignores
             .lock()
             .expect("ignore cache lock poisoned")
@@ -783,7 +805,7 @@ impl FilesBackend {
         let root = FileRootInfo {
             id: marker.id,
             name: marker.name,
-            path: canonical_str,
+            path: Some(canonical_str),
             flavor,
             created_at: Utc::now(),
             project_version: None,
@@ -799,7 +821,7 @@ impl FilesBackend {
                 tracing::warn!(root_id = %root.id, ?err, "files: adopted root not watched");
             }
         }
-        tracing::info!(root = %root.id, path = %root.path, "files: adopted a marked root");
+        tracing::info!(root = %root.id, path = ?root.path, "files: adopted a marked root");
         self.publish(FilesEvent::RootCreated(root.clone()));
         Ok(root)
     }
@@ -858,7 +880,7 @@ impl FilesBackend {
         let repo = match (cached, root.flavor) {
             (Some((repo, head)), RootFlavor::Media) => return Ok((repo, head)),
             (Some((repo, _)), RootFlavor::Software) => git_root::import_from_git(repo)?,
-            (None, _) => repo_open::open_or_init_repo(Path::new(&root.path), root.flavor)?,
+            (None, _) => repo_open::open_or_init_repo(tree_of(&root)?, root.flavor)?,
         };
         let (head, snapshot_head) = Self::heads_of(&repo, root)?;
         self.repos.lock().expect("repo cache lock poisoned").insert(
@@ -940,7 +962,7 @@ impl FilesBackend {
 
     /// The root's cadence journal (issue #260).
     fn journal_of(root: &FileRootInfo) -> Result<Journal, Error> {
-        Ok(Journal::load(&repo_open::store_dir(Path::new(&root.path)))?)
+        Ok(Journal::load(&repo_open::store_dir(tree_of(&root)?))?)
     }
 
     /// The tip of the root's auto-snapshot branch, if its session has
@@ -1008,7 +1030,7 @@ impl FilesBackend {
         // handle at head fails with a bare "Failed to read operation
         // heads" where the honest answer is "there is no store here
         // right now". Evict it so a remount reopens cleanly.
-        if !repo_open::store_dir(Path::new(&root.path)).exists() {
+        if !repo_open::store_dir(tree_of(&root)?).exists() {
             self.repos
                 .lock()
                 .expect("repo cache lock poisoned")
@@ -1027,7 +1049,7 @@ impl FilesBackend {
                 RootFlavor::Media => pollster::block_on(repo.reload_at_head())
                     .map_err(|e| Error::Repo(format!("reloading {} at head: {e}", root.id)))?,
             },
-            None => match repo_open::open_existing_repo(Path::new(&root.path), root.flavor)? {
+            None => match repo_open::open_existing_repo(tree_of(&root)?, root.flavor)? {
                 Some(repo) => repo,
                 None => return Ok(None),
             },
@@ -1104,7 +1126,7 @@ impl FilesBackend {
         // a genuine duplicate.
         if let Some(existing) = read_root_marker(&canonical) {
             return match self.registry.get(existing.id) {
-                Some(known) if Path::new(&known.path) == canonical => {
+                Some(known) if tree_of(&known)? == canonical => {
                     Err(Error::AlreadyExists(canonical_str))
                 }
                 // Known root, different path: the folder MOVED. The
@@ -1130,7 +1152,7 @@ impl FilesBackend {
                     "{canonical_str} is root {} ({}), which was registered at {} — \
                      moving or renaming a registered root is not supported yet; \
                      move it back, or restart the server to pick it up at its new path",
-                    known.id, known.name, known.path
+                    known.id, known.name, known.path.as_deref().unwrap_or("(no local tree)")
                 ))),
                 // Marker for a root this registry has never seen: a
                 // folder restored from a backup, or carried in from
@@ -1147,7 +1169,7 @@ impl FilesBackend {
         if let Some(existing) = self.registry.conflicting_root(&canonical) {
             return Err(Error::AlreadyExists(format!(
                 "{canonical_str} overlaps existing root {} ({})",
-                existing.id, existing.path
+                existing.id, existing.path.as_deref().unwrap_or("(no local tree)")
             )));
         }
 
@@ -1165,7 +1187,7 @@ impl FilesBackend {
         let root = FileRootInfo {
             id,
             name,
-            path: canonical_str,
+            path: Some(canonical_str),
             flavor,
             created_at,
             // A freshly created root is lineage 1 with no restart
@@ -1249,7 +1271,7 @@ impl FilesBackend {
     /// textual one.
     pub(crate) fn browse_inner(&self, root_id: Uuid, subpath: String) -> Result<Vec<BrowseEntry>, Error> {
         let root = self.get_root_info(root_id)?;
-        let root_path = PathBuf::from(&root.path);
+        let root_path = tree_of(&root)?.to_path_buf();
         let requested = if subpath.is_empty() {
             root_path.clone()
         } else {
@@ -1961,7 +1983,7 @@ impl FilesBackend {
         // keeps being versioned (see `crate::ignore`).
         let ignores = self.ignore_of(&root)?;
         let disk_files =
-            scan::walk_live_tree(Path::new(&root.path), root.flavor, &ignores, &base_paths)?;
+            scan::walk_live_tree(tree_of(&root)?, root.flavor, &ignores, &base_paths)?;
         let hook = self.hook.lock().expect("hook lock poisoned").clone();
         let result = crate::checkpoint::write_checkpoint(Capture {
             repo: &repo,
@@ -1978,7 +2000,7 @@ impl FilesBackend {
 
         let at = self.cadence.now();
         let commit_hex = result.commit_id.hex();
-        let store_dir = repo_open::store_dir(Path::new(&root.path));
+        let store_dir = repo_open::store_dir(tree_of(&root)?);
         let mut journal = Journal::load(&store_dir)?;
 
         let captured = match kind {
@@ -2119,7 +2141,7 @@ impl FilesBackend {
 
     pub(crate) fn ignore_set_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
-        ignore::stored_patterns(&repo_open::store_dir(Path::new(&root.path)))
+        ignore::stored_patterns(&repo_open::store_dir(tree_of(&root)?))
     }
 
     pub(crate) fn set_ignore_set_inner(
@@ -2128,7 +2150,7 @@ impl FilesBackend {
         patterns: Vec<String>,
     ) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
-        let stored = ignore::save_patterns(&repo_open::store_dir(Path::new(&root.path)), patterns)?;
+        let stored = ignore::save_patterns(&repo_open::store_dir(tree_of(&root)?), patterns)?;
         // Drop the compiled cache so the next capture (and the next
         // hint) matches against the edit.
         self.ignores
@@ -2154,7 +2176,7 @@ impl FilesBackend {
         let repo_path =
             RepoPathBuf::from_internal_string(&path.replace(std::path::MAIN_SEPARATOR, "/"))
                 .map_err(|e| Error::BadRequest(format!("{path:?}: {e}")))?;
-        let root_path = PathBuf::from(&root.path);
+        let root_path = tree_of(&root)?.to_path_buf();
         let disk_path = root_path.join(repo_path.as_internal_file_string());
         if let Ok(canonical) = disk_path.canonicalize() {
             files_store::confine(&canonical, &root_path).map_err(confinement)?;
@@ -2422,7 +2444,7 @@ impl FilesBackend {
 
     pub(crate) fn hydration_policy_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
-        hydration::stored_policy(&repo_open::store_dir(Path::new(&root.path)))
+        hydration::stored_policy(&repo_open::store_dir(tree_of(&root)?))
     }
 
     pub(crate) fn set_hydration_policy_inner(
@@ -2432,13 +2454,13 @@ impl FilesBackend {
     ) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "hydration policy")?;
-        hydration::save_policy(&repo_open::store_dir(Path::new(&root.path)), patterns)
+        hydration::save_policy(&repo_open::store_dir(tree_of(&root)?), patterns)
     }
 
     pub(crate) fn apply_hydration_policy_inner(&self, root_id: Uuid) -> Result<HydrationReport, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "hydration policy")?;
-        let store_dir = repo_open::store_dir(Path::new(&root.path));
+        let store_dir = repo_open::store_dir(tree_of(&root)?);
         let Some(policy) = hydration::matcher(&store_dir)? else {
             // Empty policy: opt-in means touch nothing.
             return Ok(HydrationReport::default());
@@ -2451,7 +2473,7 @@ impl FilesBackend {
         let ignores = self.ignore_of(&root)?;
         let (_, head) = self.reload_repo(&root)?;
         let tracked = self.tracked_paths(&root, &head)?;
-        let files = scan::walk_live_tree(Path::new(&root.path), root.flavor, &ignores, &tracked)?;
+        let files = scan::walk_live_tree(tree_of(&root)?, root.flavor, &ignores, &tracked)?;
 
         let mut report = HydrationReport::default();
         // Per-file fault tolerance: one unhydratable stub (a partial
@@ -2604,7 +2626,11 @@ impl FilesBackend {
         {
             return Ok(());
         }
-        let watcher = RootWatcher::spawn(root_id, Path::new(&root.path), self.hints())
+        let watcher = RootWatcher::spawn(
+            root_id,
+            tree_of(&root).map_err(|e| FilesError::BadRequest(e.to_string()))?,
+            self.hints(),
+        )
             .map_err(to_files_error)?;
         // Another caller may have won the race while the walk ran; the
         // first watch installed wins and ours is dropped (which stops
@@ -2636,7 +2662,7 @@ impl FilesBackend {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             for root in this.registry.list() {
                 if let Err(err) = this.watch_root(root.id) {
-                    tracing::warn!(root_id = %root.id, path = %root.path, %err, "files: root not watched");
+                    tracing::warn!(root_id = %root.id, path = ?root.path, %err, "files: root not watched");
                 }
             }
         })
@@ -2670,7 +2696,7 @@ impl FilesBackend {
         use files_proto::RestartMode;
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "restart")?;
-        let root_path = PathBuf::from(&root.path);
+        let root_path = tree_of(&root)?.to_path_buf();
 
         // Validate the mode's inputs BEFORE the checkpoint mutates
         // anything — a restart that fails validation must be a no-op.
@@ -3494,7 +3520,7 @@ impl FilesBackend {
         // content the store does not hold is an unversioned edit;
         // refuse rather than overwrite or delete it.
         let content = crate::content::ContentStore::for_repo(&repo, backend)?;
-        let root_path = PathBuf::from(&root.path);
+        let root_path = tree_of(&root)?.to_path_buf();
         let mut dirty = Vec::new();
         for (p, _want) in &materialize {
             let disk = root_path.join(p.as_internal_file_string());
@@ -3635,7 +3661,7 @@ impl FilesBackend {
         if let Some(existing) = self.registry.conflicting_root(&canonical) {
             return Err(Error::AlreadyExists(format!(
                 "{canonical_str} overlaps existing root {} ({})",
-                existing.id, existing.path
+                existing.id, existing.path.as_deref().unwrap_or("(no local tree)")
             )));
         }
         let repo = repo_open::open_or_init_repo(&canonical, RootFlavor::Media)?;
@@ -3648,7 +3674,7 @@ impl FilesBackend {
         let root = FileRootInfo {
             id: root_id,
             name: name.to_string(),
-            path: canonical_str,
+            path: Some(canonical_str),
             flavor: RootFlavor::Media,
             created_at: Utc::now(),
             project_version: None,
@@ -3940,7 +3966,7 @@ impl FilesBackend {
     pub(crate) fn materialize_head_inner(&self, root_id: Uuid) -> Result<MaterializeReport, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "materialize")?;
-        let root_path = PathBuf::from(&root.path);
+        let root_path = tree_of(&root)?.to_path_buf();
         let lock = self.root_lock(root_id);
         let _guard = lock.lock().expect("root lock poisoned");
         let (repo, head) = self.reload_repo(&root)?;
@@ -4060,7 +4086,7 @@ impl FilesBackend {
         policy: &Option<Arc<jj_lib::gitignore::GitIgnoreFile>>,
         report: &mut MaterializeReport,
     ) -> Result<(), Error> {
-        let root_path = PathBuf::from(&root.path);
+        let root_path = tree_of(&root)?.to_path_buf();
         let disk = root_path.join(path.as_internal_file_string());
         if let Some(parent) = disk.parent() {
             std::fs::create_dir_all(parent)?;
@@ -4239,7 +4265,7 @@ impl FilesBackend {
         let chunks = self
             .with_version_store(root_id, |vs| vs.chunks().clone())
             .map_err(from_files_error)?;
-        Ok((chunks, source_fid, PathBuf::from(&root.path)))
+        Ok((chunks, source_fid, tree_of(&root)?.to_path_buf()))
     }
 
     async fn rendition_inner(
@@ -4319,7 +4345,12 @@ impl FilesBackend {
             }
         };
         let root_path = match self.get_root_info(root_id) {
-            Ok(r) => PathBuf::from(&r.path),
+            // Nothing to warm on a host with no copy of the tree; the
+            // host that holds the content makes its own renditions.
+            Ok(r) => match r.local_tree() {
+                Some(tree) => tree.to_path_buf(),
+                None => return,
+            },
             Err(_) => return,
         };
         let chunks = match self.with_version_store(root_id, |vs| vs.chunks().clone()) {
@@ -4369,7 +4400,7 @@ impl FilesBackend {
     ) -> Result<bool, FilesError> {
         let root = self.get_root_info(root_id).map_err(to_files_error)?;
         let store = self
-            .rendition_store(root_id, Path::new(&root.path))
+            .rendition_store(root_id, tree_of(&root).map_err(|e| FilesError::BadRequest(e.to_string()))?)
             .await
             .map_err(to_files_error)?;
         let fid = files_store::chunk::FileId::from_hex(file_id_hex)
@@ -4393,7 +4424,7 @@ impl FilesBackend {
     {
         let root = self.get_root_info(root_id).map_err(to_files_error)?;
         let store = self
-            .rendition_store(root_id, Path::new(&root.path))
+            .rendition_store(root_id, tree_of(&root).map_err(|e| FilesError::BadRequest(e.to_string()))?)
             .await
             .map_err(to_files_error)?;
         let fid = files_store::chunk::FileId::from_hex(file_id_hex)
@@ -4409,7 +4440,7 @@ impl FilesBackend {
     pub async fn rendition_len(&self, root_id: Uuid, file_id_hex: &str) -> Result<u64, FilesError> {
         let root = self.get_root_info(root_id).map_err(to_files_error)?;
         let store = self
-            .rendition_store(root_id, Path::new(&root.path))
+            .rendition_store(root_id, tree_of(&root).map_err(|e| FilesError::BadRequest(e.to_string()))?)
             .await
             .map_err(to_files_error)?;
         let fid = files_store::chunk::FileId::from_hex(file_id_hex)
@@ -4436,7 +4467,7 @@ impl FilesBackend {
     {
         let root = self.get_root_info(root_id).map_err(to_files_error)?;
         let store = self
-            .rendition_store(root_id, Path::new(&root.path))
+            .rendition_store(root_id, tree_of(&root).map_err(|e| FilesError::BadRequest(e.to_string()))?)
             .await
             .map_err(to_files_error)?;
         let fid = files_store::chunk::FileId::from_hex(file_id_hex)
@@ -4471,7 +4502,7 @@ impl FilesBackend {
         blocking(move || {
             let root = this.get_root_info(root_id)?;
             let (disk, _repo_path) = this.resolve_root_file(&root, &dest_rel)?;
-            let root_canon = std::fs::canonicalize(&root.path).map_err(Error::Io)?;
+            let root_canon = std::fs::canonicalize(tree_of(&root)?).map_err(Error::Io)?;
             let mut probe = disk.parent().map(std::path::Path::to_path_buf);
             while let Some(p) = probe {
                 if p.exists() {
@@ -4569,7 +4600,7 @@ impl FilesBackend {
         if root.flavor != RootFlavor::Media {
             return Ok(0);
         }
-        let root_path = PathBuf::from(&root.path);
+        let root_path = tree_of(&root)?.to_path_buf();
         // Nothing to sweep — and don't create a rendition store (its
         // dirs, a private `FsStore`) on a server that never rendered
         // anything (no transcoder configured, or nothing warmed yet).

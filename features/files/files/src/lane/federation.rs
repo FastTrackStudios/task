@@ -286,7 +286,7 @@ impl FederationService for FilesBackend {
 
         // The subtree has to exist before it is offered, so holding an
         // offer is never a promise about a path that was never there.
-        let disk = std::path::Path::new(&root.path).join(path.as_str());
+        let disk = crate::lane::lane_tree(&root)?.join(path.as_str());
         if !path.is_root() && !disk.exists() {
             return Err(FilesFault::PathNotFound(path));
         }

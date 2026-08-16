@@ -146,8 +146,13 @@ struct Batch<'a> {
 }
 
 impl<'a> Batch<'a> {
-    fn new(backend: &'a FilesBackend, root: &'a FileRootInfo) -> Self {
-        let staging = crate::repo_open::store_dir(Path::new(&root.path))
+    /// `tree` comes from the caller rather than from `root`, because a
+    /// root this host holds only the structure of has none — and a
+    /// batch is a write, which such a host cannot serve at all. Taking
+    /// it as a parameter puts that refusal at the one place that can
+    /// still return an error.
+    fn new(backend: &'a FilesBackend, root: &'a FileRootInfo, tree: &Path) -> Self {
+        let staging = crate::repo_open::store_dir(tree)
             .join("write-staging")
             .join(uuid::Uuid::new_v4().to_string());
         Self {
@@ -431,7 +436,11 @@ where
     P: FnOnce(&mut Batch<'_>) -> Result<(Vec<Act>, Vec<Outcome>), FilesFault>,
 {
     let root = crate::lane::root_or_fault(backend, root_id)?;
-    let mut batch = Batch::new(backend, &root);
+    // Refused before anything is staged: a host holding structure
+    // without content has nowhere to put a write, and finding that out
+    // halfway through a batch would leave a partial one.
+    let tree = crate::lane::lane_tree(&root)?.to_path_buf();
+    let mut batch = Batch::new(backend, &root, &tree);
 
     let outcomes = {
         // Writes on one root serialise: two batches interleaving their
@@ -743,7 +752,7 @@ impl WriteService for FilesBackend {
         let mut checked = Vec::with_capacity(paths.len());
         for path in paths {
             let path = path.validate()?;
-            let disk = std::path::Path::new(&root.path).join(path.as_str());
+            let disk = crate::lane::lane_tree(&root)?.join(path.as_str());
             if !disk.exists() {
                 return Err(FilesFault::PathNotFound(path));
             }

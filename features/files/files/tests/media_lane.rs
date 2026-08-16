@@ -182,7 +182,7 @@ async fn read_at_serves_the_version_asked_for() {
     // Overwrite and checkpoint again.
     let root = backend.get_root(root_id.get()).await.expect("root");
     std::fs::write(
-        std::path::Path::new(&root.path).join("mix.wav"),
+        root.local_tree().expect("a placed root").join("mix.wav"),
         b"a second take",
     )
     .unwrap();
@@ -429,7 +429,7 @@ async fn what_is_not_implemented_refuses_rather_than_pretending() {
     // Nothing is readable before it has been checkpointed: the byte lane
     // serves the store, and a file being written has no stable length.
     let root = backend.get_root(root_id.get()).await.unwrap();
-    std::fs::write(std::path::Path::new(&root.path).join("new.wav"), b"fresh").unwrap();
+    std::fs::write(root.local_tree().expect("a placed root").join("new.wav"), b"fresh").unwrap();
     assert!(matches!(
         backend.read(root_id, p("new.wav")).await,
         Err(FilesFault::Invalid(_))

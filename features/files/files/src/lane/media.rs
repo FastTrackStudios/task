@@ -71,7 +71,6 @@
 //!   this crate calls it yet.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 use files_proto::error::FilesFault;
@@ -443,7 +442,7 @@ impl FilesBackend {
         use tokio::io::AsyncReadExt as _;
 
         let root = crate::lane::root_or_fault(self, RootId::new(root_id))?;
-        let base = std::path::Path::new(&root.path);
+        let base = crate::lane::lane_tree(&root)?;
         let mut tar = crate::tarball::Tar::new(dest);
 
         // Flatten first so a failure to walk is reported before a byte of
@@ -727,7 +726,7 @@ impl MediaService for FilesBackend {
             .resolve_source(root_id.get(), path.as_str().to_string(), None)
             .await
             .map_err(fault)?;
-        let index = crate::transcode::rendition_dir(Path::new(&root.path)).join("index");
+        let index = crate::transcode::rendition_dir(crate::lane::lane_tree(&root)?).join("index");
 
         let mut out = Vec::new();
         for kind in ALL_RENDITIONS {

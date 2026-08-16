@@ -340,7 +340,9 @@ impl FilesBackend {
                 locations: if meta.is_dir() {
                     Vec::new()
                 } else {
-                    vec![root.path.clone()]
+                    // Empty on a host holding structure only: the
+                    // entry is real, and no location here answers for it.
+                    root.path.clone().into_iter().collect()
                 },
                 modified_at: meta.modified().map_or(now, DateTime::<Utc>::from),
                 confirmed_at: now,

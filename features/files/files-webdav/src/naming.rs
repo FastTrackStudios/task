@@ -116,7 +116,7 @@ mod tests {
         FileRootInfo {
             id: Uuid::new_v4(),
             name: name.to_string(),
-            path: format!("/tmp/{name}"),
+            path: Some(format!("/tmp/{name}")),
             flavor: RootFlavor::Media,
             created_at: Utc::now(),
             project_version: None,

@@ -582,7 +582,7 @@ async fn moving_a_root_folder_re_points_it_and_keeps_its_history() {
         "the same folder is the same root — its id is what versions, \
          reviews and placements reference"
     );
-    assert_eq!(readded.path, moved.to_str().unwrap());
+    assert_eq!(readded.path.as_deref(), moved.to_str());
 
     // Exactly one root, not a second one shadowing the first.
     let roots = client.list_roots().await.expect("list");

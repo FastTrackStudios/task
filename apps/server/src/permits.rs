@@ -417,6 +417,11 @@ table!(FILES_STREAM, "files-stream", "files/**", [rd "events"]);
 table!(FILES_ROOTS, "files-roots", "files/**", [
     wr "adopt", wr "resume_adoption", wr "pause_adoption", rd "adoption_progress",
     rd "list", rd "get", wr "rename_root", wa "release",
+    // `wa`, matching `release`: it changes which roots this org's
+    // servers hold, and although it moves no byte and destroys nothing,
+    // "who hosts what" is the same class of fact as "who can find
+    // what".
+    wa "host_structure",
 ]);
 
 // The namespace and the replicated catalogue (`files.catalogue.*`).

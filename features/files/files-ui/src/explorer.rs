@@ -790,7 +790,7 @@ fn RootHeader(org: String, root: FileRootInfo, slice: String) -> Element {
             if !slice.is_empty() {
                 Badge { variant: BadgeVariant::Outline, "slice: {slice}" }
             }
-            span { class: "text-xs text-muted-foreground truncate", "{root.path}" }
+            span { class: "text-xs text-muted-foreground truncate", "{crate::placement_label(&root)}" }
             // Slice links serve bytes from the Media CAS — a software
             // root would mint a link where every download 404s, so the
             // affordance only exists where it works (the server refuses

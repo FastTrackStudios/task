@@ -332,7 +332,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             if json {
                 println!("{}", serde_json::to_string_pretty(&root)?);
             } else {
-                println!("{} ({})", root.id, root.path);
+                println!("{} ({})", root.id, placement(&root));
             }
         }
         FilesCmd::Root(FilesRootCmd::List { json }) => {
@@ -349,7 +349,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                         r.id,
                         r.flavor,
                         r.name,
-                        r.path,
+                        placement(&r),
                         project_version_suffix(&r)
                     );
                 }
@@ -367,7 +367,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                     "{} [{:?}] ({}){}",
                     root.name,
                     root.flavor,
-                    root.path,
+                    placement(&root),
                     project_version_suffix(&root)
                 );
             }
@@ -806,4 +806,13 @@ fn print_patterns(patterns: &[String], json: bool) -> eyre::Result<()> {
         println!("{p}");
     }
     Ok(())
+}
+
+/// A root's local tree, or a word for not having one.
+///
+/// A host may hold an org's structure and none of its content
+/// (`files.peering.replication`), and printing an empty column for that
+/// reads as a bug rather than as the answer.
+fn placement(root: &files_proto::model::FileRootInfo) -> &str {
+    root.path.as_deref().unwrap_or("(structure only)")
 }

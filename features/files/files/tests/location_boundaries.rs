@@ -83,9 +83,9 @@ async fn a_granted_location_can_host_a_root() {
     // The registered path is the location's, not a copy under the org dir
     // — the whole point is that the bytes stay where they are.
     assert!(
-        roots[0].path.contains("nas/Task/Projects"),
+        roots[0].path.as_deref().is_some_and(|p| p.contains("nas/Task/Projects")),
         "root should point at the location, got {}",
-        roots[0].path
+        roots[0].path.as_deref().unwrap_or("(unplaced)")
     );
 }
 

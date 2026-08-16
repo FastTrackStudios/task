@@ -46,7 +46,7 @@
 //!   should feed the rest, and wiring it is separate work.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
@@ -191,7 +191,10 @@ fn record(
         locations: if listed.is_dir {
             Vec::new()
         } else {
-            vec![root.path.clone()]
+            // Empty on a host holding structure only. The entry is real
+            // and no location *here* answers for it, which is a
+            // different statement from "nowhere does".
+            root.path.clone().into_iter().collect()
         },
         modified_at: modified_at(disk, now),
         confirmed_at: now,
@@ -214,7 +217,13 @@ fn record(
 // t[impl files.catalogue.staleness] — every entry records when we looked
 fn walk(root: &FileRootInfo, now: DateTime<Utc>) -> Catalogue {
     let mut cat = Catalogue::new(RootId::new(root.id));
-    let root_dir = PathBuf::from(&root.path);
+    // An unplaced root has nothing to walk. Callers reach the catalogue
+    // off disk before they get here, so this is the cold-and-unplaced
+    // case: an empty catalogue, which `browse_catalogued` then reports
+    // as an empty listing rather than as a missing root.
+    let Some(root_dir) = root.local_tree().map(std::path::Path::to_path_buf) else {
+        return cat;
+    };
     let mut queue = vec![(RootPath::root(), root_dir.clone())];
 
     while let Some((at, dir)) = queue.pop() {
@@ -235,7 +244,9 @@ fn walk(root: &FileRootInfo, now: DateTime<Utc>) -> Catalogue {
                 // mark, so the *root* is what is unreachable. Recording
                 // that keeps `freshness` from claiming a confirmed view
                 // of a tree we never saw.
-                cat.set_location_reachable(&root.path, false, now);
+                if let Some(here) = root.path.as_deref() {
+                    cat.set_location_reachable(here, false, now);
+                }
                 continue;
             }
             Err(_) => {
@@ -418,7 +429,12 @@ impl TreeService for FilesBackend {
         // path that is not there returns nothing, which reads as "this
         // folder is empty" when the truth is "this folder is
         // elsewhere", and that is the failure the rule names.
-        if !Path::new(&root.path).exists() {
+        // Deliberately not `lane_tree`, which refuses: this is the one
+        // place an unplaced root is a normal answer rather than a
+        // missing capability. `None` (this host holds structure) and
+        // `Some(p)` where `p` is gone (the location is down) are the
+        // same situation from here.
+        if !root.local_tree().is_some_and(std::path::Path::exists) {
             return self.browse_catalogued(root_id, &path);
         }
 
@@ -442,7 +458,7 @@ impl TreeService for FilesBackend {
         // `drive_browse` deliberately does NOT filter: it shows the raw
         // tree, internals included, which is the distinction the glossary
         // draws between the two.
-        let store = crate::repo_open::store_dir(std::path::Path::new(&root.path));
+        let store = crate::repo_open::store_dir(crate::lane::lane_tree(&root)?);
         if let Ok(ignores) = crate::ignore::for_root(&store, root.flavor) {
             listed.retain(|entry| {
                 let rel = if path.is_root() {
@@ -548,7 +564,7 @@ impl TreeService for FilesBackend {
 /// a bare stat. Stub detection stays stat-bounded, exactly as in
 /// [`record`].
 fn record_of(root: &FileRootInfo, path: &RootPath, now: DateTime<Utc>) -> Option<CatalogueEntry> {
-    let disk = Path::new(&root.path).join(path.as_str());
+    let disk = root.local_tree()?.join(path.as_str());
     let meta = std::fs::metadata(&disk).ok()?;
     let is_dir = meta.is_dir();
     let size = if is_dir { 0 } else { meta.len() };
@@ -575,7 +591,7 @@ fn record_of(root: &FileRootInfo, path: &RootPath, now: DateTime<Utc>) -> Option
         locations: if is_dir {
             Vec::new()
         } else {
-            vec![root.path.clone()]
+            root.path.clone().into_iter().collect()
         },
         modified_at: meta.modified().map_or(now, DateTime::<Utc>::from),
         confirmed_at: now,
@@ -643,7 +659,7 @@ mod tests {
         FileRootInfo {
             id: uuid::Uuid::from_bytes([3; 16]),
             name: "Session".into(),
-            path: path.into(),
+            path: Some(path.into()),
             flavor: RootFlavor::Media,
             created_at: Utc::now(),
             project_version: None,

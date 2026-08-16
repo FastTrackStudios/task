@@ -305,7 +305,7 @@ async fn version_history_is_not_exposed() {
     // The store really is there on disk — otherwise this test proves
     // nothing about hiding it.
     assert!(
-        std::path::Path::new(&root.path).join(".fts-files").is_dir(),
+        root.local_tree().expect("a placed root").join(".fts-files").is_dir(),
         "the version store exists inside the live tree"
     );
 
@@ -339,7 +339,7 @@ async fn version_history_is_not_exposed() {
     // dav-server reads "the target's parent chain does not resolve" as
     // a conflict. Either way the write does not happen, which is the
     // property that matters, so assert the refusal and the disk.
-    let marker = std::path::Path::new(&root.path).join(".fts-root.json");
+    let marker = root.local_tree().expect("a placed root").join(".fts-root.json");
     let before = std::fs::read(&marker).expect("marker exists");
     let (status, _) = h
         .send("PUT", &format!("{root_url}/.fts-root.json"), b"{}")
@@ -347,7 +347,7 @@ async fn version_history_is_not_exposed() {
     assert!(status.is_client_error(), "PUT at a hidden name: {status}");
     assert_eq!(std::fs::read(&marker).unwrap(), before, "marker untouched");
     assert!(
-        std::path::Path::new(&root.path).join(".fts-files").is_dir(),
+        root.local_tree().expect("a placed root").join(".fts-files").is_dir(),
         "the version store survived every attempt at it"
     );
 }
@@ -443,7 +443,7 @@ async fn paths_cannot_escape_the_root_they_address() {
     // never leaves the root, so only resolving it catches this.
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(outside.path(), std::path::Path::new(&a.path).join("link"))
+        std::os::unix::fs::symlink(outside.path(), a.local_tree().expect("a placed root").join("link"))
             .unwrap();
         let (status, _) = h
             .send("GET", "/org/acme/dav/Root%20A/link/secret.txt", b"")
@@ -485,11 +485,11 @@ async fn a_move_between_two_roots_is_refused() {
     // namespace — which is exactly what the other root is here.
     assert_eq!(status, StatusCode::BAD_GATEWAY, "cross-root MOVE");
     assert!(
-        std::path::Path::new(&a.path).join("take.wav").exists(),
+        a.local_tree().expect("a placed root").join("take.wav").exists(),
         "the source survives a refused move"
     );
     assert!(
-        !std::path::Path::new(&b.path).join("take.wav").exists(),
+        !b.local_tree().expect("a placed root").join("take.wav").exists(),
         "nothing was written into the other root"
     );
 }
@@ -523,15 +523,15 @@ async fn roots_whose_names_share_a_prefix_do_not_bleed_into_each_other() {
         .await;
     assert!(!status.is_success(), "cross-root MOVE succeeded: {status}");
     assert!(
-        !std::path::Path::new(&mix.path).join("Stems").exists(),
+        !mix.local_tree().expect("a placed root").join("Stems").exists(),
         "the write was re-resolved inside the SOURCE root"
     );
     assert!(
-        !std::path::Path::new(&stems.path).join("take.wav").exists(),
+        !stems.local_tree().expect("a placed root").join("take.wav").exists(),
         "the write crossed into the other root"
     );
     assert!(
-        std::path::Path::new(&mix.path).join("take.wav").exists(),
+        mix.local_tree().expect("a placed root").join("take.wav").exists(),
         "the source file survives a refused move"
     );
 
@@ -605,7 +605,7 @@ async fn a_root_collection_cannot_be_deleted_or_moved_through_the_mount() {
     }
 
     // Every byte still there.
-    let base = std::path::Path::new(&root.path);
+    let base = root.local_tree().expect("a placed root");
     assert!(base.join("mix.wav").exists(), "the live tree survived");
     assert!(base.join("stems").join("kick.wav").exists());
     assert!(base.join(".fts-files").is_dir(), "the store survived");
@@ -641,7 +641,7 @@ async fn case_variants_of_the_internals_are_still_hidden() {
         .checkpoint_now(root.id, None)
         .await
         .expect("checkpoint_now");
-    assert!(std::path::Path::new(&root.path).join(".fts-files").is_dir());
+    assert!(root.local_tree().expect("a placed root").join(".fts-files").is_dir());
 
     for name in [
         ".FTS-FILES",
@@ -673,8 +673,8 @@ async fn case_variants_of_the_internals_are_still_hidden() {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(
-            std::path::Path::new(&root.path).join(".fts-files"),
-            std::path::Path::new(&root.path).join("innocent"),
+            root.local_tree().expect("a placed root").join(".fts-files"),
+            root.local_tree().expect("a placed root").join("innocent"),
         )
         .unwrap();
         let (status, _) = h
@@ -688,7 +688,7 @@ async fn case_variants_of_the_internals_are_still_hidden() {
     }
 
     assert!(
-        std::path::Path::new(&root.path).join(".fts-files").is_dir(),
+        root.local_tree().expect("a placed root").join(".fts-files").is_dir(),
         "the version store survived every spelling"
     );
 }

@@ -206,7 +206,7 @@ impl WebdavBridge {
         // Reporting the second as the first was both a false alarm and
         // the wrong status (PR #287 review).
         let base = match files_store::confine(
-            std::path::Path::new(&root.path),
+            root.local_tree().expect("a placed root"),
             self.backend.confine_root(),
         ) {
             Ok(base) => base,
@@ -214,7 +214,7 @@ impl WebdavBridge {
                 tracing::warn!(
                     target: "files_webdav::bridge",
                     root = %root.id,
-                    path = %root.path,
+                    path = ?root.path,
                     error = %e,
                     "a root's live tree could not be resolved — transient, not a breach",
                 );
@@ -224,7 +224,7 @@ impl WebdavBridge {
                 tracing::error!(
                     target: "files_webdav::bridge",
                     root = %root.id,
-                    path = %root.path,
+                    path = ?root.path,
                     error = %e,
                     "refusing to mount a root whose live tree is outside the org's files area",
                 );
