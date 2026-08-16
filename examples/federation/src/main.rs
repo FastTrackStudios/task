@@ -471,6 +471,130 @@ async fn main() {
         },
     );
 
+    // ── Peering ──────────────────────────────────────────────────
+    //
+    // Both orgs present on both servers, with content on one apiece.
+    // Hosting an org means knowing it — structure, projects, catalogue —
+    // and a second host therefore costs the size of a catalogue rather
+    // than the size of a library.
+    let acme_id = files_domain::HostId(acme.endpoint.id().to_string());
+    let vnt_id = files_domain::HostId(vnt.endpoint.id().to_string());
+    let acme_org = files_domain::OrgId("acme-audio".into());
+    let vnt_org = files_domain::OrgId("vnt-video".into());
+
+    let mut peering = files_domain::Peering::new();
+    peering
+        .host(acme_org.clone(), acme_id.clone(), files_domain::Hosting::working())
+        .host(
+            acme_org.clone(),
+            vnt_id.clone(),
+            files_domain::Hosting::structure_only(),
+        )
+        .host(vnt_org.clone(), vnt_id.clone(), files_domain::Hosting::working())
+        .host(
+            vnt_org.clone(),
+            acme_id.clone(),
+            files_domain::Hosting::structure_only(),
+        );
+
+    stage(
+        "files.peering.presence",
+        if peering.hosts_of(&acme_org).count() == 2
+            && peering.content_hosts(&acme_org).count() == 1
+        {
+            Ok("both servers know ACME; one holds its bytes".into())
+        } else {
+            Err("presence and placement are not separable".into())
+        },
+    );
+
+    // A peer sees only what it hosts.
+    stage(
+        "files.peering.scope",
+        if peering.orgs_on(&vnt_id).len() == 2 {
+            Ok("each server hosts both orgs, and nothing else".into())
+        } else {
+            Err("a peer saw an org it does not host".into())
+        },
+    );
+
+    // Before a backup, losing ACME's server loses ACME's content. That
+    // is the state peering exists to fix.
+    let exposed = !peering.survives_loss_of(&acme_org, &acme_id);
+    peering.host(
+        acme_org.clone(),
+        files_domain::HostId("offsite-backup".into()),
+        files_domain::Hosting::backup(),
+    );
+    stage(
+        "files.peering.backup",
+        if exposed && peering.survives_loss_of(&acme_org, &acme_id) {
+            Ok(format!(
+                "{} backup added; ACME now survives losing its own server",
+                peering.backups(&acme_org).count()
+            ))
+        } else {
+            Err("a backup did not change what an org survives".into())
+        },
+    );
+
+    // Every host runs the org. VNT's server holds none of ACME's bytes
+    // and is still a place an ACME member can work — it fetches content
+    // from a host that has it. Nothing elects a leader, so losing any
+    // host costs reach and capacity, never availability.
+    let regions = ["eu-west", "ap-south"];
+    for region in regions {
+        peering.host(
+            acme_org.clone(),
+            files_domain::HostId(format!("acme-{region}")),
+            files_domain::Hosting::working(),
+        );
+    }
+    let all_serve = peering
+        .hosts_of(&acme_org)
+        .all(|(h, _)| peering.serves(h, &acme_org));
+    let stays_up = peering.available_without(&acme_org, &acme_id);
+    stage(
+        "files.peering.serving",
+        if all_serve && stays_up && peering.serves(&vnt_id, &acme_org) {
+            Ok(format!(
+                "{} hosts, all serving; ACME stays up without its own server",
+                peering.hosts_of(&acme_org).count()
+            ))
+        } else {
+            Err("a host that holds no bytes was treated as a cache".into())
+        },
+    );
+
+    // An org grows by adding servers. A host is a storage location, so
+    // attaching a server attaches its capacity — and no host has to hold
+    // everything, which is what lets an org outgrow any one machine.
+    let before = peering.content_hosts(&acme_org).count();
+    for n in 1..=3 {
+        peering.host(
+            acme_org.clone(),
+            files_domain::HostId(format!("acme-shelf-{n}")),
+            files_domain::Hosting::capacity(),
+        );
+    }
+    let after = peering.content_hosts(&acme_org).count();
+    stage(
+        "files.peering.scale",
+        if after == before + 3 && peering.complete_hosts(&acme_org).count() == 1 {
+            Ok(format!(
+                "ACME across {after} storage hosts; 1 holds a full copy"
+            ))
+        } else {
+            Err("adding a server did not add capacity".into())
+        },
+    );
+
+    stage(
+        "files.peering.replication",
+        Err("structure does not yet converge between servers — \
+             files.peering.replication".into()),
+    );
+
     println!("\n── Both servers still serving ───────────────────────────\n");
     println!(
         "  ACME root {acme_root}\n  VNT  root {vnt_root}\n\

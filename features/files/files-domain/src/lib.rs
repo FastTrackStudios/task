@@ -23,6 +23,7 @@
 //! | [`hydration`] | `files.sync.selective`, `files.device.control` |
 //! | [`ignore`] | `files.ignore.*` — the two layers |
 //! | [`labels`] | `files.version.labels` — read, never parsed |
+//! | [`peering`] | `files.peering.*` — which servers host which orgs |
 //! | [`tree`] | the org-tree grammar; `project.identity.declaration` |
 //!
 //! [`facet`] classifies and [`hydration`] decides: together they are what
@@ -41,6 +42,7 @@ pub mod facet;
 pub mod hydration;
 pub mod ignore;
 pub mod labels;
+pub mod peering;
 pub mod tree;
 
 pub use adopt::Adoption;
@@ -51,4 +53,5 @@ pub use facet::{Binding, Capability, Facet, FacetMap, Source};
 pub use hydration::{Decision, Reason, Subscription};
 pub use ignore::{IgnoreSet, Layer};
 pub use labels::Label;
+pub use peering::{Content, HostId, Hosting, OrgId, Peering};
 pub use tree::{Area, ProjectHomes, Route, RouteError};

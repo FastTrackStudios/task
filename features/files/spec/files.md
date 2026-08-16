@@ -232,6 +232,122 @@ Files does once that boundary exists.
 
 ---
 
+## Peering
+
+An org is not confined to the server that created it. Several servers may host
+the same org, and which of them holds its bytes is a separate question from
+which of them know it exists.
+
+This is the catalogue's own split — structure replicates everywhere, content
+replicates selectively — applied between servers rather than between a server
+and a device. It is the same mechanism, and it is why a backup is not a special
+case of anything.
+
+### An org may be present on several servers
+
+t[files.peering.presence]
+Hosting an org means knowing it: its structure, its projects, its catalogue and
+who its members are. It does not mean holding its content. A server that hosts
+an org can answer what exists, who may reach it and where it lives, whether or
+not a byte of it is on that machine.
+
+No host is the org's origin. A server that created an org has no standing the
+others lack, so losing it costs a copy rather than the org.
+
+### Structure reaches every host; content follows placement
+
+t[files.peering.replication]
+An org's structure converges across every server hosting it, so a project
+declared on one is visible on all of them. Content moves only where placement
+says, which is the ordinary storage-location decision and not a peering one.
+
+The consequence is the point: a second host costs the size of a catalogue,
+which scales with file count rather than bytes, so hosting an org elsewhere is
+cheap enough to do for durability alone.
+
+### Every host serves the whole org
+
+t[files.peering.serving]
+A host does not merely know an org, it runs it. A member reaching any host of
+their org gets the same answers and may do the same things there, whether or not
+that machine stores the bytes involved: a host holding no content still browses,
+searches, versions and accepts writes, and fetches content from a host that has
+it. Which server someone connects to is a question about latency, not about
+capability.
+
+No host coordinates the others. Structure converges rather than replicating from
+a leader, so there is no election, no quorum and no control plane to lose:
+writes are accepted anywhere and reconciled, and a host that is partitioned
+keeps serving what it can reach. Losing a host costs reach and capacity, never
+availability of the org itself.
+
+The consequence is that hosts are placed for where people are. An org may run in
+as many regions as it has users, each a full server rather than a cache, and
+adding one is the same act as adding any other host.
+
+---
+
+### An org grows by adding servers
+
+t[files.peering.scale]
+There is no limit on how many servers host one org, and adding one is how an org
+grows rather than a thing done once for durability. A host is a storage location
+in the sense of `files.scale.capacity`, so attaching a server attaches its
+capacity: the org's room is the sum of its hosts, and outgrowing a machine is
+answered by adding a machine rather than by replacing one.
+
+No host has to hold everything. Content follows placement, so a host may hold
+the share placed on it and nothing more, and an org can therefore be larger than
+any single server that hosts it. This is what makes the split worth having: were
+every host required to hold a full copy, the largest host would cap the org.
+
+A host that holds only a share is not a restore point. Durability comes from a
+host that holds a complete copy, which is why that is a distinct thing to ask
+for and not merely more of the same.
+
+---
+
+### A host with no members is a backup
+
+t[files.peering.backup]
+A server may host an org, replicate its structure and hold content replicas
+while having no members and serving no one. That is a backup, and it is an
+ordinary peer rather than a mode: it is reached the same way, it converges the
+same way, and restoring from it is promoting a copy rather than running a
+recovery tool.
+
+A backup that cannot be read from is not a backup, so what makes one distinct
+is only that nobody works there.
+
+### Open: may a host be unable to read what it holds?
+
+A backup peer as specified above can read everything it stores. For a machine
+in another building that is often the point — restoring from it needs the
+content — and for a machine belonging to someone else it is the whole problem.
+
+Encrypting content so a host cannot read it is buildable here: the store is
+content-addressed, so a peer can hold, verify, replicate and serve chunks it
+cannot decrypt, and only the key distribution is genuinely new work.
+
+It is **not** specified, because charter
+[#3](https://github.com/FastTrackStudios/task/issues/3) lists server-side and
+end-to-end encryption under Non-goals, and reversing that is a decision about
+what the product is rather than a detail of peering. Until it is made, a peer
+is trusted with what it holds, and the honest reading of `files.peering.backup`
+is *offsite*, not *untrusted*.
+
+---
+
+### A peer holds what it was granted, and no more
+
+t[files.peering.scope]
+A peering grant names the orgs it covers, and a peer sees nothing about an org
+it does not host. Hosting is granted per org and revocable per org: withdrawing
+one leaves the peer's other orgs untouched, and a peer that has been withdrawn
+from converges no further.
+
+---
+
 ## Catalogue
 
 Structure replicates everywhere; content replicates selectively. The catalogue
