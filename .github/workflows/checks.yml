@@ -159,11 +159,19 @@ jobs:
         if: needs.plan.outputs.workspace == 'true'
         run: ${NIX_DEV} cargo check --workspace --all-targets
       # wasm32 target + ring's clang env come from the flake CI shell.
-      - name: wasm check (ui, task-ui-core)
+      #
+      # Check via task-app-web, NOT `-p ui -p task-ui-core` directly.
+      # getrandom on wasm needs BOTH halves: the `--cfg
+      # getrandom_backend="wasm_js"` in .cargo/config.toml (global) and the
+      # `wasm_js` FEATURE, which only apps/web enables. Checking the leaf
+      # crates alone sets the cfg without the feature, and getrandom fails
+      # with "the wasm_js backend requires the wasm_js feature". The web app
+      # pulls both leaves in anyway, so coverage is unchanged.
+      - name: wasm check (task-app-web)
         if: needs.plan.outputs.wasm == 'true'
         run: |
           ${NIX_DEV} cargo check --target wasm32-unknown-unknown \
-            -p ui -p task-ui-core
+            -p task-app-web
 
   tests:
     name: Tests
