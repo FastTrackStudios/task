@@ -176,8 +176,19 @@ impl From<Organised> for Wire {
 
 static ORGANISED: crate::durable::Scoped<Organised> = crate::durable::Scoped::new("organise");
 
+/// Mutate and persist.
 fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut Organised) -> T) -> T {
     ORGANISED.write(backend, f)
+}
+
+/// Read without persisting.
+///
+/// Separate from [`with_state`] because a read that writes the state file
+/// back is both wasted io and a lie in the file's mtime — "when did
+/// someone last change a tag" should not answer "when someone last
+/// listed them".
+fn read_state<T>(backend: &FilesBackend, f: impl FnOnce(&Organised) -> T) -> T {
+    ORGANISED.read(backend, f)
 }
 
 /// The principal this process speaks for. See the module doc for why it
@@ -324,7 +335,7 @@ impl OrganiseService for FilesBackend {
     async fn marks(&self, root_id: RootId, path: RootPath) -> Result<Marks, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
-        Ok(with_state(self, |s| {
+        Ok(read_state(self, |s| {
             marks_of(s, root_id, &path, this_principal())
         }))
     }
@@ -390,7 +401,7 @@ impl OrganiseService for FilesBackend {
         let wanted = canonical_all(&tags)?;
         let who = this_principal();
 
-        Ok(with_state(self, |s| {
+        Ok(read_state(self, |s| {
             s.tags
                 .iter()
                 .filter(|((root, _), _)| root_id.is_none_or(|id| id == *root))
@@ -408,7 +419,7 @@ impl OrganiseService for FilesBackend {
         if let Some(id) = root_id {
             crate::lane::root_or_fault(self, id)?;
         }
-        Ok(with_state(self, |s| {
+        Ok(read_state(self, |s| {
             s.tags
                 .iter()
                 .filter(|((root, _), _)| root_id.is_none_or(|id| id == *root))
