@@ -5,7 +5,7 @@ use std::path::Path;
 
 use agent_proto::service::tasks::AgentTaskQueue;
 use agent_proto::tasks::{Queue, status};
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Datelike, Duration, NaiveDate, Utc};
 use sea_orm::Database;
 use sea_orm_migration::MigratorTrait;
 use tempfile::TempDir;
@@ -104,20 +104,32 @@ async fn schedule_recurring_dispatches_eligible_tasks_once() {
 async fn weekly_digest_groups_by_project() {
     let (tmp, store) = setup().await;
     let vault_root = tmp.path().to_path_buf();
+
+    // `today` must be the REAL today, not a fixed date. weekly_digest filters
+    // on `updated_at`, and complete_agent_task stamps that with wall-clock
+    // now — so a hardcoded date (this was 2026-05-22) puts the completed row
+    // outside the queried week and the digest returns nothing. The test
+    // passed the week it was written and has failed every week since.
+    let today = Utc::now().date_naive();
+    let scheduled = today.format("%Y-%m-%d").to_string();
+
     // Two agent-runnable tasks under [[Architect]], one done,
     // one still in flight.
     write_task_note(
         &vault_root,
         "tasks/port-view.md",
-        "---\ntitle: Port view to dx07\nstatus: open\nagentProfile: codex\nprojects: [\"[[Architect]]\"]\nscheduled: 2026-05-22\ntags: [task]\n---\n",
+        &format!(
+            "---\ntitle: Port view to dx07\nstatus: open\nagentProfile: codex\nprojects: [\"[[Architect]]\"]\nscheduled: {scheduled}\ntags: [task]\n---\n"
+        ),
     );
     write_task_note(
         &vault_root,
         "tasks/refactor-store.md",
-        "---\ntitle: Refactor store\nstatus: open\nagentProfile: codex\nprojects: [\"[[Architect]]\"]\nscheduled: 2026-05-22\ntags: [task]\n---\n",
+        &format!(
+            "---\ntitle: Refactor store\nstatus: open\nagentProfile: codex\nprojects: [\"[[Architect]]\"]\nscheduled: {scheduled}\ntags: [task]\n---\n"
+        ),
     );
 
-    let today = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
     let report = schedule_recurring(&store, &vault_root, today)
         .await
         .unwrap();
@@ -138,11 +150,11 @@ async fn weekly_digest_groups_by_project() {
     let digest = weekly_digest(&store, "architect", today).await.unwrap();
     assert_eq!(digest.completed.len(), 1);
     assert!(digest.completed[0].project.contains("Architect"));
-    // The week_of date is the Monday of the input week.
-    assert_eq!(
-        digest.week_of,
-        NaiveDate::from_ymd_opt(2026, 5, 18).unwrap()
-    );
+    // The week_of date is the Monday of the input week — computed, not
+    // hardcoded, for the same reason `today` is.
+    let expected_monday =
+        today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
+    assert_eq!(digest.week_of, expected_monday);
     let md = digest.to_markdown();
     assert!(md.contains("Agent activity"), "markdown:\n{md}");
     assert!(md.contains("Port view to dx07"), "markdown:\n{md}");
