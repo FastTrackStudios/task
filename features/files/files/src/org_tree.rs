@@ -18,32 +18,46 @@
 
 use std::path::{Path, PathBuf};
 
+use files_domain::tree::{self, Area, ProjectHomes, Route, RouteError};
 use files_proto::{BrowseEntry, TreeNode};
 
 use crate::backend::FilesBackend;
 use crate::error::Error;
 
-/// The four top-level areas, in display order.
-const AREAS: [&str; 4] = ["Projects", "Vault", "Wiki", "Assets"];
+impl From<RouteError> for Error {
+    fn from(err: RouteError) -> Self {
+        match err {
+            RouteError::Escapes(_) => Self::BadRequest(err.to_string()),
+            RouteError::NoSuchArea(_) => Self::NotFound(err.to_string()),
+        }
+    }
+}
 
 impl FilesBackend {
     pub(crate) fn tree_browse_inner(&self, path: String) -> Result<TreeNode, Error> {
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        // Confinement first: the tree serves virtual paths, but every
-        // segment still walks real directories underneath.
-        if segments.iter().any(|s| *s == "." || *s == "..") {
-            return Err(Error::BadRequest(format!("{path}: path escapes")));
-        }
-
-        match segments.split_first() {
-            None => Ok(TreeNode::Listing(
-                AREAS.iter().map(|a| virtual_dir(a)).collect(),
+        // The grammar — areas, confinement, where a project's remainder
+        // starts — is `files_domain::tree`, shared with the WebDAV
+        // mount so both always show one tree.
+        match tree::route(&path)? {
+            Route::Areas => Ok(TreeNode::Listing(
+                Area::ALL.iter().map(|a| virtual_dir(a.as_str())).collect(),
             )),
-            Some((&"Projects", rest)) => self.projects_area(rest),
-            Some((&"Vault", rest)) => markdown_area(&self.vault_root_dir(), rest),
-            Some((&"Wiki", rest)) => markdown_area(&self.wiki_root_dir(), rest),
-            Some((&"Assets", rest)) => self.assets_area(rest),
-            Some((other, _)) => Err(Error::NotFound(format!("{other}: no such area"))),
+            Route::Projects => self.projects_area(&[]),
+            Route::Project { name, rest } => {
+                let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+                let mut all = vec![name.as_str()];
+                all.extend(rest);
+                self.projects_area(&all)
+            }
+            Route::Within { area, rest } => {
+                let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+                match area {
+                    Area::Vault => markdown_area(&self.vault_root_dir(), &rest),
+                    Area::Wiki => markdown_area(&self.wiki_root_dir(), &rest),
+                    Area::Assets => self.assets_area(&rest),
+                    Area::Projects => unreachable!("Projects routes to its own variants"),
+                }
+            }
         }
     }
 
@@ -69,7 +83,7 @@ impl FilesBackend {
             // `Projects/` — every project folder, both homes.
             None => {
                 let mut entries = Vec::new();
-                for home in ["Projects", "Albums"] {
+                for home in ProjectHomes::legacy().iter() {
                     let Ok(dir) = confined_dir(&vault, &[home]) else {
                         continue;
                     };
@@ -84,9 +98,10 @@ impl FilesBackend {
                 Ok(TreeNode::Listing(entries))
             }
             Some((project, rest)) => {
-                let Some(home) = ["Projects", "Albums"]
-                    .into_iter()
+                let Some(home) = ProjectHomes::legacy()
+                    .iter()
                     .find(|h| vault.join(h).join(project).is_dir())
+                    .map(str::to_string)
                 else {
                     return Err(Error::NotFound(format!("{project}: no such project")));
                 };
@@ -152,20 +167,12 @@ impl FilesBackend {
     /// resolvable entry becomes the `Media/` door; the rest are still
     /// the project's, and are what a richer media view would list.
     fn project_media_root(&self, project: &str) -> Option<uuid::Uuid> {
-        let known = self.registry_list();
-        for id in self.linked_media_roots(project) {
-            if known.iter().any(|r| r.id == id) {
-                return Some(id);
-            }
-        }
-        // Not linked (or the link names a root this org no longer has):
-        // fall back to the name rule so existing projects keep working
-        // until they are linked.
-        let album_name = format!("Album — {project}");
-        known
+        let known: Vec<(uuid::Uuid, String)> = self
+            .registry_list()
             .into_iter()
-            .find(|r| r.name == project || r.name == album_name)
-            .map(|r| r.id)
+            .map(|r| (r.id, r.name))
+            .collect();
+        tree::select_media_root(project, &self.linked_media_roots(project), &known)
     }
 
     /// Root ids declared by the project note's `media_roots:`
@@ -178,7 +185,7 @@ impl FilesBackend {
     fn linked_media_roots(&self, project: &str) -> Vec<uuid::Uuid> {
         let vault = self.vault_root_dir();
         let mut out = Vec::new();
-        for home in ["Projects", "Albums"] {
+        for home in ProjectHomes::legacy().iter() {
             let dir = vault.join(home).join(project);
             // `<project>/<project>.md` is the folder-form note; the flat
             // form is `<project>.md` beside the folder.
@@ -186,7 +193,7 @@ impl FilesBackend {
                 let Ok(text) = std::fs::read_to_string(&candidate) else {
                     continue;
                 };
-                out.extend(media_roots_from_frontmatter(&text));
+                out.extend(tree::declared_media_roots(&text));
                 if !out.is_empty() {
                     return out;
                 }
@@ -286,40 +293,6 @@ fn confined_dir(base: &Path, rest: &[&str]) -> Result<PathBuf, Error> {
     Ok(resolved)
 }
 
-/// `media_roots:` from a note's YAML frontmatter.
-///
-/// Accepts the list form and a bare scalar, because someone linking one
-/// root by hand will write the scalar and be right to expect it to work:
-///
-/// ```yaml
-/// media_roots:
-///   - 3f9c1e88-...
-/// # or
-/// media_roots: 3f9c1e88-...
-/// ```
-///
-/// Anything that is not a parseable uuid is skipped rather than
-/// failing the read — see [`FilesBackend::linked_media_roots`].
-fn media_roots_from_frontmatter(text: &str) -> Vec<uuid::Uuid> {
-    let Some(rest) = text.strip_prefix("---") else {
-        return Vec::new();
-    };
-    let Some(end) = rest.find("\n---") else {
-        return Vec::new();
-    };
-    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&rest[..end]) else {
-        return Vec::new();
-    };
-    let Some(field) = doc.get("media_roots") else {
-        return Vec::new();
-    };
-    let parse = |v: &serde_yaml::Value| v.as_str().and_then(|s| s.trim().parse().ok());
-    match field {
-        serde_yaml::Value::Sequence(items) => items.iter().filter_map(parse).collect(),
-        other => parse(other).into_iter().collect(),
-    }
-}
-
 // ── entry constructors ────────────────────────────────────────────
 
 fn virtual_dir(name: &str) -> BrowseEntry {
@@ -332,50 +305,6 @@ fn virtual_dir(name: &str) -> BrowseEntry {
     }
 }
 
-#[cfg(test)]
-mod frontmatter_tests {
-    use super::media_roots_from_frontmatter as parse;
-
-    const ID: &str = "3f9c1e88-0000-4000-8000-000000000001";
-
-    #[test]
-    fn a_list_of_ids_is_read_in_order() {
-        let ids = parse(&format!(
-            "---\ntype: project\nmedia_roots:\n  - {ID}\n  - 3f9c1e88-0000-4000-8000-000000000002\n---\nbody\n"
-        ));
-        assert_eq!(ids.len(), 2);
-        assert_eq!(ids[0].to_string(), ID);
-    }
-
-    #[test]
-    fn a_bare_scalar_works_too() {
-        // Someone linking one root by hand will write this, and being
-        // strict about list-vs-scalar would only punish them for it.
-        let ids = parse(&format!("---\nmedia_roots: {ID}\n---\n"));
-        assert_eq!(ids.len(), 1);
-    }
-
-    #[test]
-    fn a_note_without_the_field_links_nothing() {
-        assert!(parse("---\ntype: project\ntitle: X\n---\nbody").is_empty());
-        assert!(parse("no frontmatter at all").is_empty());
-    }
-
-    #[test]
-    fn a_malformed_link_is_skipped_not_fatal() {
-        // The point of falling back: a hand-edited note with a typo must
-        // not make its project unbrowsable. The good id in the same list
-        // still resolves.
-        let ids = parse(&format!(
-            "---\nmedia_roots:\n  - not-a-uuid\n  - {ID}\n---\n"
-        ));
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0].to_string(), ID);
-    }
-
-    #[test]
-    fn broken_yaml_yields_no_links_rather_than_an_error() {
-        assert!(parse("---\nmedia_roots: [unclosed\n---\n").is_empty());
-        assert!(parse("---\nno terminator\n").is_empty());
-    }
-}
+// The frontmatter tests moved with the parser: `files_domain::tree`
+// owns `declared_media_roots` now, and its tests cover the list form,
+// the scalar form, malformed uuids and broken YAML.
