@@ -109,6 +109,17 @@ where
         out
     }
 
+    /// Drop this org's cached copy, so the next read comes from disk.
+    ///
+    /// Only a test wants this. A "survives a restart" test that keeps the
+    /// same process holds the same cache, so without it the test reads
+    /// back what it wrote to memory and proves nothing about the file —
+    /// which is exactly what the first version of those tests did.
+    #[cfg(test)]
+    pub(crate) fn forget(&self, backend: &FilesBackend) {
+        self.cells().remove(backend.data_dir());
+    }
+
     fn load(&self, path: &Path) -> T {
         let Ok(bytes) = std::fs::read(path) else {
             return T::default();
@@ -131,9 +142,19 @@ where
 /// same reason `Registry::persist` renames into place rather than
 /// writing over.
 fn save<T: Serialize>(path: &Path, state: &T) {
-    let Ok(bytes) = serde_json::to_vec_pretty(state) else {
-        tracing::error!(path = %path.display(), "files: lane state would not serialise");
-        return;
+    let bytes = match serde_json::to_vec_pretty(state) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            // Loud in development, survivable in production.
+            //
+            // Reads are served from the in-memory copy, so a state type
+            // that will not serialise would keep working for the life of
+            // the process and lose everything on restart — a failure that
+            // passes every test and appears only in front of a user.
+            debug_assert!(false, "lane state at {} would not serialise: {err}", path.display());
+            tracing::error!(path = %path.display(), %err, "files: lane state would not serialise");
+            return;
+        }
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -172,7 +193,7 @@ mod tests {
         // A second backend over the same data dir is what a restart looks
         // like from this module's point of view.
         drop(a);
-        COUNTER.cells().clear();
+        COUNTER.forget(&backend(tmp.path()));
         let b = backend(tmp.path());
         assert_eq!(COUNTER.read(&b, |c| c.n), 7);
     }
@@ -201,7 +222,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path()).unwrap();
         std::fs::write(tmp.path().join("test-counter.json"), b"{ not json").unwrap();
         let b = backend(tmp.path());
-        COUNTER.cells().clear();
+        COUNTER.forget(&b);
         assert_eq!(
             COUNTER.read(&b, |c| c.n),
             0,

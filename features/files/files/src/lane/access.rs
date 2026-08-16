@@ -51,10 +51,14 @@
 //! the server, not for a user. Threading it is a change to the trait
 //! methods below, not to the resolution.
 //!
-//! **Grants and links have no persistence anywhere in this codebase.**
-//! They live in [`state`], a process-lifetime `Mutex<AccessState>`, so a
-//! restart forgets every grant. Nothing degrades into a wrong answer: a
-//! forgotten grant reads back as absence, which is the closed direction.
+//! **Grants and links are not yet in the vault.** They are durable and
+//! per-org — [`crate::durable`] keys [`AccessState`] by the backend's own
+//! data directory and writes it atomically on every mutation — but
+//! `storage.tier.authored` wants a human's choices as markdown a human
+//! can read, and a JSON table beside `roots.json` is not that. It is the
+//! step that stops a restart forgetting who a folder was shared with, and
+//! stops one org's `grants` and `shares` answering with another's, which
+//! is what a process-wide static did.
 //!
 //! **The links minted here are not yet the links the world can reach.**
 //! The durable share store is `apps/server`'s `share::ShareStore` —
@@ -70,7 +74,7 @@
 //! `apps/server`'s `ShareStore` instead of the table here, and carry
 //! password and expiry — neither is a parameter on this trait.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use files_proto::error::FilesFault;
@@ -123,27 +127,42 @@ fn is_owner(subject: &Subject) -> bool {
     matches!(subject, Subject::Person(p) if *p == this_principal())
 }
 
-// ── In-memory state ────────────────────────────────────────────────
+// ── State ──────────────────────────────────────────────────────────
 
-/// Grants and links, per process.
+/// Grants and links for one org.
 ///
 /// A `Vec` rather than an index: a root's grant list is a handful of
 /// rows, every read is a full scan against one root, and an index keyed
 /// by subtree would need the same scan to answer "what governs this
-/// path" anyway.
-#[derive(Debug, Default)]
+/// path" anyway. It is also the shape the file wants, so no `Wire`
+/// conversion is needed here — `Grant` and `ShareLink` are wire types
+/// already, and a list of them is expressible in JSON as-is.
+///
+/// Persisted per org — see [`crate::durable`]. Keyed by the backend's
+/// data directory rather than held in a process-wide static, which is
+/// what stops one org's [`AccessService::grants`] and
+/// [`AccessService::shares`] enumerating another org's rows.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct AccessState {
     grants: Vec<Grant>,
     shares: Vec<ShareLink>,
 }
 
-fn state() -> &'static Mutex<AccessState> {
-    static STATE: OnceLock<Mutex<AccessState>> = OnceLock::new();
-    STATE.get_or_init(Mutex::default)
+static ACCESS: crate::durable::Scoped<AccessState> = crate::durable::Scoped::new("access");
+
+/// Mutate and persist.
+fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut AccessState) -> T) -> T {
+    ACCESS.write(backend, f)
 }
 
-fn with_state<T>(f: impl FnOnce(&mut AccessState) -> T) -> T {
-    f(&mut state().lock().expect("access state lock poisoned"))
+/// Read without persisting.
+///
+/// Separate from [`with_state`] because a read that writes the state file
+/// back is both wasted io and a lie in the file's mtime — "when was this
+/// folder last shared with someone" must not answer "when someone last
+/// asked who it was shared with".
+fn read_state<T>(backend: &FilesBackend, f: impl FnOnce(&AccessState) -> T) -> T {
+    ACCESS.read(backend, f)
 }
 
 /// Whether a grant still conveys anything at `now`.
@@ -199,7 +218,12 @@ fn canonical(mut caps: Vec<Capability>) -> Vec<Capability> {
 /// subject with no such grant gets [`FilesFault::PathNotFound`] unless
 /// they hold a grant *beneath* the path, in which case the path is an
 /// ancestor they must be able to name and resolves to nothing.
+///
+/// Takes the backend because the grants it scans are that org's, not the
+/// process's: resolving against a table shared by every org on the server
+/// would answer with a grant nobody here ever made.
 fn resolved(
+    backend: &FilesBackend,
     subject: &Subject,
     root_id: RootId,
     path: &RootPath,
@@ -208,7 +232,7 @@ fn resolved(
         return Ok(ALL.to_vec());
     }
     let now = Utc::now();
-    let (caps, beneath) = with_state(|s| {
+    let (caps, beneath) = read_state(backend, |s| {
         let mut caps: Vec<Capability> = Vec::new();
         let mut beneath = false;
         for grant in s
@@ -269,7 +293,7 @@ impl FilesBackend {
     ) -> Result<(), FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
-        let caps = resolved(subject, root_id, &path)?;
+        let caps = resolved(self, subject, root_id, &path)?;
         if caps.contains(&capability) {
             Ok(())
         } else {
@@ -288,7 +312,7 @@ impl FilesBackend {
     ) -> Result<Effective, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
-        let capabilities = resolved(subject, root_id, &path)?;
+        let capabilities = resolved(self, subject, root_id, &path)?;
         Ok(Effective {
             root_id,
             path,
@@ -323,7 +347,7 @@ impl FilesBackend {
         // over one folder cannot grant over its parent: `resolved`
         // answers `PathNotFound` there, which is the same absence the
         // grantee would see.
-        let held = resolved(granter, root_id, &path)?;
+        let held = resolved(self, granter, root_id, &path)?;
         if !held.contains(&Capability::Share) {
             return Err(FilesFault::denied("Share", path));
         }
@@ -341,7 +365,7 @@ impl FilesBackend {
             granted_at: Utc::now(),
             expires_at: None,
         };
-        with_state(|s| s.grants.push(grant.clone()));
+        with_state(self, |s| s.grants.push(grant.clone()));
         Ok(grant)
     }
 }
@@ -374,7 +398,7 @@ impl AccessService for FilesBackend {
     // t[impl files.access.internal-sharing] — revocation binds on the next
     // request: the table is read per call, never cached into a session
     async fn revoke(&self, grant: GrantId) -> Result<(), FilesFault> {
-        let existing = with_state(|s| s.grants.iter().find(|g| g.id == grant).cloned());
+        let existing = read_state(self, |s| s.grants.iter().find(|g| g.id == grant).cloned());
         // Not a `NotFound`: a grant that is not live is one that conveys
         // nothing, and the caller's intent — that it convey nothing — is
         // already satisfied. Saying so is more useful than an error the
@@ -386,7 +410,7 @@ impl AccessService for FilesBackend {
             &existing.path,
             Capability::Share,
         )?;
-        with_state(|s| s.grants.retain(|g| g.id != grant));
+        with_state(self, |s| s.grants.retain(|g| g.id != grant));
         Ok(())
     }
 
@@ -401,7 +425,7 @@ impl AccessService for FilesBackend {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.map(|p| p.validate()).transpose()?;
         let now = Utc::now();
-        Ok(with_state(|s| {
+        Ok(read_state(self, |s| {
             s.grants
                 .iter()
                 .filter(|g| g.root_id == root_id && is_live(g, now))
@@ -441,7 +465,7 @@ impl AccessService for FilesBackend {
         }
         let me = Subject::Person(this_principal());
         self.authorise(&me, root_id, &path, Capability::Share)?;
-        let held = resolved(&me, root_id, &path)?;
+        let held = resolved(self, &me, root_id, &path)?;
         if let Some(over) = capabilities.iter().find(|c| !held.contains(c)) {
             // A link cannot convey more than its issuer holds, for the
             // same reason a grant cannot: otherwise `Share` is a
@@ -465,7 +489,7 @@ impl AccessService for FilesBackend {
             expires_at: None,
             disabled: false,
         };
-        with_state(|s| s.shares.push(link.clone()));
+        with_state(self, |s| s.shares.push(link.clone()));
         Ok(link)
     }
 
@@ -477,7 +501,7 @@ impl AccessService for FilesBackend {
         share: ShareId,
         disabled: bool,
     ) -> Result<ShareLink, FilesFault> {
-        with_state(|s| {
+        with_state(self, |s| {
             let link = s
                 .shares
                 .iter_mut()
@@ -493,7 +517,7 @@ impl AccessService for FilesBackend {
         // Disabled links included: a paused link is one a human has to
         // be able to find in order to resume it, and omitting it would
         // make pausing look like deleting.
-        Ok(with_state(|s| {
+        Ok(read_state(self, |s| {
             s.shares
                 .iter()
                 .filter(|l| l.root_id == root_id)

@@ -10,17 +10,28 @@
 //! the live tree, and the hydrate/dehydrate machinery that already lives
 //! in `backend.rs`.
 //!
-//! ## Two things here are not yet real, and are not pretended to be
+//! ## What is durable, and the one half that still is not
 //!
-//! **Subscriptions, device registrations and project facet mappings have
-//! no persistence anywhere in this codebase.** They are held in
-//! [`state`], a process-lifetime `Mutex<SyncState>`. Restarting the
-//! server forgets every subscription, every pin and every mapping — which
-//! directly contradicts `files.device.control` ("pinning survives
-//! restart"). The shape of the API is right and the decisions are right;
-//! the durability is missing, and a store is the whole of the remaining
-//! work. Nothing here silently degrades: a forgotten subscription reads
-//! back as an empty one, never as a wrong one.
+//! **Subscriptions, pins, device rows and project facet mappings are all
+//! things a human chose**, so `storage.tier.authored` puts them in the
+//! durable tier and `files.device.control` says in as many words that
+//! pinning survives restart. They live in [`SYNC`], a
+//! [`crate::durable::Scoped`] keyed by the backend's own data directory —
+//! which is the org boundary, because `FilesBackend` is constructed once
+//! per org. That keying is the point twice over: the state outlives the
+//! process, and one org's `devices()` can no longer answer with another
+//! org's rows, which a process-wide `static` did.
+//!
+//! **The half that is still missing is device *identity*.**
+//! [`this_device`] mints an id per process, so a restart comes back as a
+//! stranger: its subscriptions are on disk under the old id and it reads
+//! back an empty one, and the devices table grows a row per process
+//! lifetime. Nothing degrades into a *wrong* answer — an unrecognised
+//! device takes nothing, and under `files.sync.selective` taking nothing
+//! means stubs, never absent content — but a revocation does not yet
+//! outlive the process it was issued in, which is the security-relevant
+//! half. Closing that needs a device registry to mint a stable id from;
+//! it is not a change to this file's storage.
 //!
 //! **A project's capabilities are derived from its `RootFlavor`.** Facets
 //! come from capabilities, capabilities come from a project declaration,
@@ -30,7 +41,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use chrono::Utc;
 use files_domain::facet::{Capability, Facet, FacetMap, Source};
@@ -50,16 +61,16 @@ use files_proto::service::tree::Hydration;
 use crate::backend::FilesBackend;
 use crate::consts::{GIT_DIR, MARKER_FILE, STORE_DIR};
 
-// ── In-memory state ────────────────────────────────────────────────
+// ── State ──────────────────────────────────────────────────────────
 
-/// Per-process sync state: subscriptions, devices and project facet
+/// One org's sync state: subscriptions, devices and project facet
 /// mappings.
 ///
-/// Not durable. See the module doc — this exists so the lane can be
-/// exercised and reviewed end to end while the store it belongs in is
-/// still to be written, and every method that reads it degrades to
-/// "nothing subscribed" rather than to a guess.
-#[derive(Debug, Default)]
+/// Persisted per org — see [`crate::durable`]. Every method that reads it
+/// degrades to "nothing subscribed" rather than to a guess, which under
+/// `files.sync.selective` is a tree of stubs and never missing content.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(from = "Wire", into = "Wire")]
 struct SyncState {
     /// Keyed by device *and* root: a subscription is one device's answer
     /// about one root, and a laptop takes sessions from one album while
@@ -72,36 +83,109 @@ struct SyncState {
     mappings: HashMap<RootId, BTreeMap<String, FacetName>>,
 }
 
-fn state() -> &'static Mutex<SyncState> {
-    static STATE: OnceLock<Mutex<SyncState>> = OnceLock::new();
-    STATE.get_or_init(Mutex::default)
+/// The on-disk shape.
+///
+/// JSON has no representation for a composite map key, and the
+/// subscription table is keyed by `(device, root)` because that is the
+/// question every lookup here asks. Rather than degrade the runtime types
+/// to fit the file format, the file format is lists of rows and the
+/// conversion is here.
+///
+/// The rows are the wire types themselves rather than a second copy of
+/// their fields: a [`Subscription`] already carries its own `device` and
+/// `root_id`, and a [`DeviceInfo`] its own `id`, so the map keys are
+/// recoverable from the values and storing them again would be a way for
+/// a key and its row to disagree. Only `mappings`, whose inner map is
+/// path-keyed and has no such field, needs a row struct.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Wire {
+    subscriptions: Vec<Subscription>,
+    devices: Vec<DeviceInfo>,
+    mappings: Vec<MappingRow>,
 }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MappingRow {
+    root: RootId,
+    /// Lowercased path to facet, exactly as `map_facet` recorded it.
+    facets: BTreeMap<String, FacetName>,
+}
+
+impl From<Wire> for SyncState {
+    fn from(w: Wire) -> Self {
+        Self {
+            subscriptions: w
+                .subscriptions
+                .into_iter()
+                .map(|s| ((s.device, s.root_id), s))
+                .collect(),
+            devices: w
+                .devices
+                .into_iter()
+                .map(|d| (d.id.to_string(), d))
+                .collect(),
+            mappings: w.mappings.into_iter().map(|m| (m.root, m.facets)).collect(),
+        }
+    }
+}
+
+impl From<SyncState> for Wire {
+    fn from(s: SyncState) -> Self {
+        Self {
+            subscriptions: s.subscriptions.into_values().collect(),
+            devices: s.devices.into_values().collect(),
+            mappings: s
+                .mappings
+                .into_iter()
+                .map(|(root, facets)| MappingRow { root, facets })
+                .collect(),
+        }
+    }
+}
+
+static SYNC: crate::durable::Scoped<SyncState> = crate::durable::Scoped::new("sync");
 
 /// This process's device identity.
 ///
 /// Minted per process because there is no device registry to mint it
 /// from. A real identity is stable across restarts and is what
-/// revocation acts on, so this is the second half of the persistence gap
-/// rather than a separate one.
+/// revocation acts on, so this is the remaining half of the durability
+/// gap rather than a separate one — see the module doc.
 fn this_device() -> DeviceId {
     static ID: OnceLock<DeviceId> = OnceLock::new();
     *ID.get_or_init(DeviceId::generate)
 }
 
-fn with_state<T>(f: impl FnOnce(&mut SyncState) -> T) -> T {
-    let mut guard = state().lock().expect("sync state lock poisoned");
-    let local = this_device();
-    guard.devices.entry(local.to_string()).or_insert(DeviceInfo {
-        id: local,
-        name: "this device".to_string(),
-        last_seen: Utc::now(),
-        transfer: TransferPolicy {
-            max_bytes_per_sec: None,
-            paused: false,
-        },
-        revoked: false,
-    });
-    f(&mut guard)
+/// Mutate this org's state and persist it, registering this device first.
+///
+/// The registration is why announcing a device belongs on the write path
+/// and not on the read one: a row saying "this device exists" is a fact
+/// about the org, and a table that only remembered it for as long as the
+/// process ran could not be revoked against.
+fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut SyncState) -> T) -> T {
+    SYNC.write(backend, |s| {
+        let local = this_device();
+        s.devices.entry(local.to_string()).or_insert(DeviceInfo {
+            id: local,
+            name: "this device".to_string(),
+            last_seen: Utc::now(),
+            transfer: TransferPolicy {
+                max_bytes_per_sec: None,
+                paused: false,
+            },
+            revoked: false,
+        });
+        f(s)
+    })
+}
+
+/// Read this org's state without registering or persisting.
+///
+/// Separate from [`with_state`] because a read that writes the file back
+/// is both wasted io and a lie in its mtime — "when did this device last
+/// change what it takes" must not answer "when it last asked".
+fn read_state<T>(backend: &FilesBackend, f: impl FnOnce(&SyncState) -> T) -> T {
+    SYNC.read(backend, f)
 }
 
 // ── Capabilities, ignores, facet maps ──────────────────────────────
@@ -134,7 +218,7 @@ impl FilesBackend {
     /// plus whatever the project has mapped.
     fn facet_map(&self, root_id: RootId, root: &FileRootInfo) -> FacetMap {
         let mut map = FacetMap::new(capability_of(root));
-        with_state(|s| {
+        read_state(self, |s| {
             if let Some(project) = s.mappings.get(&root_id) {
                 for (path, facet) in project {
                     map.map(path, Facet::new(facet.0.clone()));
@@ -161,7 +245,7 @@ impl FilesBackend {
 
     /// This device's subscription to a root, as the domain wants it.
     fn plan_for(&self, root_id: RootId) -> Plan {
-        let stored = stored_subscription(root_id);
+        let stored = stored_subscription(self, root_id);
         let mut plan = Plan::new(stored.facets.into_iter().map(|f| Facet::new(f.0)));
         for pinned in stored.pinned {
             plan.pin(pinned);
@@ -350,9 +434,9 @@ fn ancestor_is_classified(path: &RootPath, map: &FacetMap) -> bool {
 /// nothing, which under `files.sync.selective` means everything is a
 /// stub — present, sized, hydrating on access. There is no state in
 /// which content is missing.
-fn stored_subscription(root_id: RootId) -> Subscription {
+fn stored_subscription(backend: &FilesBackend, root_id: RootId) -> Subscription {
     let device = this_device();
-    with_state(|s| {
+    read_state(backend, |s| {
         s.subscriptions
             .get(&(device, root_id))
             .cloned()
@@ -365,8 +449,8 @@ fn stored_subscription(root_id: RootId) -> Subscription {
     })
 }
 
-fn store_subscription(sub: &Subscription) {
-    with_state(|s| {
+fn store_subscription(backend: &FilesBackend, sub: &Subscription) {
+    with_state(backend, |s| {
         s.subscriptions
             .insert((sub.device, sub.root_id), sub.clone());
     });
@@ -410,7 +494,7 @@ impl SyncService for FilesBackend {
         if facet.0.trim().is_empty() {
             return Err(FilesFault::invalid("a facet's name may not be empty"));
         }
-        with_state(|s| {
+        with_state(self, |s| {
             s.mappings
                 .entry(root_id)
                 .or_default()
@@ -454,7 +538,7 @@ impl SyncService for FilesBackend {
 
     async fn subscription(&self, root_id: RootId) -> Result<Subscription, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
-        Ok(stored_subscription(root_id))
+        Ok(stored_subscription(self, root_id))
     }
 
     // t[impl files.sync.selective] — facets, not globs; unsubscribed is a stub
@@ -464,11 +548,11 @@ impl SyncService for FilesBackend {
         facets: Vec<FacetName>,
     ) -> Result<Subscription, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
-        let mut sub = stored_subscription(root_id);
+        let mut sub = stored_subscription(self, root_id);
         sub.facets = facets;
         sub.facets.sort_by(|a, b| a.0.cmp(&b.0));
         sub.facets.dedup();
-        store_subscription(&sub);
+        store_subscription(self, &sub);
         // Content leaving the subscription becomes a stub here rather
         // than at some later sweep: a user who unticks "footage" and
         // then unplugs must already have the space back.
@@ -489,7 +573,7 @@ impl SyncService for FilesBackend {
             .map(|p| p.validate())
             .collect::<Result<_, _>>()?;
 
-        let mut sub = stored_subscription(root_id);
+        let mut sub = stored_subscription(self, root_id);
         if pinned {
             sub.pinned.extend(paths);
             sub.pinned.sort();
@@ -497,7 +581,7 @@ impl SyncService for FilesBackend {
         } else {
             sub.pinned.retain(|p| !paths.contains(p));
         }
-        store_subscription(&sub);
+        store_subscription(self, &sub);
         self.apply_subscription(root_id).await?;
         Ok(sub)
     }
@@ -528,7 +612,10 @@ impl SyncService for FilesBackend {
     }
 
     async fn devices(&self) -> Result<Vec<DeviceInfo>, FilesFault> {
-        Ok(with_state(|s| s.devices.values().cloned().collect()))
+        // The write path, not the read one: listing is how this device
+        // announces itself, and a caller asking "what talks to this org"
+        // must see the machine it is asking from.
+        Ok(with_state(self, |s| s.devices.values().cloned().collect()))
     }
 
     // t[impl files.device.control] — throttle and pause, losing no progress
@@ -537,7 +624,7 @@ impl SyncService for FilesBackend {
         device: DeviceId,
         policy: TransferPolicy,
     ) -> Result<DeviceInfo, FilesFault> {
-        with_state(|s| {
+        with_state(self, |s| {
             let info = s
                 .devices
                 .get_mut(&device.to_string())
@@ -552,7 +639,7 @@ impl SyncService for FilesBackend {
 
     // t[impl files.device.control] — revoked, refused sync, wipes on next contact
     async fn revoke_device(&self, device: DeviceId) -> Result<DeviceInfo, FilesFault> {
-        with_state(|s| {
+        with_state(self, |s| {
             let info = s
                 .devices
                 .get_mut(&device.to_string())

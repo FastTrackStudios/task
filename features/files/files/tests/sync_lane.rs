@@ -352,3 +352,95 @@ async fn a_silent_device_has_an_empty_subscription_rather_than_none() {
     assert!(sub.facets.is_empty());
     assert!(sub.pinned.is_empty());
 }
+
+/// `files.device.control` says a pin survives a restart, in as many
+/// words: the whole point of pinning a reel is that it is still there
+/// when the laptop comes back up on the plane.
+// t[verify files.device.control]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pin_survives_a_restart() {
+    let (tmp, backend, root) = album("restart").await;
+    let reel = RootPath::parse("Proxies/reel.mov").unwrap();
+
+    backend
+        .subscribe(root, vec![FacetName("sessions".into())])
+        .await
+        .expect("subscribe");
+    backend
+        .pin(root, vec![reel.clone()], true)
+        .await
+        .expect("pin");
+    drop(backend);
+
+    // The state file is the proof. A second backend in THIS process
+    // shares the lane's in-memory cache, so reading through it alone
+    // would answer from memory and say nothing about durability — and
+    // `files.device.control` is a claim about what survives a real
+    // restart, which only the disk can settle.
+    let on_disk = std::fs::read_to_string(tmp.path().join("sync.json"))
+        .expect("the lane must have written its state to the org's data dir");
+    assert!(
+        on_disk.contains("reel.mov"),
+        "a pin must reach the disk, not just the cache: {on_disk}"
+    );
+
+    // And it still reads back through the lane.
+    let second = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("restart");
+    let sub = second.subscription(root).await.expect("subscription");
+    assert!(
+        sub.pinned.contains(&reel),
+        "a pin a human set must outlive the process that recorded it: {sub:?}"
+    );
+    assert_eq!(
+        sub.facets,
+        vec![FacetName("sessions".into())],
+        "and so must the subscription the pin overrides"
+    );
+}
+
+/// One org's devices are not another's.
+///
+/// The lane state used to be a process-wide `static`, but `FilesBackend`
+/// is constructed once per org — so `devices()` was answering with every
+/// org's machines, and revoking one org's laptop revoked it everywhere.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_orgs_devices_are_not_anothers() {
+    let (_a_tmp, a, _a_root) = album("alpha").await;
+    let (_b_tmp, b, _b_root) = album("beta").await;
+
+    let me = a
+        .devices()
+        .await
+        .expect("alpha devices")
+        .first()
+        .expect("this process registers itself")
+        .id;
+    a.revoke_device(me).await.expect("revoke in alpha");
+    a.set_transfer_policy(
+        me,
+        files_proto::service::sync::TransferPolicy {
+            max_bytes_per_sec: Some(1),
+            paused: true,
+        },
+    )
+    .await
+    .expect("throttle in alpha");
+
+    let elsewhere = b.devices().await.expect("beta devices");
+    let there = elsewhere
+        .iter()
+        .find(|d| d.id == me)
+        .expect("the same machine talks to both orgs");
+    assert!(
+        !there.revoked,
+        "revoking a device in one org must not revoke it in another: {elsewhere:?}"
+    );
+    assert_eq!(
+        there.transfer.max_bytes_per_sec, None,
+        "nor must one org's throttle be another's"
+    );
+    assert!(
+        a.devices().await.unwrap().iter().any(|d| d.id == me && d.revoked),
+        "and the org that did revoke it still has"
+    );
+}

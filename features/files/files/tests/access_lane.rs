@@ -435,3 +435,122 @@ async fn the_trait_answers_for_the_process_principal() {
         "`effective` is `effective_for(this_principal)` and nothing more"
     );
 }
+
+/// A grant is a decision a human made about who may see their work, and
+/// `storage.tier.authored` says such a decision is durable. It used to
+/// live in a process-lifetime `static`, so restarting the server silently
+/// un-shared every folder on it — the failure nobody notices until a
+/// collaborator is locked out.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_grant_survives_a_restart() {
+    let (tmp, first, root) = adopted().await;
+    let sam = colleague();
+    let grant = first
+        .grant(sam.clone(), root, p("Sessions/Song"), vec![Capability::Read])
+        .await
+        .expect("grant");
+    drop(first);
+
+    // Asserted on disk as well as through the API, because a second
+    // backend in *this* process shares the already-loaded cell — so the
+    // trait calls below would pass against a process-wide static too. The
+    // file is the part a real restart reads.
+    let on_disk = std::fs::read_to_string(tmp.path().join("access.json")).expect("access.json");
+    assert!(
+        on_disk.contains(&grant.id.to_string()),
+        "the grant was never written down: {on_disk}"
+    );
+
+    // A second backend over the same data directory is what a restart
+    // looks like to this lane.
+    let second = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("restart");
+    assert!(
+        second
+            .grants(root, None)
+            .await
+            .expect("grants after restart")
+            .iter()
+            .any(|g| g.id == grant.id),
+        "a grant a human made must outlive the process that recorded it"
+    );
+    assert!(
+        second
+            .effective_for(&sam, root, &p("Sessions/Song/mix.wav"))
+            .expect("Sam still holds the subtree")
+            .capabilities
+            .contains(&Capability::Read),
+        "and it must still resolve, not merely be listed"
+    );
+}
+
+/// One org's grants and links are not another's.
+///
+/// `FilesBackend` is constructed once per org, so the lane's old
+/// process-wide `static` was one table shared by every org on the server.
+/// The lookups that gave it away are the ones keyed by id alone — `revoke`
+/// and `set_share_disabled` scan without a root to scope them, so an org
+/// could reach a row it had no way of knowing existed.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_orgs_access_is_not_anothers() {
+    async fn org(name: &str) -> (tempfile::TempDir, FilesBackend, RootId) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join(name);
+        std::fs::create_dir_all(dir.join("Sessions").join("Song")).unwrap();
+        let backend = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+        let root = backend
+            .adopt(AdoptRequest {
+                path: dir.to_string_lossy().into_owned(),
+                name: name.into(),
+                flavor: RootFlavor::Media,
+                hash_content: false,
+            })
+            .await
+            .expect("adopt");
+        (tmp, backend, RootId::new(root.id))
+    }
+
+    let (_a_tmp, a, a_root) = org("alpha").await;
+    let (_b_tmp, b, _b_root) = org("beta").await;
+
+    let grant = a
+        .grant(colleague(), a_root, p("Sessions"), vec![Capability::Read])
+        .await
+        .expect("alpha grants");
+    let link = a
+        .create_share(a_root, p("Sessions"), vec![Capability::Read])
+        .await
+        .expect("alpha shares");
+
+    // Beta has no row with these ids, so both must read as absent —
+    // anything else means beta reached into alpha's table.
+    match b.revoke(grant.id).await.expect_err("not beta's grant") {
+        FilesFault::GrantRevoked(id) => assert_eq!(id, grant.id),
+        other => panic!("beta could see alpha's grant: {other:?}"),
+    }
+    assert!(
+        matches!(
+            b.set_share_disabled(link.id, true)
+                .await
+                .expect_err("not beta's link"),
+            FilesFault::Invalid(_)
+        ),
+        "beta must not be able to pause a link alpha minted"
+    );
+
+    // And alpha's own rows are untouched by beta having asked.
+    assert!(
+        !a.shares(a_root)
+            .await
+            .expect("alpha shares")
+            .iter()
+            .any(|l| l.id == link.id && l.disabled),
+        "beta's request reached alpha's link"
+    );
+    assert!(
+        a.grants(a_root, None)
+            .await
+            .expect("alpha grants")
+            .iter()
+            .any(|g| g.id == grant.id)
+    );
+}

@@ -397,14 +397,21 @@ async fn tags_survive_a_restart() {
         root
     };
 
-    // A second backend over the same data directory is what a restart
-    // looks like to this lane.
+    // The state file is the proof. A second backend in THIS process
+    // shares the same in-memory cache, so reading through it would
+    // answer from memory and say nothing about durability — which is
+    // what the first version of this test did.
+    let on_disk = std::fs::read_to_string(tmp.path().join("organise.json"))
+        .expect("the lane must have written its state to the org's data dir");
+    assert!(
+        on_disk.contains("keeper"),
+        "a tag a human chose must reach the disk, not just the cache: {on_disk}"
+    );
+
+    // And it still reads back through the lane.
     let second = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("restart");
     let marks = second.marks(root, take).await.expect("marks after restart");
-    assert!(
-        marks.tags.iter().any(|t| t.0 == "keeper"),
-        "a tag a human chose must outlive the process that recorded it"
-    );
+    assert!(marks.tags.iter().any(|t| t.0 == "keeper"));
 }
 
 /// One org's tags are not another's.
