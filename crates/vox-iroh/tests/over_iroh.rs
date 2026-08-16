@@ -10,7 +10,6 @@
 //! direct path on the loopback network and never touches the internet.
 
 use iroh::{Endpoint, RelayMode, endpoint::presets};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use vox_iroh::ALPN;
 
 /// Bind an endpoint that talks only to peers it is told about.
