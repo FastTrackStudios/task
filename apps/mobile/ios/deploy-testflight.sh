@@ -232,7 +232,16 @@ echo "=== SDK metadata: iphoneos${SDK_VER} (${SDK_BUILD}), Xcode ${XCODE_VER} ($
 # Xcode whose actool matches this OS (the 27 beta) for the icon compile ONLY —
 # it produces a valid Assets.car and does not touch the build/upload SDK.
 ICONS_DIR="${ICONS_DIR:-$ROOT/apps/mobile/ios/Assets.xcassets}"
-if [ -d "$ICONS_DIR" ]; then
+# FAIL, don't skip. A missing ICONS_DIR used to fall straight through to the
+# upload, which Apple then rejected (90022/90023/91111) — minutes later, with
+# an error naming icon formats rather than the path that was wrong. The repo
+# split moved this directory, so it is exactly the mistake that gets made.
+if [ ! -d "$ICONS_DIR" ]; then
+    echo "ERROR: no icon assets at $ICONS_DIR" >&2
+    echo "       altool rejects icon-less apps, so this build cannot ship." >&2
+    echo "       Set ICONS_DIR, or restore the Assets.xcassets." >&2
+    exit 1
+fi
     ICON_DEV="${ACTOOL_DEVELOPER_DIR:-$DEV}"
     ACTOOL="$ICON_DEV/usr/bin/actool"; [ -x "$ACTOOL" ] || ACTOOL="$(xcrun --find actool)"
     DEVELOPER_DIR="$ICON_DEV" "$ACTOOL" "$ICONS_DIR" --compile "$APP" --platform iphoneos \
@@ -246,11 +255,14 @@ if [ -d "$ICONS_DIR" ]; then
             || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Info.plist" 2>/dev/null || true
         echo "app icon embedded (Assets.car + CFBundleIconName)"
     else
-        echo "ERROR: app-icon compile produced no Assets.car — altool will reject."
-        echo "  set ACTOOL_DEVELOPER_DIR to an Xcode whose actool matches this macOS."
-        tail -6 /tmp/fts-actool.log
+        # Also a hard failure. This printed ERROR and continued, so the upload
+        # went ahead and Apple rejected it — the build was already doomed here,
+        # several minutes earlier, with a far more legible message.
+        echo "ERROR: app-icon compile produced no Assets.car — altool will reject." >&2
+        echo "  set ACTOOL_DEVELOPER_DIR to an Xcode whose actool matches this macOS." >&2
+        tail -6 /tmp/fts-actool.log >&2
+        exit 1
     fi
-fi
 echo "=== app: $APP ($BUNDLE) build $BUILD_NO ==="
 
 # ── Embedded watchOS companion ───────────────────────────────────────────

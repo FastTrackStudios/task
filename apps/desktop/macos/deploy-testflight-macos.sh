@@ -171,21 +171,29 @@ echo "=== SDK metadata: macosx${SDK_VER} (${SDK_BUILD}), Xcode ${XCODE_VER} (${X
 # rejects icon-less apps. sips + iconutil are macOS built-ins, so unlike the
 # iOS flow there is NO actool / Xcode-beta coupling here (that dance exists
 # only because iOS icons must be an Assets.car).
-if [ -f "$ICON_1024" ]; then
-    ICONSET="$(mktemp -d)/AppIcon.iconset"
-    mkdir -p "$ICONSET"
-    for s in 16 32 128 256 512; do
-        sips -z "$s" "$s" "$ICON_1024" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-        d=$((s * 2))
-        sips -z "$d" "$d" "$ICON_1024" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-    done
-    mkdir -p "$APP/Contents/Resources"
-    iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
-    pb CFBundleIconFile AppIcon
-    echo "=== app icon: AppIcon.icns (from $ICON_1024) ==="
-else
-    echo "WARNING: no icon master at $ICON_1024 — the App Store will reject an icon-less app."
+# FAIL, don't warn. This used to `echo WARNING` and carry on, which meant a
+# wrong ICON_1024 path produced a full signed build and a TestFlight upload
+# that Apple rejected minutes later with "Missing required icon ... ICNS
+# containing a 512pt x 512pt @2x image (90236)" — an error that says nothing
+# about a path. The repo split moved this master and that is exactly what
+# happened. An icon-less app can never ship, so stop here.
+if [ ! -f "$ICON_1024" ]; then
+    echo "ERROR: no icon master at $ICON_1024" >&2
+    echo "       The App Store rejects icon-less apps (90236), so this build" >&2
+    echo "       cannot ship. Set ICON_1024, or restore the 1024px master." >&2
+    exit 1
 fi
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+    sips -z "$s" "$s" "$ICON_1024" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    d=$((s * 2))
+    sips -z "$d" "$d" "$ICON_1024" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+done
+mkdir -p "$APP/Contents/Resources"
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+pb CFBundleIconFile AppIcon
+echo "=== app icon: AppIcon.icns (from $ICON_1024) ==="
 echo "=== app: $PRODUCT_NAME ($DX_BUNDLE_ID) build $BUILD_NO ==="
 
 # ── Entitlements: App Sandbox base + identity keys from the profile ──────────
