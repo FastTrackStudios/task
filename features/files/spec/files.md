@@ -363,6 +363,22 @@ org content on next contact.
 
 ---
 
+### A device says who it is; the server never decides for it
+
+t[files.device.identity]
+A device presents an identity it holds and persists itself — one per
+machine, surviving restart and the expiry of any login session — and the
+server records it rather than minting one. Two devices are the same
+device only when they present the same identity.
+
+This is what makes the rest of the lane mean anything. A server that
+invents an identity for whoever is calling has one device, not many: a
+subscription cannot belong to a laptop rather than a phone, and revoking
+"the device" cuts everyone. Revocation in particular is only as precise
+as identity is.
+
+---
+
 ### Devices ingest on their own
 
 t[files.device.ingest]

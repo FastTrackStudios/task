@@ -145,12 +145,28 @@ impl From<SyncState> for Wire {
 
 static SYNC: crate::durable::Scoped<SyncState> = crate::durable::Scoped::new("sync");
 
-/// This process's device identity.
+/// The device this process speaks for.
 ///
-/// Minted per process because there is no device registry to mint it
-/// from. A real identity is stable across restarts and is what
-/// revocation acts on, so this is the remaining half of the durability
-/// gap rather than a separate one — see the module doc.
+/// **Deliberately not persisted, and persisting it would be worse than
+/// leaving it.** `files.device.identity` says a device presents an
+/// identity it holds itself and the server records it rather than
+/// minting one — and that machinery already exists: `files-daemon`'s
+/// `DeviceIdentity` is a per-machine `(device id, secret)` on disk,
+/// surviving restart and session expiry, mapped onto storage-agent
+/// enrollment so an operator can revoke one device without touching
+/// others.
+///
+/// A server-side id is not that. The server is ONE machine serving many
+/// devices, so making this stable would make it stably wrong: every
+/// client would present as the same device forever, one subscription
+/// would belong to all of them, and revoking it would cut everyone.
+/// Minting it per process at least keeps the error obvious.
+///
+/// The fix is to thread the caller's identity from the connection, which
+/// no method on this trait carries and `FilesBackend` holds no session
+/// for. Until then, revocation is only as precise as identity is — which
+/// is not very.
+// FUTURE: take the device id from the connection, not from here.
 fn this_device() -> DeviceId {
     static ID: OnceLock<DeviceId> = OnceLock::new();
     *ID.get_or_init(DeviceId::generate)
