@@ -103,6 +103,7 @@ fn matches(pattern: &str, name: &str) -> bool {
 
 /// The ignore rules in force for one root.
 #[derive(Debug, Clone, Default)]
+// t[impl files.ignore.layers]
 pub struct IgnoreSet {
     capabilities: Vec<Capability>,
     project: Vec<String>,
@@ -167,6 +168,7 @@ impl IgnoreSet {
     /// Both halves are returned on purpose: the ignored half still
     /// exists, still occupies disk, and a UI that wants to say "and 8,412
     /// hidden files" needs it.
+    // t[impl files.ignore.retained] — both halves; ignored is not deleted
     pub fn partition<'a, I>(&self, paths: I) -> (Vec<&'a str>, Vec<(&'a str, Layer)>)
     where
         I: IntoIterator<Item = &'a str>,
@@ -188,6 +190,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // t[verify files.ignore.layers]
     fn platform_junk_goes_regardless_of_capability() {
         let none = IgnoreSet::default();
         assert_eq!(none.ignored(".DS_Store"), Some(Layer::Platform));
@@ -223,6 +226,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.ignore.layers]
     fn layers_are_independent() {
         // A music project still drops OS junk, and a project pattern
         // cannot rescue a platform-ignored file.
@@ -241,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.ignore.retained]
     fn partition_keeps_both_halves() {
         let music = IgnoreSet::new([Capability::MusicProduction]);
         let listing = [

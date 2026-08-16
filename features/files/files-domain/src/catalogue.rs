@@ -35,6 +35,7 @@ pub enum Change {
 
 /// One root's structure, plus the change log a client resumes from.
 #[derive(Debug, Clone)]
+// t[impl files.catalogue.complete]
 pub struct Catalogue {
     root_id: RootId,
     entries: BTreeMap<RootPath, CatalogueEntry>,
@@ -82,6 +83,7 @@ impl Catalogue {
     /// Direct children of `path`. Serves a browse without touching the
     /// filesystem, which is what makes an offline listing possible.
     #[must_use]
+    // t[impl files.catalogue.offline] — served without touching the filesystem
     pub fn children(&self, path: &RootPath) -> Vec<&CatalogueEntry> {
         let depth = if path.is_root() {
             1
@@ -123,6 +125,7 @@ impl Catalogue {
     /// Entries held there change hydration and **nothing else** — they
     /// keep their name, size, kind and content address, because a server
     /// being down is not a fact about the tree.
+    // t[impl files.catalogue.offline] — hydration changes, structure does not
     pub fn set_location_reachable(&mut self, location: &str, reachable: bool, now: DateTime<Utc>) {
         let affected: Vec<RootPath> = self
             .entries
@@ -168,6 +171,7 @@ impl Catalogue {
     /// safe direction: a client re-syncs rather than silently skipping
     /// changes it never saw.
     #[must_use]
+    // t[impl files.catalogue.concurrent] — resume, never re-list
     pub fn changes_since(&self, cursor: &Cursor) -> Vec<Change> {
         let from: u64 = cursor.0.parse().unwrap_or(0);
         self.log
@@ -182,6 +186,7 @@ impl Catalogue {
     /// Bounded growth is the requirement the log would otherwise break:
     /// entries scale with file count, but a change log scales with
     /// *edits*, forever.
+    // t[impl files.catalogue.bounded]
     pub fn compact(&mut self, keep_after: &Cursor) {
         let from: u64 = keep_after.0.parse().unwrap_or(0);
         self.log.retain(|(seq, _)| *seq > from);
@@ -201,6 +206,7 @@ impl Catalogue {
     /// Whether this view should be presented as "as of" rather than as
     /// current.
     #[must_use]
+    // t[impl files.catalogue.staleness]
     pub fn is_stale(&self, now: DateTime<Utc>, ttl: Duration) -> bool {
         match self.confirmed_at {
             None => true,
@@ -266,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.catalogue.complete]
     fn children_are_direct_only() {
         let mut c = cat();
         for p in [
@@ -281,6 +288,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.catalogue.offline]
     fn an_unreachable_location_hides_content_not_structure() {
         let mut c = cat();
         c.upsert(entry("Footage/A.mov", 400, "post", at(0)));
@@ -296,6 +304,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.catalogue.concurrent]
     fn a_client_resumes_from_a_cursor_without_relisting() {
         let mut c = cat();
         c.upsert(entry("a", 1, "studio", at(0)));
@@ -308,6 +317,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.catalogue.concurrent]
     fn an_unknown_cursor_resyncs_rather_than_skipping() {
         let mut c = cat();
         c.upsert(entry("a", 1, "studio", at(0)));
@@ -326,6 +336,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.catalogue.bounded]
     fn compaction_bounds_the_log() {
         let mut c = cat();
         for i in 0..50 {
@@ -338,6 +349,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.catalogue.staleness]
     fn staleness_is_visible() {
         let mut c = cat();
         c.upsert(entry("a", 1, "studio", at(0)));

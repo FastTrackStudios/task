@@ -145,6 +145,7 @@ fn layouts_for(capability: Capability) -> &'static [&'static [ToolDir]] {
 /// Resolves a directory to a facet, given a project's capabilities and
 /// its own mappings.
 #[derive(Debug, Clone, Default)]
+// t[impl files.facet.vocabulary]
 pub struct FacetMap {
     capabilities: Vec<Capability>,
     /// Project mappings, keyed by lowercased path.
@@ -195,6 +196,7 @@ impl FacetMap {
     /// maps a directory has said something more specific than a general
     /// fact about a tool.
     #[must_use]
+    // t[impl files.facet.tool-layout] — capability layouts, no configuration
     pub fn resolve(&self, path: &str) -> Binding {
         let lower = path.to_ascii_lowercase();
 
@@ -231,6 +233,7 @@ impl FacetMap {
     /// Directories belonging to no facet, so the mapping can be
     /// supplied. Reporting these is required: unmapped content is never
     /// hidden and its facet is never guessed.
+    // t[impl files.facet.project-override] — unmapped is reported, never guessed
     pub fn unmapped<'a, I>(&'a self, paths: I) -> Vec<&'a str>
     where
         I: IntoIterator<Item = &'a str>,
@@ -269,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.facet.tool-layout]
     fn tool_layouts_need_no_configuration() {
         let m = music();
         // Pro Tools and Reaper, from the same capability, no setup.
@@ -278,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.facet.tool-layout]
     fn tool_dirs_are_recognised_at_any_depth() {
         let m = music();
         let deep = "01 ALL THAT I AM/Audio Files";
@@ -310,6 +315,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.facet.project-override]
     fn the_project_maps_what_no_tool_made() {
         let mut m = music();
         m.map("Project Assembly", Facet::new("assembly"));
@@ -326,6 +332,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.facet.project-override]
     fn unmapped_is_reported_not_hidden() {
         let m = music();
         let real = [
@@ -347,6 +354,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.facet.vocabulary]
     fn vocabulary_covers_both_sources() {
         let mut m = FacetMap::new([Capability::MusicProduction, Capability::VideoProduction]);
         m.map("Video ISO Files", Facet::new("iso"));

@@ -155,6 +155,7 @@ impl RootCadence {
 
 /// Per-root cadence state plus the clock and config it runs on.
 #[derive(Debug)]
+// t[impl files.version.cadence]
 pub struct CadenceEngine {
     config: CadenceConfig,
     clock: Arc<dyn Clock>,

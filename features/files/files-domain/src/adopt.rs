@@ -32,6 +32,7 @@ pub enum Discarded {
 /// resumed adoption re-does the work that was in flight and nothing
 /// else.
 #[derive(Debug, Clone, PartialEq)]
+// t[impl files.adopt.catalogue-first]
 pub struct Adoption {
     phase: AdoptionPhase,
     /// Whether to read bytes at all. `false` publishes the catalogue and
@@ -178,6 +179,7 @@ impl Adoption {
 
     /// Continue from where it stopped. Never restarts — counters were
     /// preserved across the pause, so resumption picks up the remainder.
+    // t[impl files.adopt.resumable]
     pub fn resume(&mut self, now: DateTime<Utc>) {
         if self.phase != AdoptionPhase::Paused {
             return;
@@ -232,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.adopt.catalogue-first]
     fn browsable_before_anything_is_hashed() {
         let mut a = Adoption::begin(at(0), true);
         assert!(!a.is_browsable());
@@ -242,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.adopt.catalogue-first]
     fn no_denominator_until_the_walk_finishes() {
         let mut a = Adoption::begin(at(0), true);
         walked(&mut a, 500);
@@ -275,6 +279,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.adopt.resumable]
     fn resuming_continues_and_does_not_restart() {
         let mut a = Adoption::begin(at(0), true);
         walked(&mut a, 100);
@@ -312,6 +317,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.adopt.resumable]
     fn a_file_changing_under_us_costs_only_the_work() {
         let mut a = Adoption::begin(at(0), true);
         walked(&mut a, 2);

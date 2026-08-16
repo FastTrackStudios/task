@@ -58,6 +58,7 @@ impl Subscription {
 
     /// Pin a path for offline use regardless of facet. Survives restart,
     /// because it is part of the subscription rather than a cache hint.
+    // t[impl files.device.control] — pin survives restart, beats facets
     pub fn pin(&mut self, path: RootPath) -> &mut Self {
         self.pinned.insert(path);
         self
@@ -143,6 +144,7 @@ impl Decision {
 /// ancestor, because tool directories classify their whole subtree —
 /// `Audio Files/kick.wav` belongs to sessions by virtue of its parent.
 #[must_use]
+// t[impl files.sync.selective]
 pub fn decide(path: &RootPath, facets: &FacetMap, sub: &Subscription) -> Decision {
     if sub.is_pinned(path) {
         return Decision::resident(Reason::Pinned);
@@ -221,6 +223,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.sync.selective]
     fn a_mix_engineer_takes_sessions_and_leaves_footage() {
         let m = album();
         let sub = Subscription::new([Facet::new("sessions")]);
@@ -257,6 +260,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.sync.selective]
     fn subscribing_to_a_session_brings_its_media() {
         let m = album();
         let sub = Subscription::new([Facet::new("sessions")]);
@@ -269,6 +273,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.device.control]
     fn a_pin_beats_an_unsubscribed_facet() {
         let m = album();
         let mut sub = Subscription::new([Facet::new("sessions")]);
@@ -280,6 +285,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.device.control]
     fn pinning_a_folder_pins_what_is_in_it() {
         let m = album();
         let mut sub = Subscription::default();
@@ -342,6 +348,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.sync.selective]
     fn nothing_is_ever_absent() {
         let m = album();
         let sub = Subscription::default();

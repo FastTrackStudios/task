@@ -94,6 +94,7 @@ fn is_date_token(tok: &str) -> Option<String> {
 /// yields no ordering: two files' labels cannot be compared, because
 /// doing so would be inferring a lineage.
 #[must_use]
+// t[impl files.version.labels]
 pub fn read(filename: &str) -> Vec<Label> {
     let stem = filename.rsplit_once('.').map_or(filename, |(s, _)| s);
     let lower = stem.to_ascii_lowercase();
@@ -169,6 +170,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.version.labels]
     fn a_date_is_a_date_not_a_version() {
         let l = read("Ancestro - 5.8.26 Mix.wav");
         assert!(l.contains(&Label::Date("5.8.26".into())));
@@ -190,6 +192,7 @@ mod tests {
     }
 
     #[test]
+    // t[verify files.version.labels]
     fn labels_offer_no_ordering() {
         // The point of the module: these are readable and not comparable.
         // If this ever compiles with `<`, someone has added a lineage.
