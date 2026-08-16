@@ -188,3 +188,71 @@ fn confinement_is_one_rule_across_lanes() {
     assert!(RootPath::parse("stems/../../../etc").is_err());
     assert!(RootPath::parse("stems/kick.wav").is_ok());
 }
+
+/// A write must be visible to the tree lane immediately.
+///
+/// The catalogue is a separate structure that only `note_write` updates.
+/// Before it existed, a file created through `WriteService` stayed
+/// invisible to `entry`/`catalogue`/`changes_since` until the process
+/// restarted — a catalogue that is *stale* is allowed and reported by
+/// `freshness`, one that is *wrong* is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_is_visible_to_the_tree_lane_at_once() {
+    use files_proto::service::write::WriteService;
+
+    let rig = rig().await;
+
+    // Make the catalogue resident first — the bug only bites a root
+    // somebody has already browsed.
+    let before = rig.backend.catalogue(rig.root, None).await.expect("catalogue");
+    let cursor = before.cursor.clone();
+
+    let made = RootPath::parse("Renders").unwrap();
+    rig.backend
+        .create_dirs(rig.root, vec![made.clone()])
+        .await
+        .expect("mkdir");
+
+    let entry = rig
+        .backend
+        .entry(rig.root, made.clone())
+        .await
+        .expect("a directory created through the write lane must be in the catalogue");
+    assert_eq!(entry.path, made);
+
+    // And it arrives as a delta rather than forcing a re-list, which is
+    // what keeping the log (instead of dropping the catalogue) buys.
+    let delta = rig
+        .backend
+        .changes_since(rig.root, cursor)
+        .await
+        .expect("changes_since");
+    assert!(
+        delta.changed.iter().any(|e| e.path == made),
+        "the write should arrive as a change, not require a re-list"
+    );
+}
+
+/// A delete is visible too — and as a removal, not a stale entry.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delete_removes_the_entry_rather_than_leaving_it() {
+    use files_proto::service::write::WriteService;
+
+    let rig = rig().await;
+    let doomed = RootPath::parse("mix.wav").unwrap();
+    rig.backend.catalogue(rig.root, None).await.expect("catalogue");
+    rig.backend
+        .entry(rig.root, doomed.clone())
+        .await
+        .expect("present to begin with");
+
+    rig.backend
+        .delete_paths(rig.root, vec![doomed.clone()])
+        .await
+        .expect("delete");
+
+    assert!(
+        rig.backend.entry(rig.root, doomed).await.is_err(),
+        "a deleted path must leave the catalogue, not linger as a stale entry"
+    );
+}

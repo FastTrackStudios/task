@@ -486,3 +486,87 @@ mod tests {
         );
     }
 }
+
+// ── Keeping the catalogue honest about writes ─────────────────────────
+
+/// Stat one live-tree path into a catalogue record.
+///
+/// The walk builds records from a `BrowseEntry` it already has; a write
+/// knows only the path it touched, so this is the same construction from
+/// a bare stat. Stub detection stays stat-bounded, exactly as in
+/// [`record`].
+fn record_of(root: &FileRootInfo, path: &RootPath, now: DateTime<Utc>) -> Option<CatalogueEntry> {
+    let disk = Path::new(&root.path).join(path.as_str());
+    let meta = std::fs::metadata(&disk).ok()?;
+    let is_dir = meta.is_dir();
+    let size = if is_dir { 0 } else { meta.len() };
+
+    let stub = (!is_dir && root.flavor == RootFlavor::Media && crate::stub::candidate_len(size))
+        .then(|| crate::stub::probe(&disk))
+        .flatten();
+
+    Some(CatalogueEntry {
+        root_id: RootId::new(root.id),
+        path: path.clone(),
+        kind: if is_dir {
+            EntryKind::Directory
+        } else {
+            EntryKind::File
+        },
+        size: stub.as_ref().map_or(size, |s| s.size),
+        content: stub.as_ref().map(|s| ContentId::new(s.file_id.clone())),
+        hydration: if stub.is_some() {
+            Hydration::Stub
+        } else {
+            Hydration::Resident
+        },
+        locations: if is_dir {
+            Vec::new()
+        } else {
+            vec![root.path.clone()]
+        },
+        modified_at: meta.modified().map_or(now, DateTime::<Utc>::from),
+        confirmed_at: now,
+    })
+}
+
+/// Fold a completed mutation into this root's catalogue.
+///
+/// Called by the lanes that change a live tree — `crate::lane::write` and
+/// `crate::lane::upload` — because nothing else does. Without it a write
+/// is invisible to `entry`, `catalogue` and `changes_since` until the
+/// process restarts, which is the difference between a catalogue that is
+/// *stale* (allowed, and reported by `freshness`) and one that is *wrong*
+/// (not allowed at all).
+///
+/// It **updates** rather than invalidates. Dropping the catalogue would
+/// discard the change log with it, forcing every subscribed client to
+/// re-list a tree that changed by one file — the exact re-listing
+/// `files.catalogue.concurrent` says a client never has to do. Upserting
+/// keeps the log, so the write arrives as a delta.
+///
+/// A root with no resident catalogue is left alone: it will be walked on
+/// first read and see the write then. Nothing here builds one, because a
+/// write must not pay for a full walk of a tree nobody has browsed.
+// t[impl files.catalogue.concurrent] — a write arrives as a delta
+pub(crate) fn note_write(root: &FileRootInfo, touched: &[RootPath], removed: &[RootPath]) {
+    let root_id = RootId::new(root.id);
+    let mut guard = catalogues().lock().expect("catalogue lock poisoned");
+    let Some(cat) = guard.get_mut(&root_id) else {
+        return;
+    };
+    let now = Utc::now();
+
+    for path in removed {
+        cat.remove(path);
+    }
+    for path in touched {
+        // A touched path that is gone was moved away or deleted; the
+        // caller may not have distinguished the two, so resolve it here
+        // rather than requiring them to.
+        match record_of(root, path, now) {
+            Some(entry) => cat.upsert(entry),
+            None => cat.remove(path),
+        }
+    }
+}

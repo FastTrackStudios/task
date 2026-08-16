@@ -578,6 +578,11 @@ impl UploadService for FilesBackend {
         }
         let entry = landed?;
         forget(upload_id);
+        // An upload is a write, and the catalogue hears about writes from
+        // nobody else — see `lane::tree::note_write`.
+        if let Ok(root) = crate::lane::root_or_fault(self, spec.root_id) {
+            crate::lane::tree::note_write(&root, std::slice::from_ref(&entry.path), &[]);
+        }
         Ok(entry)
     }
 

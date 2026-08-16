@@ -449,6 +449,24 @@ where
     match backend.checkpoint_now_inner(root_id.get(), Some(description)) {
         Ok(info) => {
             batch.commit();
+            // The catalogue is a separate structure and nothing else
+            // updates it, so a write it never hears about is a write the
+            // tree lane reports as not having happened. Folding it in
+            // here — rather than dropping the catalogue — keeps the
+            // change log, so subscribers get a delta instead of having
+            // to re-list a tree that changed by one file.
+            let touched: Vec<_> = outcomes
+                .iter()
+                .filter_map(|o| o.landed_at.clone())
+                .collect();
+            let removed: Vec<_> = outcomes
+                .iter()
+                .filter(|o| o.landed_at.is_none() && !o.skipped)
+                .map(|o| o.path.clone())
+                .collect();
+            if let Ok(root) = crate::lane::root_or_fault(backend, root_id) {
+                crate::lane::tree::note_write(&root, &touched, &removed);
+            }
             Ok(WriteReceipt {
                 root_id,
                 outcomes,
