@@ -433,3 +433,131 @@ async fn an_upload_sends_its_bytes_over_vox_and_lands() {
     assert_eq!(landed.len(), 200_000);
     assert_eq!(landed[..64], (0..64u32).map(|i| (i % 253) as u8).collect::<Vec<_>>()[..]);
 }
+
+/// An archive of a selection, generated as it is sent, over vox.
+///
+/// The last stub. It refused for a good reason — a `ByteTicket` nothing
+/// could redeem is worse than an honest refusal — and the reason is gone
+/// now that the byte lane can carry a generated stream.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_archive_streams_as_a_tar_over_vox() {
+    use files_proto::MediaServiceStreamClient;
+    use files_proto::service::media::{ByteFrame, ByteRequest};
+    use files_proto::service::write::WriteService;
+
+    let tmp = tempfile::tempdir().expect("data tempdir");
+    let dir = tmp.path().join("mix-session");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("mix.wav"), b"take one").unwrap();
+    std::fs::create_dir(dir.join("stems")).unwrap();
+    std::fs::write(dir.join("stems").join("kick.wav"), b"boom").unwrap();
+
+    let backend = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+    let scope = Scope::new();
+    let local = LocalServer::serve(
+        LayerRouter::new()
+            .merge(files_proto::roots_layer(backend.clone()))
+            .merge(files_proto::media_stream_layer(backend.clone())),
+        scope,
+    );
+
+    let roots: RootsServiceClient = local.establish().await.expect("roots client");
+    let root = RootId::new(
+        roots
+            .adopt(AdoptRequest {
+                path: dir.to_string_lossy().into_owned(),
+                name: "Mix Session".into(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            })
+            .await
+            .expect("adopt")
+            .id,
+    );
+
+    let ticket = backend
+        .archive(root, vec![RootPath::parse("stems").unwrap()])
+        .await
+        .expect("archive must no longer refuse");
+    assert_eq!(ticket.length, None, "a generated stream has no known length");
+    assert!(!ticket.seekable, "and cannot be ranged");
+    assert_eq!(ticket.content_type, "application/x-tar");
+
+    let stream: MediaServiceStreamClient = local.establish().await.expect("byte lane");
+    let (tx, mut rx) = vox::channel::<ByteFrame>();
+    let request = ByteRequest {
+        token: ticket.token.clone(),
+        range: None,
+    };
+    tokio::spawn(async move {
+        let _ = stream.bytes(request, tx).await;
+    });
+
+    let mut tar = Vec::new();
+    let mut done = false;
+    while let Ok(Ok(Some(frame))) =
+        tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
+    {
+        let mut copied = None;
+        let _ = frame.map(|f| copied = Some(f));
+        match copied.expect("frame") {
+            ByteFrame::Chunk { bytes, .. } => tar.extend_from_slice(&bytes),
+            ByteFrame::Done => {
+                done = true;
+                break;
+            }
+            ByteFrame::Failed(f) => panic!("archive failed: {f:?}"),
+            ByteFrame::Opened { .. } => {}
+        }
+    }
+    assert!(done, "the archive says it finished");
+
+    // Read it back the way an extractor would, so this asserts a real
+    // tar rather than merely some bytes.
+    assert_eq!(tar.len() % 512, 0, "block-aligned");
+    assert!(
+        tar[tar.len() - 1024..].iter().all(|b| *b == 0),
+        "two zero blocks end it"
+    );
+    let name = |block: &[u8]| {
+        String::from_utf8_lossy(&block[..100])
+            .trim_end_matches('\0')
+            .to_string()
+    };
+    let mut names = Vec::new();
+    let mut at = 0;
+    while at + 512 <= tar.len() {
+        let block = &tar[at..at + 512];
+        if block.iter().all(|b| *b == 0) {
+            break;
+        }
+        assert_eq!(&block[257..263], b"ustar\0", "every header is USTAR");
+        let n = name(block);
+        let size = u64::from_str_radix(
+            String::from_utf8_lossy(&block[124..135]).trim_end_matches(['\0', ' ']),
+            8,
+        )
+        .unwrap_or(0);
+        if n == "stems/kick.wav" {
+            let body = &tar[at + 512..at + 512 + size as usize];
+            assert_eq!(body, b"boom", "the file's bytes are in the archive");
+        }
+        names.push(n);
+        at += 512 + size as usize + files_padding(size);
+    }
+    assert!(
+        names.iter().any(|n| n == "stems/"),
+        "the directory is announced before its contents: {names:?}"
+    );
+    assert!(names.iter().any(|n| n == "stems/kick.wav"), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n == "mix.wav"),
+        "only what was selected: {names:?}"
+    );
+}
+
+/// Tar pads each entry's body to a 512-byte boundary.
+fn files_padding(size: u64) -> usize {
+    let rem = (size % 512) as usize;
+    if rem == 0 { 0 } else { 512 - rem }
+}

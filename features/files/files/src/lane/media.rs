@@ -122,6 +122,17 @@ enum ByteSource {
     Source { root_id: Uuid, file_id: String },
     /// A derived rendition in the root's private rendition CAS.
     Rendition { root_id: Uuid, file_id: String },
+    /// A tar generated as it is sent, over a selection of live-tree
+    /// paths.
+    ///
+    /// The one source that is not an immutable object. Every other grant
+    /// pins content at mint so a checkpoint landing mid-response cannot
+    /// change bytes under an advertised length; an archive has no
+    /// advertised length to break — `length: None`, `seekable: false` —
+    /// and is a snapshot of the tree at redemption rather than at mint.
+    /// That is a weaker promise, made explicitly rather than by
+    /// accident.
+    Archive { root_id: Uuid, paths: Vec<String> },
 }
 
 /// A minted grant. The wire [`ByteTicket`] is a projection of this.
@@ -140,14 +151,18 @@ struct Grant {
 
 impl Grant {
     fn ticket(&self, token: String) -> ByteTicket {
+        let generated = matches!(self.source, ByteSource::Archive { .. });
         ByteTicket {
             token,
-            // Known, because the object is already in a store and its
-            // length was read from there. Only a generated stream (an
-            // archive) reports `None`, and this lane mints none.
-            length: Some(self.length),
-            // Honest, not aspirational: both stores read by range.
-            seekable: true,
+            // Known for a stored object, because its length was read from
+            // the store. `None` for a generated stream: an archive's size
+            // is not known until it has been produced, and guessing it
+            // would put a number on the wire that the body then fails to
+            // match.
+            length: (!generated).then_some(self.length),
+            // Honest, not aspirational: both stores read by range, and a
+            // stream generated in one pass cannot.
+            seekable: !generated,
             content_type: self.content_type.clone(),
             expires_at: self.expires_at,
         }
@@ -334,7 +349,136 @@ impl FilesBackend {
                 .read_rendition_range(*root_id, file_id, start, len, dest)
                 .await
                 .map_err(fault),
+            ByteSource::Archive { root_id, paths } => {
+                if range.is_some() {
+                    // The ticket said `seekable: false`. Refusing is the
+                    // only honest answer: satisfying a range would mean
+                    // generating everything before it and discarding it,
+                    // which is the cost the caller was told to avoid.
+                    return Err(FilesFault::invalid(
+                        "an archive is generated in one pass and cannot be ranged",
+                    ));
+                }
+                self.write_archive(*root_id, paths, dest).await
+            }
         }
+    }
+
+
+    /// Generate a tar over a selection, straight into `dest`.
+    ///
+    /// Nothing is materialised: each file is opened, streamed a buffer at
+    /// a time into the entry, and closed. A selection of a whole root
+    /// costs one buffer, not one archive.
+    ///
+    /// Entries are emitted depth-first in the order given, with each
+    /// directory announced before its contents so an extractor never has
+    /// to create a parent it was not told about.
+    async fn write_archive<W>(
+        &self,
+        root_id: Uuid,
+        paths: &[String],
+        dest: &mut W,
+    ) -> Result<(), FilesFault>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        use tokio::io::AsyncReadExt as _;
+
+        let root = crate::lane::root_or_fault(self, RootId::new(root_id))?;
+        let base = std::path::Path::new(&root.path);
+        let mut tar = crate::tarball::Tar::new(dest);
+
+        // Flatten first so a failure to walk is reported before a byte of
+        // archive is on the wire — after that, the only way to signal is
+        // to truncate.
+        let mut queue: Vec<String> = paths.to_vec();
+        let mut entries: Vec<(String, bool, u64, u64)> = Vec::new();
+        while let Some(rel) = queue.pop() {
+            let disk = base.join(&rel);
+            let Ok(meta) = std::fs::metadata(&disk) else {
+                continue;
+            };
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs());
+            if meta.is_dir() {
+                entries.push((rel.clone(), true, 0, mtime));
+                if let Ok(read) = std::fs::read_dir(&disk) {
+                    for child in read.flatten() {
+                        let name = child.file_name().to_string_lossy().into_owned();
+                        if name == files_proto::consts::STORE_DIR
+                            || name == files_proto::consts::MARKER_FILE
+                        {
+                            continue;
+                        }
+                        queue.push(format!("{rel}/{name}"));
+                    }
+                }
+            } else {
+                entries.push((rel.clone(), false, meta.len(), mtime));
+            }
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut buf = vec![0u8; 64 * 1024];
+        for (rel, is_dir, size, mtime) in entries {
+            if is_dir {
+                tar.directory(&rel, mtime)
+                    .await
+                    .map_err(|e| FilesFault::Io(e.to_string()))?;
+                continue;
+            }
+            let mut file = tokio::fs::File::open(base.join(&rel))
+                .await
+                .map_err(FilesFault::io)?;
+            let mut entry = tar
+                .file(&rel, size, mtime)
+                .await
+                .map_err(|e| FilesFault::Io(e.to_string()))?;
+            loop {
+                let n = file.read(&mut buf).await.map_err(FilesFault::io)?;
+                if n == 0 {
+                    break;
+                }
+                entry
+                    .write(&buf[..n])
+                    .await
+                    .map_err(|e| FilesFault::Io(e.to_string()))?;
+            }
+            entry
+                .close()
+                .await
+                .map_err(|e| FilesFault::Io(e.to_string()))?;
+        }
+        tar.finish()
+            .await
+            .map_err(|e| FilesFault::Io(e.to_string()))
+    }
+
+    /// Mint a ticket for an archive of `paths`.
+    ///
+    /// Called by [`crate::lane::write`], which owns `archive` on the
+    /// wire but has no ticket store of its own.
+    pub(crate) fn mint_archive(
+        &self,
+        root_id: RootId,
+        paths: &[files_proto::path::RootPath],
+    ) -> Result<ByteTicket, FilesFault> {
+        crate::lane::root_or_fault(self, root_id)?;
+        let grant = Grant {
+            source: ByteSource::Archive {
+                root_id: root_id.get(),
+                paths: paths.iter().map(|p| p.as_str().to_string()).collect(),
+            },
+            offset: 0,
+            length: 0,
+            content_type: "application/x-tar".to_string(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        };
+        Ok(self.mint(grant))
     }
 
     /// Collect a handoff by its token, which consumes it.
@@ -609,47 +753,6 @@ impl MediaService for FilesBackend {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn p(s: &str) -> RootPath {
-        RootPath::parse(s).expect("test path")
-    }
-
-    #[test]
-    fn a_content_type_comes_from_the_extension_and_never_from_a_guess() {
-        assert_eq!(content_type_for(&p("takes/cut.mov")), "video/quicktime");
-        assert_eq!(content_type_for(&p("mix.WAV")), "audio/wav");
-        assert_eq!(
-            content_type_for(&p("session")),
-            "application/octet-stream",
-            "no extension says nothing, and saying nothing is honest"
-        );
-    }
-
-    #[test]
-    fn the_root_itself_has_no_bytes() {
-        assert!(matches!(
-            readable(&RootPath::root()),
-            Err(FilesFault::Invalid(_))
-        ));
-        // `RootPath` is `#[serde(transparent)]`, so a hostile peer's
-        // path never saw `parse` — the guard has to run on this side.
-        let hostile: RootPath =
-            serde_json::from_str("\"../../etc/passwd\"").expect("transparent newtype");
-        assert!(matches!(readable(&hostile), Err(FilesFault::BadPath(_))));
-    }
-
-    #[test]
-    fn a_token_is_wide_enough_to_be_a_capability() {
-        let a = mint_token();
-        let b = mint_token();
-        assert_eq!(a.len(), 64, "256 bits, hex");
-        assert_ne!(a, b);
-    }
-}
-
 // ── The byte lane over vox ────────────────────────────────────────────
 
 /// Bytes per frame.
@@ -768,4 +871,45 @@ async fn stream_bytes(
         Err(join) => ByteFrame::Failed(FilesFault::Internal(join.to_string())),
     };
     let _ = sink.send(outcome).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(s: &str) -> RootPath {
+        RootPath::parse(s).expect("test path")
+    }
+
+    #[test]
+    fn a_content_type_comes_from_the_extension_and_never_from_a_guess() {
+        assert_eq!(content_type_for(&p("takes/cut.mov")), "video/quicktime");
+        assert_eq!(content_type_for(&p("mix.WAV")), "audio/wav");
+        assert_eq!(
+            content_type_for(&p("session")),
+            "application/octet-stream",
+            "no extension says nothing, and saying nothing is honest"
+        );
+    }
+
+    #[test]
+    fn the_root_itself_has_no_bytes() {
+        assert!(matches!(
+            readable(&RootPath::root()),
+            Err(FilesFault::Invalid(_))
+        ));
+        // `RootPath` is `#[serde(transparent)]`, so a hostile peer's
+        // path never saw `parse` — the guard has to run on this side.
+        let hostile: RootPath =
+            serde_json::from_str("\"../../etc/passwd\"").expect("transparent newtype");
+        assert!(matches!(readable(&hostile), Err(FilesFault::BadPath(_))));
+    }
+
+    #[test]
+    fn a_token_is_wide_enough_to_be_a_capability() {
+        let a = mint_token();
+        let b = mint_token();
+        assert_eq!(a.len(), 64, "256 bits, hex");
+        assert_ne!(a, b);
+    }
 }

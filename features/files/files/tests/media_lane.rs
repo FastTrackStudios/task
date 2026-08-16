@@ -409,13 +409,22 @@ async fn what_is_not_implemented_refuses_rather_than_pretending() {
     use files_proto::service::write::WriteService;
     let (_data, backend, root_id, _bytes) = rig().await;
 
-    // No archive writer exists in this crate, so no archive ticket is
-    // minted. When one lands, this is the test that changes.
-    let refused = WriteService::archive(&backend, root_id, vec![p("mix.wav")]).await;
-    assert!(
-        matches!(&refused, Err(FilesFault::Internal(m)) if m.contains("byte lane")),
-        "got {refused:?}"
-    );
+    // `archive` used to refuse here — there was no archive writer, so a
+    // ticket would have been a token nothing could redeem. It now mints
+    // one, and the promises it makes are the weak ones a generated
+    // stream can keep: no length, and no seeking.
+    let ticket = WriteService::archive(&backend, root_id, vec![p("mix.wav")])
+        .await
+        .expect("an archive ticket");
+    assert_eq!(ticket.length, None);
+    assert!(!ticket.seekable);
+
+    // And a path that is not there is refused before a token exists, so
+    // holding one is never a promise about a path that never was.
+    assert!(matches!(
+        WriteService::archive(&backend, root_id, vec![p("no-such-file.wav")]).await,
+        Err(FilesFault::PathNotFound(_))
+    ));
 
     // Nothing is readable before it has been checkpointed: the byte lane
     // serves the store, and a file being written has no stable length.

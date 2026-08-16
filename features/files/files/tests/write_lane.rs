@@ -518,19 +518,28 @@ async fn a_move_into_a_missing_folder_is_refused() {
 
 // ── Honestly unimplemented ──────────────────────────────────────────
 
-/// Pinned as a decision on record: a `ByteTicket` is a promise the byte
-/// lane will honour a token, and there is no byte lane. Minting one would
-/// hand every caller a token that fails somewhere else.
+/// An archive ticket promises only what a generated stream can keep.
+///
+/// This test used to pin the opposite: with no byte lane, minting a
+/// ticket would have handed every caller a token that failed somewhere
+/// else, so `archive` refused. The lane exists now, and the ticket says
+/// plainly what it is — a tar produced in one pass, with no length known
+/// in advance and no seeking.
 // t[verify files.write.surface]
 #[tokio::test(flavor = "multi_thread")]
-async fn archive_refuses_rather_than_minting_a_ticket_nothing_can_redeem() {
+async fn an_archive_ticket_promises_only_what_it_can_keep() {
     let (_tmp, backend, id, _dir) = adopted().await;
-    match backend
-        .archive(id, vec![p("stems")])
-        .await
-        .expect_err("no byte lane")
-    {
-        FilesFault::Internal(why) => assert_eq!(why, "not yet implemented: the byte lane"),
-        other => panic!("expected Internal, got {other:?}"),
-    }
+    let ticket = backend.archive(id, vec![p("stems")]).await.expect("ticket");
+    assert_eq!(ticket.content_type, "application/x-tar");
+    assert_eq!(
+        ticket.length, None,
+        "the size is not known until the archive has been produced"
+    );
+    assert!(!ticket.seekable, "one pass cannot seek");
+
+    // An empty selection is a caller error, not an empty archive.
+    assert!(matches!(
+        backend.archive(id, vec![]).await,
+        Err(FilesFault::Invalid(_))
+    ));
 }

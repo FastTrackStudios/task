@@ -30,6 +30,7 @@ pub mod certify;
 mod checkpoint;
 mod consts;
 mod durable;
+mod tarball;
 mod content;
 mod entity;
 mod error;

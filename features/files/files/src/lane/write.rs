@@ -718,14 +718,38 @@ impl WriteService for FilesBackend {
     /// component, with no way to tell a bad ticket from a bad stream —
     /// so this refuses in the one place that knows why.
     // t[impl files.write.surface] — declared, and honestly unimplemented
+    // t[impl files.write.surface] — a selection downloads as one stream
+    /// Open an archive stream over a selection.
+    ///
+    /// The ticket names the paths, not their content: a tar is generated
+    /// as it is sent, so nothing is materialised server-side and a
+    /// selection of a whole root costs one buffer. That is also why it
+    /// reports no length and refuses a range — the size is not known
+    /// until the archive has been produced, and a stream generated in
+    /// one pass cannot seek.
+    ///
+    /// Every path is validated and checked to exist before a token is
+    /// minted, so a caller holding a ticket is not holding a promise
+    /// about a path that was never there.
     async fn archive(
         &self,
-        _root_id: RootId,
-        _paths: Vec<RootPath>,
+        root_id: RootId,
+        paths: Vec<RootPath>,
     ) -> Result<ByteTicket, FilesFault> {
-        Err(FilesFault::Internal(
-            "not yet implemented: the byte lane".into(),
-        ))
+        let root = crate::lane::root_or_fault(self, root_id)?;
+        if paths.is_empty() {
+            return Err(FilesFault::invalid("an archive needs at least one path"));
+        }
+        let mut checked = Vec::with_capacity(paths.len());
+        for path in paths {
+            let path = path.validate()?;
+            let disk = std::path::Path::new(&root.path).join(path.as_str());
+            if !disk.exists() {
+                return Err(FilesFault::PathNotFound(path));
+            }
+            checked.push(path);
+        }
+        self.mint_archive(root_id, &checked)
     }
 }
 
