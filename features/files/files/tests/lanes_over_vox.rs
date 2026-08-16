@@ -320,3 +320,116 @@ async fn bytes_cross_vox_and_arrive_intact() {
     assert!(done, "the stream says it finished rather than just stopping");
     assert_eq!(got, payload, "every byte arrived, in order, unaltered");
 }
+
+/// An upload of content the server does not already hold, end to end.
+///
+/// This is what the byte lane's egress half could not do. `complete`
+/// refused for want of bytes, because nothing in the codebase could
+/// deliver them — a subscription streams *out*, and an upload needs the
+/// other direction.
+///
+/// vox binds a channel handle in either position: a `Tx` in a
+/// subscription's args means the server sends, an `Rx` in a method's args
+/// means the server receives. The capability was there and unused.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_upload_sends_its_bytes_over_vox_and_lands() {
+    use files_proto::UploadServiceClient;
+    use files_proto::service::upload::{UploadFrame, UploadSpec};
+
+    let tmp = tempfile::tempdir().expect("data tempdir");
+    let dir = tmp.path().join("mix-session");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("mix.wav"), b"take one").unwrap();
+
+    let backend = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+    let scope = Scope::new();
+    let local = LocalServer::serve(
+        LayerRouter::new()
+            .merge(files_proto::roots_layer(backend.clone()))
+            .merge(files_proto::tree_layer(backend.clone()))
+            .merge(files_proto::upload_layer(backend.clone())),
+        scope,
+    );
+
+    let roots: RootsServiceClient = local.establish().await.expect("roots client");
+    let root = RootId::new(
+        roots
+            .adopt(AdoptRequest {
+                path: dir.to_string_lossy().into_owned(),
+                name: "Mix Session".into(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            })
+            .await
+            .expect("adopt")
+            .id,
+    );
+
+    // Content the server has never seen — so no dedup shortcut, and the
+    // bytes genuinely have to cross the wire.
+    let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 253) as u8).collect();
+    let dest = RootPath::parse("stems/new-take.wav").unwrap();
+
+    let uploads: UploadServiceClient = local.establish().await.expect("upload client");
+    let plan = uploads
+        .begin(UploadSpec {
+            root_id: root,
+            path: dest.clone(),
+            size: payload.len() as u64,
+            content: None,
+            modified_at: None,
+        })
+        .await
+        .expect("begin");
+    assert!(
+        !plan.needed.is_empty(),
+        "content the store has never seen must be asked for"
+    );
+
+    // The client keeps the sender and hands over the receiver; vox binds
+    // it, and the server reads with the channel's credit pacing us.
+    let (tx, rx) = vox::channel::<UploadFrame>();
+    let sending = tokio::spawn(async move {
+        for (i, chunk) in payload.chunks(64 * 1024).enumerate() {
+            let offset = (i * 64 * 1024) as u64;
+            if tx
+                .send(UploadFrame::Chunk {
+                    offset,
+                    bytes: chunk.to_vec(),
+                })
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+        let _ = tx.send(UploadFrame::Finished).await;
+    });
+
+    let received = tokio::time::timeout(
+        Duration::from_secs(30),
+        uploads.send_bytes(plan.upload_id, rx),
+    )
+    .await
+    .expect("send_bytes timed out")
+    .expect("send_bytes");
+    sending.await.expect("sender finished");
+
+    assert_eq!(received.written, 200_000, "every byte was written");
+    assert!(
+        received.needed.is_empty(),
+        "after sending, nothing is outstanding: {:?}",
+        received.needed
+    );
+
+    let entry = uploads
+        .complete(plan.upload_id, OnConflict::Fail)
+        .await
+        .expect("complete must not refuse once the bytes are held");
+    assert_eq!(entry.path, dest);
+
+    // And it is really on disk, byte for byte.
+    let landed = std::fs::read(dir.join("stems").join("new-take.wav")).expect("landed");
+    assert_eq!(landed.len(), 200_000);
+    assert_eq!(landed[..64], (0..64u32).map(|i| (i % 253) as u8).collect::<Vec<_>>()[..]);
+}

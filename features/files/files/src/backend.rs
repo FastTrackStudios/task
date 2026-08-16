@@ -3715,6 +3715,25 @@ impl FilesBackend {
         self.with_version_store(root_id, |vs| pollster::block_on(vs.chunks().has(file_id)))
     }
 
+    /// Chunk a staged file into this root's store, returning its content
+    /// address.
+    ///
+    /// The ingress lane's landing step. Bytes arriving over the wire go
+    /// to a staging file outside the tree, and this is what turns that
+    /// file into content the store holds — after which `outstanding`
+    /// reports nothing missing, because the answer is derived from the
+    /// store rather than tracked alongside it. Chunking here is also
+    /// what makes the upload dedup against everything already held: an
+    /// identical chunk costs nothing to add.
+    pub fn sync_ingest_path(&self, root_id: Uuid, path: &Path) -> Result<String, FilesError> {
+        let owned = path.to_path_buf();
+        self.with_version_store(root_id, |vs| {
+            pollster::block_on(vs.chunks().write_path(&owned))
+        })?
+        .map(|file_id| file_id.to_string())
+        .map_err(|e| to_files_error(Error::VersionStore(e.into())))
+    }
+
     /// Does this root's chunk store hold the chunk?
     pub fn sync_has_chunk(&self, root_id: Uuid, hash_hex: &str) -> Result<bool, FilesError> {
         let hash = chunk_hash_from_hex(hash_hex)?;

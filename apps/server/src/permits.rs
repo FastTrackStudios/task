@@ -445,8 +445,14 @@ table!(FILES_WRITE, "files-write", "files/**", [
 // `OnConflict::Replace` checkpoints the outgoing content first, so
 // nothing is lost, but a file at a path stopped being the file that was
 // there. The rest of the lane is planning and accounting.
+// `send_bytes` is the ingress byte lane. A write, not `dl` — that tier
+// is for content LEAVING the server — and not audited: it moves bytes
+// into a staging file outside the tree and displaces nothing. `complete`
+// is where a file can stop being the file that was there, and that is
+// the audited one.
 table!(FILES_UPLOAD, "files-upload", "files/**", [
     wr "begin", rd "progress", wa "complete", wr "abort", rd "pending",
+    wr "send_bytes",
 ]);
 
 // History, divergence and restore (`files.version.*`,

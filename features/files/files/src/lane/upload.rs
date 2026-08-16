@@ -59,7 +59,7 @@ use files_proto::path::RootPath;
 use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::tree::{CatalogueEntry, EntryKind, Hydration};
 use files_proto::service::upload::{
-    ChunkRange, Conflict, UploadPlan, UploadProgress, UploadService, UploadSpec,
+    ChunkRange, Conflict, UploadPlan, UploadProgress, UploadService, UploadSpec, Received, UploadFrame,
 };
 use files_proto::service::write::OnConflict;
 
@@ -624,6 +624,125 @@ impl UploadService for FilesBackend {
         }
         Ok(out)
     }
+    // t[impl files.write.upload] — bytes arrive over the same transport
+    // t[impl files.scale.transport] — ingress rides vox, with vox's credit
+    async fn send_bytes(
+        &self,
+        upload_id: UploadId,
+        mut frames: architect::vox::Rx<UploadFrame>,
+    ) -> Result<Received, FilesFault> {
+        use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
+
+        let session = session_of(upload_id)?;
+        let spec = session.spec.clone();
+        let root = crate::lane::root_or_fault(self, spec.root_id)?;
+
+        // The staging file already exists — `begin` created it and filled
+        // whatever the store could supply. Writing into it at an offset
+        // is what makes a resumed upload cheap: the client sends the
+        // ranges still outstanding and nothing else.
+        let staged = self
+            .data_dir()
+            .join("uploads")
+            .join(format!("{upload_id}.part"));
+        tokio::fs::create_dir_all(staged.parent().expect("uploads dir"))
+            .await
+            .map_err(FilesFault::io)?;
+        let file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&staged)
+            .await
+            .map_err(FilesFault::io)?;
+        // Size it up front so a client may send its ranges in any order:
+        // seeking past the end of a shorter file would otherwise decide
+        // the order for them.
+        file.set_len(spec.size).await.map_err(FilesFault::io)?;
+        let mut file = file;
+
+        let mut written = 0u64;
+        // Each `recv` awaits, so the channel's credit is what paces the
+        // sender: a client faster than this disk waits on us rather than
+        // filling our memory. That is the whole reason a 244 GB upload is
+        // safe here and a `Vec<u8>` parameter would not be.
+        while let Ok(Some(frame)) = frames.recv().await {
+            let mut copied = None;
+            let _ = frame.map(|f| copied = Some(f));
+            match copied {
+                Some(UploadFrame::Chunk { offset, bytes }) => {
+                    if offset + bytes.len() as u64 > spec.size {
+                        // Refuse rather than grow the file past what the
+                        // spec declared: the size is what the collision
+                        // and dedup decisions were made against.
+                        return Err(FilesFault::invalid(
+                            "an upload frame lies outside the declared size",
+                        ));
+                    }
+                    file.seek(std::io::SeekFrom::Start(offset))
+                        .await
+                        .map_err(FilesFault::io)?;
+                    file.write_all(&bytes).await.map_err(FilesFault::io)?;
+                    written += bytes.len() as u64;
+                }
+                Some(UploadFrame::Finished) => break,
+                None => break,
+            }
+        }
+
+        // Durable before we report progress: a client told its bytes
+        // landed and then losing them to a crash would resume from a
+        // position that never existed.
+        file.flush().await.map_err(FilesFault::io)?;
+        file.sync_all().await.map_err(FilesFault::io)?;
+        drop(file);
+
+        // Chunk the staged file into the root's store.
+        //
+        // This is what makes the bytes *held* rather than merely written:
+        // `outstanding` derives from the store, deliberately, so that a
+        // chunk arriving by any route at all counts. Skipping this step
+        // would leave a complete staging file that every other method in
+        // the lane still reports as missing.
+        //
+        // It is also where the upload finally dedups against everything
+        // already in the store — an identical chunk costs nothing to add.
+        let this = self.clone();
+        let root_id = spec.root_id.get();
+        let staged_for_ingest = staged.clone();
+        let landed = crate::lane::blocking(move || {
+            this.sync_ingest_path(root_id, &staged_for_ingest)
+                .map_err(|e| crate::error::Error::BadRequest(e.to_string()))
+        })
+        .await?;
+
+        // Record it on the session as the content this upload is for.
+        //
+        // From here the session is indistinguishable from one whose
+        // client declared its address up front — which is the point:
+        // `stage`, `outstanding` and the dedup check all key off the
+        // content address, and none of them should need to know whether
+        // the bytes arrived over the wire or were already held.
+        let resolved = ContentId::new(landed);
+        with_uploads(|u| {
+            if let Some(session) = u.0.get_mut(&upload_id) {
+                session.spec.content = Some(resolved.clone());
+            }
+        });
+        let spec = UploadSpec {
+            content: Some(resolved),
+            ..spec
+        };
+
+        // Recomputed rather than tallied, for the same reason `progress`
+        // recomputes: a fact beats a count two paths could disagree about.
+        let needed = self.outstanding(&root, &spec).await?;
+        Ok(Received {
+            upload_id,
+            written,
+            needed,
+        })
+    }
 }
 
 impl FilesBackend {
@@ -660,6 +779,7 @@ impl FilesBackend {
             .await?
             .ok_or_else(|| FilesFault::Io(format!("{dest}: landed and then vanished")))
     }
+
 }
 
 #[cfg(test)]
