@@ -194,9 +194,9 @@ fn stage(name: &str, outcome: Result<String, String>) {
 async fn main() {
     println!("\n── Two servers, addressed by public key ──────────────────\n");
 
-    // The studio server: an audio session, as a mix engineer's tree.
+    // ACME Audio: the sessions and stems half of the job.
     let known = Arc::new(Mutex::new(HashMap::new()));
-    let studio = Server::start("studio", Arc::clone(&known), |tree| {
+    let acme = Server::start("ACME Audio", Arc::clone(&known), |tree| {
         let session = tree.join("Song");
         std::fs::create_dir_all(session.join("Audio Files")).unwrap();
         std::fs::write(session.join("Song.rpp"), b"REAPER project (fixture)").unwrap();
@@ -208,8 +208,9 @@ async fn main() {
     })
     .await;
 
-    // The post server: the video half of the same job, a different org.
-    let post = Server::start("post", Arc::clone(&known), |tree| {
+    // VNT Video: the footage and cut half, a different company on a
+    // different server.
+    let vnt = Server::start("VNT Video", Arc::clone(&known), |tree| {
         let cut = tree.join("Cut");
         std::fs::create_dir_all(cut.join("Proxies")).unwrap();
         std::fs::write(cut.join("Cut.drp"), b"Resolve project (fixture)").unwrap();
@@ -217,8 +218,8 @@ async fn main() {
     })
     .await;
 
-    for s in [&studio, &post] {
-        println!("  {:<8} {}", s.name, s.endpoint.id());
+    for s in [&acme, &vnt] {
+        println!("  {:<11} {}", s.name, s.endpoint.id());
     }
     println!(
         "\n  A device registers a server by pasting one of those ids.\n  \
@@ -229,14 +230,14 @@ async fn main() {
 
     // Two clients, each dialling a different server by its id alone.
     let mut clients = Vec::new();
-    for server in [&studio, &post] {
+    for server in [&acme, &vnt] {
         let dialer = iroh_link::bind_endpoint(iroh::SecretKey::generate())
             .await
             .expect("client endpoint");
         let link = iroh_link::connect(&dialer, server.endpoint.addr())
             .await
             .expect("dial the server by its id");
-        println!("  client → {:<8} connected over QUIC", server.name);
+        println!("  client → {:<11} connected over QUIC", server.name);
         clients.push((dialer, link));
     }
     println!();
@@ -245,8 +246,8 @@ async fn main() {
 
     // Adoption. The tree already exists, written by other applications;
     // nothing is moved, copied or renamed.
-    let studio_root = adopt(&studio, "Song").await;
-    let post_root = adopt(&post, "Cut").await;
+    let acme_root = adopt(&acme, "Song").await;
+    let vnt_root = adopt(&vnt, "Cut").await;
     stage(
         "files.adopt.in-place",
         Ok(format!(
@@ -256,9 +257,9 @@ async fn main() {
     );
 
     // The catalogue is browsable before anything is hashed.
-    let listing = studio
+    let listing = acme
         .backend
-        .browse(studio_root, RootPath::root())
+        .browse(acme_root, RootPath::root())
         .await
         .expect("browse");
     stage(
@@ -267,9 +268,9 @@ async fn main() {
     );
 
     // Platform junk never surfaces.
-    let audio = studio
+    let audio = acme
         .backend
-        .browse(studio_root, RootPath::parse("Audio Files").unwrap())
+        .browse(acme_root, RootPath::parse("Audio Files").unwrap())
         .await
         .expect("browse");
     let hidden = !audio.iter().any(|e| e.name.starts_with("._"))
@@ -284,9 +285,9 @@ async fn main() {
     );
 
     // A write, transactional, recorded as one operation.
-    let receipt = studio
+    let receipt = acme
         .backend
-        .create_dirs(studio_root, vec![RootPath::parse("Renders").unwrap()])
+        .create_dirs(acme_root, vec![RootPath::parse("Renders").unwrap()])
         .await
         .expect("mkdir");
     stage(
@@ -295,9 +296,9 @@ async fn main() {
     );
 
     // And it reaches the catalogue without a restart.
-    let seen = studio
+    let seen = acme
         .backend
-        .entry(studio_root, RootPath::parse("Renders").unwrap())
+        .entry(acme_root, RootPath::parse("Renders").unwrap())
         .await
         .is_ok();
     stage(
@@ -310,9 +311,9 @@ async fn main() {
     );
 
     // History.
-    let checkpoint = studio
+    let checkpoint = acme
         .backend
-        .checkpoint(studio_root, Some("first".into()))
+        .checkpoint(acme_root, Some("first".into()))
         .await
         .expect("checkpoint");
     stage(
@@ -321,9 +322,9 @@ async fn main() {
     );
 
     // Bytes, over the same transport as everything else.
-    let ticket = studio
+    let ticket = acme
         .backend
-        .read(studio_root, RootPath::parse("Audio Files/kick.wav").unwrap())
+        .read(acme_root, RootPath::parse("Audio Files/kick.wav").unwrap())
         .await
         .expect("a byte ticket");
     stage(
@@ -336,9 +337,9 @@ async fn main() {
     );
 
     // An archive, generated as it is sent.
-    let archive = studio
+    let archive = acme
         .backend
-        .archive(studio_root, vec![RootPath::parse("Audio Files").unwrap()])
+        .archive(acme_root, vec![RootPath::parse("Audio Files").unwrap()])
         .await
         .expect("an archive ticket");
     stage(
@@ -349,31 +350,30 @@ async fn main() {
         )),
     );
 
-    // Federation. The studio offers its session subtree to the post
-    // server, which accepts it and browses it — over iroh, by endpoint
+    // Federation. ACME offers its session subtree to VNT, which accepts it and browses it — over iroh, by endpoint
     // id, with the secret standing for the grant.
-    let offer = studio
+    let offer = acme
         .backend
         .offer(
-            studio_root,
+            acme_root,
             RootPath::parse("Audio Files").unwrap(),
-            EndpointId(post.endpoint.id().to_string()),
+            EndpointId(vnt.endpoint.id().to_string()),
             vec![Capability::Read],
         )
         .await
         .expect("offer");
 
-    let accepted = post.backend.accept(offer.clone()).await.expect("accept");
+    let accepted = vnt.backend.accept(offer.clone()).await.expect("accept");
 
     // The accepted offer is an ordinary root here: `TreeService::browse`
-    // is the same call the post server makes against its own content,
+    // is the same call the vnt server makes against its own content,
     // and it does not know this one is not local.
-    match post.backend.browse(accepted.root_id, RootPath::root()).await {
+    match vnt.backend.browse(accepted.root_id, RootPath::root()).await {
         Ok(entries) => {
             let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
             stage(
                 "files.topology.federation",
-                Ok(format!("post browsed studio's subtree: {names:?}")),
+                Ok(format!("VNT browsed ACME's subtree: {names:?}")),
             );
         }
         Err(e) => stage("files.topology.federation", Err(format!("{e}"))),
@@ -381,12 +381,12 @@ async fn main() {
 
     // A grant stays revocable from the originating side, and binds on
     // the receiver's next call rather than on its cooperation.
-    studio
+    acme
         .backend
         .withdraw(offer.grant)
         .await
         .expect("withdraw");
-    let after = post.backend.browse(accepted.root_id, RootPath::root()).await;
+    let after = vnt.backend.browse(accepted.root_id, RootPath::root()).await;
     stage(
         "files.topology.federation (revoke)",
         if after.is_err() {
@@ -397,9 +397,9 @@ async fn main() {
     );
 
     // An unreachable origin costs its own content and nothing else.
-    let local_still_fine = studio
+    let local_still_fine = acme
         .backend
-        .browse(studio_root, RootPath::root())
+        .browse(acme_root, RootPath::root())
         .await
         .is_ok();
     stage(
@@ -411,17 +411,72 @@ async fn main() {
         },
     );
 
+    // One project, both companies.
+    //
+    // VNT re-accepts (the withdrawal above ended the first grant) and
+    // then composes: its own footage plus ACME's sessions, as one tree
+    // with one identity. Neither is the project's "real" home — that is
+    // the clause the type has no field for.
+    let offer = acme
+        .backend
+        .offer(
+            acme_root,
+            RootPath::parse("Audio Files").unwrap(),
+            EndpointId(vnt.endpoint.id().to_string()),
+            vec![Capability::Read],
+        )
+        .await
+        .expect("offer again");
+    let sessions = vnt.backend.accept(offer).await.expect("accept").root_id;
+
+    let mut project = files_domain::Composition::new();
+    project
+        .with(files_domain::Member {
+            name: "Sessions".into(),
+            root: sessions,
+            path: RootPath::root(),
+        })
+        .expect("ACME's half");
+    project
+        .with(files_domain::Member {
+            name: "Footage".into(),
+            root: vnt_root,
+            path: RootPath::parse("Proxies").unwrap(),
+        })
+        .expect("VNT's half");
+
+    // Browse it as one tree. Each part resolves to whichever root
+    // answers for it — one of them on another company's server — and the
+    // caller makes the same call either way.
+    let mut composed = Vec::new();
+    for member in project.members() {
+        let at = RootPath::parse(&member.name).unwrap();
+        let located = project.locate(&at).expect("locate");
+        let entries = vnt
+            .backend
+            .browse(located.member.root, located.within.clone())
+            .await
+            .unwrap_or_default();
+        for entry in entries {
+            composed.push(format!("{}/{}", member.name, entry.name));
+        }
+    }
+    composed.sort();
     stage(
         "project.location.composed",
-        Err("one project spanning both servers' roots — project.location.composed".into()),
+        if project.locations() == 2 && composed.len() >= 3 {
+            Ok(format!("{} locations, one tree: {composed:?}", project.locations()))
+        } else {
+            Err(format!("expected both halves, got {composed:?}"))
+        },
     );
 
     println!("\n── Both servers still serving ───────────────────────────\n");
     println!(
-        "  studio root {studio_root}\n  post   root {post_root}\n\
+        "  ACME root {acme_root}\n  VNT  root {vnt_root}\n\
          \n  Two orgs, two endpoints, one transport.\n"
     );
-    let _ = (studio.tree(), post.tree(), clients.pop());
+    let _ = (acme.tree(), vnt.tree(), clients.pop());
 }
 
 async fn adopt(server: &Server, dir: &str) -> RootId {

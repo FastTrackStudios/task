@@ -18,6 +18,7 @@
 //! | [`adopt`] | `files.adopt.*` — structure first, addresses later |
 //! | [`cadence`] | `files.version.cadence` — quiescence, save points, snapshots |
 //! | [`catalogue`] | `files.catalogue.*` — entries, staleness, cursors |
+//! | [`composition`] | `project.location.composed` — one project, many places |
 //! | [`facet`] | `files.facet.*` — tool layouts, project overrides, unmapped |
 //! | [`hydration`] | `files.sync.selective`, `files.device.control` |
 //! | [`ignore`] | `files.ignore.*` — the two layers |
@@ -35,6 +36,7 @@
 pub mod adopt;
 pub mod cadence;
 pub mod catalogue;
+pub mod composition;
 pub mod facet;
 pub mod hydration;
 pub mod ignore;
@@ -44,6 +46,7 @@ pub mod tree;
 pub use adopt::Adoption;
 pub use cadence::{CadenceConfig, CadenceEngine, Clock, SystemClock, TestClock};
 pub use catalogue::{Catalogue, Change};
+pub use composition::{Composition, Member};
 pub use facet::{Binding, Capability, Facet, FacetMap, Source};
 pub use hydration::{Decision, Reason, Subscription};
 pub use ignore::{IgnoreSet, Layer};

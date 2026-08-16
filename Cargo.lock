@@ -7148,6 +7148,7 @@ dependencies = [
  "architect",
  "async-trait",
  "files",
+ "files-domain",
  "files-proto",
  "iroh",
  "tempfile",
