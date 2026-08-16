@@ -158,7 +158,11 @@ impl RootsService for FilesBackend {
         .await
     }
 
-    async fn rename(&self, root_id: RootId, name: String) -> Result<FileRootInfo, FilesFault> {
+    async fn rename_root(
+        &self,
+        root_id: RootId,
+        name: String,
+    ) -> Result<FileRootInfo, FilesFault> {
         if name.trim().is_empty() {
             return Err(FilesFault::invalid("a root's name may not be empty"));
         }

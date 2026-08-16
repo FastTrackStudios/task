@@ -112,7 +112,16 @@ pub trait RootsService {
 
     /// Rename the root. Its identity, path and history are unaffected —
     /// this is the display name only.
-    async fn rename(&self, root_id: RootId, name: String) -> Result<FileRootInfo, FilesFault>;
+    ///
+    /// `rename_root`, not `rename`, because [`WriteService::rename`]
+    /// renames a path *inside* a root. Both are implemented on the same
+    /// backend, and a bare `rename` there is ambiguous in a way a reader
+    /// cannot resolve — the compiler catches it, but only after someone
+    /// has written the wrong one.
+    ///
+    /// [`WriteService::rename`]: crate::service::write::WriteService::rename
+    async fn rename_root(&self, root_id: RootId, name: String)
+    -> Result<FileRootInfo, FilesFault>;
 
     /// Stop tracking the root. The directory and every byte in it stay
     /// exactly where they are; only our record of it goes. Re-adopting

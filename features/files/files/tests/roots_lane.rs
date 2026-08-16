@@ -114,7 +114,7 @@ async fn renaming_changes_the_name_and_nothing_else() {
     let root = backend.adopt(request(path.clone(), "Takes")).await.unwrap();
     let id = RootId::new(root.id);
 
-    let renamed = backend.rename(id, "Live Takes".into()).await.expect("rename");
+    let renamed = backend.rename_root(id, "Live Takes".into()).await.expect("rename");
     assert_eq!(renamed.name, "Live Takes");
     assert_eq!(renamed.id, root.id, "identity survives a rename");
     assert_eq!(renamed.path, root.path, "and so does its path");
@@ -127,7 +127,7 @@ async fn an_empty_name_is_refused() {
     let (_tmp, backend, path) = staged("takes");
     let root = backend.adopt(request(path, "Takes")).await.unwrap();
     let err = backend
-        .rename(RootId::new(root.id), "  ".into())
+        .rename_root(RootId::new(root.id), "  ".into())
         .await
         .expect_err("an empty name is not a name");
     assert!(matches!(err, FilesFault::Invalid(_)));
