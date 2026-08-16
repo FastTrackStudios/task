@@ -19,11 +19,15 @@
 //! enforces in production and fails closed, so a lane is mounted in the
 //! same change that grants it.
 
+pub mod access;
 pub mod curation;
+pub mod organise;
 pub mod roots;
 pub mod sync;
 pub mod tree;
+pub mod upload;
 pub mod version;
+pub mod write;
 
 use files_proto::error::FilesFault;
 use files_proto::id::RootId;

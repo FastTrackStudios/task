@@ -661,7 +661,7 @@ impl FilesBackend {
     /// badge on top (see [`FilesBackend::with_project_version`]), so
     /// the hot paths never pay for a vault scan they don't read (PR
     /// #288 review).
-    fn get_root_info(&self, id: Uuid) -> Result<FileRootInfo, Error> {
+    pub(crate) fn get_root_info(&self, id: Uuid) -> Result<FileRootInfo, Error> {
         self.registry
             .get(id)
             .ok_or_else(|| Error::NotFound(id.to_string()))
@@ -1018,7 +1018,7 @@ impl FilesBackend {
         );
     }
 
-    fn root_lock(&self, root_id: Uuid) -> Arc<Mutex<()>> {
+    pub(crate) fn root_lock(&self, root_id: Uuid) -> Arc<Mutex<()>> {
         self.root_locks
             .lock()
             .expect("root lock map poisoned")
@@ -2104,7 +2104,7 @@ impl FilesBackend {
     /// subpaths before `join` (std `join` replaces the base), then
     /// canonicalize-and-prefix-check the platform way. The jj repo
     /// path is parsed too, which rejects `.`/`..` components.
-    fn resolve_root_file(
+    pub(crate) fn resolve_root_file(
         &self,
         root: &FileRootInfo,
         path: &str,
