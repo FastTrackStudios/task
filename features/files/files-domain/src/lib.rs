@@ -15,20 +15,31 @@
 //!
 //! | Module | Spec |
 //! |---|---|
+//! | [`adopt`] | `files.adopt.*` — structure first, addresses later |
+//! | [`catalogue`] | `files.catalogue.*` — entries, staleness, cursors |
 //! | [`facet`] | `files.facet.*` — tool layouts, project overrides, unmapped |
+//! | [`hydration`] | `files.sync.selective`, `files.device.control` |
 //! | [`ignore`] | `files.ignore.*` — the two layers |
 //! | [`labels`] | `files.version.labels` — read, never parsed |
 //!
+//! [`facet`] classifies and [`hydration`] decides: together they are what
+//! selective sync was blocked on, since nothing previously defined what a
+//! facet *was*.
+//!
 //! Still to move out of `backend.rs`, in rough dependency order: root
-//! identity and the adoption state machine (`files.adopt.*`), catalogue
-//! entries and staleness (`files.catalogue.*`), namespace resolution,
-//! version chains and divergence, hydration policy, and the cadence
-//! engine.
+//! identity and the marker file, namespace resolution over the org tree,
+//! version chains and divergence, and the cadence engine.
 
+pub mod adopt;
+pub mod catalogue;
 pub mod facet;
+pub mod hydration;
 pub mod ignore;
 pub mod labels;
 
+pub use adopt::Adoption;
+pub use catalogue::{Catalogue, Change};
 pub use facet::{Binding, Capability, Facet, FacetMap, Source};
+pub use hydration::{Decision, Reason, Subscription};
 pub use ignore::{IgnoreSet, Layer};
 pub use labels::Label;
