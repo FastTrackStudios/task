@@ -7150,6 +7150,7 @@ dependencies = [
  "files",
  "files-domain",
  "files-proto",
+ "files-sync",
  "iroh",
  "tempfile",
  "tokio",

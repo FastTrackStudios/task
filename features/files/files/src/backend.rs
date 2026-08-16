@@ -75,6 +75,29 @@ use crate::git_root;
 /// what `files.peering.replication` describes, and its structure
 /// questions are answered from the catalogue without ever arriving
 /// here.
+/// Where a root's version store lives on this host.
+///
+/// **Inside the tree when there is one, and that is deliberate**: the
+/// store travels with the folder, which is what lets a folder restored
+/// from a backup or carried in from another deployment be re-adopted
+/// with its history intact (`adopt_marked_root`).
+///
+/// A root this host holds only the *structure* of has no folder, so its
+/// store sits with the host's own state instead. Such a store holds
+/// commits and manifests — which *are* the structure — and no chunks,
+/// which is exactly `files.peering.replication`: structure converges
+/// everywhere, content follows placement. It is also why hosting an org
+/// elsewhere costs the size of a catalogue rather than a library.
+///
+/// Not a relocation. A root that gains a tree is placed from then on,
+/// and one root on one host never has both.
+pub(crate) fn store_of(data_dir: &Path, root: &FileRootInfo) -> PathBuf {
+    match root.local_tree() {
+        Some(tree) => repo_open::store_dir(tree),
+        None => data_dir.join("stores").join(root.id.to_string()),
+    }
+}
+
 fn tree_of(root: &FileRootInfo) -> Result<&Path, Error> {
     root.local_tree().ok_or_else(|| {
         Error::BadRequest(format!(
@@ -162,6 +185,9 @@ pub enum Captured {
 /// review). `Hints` holds no watcher map and no driver handle, so the
 /// cycle simply does not exist.
 struct Hints {
+    /// Needed to locate a root's store, which is not always inside its
+    /// tree — see [`store_of`].
+    data_dir: PathBuf,
     registry: Arc<Registry>,
     ignores: Arc<Mutex<HashMap<Uuid, Arc<jj_lib::gitignore::GitIgnoreFile>>>>,
     cadence: Arc<CadenceEngine>,
@@ -171,6 +197,7 @@ impl Hints {
     /// The root's whole Ignore set (flavor seed + its stored patterns),
     /// compiled on first touch and cached.
     fn ignore_of(
+        data_dir: &Path,
         ignores: &Mutex<HashMap<Uuid, Arc<jj_lib::gitignore::GitIgnoreFile>>>,
         root: &FileRootInfo,
     ) -> Result<Arc<jj_lib::gitignore::GitIgnoreFile>, Error> {
@@ -181,7 +208,7 @@ impl Hints {
         {
             return Ok(set.clone());
         }
-        let set = ignore::for_root(&repo_open::store_dir(tree_of(&root)?), root.flavor)?;
+        let set = ignore::for_root(&store_of(data_dir, root), root.flavor)?;
         ignores
             .lock()
             .expect("ignore cache lock poisoned")
@@ -197,7 +224,7 @@ impl Hints {
             .get(root_id)
             .ok_or_else(|| Error::NotFound(root_id.to_string()))?;
         let filter = crate::ignore::RootFilter::new(
-            Self::ignore_of(&self.ignores, &root)?,
+            Self::ignore_of(&self.data_dir, &self.ignores, &root)?,
             root.flavor,
         );
         Ok(self.cadence.note_activity(root_id, paths, &filter))
@@ -471,6 +498,27 @@ impl FilesBackend {
     #[must_use]
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Where this root's version store lives on this host.
+    ///
+    /// **Inside the tree when there is one, and that is deliberate**:
+    /// the store travels with the folder, which is what lets a folder
+    /// restored from a backup or carried in from another deployment be
+    /// re-adopted with its history intact (`adopt_marked_root`).
+    ///
+    /// A root this host holds the *structure* of has no folder, so its
+    /// store goes with the host's own state instead. That store holds
+    /// commits and manifests — the structure — and no chunks, which is
+    /// exactly `files.peering.replication`: structure converges
+    /// everywhere, content follows placement. It is also why a second
+    /// host costs the size of a catalogue rather than a library.
+    ///
+    /// Not a relocation of a placed root's store. A root that gains a
+    /// tree later is placed from that point on, and the two locations
+    /// are never both in use for one root on one host.
+    pub(crate) fn store_of(&self, root: &FileRootInfo) -> PathBuf {
+        store_of(&self.data_dir, root)
     }
 
     /// This org's files area — the boundary every caller-supplied path
@@ -880,9 +928,16 @@ impl FilesBackend {
         let repo = match (cached, root.flavor) {
             (Some((repo, head)), RootFlavor::Media) => return Ok((repo, head)),
             (Some((repo, _)), RootFlavor::Software) => git_root::import_from_git(repo)?,
-            (None, _) => repo_open::open_or_init_repo(tree_of(&root)?, root.flavor)?,
+            // Through the store, not the tree: a root this host holds
+            // the structure of has a repo and no working copy, and the
+            // commits in it are precisely what it is hosting.
+            (None, _) => repo_open::open_or_init_repo_at(
+                &self.store_of(&root),
+                root.local_tree(),
+                root.flavor,
+            )?,
         };
-        let (head, snapshot_head) = Self::heads_of(&repo, root)?;
+        let (head, snapshot_head) = Self::heads_of(&self.data_dir, &repo, root)?;
         self.repos.lock().expect("repo cache lock poisoned").insert(
             root.id,
             RootRuntime {
@@ -910,13 +965,14 @@ impl FilesBackend {
     /// already follows its checked-out branch, and that flavor takes no
     /// auto-snapshots at all (see [`FilesBackend::capture_inner`]).
     fn heads_of(
+        data_dir: &Path,
         repo: &Arc<ReadonlyRepo>,
         root: &FileRootInfo,
     ) -> Result<(CommitId, Option<CommitId>), Error> {
         if root.flavor == RootFlavor::Software {
             return Ok((Self::head_of(repo, root.flavor)?, None));
         }
-        let journal = Self::journal_of(root)?;
+        let journal = Self::journal_of(data_dir, root)?;
         let snapshot_head = journal
             .snapshot_head
             .as_deref()
@@ -961,8 +1017,8 @@ impl FilesBackend {
     }
 
     /// The root's cadence journal (issue #260).
-    fn journal_of(root: &FileRootInfo) -> Result<Journal, Error> {
-        Ok(Journal::load(&repo_open::store_dir(tree_of(&root)?))?)
+    fn journal_of(data_dir: &Path, root: &FileRootInfo) -> Result<Journal, Error> {
+        Ok(Journal::load(&store_of(data_dir, root))?)
     }
 
     /// The tip of the root's auto-snapshot branch, if its session has
@@ -1009,7 +1065,7 @@ impl FilesBackend {
         }
         let repo = pollster::block_on(cached.reload_at_head())
             .map_err(|e| Error::Repo(format!("reloading {} at head: {e}", root.id)))?;
-        let (head, snapshot_head) = Self::heads_of(&repo, root)?;
+        let (head, snapshot_head) = Self::heads_of(&self.data_dir, &repo, root)?;
         self.set_heads(root.id, repo.clone(), head.clone(), snapshot_head);
         Ok((repo, head))
     }
@@ -1030,7 +1086,7 @@ impl FilesBackend {
         // handle at head fails with a bare "Failed to read operation
         // heads" where the honest answer is "there is no store here
         // right now". Evict it so a remount reopens cleanly.
-        if !repo_open::store_dir(tree_of(&root)?).exists() {
+        if !self.store_of(&root).exists() {
             self.repos
                 .lock()
                 .expect("repo cache lock poisoned")
@@ -1054,7 +1110,7 @@ impl FilesBackend {
                 None => return Ok(None),
             },
         };
-        let (head, snapshot_head) = Self::heads_of(&repo, root)?;
+        let (head, snapshot_head) = Self::heads_of(&self.data_dir, &repo, root)?;
         self.set_heads(root.id, repo.clone(), head.clone(), snapshot_head);
         Ok(Some((repo, head)))
     }
@@ -1440,7 +1496,7 @@ impl FilesBackend {
         // metadata, not a version"), joined on here from the root's
         // cadence journal, which records them against the checkpoint
         // that closed the session they were marked in (issue #260).
-        let journal = Self::journal_of(&root).unwrap_or_default();
+        let journal = Self::journal_of(&self.data_dir, &root).unwrap_or_default();
         Ok(entries
             .into_iter()
             .map(|e| {
@@ -2000,7 +2056,7 @@ impl FilesBackend {
 
         let at = self.cadence.now();
         let commit_hex = result.commit_id.hex();
-        let store_dir = repo_open::store_dir(tree_of(&root)?);
+        let store_dir = self.store_of(&root);
         let mut journal = Journal::load(&store_dir)?;
 
         let captured = match kind {
@@ -2117,13 +2173,14 @@ impl FilesBackend {
         &self,
         root: &FileRootInfo,
     ) -> Result<Arc<jj_lib::gitignore::GitIgnoreFile>, Error> {
-        Hints::ignore_of(&self.ignores, root)
+        Hints::ignore_of(&self.data_dir, &self.ignores, root)
     }
 
     /// The registry + Ignore-set + cadence slice of this backend, as an
     /// [`ActivitySink`] a watcher can hold.
     fn hints(&self) -> Arc<Hints> {
         Arc::new(Hints {
+            data_dir: self.data_dir.clone(),
             registry: self.registry.clone(),
             ignores: self.ignores.clone(),
             cadence: self.cadence.clone(),
@@ -2132,7 +2189,7 @@ impl FilesBackend {
 
     pub(crate) fn snapshots_inner(&self, root_id: Uuid) -> Result<Vec<SnapshotInfo>, Error> {
         let root = self.get_root_info(root_id)?;
-        Ok(Self::journal_of(&root)?.snapshot_infos(root_id))
+        Ok(Self::journal_of(&self.data_dir, &root)?.snapshot_infos(root_id))
     }
 
     pub(crate) fn hint_activity_inner(&self, root_id: Uuid, paths: Vec<String>) -> Result<u32, Error> {
@@ -2141,7 +2198,7 @@ impl FilesBackend {
 
     pub(crate) fn ignore_set_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
-        ignore::stored_patterns(&repo_open::store_dir(tree_of(&root)?))
+        ignore::stored_patterns(&self.store_of(&root))
     }
 
     pub(crate) fn set_ignore_set_inner(
@@ -2150,7 +2207,7 @@ impl FilesBackend {
         patterns: Vec<String>,
     ) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
-        let stored = ignore::save_patterns(&repo_open::store_dir(tree_of(&root)?), patterns)?;
+        let stored = ignore::save_patterns(&self.store_of(&root), patterns)?;
         // Drop the compiled cache so the next capture (and the next
         // hint) matches against the edit.
         self.ignores
@@ -2444,7 +2501,7 @@ impl FilesBackend {
 
     pub(crate) fn hydration_policy_inner(&self, root_id: Uuid) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
-        hydration::stored_policy(&repo_open::store_dir(tree_of(&root)?))
+        hydration::stored_policy(&self.store_of(&root))
     }
 
     pub(crate) fn set_hydration_policy_inner(
@@ -2454,13 +2511,13 @@ impl FilesBackend {
     ) -> Result<Vec<String>, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "hydration policy")?;
-        hydration::save_policy(&repo_open::store_dir(tree_of(&root)?), patterns)
+        hydration::save_policy(&self.store_of(&root), patterns)
     }
 
     pub(crate) fn apply_hydration_policy_inner(&self, root_id: Uuid) -> Result<HydrationReport, Error> {
         let root = self.get_root_info(root_id)?;
         Self::require_media(&root, "hydration policy")?;
-        let store_dir = repo_open::store_dir(tree_of(&root)?);
+        let store_dir = self.store_of(&root);
         let Some(policy) = hydration::matcher(&store_dir)? else {
             // Empty policy: opt-in means touch nothing.
             return Ok(HydrationReport::default());
@@ -3232,7 +3289,7 @@ impl FilesBackend {
         root: &FileRootInfo,
         head: &CommitId,
     ) -> Vec<CommitId> {
-        let known_snapshots: std::collections::HashSet<String> = Self::journal_of(root)
+        let known_snapshots: std::collections::HashSet<String> = Self::journal_of(&self.data_dir, root)
             .map(|j| {
                 j.snapshots
                     .iter()
@@ -3851,6 +3908,22 @@ impl FilesBackend {
         file_id_hex: &str,
         chunks: Vec<(String, u64)>,
     ) -> Result<(), FilesError> {
+        self.sync_import_manifest_at(root_id, file_id_hex, chunks, true)
+    }
+
+    /// [`Self::sync_import_manifest`], optionally without requiring the
+    /// chunks to be local.
+    ///
+    /// `backed: false` is the structure-host case — see
+    /// `files_store::chunk::Store::write_manifest_unbacked` for why the
+    /// invariant is safe to relax there and nowhere else.
+    pub fn sync_import_manifest_at(
+        &self,
+        root_id: Uuid,
+        file_id_hex: &str,
+        chunks: Vec<(String, u64)>,
+        backed: bool,
+    ) -> Result<(), FilesError> {
         let expected = chunk_file_id_from_hex(file_id_hex)?;
         let mut refs = Vec::with_capacity(chunks.len());
         for (hash_hex, len) in chunks {
@@ -3867,7 +3940,14 @@ impl FilesBackend {
             )));
         }
         self.with_version_store(root_id, |vs| {
-            pollster::block_on(vs.chunks().import_manifest(&manifest)).map(|_| ())
+            pollster::block_on(async {
+                if backed {
+                    vs.chunks().import_manifest(&manifest).await
+                } else {
+                    vs.chunks().write_manifest_unbacked(&manifest).await
+                }
+            })
+            .map(|_| ())
         })?
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))
     }
@@ -3949,7 +4029,7 @@ impl FilesBackend {
             .map_err(|e| FilesError::Io(format!("adding head: {e}")))?;
         let new_repo = pollster::block_on(tx.commit("sync: import remote head"))
             .map_err(|e| FilesError::Io(e.to_string()))?;
-        let (head, snapshot_head) = Self::heads_of(&new_repo, &root).map_err(to_files_error)?;
+        let (head, snapshot_head) = Self::heads_of(&self.data_dir, &new_repo, &root).map_err(to_files_error)?;
         self.set_heads(root_id, new_repo, head, snapshot_head);
         Ok(())
     }
@@ -4373,6 +4453,40 @@ impl FilesBackend {
     }
 
     /// Every file's source CAS `FileId` in `head`'s tree.
+    /// Every path at the root's head, with its size.
+    ///
+    /// The commit graph read as *structure*: trees say what exists and
+    /// where, manifests say how big each file is. This is what a host
+    /// holding an org's structure derives its catalogue from, because
+    /// it has no tree to walk — and it is why such a host can answer
+    /// "how big is this project" correctly while holding none of it.
+    pub(crate) fn head_structure(&self, root_id: Uuid) -> Result<Vec<(String, u64)>, Error> {
+        let root = self.get_root_info(root_id)?;
+        let (repo, _) = self.ensure_repo(&root)?;
+        let head = Self::head_of(&repo, root.flavor)?;
+        let backend = repo.store().backend();
+        let mut out = Vec::new();
+        for (path, id) in Self::tree_files_of(backend, &head)? {
+            // Size from the manifest, never from disk. A missing
+            // manifest means 0 rather than a failure: a file whose
+            // structure arrived and whose manifest has not is real and
+            // browsable, and refusing the whole listing over one of
+            // them would make a partial pull look like a broken root.
+            let size = files_store::chunk::FileId::from_hex(&id.hex())
+                .ok()
+                .and_then(|fid| {
+                    self.with_version_store(root_id, |vs| {
+                        pollster::block_on(vs.chunks().manifest(fid))
+                    })
+                    .ok()
+                    .and_then(Result::ok)
+                })
+                .map_or(0, |m| m.chunks.iter().map(|c| c.len).sum());
+            out.push((path.as_internal_file_string().to_owned(), size));
+        }
+        Ok(out)
+    }
+
     fn head_source_ids(
         &self,
         root_id: Uuid,

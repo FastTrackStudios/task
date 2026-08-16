@@ -73,18 +73,33 @@ const PAGE: usize = 512;
 
 /// Every root's catalogue, for this process only.
 ///
-/// Global rather than a `FilesBackend` field because the backend is owned
-/// elsewhere and this lane may not grow it a field yet. Roots are keyed by
-/// `RootId`, which is a v4 UUID, so two backends in one process (the test
-/// suite does this constantly) never collide.
+/// Global rather than a `FilesBackend` field because the backend is
+/// owned elsewhere and this lane may not grow it a field yet.
+///
+/// **Keyed by host as well as root, and that is not paranoia.** A
+/// `RootId` alone used to be enough because two backends in one process
+/// were always different orgs with different roots. `files.peering.*`
+/// makes the same root legitimately present on several hosts at once —
+/// a server and its backup, two servers hosting one org — and a
+/// process running both would otherwise serve one host's catalogue as
+/// the other's. Which is exactly wrong in the one case that matters:
+/// the host holding structure would answer with the catalogue of the
+/// host holding content.
 ///
 /// The in-memory copy is a cache over [`CATALOGUES_ON_DISK`], which is
 /// the authority across restarts. Keeping both is what lets a hot
 /// process answer without touching the disk and a cold one answer
 /// without touching the *tree*.
-fn catalogues() -> &'static Mutex<HashMap<RootId, Catalogue>> {
-    static CATALOGUES: OnceLock<Mutex<HashMap<RootId, Catalogue>>> = OnceLock::new();
+type CatalogueKey = (std::path::PathBuf, RootId);
+
+fn catalogues() -> &'static Mutex<HashMap<CatalogueKey, Catalogue>> {
+    static CATALOGUES: OnceLock<Mutex<HashMap<CatalogueKey, Catalogue>>> = OnceLock::new();
     CATALOGUES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// This backend's key for a root. The data directory is the host.
+fn key_of(backend: &FilesBackend, root_id: RootId) -> CatalogueKey {
+    (backend.data_dir().to_path_buf(), root_id)
 }
 
 /// The durable catalogue, per org.
@@ -329,10 +344,11 @@ fn with_catalogue<T>(
 ) -> Result<T, FilesFault> {
     let root = root_of(backend, root_id)?;
 
+    let key = key_of(backend, root_id);
     if let Some(cat) = catalogues()
         .lock()
         .expect("catalogue lock poisoned")
-        .get(&root_id)
+        .get(&key)
     {
         return Ok(f(cat));
     }
@@ -343,15 +359,86 @@ fn with_catalogue<T>(
     // its whole catalogue as empty rather than as elsewhere.
     if let Some(stored) = CATALOGUES_ON_DISK.read(backend, |book| book.get(&root_id).cloned()) {
         let mut guard = catalogues().lock().expect("catalogue lock poisoned");
-        let cat = guard.entry(root_id).or_insert(stored);
+        let cat = guard.entry(key).or_insert(stored);
         return Ok(f(cat));
     }
 
-    let built = walk(&root, Utc::now());
+    // With a tree, walk it. Without one, derive from the commit graph —
+    // trees say what exists, manifests say how big it is. That is the
+    // whole of "replicate the commit graph, re-derive the catalogue
+    // locally": the structure is what converged, and this is where it
+    // becomes something to browse.
+    let built = match root.local_tree() {
+        Some(_) => walk(&root, Utc::now()),
+        None => from_head(backend, &root, Utc::now()),
+    };
     persist(backend, root_id, &built);
     let mut guard = catalogues().lock().expect("catalogue lock poisoned");
-    let cat = guard.entry(root_id).or_insert(built);
+    let cat = guard.entry(key).or_insert(built);
     Ok(f(cat))
+}
+
+/// Build a catalogue from the root's head, with no filesystem involved.
+///
+/// Everything is `Unavailable`: this host knows the file exists and its
+/// size, and holds none of its bytes. Directories are synthesised from
+/// the paths, because a commit tree records files and the browse above
+/// needs their parents to exist as entries.
+fn from_head(backend: &FilesBackend, root: &FileRootInfo, now: DateTime<Utc>) -> Catalogue {
+    let root_id = RootId::new(root.id);
+    let mut cat = Catalogue::new(root_id);
+    // No head yet is an empty catalogue, not a failure: a host that has
+    // been given a root and not yet reconciled is in a legitimate state
+    // and should say "nothing here yet" rather than refuse.
+    let Ok(files) = backend.head_structure(root.id) else {
+        return cat;
+    };
+
+    let mut dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (path, size) in files {
+        let Ok(at) = RootPath::parse(&path) else {
+            continue;
+        };
+        let mut parts: Vec<&str> = at.components().collect();
+        parts.pop();
+        let mut prefix = String::new();
+        for part in parts {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            dirs.insert(prefix.clone());
+        }
+        cat.upsert(CatalogueEntry {
+            root_id,
+            path: at,
+            kind: EntryKind::File,
+            size,
+            content: None,
+            hydration: Hydration::Unavailable,
+            // No location *here*. A different statement from "nowhere".
+            locations: Vec::new(),
+            modified_at: now,
+            confirmed_at: now,
+        });
+    }
+    for dir in dirs {
+        let Ok(at) = RootPath::parse(&dir) else {
+            continue;
+        };
+        cat.upsert(CatalogueEntry {
+            root_id,
+            path: at,
+            kind: EntryKind::Directory,
+            size: 0,
+            content: None,
+            hydration: Hydration::Unavailable,
+            locations: Vec::new(),
+            modified_at: now,
+            confirmed_at: now,
+        });
+    }
+    cat
 }
 
 impl FilesBackend {
@@ -458,7 +545,7 @@ impl TreeService for FilesBackend {
         // `drive_browse` deliberately does NOT filter: it shows the raw
         // tree, internals included, which is the distinction the glossary
         // draws between the two.
-        let store = crate::repo_open::store_dir(crate::lane::lane_tree(&root)?);
+        let store = self.store_of(&root);
         if let Ok(ignores) = crate::ignore::for_root(&store, root.flavor) {
             listed.retain(|entry| {
                 let rel = if path.is_root() {
@@ -626,7 +713,7 @@ pub(crate) fn note_write(
     let root_id = RootId::new(root.id);
     let updated = {
         let mut guard = catalogues().lock().expect("catalogue lock poisoned");
-        let Some(cat) = guard.get_mut(&root_id) else {
+        let Some(cat) = guard.get_mut(&key_of(backend, root_id)) else {
             return;
         };
         let now = Utc::now();

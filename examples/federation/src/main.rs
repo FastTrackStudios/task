@@ -208,7 +208,11 @@ impl Server {
             .merge(files_proto::version_layer(backend.clone()))
             .merge(files_proto::media_layer(backend.clone()))
             .merge(files_proto::media_stream_layer(backend.clone()))
-            .merge(files_proto::federation_layer(backend.clone()));
+            .merge(files_proto::federation_layer(backend.clone()))
+            // The replica sync surface. Structure converges over this:
+            // commits and trees say what exists, manifests say how big
+            // it is, and a peer pulls the graph without the chunks.
+            .merge(files_sync::layer(files_sync::SyncHost::new(backend.clone())));
 
         let serving = endpoint.clone();
         tokio::spawn(async move {
@@ -836,11 +840,61 @@ async fn main() {
         },
     );
 
-    stage(
-        "files.peering.replication",
-        Err("structure does not yet converge between servers — \
-             files.peering.replication".into()),
-    );
+    // Structure converges between the servers. VNT hosts ACME's root —
+    // same id, no tree — and pulls the commit graph over iroh. What
+    // arrives is the shape: what exists, where, and how big. What does
+    // not arrive is a single chunk, which is the whole point: a second
+    // host costs the size of a catalogue rather than the size of a
+    // library.
+    let replication = async {
+        let link = iroh_link::connect(&vnt.endpoint, acme.endpoint.addr())
+            .await
+            .map_err(|e| format!("dial ACME: {e}"))?;
+        let peer: files_sync::SyncServiceClient = vox_core::initiator_on(link)
+            .establish()
+            .await
+            .map_err(|e| format!("establish sync lane: {e}"))?;
+
+        files_proto::service::roots::RootsService::host_structure(
+            &vnt.backend,
+            acme_root,
+            "ACME Song".into(),
+            RootFlavor::Media,
+        )
+        .await
+        .map_err(|e| format!("host ACME's structure: {e}"))?;
+
+        let report = files_sync::reconcile_structure(&vnt.backend, &peer, acme_root.get())
+            .await
+            .map_err(|e| format!("pull structure: {e}"))?;
+
+        // Browsed on VNT, from a commit graph rather than a disk.
+        let listed = vnt
+            .backend
+            .browse(acme_root, RootPath::parse("Audio Files").unwrap())
+            .await
+            .map_err(|e| format!("browse the replicated structure: {e}"))?;
+        let mut names: Vec<&str> = listed.iter().map(|e| e.name.as_str()).collect();
+        names.sort_unstable();
+
+        if report.chunks_fetched != 0 {
+            return Err(format!(
+                "pulled {} chunks; structure replication must move none",
+                report.chunks_fetched
+            ));
+        }
+        if names.is_empty() {
+            return Err("the structure arrived empty".into());
+        }
+        // Sizes come from the manifests, so "how big is this" is right
+        // on a host holding none of it.
+        let bytes: u64 = listed.iter().filter_map(|e| e.size).sum();
+        Ok::<String, String>(format!(
+            "VNT hosts ACME's root: {names:?}, {bytes} bytes accounted, 0 chunks held"
+        ))
+    }
+    .await;
+    stage("files.peering.replication", replication);
 
     println!("\n── Both servers still serving ───────────────────────────\n");
     println!(

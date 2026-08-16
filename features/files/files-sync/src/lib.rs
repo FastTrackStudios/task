@@ -291,6 +291,48 @@ pub async fn reconcile(
     reconcile_with_progress(local, remote, root_id, &NoObserver).await
 }
 
+/// How much of a root to pull.
+///
+/// `files.peering.replication` in one type: structure converges across
+/// every host, content follows placement. The commit graph *is* the
+/// structure — commits, trees and manifests say what exists, how big it
+/// is and what it hashes to — so a host can hold a complete and correct
+/// account of a 244 GB project for the size of its metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Depth {
+    /// Commits, trees and manifests. No chunks, and no working copy
+    /// written — a host with no tree has nowhere to write one, and a
+    /// host that wanted the bytes would have asked for them.
+    ///
+    /// Manifests are deliberately *in*: they carry each file's size and
+    /// chunk hashes, which is what lets this host answer "how big is
+    /// this" and later tell which chunks it would need. Stopping short
+    /// of them would leave a structure that cannot describe itself.
+    Structure,
+    /// Everything, and materialise the head. What a replica holding the
+    /// project pulls.
+    Content,
+}
+
+impl Depth {
+    const fn wants_chunks(self) -> bool {
+        matches!(self, Self::Content)
+    }
+}
+
+/// Pull a root's structure and none of its bytes.
+///
+/// The receiving half of `files.peering.replication`, paired with
+/// [`files_proto::service::roots::RootsService::host_structure`] which
+/// gives the root a presence here first.
+pub async fn reconcile_structure(
+    local: &FilesBackend,
+    remote: &SyncServiceClient,
+    root_id: Uuid,
+) -> Result<ReconcileReport, SyncError> {
+    reconcile_at(local, remote, root_id, Depth::Structure, &NoObserver).await
+}
+
 /// [`reconcile`] with live per-file progress reported to `observer` —
 /// what the sync daemon (issue #265) drives so its status surface can
 /// show each file's chunk progress instead of one opaque "syncing".
@@ -300,8 +342,19 @@ pub async fn reconcile_with_progress(
     root_id: Uuid,
     observer: &dyn SyncObserver,
 ) -> Result<ReconcileReport, SyncError> {
+    reconcile_at(local, remote, root_id, Depth::Content, observer).await
+}
+
+/// [`reconcile_with_progress`] at an explicit [`Depth`].
+pub async fn reconcile_at(
+    local: &FilesBackend,
+    remote: &SyncServiceClient,
+    root_id: Uuid,
+    depth: Depth,
+    observer: &dyn SyncObserver,
+) -> Result<ReconcileReport, SyncError> {
     observer.scan_started(root_id);
-    let result = reconcile_inner(local, remote, root_id, observer).await;
+    let result = reconcile_inner(local, remote, root_id, depth, observer).await;
     observer.pull_finished(
         root_id,
         result.as_ref().err().map(|e| e.to_string()).as_deref(),
@@ -313,6 +366,7 @@ async fn reconcile_inner(
     local: &FilesBackend,
     remote: &SyncServiceClient,
     root_id: Uuid,
+    depth: Depth,
     observer: &dyn SyncObserver,
 ) -> Result<ReconcileReport, SyncError> {
     let mut report = ReconcileReport::default();
@@ -327,7 +381,8 @@ async fn reconcile_inner(
             off_thread(move || l.sync_has_object(root_id, &h).map_err(from_files)).await?
         };
         if !known {
-            import_commit_closure(local, remote, root_id, &head, &mut report, observer).await?;
+            import_commit_closure(local, remote, root_id, &head, depth, &mut report, observer)
+                .await?;
             report.heads_imported += 1;
         }
         // Always (re)assert visibility: a previous pull may have
@@ -337,9 +392,14 @@ async fn reconcile_inner(
         off_thread(move || l.import_remote_head(root_id, &h).map_err(from_files)).await?;
     }
 
-    let l = local.clone();
-    report.materialized =
-        off_thread(move || l.materialize_head(root_id).map_err(from_files)).await?;
+    // A structure host has no working copy to write, and writing one
+    // would be worse than useless: every file would materialise as a
+    // stub for content it never asked for.
+    if depth.wants_chunks() {
+        let l = local.clone();
+        report.materialized =
+            off_thread(move || l.materialize_head(root_id).map_err(from_files)).await?;
+    }
     Ok(report)
 }
 
@@ -351,6 +411,7 @@ async fn import_commit_closure(
     remote: &SyncServiceClient,
     root_id: Uuid,
     head: &str,
+    depth: Depth,
     report: &mut ReconcileReport,
     observer: &dyn SyncObserver,
 ) -> Result<(), SyncError> {
@@ -388,7 +449,7 @@ async fn import_commit_closure(
             let (l, b) = (local.clone(), bytes.clone());
             off_thread(move || l.sync_decode_commit(&b).map_err(from_files)).await?
         };
-        import_tree_closure(local, remote, root_id, &tree, "", report, observer).await?;
+        import_tree_closure(local, remote, root_id, &tree, "", depth, report, observer).await?;
         cached.insert(commit_hex.clone(), bytes);
         // Revisit this commit to import its object after its parents.
         stack.push((commit_hex, true));
@@ -405,6 +466,7 @@ async fn import_tree_closure(
     root_id: Uuid,
     tree_hex: &str,
     prefix: &str,
+    depth: Depth,
     report: &mut ReconcileReport,
     observer: &dyn SyncObserver,
 ) -> Result<(), SyncError> {
@@ -445,7 +507,7 @@ async fn import_tree_closure(
             } else {
                 format!("{dir}/{name}")
             };
-            import_file(local, remote, root_id, &file_id, &path, report, observer).await?;
+            import_file(local, remote, root_id, &file_id, &path, depth, report, observer).await?;
         }
     }
     Ok(())
@@ -481,6 +543,7 @@ async fn import_file(
     root_id: Uuid,
     file_id: &str,
     path: &str,
+    depth: Depth,
     report: &mut ReconcileReport,
     observer: &dyn SyncObserver,
 ) -> Result<(), SyncError> {
@@ -511,10 +574,19 @@ async fn import_file(
     // hashes to actually pull; `entries_for` maps each to how many
     // entries it satisfies, so importing it advances progress by that
     // many.
+    //
+    // A structure pull skips this entirely: it wants none of them, and
+    // the presence check is one round trip per entry — which on a 48-file,
+    // 244 GB project is the difference between hosting an org for the
+    // size of its metadata and paying to be told what it does not want.
     let mut missing: Vec<String> = Vec::new();
     let mut resident = 0usize;
     let mut entries_for: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for entry in &manifest.chunks {
+        if !depth.wants_chunks() {
+            report.chunks_skipped += 1;
+            continue;
+        }
         let (l, h) = (local.clone(), entry.hash.clone());
         let present = off_thread(move || l.sync_has_chunk(root_id, &h).map_err(from_files)).await?;
         if present {
@@ -585,7 +657,7 @@ async fn import_file(
         .collect();
     let (l, f) = (local.clone(), file_id.to_string());
     off_thread(move || {
-        l.sync_import_manifest(root_id, &f, chunks)
+        l.sync_import_manifest_at(root_id, &f, chunks, depth.wants_chunks())
             .map_err(from_files)
     })
     .await?;

@@ -96,16 +96,45 @@ pub fn open_existing_repo(
 /// survives" (issue #259 acceptance criteria) true across a
 /// `FilesBackend` restart, not just within one process's lifetime.
 pub fn open_or_init_repo(root_path: &Path, flavor: RootFlavor) -> Result<Arc<ReadonlyRepo>> {
-    let repo_path = store_dir(root_path);
-    let repo = if already_initialized(&repo_path) {
-        open_existing(&repo_path, flavor)?
+    open_or_init_repo_at(&store_dir(root_path), Some(root_path), flavor)
+}
+
+/// Open or create a repo at an explicit store directory.
+///
+/// `tree` is the root's working tree, and `None` means there is not one
+/// — a host holding an org's structure and not its content. A media
+/// repo needs no tree at all: `open_or_init_repo_blocking` takes a
+/// directory, and commits and manifests are structure, so such a store
+/// is a complete copy of what the host is hosting.
+///
+/// A software root is different in kind and says so. Its repo is a
+/// colocated git checkout, so "the history without the files" is not a
+/// state git has — there is nothing to open.
+pub fn open_or_init_repo_at(
+    repo_path: &Path,
+    tree: Option<&Path>,
+    flavor: RootFlavor,
+) -> Result<Arc<ReadonlyRepo>> {
+    let repo_path = repo_path.to_path_buf();
+    let repo_path = &repo_path;
+    let repo = if already_initialized(repo_path) {
+        open_existing(repo_path, flavor)?
     } else {
         match flavor {
             RootFlavor::Media => {
-                files_store::version::repo::open_or_init_repo_blocking(&repo_path)
+                files_store::version::repo::open_or_init_repo_blocking(repo_path)
                     .map_err(Error::from)?
             }
-            RootFlavor::Software => init_software_repo(&repo_path, root_path)?,
+            RootFlavor::Software => {
+                let Some(root_path) = tree else {
+                    return Err(Error::BadRequest(
+                        "a software root is a colocated git checkout; \
+                         it cannot be hosted without its tree"
+                            .to_owned(),
+                    ));
+                };
+                init_software_repo(repo_path, root_path)?
+            }
         }
     };
     match flavor {

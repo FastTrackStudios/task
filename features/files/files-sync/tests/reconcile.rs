@@ -575,3 +575,111 @@ async fn resolve_refuses_to_clobber_unversioned_work() {
     assert!(err.to_string().contains("checkpoint first"), "{err}");
     assert_eq!(read(&primary, "mix.wav"), b"live unversioned edit");
 }
+
+/// A host that holds an org's structure and none of its content —
+/// `files.peering.replication`.
+///
+/// The commit graph *is* the structure: commits and trees say what
+/// exists, manifests say how big each file is and what it hashes to.
+/// A host can therefore hold a complete, correct account of a project
+/// for the size of its metadata, which is the whole reason hosting an
+/// org elsewhere is cheap enough to do for durability alone.
+// t[verify files.peering.replication]
+#[tokio::test]
+async fn a_structure_host_pulls_the_shape_and_none_of_the_bytes() {
+    use files_proto::service::roots::RootsService;
+    use files_proto::service::tree::TreeService;
+    use files_sync::reconcile_structure;
+
+    let (primary, _replica, root_id) = rig().await;
+    // A *third* agent, not `rig`'s replica — that one adopted a
+    // directory, and `host_structure` is idempotent precisely so it
+    // will not take a placed root's tree away from it.
+    let host = agent().await;
+
+    // This host is given no directory: it takes the root's identity and
+    // nowhere to put its tree.
+    host.backend
+        .host_structure(
+            files_proto::id::RootId::new(root_id),
+            "session".into(),
+            RootFlavor::Media,
+        )
+        .await
+        .expect("host the structure");
+
+    let report = reconcile_structure(&host.backend, &primary.client, root_id)
+        .await
+        .expect("pull structure");
+
+    assert!(report.objects_imported > 0, "no structure arrived");
+    assert_eq!(
+        report.chunks_fetched, 0,
+        "a structure host pulled content it never asked for"
+    );
+    assert!(
+        report.materialized.written.is_empty() && report.materialized.stubbed.is_empty(),
+        "a host with no tree wrote a working copy: {:?}",
+        report.materialized
+    );
+
+    // And the point of having done it: this host can answer for a tree
+    // it cannot see. Sizes come from the manifests, so "how big is this
+    // project" is right here — a host that answered zero because it
+    // holds no bytes would be confidently wrong.
+    let listed = TreeService::browse(
+        &host.backend,
+        files_proto::id::RootId::new(root_id),
+        files_proto::path::RootPath::root(),
+    )
+    .await
+    .expect("a structure host must browse");
+    let mut names: Vec<&str> = listed.iter().map(|e| e.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["mix.wav", "stems"]);
+    let mix = listed.iter().find(|e| e.name == "mix.wav").expect("mix.wav");
+    assert_eq!(mix.size, Some(96 * 1024));
+    assert!(mix.stub, "a file whose bytes are elsewhere was called resident");
+}
+
+/// Two hosts of one root, in one process, must not share a catalogue.
+///
+/// A `RootId` used to identify a catalogue on its own, because two
+/// backends in one process were always different orgs. `files.peering.*`
+/// makes the same root legitimately present on several hosts at once,
+/// and the failure that caused is the worst available one: the host
+/// holding structure answers with the catalogue of the host holding
+/// content, so it reports bytes it does not have as resident.
+// t[verify files.peering.replication]
+#[tokio::test]
+async fn two_hosts_of_one_root_keep_their_own_catalogues() {
+    use files_proto::service::roots::RootsService;
+    use files_proto::service::tree::TreeService;
+
+    let (primary, _replica, root_id) = rig().await;
+    let id = files_proto::id::RootId::new(root_id);
+
+    // The host that holds the content answers first, which is what puts
+    // its catalogue in the process-wide cache.
+    let placed = TreeService::browse(&primary.backend, id, files_proto::path::RootPath::root())
+        .await
+        .expect("primary browses its own tree");
+    assert!(
+        placed.iter().any(|e| e.name == "mix.wav" && !e.stub),
+        "fixture: the primary must hold resident content"
+    );
+
+    let host = agent().await;
+    host.backend
+        .host_structure(id, "session".into(), RootFlavor::Media)
+        .await
+        .expect("host the structure");
+    let structural = TreeService::browse(&host.backend, id, files_proto::path::RootPath::root())
+        .await
+        .expect("structure host browses");
+
+    assert!(
+        structural.iter().all(|e| e.stub),
+        "a structure host served another host's residency: {structural:?}"
+    );
+}

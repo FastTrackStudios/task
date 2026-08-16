@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
+files-sync = { workspace = true }
 files-domain = { workspace = true }
 files-proto = { workspace = true, features = ["vox"] }
 iroh = { workspace = true }

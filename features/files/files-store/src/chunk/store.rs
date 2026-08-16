@@ -826,6 +826,31 @@ impl ChunkStore {
                 return Err(Error::MissingChunk(chunk.hash.to_hex().to_string()));
             }
         }
+        self.write_manifest_unchecked(manifest).await
+    }
+
+    /// Write a manifest without requiring its chunks to be here.
+    ///
+    /// [`Self::import_manifest`]'s presence check is the right rule for
+    /// a store that will serve the file: a manifest promising bytes the
+    /// store cannot produce is a store that lies when read.
+    ///
+    /// A host holding an org's *structure* is the case that rule does
+    /// not fit (`files.peering.replication`). Its manifests are true —
+    /// they carry the file's real size and the real hashes of its
+    /// chunks — and the bytes are simply somewhere else. That is a stub
+    /// at the store layer, and refusing to record it would mean such a
+    /// host could not say how big a project is.
+    ///
+    /// What keeps it honest is that nothing on such a host serves those
+    /// bytes: a root with no working tree refuses content reads before
+    /// reaching the store, and its listings mark every entry as not
+    /// resident. Use this only where that is true.
+    pub async fn write_manifest_unbacked(&self, manifest: &Manifest) -> Result<FileId> {
+        self.write_manifest_unchecked(manifest).await
+    }
+
+    async fn write_manifest_unchecked(&self, manifest: &Manifest) -> Result<FileId> {
         let file_id = manifest.file_id();
         self.write_manifest(file_id, manifest).await?;
         Ok(file_id)
