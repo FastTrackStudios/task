@@ -17,7 +17,10 @@
 //! side, exactly like `milestone` sits on top of `milestone-proto`.
 
 pub mod consts;
+pub mod error;
+pub mod id;
 pub mod model;
+pub mod path;
 pub mod service;
 
 pub use consts::{GIT_DIR, MARKER_FILE, STORE_DIR};
@@ -27,13 +30,29 @@ pub use model::{
     NamedVersion, NewReviewComment, ProjectVersion, RenditionInfo, RenditionKind, RestartMode,
     Review, ReviewComment, RootFlavor, SavePoint, SnapshotInfo, TreeNode, VersionRef,
 };
-pub use service::{FilesError, FilesEvent, FilesService};
+// v1, re-exported at the crate root it has always occupied so downstream
+// is untouched. `service::FilesEvent` is the *new* nested stream; the
+// root re-export flips to it when the last lane has migrated.
+pub use service::legacy::{FilesError, FilesEvent, FilesService};
+
+// The lane traits — the target surface. See [`service`] for the map from
+// each to its section of `features/files/spec/files.md`.
+pub use error::FilesFault;
+pub use id::{
+    ActivityId, CommentId, ContentId, DeviceId, GrantId, PrincipalId, ProjectVersionId, ReviewId,
+    RootId, ShareId, SnapshotId, UploadId, VersionId,
+};
+pub use path::{PathError, RootPath, TreePath};
+pub use service::{
+    AccessService, CurationService, MediaService, OrganiseService, ReviewService, RootsService,
+    SearchService, SyncService, TreeService, UploadService, VersionService, WriteService,
+};
 
 // architect-emitted vox bits: the async client / dispatcher / descriptor
 // / serve helpers. Mount sites stitch the descriptor + `serve` into the
 // org router; the web UI binds the client.
 #[cfg(feature = "vox")]
-pub use service::{
+pub use service::legacy::{
     FilesServiceClient, FilesServiceRpcDispatcher as FilesDispatcher,
     Service as FilesServiceBridge,
     files_service_rpc_service_descriptor as files_service_descriptor, layer as files_service_layer,
@@ -44,7 +63,7 @@ pub use service::{
 // changes. Mount `files_service_stream_layer(backend)` next to the base
 // service; subscribers drive a `FilesServiceStreamClient`.
 #[cfg(feature = "vox")]
-pub use service::{
+pub use service::legacy::{
     FilesServiceStream, FilesServiceStreamClient, FilesServiceStreamSource,
     files_service_stream_service_descriptor as files_stream_descriptor,
     stream_layer as files_service_stream_layer, stream_serve as serve_files_service_stream,

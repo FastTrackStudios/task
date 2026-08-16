@@ -1,0 +1,121 @@
+//! Root lifecycle and adoption — `files.adopt.*`.
+//!
+//! Most content does not arrive by upload. It is already on disk, written
+//! by the applications that made it, and has to become ours without
+//! ceasing to be theirs. Adoption is therefore not a bulk import: it
+//! publishes structure immediately and reads bytes behind it.
+
+use chrono::{DateTime, Utc};
+use facet::Facet;
+use serde::{Deserialize, Serialize};
+
+use crate::error::FilesFault;
+use crate::id::RootId;
+use crate::model::{FileRootInfo, RootFlavor};
+
+/// How far adoption has got. A root is usable at every stage but the
+/// first — `files.adopt.catalogue-first`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[repr(u8)]
+pub enum AdoptionPhase {
+    /// Walking the tree, publishing entries from name/size/mtime.
+    Enumerating,
+    /// Structure is complete and browsable; content addresses are still
+    /// being computed. Entries without one are marked unverified.
+    Hashing,
+    /// Every entry has a verified content address.
+    Complete,
+    /// Stopped before completing. Resuming continues rather than
+    /// restarting — `files.adopt.resumable`.
+    Paused,
+}
+
+/// Adoption's progress, for a UI that must not imply the tree is
+/// incomplete when it is merely unverified.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct AdoptionProgress {
+    pub root_id: RootId,
+    pub phase: AdoptionPhase,
+    /// Entries published so far — browsable now, whatever the phase.
+    pub entries_seen: u64,
+    /// Of those, how many carry a verified content address.
+    pub entries_hashed: u64,
+    pub bytes_seen: u64,
+    pub bytes_hashed: u64,
+    /// Set when the walk finished, so a percentage is honest before then.
+    pub entries_total: Option<u64>,
+    pub started_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Everything needed to adopt a tree. A struct rather than four params
+/// because this is exactly the signature that would break next.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct AdoptRequest {
+    /// The existing directory. Nothing under it is moved, copied or
+    /// renamed — `files.adopt.in-place`.
+    pub path: String,
+    pub name: String,
+    /// Fixed for the root's life.
+    pub flavor: RootFlavor,
+    /// Read bytes as well as structure. `false` publishes the catalogue
+    /// and stops, for a tree being surveyed rather than taken on.
+    pub hash_content: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(u8)]
+pub enum RootEvent {
+    Created(FileRootInfo),
+    /// Adoption advanced. Emitted on phase changes and periodically
+    /// during `Hashing`, not per file.
+    AdoptionProgressed(AdoptionProgress),
+    Renamed(FileRootInfo),
+    /// The root is no longer tracked. Its bytes are untouched on disk —
+    /// releasing is not deleting.
+    Released(RootId),
+}
+
+#[architect::rpc]
+pub trait RootsService {
+    /// Adopt an existing directory as a File Root.
+    ///
+    /// Returns as soon as the root has an identity — before the tree is
+    /// walked, let alone hashed. Follow [`RootEvent::AdoptionProgressed`]
+    /// for the rest. The applications already writing this tree keep
+    /// writing it throughout; a file modified mid-hash is re-hashed
+    /// rather than recorded wrongly.
+    ///
+    /// Fails with [`FilesFault::AlreadyRoot`] if the path is one already,
+    /// and [`FilesFault::NotADirectory`] if it is not a directory.
+    async fn adopt(&self, request: AdoptRequest) -> Result<FileRootInfo, FilesFault>;
+
+    /// Resume an adoption left in [`AdoptionPhase::Paused`]. Continues
+    /// from where it stopped; work in flight when it stopped is redone,
+    /// nothing else is.
+    async fn resume_adoption(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault>;
+
+    /// Stop an adoption in progress, leaving what has been published
+    /// browsable.
+    async fn pause_adoption(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault>;
+
+    /// Where an adoption has got to.
+    async fn adoption_progress(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault>;
+
+    /// Every root this org can reach.
+    async fn list(&self) -> Result<Vec<FileRootInfo>, FilesFault>;
+
+    /// One root.
+    async fn get(&self, root_id: RootId) -> Result<FileRootInfo, FilesFault>;
+
+    /// Rename the root. Its identity, path and history are unaffected —
+    /// this is the display name only.
+    async fn rename(&self, root_id: RootId, name: String) -> Result<FileRootInfo, FilesFault>;
+
+    /// Stop tracking the root. The directory and every byte in it stay
+    /// exactly where they are; only our record of it goes. Re-adopting
+    /// the same path recovers the history, which lives in the tree.
+    async fn release(&self, root_id: RootId) -> Result<(), FilesFault>;
+}

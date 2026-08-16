@@ -4853,7 +4853,7 @@ impl FilesService for FilesBackend {
 /// The `#[subscribe]` backend contract: hand the emitted stream host
 /// the hub it attaches subscriber sinks to. Publishing happens in the
 /// `*_inner` methods above, on every successful mutation.
-impl files_proto::service::FilesServiceStreamSource for FilesBackend {
+impl files_proto::service::legacy::FilesServiceStreamSource for FilesBackend {
     fn events_hub(&self) -> &architect::PubSub<FilesEvent> {
         &self.events
     }
