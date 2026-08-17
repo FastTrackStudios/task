@@ -43,7 +43,7 @@
 //! |---|---|
 //! | [`server`]   | a server: one org, the real router, one endpoint |
 //! | [`client`]   | a person talking to a server, over the wire |
-//! | [`device`]   | a laptop: one project, partly carried |
+//! | [`device`]   | a laptop: a peer with one project, partly carried |
 //! | [`orgs`]     | the two companies, and what is on their disks |
 //! | [`people`]   | the four accounts, and what each was granted |
 //! | [`transport`]| the wire between servers |
@@ -70,6 +70,7 @@
 //! | `restart.rs`       | what survives the process |
 //! | `scale.rs`         | a file bigger than a chunk |
 //! | `office.rs`        | the work around the files |
+//! | `peer_to_peer.rs`  | two clients, no server in the middle |
 //!
 //! These are tests rather than a script that prints `ok`, because a
 //! printed `ok` is only as honest as the eye reading it. A test that

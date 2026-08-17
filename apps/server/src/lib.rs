@@ -3817,52 +3817,19 @@ pub fn attach_peering(
 /// `HostResolver` then decides whether this org admits that id. A
 /// verified stranger is still a stranger.
 ///
-/// # Why not `iroh_link::serve_router`
-///
-/// That serves ONE router across every connection, which is fine for a
-/// handler that treats all callers alike and wrong for a gate. Using it
-/// is how the org router ended up served with no gate at all: nothing
-/// about the call site says an identity is missing, because a bare
-/// router answers every call perfectly well.
+/// The accept loop itself is [`files::peer::serve_over_iroh`], shared
+/// with the device that serves its own replica lane
+/// (`files_sync::serve_peer`). Only what gets wrapped differs: an org
+/// router here, one lane there.
 pub async fn serve_org_iroh(
     org: OrgAppState,
     gate: snapshot::WriteGate,
     endpoint: &architect::iroh_link::iroh::Endpoint,
 ) {
-    while let Some(incoming) = endpoint.accept().await {
-        let org = org.clone();
-        let gate = gate.clone();
-        tokio::spawn(async move {
-            let connection = match incoming.await {
-                Ok(connection) => connection,
-                Err(err) => {
-                    tracing::warn!(%err, "peering: incoming iroh connection failed");
-                    return;
-                }
-            };
-            // Proved by the handshake, not asserted by the caller.
-            let bearer = format!("{}{}", permits::HOST_BEARER_PREFIX, connection.remote_id());
-            let router = org_router_guarded(&org, gate, Some(bearer));
-
-            loop {
-                match connection.accept_bi().await {
-                    Ok((send, recv)) => {
-                        let link = architect::iroh_link::IrohLink::new(
-                            connection.clone(),
-                            send,
-                            recv,
-                        );
-                        let acceptor = architect::layer::handler_acceptor(router.clone());
-                        tokio::spawn(architect::iroh_link::serve_link(link, acceptor));
-                    }
-                    Err(err) => {
-                        tracing::debug!(%err, "peering: iroh connection closed");
-                        return;
-                    }
-                }
-            }
-        });
-    }
+    files::peer::serve_over_iroh(endpoint, move |bearer| {
+        org_router_guarded(&org, gate.clone(), bearer)
+    })
+    .await;
 }
 
 fn serve_org_vox(

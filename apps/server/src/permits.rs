@@ -511,25 +511,21 @@ table!(FILES_SYNC, "files-sync", "files/**", [
 // replication could not happen on a real server, only in a harness
 // that mounted it itself. Which is why the integration suite now
 // serves `org_router_guarded` rather than a router of its own.
-/// The replica lane's own coarse resource, and not `files/**`.
-///
-/// A role scoped to `files/**` can read every files lane there is. An
-/// admitted host needs exactly this one, so it needs a resource that
-/// means exactly this one — otherwise "may replicate" and "may read the
-/// whole org" are the same permission and admission becomes the widest
-/// grant on the server.
+/// The replica lane's own coarse resource — defined with the peer model
+/// it belongs to, since a device gates on the same string.
 ///
 /// Members are unaffected: their rule is `**`.
-pub const REPLICA_RESOURCE: &str = "files/replica";
+pub use files::peer::REPLICA_RESOURCE;
 
-// `chunk_ranges` is `dl` for the same reason `chunks` is, and it is the
-// method that actually moves a large file: the store links big files
-// whole, so their manifest names one chunk of the file's whole length
-// and `chunks` cannot serve it. A verified window at a time is how an
-// 800 GB take crosses a wire and how an interrupted one resumes.
-table!(FILES_REPLICA, "files-replica", REPLICA_RESOURCE, [
-    rd "heads", rd "object", rd "manifest", dl "chunks", dl "chunk_ranges",
-]);
+/// The replica lane's rows, defined once with the peer model.
+///
+/// **Not a `table!` of its own.** A device installs the same rows as the
+/// only table its gate has, and two copies would be two things to keep in
+/// step — with the failure mode being a method a server serves and a
+/// device refuses, or the reverse. `chunk_ranges` is `download` there for
+/// the same reason `chunks` is: it is how a whole library leaves, a window
+/// at a time.
+const FILES_REPLICA: ServicePermits = files::peer::REPLICA_PERMITS;
 
 // Who may see and change what (`files.access.*`).
 //
@@ -1885,143 +1881,14 @@ impl<R: IdentityResolver, H: IdentityResolver> IdentityResolver for HomeFallback
     }
 }
 
-/// The prefix a host presents instead of a session token.
+/// The peer admission model, re-exported from where it now lives.
 ///
-/// `host:<endpoint-id>`. Not a secret and not meant to be: the endpoint
-/// id is public, and what proves the caller holds it is the iroh
-/// handshake, which happened before this string was ever assembled. The
-/// transport is the credential; this is only how the transport tells the
-/// gate what it already verified.
-///
-/// Which is why nothing but the transport may set it. `serve_org_iroh`
-/// derives it from `connection.remote_id()` on a connection whose keys
-/// are already checked, and a client cannot forge it because a
-/// *per-call* `authorization` beats the connection's — so a caller
-/// claiming `host:` in metadata gets resolved against the admitted set
-/// under an id it does not hold, and fails.
-pub const HOST_BEARER_PREFIX: &str = "host:";
-
-/// Resolve an admitted host to a principal of its own.
-///
-/// Hosts are not people and must not borrow a person's identity to be
-/// one. Before this, replicating an org's structure meant presenting
-/// some member's session token — so "which servers may hold this org"
-/// was answered by "who happens to have a login", and admitting a
-/// machine meant issuing it a human's credential.
-///
-/// A non-`host:` bearer falls through untouched, so this composes in
-/// front of the session resolver rather than replacing it.
-pub struct HostResolver<R> {
-    inner: R,
-    /// The org's own admitted set. Per-org because admission is: one
-    /// machine can host many orgs and be a stranger to the next.
-    files: files::FilesBackend,
-    slug: String,
-}
-
-impl<R> HostResolver<R> {
-    pub fn new(inner: R, files: files::FilesBackend, slug: impl Into<String>) -> Self {
-        Self {
-            inner,
-            files,
-            slug: slug.into(),
-        }
-    }
-}
-
-impl<R: IdentityResolver> IdentityResolver for HostResolver<R> {
-    fn resolve<'a>(&'a self, bearer_token: Option<&'a str>) -> BoxIdentityFuture<'a> {
-        Box::pin(async move {
-            use architect_telemetry::wide;
-
-            let Some(endpoint) = bearer_token.and_then(|t| t.strip_prefix(HOST_BEARER_PREFIX))
-            else {
-                return self.inner.resolve(bearer_token).await;
-            };
-
-            let host = files_domain::HostId(endpoint.to_string());
-            if self.files.admits(&host).is_none() {
-                // A verified endpoint this org never admitted. One warn
-                // line: a machine dialling an org it does not host is
-                // either a misconfiguration or a probe, and both are
-                // worth seeing.
-                wide::set("auth.host", "not_admitted");
-                tracing::warn!(
-                    org.slug = self.slug,
-                    host = endpoint,
-                    "peering: an unadmitted host presented itself — refusing"
-                );
-                return Principal::Anonymous;
-            }
-            wide::set("auth.host", "admitted");
-            // Its own variant, and each alternative was wrong for its own
-            // reason: `User` picks up `DEFAULT_ORG_ROLE`, `Service` rides
-            // the role engine's in-process bypass, and a `Guest`'s
-            // credential is a link somebody minted rather than the peer's
-            // own proved identity. `Principal::Host` carries no rights at
-            // all — `HostEngine` below is the only thing that grants it
-            // anything.
-            Principal::Host {
-                endpoint: endpoint.to_string(),
-            }
-        })
-    }
-}
-
-/// What an admitted host may do: read the replica lane, and nothing.
-///
-/// The narrowness is the point. A host needs the commit graph and the
-/// chunks under it to converge an org's structure; it does not need to
-/// write, to grant, to browse the vault, or to read anyone's mail. On
-/// `files/**` — the resource every other files lane shares — "read" would
-/// have meant all of those, which is why the replica lane has a resource
-/// of its own.
-#[derive(Debug, Default)]
-pub struct HostEngine;
-
-impl architect_permissions::PermissionEngine for HostEngine {
-    fn check(
-        &self,
-        who: &Principal,
-        what: &architect_permissions::Resource,
-        action: &architect_permissions::Action,
-    ) -> architect_permissions::Decision {
-        if matches!(who, Principal::Host { .. })
-            && what.as_str() == REPLICA_RESOURCE
-            && matches!(action.as_str(), "read" | "download")
-        {
-            return architect_permissions::Decision::Allow;
-        }
-        // Deny rather than abstain: the composite is first-allow-wins, so
-        // this only ever narrows what another engine already refused.
-        architect_permissions::Decision::deny(format!(
-            "{} may not {} {}",
-            who.describe(),
-            action.as_str(),
-            what.as_str()
-        ))
-    }
-
-    fn survey(
-        &self,
-        who: &Principal,
-        _prefix: &architect_permissions::Resource,
-    ) -> Vec<(
-        architect_permissions::Resource,
-        Vec<architect_permissions::Action>,
-    )> {
-        if !matches!(who, Principal::Host { .. }) {
-            return Vec::new();
-        }
-        vec![(
-            architect_permissions::Resource::new(REPLICA_RESOURCE),
-            vec![
-                architect_permissions::Action::READ.into(),
-                architect_permissions::Action::DOWNLOAD.into(),
-            ],
-        )]
-    }
-}
+/// It was defined here, which put it out of reach of the callers who need
+/// it most: a device serving content to another device cannot depend on
+/// the server binary to find out who it may talk to. It moved to
+/// `files::peer` with the rest of the peering feature; these keep the
+/// paths this module's own tables and docs refer to.
+pub use files::peer::{HostEngine, HostResolver, HOST_BEARER_PREFIX};
 
 impl<R: IdentityResolver> IdentityResolver for AuditedIdentityResolver<R> {
     fn resolve<'a>(&'a self, bearer_token: Option<&'a str>) -> BoxIdentityFuture<'a> {

@@ -37,6 +37,7 @@ pub mod hydration;
 pub mod ignore;
 pub mod lane;
 mod org_tree;
+pub mod peer;
 mod registry;
 /// Opening (and reopening) a root's version-store repo. Public so a
 /// test — or a future sibling crate, e.g. the cadence engine (#260) —

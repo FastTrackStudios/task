@@ -210,6 +210,49 @@ pub const WINDOW_CHUNKS: u64 = (1 << 20) / BAO_CHUNK;
 /// tells them apart.
 pub const WINDOW_ABOVE: u64 = WINDOW_CHUNKS * BAO_CHUNK;
 
+/// Serve the replica lane to admitted peers on a **device's** endpoint.
+///
+/// This is what makes a client a peer rather than only a puller. A laptop
+/// serving this can be dialled by another laptop, and
+/// `files.topology.multi-server`'s "where two peers can reach each other,
+/// bytes move directly over iroh/QUIC" stops requiring one of those peers
+/// to be a server.
+///
+/// The gate is [`files::peer::device_gate`]: no sessions, no roles, no
+/// accounts — which endpoints this device admits, and nothing else. A
+/// smaller model than a server's, and the whole model here, because a
+/// laptop has nobody to authenticate.
+///
+/// Only the replica lane is mounted. A device is not an org and must not
+/// answer as one: browsing its tree, reading its grants, writing to it are
+/// questions for the server that holds the org, and a device answering
+/// them would be a second authority nobody registered.
+///
+/// Runs until the endpoint closes.
+#[cfg(feature = "vox")]
+pub async fn serve_peer(
+    backend: FilesBackend,
+    whose: String,
+    endpoint: &architect::iroh_link::iroh::Endpoint,
+) {
+    // The one table a device has. Its gate refuses anything unlisted, so
+    // without this it would refuse the lane it exists to serve — which is
+    // what it did, loudly, the first time this ran.
+    let gate = std::sync::Arc::new(
+        files::peer::device_gate(&backend, &whose)
+            .permit(sync_service_service_descriptor(), files::peer::REPLICA_PERMITS),
+    );
+    let router = architect::LayerRouter::new().merge(layer(SyncHost::new(backend)));
+    files::peer::serve_over_iroh(endpoint, move |bearer| {
+        architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(
+            gate.clone(),
+            router.clone(),
+            bearer,
+        )
+    })
+    .await;
+}
+
 /// [`SyncService`] served straight off a [`FilesBackend`] — the shape
 /// both the in-server hosting and the sync daemon (#265) mount.
 #[derive(Clone, architect::HasDispatcher)]
