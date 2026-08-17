@@ -3771,6 +3771,35 @@ pub fn org_router_guarded(
     )
 }
 
+/// Give an org's Files backend a way to reach other servers.
+///
+/// Federation and peering both need it: an accepted offer resolves
+/// through its origin, and a relayed read fetches from the host that
+/// holds the bytes. Without it those lanes answer `Unavailable` for
+/// every remote root — mounted, permitted, and unable to do the one
+/// thing they exist for.
+///
+/// **Nothing in the server binary calls this yet**, because nothing in
+/// the server binary binds an iroh endpoint: a deployment needs a
+/// persisted endpoint key and an address book before it can, and that is
+/// its own piece of work. Until then the peering lanes are exercised by
+/// the integration suite and by nothing else, which is worth knowing
+/// before reading their tests as proof a deployment can federate.
+///
+/// Takes `&mut` because the backend holds the port by value —
+/// `FilesBackend::with_remotes` is a consuming builder, so installing it
+/// on a *clone* leaves the org's own backend, and therefore the router,
+/// exactly as it was. That is not a hypothetical: it is how the harness
+/// first wired this, and every federated call over the wire answered
+/// `Unavailable` while the in-process ones passed.
+pub fn attach_peering(
+    org: &mut OrgAppState,
+    endpoint_id: impl Into<String>,
+    remotes: std::sync::Arc<dyn files::lane::federation::RemoteFiles>,
+) {
+    org.files = org.files.clone().with_remotes(endpoint_id, remotes);
+}
+
 /// Serve an org's router on an iroh endpoint, one connection at a time.
 ///
 /// The counterpart of [`serve_org_vox`], and it exists for the same

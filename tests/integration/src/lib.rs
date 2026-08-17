@@ -43,6 +43,14 @@
 //! | [`transport`]| the wire between servers |
 //! | [`scenario`] | all of the above, assembled |
 //!
+//! Chapters call over the wire, as a signed-in person, through the
+//! router a deployment mounts. The exceptions are deliberate and each
+//! says so where it sits: `device` drives a laptop's own backend because
+//! the laptop *is* the thing under test, `restart` reads files off disk
+//! because a same-process restart can answer from a cache, and setup
+//! (adoption, admission) uses the backend directly because it is
+//! arranging the world rather than exercising it.
+//!
 //! `tests/` is the suite, one file per chapter:
 //!
 //! | test file | chapter |
@@ -52,6 +60,8 @@
 //! | `people.rs`        | four people, and what each of them may do |
 //! | `device.rs`        | a laptop that syncs the audio, not the footage |
 //! | `peering.rs`       | an org on as many servers as it wants |
+//! | `reachable.rs`     | can a client reach any of this at all |
+//! | `restart.rs`       | what survives the process |
 //!
 //! These are tests rather than a script that prints `ok`, because a
 //! printed `ok` is only as honest as the eye reading it. A test that

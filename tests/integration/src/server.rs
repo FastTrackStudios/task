@@ -69,6 +69,11 @@ const SECRET: &str = "integration-suite-secret-at-least-32-bytes";
 
 pub struct Server {
     pub name: &'static str,
+    /// Kept so a restart can come back on the same endpoint id. A real
+    /// server persists its key for exactly this reason — an id a device
+    /// was registered against must survive the process that minted it.
+    key: iroh::SecretKey,
+    known: Arc<Mutex<HashMap<String, iroh::EndpointAddr>>>,
     /// The org this server hosts, as a slug. Also the name of its
     /// directory under the data root.
     pub slug: String,
@@ -117,13 +122,15 @@ impl Server {
                 .expect("boot AppState")
         };
 
-        let org = state.org(slug).expect("the org we just scaffolded");
+        let mut org = state.org(slug).expect("the org we just scaffolded");
         let tree = data.path().join("orgs").join(slug).join("files");
         std::fs::create_dir_all(&tree).expect("files dir");
         fixture(&tree);
 
         let key = iroh::SecretKey::generate();
-        let endpoint = iroh_link::bind_endpoint(key).await.expect("bind endpoint");
+        let endpoint = iroh_link::bind_endpoint(key.clone())
+            .await
+            .expect("bind endpoint");
         known
             .lock()
             .expect("known peers")
@@ -131,13 +138,22 @@ impl Server {
 
         // The backend reaches other servers through the port, and knows
         // its own id so the offers it mints say where to come back to.
-        let backend = org.files.clone().with_remotes(
+        //
+        // Installed on the org's *own* backend, which is the one the
+        // router dispatches into. Putting it on a clone leaves the served
+        // backend without it, and every federated call over the wire
+        // answers `Unavailable` while the in-process ones pass — which is
+        // exactly how this was wired until the chapters went over the
+        // wire and said so.
+        task_server::attach_peering(
+            &mut org,
             endpoint.id().to_string(),
             Arc::new(IrohRemotes {
                 endpoint: endpoint.clone(),
                 known: Arc::clone(&known),
             }),
         );
+        let backend = org.files.clone();
 
         // Served the way a deployment serves it: one wrapped router per
         // connection, so the identity the handshake proved is the
@@ -154,7 +170,90 @@ impl Server {
 
         Self {
             name,
+            key,
+            known,
             slug: slug.to_string(),
+            endpoint,
+            backend,
+            auth,
+            state,
+            _data: data,
+        }
+    }
+
+    /// Stop this server and start it again on the same disk.
+    ///
+    /// Same data root, same endpoint key, new process state: a new
+    /// `AppState`, a new auth store, a freshly bound endpoint. What
+    /// survives is whatever was written down, which is the only thing a
+    /// restart test can honestly be about.
+    ///
+    /// The auth database does *not* survive — it is `sqlite::memory:`,
+    /// so sessions and accounts go with the old process. That is a
+    /// property of the harness rather than of the product, and it is why
+    /// the restart chapter asserts about catalogues and admissions
+    /// rather than about people.
+    pub async fn restart(self) -> Self {
+        let Self {
+            name,
+            key,
+            known,
+            slug,
+            endpoint,
+            _data: data,
+            ..
+        } = self;
+        // Close the old endpoint before rebinding the same key, or the
+        // two race for the identity.
+        endpoint.close().await;
+
+        let auth = AuthState::open("sqlite::memory:", SECRET)
+            .await
+            .expect("auth db");
+        let state = {
+            let _guard = ENV.lock().await;
+            // SAFETY: held under `ENV` for the whole window in which
+            // `AppState` reads these.
+            unsafe {
+                std::env::set_var("TASK_DATA_ROOT", data.path());
+                std::env::set_var("TASK_ENFORCE_PERMISSIONS", "1");
+            }
+            AppState::new_with_auth(auth.clone(), ServerKeypair::generate_ephemeral())
+                .await
+                .expect("boot AppState")
+        };
+
+        let mut org = state.org(&slug).expect("the org is still on this disk");
+        let endpoint = iroh_link::bind_endpoint(key.clone())
+            .await
+            .expect("rebind the same endpoint");
+        known
+            .lock()
+            .expect("known peers")
+            .insert(endpoint.id().to_string(), endpoint.addr());
+
+        task_server::attach_peering(
+            &mut org,
+            endpoint.id().to_string(),
+            Arc::new(IrohRemotes {
+                endpoint: endpoint.clone(),
+                known: Arc::clone(&known),
+            }),
+        );
+        let backend = org.files.clone();
+
+        let serving = endpoint.clone();
+        let org_for_serving = org.clone();
+        let gate = state.write_gate.clone();
+        tokio::spawn(async move {
+            task_server::serve_org_iroh(org_for_serving, gate, &serving).await;
+        });
+
+        Self {
+            name,
+            key,
+            known,
+            slug,
             endpoint,
             backend,
             auth,

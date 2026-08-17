@@ -8,6 +8,19 @@
 //! honest one — a stub must still report its real size, and the
 //! catalogue saying "stub" proves nothing if the bytes are still on the
 //! disk.
+//!
+//! # Why this chapter does not go over the wire
+//!
+//! Every other chapter drives a client against a server, because the
+//! question is whether a person can reach something. Here the laptop
+//! *is* the system under test: what is being asserted is which bytes are
+//! on its disk, and its own backend is the thing deciding that. Routing
+//! the calls through a server would put a network between the test and
+//! its subject without changing what is being claimed.
+//!
+//! What that leaves untested is a device talking to an org server at
+//! all — enrolment, and pulling content it does not have. That belongs
+//! with `files-daemon` and is not written yet.
 
 use files::path::RootPath;
 use files::service::sync::{FacetName, SyncService};

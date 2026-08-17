@@ -11,13 +11,16 @@
 //! company boundary, which is the only reason the chapter is worth
 //! having: the failure these tests exist to catch is a lane that works
 //! because both sides happen to share a process.
+//!
+//! Alice offers and Victor accepts, each signed in to their own company's
+//! server — so the offer is made by a person who holds `Share` and
+//! accepted by a person who runs the other org, rather than by two
+//! backends reaching into each other.
 
 use files::RootId;
 use files::path::RootPath;
 use files::service::access::Capability;
-use files::service::federation::{EndpointId, FederationService};
-use files::service::media::MediaService;
-use files::service::tree::TreeService;
+use files::service::federation::EndpointId;
 
 use integration::scenario::Scenario;
 
@@ -29,9 +32,10 @@ use integration::scenario::Scenario;
 /// keeps locally.
 async fn share_takes(s: &Scenario) -> (files::service::federation::Offer, RootId) {
     let offer = s
-        .orgs
-        .acme
-        .backend
+        .as_alice()
+        .await
+        .federation()
+        .await
         .offer(
             s.acme_root,
             RootPath::parse("Audio Files").unwrap(),
@@ -41,9 +45,10 @@ async fn share_takes(s: &Scenario) -> (files::service::federation::Offer, RootId
         .await
         .expect("offer the takes to VNT");
     let accepted = s
-        .orgs
-        .vnt
-        .backend
+        .as_victor()
+        .await
+        .federation()
+        .await
         .accept(offer.clone())
         .await
         .expect("VNT accepts");
@@ -59,9 +64,10 @@ async fn an_accepted_offer_browses_like_any_other_root() {
     // The same call VNT makes against its own content. That it does not
     // know this root is not local is the entire claim.
     let entries = s
-        .orgs
-        .vnt
-        .backend
+        .as_victor()
+        .await
+        .tree()
+        .await
         .browse(sessions, RootPath::root())
         .await
         .expect("browse ACME's subtree from VNT");
@@ -81,19 +87,21 @@ async fn an_accepted_offer_browses_like_any_other_root() {
 async fn a_grant_is_withdrawn_at_the_origin_and_binds_on_the_next_call() {
     let s = Scenario::open().await;
     let (offer, sessions) = share_takes(&s).await;
+    let victor = s.as_victor().await;
     assert!(
-        s.orgs
-            .vnt
-            .backend
+        victor
+            .tree()
+            .await
             .browse(sessions, RootPath::root())
             .await
             .is_ok(),
         "fixture: it works before the withdrawal"
     );
 
-    s.orgs
-        .acme
-        .backend
+    s.as_alice()
+        .await
+        .federation()
+        .await
         .withdraw(offer.grant)
         .await
         .expect("withdraw");
@@ -101,9 +109,9 @@ async fn a_grant_is_withdrawn_at_the_origin_and_binds_on_the_next_call() {
     // Not "VNT deletes its copy of the grant" — revocation that depends
     // on the receiver cooperating is not revocation.
     assert!(
-        s.orgs
-            .vnt
-            .backend
+        victor
+            .tree()
+            .await
             .browse(sessions, RootPath::root())
             .await
             .is_err(),
@@ -116,11 +124,18 @@ async fn a_grant_is_withdrawn_at_the_origin_and_binds_on_the_next_call() {
 async fn an_unreachable_origin_costs_its_own_content_and_nothing_else() {
     let s = Scenario::open().await;
     let (offer, sessions) = share_takes(&s).await;
-    s.orgs.acme.backend.withdraw(offer.grant).await.unwrap();
+    let victor = s.as_victor().await;
+    s.as_alice()
+        .await
+        .federation()
+        .await
+        .withdraw(offer.grant)
+        .await
+        .unwrap();
     assert!(
-        s.orgs
-            .vnt
-            .backend
+        victor
+            .tree()
+            .await
             .browse(sessions, RootPath::root())
             .await
             .is_err()
@@ -128,15 +143,16 @@ async fn an_unreachable_origin_costs_its_own_content_and_nothing_else() {
 
     // VNT's own footage is untouched by ACME's state, and ACME's own
     // sessions are untouched by having stopped sharing them.
-    s.orgs
-        .vnt
-        .backend
+    victor
+        .tree()
+        .await
         .browse(s.vnt_root, RootPath::root())
         .await
         .expect("VNT's own root");
-    s.orgs
-        .acme
-        .backend
+    s.as_alice()
+        .await
+        .tree()
+        .await
         .browse(s.acme_root, RootPath::root())
         .await
         .expect("ACME's own root");
@@ -147,11 +163,16 @@ async fn an_unreachable_origin_costs_its_own_content_and_nothing_else() {
 /// Neither half is the project's "real" home. That is the clause
 /// [`files_domain::Composition`] has no field for, and the reason a
 /// composition is a list of members rather than a root with attachments.
+///
+/// The composition itself is a domain value rather than a lane call —
+/// it is arithmetic over ids, and the *resolution* is what crosses the
+/// wire, once per member.
 // t[verify project.location.composed]
 #[tokio::test]
 async fn a_project_composes_from_two_servers() {
     let s = Scenario::open().await;
     let (_offer, sessions) = share_takes(&s).await;
+    let victor = s.as_victor().await;
 
     let mut project = files_domain::Composition::new();
     project
@@ -173,14 +194,12 @@ async fn a_project_composes_from_two_servers() {
     // Each part resolves to whichever root answers for it — one of them
     // on another company's server — and the caller makes the same call
     // either way.
+    let tree = victor.tree().await;
     let mut composed = Vec::new();
     for member in project.members() {
         let at = RootPath::parse(&member.name).unwrap();
         let located = project.locate(&at).expect("locate");
-        let entries = s
-            .orgs
-            .vnt
-            .backend
+        let entries = tree
             .browse(located.member.root, located.within.clone())
             .await
             .expect("browse a member");
@@ -213,13 +232,17 @@ async fn a_deliverable_streams_across_the_company_boundary() {
     let (_offer, sessions) = share_takes(&s).await;
 
     let ticket = s
-        .orgs
-        .vnt
-        .backend
+        .as_victor()
+        .await
+        .media()
+        .await
         .read(sessions, RootPath::parse("vox.wav").unwrap())
         .await
         .expect("a ticket for content this server does not hold");
 
+    // Redeemed against VNT's own backend: a ticket is a local promise,
+    // and where the bytes come from is VNT's problem rather than its
+    // caller's.
     let mut played = Vec::new();
     s.orgs
         .vnt
@@ -243,9 +266,10 @@ async fn a_relayed_ticket_serves_a_range_rather_than_the_whole_file() {
     let (_offer, sessions) = share_takes(&s).await;
 
     let ticket = s
-        .orgs
-        .vnt
-        .backend
+        .as_victor()
+        .await
+        .media()
+        .await
         .read(sessions, RootPath::parse("vox.wav").unwrap())
         .await
         .expect("ticket");
