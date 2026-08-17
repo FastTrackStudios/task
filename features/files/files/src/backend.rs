@@ -3922,36 +3922,73 @@ impl FilesBackend {
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))
     }
 
-    /// How much of `hash` this store has already received — the resume
-    /// cursor a pull reads before asking for anything.
-    pub fn sync_staged_len(&self, root_id: Uuid, hash_hex: &str) -> Result<u64, FilesError> {
-        let hash = chunk_hash_from_hex(hash_hex)?;
-        self.with_version_store(root_id, |vs| {
-            pollster::block_on(vs.chunks().staged_len(hash))
-        })?
-        .map_err(|e| to_files_error(Error::VersionStore(e.into())))
-    }
-
-    /// Append a received window to a chunk in progress.
-    pub fn sync_stage_chunk_range(
+    /// The first BLAKE3 chunk of `hash` this store still lacks.
+    ///
+    /// The resume cursor. A pull asks before requesting anything, so an
+    /// interrupted transfer asks for the gap rather than for the file.
+    /// `None` means nothing is missing — it is complete here.
+    ///
+    /// A single boundary rather than a range set because windows are
+    /// requested in order, so what is held is always a prefix. The store
+    /// itself tracks arbitrary ranges (iroh-blobs' bitfield does); this is
+    /// the narrower question a puller actually asks.
+    pub fn sync_missing_from(
         &self,
         root_id: Uuid,
         hash_hex: &str,
-        offset: u64,
-        bytes: &[u8],
-    ) -> Result<(), FilesError> {
+        len: u64,
+    ) -> Result<Option<u64>, FilesError> {
         let hash = chunk_hash_from_hex(hash_hex)?;
         self.with_version_store(root_id, |vs| {
-            pollster::block_on(vs.chunks().stage_chunk_range(hash, offset, bytes))
+            let have = pollster::block_on(vs.chunks().have_ranges(hash))?;
+            let all = bao_tree::ChunkRanges::from(..bao_tree::ChunkNum::chunks(len));
+            let missing: bao_tree::ChunkRanges = all.difference(&have);
+            let first: Option<bao_tree::ChunkNum> = missing.boundaries().first().copied();
+            Ok(first.map(|c| c.0))
+        })?
+        .map_err(|e: files_store::chunk::Error| {
+            to_files_error(Error::VersionStore(e.into()))
+        })
+    }
+
+    /// Bao-encode a window of `hash`: the bytes, plus the proof they
+    /// belong to it.
+    pub fn sync_export_ranges(
+        &self,
+        root_id: Uuid,
+        hash_hex: &str,
+        from_chunk: u64,
+        chunks: u64,
+    ) -> Result<Vec<u8>, FilesError> {
+        let hash = chunk_hash_from_hex(hash_hex)?;
+        let ranges = bao_tree::ChunkRanges::from(
+            bao_tree::ChunkNum(from_chunk)..bao_tree::ChunkNum(from_chunk + chunks),
+        );
+        self.with_version_store(root_id, |vs| {
+            pollster::block_on(vs.chunks().export_ranges(hash, ranges))
         })?
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))
     }
 
-    /// Verify a fully-received chunk and admit it to the store.
-    pub fn sync_finish_chunk(&self, root_id: Uuid, hash_hex: &str) -> Result<(), FilesError> {
+    /// Verify a received window and write it.
+    ///
+    /// Verification is not a step a caller could skip: the encoding
+    /// carries the proof, so a window that does not hash into `hash` is
+    /// refused and nothing lands.
+    pub fn sync_import_ranges(
+        &self,
+        root_id: Uuid,
+        hash_hex: &str,
+        from_chunk: u64,
+        chunks: u64,
+        bao: Vec<u8>,
+    ) -> Result<(), FilesError> {
         let hash = chunk_hash_from_hex(hash_hex)?;
+        let ranges = bao_tree::ChunkRanges::from(
+            bao_tree::ChunkNum(from_chunk)..bao_tree::ChunkNum(from_chunk + chunks),
+        );
         self.with_version_store(root_id, |vs| {
-            pollster::block_on(vs.chunks().finish_staged_chunk(hash))
+            pollster::block_on(vs.chunks().import_ranges(hash, ranges, bao))
         })?
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))
     }

@@ -482,10 +482,137 @@ impl ChunkStore {
                 .map_err(|e| Error::Io(std::io::Error::other(e)))??;
         }
 
+        // Register the placed file with iroh-blobs **by reference**, so
+        // the blob has an outboard — the BLAKE3 tree over its content.
+        //
+        // That is what makes a transfer of it verifiable in flight: with
+        // an outboard, any range can be sent with the proof that it
+        // belongs to this hash, and a receiver rejects a bad window
+        // rather than discovering it after the last byte. Without one,
+        // the only check available on an 800 GB take is at the end.
+        //
+        // By reference, so nothing is copied: iroh-blobs opens the file
+        // where it lies and stores the outboard, which is a few hundred
+        // KB for a file of any size. The link this just made is what
+        // makes that safe to reference — it is the store's own path,
+        // unaffected by anything the user does to their tree.
+        self.reference_whole(&dest).await?;
+
         let manifest = Manifest::new(vec![ChunkRef { hash, len }]);
         let file_id = manifest.file_id();
         self.write_manifest(file_id, &manifest).await?;
         Ok(file_id)
+    }
+
+    /// Register an already-placed whole-tier file with iroh-blobs by
+    /// reference, computing its outboard.
+    ///
+    /// Idempotent and best-effort in one specific way: a store that
+    /// cannot compute an outboard still holds the content and can still
+    /// serve it unverified, so this logs rather than failing a write that
+    /// otherwise succeeded. What it costs is in-flight verification for
+    /// that one blob, which is worth strictly less than the bytes.
+    async fn reference_whole(&self, placed: &Path) -> Result<()> {
+        use iroh_blobs::api::blobs::AddPathOptions;
+        use iroh_blobs::api::proto::ImportMode;
+        use iroh_blobs::BlobFormat;
+
+        let outcome = self
+            .blobs
+            .add_path_with_opts(AddPathOptions {
+                path: placed.to_path_buf(),
+                format: BlobFormat::Raw,
+                mode: ImportMode::TryReference,
+            })
+            .temp_tag()
+            .await;
+        match outcome {
+            Ok(tag) => {
+                // The tag drops here, exactly as `import_chunk`'s does:
+                // liveness is the manifest, never a tags row.
+                drop(tag);
+                Ok(())
+            }
+            Err(err) => {
+                tracing::warn!(
+                    path = %placed.display(),
+                    %err,
+                    "files-store: no outboard for this blob — transfers of it \
+                     cannot be verified per range"
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Which byte ranges of `hash` this store already holds.
+    ///
+    /// The resume cursor, and iroh-blobs' own: a partially-received blob
+    /// records which ranges arrived, verified, durably. That is a better
+    /// answer than a length — an interrupted transfer can have gaps if
+    /// windows ever land out of order — and it is state this store does
+    /// not have to keep itself.
+    ///
+    /// An empty set means nothing of it is here, which is also what an
+    /// unknown hash returns: "no ranges" and "no such blob" are the same
+    /// instruction to a caller, namely fetch all of it.
+    pub async fn have_ranges(&self, hash: blake3::Hash) -> Result<bao_tree::ChunkRanges> {
+        // A whole-tier file that predates outboards, or one whose
+        // outboard could not be computed, is present in full and unknown
+        // to iroh-blobs. Reporting "nothing" would re-fetch a file that
+        // is already here.
+        if let Ok(meta) = tokio::fs::metadata(self.whole_path(&hash)).await {
+            if self.blobs.has(*hash.as_bytes()).await.unwrap_or(false) {
+                // Known to blobs: its own bitfield is authoritative.
+            } else {
+                return Ok(bao_tree::ChunkRanges::from(
+                    ..bao_tree::ChunkNum::chunks(meta.len()),
+                ));
+            }
+        }
+        match self.blobs.observe(*hash.as_bytes()).await {
+            Ok(bitfield) => Ok(bitfield.ranges),
+            Err(_) => Ok(bao_tree::ChunkRanges::empty()),
+        }
+    }
+
+    /// Bao-encode `ranges` of `hash`: the bytes, plus the proof they
+    /// belong to that hash.
+    ///
+    /// The serving half of a verified transfer. BLAKE3 is a Merkle tree,
+    /// so a range can carry the hashes on its path to the root — which is
+    /// what lets a receiver reject a corrupt window immediately instead
+    /// of after the file.
+    pub async fn export_ranges(
+        &self,
+        hash: blake3::Hash,
+        ranges: bao_tree::ChunkRanges,
+    ) -> Result<Vec<u8>> {
+        self.blobs
+            .export_bao(*hash.as_bytes(), ranges)
+            .bao_to_vec()
+            .await
+            .map_err(|e| Error::Store(format!("bao export of {hash}: {e}")))
+    }
+
+    /// Verify received bao-encoded ranges and write them.
+    ///
+    /// Verification is not a separate step a caller could skip: the
+    /// encoding carries the proof, so a window that does not hash into
+    /// `hash` is refused here and nothing is written. A transfer that
+    /// stops part-way leaves exactly the ranges that verified, which is
+    /// what [`ChunkStore::have_ranges`] then reports.
+    pub async fn import_ranges(
+        &self,
+        hash: blake3::Hash,
+        ranges: bao_tree::ChunkRanges,
+        bao: Vec<u8>,
+    ) -> Result<()> {
+        let _write_guard = self.write_lock.read().await;
+        self.blobs
+            .import_bao_bytes(iroh_blobs::Hash::from(*hash.as_bytes()), ranges, bao)
+            .await
+            .map_err(|e| Error::Store(format!("bao import of {hash}: {e}")))
     }
 
     /// Derive the [`FileId`] the file at `path` *would* have in this
@@ -550,106 +677,6 @@ impl ChunkStore {
             .join(&hex[0..2])
             .join(&hex[2..4])
             .join(hex.as_str())
-    }
-
-    /// Where a chunk being received lands while it is incomplete.
-    ///
-    /// Beside the finished blob rather than in a temp directory, and
-    /// deliberately *not* at [`ChunkStore::whole_path`]: a file at a
-    /// content address is a promise that its bytes hash to that address,
-    /// and a half-received one does not. Anything that reads the store
-    /// must not be able to find this.
-    fn partial_path(&self, hash: &blake3::Hash) -> PathBuf {
-        let hex = hash.to_hex();
-        self.whole_dir
-            .join(&hex[0..2])
-            .join(&hex[2..4])
-            .join(format!("{}.partial", hex.as_str()))
-    }
-
-    /// How much of `hash` has already been received, in bytes.
-    ///
-    /// Zero when nothing has. This is the resume cursor: a transfer asks
-    /// it before requesting anything, so an interrupted 800 GB pull
-    /// resumes where it stopped instead of starting the file again.
-    ///
-    /// It is a length rather than a set of ranges because the receiver
-    /// only ever appends — windows are requested in order, so what is
-    /// present is always a prefix. That is a smaller promise than
-    /// rsync's and it is the one that matches how this fetches.
-    pub async fn staged_len(&self, hash: blake3::Hash) -> Result<u64> {
-        match tokio::fs::metadata(self.partial_path(&hash)).await {
-            Ok(meta) => Ok(meta.len()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
-            Err(e) => Err(Error::Io(e)),
-        }
-    }
-
-    /// Append received bytes to a chunk in progress.
-    ///
-    /// `offset` must be exactly what [`ChunkStore::staged_len`] reports —
-    /// a mismatch means the sender and the receiver disagree about where
-    /// the transfer had got to, and writing anyway would leave a file
-    /// that is the right length and the wrong content.
-    pub async fn stage_chunk_range(
-        &self,
-        hash: blake3::Hash,
-        offset: u64,
-        bytes: &[u8],
-    ) -> Result<()> {
-        use tokio::io::AsyncWriteExt as _;
-
-        let path = self.partial_path(&hash);
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        let have = self.staged_len(hash).await?;
-        if have != offset {
-            return Err(Error::Store(format!(
-                "chunk {hash}: staged {have} bytes, peer sent from {offset}"
-            )));
-        }
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await?;
-        file.write_all(bytes).await.map_err(Error::Io)?;
-        // Durable before the length is reported as progress: a length
-        // the store would not have after a crash is a resume point that
-        // skips bytes it never received.
-        file.sync_all().await.map_err(Error::Io)?;
-        Ok(())
-    }
-
-    /// Verify a fully-received chunk and admit it to the store.
-    ///
-    /// The staged file is hashed and compared to the address it was
-    /// received under. This is the authoritative check and it is why a
-    /// partial is never placed early: a transfer that ends anywhere but
-    /// here leaves a `.partial` nothing reads and the next run resumes,
-    /// rather than a plausible file at a content address.
-    ///
-    /// A mismatch deletes the staging file, because the bytes are known
-    /// wrong and keeping them would resume a transfer that can only fail
-    /// again at exactly this point.
-    pub async fn finish_staged_chunk(&self, hash: blake3::Hash) -> Result<()> {
-        let staged = self.partial_path(&hash);
-        let actual = Self::hash_file(&staged).await?;
-        if actual != hash {
-            let _ = tokio::fs::remove_file(&staged).await;
-            return Err(Error::Store(format!(
-                "received chunk hashes to {actual}, peer claimed {hash}"
-            )));
-        }
-        let dest = self.whole_path(&hash);
-        if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        // Rename, so the blob appears at its content address whole or
-        // not at all.
-        tokio::fs::rename(&staged, &dest).await.map_err(Error::Io)?;
-        Ok(())
     }
 
     /// Read a window of one stored chunk.

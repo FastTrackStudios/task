@@ -28,6 +28,21 @@ fn p(s: &str) -> RootPath {
 /// average, so anything that splits has room to.
 const TAKE: u64 = 3 << 20;
 
+/// Run a `sync_*` seam off the async thread.
+///
+/// They are synchronous with `pollster::block_on` inside, and the bao
+/// ones stream from the iroh-blobs actor — which needs *this* runtime to
+/// make progress. Calling one directly from an async test blocks the
+/// worker the actor is waiting on, so the test hangs rather than fails.
+/// `SyncHost` wraps every one of these the same way, for the same reason.
+async fn off_thread<T, F>(f: F) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.expect("blocking task")
+}
+
 /// The hash of the single stored chunk behind `path`.
 ///
 /// **Not** its `ContentId`. That is the hash of the *manifest*, which is
@@ -259,9 +274,41 @@ async fn an_interrupted_transfer_resumes_where_it_stopped() {
 
     let chunk = chunk_hash_of(&s, "Audio Files/drums.wav").await;
 
-    // Two thirds of it arrive, then the transfer dies.
-    let cut = (TAKE / 3) * 2;
-    let prefix = std::fs::read(
+    // Two thirds of it arrive, verified, and then the transfer dies. The
+    // window comes from the origin exactly as a real pull's would, so
+    // what is staged is bao-verified rather than bytes asserted to be
+    // right — a partial that could be wrong is a different test, below.
+    let chunks_in = TAKE / 1024;
+    let cut = (chunks_in / 3) * 2;
+    let origin_backend = s.orgs.acme.backend.clone();
+    let (root, h) = (s.acme_root.get(), chunk.clone());
+    let bao = off_thread(move || {
+        origin_backend
+            .sync_export_ranges(root, &h, 0, cut)
+            .expect("the origin can prove its own ranges")
+    })
+    .await;
+    let (b, h) = (backend.clone(), chunk.clone());
+    off_thread(move || {
+        b.sync_import_ranges(root, &h, 0, cut, bao)
+            .expect("import the prefix a killed pull would have left")
+    })
+    .await;
+    let (b, h) = (backend.clone(), chunk.clone());
+    assert_eq!(
+        off_thread(move || b.sync_missing_from(root, &h, TAKE).expect("resume cursor")).await,
+        Some(cut),
+        "the cursor does not see what was already received"
+    );
+
+    files_sync::reconcile(&backend, &peer, s.acme_root.get())
+        .await
+        .expect("resume the pull");
+
+    // Whole, and byte-for-byte against the origin — a seam where the
+    // resumed part met the staged part would show up here.
+    let landed = std::fs::read(tree.join("Audio Files").join("drums.wav")).expect("landed");
+    let origin = std::fs::read(
         s.orgs
             .acme
             .tree()
@@ -269,68 +316,66 @@ async fn an_interrupted_transfer_resumes_where_it_stopped() {
             .join("Audio Files")
             .join("drums.wav"),
     )
-    .expect("the origin has it")[..usize::try_from(cut).unwrap()]
-        .to_vec();
-    backend
-        .sync_stage_chunk_range(s.acme_root.get(), &chunk, 0, &prefix)
-        .expect("stage the prefix a killed pull would have left");
-    assert_eq!(
-        backend
-            .sync_staged_len(s.acme_root.get(), &chunk)
-            .expect("staged length"),
-        cut,
-        "the resume cursor does not see the partial"
-    );
-
-    files_sync::reconcile(&backend, &peer, s.acme_root.get())
-        .await
-        .expect("resume the pull");
-
-    // Whole, and right — the resumed third joined the staged two thirds
-    // without a seam.
-    let landed = std::fs::read(tree.join("Audio Files").join("drums.wav")).expect("landed");
+    .expect("the origin has it");
     assert_eq!(landed.len() as u64, TAKE);
+    assert_eq!(landed, origin, "the resumed transfer produced a seam");
+
+    // And the cursor now says there is nothing left, which is what a
+    // second pull reads to do nothing.
+    let (b, h) = (backend.clone(), chunk.clone());
     assert_eq!(
-        landed[..usize::try_from(cut).unwrap()],
-        prefix[..],
-        "the resumed transfer rewrote bytes it already had"
+        off_thread(move || b.sync_missing_from(root, &h, TAKE).expect("resume cursor")).await,
+        None
     );
 }
 
-/// A staged prefix that is *wrong* is caught, and does not become a file.
+/// A tampered window is refused *as it arrives*, not after the file.
 ///
-/// The failure a length-only resume cursor invites: a partial whose bytes
-/// are not the file's. It is verified against the address it was received
-/// under before anything is admitted to the store, so the pull fails and
-/// the tree keeps no file at all — rather than gaining one of exactly the
-/// right size that nothing hashes to.
+/// This is what the outboard buys, and the difference matters at scale: a
+/// whole-file check on an 800 GB take means a day of transfer before
+/// anything can be said about it. Bao-encoded ranges carry the hashes on
+/// their path to the root, so a corrupt window fails where it lands and
+/// nothing is written — the store keeps only the ranges that verified,
+/// which is exactly what a resumed pull then asks about.
 // t[verify files.scale.transport]
 #[tokio::test]
-async fn a_corrupt_partial_is_refused_rather_than_admitted() {
+async fn a_tampered_window_is_refused_where_it_lands() {
     let s = Scenario::open().await;
-    s.orgs
-        .acme
-        .backend
-        .admit_host(s.orgs.vnt.host_id(), Hosting::working());
-    let peer = s.orgs.vnt.dial_replica(&s.orgs.acme).await;
-    let (_dir, tree, backend) = replica(&s).await;
-
+    let (_dir, _tree, backend) = replica(&s).await;
     let chunk = chunk_hash_of(&s, "Audio Files/drums.wav").await;
 
-    // The right length of the wrong bytes.
-    let cut = usize::try_from((TAKE / 3) * 2).unwrap();
-    backend
-        .sync_stage_chunk_range(s.acme_root.get(), &chunk, 0, &vec![0xAB; cut])
-        .expect("stage a corrupt prefix");
+    let chunks_in = TAKE / 1024;
+    let origin_backend = s.orgs.acme.backend.clone();
+    let (root, h) = (s.acme_root.get(), chunk.clone());
+    let mut bao =
+        off_thread(move || origin_backend.sync_export_ranges(root, &h, 0, chunks_in).expect("export"))
+            .await;
+    // Flip a byte deep in the payload, past the header and the first
+    // parent hashes.
+    let at = bao.len() / 2;
+    bao[at] ^= 0xFF;
 
-    let refused = files_sync::reconcile(&backend, &peer, s.acme_root.get()).await;
+    let (b, h) = (backend.clone(), chunk.clone());
+    let refused = off_thread(move || b.sync_import_ranges(root, &h, 0, chunks_in, bao)).await;
+    assert!(refused.is_err(), "a tampered window was written");
+
+    // What survives is the *verified prefix*, and that is the better
+    // behaviour rather than a leak: bao verifies as it decodes, so
+    // everything up to the tampered byte proved itself and is legitimately
+    // received. The cursor therefore points just past the corruption, and
+    // a retry starts there instead of at zero.
+    //
+    // The assertion here was `Some(0)` at first, which was a guess about
+    // all-or-nothing verification. The implementation is finer than the
+    // guess.
+    let (b, h) = (backend.clone(), chunk.clone());
+    let cursor = off_thread(move || b.sync_missing_from(root, &h, TAKE).expect("resume cursor"))
+        .await
+        .expect("something must still be missing");
+    assert!(cursor > 0, "the verified prefix was thrown away");
     assert!(
-        refused.is_err(),
-        "a corrupt partial was completed and admitted"
-    );
-    assert!(
-        !tree.join("Audio Files").join("drums.wav").exists(),
-        "a file nothing hashes to reached the tree"
+        cursor < chunks_in,
+        "the tampered window was accepted whole: cursor {cursor} of {chunks_in}"
     );
 }
 

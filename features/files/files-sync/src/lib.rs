@@ -140,7 +140,8 @@ pub trait SyncService {
     async fn chunks(&self, root_id: Uuid, hashes: Vec<String>)
     -> Result<Vec<WireChunk>, SyncError>;
 
-    /// One window of one chunk.
+    /// A window of one chunk, bao-encoded: the bytes, plus the proof they
+    /// belong to that hash.
     ///
     /// [`Self::chunks`] moves whole chunks, which is fine while a chunk
     /// is a chunk and wrong the moment it is a file: the store links
@@ -149,21 +150,28 @@ pub trait SyncService {
     /// that chunk means asking for 800 GB in one response — not merely
     /// unresumable but unable to complete at all.
     ///
-    /// So the byte, not the chunk, is the unit of progress. A receiver
-    /// asks its own store how much of a chunk it already staged and
-    /// requests from there, which makes an interrupted transfer resume
-    /// where it stopped however large the file is.
+    /// So the unit is a range of BLAKE3 chunks. Two properties follow,
+    /// and the second is why this is bao-encoded rather than raw bytes:
     ///
-    /// `len` is clamped to [`WINDOW`]; a caller asking for more gets a
-    /// window, not an error, because the bound is the server's to keep.
-    /// A short window means end-of-chunk and is how a caller learns it
-    /// is done without being told the length twice.
-    async fn chunk_range(
+    /// - **Resumable.** A receiver asks its own store which ranges it
+    ///   lacks and requests from there, so an interrupted transfer moves
+    ///   the gap however large the file is.
+    /// - **Verified in flight.** BLAKE3 is a Merkle tree, so a range can
+    ///   carry the hashes on its path to the root. A receiver rejects a
+    ///   corrupt window as it arrives. Verifying only at the end is not a
+    ///   smaller version of this on an 800 GB take — it is a day of
+    ///   transfer to learn something a proof states immediately.
+    ///
+    /// `chunks` is clamped to [`WINDOW_CHUNKS`]; a caller asking for more
+    /// gets a window rather than an error, because the bound exists to
+    /// keep the server's memory flat and so cannot be a request
+    /// parameter.
+    async fn chunk_ranges(
         &self,
         root_id: Uuid,
         hash: String,
-        offset: u64,
-        len: u32,
+        from_chunk: u64,
+        chunks: u64,
     ) -> Result<Vec<u8>, SyncError>;
 }
 
@@ -172,7 +180,15 @@ pub trait SyncService {
 /// memory while amortizing per-call overhead across many chunks.
 pub const CHUNK_BATCH: usize = 16;
 
-/// How much one [`SyncService::chunk_range`] response carries.
+/// A BLAKE3 chunk, in bytes — the unit bao ranges are counted in.
+///
+/// Not the FastCDC chunk the manifest names, which is a different thing
+/// with the same word attached to it: one is where the content-defined
+/// chunker chose to split, this is the fixed leaf size of the hash tree.
+/// A range of *these* is what a verified window is expressed in.
+pub const BAO_CHUNK: u64 = 1024;
+
+/// How much one [`SyncService::chunk_ranges`] response carries.
 ///
 /// 1 MiB, matching `ByteRange::MAX_LEN` on the federation relay — the
 /// other place in this codebase that moves someone else's bytes a window
@@ -183,16 +199,16 @@ pub const CHUNK_BATCH: usize = 16;
 /// Large enough that per-call overhead is noise against a multi-gigabyte
 /// file, small enough that a failed window costs almost nothing to
 /// re-request.
-pub const WINDOW: u32 = 1 << 20;
+pub const WINDOW_CHUNKS: u64 = (1 << 20) / BAO_CHUNK;
 
-/// Above this, a chunk is pulled as windows rather than whole.
+/// Above this, a chunk is pulled as verified windows rather than whole.
 ///
 /// Both paths are kept because both are right somewhere. A session
-/// folder is thousands of sub-megabyte chunks, and asking for each in
-/// 4 MiB windows would triple the round trips to move the same bytes;
-/// one 800 GB blob is one chunk, and asking for it whole cannot work.
-/// The threshold is what tells them apart.
-pub const WINDOW_ABOVE: u64 = WINDOW as u64;
+/// folder is thousands of sub-megabyte chunks, and windowing each would
+/// multiply the round trips to move the same bytes; one 800 GB blob is
+/// one chunk, and asking for it whole cannot work. The threshold is what
+/// tells them apart.
+pub const WINDOW_ABOVE: u64 = WINDOW_CHUNKS * BAO_CHUNK;
 
 /// [`SyncService`] served straight off a [`FilesBackend`] — the shape
 /// both the in-server hosting and the sync daemon (#265) mount.
@@ -262,19 +278,19 @@ impl SyncService for SyncHost {
         .await
     }
 
-    async fn chunk_range(
+    async fn chunk_ranges(
         &self,
         root_id: Uuid,
         hash: String,
-        offset: u64,
-        len: u32,
+        from_chunk: u64,
+        chunks: u64,
     ) -> Result<Vec<u8>, SyncError> {
         // Clamped here rather than trusted: the bound exists to keep this
         // server's memory flat, so it cannot be a request parameter.
-        let len = len.min(WINDOW);
+        let chunks = chunks.min(WINDOW_CHUNKS);
         let b = self.backend.clone();
         off_thread(move || {
-            b.sync_read_chunk_range(root_id, &hash, offset, u64::from(len))
+            b.sync_export_ranges(root_id, &hash, from_chunk, chunks)
                 .map_err(from_files)
         })
         .await
@@ -701,54 +717,53 @@ async fn import_file(
         .cloned()
         .partition(|h| chunk_len.get(h.as_str()).copied().unwrap_or(0) > WINDOW_ABOVE);
 
-    // The window path. Every large chunk resumes from what this store
-    // already staged, so an interrupted 800 GB transfer asks for the
-    // remainder and nothing else.
+    // The window path. Every large chunk resumes from the first range
+    // this store lacks, so an interrupted 800 GB transfer asks for the
+    // gap and nothing else — and every window arrives with the proof it
+    // belongs to the hash, so a corrupt one is refused where it lands
+    // rather than after the file.
     for hash in &large {
         let len = chunk_len.get(hash.as_str()).copied().unwrap_or(0);
         let satisfied = entries_for.get(hash.as_str()).copied().unwrap_or(1);
+        let total_chunks = len.div_ceil(BAO_CHUNK);
 
-        let mut at = {
-            let (l, h) = (local.clone(), hash.clone());
-            off_thread(move || l.sync_staged_len(root_id, &h).map_err(from_files)).await?
-        };
-        // Already-staged bytes are progress this run did not make, and
-        // reporting them as if it had would show a resumed transfer
-        // restarting.
-        bytes_done += at * u64::from(satisfied);
-        observer.file_progress(root_id, path, done, bytes_done);
+        loop {
+            let from = {
+                let (l, h) = (local.clone(), hash.clone());
+                off_thread(move || l.sync_missing_from(root_id, &h, len).map_err(from_files))
+                    .await?
+            };
+            // Nothing missing: complete, and verified on the way in.
+            let Some(from) = from else { break };
 
-        while at < len {
-            let want = u32::try_from((len - at).min(u64::from(WINDOW))).unwrap_or(WINDOW);
-            let bytes = remote
-                .chunk_range(root_id, hash.clone(), at, want)
+            // Already-held ranges are progress this run did not make;
+            // reporting them as if it had would show a resumed transfer
+            // starting over.
+            bytes_done = bytes_done.max(from * BAO_CHUNK * u64::from(satisfied));
+            observer.file_progress(root_id, path, done, bytes_done);
+
+            let want = (total_chunks - from).min(WINDOW_CHUNKS);
+            let bao = remote
+                .chunk_ranges(root_id, hash.clone(), from, want)
                 .await
-                .map_err(|e| SyncError::Io(format!("chunk_range rpc: {e}")))?;
-            if bytes.is_empty() {
+                .map_err(|e| SyncError::Io(format!("chunk_ranges rpc: {e}")))?;
+            if bao.is_empty() {
                 return Err(SyncError::Io(format!(
-                    "chunk {hash}: peer sent nothing for the window at {at} of {len}"
+                    "chunk {hash}: peer sent nothing for chunks {from}..{} of {total_chunks}",
+                    from + want
                 )));
             }
-            let moved = bytes.len() as u64;
             let (l, h) = (local.clone(), hash.clone());
             off_thread(move || {
-                l.sync_stage_chunk_range(root_id, &h, at, &bytes)
+                l.sync_import_ranges(root_id, &h, from, want, bao)
                     .map_err(from_files)
             })
             .await?;
-            at += moved;
-            bytes_done += moved * u64::from(satisfied);
-            observer.file_progress(root_id, path, done, bytes_done);
         }
 
-        // Verified against the address it was received under, and only
-        // then admitted. Everything before this point is a `.partial`
-        // nothing reads, which is what makes an interrupted transfer
-        // resumable rather than corrupting.
-        let (l, h) = (local.clone(), hash.clone());
-        off_thread(move || l.sync_finish_chunk(root_id, &h).map_err(from_files)).await?;
         report.chunks_fetched += satisfied;
         done += satisfied as usize;
+        bytes_done = bytes_done.max(len * u64::from(satisfied));
         observer.file_progress(root_id, path, done, bytes_done);
     }
 

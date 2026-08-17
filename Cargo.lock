@@ -7642,6 +7642,7 @@ dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "architect-permissions 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "async-trait",
+ "bao-tree",
  "chrono",
  "facet",
  "facet-json",
@@ -7768,6 +7769,7 @@ name = "files-store"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bao-tree",
  "blake3",
  "fastcdc",
  "futures",
@@ -7780,6 +7782,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

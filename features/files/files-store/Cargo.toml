@@ -12,9 +12,16 @@ repository.workspace = true
 # chunk
 fastcdc.workspace = true
 iroh-blobs.workspace = true
+# The BLAKE3 tree types iroh-blobs speaks. Direct rather than via a
+# re-export because `ChunkRanges` is in this crate's own signatures — a
+# range of a blob is what a resumable transfer asks for, so it is
+# vocabulary here rather than an implementation detail. Version pinned to
+# iroh-blobs' own, since the types cross that boundary.
+bao-tree = "0.16"
 blake3.workspace = true
 reflink-copy.workspace = true
 futures.workspace = true
+tracing.workspace = true
 # version
 jj-lib.workspace = true
 async-trait.workspace = true
