@@ -66,8 +66,11 @@ pub use journal::Journal;
 pub enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// A `String` rather than the codec's own error type: the journal
+    /// is JSON today and the variant should not have to change the day
+    /// it is not.
     #[error("journal json: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

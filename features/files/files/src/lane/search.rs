@@ -128,6 +128,7 @@
 //! million files, and the honest fix is a real index keyed by the same
 //! content addresses this module already records, not a cleverer scan.
 
+use facet::Facet;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -495,14 +496,15 @@ fn text_segments(disk: &Path, path: &RootPath, len: u64) -> Result<Vec<Segment>,
 /// Durable so that extraction is *resumable* in the sense the rule means:
 /// a server restarted halfway through a root does not re-extract what it
 /// already did, because the content addresses survived.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(from = "Wire", into = "Wire")]
+#[derive(Debug, Default, Clone, Facet)]
+#[repr(C)]
 struct Extracted {
     rows: BTreeMap<(RootId, RootPath, &'static str), Row>,
 }
 
 /// One file, one kind.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(C)]
 struct Row {
     root: RootId,
     path: RootPath,
@@ -519,7 +521,8 @@ struct Row {
 /// The on-disk shape: a list, because JSON has no composite map key.
 /// Same trade as `lane::organise` — the runtime type stays the one every
 /// lookup wants and the conversion lives here.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Facet)]
+#[repr(C)]
 struct Wire {
     rows: Vec<Row>,
 }
@@ -1094,5 +1097,17 @@ mod tests {
             sidecar_for(&RootPath::root(), Extract::Text).is_none(),
             "the root is not a file"
         );
+    }
+}
+
+impl crate::durable::Durable for Extracted {
+    type Wire = Wire;
+
+    fn to_wire(&self) -> Wire {
+        Wire::from(self.clone())
+    }
+
+    fn from_wire(wire: Wire) -> Self {
+        Self::from(wire)
     }
 }

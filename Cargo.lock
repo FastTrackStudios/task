@@ -7214,8 +7214,7 @@ dependencies = [
 [[package]]
 name = "facet-core"
 version = "0.50.0-rc.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2c2ad271d54e76358f179bc5f75483c4ed025d1009a8599f299ac7bee99dbdd"
+source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.2.0#3cc215ef23893d58191a376347e8c2a810ef9088"
 dependencies = [
  "autocfg",
  "chrono",
@@ -7529,6 +7528,8 @@ dependencies = [
  "architect",
  "async-trait",
  "chrono",
+ "facet",
+ "facet-json",
  "files-domain",
  "files-proto",
  "files-store",
@@ -7580,6 +7581,8 @@ name = "files-domain"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "facet",
+ "facet-json",
  "files-proto",
  "files-store",
  "serde",
@@ -16572,7 +16575,7 @@ dependencies = [
 [[package]]
 name = "phon"
 version = "0.2.0-rc.5"
-source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.1.0#85c1a4b85a316b39a61c156127d61c05bf25fd9f"
+source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.2.0#3cc215ef23893d58191a376347e8c2a810ef9088"
 dependencies = [
  "facet",
  "facet-value",
@@ -16618,7 +16621,7 @@ dependencies = [
 [[package]]
 name = "phon-jit"
 version = "0.2.0-rc.5"
-source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.1.0#85c1a4b85a316b39a61c156127d61c05bf25fd9f"
+source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.2.0#3cc215ef23893d58191a376347e8c2a810ef9088"
 dependencies = [
  "copypatch",
  "phon-ir",
@@ -20858,7 +20861,7 @@ dependencies = [
 [[package]]
 name = "styx-format"
 version = "5.0.0-rc.5"
-source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.1.0#85c1a4b85a316b39a61c156127d61c05bf25fd9f"
+source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.2.0#3cc215ef23893d58191a376347e8c2a810ef9088"
 dependencies = [
  "styx-cst",
  "styx-parse",

@@ -810,7 +810,7 @@ mod tests {
         ));
         // The wire type skips `parse`, so the guard has to be here.
         let hostile: RootPath =
-            serde_json::from_str("\"../../etc/passwd\"").expect("transparent newtype");
+            facet_json::from_str("\"../../etc/passwd\"").expect("transparent newtype");
         assert!(matches!(addressable(&hostile), Err(FilesFault::BadPath(_))));
     }
 }

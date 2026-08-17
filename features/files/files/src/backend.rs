@@ -1237,11 +1237,10 @@ impl FilesBackend {
 
         let id = Uuid::new_v4();
         let created_at = Utc::now();
-        let marker = serde_json::json!({ "id": id, "name": name });
-        std::fs::write(
-            canonical.join(MARKER_FILE),
-            serde_json::to_vec_pretty(&marker)?,
-        )?;
+        // Written through the same type the reader parses. It was an
+        // ad-hoc `json!({...})` here, so writer and reader agreed by
+        // inspection rather than by construction.
+        crate::registry::write_root_marker(&canonical.join(MARKER_FILE), id, &name)?;
 
         let root = FileRootInfo {
             id,
@@ -3753,11 +3752,7 @@ impl FilesBackend {
         }
         let repo = repo_open::open_or_init_repo(&canonical, RootFlavor::Media)?;
         let head = Self::head_of(&repo, RootFlavor::Media)?;
-        let marker = serde_json::json!({ "id": root_id, "name": name });
-        std::fs::write(
-            canonical.join(MARKER_FILE),
-            serde_json::to_vec_pretty(&marker)?,
-        )?;
+        crate::registry::write_root_marker(&canonical.join(MARKER_FILE), root_id, name)?;
         let root = FileRootInfo {
             id: root_id,
             name: name.to_string(),

@@ -9,6 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+facet = { workspace = true }
+facet-json = { workspace = true }
 files-store.workspace = true
 architect = { workspace = true }
 files-domain.workspace = true

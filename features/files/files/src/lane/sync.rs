@@ -70,8 +70,8 @@ use crate::consts::{GIT_DIR, MARKER_FILE, STORE_DIR};
 /// Persisted per org — see [`crate::durable`]. Every method that reads it
 /// degrades to "nothing subscribed" rather than to a guess, which under
 /// `files.sync.selective` is a tree of stubs and never missing content.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(from = "Wire", into = "Wire")]
+#[derive(Debug, Default, Clone, facet::Facet)]
+#[repr(C)]
 struct SyncState {
     /// Keyed by device *and* root: a subscription is one device's answer
     /// about one root, and a laptop takes sessions from one album while
@@ -98,14 +98,16 @@ struct SyncState {
 /// recoverable from the values and storing them again would be a way for
 /// a key and its row to disagree. Only `mappings`, whose inner map is
 /// path-keyed and has no such field, needs a row struct.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, facet::Facet)]
+#[repr(C)]
 struct Wire {
     subscriptions: Vec<Subscription>,
     devices: Vec<DeviceInfo>,
     mappings: Vec<MappingRow>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(facet::Facet)]
+#[repr(C)]
 struct MappingRow {
     root: RootId,
     /// Lowercased path to facet, exactly as `map_facet` recorded it.
@@ -751,5 +753,17 @@ mod tests {
             capability_of(&root).is_empty(),
             "source is neither sessions nor footage"
         );
+    }
+}
+
+impl crate::durable::Durable for SyncState {
+    type Wire = Wire;
+
+    fn to_wire(&self) -> Wire {
+        Wire::from(self.clone())
+    }
+
+    fn from_wire(wire: Wire) -> Self {
+        Self::from(wire)
     }
 }

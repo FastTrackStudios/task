@@ -74,6 +74,7 @@
 //! `apps/server`'s `ShareStore` instead of the table here, and carry
 //! password and expiry — neither is a parameter on this trait.
 
+use facet::Facet;
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
@@ -142,7 +143,8 @@ fn is_owner(subject: &Subject) -> bool {
 /// data directory rather than held in a process-wide static, which is
 /// what stops one org's [`AccessService::grants`] and
 /// [`AccessService::shares`] enumerating another org's rows.
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, Facet)]
+#[repr(C)]
 struct AccessState {
     grants: Vec<Grant>,
     shares: Vec<ShareLink>,
@@ -594,3 +596,5 @@ mod tests {
         assert_eq!(a.len(), 2, "and a duplicate is not a second capability");
     }
 }
+
+crate::durable::durable_as_itself!(AccessState);

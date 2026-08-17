@@ -408,6 +408,7 @@ song = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.
 
 # ── Facet reflection + vox RPC — the rc.5 fleet pins ──────────────────
 facet = { version = "0.50.0-rc.5", features = ["reflect", "chrono", "uuid"] }
+facet-json = "0.50.0-rc.5"
 vox = { version = "0.10.0-rc.5", default-features = false, features = ["runtime"] }
 vox-core = "0.10.0-rc.5"
 vox-types = "0.10.0-rc.5"
@@ -528,16 +529,22 @@ blitz-html = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd23
 # Vendored one-line fix: quote scalars containing `<`/`>` — upstream
 # styx-format emits them bare but styx-parse rejects them, so serialized
 # keybind configs (`keys "<C-s>"`) could not be re-parsed.
-styx-format = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
+styx-format = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
 # Vendored phon rc.5 + derive support for parse/display opaque scalars
 # (Uuid, chrono DateTime/NaiveDate, url, …). Upstream rc.5 PANICS (and the
 # reply path aborts the process) the first time a vox RPC reply contains
 # such a field — every task-server list/stats call died.
-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
+phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
 # Vendored phon-jit rc.5 with a one-line build.rs fix: force the stable,
 # call-based stencils (upstream's nightly detection misfires on the pinned
 # stable toolchain → E0658 on `become`).
-phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
+phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
+# Vendored facet-core rc.5 with one change: chrono's display fns keep
+# sub-second precision. chrono types are opaque scalars whose only
+# encode path is `display`, so upstream's `SecondsFormat::Secs` rounded
+# EVERY timestamp on every vox RPC to the second — and anything ordered
+# by one could invert when two events shared a second.
+facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
 # Editor's vendored mermaid-rs-renderer fork (web_time::Instant so the
 # layouter works on wasm32) — see features/editor/mermaid-rs-renderer/.
 mermaid-rs-renderer = { path = "features/editor/mermaid-rs-renderer" }

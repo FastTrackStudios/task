@@ -27,7 +27,8 @@ use files_proto::path::RootPath;
 use files_proto::service::tree::{CatalogueEntry, Cursor, Freshness, Hydration};
 
 /// A change, as a client sees it.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, facet::Facet)]
+#[repr(C)]
 pub enum Change {
     Upserted(CatalogueEntry),
     Removed(RootPath),
@@ -44,7 +45,8 @@ pub enum Change {
 /// host that holds no content to hold structure, which is precisely a
 /// catalogue with nothing under it. Disposable means safe to lose, not
 /// obliged to be lost.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, facet::Facet)]
+#[repr(C)]
 // t[impl files.catalogue.complete]
 pub struct Catalogue {
     root_id: RootId,

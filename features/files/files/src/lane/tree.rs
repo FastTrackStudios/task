@@ -112,7 +112,45 @@ fn key_of(backend: &FilesBackend, root_id: RootId) -> CatalogueKey {
 /// filesystem absent, and a process that rebuilds by walking on first
 /// use cannot honour that from cold. Disposable means safe to lose, not
 /// obliged to be lost.
-static CATALOGUES_ON_DISK: Scoped<HashMap<RootId, Catalogue>> = Scoped::new("catalogue");
+static CATALOGUES_ON_DISK: Scoped<Catalogues> = Scoped::new("catalogue");
+
+/// Every root's catalogue on this host, as one file.
+///
+/// A newtype rather than a bare `HashMap<RootId, Catalogue>` because the
+/// store needs a [`Durable`] impl and the map is a foreign type — and
+/// because the stored shape is rows, not a map. A `RootId` is a UUID and
+/// JSON object keys are strings; the id is already inside each
+/// `Catalogue`, so storing it again as a key would be a way for the key
+/// and its row to disagree.
+///
+/// [`Durable`]: crate::durable::Durable
+#[derive(Debug, Default, Clone)]
+struct Catalogues(HashMap<RootId, Catalogue>);
+
+/// The on-disk shape: a list, with each root's id read back off its own
+/// catalogue.
+#[derive(Default, facet::Facet)]
+#[repr(C)]
+struct CataloguesWire {
+    roots: Vec<Catalogue>,
+}
+
+impl crate::durable::Durable for Catalogues {
+    type Wire = CataloguesWire;
+
+    fn to_wire(&self) -> CataloguesWire {
+        let mut roots: Vec<Catalogue> = self.0.values().cloned().collect();
+        // Sorted so the file does not churn between writes that changed
+        // nothing — a `HashMap` iterates in whatever order it likes, and
+        // a diff that moves every line hides the one that mattered.
+        roots.sort_by_key(files_domain::catalogue::Catalogue::root_id);
+        CataloguesWire { roots }
+    }
+
+    fn from_wire(wire: CataloguesWire) -> Self {
+        Self(wire.roots.into_iter().map(|c| (c.root_id(), c)).collect())
+    }
+}
 
 /// Write a root's catalogue through to disk.
 ///
@@ -120,7 +158,7 @@ static CATALOGUES_ON_DISK: Scoped<HashMap<RootId, Catalogue>> = Scoped::new("cat
 /// into a state where the durable answer is older than the served one.
 fn persist(backend: &FilesBackend, root_id: RootId, cat: &Catalogue) {
     CATALOGUES_ON_DISK.write(backend, |book| {
-        book.insert(root_id, cat.clone());
+        book.0.insert(root_id, cat.clone());
     });
 }
 
@@ -398,7 +436,7 @@ fn with_catalogue<T>(
     // answer its first question, and a host holding structure without
     // content has no tree to walk at all — the walk below would report
     // its whole catalogue as empty rather than as elsewhere.
-    if let Some(stored) = CATALOGUES_ON_DISK.read(backend, |book| book.get(&root_id).cloned()) {
+    if let Some(stored) = CATALOGUES_ON_DISK.read(backend, |book| book.0.get(&root_id).cloned()) {
         let mut guard = catalogues().lock().expect("catalogue lock poisoned");
         let cat = guard.entry(key).or_insert(stored);
         return Ok(f(cat));

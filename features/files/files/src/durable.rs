@@ -37,8 +37,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use facet::Facet;
 
 use crate::backend::FilesBackend;
 
@@ -55,9 +54,40 @@ pub(crate) struct Scoped<T> {
     cells: OnceLock<Mutex<HashMap<PathBuf, T>>>,
 }
 
+/// The shape a lane's state takes on disk.
+///
+/// Usually the state itself, and [`durable_as_itself!`] says so in one
+/// line. It is a *separate* type when the runtime shape has no JSON: the
+/// sync lane keys subscriptions by `(device, root)` because that is the
+/// question every lookup asks, and JSON has no composite map key.
+/// Degrading the runtime type to fit the file format would put the cost
+/// in every lookup rather than in the one place that writes the file.
+///
+/// serde expressed this as `#[serde(from = "Wire", into = "Wire")]`.
+/// facet has no container conversion, so the seam is explicit — which is
+/// arguably where it belonged: the fact that a type's stored shape
+/// differs from its runtime shape is worth being able to find.
+pub(crate) trait Durable: Sized {
+    type Wire: Default + Facet<'static>;
+    fn to_wire(&self) -> Self::Wire;
+    fn from_wire(wire: Self::Wire) -> Self;
+}
+
+/// For state whose runtime shape *is* its stored shape.
+macro_rules! durable_as_itself {
+    ($($t:ty),* $(,)?) => {
+        $(impl crate::durable::Durable for $t {
+            type Wire = Self;
+            fn to_wire(&self) -> Self { self.clone() }
+            fn from_wire(wire: Self) -> Self { wire }
+        })*
+    };
+}
+pub(crate) use durable_as_itself;
+
 impl<T> Scoped<T>
 where
-    T: Default + Serialize + DeserializeOwned + Send + 'static,
+    T: Default + Durable + Send + 'static,
 {
     pub(crate) const fn new(name: &'static str) -> Self {
         Self {
@@ -103,7 +133,7 @@ where
         let mut cells = self.cells();
         let state = cells.entry(dir).or_insert_with(|| self.load(&path));
         let out = f(state);
-        save(&path, state);
+        save(&path, &state.to_wire());
         out
     }
 
@@ -122,14 +152,16 @@ where
         let Ok(bytes) = std::fs::read(path) else {
             return T::default();
         };
-        serde_json::from_slice(&bytes).unwrap_or_else(|err| {
+        facet_json::from_slice::<T::Wire>(&bytes)
+            .map(T::from_wire)
+            .unwrap_or_else(|err| {
             tracing::warn!(
                 path = %path.display(),
                 %err,
                 "files: lane state unreadable, continuing without it"
             );
             T::default()
-        })
+            })
     }
 }
 
@@ -139,9 +171,9 @@ where
 /// truncated file, and a truncated JSON object is every row in it — the
 /// same reason `Registry::persist` renames into place rather than
 /// writing over.
-fn save<T: Serialize>(path: &Path, state: &T) {
-    let bytes = match serde_json::to_vec_pretty(state) {
-        Ok(bytes) => bytes,
+fn save<W: Facet<'static>>(path: &Path, state: &W) {
+    let bytes = match facet_json::to_string(state) {
+        Ok(text) => text.into_bytes(),
         Err(err) => {
             // Loud in development, survivable in production.
             //
@@ -173,12 +205,11 @@ fn save<T: Serialize>(path: &Path, state: &T) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
-
-    #[derive(Default, Serialize, Deserialize, PartialEq, Debug)]
+    #[derive(Default, Facet, PartialEq, Debug, Clone)]
     struct Counter {
         n: u32,
     }
+    durable_as_itself!(Counter);
 
     static COUNTER: Scoped<Counter> = Scoped::new("test-counter");
 

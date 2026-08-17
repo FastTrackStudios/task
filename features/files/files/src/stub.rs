@@ -20,7 +20,7 @@ use std::path::Path;
 
 use jj_lib::backend::FileId;
 use jj_lib::object_id::ObjectId as _;
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 
 use crate::error::{Error, Result};
 
@@ -34,7 +34,8 @@ pub const MAGIC: &str = "#fts-stub v1\n";
 pub const MAX_LEN: u64 = 4096;
 
 /// What a stub records about the content it stands in for.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Facet)]
+#[repr(C)]
 pub struct Stub {
     /// Hex `FileId` of the dehydrated content — the identity hydration
     /// restores and verifies (media roots: the CAS chunk-manifest hash).
@@ -73,7 +74,7 @@ impl Stub {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = MAGIC.as_bytes().to_vec();
         // Infallible: the struct is three plain scalars.
-        out.extend(serde_json::to_vec(self).expect("stub serializes"));
+        out.extend(facet_json::to_string(self).expect("stub serializes").into_bytes());
         out.push(b'\n');
         out
     }
@@ -87,7 +88,7 @@ impl Stub {
         let Some(body) = bytes.strip_prefix(MAGIC.as_bytes()) else {
             return Ok(None);
         };
-        serde_json::from_slice(body)
+        facet_json::from_slice(body)
             .map(Some)
             .map_err(|e| Error::BadRequest(format!("malformed stub body: {e}")))
     }

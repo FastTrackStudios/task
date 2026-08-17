@@ -28,7 +28,8 @@ impl Registry {
         let path = data_dir.join("roots.json");
         let roots = if path.exists() {
             let bytes = std::fs::read(&path)?;
-            let list: Vec<FileRootInfo> = serde_json::from_slice(&bytes)?;
+            let list: Vec<FileRootInfo> = facet_json::from_slice(&bytes)
+                .map_err(|e| crate::error::Error::BadRequest(format!("roots.json: {e}")))?;
             list.into_iter().map(|r| (r.id, r)).collect()
         } else {
             HashMap::new()
@@ -46,7 +47,9 @@ impl Registry {
     fn persist(&self, roots: &HashMap<Uuid, FileRootInfo>) -> Result<()> {
         let mut list: Vec<&FileRootInfo> = roots.values().collect();
         list.sort_by(|a, b| a.id.cmp(&b.id));
-        let bytes = serde_json::to_vec_pretty(&list)?;
+        let bytes = facet_json::to_string(&list)
+            .map_err(|e| crate::error::Error::BadRequest(format!("roots.json: {e}")))?
+            .into_bytes();
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, bytes)?;
         std::fs::rename(&tmp, &self.path)?;
@@ -130,10 +133,23 @@ impl Registry {
 /// What a root's on-disk marker (`.fts-root.json`) records. The folder
 /// carries this with it, so it — not the registry's absolute path — is
 /// the durable statement of "this directory is root X".
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, facet::Facet)]
+#[repr(C)]
 pub struct RootMarker {
     pub id: Uuid,
     pub name: String,
+}
+
+/// Write a root's marker, through the type that reads it back.
+pub fn write_root_marker(path: &Path, id: Uuid, name: &str) -> crate::error::Result<()> {
+    let marker = RootMarker {
+        id,
+        name: name.to_string(),
+    };
+    let json = facet_json::to_string(&marker)
+        .map_err(|e| crate::error::Error::BadRequest(format!("root marker: {e}")))?;
+    std::fs::write(path, json)?;
+    Ok(())
 }
 
 /// Read `dir`'s root marker, if it has a readable one.
@@ -143,5 +159,5 @@ pub struct RootMarker {
 /// forever, and the caller's next step is to write a fresh one.
 pub fn read_root_marker(dir: &Path) -> Option<RootMarker> {
     let bytes = std::fs::read(dir.join(crate::consts::MARKER_FILE)).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    facet_json::from_slice(&bytes).ok()
 }

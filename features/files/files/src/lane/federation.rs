@@ -40,11 +40,11 @@ use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
 use files_proto::service::federation::{ByteRange, EndpointId, FederationService, Offer, Remote};
 use files_proto::service::media::ByteTicket;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::backend::FilesBackend;
 use crate::durable::Scoped;
+use facet::Facet;
 
 /// What this lane needs of a remote server.
 ///
@@ -89,7 +89,8 @@ pub trait RemoteFiles: Send + Sync + std::fmt::Debug + 'static {
 }
 
 /// What the origin keeps about an offer it has made.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(C)]
 struct Offered {
     offer: Offer,
     /// Who it was offered to. Not on the wire `Offer` — the receiver
@@ -105,14 +106,16 @@ struct Offered {
 }
 
 /// What the receiver keeps about a remote it has accepted.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(C)]
 struct Accepted {
     remote: Remote,
     secret: String,
     path: RootPath,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Facet)]
+#[repr(C)]
 struct Federated {
     /// Offers this server made, by secret.
     offers: HashMap<String, Offered>,
@@ -529,3 +532,5 @@ mod tests {
         assert!(!offered.offer.capabilities.contains(&Capability::Read));
     }
 }
+
+crate::durable::durable_as_itself!(Federated);

@@ -78,6 +78,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::OnceLock;
+use facet::Facet;
 
 use chrono::{DateTime, Utc};
 use files_domain::cadence::Journal;
@@ -101,8 +102,8 @@ use crate::backend::FilesBackend;
 /// Persisted per org — see [`crate::durable`]. It is keyed by the
 /// backend's data directory rather than held in a process-wide static,
 /// which is what stops one org's `all_tags` answering with another's.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(from = "Wire", into = "Wire")]
+#[derive(Debug, Default, Clone, Facet)]
+#[repr(C)]
 struct Organised {
     /// Canonical (lowercased) tags per marked path.
     tags: BTreeMap<(RootId, RootPath), BTreeSet<String>>,
@@ -115,20 +116,23 @@ struct Organised {
 /// maps are keyed by `(root, path)` because that is what every lookup
 /// here wants. Rather than degrade the runtime types to fit the file
 /// format, the file format is a list of rows and the conversion is here.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Facet)]
+#[repr(C)]
 struct Wire {
     tags: Vec<TagRow>,
     favourites: Vec<FavouriteRow>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Facet)]
+#[repr(C)]
 struct TagRow {
     root: RootId,
     path: RootPath,
     tags: BTreeSet<String>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Facet)]
+#[repr(C)]
 struct FavouriteRow {
     principal: PrincipalId,
     root: RootId,
@@ -611,5 +615,17 @@ mod tests {
             canonical(&Tag("   ".into())).is_err(),
             "whitespace is not a label"
         );
+    }
+}
+
+impl crate::durable::Durable for Organised {
+    type Wire = Wire;
+
+    fn to_wire(&self) -> Wire {
+        Wire::from(self.clone())
+    }
+
+    fn from_wire(wire: Wire) -> Self {
+        Self::from(wire)
     }
 }

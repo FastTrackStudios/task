@@ -8,7 +8,11 @@ pub enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("registry json: {0}")]
-    Json(#[from] serde_json::Error),
+    /// A stored-JSON failure, as text. `files` no longer speaks serde
+    /// at rest — facet's serializer and deserializer have distinct error
+    /// types, and neither belongs in a variant that outlives the codec.
+    #[allow(clippy::doc_markdown)]
+    Json(String),
     #[error("version store: {0}")]
     VersionStore(#[from] files_store::version::Error),
     /// A failure reported by a jj backend itself — this crate talks to
@@ -48,7 +52,7 @@ impl From<Error> for files_proto::error::FilesFault {
         use files_proto::error::FilesFault as F;
         match err {
             Error::Io(e) => F::Io(e.to_string()),
-            Error::Json(e) => F::Internal(e.to_string()),
+            Error::Json(e) => F::Internal(e),
             Error::VersionStore(e) => F::Store(e.to_string()),
             Error::JjBackend(e) => F::Store(e.to_string()),
             Error::Repo(m) => F::Store(m),

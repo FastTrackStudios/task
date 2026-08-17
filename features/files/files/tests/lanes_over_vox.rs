@@ -565,3 +565,28 @@ fn files_padding(size: u64) -> usize {
     let rem = (size % 512) as usize;
     if rem == 0 { 0 } else { 512 - rem }
 }
+
+/// A timestamp survives the wire with the precision it was created with.
+///
+/// `DateTime<Utc>` is an opaque scalar to facet: its only encode path
+/// is one `display` fn, so whatever that fn writes is what every facet
+/// format writes, vox included. Upstream rc.5 hardcoded
+/// `SecondsFormat::Secs` there and rounded every timestamp on every RPC
+/// in this repo to the second — see the vendored `facet-core` patch.
+///
+/// This is the regression test for that, and it belongs at the wire
+/// rather than next to the fix: `files.catalogue.staleness` answers
+/// "how fresh is this" from these values, and two events in the same
+/// second cannot be ordered by a field that rounds them together.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timestamp_crosses_the_wire_without_losing_precision() {
+    let (rig, path) = rig().await;
+    let root = adopted(&rig, path).await;
+
+    let over_the_wire = rig.roots.get(root).await.expect("get").created_at;
+    assert_ne!(
+        over_the_wire.timestamp_subsec_nanos(),
+        0,
+        "the wire rounded a timestamp to the second"
+    );
+}

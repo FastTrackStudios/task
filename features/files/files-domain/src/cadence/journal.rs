@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use files_proto::{SavePoint, SnapshotInfo};
-use serde::{Deserialize, Serialize};
+use facet::Facet;
 use uuid::Uuid;
 
 use super::Result;
@@ -38,7 +38,8 @@ pub const JOURNAL_FILE: &str = "cadence.json";
 /// retention (`files_store::version::gc`, issue #258).
 pub const SNAPSHOT_RETENTION: TimeDelta = TimeDelta::days(14);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(C)]
 pub struct SnapshotRecord {
     /// Hex-encoded jj `CommitId` of the snapshot commit.
     pub snapshot_id: String,
@@ -47,7 +48,8 @@ pub struct SnapshotRecord {
     pub save_points: Vec<SavePoint>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(C)]
 pub struct CheckpointRecord {
     /// Hex-encoded jj `CommitId` of the checkpoint commit.
     pub commit_id: String,
@@ -57,7 +59,8 @@ pub struct CheckpointRecord {
 }
 
 /// One root's durable cadence state.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Facet)]
+#[repr(C)]
 pub struct Journal {
     /// Newest certified checkpoint — the head every chain walk starts
     /// from and every new checkpoint parents onto.
@@ -100,7 +103,7 @@ impl Journal {
                 return Ok(Self::default());
             }
         };
-        match serde_json::from_slice(&bytes) {
+        match facet_json::from_slice(&bytes) {
             Ok(journal) => Ok(journal),
             Err(err) => {
                 tracing::warn!(path = %path.display(), %err, "files: cadence journal corrupt, continuing without its labels");
@@ -119,7 +122,8 @@ impl Journal {
         std::fs::create_dir_all(store_dir)?;
         let path = Self::path(store_dir);
         let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
+        let json = facet_json::to_string(self).map_err(|e| super::Error::Json(e.to_string()))?;
+        std::fs::write(&temp, json)?;
         std::fs::rename(&temp, &path)?;
         Ok(())
     }

@@ -71,6 +71,10 @@ macro_rules! rel_path {
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, Facet,
         )]
         #[serde(transparent)]
+        // The same statement to facet, which is what vox actually
+        // encodes with. Without it the two disagree: serde sees a
+        // string, facet sees a one-field tuple.
+        #[facet(transparent)]
         #[repr(C)]
         pub struct $name(String);
 

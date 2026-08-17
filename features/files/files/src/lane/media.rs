@@ -78,11 +78,11 @@ use files_proto::id::{ContentId, RootId, VersionId};
 use files_proto::model::{RenditionInfo, RenditionKind};
 use files_proto::path::RootPath;
 use files_proto::service::federation::{ByteRange, EndpointId};
+use facet::Facet;
 use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::media::{
     ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService,
 };
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::backend::FilesBackend;
@@ -118,7 +118,8 @@ const ALL_RENDITIONS: [RenditionKind; 5] = [
 /// on why a ticket must be immutable. They are separate variants because
 /// they live in separate stores: renditions sit in a root's *private*
 /// rendition CAS, which the source read paths deliberately cannot see.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Facet)]
+#[repr(u8)]
 enum ByteSource {
     /// Source content in the root's chunk CAS, by hex `FileId`.
     Source { root_id: Uuid, file_id: String },
@@ -156,7 +157,8 @@ enum ByteSource {
 }
 
 /// A minted grant. The wire [`ByteTicket`] is a projection of this.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Facet)]
+#[repr(C)]
 struct Grant {
     source: ByteSource,
     /// Where the readable window starts in the underlying object.
@@ -189,10 +191,12 @@ impl Grant {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Facet)]
+#[repr(C)]
 struct TicketBook(HashMap<String, Grant>);
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Facet)]
+#[repr(C)]
 struct HandoffBook(HashMap<String, Handoff>);
 
 /// Per-org, so a token minted against one org's backend cannot be
@@ -997,7 +1001,7 @@ mod tests {
         // `RootPath` is `#[serde(transparent)]`, so a hostile peer's
         // path never saw `parse` — the guard has to run on this side.
         let hostile: RootPath =
-            serde_json::from_str("\"../../etc/passwd\"").expect("transparent newtype");
+            facet_json::from_str("\"../../etc/passwd\"").expect("transparent newtype");
         assert!(matches!(readable(&hostile), Err(FilesFault::BadPath(_))));
     }
 
@@ -1009,3 +1013,5 @@ mod tests {
         assert_ne!(a, b);
     }
 }
+
+crate::durable::durable_as_itself!(TicketBook, HandoffBook);

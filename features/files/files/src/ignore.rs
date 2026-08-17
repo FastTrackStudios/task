@@ -179,7 +179,8 @@ pub fn stored_patterns(store_dir: &Path) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     let bytes = std::fs::read(&path)?;
-    Ok(serde_json::from_slice(&bytes)?)
+    facet_json::from_slice(&bytes)
+        .map_err(|e| crate::error::Error::BadRequest(format!("{}: {e}", path.display())))
 }
 
 /// Replace the root's stored patterns, returning them normalized
@@ -189,7 +190,9 @@ pub fn save_patterns(store_dir: &Path, patterns: Vec<String>) -> Result<Vec<Stri
     std::fs::create_dir_all(store_dir)?;
     let path = store_dir.join(IGNORE_FILE);
     let temp = path.with_extension("json.tmp");
-    std::fs::write(&temp, serde_json::to_vec_pretty(&normalized)?)?;
+    let json = facet_json::to_string(&normalized)
+        .map_err(|e| crate::error::Error::BadRequest(format!("ignore patterns: {e}")))?;
+    std::fs::write(&temp, json)?;
     std::fs::rename(&temp, &path)?;
     Ok(normalized)
 }
