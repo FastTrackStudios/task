@@ -58,7 +58,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// A public key. The same identity a device is registered against, so
 /// "add a backup" and "add a laptop" are the same act with a different
 /// grant.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, facet::Facet)]
+#[repr(C)]
+#[facet(transparent)]
 pub struct HostId(pub String);
 
 impl std::fmt::Display for HostId {
@@ -68,7 +70,9 @@ impl std::fmt::Display for HostId {
 }
 
 /// An org, by slug.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, facet::Facet)]
+#[repr(C)]
+#[facet(transparent)]
 pub struct OrgId(pub String);
 
 impl std::fmt::Display for OrgId {
@@ -84,7 +88,8 @@ impl std::fmt::Display for OrgId {
 /// distinction that matters is [`Self::Complete`]: capacity comes from
 /// any host that stores, durability only from one that stores
 /// everything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, facet::Facet)]
+#[repr(u8)]
 pub enum Content {
     /// Structure only. Knows the org, stores none of it — the cheap
     /// case, and the one that makes a second host worth having by
@@ -106,7 +111,8 @@ impl Content {
 }
 
 /// What a host does for one org.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, facet::Facet)]
+#[repr(C)]
 pub struct Hosting {
     /// Whether anyone is homed here.
     ///

@@ -550,6 +550,18 @@ impl From<Extracted> for Wire {
     }
 }
 
+impl crate::durable::Durable for Extracted {
+    type Wire = Wire;
+
+    fn to_wire(&self) -> Wire {
+        Wire::from(self.clone())
+    }
+
+    fn from_wire(wire: Wire) -> Self {
+        Self::from(wire)
+    }
+}
+
 static EXTRACTED: crate::durable::Scoped<Extracted> = crate::durable::Scoped::new("search");
 
 impl Row {
@@ -1097,17 +1109,5 @@ mod tests {
             sidecar_for(&RootPath::root(), Extract::Text).is_none(),
             "the root is not a file"
         );
-    }
-}
-
-impl crate::durable::Durable for Extracted {
-    type Wire = Wire;
-
-    fn to_wire(&self) -> Wire {
-        Wire::from(self.clone())
-    }
-
-    fn from_wire(wire: Wire) -> Self {
-        Self::from(wire)
     }
 }

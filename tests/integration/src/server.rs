@@ -139,21 +139,17 @@ impl Server {
             }),
         );
 
-        // The deployed router, guarded exactly as the WebSocket
-        // transport guards it: permission gate outermost, snapshot
-        // write gate under it. Nothing is added here — a lane this
+        // Served the way a deployment serves it: one wrapped router per
+        // connection, so the identity the handshake proved is the
+        // identity the gate sees. Nothing is added here — a lane this
         // harness had to mount for itself would be a lane no real peer
         // could reach, which is how the replica sync surface went
         // unmounted for as long as it did.
-        //
-        // `None` for the connection bearer: an iroh connection has no
-        // handshake to read one from, so identity is per-call metadata
-        // and nothing else.
-        let router = task_server::org_router_guarded(&org, state.write_gate.clone(), None);
-
         let serving = endpoint.clone();
+        let org_for_serving = org.clone();
+        let gate = state.write_gate.clone();
         tokio::spawn(async move {
-            iroh_link::serve_router(&serving, router).await;
+            task_server::serve_org_iroh(org_for_serving, gate, &serving).await;
         });
 
         Self {
@@ -165,6 +161,31 @@ impl Server {
             state,
             _data: data,
         }
+    }
+
+    /// This server's own identity, as the admitted-host set records it.
+    #[must_use]
+    pub fn host_id(&self) -> files_domain::HostId {
+        files_domain::HostId(self.endpoint.id().to_string())
+    }
+
+    /// Open the replica lane on `origin` **as this server**.
+    ///
+    /// The distinction from [`crate::client::Session`] is the whole
+    /// point: a session dials from a fresh device endpoint and signs
+    /// each call with a person's token, and this dials from the
+    /// server's own endpoint and signs nothing. The identity that
+    /// reaches the gate is the one iroh proved during the handshake, so
+    /// what authorises the pull is `origin` having admitted this
+    /// machine — not a login someone lent it.
+    pub async fn dial_replica(&self, origin: &Self) -> files_sync::SyncServiceClient {
+        let link = architect::iroh_link::connect(&self.endpoint, origin.endpoint.addr())
+            .await
+            .expect("dial the origin");
+        vox_core::initiator_on(link)
+            .establish()
+            .await
+            .expect("establish the replica lane")
     }
 
     /// This org's files directory — where its trees sit on this disk.

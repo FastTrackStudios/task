@@ -150,6 +150,8 @@ struct AccessState {
     shares: Vec<ShareLink>,
 }
 
+crate::durable::durable_as_itself!(AccessState);
+
 static ACCESS: crate::durable::Scoped<AccessState> = crate::durable::Scoped::new("access");
 
 /// Mutate and persist.
@@ -597,4 +599,3 @@ mod tests {
     }
 }
 
-crate::durable::durable_as_itself!(AccessState);

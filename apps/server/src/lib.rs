@@ -1551,6 +1551,7 @@ pub(crate) async fn build_org_state(
             &plugins,
             org_root.slug(),
             home_identity,
+            &files,
         ));
         // Coverage + dry-run, once per org at boot: how many mounted
         // services carry a permit table, which do not, and what a
@@ -2885,7 +2886,12 @@ pub fn org_permission_engine() -> Arc<dyn architect_permissions::PermissionEngin
     Arc::new(
         architect_permissions::CompositeEngine::new()
             .push(Arc::new(roles))
-            .push(Arc::new(public)),
+            .push(Arc::new(public))
+            // An admitted host, holding the replica lane and nothing
+            // else. Last because first-allow-wins and this only ever
+            // widens — and it widens for a principal the other two
+            // refuse outright.
+            .push(Arc::new(permits::HostEngine)),
     )
 }
 
@@ -2907,6 +2913,7 @@ fn build_org_permissions_gate(
     plugins: &task_plugin::PluginSet,
     slug: &str,
     home_identity: Option<&HomeIdentity>,
+    files: &files::FilesBackend,
 ) -> architect::permissions_gate::PermissionsGate {
     use architect::permissions_gate::{PermissionsGate, UnlistedPolicy};
     let own = architect_auth::identity::SessionIdentityResolver::new(auth.auth.clone());
@@ -2930,7 +2937,12 @@ fn build_org_permissions_gate(
             // same `Principal::Anonymous` without it (see `AuditedIdentityResolver`).
             _ => Arc::new(permits::AuditedIdentityResolver::new(own, slug)),
         };
-    let identity = resolver;
+    // Outermost: a `host:<endpoint-id>` bearer resolves against this
+    // org's admitted set instead of its auth store. Non-host bearers
+    // fall straight through, so nothing about a person's sign-in
+    // changes.
+    let identity: Arc<dyn architect_permissions::IdentityResolver + Send + Sync> =
+        Arc::new(permits::HostResolver::new(resolver, files.clone(), slug));
     let enforce = enforce_permissions();
     let audit = permits::GateAudit::new(enforce, permission_deny_ledger(), DEFAULT_ORG_ROLE);
     let gate = PermissionsGate::new(org_permission_engine(), Arc::new(identity))
@@ -3757,6 +3769,71 @@ pub fn org_router_guarded(
         router,
         bearer,
     )
+}
+
+/// Serve an org's router on an iroh endpoint, one connection at a time.
+///
+/// The counterpart of [`serve_org_vox`], and it exists for the same
+/// reason that one takes `headers`: the router has to be wrapped **per
+/// connection**, because the identity is a property of the connection
+/// rather than of the server.
+///
+/// On a WebSocket that identity is read from the upgrade. Here it is
+/// `connection.remote_id()` — and the difference is that this one was
+/// not presented, it was *proved*. An iroh connection is mutually
+/// authenticated by construction, so by the time this runs the peer has
+/// already demonstrated it holds the secret half of that endpoint id.
+/// There is no token to check because there was never a claim to doubt.
+///
+/// `HostResolver` then decides whether this org admits that id. A
+/// verified stranger is still a stranger.
+///
+/// # Why not `iroh_link::serve_router`
+///
+/// That serves ONE router across every connection, which is fine for a
+/// handler that treats all callers alike and wrong for a gate. Using it
+/// is how the org router ended up served with no gate at all: nothing
+/// about the call site says an identity is missing, because a bare
+/// router answers every call perfectly well.
+pub async fn serve_org_iroh(
+    org: OrgAppState,
+    gate: snapshot::WriteGate,
+    endpoint: &architect::iroh_link::iroh::Endpoint,
+) {
+    while let Some(incoming) = endpoint.accept().await {
+        let org = org.clone();
+        let gate = gate.clone();
+        tokio::spawn(async move {
+            let connection = match incoming.await {
+                Ok(connection) => connection,
+                Err(err) => {
+                    tracing::warn!(%err, "peering: incoming iroh connection failed");
+                    return;
+                }
+            };
+            // Proved by the handshake, not asserted by the caller.
+            let bearer = format!("{}{}", permits::HOST_BEARER_PREFIX, connection.remote_id());
+            let router = org_router_guarded(&org, gate, Some(bearer));
+
+            loop {
+                match connection.accept_bi().await {
+                    Ok((send, recv)) => {
+                        let link = architect::iroh_link::IrohLink::new(
+                            connection.clone(),
+                            send,
+                            recv,
+                        );
+                        let acceptor = architect::layer::handler_acceptor(router.clone());
+                        tokio::spawn(architect::iroh_link::serve_link(link, acceptor));
+                    }
+                    Err(err) => {
+                        tracing::debug!(%err, "peering: iroh connection closed");
+                        return;
+                    }
+                }
+            }
+        });
+    }
 }
 
 fn serve_org_vox(

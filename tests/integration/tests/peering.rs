@@ -18,7 +18,6 @@ use files::service::roots::RootsService;
 use files::service::tree::TreeService;
 use files_domain::{HostId, Hosting, OrgId, Peering};
 
-use integration::client::Session;
 use integration::scenario::Scenario;
 
 /// The starting arrangement: both orgs known to both servers, with the
@@ -164,32 +163,31 @@ async fn adding_a_server_adds_capacity() {
 /// big. What does not arrive is a single chunk, which is the whole
 /// point.
 ///
-/// # What signing this call reveals
+/// # What authorises the pull
 ///
-/// The pull is signed with an ACME session token, and it has to be: the
-/// replica lane sits behind the same permission gate as everything else
-/// and asks "is this caller a member of this org", which an anonymous
-/// peer can only ever fail.
+/// ACME admitted VNT's *endpoint id*, and nothing else changes hands.
+/// An iroh connection is mutually authenticated by construction, so the
+/// id VNT presents was proved during the handshake rather than claimed
+/// afterwards — there is no token here to steal, expire or rotate,
+/// because the credential is the endpoint being dialled by.
 ///
-/// A host is not a person, so there is no host credential to present —
-/// what stands in here is a user account on the org being replicated.
-/// That is a real gap and this is where it shows: admitting a server to
-/// host an org is a different act from hiring someone, and until it has
-/// its own credential, "which hosts may pull this org" is answered by
-/// who happens to hold a login.
-///
-/// The alternative was worse and was the state until this suite served
-/// the real router: the lane mounted nowhere, so replication worked in
-/// a harness and nowhere else.
+/// This test used to sign the pull with Alice's session, for want of
+/// anything better: a host had no identity, so "which servers may hold
+/// this org" was answered by "who happens to have a login". Admitting a
+/// machine is now a different act from hiring a person.
 // t[verify files.peering.replication]
 #[tokio::test]
 async fn structure_replicates_between_servers_without_moving_content() {
     let s = Scenario::open().await;
 
-    // VNT dials ACME as an admitted host. The credential is Alice's,
-    // for want of a host's own — see above.
-    let admitted = Session::open(&s.orgs.acme, s.people.alice.token.clone()).await;
-    let peer = admitted.replica().await;
+    // The admission. One line, and it is the whole credential story.
+    s.orgs
+        .acme
+        .backend
+        .admit_host(s.orgs.vnt.host_id(), Hosting::structure_only());
+
+    // Dialled by VNT's server as itself — no person's token anywhere.
+    let peer = s.orgs.vnt.dial_replica(&s.orgs.acme).await;
 
     // The receiving side of `files.peering.replication`: the root
     // becomes real here, with the id it has everywhere, and no tree
@@ -229,22 +227,80 @@ async fn structure_replicates_between_servers_without_moving_content() {
     assert!(bytes > 0, "the structure arrived without sizes");
 }
 
-/// The gap above, stated so it cannot quietly close the wrong way.
+/// The same machine, before it is admitted.
 ///
-/// Nothing about an unauthenticated peer should be able to walk an org's
-/// commit graph: `object` returns raw commits and trees, and `chunks`
-/// returns content. If someone makes the replica lane public to "get
-/// peering working", this fails — which is the point of writing it down
-/// as a test rather than as a comment.
+/// Everything about the two tests is identical except the one line that
+/// admits VNT — which is the only way to be sure admission is what
+/// authorised the pull, rather than the endpoint being able to ask at
+/// all.
 // t[verify files.peering.replication]
 #[tokio::test]
-async fn an_unadmitted_peer_cannot_walk_the_commit_graph() {
+async fn an_unadmitted_server_cannot_pull_the_commit_graph() {
     let s = Scenario::open().await;
-    let stranger = Session::anonymous(&s.orgs.acme).await;
+    let peer = s.orgs.vnt.dial_replica(&s.orgs.acme).await;
 
-    let refused = stranger.replica().await.heads(s.acme_root.get()).await;
+    let refused = peer.heads(s.acme_root.get()).await;
     assert!(
         refused.is_err(),
-        "an anonymous peer read an org's heads: {refused:?}"
+        "an unadmitted server read an org's heads: {refused:?}"
+    );
+}
+
+/// Dismissal binds on the next call, not on the dismissed host's
+/// cooperation.
+// t[verify files.peering.replication]
+#[tokio::test]
+async fn a_dismissed_server_stops_being_able_to_pull() {
+    let s = Scenario::open().await;
+    s.orgs
+        .acme
+        .backend
+        .admit_host(s.orgs.vnt.host_id(), Hosting::structure_only());
+    let peer = s.orgs.vnt.dial_replica(&s.orgs.acme).await;
+    peer.heads(s.acme_root.get())
+        .await
+        .expect("fixture: an admitted host can pull");
+
+    s.orgs.acme.backend.dismiss_host(&s.orgs.vnt.host_id());
+
+    // Same connection, already established. Revocation that needed a
+    // reconnect would leave a dismissed host reading for as long as it
+    // kept its socket open.
+    assert!(
+        peer.heads(s.acme_root.get()).await.is_err(),
+        "a dismissed host kept pulling on an open connection"
+    );
+}
+
+/// An admitted host holds the replica lane and nothing else.
+///
+/// The narrow role is what makes admission safe to hand out: a machine
+/// that may converge an org's structure is not thereby a machine that
+/// may read its files, write to it, or see who has access.
+// t[verify files.peering.scope]
+#[tokio::test]
+async fn an_admitted_host_cannot_do_anything_but_replicate() {
+    let s = Scenario::open().await;
+    s.orgs
+        .acme
+        .backend
+        .admit_host(s.orgs.vnt.host_id(), Hosting::structure_only());
+
+    // Same endpoint, same admission, a different lane.
+    let link = architect::iroh_link::connect(
+        &s.orgs.vnt.endpoint,
+        s.orgs.acme.endpoint.addr(),
+    )
+    .await
+    .expect("dial");
+    let tree: files::TreeServiceClient = vox_core::initiator_on(link)
+        .establish()
+        .await
+        .expect("establish");
+
+    let refused = tree.browse(s.acme_root, RootPath::root()).await;
+    assert!(
+        refused.is_err(),
+        "an admitted host browsed the org's files: {refused:?}"
     );
 }

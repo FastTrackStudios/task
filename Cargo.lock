@@ -21700,6 +21700,7 @@ dependencies = [
  "eyre",
  "facet",
  "files",
+ "files-domain",
  "files-proto",
  "files-storage",
  "files-sync",

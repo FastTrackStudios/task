@@ -177,6 +177,18 @@ impl From<Organised> for Wire {
     }
 }
 
+impl crate::durable::Durable for Organised {
+    type Wire = Wire;
+
+    fn to_wire(&self) -> Wire {
+        Wire::from(self.clone())
+    }
+
+    fn from_wire(wire: Wire) -> Self {
+        Self::from(wire)
+    }
+}
+
 static ORGANISED: crate::durable::Scoped<Organised> = crate::durable::Scoped::new("organise");
 
 /// Mutate and persist.
@@ -615,17 +627,5 @@ mod tests {
             canonical(&Tag("   ".into())).is_err(),
             "whitespace is not a label"
         );
-    }
-}
-
-impl crate::durable::Durable for Organised {
-    type Wire = Wire;
-
-    fn to_wire(&self) -> Wire {
-        Wire::from(self.clone())
-    }
-
-    fn from_wire(wire: Wire) -> Self {
-        Self::from(wire)
     }
 }

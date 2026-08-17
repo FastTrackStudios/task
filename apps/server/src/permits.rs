@@ -108,7 +108,7 @@ const fn dl(m: &'static str, r: &'static str) -> MethodPermit {
 
 /// `table!(CONST, "service", "resource/**", [rd "list", wa "delete"])`
 macro_rules! table {
-    ($name:ident, $service:literal, $res:literal, [$($f:ident $m:literal),* $(,)?]) => {
+    ($name:ident, $service:literal, $res:expr, [$($f:ident $m:literal),* $(,)?]) => {
         const $name: ServicePermits = ServicePermits {
             service: $service,
             methods: &[$($f($m, $res)),*],
@@ -511,7 +511,18 @@ table!(FILES_SYNC, "files-sync", "files/**", [
 // replication could not happen on a real server, only in a harness
 // that mounted it itself. Which is why the integration suite now
 // serves `org_router_guarded` rather than a router of its own.
-table!(FILES_REPLICA, "files-replica", "files/**", [
+/// The replica lane's own coarse resource, and not `files/**`.
+///
+/// A role scoped to `files/**` can read every files lane there is. An
+/// admitted host needs exactly this one, so it needs a resource that
+/// means exactly this one — otherwise "may replicate" and "may read the
+/// whole org" are the same permission and admission becomes the widest
+/// grant on the server.
+///
+/// Members are unaffected: their rule is `**`.
+pub const REPLICA_RESOURCE: &str = "files/replica";
+
+table!(FILES_REPLICA, "files-replica", REPLICA_RESOURCE, [
     rd "heads", rd "object", rd "manifest", dl "chunks",
 ]);
 
@@ -1866,6 +1877,153 @@ impl<R: IdentityResolver, H: IdentityResolver> IdentityResolver for HomeFallback
                 }
             }
         })
+    }
+}
+
+/// The prefix a host presents instead of a session token.
+///
+/// `host:<endpoint-id>`. Not a secret and not meant to be: the endpoint
+/// id is public, and what proves the caller holds it is the iroh
+/// handshake, which happened before this string was ever assembled. The
+/// transport is the credential; this is only how the transport tells the
+/// gate what it already verified.
+///
+/// Which is why nothing but the transport may set it. `serve_org_iroh`
+/// derives it from `connection.remote_id()` on a connection whose keys
+/// are already checked, and a client cannot forge it because a
+/// *per-call* `authorization` beats the connection's — so a caller
+/// claiming `host:` in metadata gets resolved against the admitted set
+/// under an id it does not hold, and fails.
+pub const HOST_BEARER_PREFIX: &str = "host:";
+
+/// Resolve an admitted host to a principal of its own.
+///
+/// Hosts are not people and must not borrow a person's identity to be
+/// one. Before this, replicating an org's structure meant presenting
+/// some member's session token — so "which servers may hold this org"
+/// was answered by "who happens to have a login", and admitting a
+/// machine meant issuing it a human's credential.
+///
+/// A non-`host:` bearer falls through untouched, so this composes in
+/// front of the session resolver rather than replacing it.
+pub struct HostResolver<R> {
+    inner: R,
+    /// The org's own admitted set. Per-org because admission is: one
+    /// machine can host many orgs and be a stranger to the next.
+    files: files::FilesBackend,
+    slug: String,
+}
+
+impl<R> HostResolver<R> {
+    pub fn new(inner: R, files: files::FilesBackend, slug: impl Into<String>) -> Self {
+        Self {
+            inner,
+            files,
+            slug: slug.into(),
+        }
+    }
+}
+
+impl<R: IdentityResolver> IdentityResolver for HostResolver<R> {
+    fn resolve<'a>(&'a self, bearer_token: Option<&'a str>) -> BoxIdentityFuture<'a> {
+        Box::pin(async move {
+            use architect_telemetry::wide;
+
+            let Some(endpoint) = bearer_token.and_then(|t| t.strip_prefix(HOST_BEARER_PREFIX))
+            else {
+                return self.inner.resolve(bearer_token).await;
+            };
+
+            let host = files_domain::HostId(endpoint.to_string());
+            if self.files.admits(&host).is_none() {
+                // A verified endpoint this org never admitted. One warn
+                // line: a machine dialling an org it does not host is
+                // either a misconfiguration or a probe, and both are
+                // worth seeing.
+                wide::set("auth.host", "not_admitted");
+                tracing::warn!(
+                    org.slug = self.slug,
+                    host = endpoint,
+                    "peering: an unadmitted host presented itself — refusing"
+                );
+                return Principal::Anonymous;
+            }
+            wide::set("auth.host", "admitted");
+            // `Guest` because it is the one variant that carries a
+            // credential without conveying membership: `Service` bypasses
+            // the role engine outright and `User` picks up
+            // `DEFAULT_ORG_ROLE`, either of which would hand a host the
+            // run of the org. A `Host` variant belongs upstream in
+            // architect-permissions; until then this is the honest fit,
+            // and `HostEngine` below is what grants it anything at all.
+            Principal::Guest {
+                link_id: format!("{HOST_BEARER_PREFIX}{endpoint}"),
+                display: None,
+            }
+        })
+    }
+}
+
+/// What an admitted host may do: read the replica lane, and nothing.
+///
+/// The narrowness is the point. A host needs the commit graph and the
+/// chunks under it to converge an org's structure; it does not need to
+/// write, to grant, to browse the vault, or to read anyone's mail. On
+/// `files/**` — the resource every other files lane shares — "read" would
+/// have meant all of those, which is why the replica lane has a resource
+/// of its own.
+#[derive(Debug, Default)]
+pub struct HostEngine;
+
+impl architect_permissions::PermissionEngine for HostEngine {
+    fn check(
+        &self,
+        who: &Principal,
+        what: &architect_permissions::Resource,
+        action: &architect_permissions::Action,
+    ) -> architect_permissions::Decision {
+        let is_host = matches!(
+            who,
+            Principal::Guest { link_id, .. } if link_id.starts_with(HOST_BEARER_PREFIX)
+        );
+        if is_host
+            && what.as_str() == REPLICA_RESOURCE
+            && matches!(action.as_str(), "read" | "download")
+        {
+            return architect_permissions::Decision::Allow;
+        }
+        // Deny rather than abstain: the composite is first-allow-wins, so
+        // this only ever narrows what another engine already refused.
+        architect_permissions::Decision::deny(format!(
+            "{} may not {} {}",
+            who.describe(),
+            action.as_str(),
+            what.as_str()
+        ))
+    }
+
+    fn survey(
+        &self,
+        who: &Principal,
+        _prefix: &architect_permissions::Resource,
+    ) -> Vec<(
+        architect_permissions::Resource,
+        Vec<architect_permissions::Action>,
+    )> {
+        let is_host = matches!(
+            who,
+            Principal::Guest { link_id, .. } if link_id.starts_with(HOST_BEARER_PREFIX)
+        );
+        if !is_host {
+            return Vec::new();
+        }
+        vec![(
+            architect_permissions::Resource::new(REPLICA_RESOURCE),
+            vec![
+                architect_permissions::Action::READ.into(),
+                architect_permissions::Action::DOWNLOAD.into(),
+            ],
+        )]
     }
 }
 

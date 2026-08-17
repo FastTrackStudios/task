@@ -146,6 +146,18 @@ impl From<SyncState> for Wire {
     }
 }
 
+impl crate::durable::Durable for SyncState {
+    type Wire = Wire;
+
+    fn to_wire(&self) -> Wire {
+        Wire::from(self.clone())
+    }
+
+    fn from_wire(wire: Wire) -> Self {
+        Self::from(wire)
+    }
+}
+
 static SYNC: crate::durable::Scoped<SyncState> = crate::durable::Scoped::new("sync");
 
 /// The device this process speaks for.
@@ -753,17 +765,5 @@ mod tests {
             capability_of(&root).is_empty(),
             "source is neither sessions nor footage"
         );
-    }
-}
-
-impl crate::durable::Durable for SyncState {
-    type Wire = Wire;
-
-    fn to_wire(&self) -> Wire {
-        Wire::from(self.clone())
-    }
-
-    fn from_wire(wire: Wire) -> Self {
-        Self::from(wire)
     }
 }

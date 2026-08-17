@@ -123,6 +123,8 @@ struct Federated {
     remotes: HashMap<String, Accepted>,
 }
 
+crate::durable::durable_as_itself!(Federated);
+
 static FEDERATION: Scoped<Federated> = Scoped::new("federation");
 
 fn read<T>(backend: &FilesBackend, f: impl FnOnce(&Federated) -> T) -> T {
@@ -533,4 +535,3 @@ mod tests {
     }
 }
 
-crate::durable::durable_as_itself!(Federated);

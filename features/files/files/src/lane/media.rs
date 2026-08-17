@@ -199,6 +199,8 @@ struct TicketBook(HashMap<String, Grant>);
 #[repr(C)]
 struct HandoffBook(HashMap<String, Handoff>);
 
+crate::durable::durable_as_itself!(TicketBook, HandoffBook);
+
 /// Per-org, so a token minted against one org's backend cannot be
 /// redeemed against another's.
 static TICKETS: Scoped<TicketBook> = Scoped::new("byte-tickets");
@@ -1014,4 +1016,3 @@ mod tests {
     }
 }
 
-crate::durable::durable_as_itself!(TicketBook, HandoffBook);
