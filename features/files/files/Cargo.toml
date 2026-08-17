@@ -46,7 +46,7 @@ vault-entity = { workspace = true }
 # this crate takes no ffmpeg dependency.
 files-transcode = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "rt", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["compat"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }

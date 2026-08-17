@@ -63,7 +63,11 @@ pub struct Session {
     /// The endpoint this person dials *from*. A person is not a server,
     /// so this is their device's endpoint rather than an org's.
     device: iroh::Endpoint,
-    addr: iroh::EndpointAddr,
+    /// The server's id, and nothing else. This is the whole of what a
+    /// person was given when they registered the device — no host, no
+    /// port, no certificate — so it is the whole of what a `Session`
+    /// gets to hold.
+    server: iroh::EndpointId,
     bearer: Option<Bearer>,
 }
 
@@ -72,7 +76,7 @@ impl Session {
     pub async fn open(server: &Server, token: impl Into<String>) -> Self {
         Self {
             device: device_endpoint().await,
-            addr: server.endpoint.addr(),
+            server: server.endpoint.id(),
             bearer: Some(Bearer(token.into())),
         }
     }
@@ -85,13 +89,13 @@ impl Session {
     pub async fn anonymous(server: &Server) -> Self {
         Self {
             device: device_endpoint().await,
-            addr: server.endpoint.addr(),
+            server: server.endpoint.id(),
             bearer: None,
         }
     }
 
     async fn establish<C: Signable + vox::FromVoxLane>(&self) -> C {
-        let link = iroh_link::connect(&self.device, self.addr.clone())
+        let link = iroh_link::connect(&self.device, self.server)
             .await
             .expect("dial the server");
         let client: C = vox_core::initiator_on(link)
@@ -170,11 +174,7 @@ impl Session {
 async fn device_endpoint() -> iroh::Endpoint {
     static DEVICE: tokio::sync::OnceCell<iroh::Endpoint> = tokio::sync::OnceCell::const_new();
     DEVICE
-        .get_or_init(|| async {
-            iroh_link::bind_endpoint(iroh::SecretKey::generate())
-                .await
-                .expect("bind a device endpoint")
-        })
+        .get_or_init(|| async { crate::net::bind(iroh::SecretKey::generate()).await })
         .await
         .clone()
 }

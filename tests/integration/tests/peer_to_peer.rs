@@ -87,7 +87,7 @@ async fn a_device_does_not_answer_for_the_org() {
     // Admitted, and still not able to reach a lane the device does not
     // serve: the tree lane is not mounted on a device at all, so this
     // fails at dispatch rather than at the gate.
-    let link = architect::iroh_link::connect(&receiver.endpoint, holder.endpoint.addr())
+    let link = architect::iroh_link::connect(&receiver.endpoint, holder.endpoint.id())
         .await
         .expect("dial");
     let tree: files::TreeServiceClient = vox_core::initiator_on(link)

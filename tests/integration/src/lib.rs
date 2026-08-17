@@ -19,6 +19,13 @@
 //!
 //! That is the whole registration model: paste an id into a device.
 //!
+//! An id is *all* anything here holds. No piece of this suite is handed
+//! an address, and the code that turns an id into a route is
+//! [`files::IrohRemotes`] — the dialler a deployment runs, not one
+//! written for tests. [`net`] says where the routes come from when there
+//! is no network to discover them over, and why that is a property of
+//! the endpoint rather than a branch in the dialler.
+//!
 //! # Why the fixtures are tiny
 //!
 //! Almost every byte here is written by the harness, and most fixtures
@@ -46,7 +53,7 @@
 //! | [`device`]   | a laptop: a peer with one project, partly carried |
 //! | [`orgs`]     | the two companies, and what is on their disks |
 //! | [`people`]   | the four accounts, and what each was granted |
-//! | [`transport`]| the wire between servers |
+//! | [`net`]      | how an endpoint id turns into a route |
 //! | [`scenario`] | all of the above, assembled |
 //!
 //! Chapters call over the wire, as a signed-in person, through the
@@ -92,8 +99,8 @@
 pub mod archive;
 pub mod client;
 pub mod device;
+pub mod net;
 pub mod orgs;
 pub mod people;
 pub mod scenario;
 pub mod server;
-pub mod transport;

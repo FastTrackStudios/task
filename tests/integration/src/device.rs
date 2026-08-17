@@ -94,9 +94,7 @@ impl Laptop {
         // this key — `files.device.identity` requires the identity to
         // survive restart and the expiry of any login — and a test lives
         // for one process, so a fresh key is the same thing here.
-        let endpoint = architect::iroh_link::bind_endpoint(iroh::SecretKey::generate())
-            .await
-            .expect("bind the device's endpoint");
+        let endpoint = crate::net::bind(iroh::SecretKey::generate()).await;
 
         // And it serves. Only the replica lane, only to endpoints it
         // admits — see `files_sync::serve_peer`.
@@ -135,9 +133,7 @@ impl Laptop {
             )
             .expect("adopt the replica");
 
-        let endpoint = architect::iroh_link::bind_endpoint(iroh::SecretKey::generate())
-            .await
-            .expect("bind the device's endpoint");
+        let endpoint = crate::net::bind(iroh::SecretKey::generate()).await;
         let serving = endpoint.clone();
         let served = backend.clone();
         tokio::spawn(async move {
@@ -164,11 +160,8 @@ impl Laptop {
     /// Signs nothing: what reaches the far gate is the endpoint iroh
     /// proved during the handshake, so what authorises the pull is
     /// `origin` having admitted this machine.
-    pub async fn dial_replica(
-        &self,
-        origin: &iroh::Endpoint,
-    ) -> files_sync::SyncServiceClient {
-        let link = architect::iroh_link::connect(&self.endpoint, origin.addr())
+    pub async fn dial_replica(&self, origin: &iroh::Endpoint) -> files_sync::SyncServiceClient {
+        let link = architect::iroh_link::connect(&self.endpoint, origin.id())
             .await
             .expect("dial the origin");
         vox_core::initiator_on(link)

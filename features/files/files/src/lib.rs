@@ -44,6 +44,7 @@ mod registry;
 /// can reach the same repo the backend serves, without duplicating
 /// jj-lib's loader wiring.
 pub mod repo_open;
+pub mod remotes;
 mod restart;
 mod scan;
 pub mod stub;
@@ -53,6 +54,7 @@ mod versions;
 pub mod watcher;
 
 pub use backend::{Captured, FilesBackend, LocationBoundaries, MaterializeReport, SyncTreeMeta};
+pub use remotes::{AddressBook, IrohRemotes, bind_endpoint};
 // The cadence engine moved to `files-domain`: it is a state machine
 // about time, and needs neither jj-lib nor the version store. Re-exported
 // here so callers and mount sites are unaffected.

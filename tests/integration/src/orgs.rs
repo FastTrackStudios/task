@@ -8,9 +8,6 @@
 //! This file owns the fixtures too, so "what is on each server's disk
 //! at the start" is one thing you can read in one place.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
 use files::RootId;
 use files::model::RootFlavor;
 use files::service::roots::{AdoptRequest, RootsService};
@@ -65,22 +62,20 @@ fn take_bytes(len: usize, seed: u64) -> Vec<u8> {
 }
 
 /// Both companies, booted and reachable by endpoint id.
+///
+/// Reachable by id and by nothing else — see [`crate::net`] for where
+/// an id turns into a route, and why that is not somewhere either of
+/// these two can see it.
 pub struct Orgs {
     pub acme: Server,
     pub vnt: Server,
-    /// Endpoint id → address. A demo stands in for the address lookup a
-    /// deployment gets from iroh's discovery; the id is still the only
-    /// thing a person ever handles.
-    pub known: Arc<Mutex<HashMap<String, iroh::EndpointAddr>>>,
 }
 
 impl Orgs {
     /// Start both servers with the fixtures the scenario needs.
     pub async fn boot() -> Self {
-        let known = Arc::new(Mutex::new(HashMap::new()));
-
         // ACME Audio: the sessions and stems half of the job.
-        let acme = Server::start("ACME Audio", "acme-audio", Arc::clone(&known), |tree| {
+        let acme = Server::start("ACME Audio", "acme-audio", |tree| {
             let session = tree.join("Song");
             std::fs::create_dir_all(session.join("Audio Files")).unwrap();
             std::fs::write(session.join("Song.rpp"), b"REAPER project (fixture)").unwrap();
@@ -132,7 +127,7 @@ impl Orgs {
 
         // VNT Video: the footage and cut half, a different company on a
         // different server.
-        let vnt = Server::start("VNT Video", "vnt-video", Arc::clone(&known), |tree| {
+        let vnt = Server::start("VNT Video", "vnt-video", |tree| {
             let cut = tree.join("Cut");
             std::fs::create_dir_all(cut.join("Proxies")).unwrap();
             std::fs::write(cut.join("Cut.drp"), b"Resolve project (fixture)").unwrap();
@@ -140,6 +135,6 @@ impl Orgs {
         })
         .await;
 
-        Self { acme, vnt, known }
+        Self { acme, vnt }
     }
 }

@@ -40,15 +40,11 @@
 //! — which is the entire point of registering a device against an id
 //! rather than an address.
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use architect::iroh_link;
-use files::FilesBackend;
+use files::{FilesBackend, IrohRemotes};
 use task_server::{AppState, AuthState, capability::ServerKeypair};
-
-use crate::transport::IrohRemotes;
 
 /// Serialises the env-var window around [`AppState`] construction.
 ///
@@ -73,7 +69,6 @@ pub struct Server {
     /// server persists its key for exactly this reason — an id a device
     /// was registered against must survive the process that minted it.
     key: iroh::SecretKey,
-    known: Arc<Mutex<HashMap<String, iroh::EndpointAddr>>>,
     /// The org this server hosts, as a slug. Also the name of its
     /// directory under the data root.
     pub slug: String,
@@ -94,12 +89,7 @@ impl Server {
     /// `fixture` writes the tree this org starts with, under the org's
     /// own files directory: the tree is *already there* before anyone
     /// adopts it, which is the premise the adoption chapter rests on.
-    pub async fn start(
-        name: &'static str,
-        slug: &str,
-        known: Arc<Mutex<HashMap<String, iroh::EndpointAddr>>>,
-        fixture: impl Fn(&Path),
-    ) -> Self {
+    pub async fn start(name: &'static str, slug: &str, fixture: impl Fn(&Path)) -> Self {
         let data = tempfile::tempdir().expect("data dir");
         let auth = AuthState::open("sqlite::memory:", SECRET)
             .await
@@ -128,13 +118,7 @@ impl Server {
         fixture(&tree);
 
         let key = iroh::SecretKey::generate();
-        let endpoint = iroh_link::bind_endpoint(key.clone())
-            .await
-            .expect("bind endpoint");
-        known
-            .lock()
-            .expect("known peers")
-            .insert(endpoint.id().to_string(), endpoint.addr());
+        let endpoint = crate::net::bind(key.clone()).await;
 
         // The backend reaches other servers through the port, and knows
         // its own id so the offers it mints say where to come back to.
@@ -148,10 +132,7 @@ impl Server {
         task_server::attach_peering(
             &mut org,
             endpoint.id().to_string(),
-            Arc::new(IrohRemotes {
-                endpoint: endpoint.clone(),
-                known: Arc::clone(&known),
-            }),
+            Arc::new(IrohRemotes::new(endpoint.clone())),
         );
         let backend = org.files.clone();
 
@@ -171,7 +152,6 @@ impl Server {
         Self {
             name,
             key,
-            known,
             slug: slug.to_string(),
             endpoint,
             backend,
@@ -197,7 +177,6 @@ impl Server {
         let Self {
             name,
             key,
-            known,
             slug,
             endpoint,
             _data: data,
@@ -224,21 +203,16 @@ impl Server {
         };
 
         let mut org = state.org(&slug).expect("the org is still on this disk");
-        let endpoint = iroh_link::bind_endpoint(key.clone())
-            .await
-            .expect("rebind the same endpoint");
-        known
-            .lock()
-            .expect("known peers")
-            .insert(endpoint.id().to_string(), endpoint.addr());
+        // Same id, new addresses — so the book is told again, exactly as
+        // a deployed endpoint republishes its pkarr record on boot. A
+        // device registered against this id notices nothing, which is
+        // the entire point of registering against an id.
+        let endpoint = crate::net::bind(key.clone()).await;
 
         task_server::attach_peering(
             &mut org,
             endpoint.id().to_string(),
-            Arc::new(IrohRemotes {
-                endpoint: endpoint.clone(),
-                known: Arc::clone(&known),
-            }),
+            Arc::new(IrohRemotes::new(endpoint.clone())),
         );
         let backend = org.files.clone();
 
@@ -252,7 +226,6 @@ impl Server {
         Self {
             name,
             key,
-            known,
             slug,
             endpoint,
             backend,
@@ -277,8 +250,11 @@ impl Server {
     /// reaches the gate is the one iroh proved during the handshake, so
     /// what authorises the pull is `origin` having admitted this
     /// machine — not a login someone lent it.
+    /// By `origin`'s bare id, like everything else here — a server that
+    /// had to be handed an address could not be the thing a person
+    /// registers by pasting one string.
     pub async fn dial_replica(&self, origin: &Self) -> files_sync::SyncServiceClient {
-        let link = architect::iroh_link::connect(&self.endpoint, origin.endpoint.addr())
+        let link = architect::iroh_link::connect(&self.endpoint, origin.endpoint.id())
             .await
             .expect("dial the origin");
         vox_core::initiator_on(link)
