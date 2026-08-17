@@ -1,14 +1,9 @@
-# Repo-root cargo config. This was `apps/task/.cargo/config.toml` in the
-# monorepo, where `apps/task/` was the product root; here the product root
-# IS the repo root, so it has to live at the top or cargo never reads it.
+# Repo-root cargo config — the product root IS the repo root, so this has
+# to live at the top or cargo never reads it.
 #
-# `cargo xtask <command>` runs the Task xtask binary (crates/xtask/).
-#
-# KNOWN STALE: `cargo xtask build` (Obsidian plugin) targets
-# `integrations/obsidian/plugin`, which was deleted; and `cargo xtask
-# codegen` writes to `<xtask-manifest-dir>/../ui-lab/src/generated`, which
-# resolves to `crates/ui-lab` rather than the real `apps/ui-lab`. Both need
-# a fix in crates/xtask/src/main.rs.
+# `cargo xtask <command>` runs the Task xtask binary (xtask/). Its only
+# verb is `codegen <out-dir>`, which writes TypeScript clients for the
+# vox services listed in xtask/src/main.rs.
 
 [alias]
 xtask = "run --package xtask --release --"

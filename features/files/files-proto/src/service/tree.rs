@@ -124,8 +124,7 @@ pub trait TreeService {
     async fn resolve(&self, path: TreePath) -> Result<TreeNode, FilesFault>;
 
     /// One entry's catalogue record, without listing its parent.
-    async fn entry(&self, root_id: RootId, path: RootPath)
-    -> Result<CatalogueEntry, FilesFault>;
+    async fn entry(&self, root_id: RootId, path: RootPath) -> Result<CatalogueEntry, FilesFault>;
 
     /// A root's full catalogue, paged. The initial sync; afterwards use
     /// [`Self::changes_since`].

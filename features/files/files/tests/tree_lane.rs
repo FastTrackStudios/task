@@ -136,7 +136,10 @@ async fn the_catalogue_covers_every_reachable_path_at_every_depth() {
         "stems/perc",
         "stems/perc/shaker.wav",
     ] {
-        assert!(paths.contains(&expected), "{expected} missing from {paths:?}");
+        assert!(
+            paths.contains(&expected),
+            "{expected} missing from {paths:?}"
+        );
     }
     assert!(!delta.more, "this tree fits in one page");
 
@@ -222,7 +225,10 @@ async fn an_unreadable_folder_is_present_and_marked_never_missing() {
         "and it is in the listing a client syncs, not only in a point lookup"
     );
     assert!(
-        delta.changed.iter().any(|e| e.path.as_str() == "readme.txt"),
+        delta
+            .changed
+            .iter()
+            .any(|e| e.path.as_str() == "readme.txt"),
         "one unreadable folder does not take the rest of the listing with it"
     );
     // The delta replays the log, so `vault` appears twice — first as the

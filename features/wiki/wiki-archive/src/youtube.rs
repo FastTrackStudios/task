@@ -27,7 +27,7 @@
 //! Nothing is pinned here — "update yt-dlp" is the standing
 //! fix, and failures surface as retryable errors, never
 //! partial archives. (A bgutil POT-provider sidecar exists
-//! for hard cases; see `plans/wiki-archive.md`.)
+//! for hard cases.)
 
 use std::time::Duration;
 

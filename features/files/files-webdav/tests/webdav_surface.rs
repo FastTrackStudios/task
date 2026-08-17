@@ -305,7 +305,10 @@ async fn version_history_is_not_exposed() {
     // The store really is there on disk — otherwise this test proves
     // nothing about hiding it.
     assert!(
-        root.local_tree().expect("a placed root").join(".fts-files").is_dir(),
+        root.local_tree()
+            .expect("a placed root")
+            .join(".fts-files")
+            .is_dir(),
         "the version store exists inside the live tree"
     );
 
@@ -339,7 +342,10 @@ async fn version_history_is_not_exposed() {
     // dav-server reads "the target's parent chain does not resolve" as
     // a conflict. Either way the write does not happen, which is the
     // property that matters, so assert the refusal and the disk.
-    let marker = root.local_tree().expect("a placed root").join(".fts-root.json");
+    let marker = root
+        .local_tree()
+        .expect("a placed root")
+        .join(".fts-root.json");
     let before = std::fs::read(&marker).expect("marker exists");
     let (status, _) = h
         .send("PUT", &format!("{root_url}/.fts-root.json"), b"{}")
@@ -347,7 +353,10 @@ async fn version_history_is_not_exposed() {
     assert!(status.is_client_error(), "PUT at a hidden name: {status}");
     assert_eq!(std::fs::read(&marker).unwrap(), before, "marker untouched");
     assert!(
-        root.local_tree().expect("a placed root").join(".fts-files").is_dir(),
+        root.local_tree()
+            .expect("a placed root")
+            .join(".fts-files")
+            .is_dir(),
         "the version store survived every attempt at it"
     );
 }
@@ -443,8 +452,11 @@ async fn paths_cannot_escape_the_root_they_address() {
     // never leaves the root, so only resolving it catches this.
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(outside.path(), a.local_tree().expect("a placed root").join("link"))
-            .unwrap();
+        std::os::unix::fs::symlink(
+            outside.path(),
+            a.local_tree().expect("a placed root").join("link"),
+        )
+        .unwrap();
         let (status, _) = h
             .send("GET", "/org/acme/dav/Root%20A/link/secret.txt", b"")
             .await;
@@ -485,11 +497,17 @@ async fn a_move_between_two_roots_is_refused() {
     // namespace — which is exactly what the other root is here.
     assert_eq!(status, StatusCode::BAD_GATEWAY, "cross-root MOVE");
     assert!(
-        a.local_tree().expect("a placed root").join("take.wav").exists(),
+        a.local_tree()
+            .expect("a placed root")
+            .join("take.wav")
+            .exists(),
         "the source survives a refused move"
     );
     assert!(
-        !b.local_tree().expect("a placed root").join("take.wav").exists(),
+        !b.local_tree()
+            .expect("a placed root")
+            .join("take.wav")
+            .exists(),
         "nothing was written into the other root"
     );
 }
@@ -523,15 +541,25 @@ async fn roots_whose_names_share_a_prefix_do_not_bleed_into_each_other() {
         .await;
     assert!(!status.is_success(), "cross-root MOVE succeeded: {status}");
     assert!(
-        !mix.local_tree().expect("a placed root").join("Stems").exists(),
+        !mix.local_tree()
+            .expect("a placed root")
+            .join("Stems")
+            .exists(),
         "the write was re-resolved inside the SOURCE root"
     );
     assert!(
-        !stems.local_tree().expect("a placed root").join("take.wav").exists(),
+        !stems
+            .local_tree()
+            .expect("a placed root")
+            .join("take.wav")
+            .exists(),
         "the write crossed into the other root"
     );
     assert!(
-        mix.local_tree().expect("a placed root").join("take.wav").exists(),
+        mix.local_tree()
+            .expect("a placed root")
+            .join("take.wav")
+            .exists(),
         "the source file survives a refused move"
     );
 
@@ -641,7 +669,12 @@ async fn case_variants_of_the_internals_are_still_hidden() {
         .checkpoint_now(root.id, None)
         .await
         .expect("checkpoint_now");
-    assert!(root.local_tree().expect("a placed root").join(".fts-files").is_dir());
+    assert!(
+        root.local_tree()
+            .expect("a placed root")
+            .join(".fts-files")
+            .is_dir()
+    );
 
     for name in [
         ".FTS-FILES",
@@ -688,7 +721,10 @@ async fn case_variants_of_the_internals_are_still_hidden() {
     }
 
     assert!(
-        root.local_tree().expect("a placed root").join(".fts-files").is_dir(),
+        root.local_tree()
+            .expect("a placed root")
+            .join(".fts-files")
+            .is_dir(),
         "the version store survived every spelling"
     );
 }

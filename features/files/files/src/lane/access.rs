@@ -436,11 +436,7 @@ impl AccessService for FilesBackend {
     }
 
     // t[impl files.access.granularity] — one resolved answer at this path
-    async fn effective(
-        &self,
-        root_id: RootId,
-        path: RootPath,
-    ) -> Result<Effective, FilesFault> {
+    async fn effective(&self, root_id: RootId, path: RootPath) -> Result<Effective, FilesFault> {
         // Answers for the process principal — see the module doc. This
         // is the one method that becomes wrong rather than incomplete
         // when a second user appears on a server.
@@ -583,7 +579,10 @@ mod tests {
         let granted = p("Sessions/Song");
         assert!(p("Sessions/Song/mix.wav").is_within(&granted));
         assert!(p("Sessions/Song").is_within(&granted));
-        assert!(!p("Sessions").is_within(&granted), "a parent is not covered");
+        assert!(
+            !p("Sessions").is_within(&granted),
+            "a parent is not covered"
+        );
         assert!(!p("Sessions/Other").is_within(&granted));
     }
 

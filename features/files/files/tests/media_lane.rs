@@ -99,7 +99,11 @@ async fn a_range_reads_exactly_that_window() {
     let got = redeem(&backend, &ticket.token, Some((1000, 1099)))
         .await
         .expect("ranged redeem");
-    assert_eq!(got.len(), 100, "an inclusive HTTP range is last - first + 1");
+    assert_eq!(
+        got.len(),
+        100,
+        "an inclusive HTTP range is last - first + 1"
+    );
     assert_eq!(got, bytes[1000..1100], "and it is the right window");
 
     // The last byte is addressable; one past it is not.
@@ -429,7 +433,11 @@ async fn what_is_not_implemented_refuses_rather_than_pretending() {
     // Nothing is readable before it has been checkpointed: the byte lane
     // serves the store, and a file being written has no stable length.
     let root = backend.get_root(root_id.get()).await.unwrap();
-    std::fs::write(root.local_tree().expect("a placed root").join("new.wav"), b"fresh").unwrap();
+    std::fs::write(
+        root.local_tree().expect("a placed root").join("new.wav"),
+        b"fresh",
+    )
+    .unwrap();
     assert!(matches!(
         backend.read(root_id, p("new.wav")).await,
         Err(FilesFault::Invalid(_))

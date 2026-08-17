@@ -3,7 +3,6 @@
 #
 #   task-server  -> registry.starcommand.live:30050/task-server
 #   task-web     -> registry.starcommand.live:30050/task-web
-#   task-ui-lab  -> registry.starcommand.live:30050/task-ui-lab
 #
 # The in-cluster registry is NOT reachable from GitHub-hosted runners, so
 # this runs on a SELF-HOSTED runner labelled `nix-host` — THEBATTLESHIP.
@@ -58,7 +57,7 @@ jobs:
       - name: Push images
         run: |
           set -euo pipefail
-          for img in task-server task-web task-ui-lab; do
+          for img in task-server task-web; do
             echo "── $img ──"
             streamer="$(nix build .#${img}-image --no-link --print-out-paths)"
             "$streamer" | nix run nixpkgs#skopeo -- --insecure-policy copy \

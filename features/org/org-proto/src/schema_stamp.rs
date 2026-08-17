@@ -16,9 +16,8 @@
 //! - **Clients** compute the same stamps from the descriptors
 //!   they were compiled against and compare: a mismatch means
 //!   "one of us is stale — rebuild" (`task doctor` does this for
-//!   the CLI; ui-lab's smoke does it for the TS bundle, where
-//!   the stamp folds the generated descriptor's method ids with
-//!   the same XOR + 16-hex-digit format).
+//!   the CLI; a TS client folds the generated descriptor's method
+//!   ids with the same XOR + 16-hex-digit format).
 //!
 //! XOR keeps the fold order-independent and trivially mirrored
 //! in TypeScript (`BigInt` xor over the generated method ids) —

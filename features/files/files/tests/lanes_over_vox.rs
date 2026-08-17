@@ -48,8 +48,7 @@ async fn rig() -> (Rig, String) {
     std::fs::create_dir(dir.join("stems")).unwrap();
     std::fs::write(dir.join("stems").join("kick.wav"), b"boom").unwrap();
 
-    let backend =
-        FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
+    let backend = FilesBackend::new(tmp.path(), tmp.path().join("vault")).expect("backend");
     let scope = Scope::new();
     let local = LocalServer::serve(router(backend), scope);
 
@@ -293,9 +292,7 @@ async fn bytes_cross_vox_and_arrive_intact() {
     let mut got = Vec::new();
     let mut opened = None;
     let mut done = false;
-    while let Ok(Ok(Some(frame))) =
-        tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
-    {
+    while let Ok(Ok(Some(frame))) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
         let mut copied = None;
         let _ = frame.map(|f| copied = Some(f));
         match copied.expect("frame") {
@@ -317,7 +314,10 @@ async fn bytes_cross_vox_and_arrive_intact() {
         Some((payload.len() as u64, payload.len() as u64)),
         "the stream announces its length before any bytes"
     );
-    assert!(done, "the stream says it finished rather than just stopping");
+    assert!(
+        done,
+        "the stream says it finished rather than just stopping"
+    );
     assert_eq!(got, payload, "every byte arrived, in order, unaltered");
 }
 
@@ -431,7 +431,10 @@ async fn an_upload_sends_its_bytes_over_vox_and_lands() {
     // And it is really on disk, byte for byte.
     let landed = std::fs::read(dir.join("stems").join("new-take.wav")).expect("landed");
     assert_eq!(landed.len(), 200_000);
-    assert_eq!(landed[..64], (0..64u32).map(|i| (i % 253) as u8).collect::<Vec<_>>()[..]);
+    assert_eq!(
+        landed[..64],
+        (0..64u32).map(|i| (i % 253) as u8).collect::<Vec<_>>()[..]
+    );
 }
 
 /// An archive of a selection, generated as it is sent, over vox.
@@ -479,7 +482,10 @@ async fn an_archive_streams_as_a_tar_over_vox() {
         .archive(root, vec![RootPath::parse("stems").unwrap()])
         .await
         .expect("archive must no longer refuse");
-    assert_eq!(ticket.length, None, "a generated stream has no known length");
+    assert_eq!(
+        ticket.length, None,
+        "a generated stream has no known length"
+    );
     assert!(!ticket.seekable, "and cannot be ranged");
     assert_eq!(ticket.content_type, "application/x-tar");
 
@@ -495,9 +501,7 @@ async fn an_archive_streams_as_a_tar_over_vox() {
 
     let mut tar = Vec::new();
     let mut done = false;
-    while let Ok(Ok(Some(frame))) =
-        tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
-    {
+    while let Ok(Ok(Some(frame))) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
         let mut copied = None;
         let _ = frame.map(|f| copied = Some(f));
         match copied.expect("frame") {

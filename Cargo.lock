@@ -7143,23 +7143,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "example-federation"
-version = "0.1.0"
-dependencies = [
- "architect",
- "async-trait",
- "files",
- "files-domain",
- "files-proto",
- "files-sync",
- "iroh",
- "tempfile",
- "tokio",
- "vox",
- "vox-core",
-]
-
-[[package]]
 name = "exercises"
 version = "0.1.0"
 dependencies = [
@@ -18764,6 +18747,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "scenario-two-orgs"
+version = "0.1.0"
+dependencies = [
+ "architect",
+ "async-trait",
+ "files",
+ "files-domain",
+ "files-sync",
+ "iroh",
+ "tempfile",
+ "tokio",
+ "vox",
+ "vox-core",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -26362,21 +26361,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
-name = "xshell"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e7290c623014758632efe00737145b6867b66292c42167f2ec381eb566a373d"
-dependencies = [
- "xshell-macros",
-]
-
-[[package]]
-name = "xshell-macros"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
-
-[[package]]
 name = "xtask"
 version = "0.1.0"
 dependencies = [
@@ -26387,7 +26371,6 @@ dependencies = [
  "vox-codegen",
  "vox-types",
  "workstream-proto",
- "xshell",
 ]
 
 [[package]]

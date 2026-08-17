@@ -40,9 +40,7 @@ fn is_version_token(tok: &str) -> Option<String> {
     // v3 / V3 / v1.6
     if let Some(rest) = lower.strip_prefix('v') {
         if !rest.is_empty()
-            && rest
-                .chars()
-                .all(|c| c.is_ascii_digit() || c == '.')
+            && rest.chars().all(|c| c.is_ascii_digit() || c == '.')
             && rest.chars().any(|c| c.is_ascii_digit())
         {
             return Some(t.to_string());
@@ -70,14 +68,18 @@ fn is_date_token(tok: &str) -> Option<String> {
         return None;
     }
     // 2026-05-08
-    if t.len() == 10 && t.split('-').count() == 3 && t.chars().all(|c| c.is_ascii_digit() || c == '-')
+    if t.len() == 10
+        && t.split('-').count() == 3
+        && t.chars().all(|c| c.is_ascii_digit() || c == '-')
     {
         return Some(t.to_string());
     }
     // 5.8.26
     let parts: Vec<&str> = t.split('.').filter(|p| !p.is_empty()).collect();
     if parts.len() == 3
-        && parts.iter().all(|p| p.len() <= 4 && p.chars().all(|c| c.is_ascii_digit()))
+        && parts
+            .iter()
+            .all(|p| p.len() <= 4 && p.chars().all(|c| c.is_ascii_digit()))
     {
         return Some(t.to_string());
     }
@@ -123,7 +125,9 @@ pub fn read(filename: &str) -> Vec<Label> {
             }
             continue;
         }
-        let word = tok.trim_matches(|c: char| !c.is_alphanumeric()).to_ascii_lowercase();
+        let word = tok
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_ascii_lowercase();
         if STATUS_WORDS.contains(&word.as_str()) {
             let label = Label::Status(word);
             if !out.contains(&label) {

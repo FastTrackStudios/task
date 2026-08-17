@@ -272,8 +272,8 @@ async fn delete_user(args: &[String]) -> eyre::Result<()> {
 ///
 /// Creating the same email in several orgs makes several *distinct*
 /// accounts with distinct user ids — auth stores are per-org and there
-/// is no cross-org identity yet (see `plans/federated-task-platform.md`
-/// phase 3). They share a login, not a principal.
+/// is no cross-org identity yet (federated-platform phase 3). They
+/// share a login, not a principal.
 async fn create_user(args: &[String]) -> eyre::Result<()> {
     use std::io::Read as _;
 
@@ -415,8 +415,7 @@ async fn email_history(args: &[String]) -> eyre::Result<()> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  merge-principals — one account per server (S2 of
-//  `plans/one-account-per-server.md`)
+//  merge-principals — one account per server (S2)
 // ─────────────────────────────────────────────────────────────────────
 
 /// One org's account for a given email, as it exists today.
@@ -526,8 +525,7 @@ fn is_user_id_column(name: &str) -> bool {
     )
 }
 
-/// `admin merge-principals` — the S2 dry run of
-/// `plans/one-account-per-server.md`.
+/// `admin merge-principals` — the S2 dry run of one-account-per-server.
 ///
 /// Reports, and by default changes NOTHING: which accounts share an
 /// email across this server's orgs, which id each group would collapse
@@ -547,7 +545,7 @@ async fn merge_principals(args: &[String]) -> eyre::Result<()> {
     if has(args, "--apply") {
         bail!(
             "--apply is not implemented yet — S1 (the server-level auth store) must land first.\n\
-             See apps/task/plans/one-account-per-server.md. This command is read-only today."
+             This command is read-only today."
         );
     }
 
@@ -725,8 +723,7 @@ fn home_org(
         })
 }
 
-/// `admin adopt-principal --email <addr>` — S1 of
-/// `plans/one-account-per-server.md`.
+/// `admin adopt-principal --email <addr>` — S1 of one-account-per-server.
 ///
 /// Give one principal a membership row in every org on this server that
 /// already holds an account with that address, carrying THAT org's role

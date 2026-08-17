@@ -11,7 +11,7 @@
 //! The item reference type is reused wholesale from `links_proto`
 //! ([`NodeRef`] + [`NodeKind`], which already knows `Song`). The sibling
 //! `collection` crate owns the backing JSONL store and the lexorank
-//! ordering. See `plans/knowledge-primitives.md`.
+//! ordering.
 
 pub mod model;
 pub mod service;

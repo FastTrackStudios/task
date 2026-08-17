@@ -259,7 +259,9 @@ fn activity_id(root_id: RootId, path: &RootPath, action: Action, at: DateTime<Ut
         root_id.hash(&mut hasher);
         path.as_str().hash(&mut hasher);
         (action as u8).hash(&mut hasher);
-        at.timestamp_nanos_opt().unwrap_or_default().hash(&mut hasher);
+        at.timestamp_nanos_opt()
+            .unwrap_or_default()
+            .hash(&mut hasher);
         bytes[half..half + 8].copy_from_slice(&hasher.finish().to_le_bytes());
     }
     ActivityId::new(Uuid::from_bytes(bytes))
@@ -314,7 +316,12 @@ fn feed_of(root_id: RootId, created_at: DateTime<Utc>, journal: &Journal) -> Vec
         // is computed during the capture and never written down. The save
         // points that *are* written give back the files a session
         // touched, at the times they were touched.
-        rows.push(row(root_id, RootPath::root(), Action::Modified, checkpoint.at));
+        rows.push(row(
+            root_id,
+            RootPath::root(),
+            Action::Modified,
+            checkpoint.at,
+        ));
         for save in &checkpoint.save_points {
             rows.extend(path_rows(root_id, [&save.path], save.at));
         }
@@ -447,7 +454,11 @@ impl OrganiseService for FilesBackend {
             // An unreadable journal is an empty journal (its own rule):
             // losing the labels must not cost the caller the root's
             // creation row too.
-            Ok(feed_of(root_id, created_at, &Journal::load(&store_dir).unwrap_or_default()))
+            Ok(feed_of(
+                root_id,
+                created_at,
+                &Journal::load(&store_dir).unwrap_or_default(),
+            ))
         })
         .await?;
 

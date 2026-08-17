@@ -1,6 +1,6 @@
 //! `attachments-proto` — wire contract for the attachments feature.
 //!
-//! Per `plans/decentralized-foundation.md` §13 Phase 7. Pattern:
+//! Per decentralized-foundation §13 Phase 7. Pattern:
 //!
 //! 1. Client calls [`AttachmentService::initiate_upload`] with
 //!    filename + mime + size + the doc id the attachment belongs
@@ -144,7 +144,6 @@ pub trait AttachmentService {
         arg: ContentHashArg,
     ) -> Result<SignedDownloadUrl, AttachmentError>;
 }
-
 
 // The architect surface under the workspace's usual names — see
 // `media-proto` for why `layer`/`serve` are emitted unqualified.

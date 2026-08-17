@@ -196,10 +196,7 @@ impl CadenceEngine {
         filter: &impl ActivityFilter,
     ) -> u32 {
         let now = self.clock.now();
-        let live: Vec<&String> = paths
-            .iter()
-            .filter(|p| !filter.is_ignored(p))
-            .collect();
+        let live: Vec<&String> = paths.iter().filter(|p| !filter.is_ignored(p)).collect();
         if live.is_empty() {
             return 0;
         }

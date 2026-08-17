@@ -149,7 +149,7 @@ async fn discovery_tags_membership_per_org() -> eyre::Result<()> {
 
 /// A membership row makes a home token mean something in another org.
 ///
-/// This is `plans/one-account-per-server.md` from the outside: sign in
+/// This is one-account-per-server from the outside: sign in
 /// once, at home, and every org holding a row reports `member: true` —
 /// which is what the client turns into "All organizations" actually
 /// spanning them (`orgs::selected_slugs`, the choke point every

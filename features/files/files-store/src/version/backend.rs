@@ -601,9 +601,11 @@ impl Backend for VersionStoreBackend {
         // never touches the chunk store. The Vault-facing entry point
         // (future RPC work) calls `crate::version::gc::sweep` directly with its own
         // resolved protected-commit set.
-        self.block_on(crate::version::gc::sweep_objects_only(self, index, keep_newer))
-            .map(|_objects_swept| ())
-            .map_err(to_backend_err)
+        self.block_on(crate::version::gc::sweep_objects_only(
+            self, index, keep_newer,
+        ))
+        .map(|_objects_swept| ())
+        .map_err(to_backend_err)
     }
 }
 

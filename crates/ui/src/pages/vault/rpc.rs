@@ -34,7 +34,7 @@ pub(crate) async fn fetch_folder_index(slug: String) -> Result<Vec<PageMeta>, St
             .into_iter()
             .filter(|p| {
                 // Notes AND base views — a `.base` is a first-class
-                // vault citizen (plans/vault-views.md): it appears in
+                // vault citizen: it appears in
                 // the tree, deep-links, and renders its view in place.
                 std::path::Path::new(&p.path)
                     .extension()

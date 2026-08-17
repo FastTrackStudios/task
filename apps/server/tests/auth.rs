@@ -1,7 +1,7 @@
 #![allow(clippy::large_futures)]
 //! Phase 2 integration test — architect-auth wired over vox.
 //!
-//! Plan (`plans/decentralized-foundation.md` §13 Phase 2):
+//! Plan (decentralized-foundation §13 Phase 2):
 //! create a user, sign in over vox, get a session token, call
 //! `current_session` with that token, assert identity round-trips.
 //!

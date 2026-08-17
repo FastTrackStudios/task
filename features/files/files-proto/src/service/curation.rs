@@ -39,8 +39,11 @@ pub trait CurationService {
 
     /// Drop a name. The underlying version stays; it merely loses its
     /// exemption from retention.
-    async fn unname_version(&self, root_id: RootId, version: VersionId)
-    -> Result<NamedVersion, FilesFault>;
+    async fn unname_version(
+        &self,
+        root_id: RootId,
+        version: VersionId,
+    ) -> Result<NamedVersion, FilesFault>;
 
     /// Named versions of a root, or of one path within it.
     async fn named_versions(
@@ -62,8 +65,7 @@ pub trait CurationService {
     ) -> Result<ProjectVersion, FilesFault>;
 
     /// A root's project versions, newest first.
-    async fn project_versions(&self, root_id: RootId)
-    -> Result<Vec<ProjectVersion>, FilesFault>;
+    async fn project_versions(&self, root_id: RootId) -> Result<Vec<ProjectVersion>, FilesFault>;
 
     /// Restart a project version — begin again from its start, or from
     /// a chosen point, without losing what was there.

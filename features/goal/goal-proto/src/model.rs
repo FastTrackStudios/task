@@ -93,7 +93,7 @@ pub struct Goal {
 
     /// Optional cycle id this goal is scoped to. Populated
     /// when the cyclic-calendar entities land (Phase 2 in
-    /// `plans/cyclic-life-calendar.md`); meanwhile, callers
+    /// cyclic life-calendar); meanwhile, callers
     /// can leave it `None` and use `target_date` + `kind`.
     #[serde(skip_serializing_if = "Option::is_none", default, rename = "cycleId")]
     #[architect(filterable)]
@@ -146,7 +146,7 @@ pub enum Kind {
     /// Scoped to one calendar year.
     Yearly,
     /// Scoped to one 13-week quarter (see
-    /// `plans/cyclic-life-calendar.md`).
+    /// cyclic life-calendar).
     Quarterly,
     /// Scoped to one 28-day cycle.
     Cycle,

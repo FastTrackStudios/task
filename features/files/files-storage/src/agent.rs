@@ -33,11 +33,11 @@ use files_proto::consts::STORE_DIR;
 use files_storage_proto::{
     AgentDirective, ConfinedPath, DirectiveKind, DirectiveOutcome, StorageError,
 };
+use files_store::chunk::{ChunkStore, FileId};
+use files_store::version::VersionStoreBackend;
 use jj_lib::backend::TreeValue;
 use jj_lib::object_id::ObjectId as _;
 use jj_lib::repo::{ReadonlyRepo, Repo as _};
-use files_store::chunk::{ChunkStore, FileId};
-use files_store::version::VersionStoreBackend;
 use uuid::Uuid;
 
 use crate::error::{Result, io, path as path_err, store};
@@ -126,8 +126,9 @@ impl InServerAgent {
         let mut held = slot.lock().expect("agent repo slot poisoned");
         let repo = match held.as_ref() {
             Some(repo) => pollster::block_on(repo.loader().load_at_head()).map_err(store)?,
-            None => files_store::version::repo::open_or_init_repo_blocking(&store_dir)
-                .map_err(store)?,
+            None => {
+                files_store::version::repo::open_or_init_repo_blocking(&store_dir).map_err(store)?
+            }
         };
         *held = Some(repo.clone());
         Ok(repo)

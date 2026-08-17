@@ -1,6 +1,6 @@
 //! App-view registry — the custom pages as vault view types.
 //!
-//! `plans/vault-views.md` slice 1: a `.base` entry in the vault can
+//! Vault-views slice 1: a `.base` entry in the vault can
 //! declare `type: tasks-board` (etc.) and opening it renders the
 //! full custom page — stores, mutations, Now bar and all — in place,
 //! like any note. That makes the app's rich surfaces *vault

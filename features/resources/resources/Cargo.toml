@@ -1,6 +1,6 @@
 [package]
 name = "resources"
-description = "Resource Library + annotations: read-only primary sources (songs, PDFs, books, videos) that the vault/wiki annotate and link into without editing. Loads `type: resource` manifests, reads/writes the per-resource annotation sidecar (`<slug>.annotations.json`, Logseq's `.edn`-sidecar pattern), and turns annotation specs into `links_proto::TypedLink`s. The anchor string keys the graph; geometry lives in the sidecar. See plans/resource-annotations.md."
+description = "Resource Library + annotations: read-only primary sources (songs, PDFs, books, videos) that the vault/wiki annotate and link into without editing. Loads `type: resource` manifests, reads/writes the per-resource annotation sidecar (`<slug>.annotations.json`, Logseq's `.edn`-sidecar pattern), and turns annotation specs into `links_proto::TypedLink`s. The anchor string keys the graph; geometry lives in the sidecar."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

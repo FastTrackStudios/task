@@ -144,8 +144,7 @@ pub trait RootsService {
     /// has written the wrong one.
     ///
     /// [`WriteService::rename`]: crate::service::write::WriteService::rename
-    async fn rename_root(&self, root_id: RootId, name: String)
-    -> Result<FileRootInfo, FilesFault>;
+    async fn rename_root(&self, root_id: RootId, name: String) -> Result<FileRootInfo, FilesFault>;
 
     /// Stop tracking the root. The directory and every byte in it stay
     /// exactly where they are; only our record of it goes. Re-adopting

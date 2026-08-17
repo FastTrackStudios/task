@@ -156,7 +156,11 @@ async fn content_the_server_already_holds_transfers_nothing() {
         "the plan names the placeholder lane rather than an endpoint that does not exist"
     );
 
-    let progress = rig.backend.progress(plan.upload_id).await.expect("progress");
+    let progress = rig
+        .backend
+        .progress(plan.upload_id)
+        .await
+        .expect("progress");
     assert_eq!(progress.received, size);
     assert_eq!(progress.total, size);
     assert!(progress.needed.is_empty());
@@ -302,14 +306,21 @@ async fn an_interrupted_upload_resumes_rather_than_restarting() {
 
     // The same session, asked again, reports the truth rather than what
     // it last remembered.
-    let resumed = rig.backend.progress(plan.upload_id).await.expect("progress");
+    let resumed = rig
+        .backend
+        .progress(plan.upload_id)
+        .await
+        .expect("progress");
     assert!(
         resumed.needed.is_empty(),
         "what arrived is not asked for again: {:?}",
         resumed.needed
     );
     assert_eq!(resumed.received, size);
-    assert_eq!(resumed.upload_id, plan.upload_id, "and it is the same upload");
+    assert_eq!(
+        resumed.upload_id, plan.upload_id,
+        "and it is the same upload"
+    );
 
     // Which means it can now land — no restart, no re-transfer.
     rig.backend
@@ -524,7 +535,12 @@ async fn an_aborted_upload_leaves_nothing_behind() {
 async fn an_unknown_upload_is_a_typed_fault() {
     let rig = rig().await;
     let ghost = UploadId::generate();
-    match rig.backend.progress(ghost).await.expect_err("no such upload") {
+    match rig
+        .backend
+        .progress(ghost)
+        .await
+        .expect_err("no such upload")
+    {
         FilesFault::UploadNotFound(id) => assert_eq!(id, ghost),
         other => panic!("expected UploadNotFound, got {other:?}"),
     }

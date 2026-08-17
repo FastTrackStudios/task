@@ -1,6 +1,6 @@
 //! [`Translation`] — edition metadata + licensing posture.
 //!
-//! The bundle-vs-fetch decision from `plans/bible-study.md` lives here in
+//! The bundle-vs-fetch decision from the bible-study design lives here in
 //! the type system: public-domain / open texts are
 //! [`Availability::Bundled`] and ship with the app; copyright-restricted
 //! texts (NIV, ESV, …) are [`Availability::Api`] and are fetched

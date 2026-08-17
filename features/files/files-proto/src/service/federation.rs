@@ -198,11 +198,7 @@ pub trait FederationService {
     /// content *fetches* it, and passing the token to the receiver's
     /// caller would make federated media a download link to another
     /// server, which is the outcome `files.topology.federation` refuses.
-    async fn read_offered(
-        &self,
-        secret: String,
-        path: RootPath,
-    ) -> Result<ByteTicket, FilesFault>;
+    async fn read_offered(&self, secret: String, path: RootPath) -> Result<ByteTicket, FilesFault>;
 
     /// Serve one bounded chunk of a ticket minted by
     /// [`Self::read_offered`].

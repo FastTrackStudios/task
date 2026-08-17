@@ -9,8 +9,8 @@
 //! 53rd "week zero" bonus week in cyclic-leap years (e.g.
 //! 2026 / 2032 / 2037 for Monday-start). Every cycle is
 //! exactly 28 days, starts on the same weekday, and has the
-//! same number of each weekday — see
-//! `plans/cyclic-life-calendar.md` for the design rationale.
+//! same number of each weekday — see the cyclic-life-calendar
+//! design for the rationale.
 //!
 //! ## Public surface
 //!

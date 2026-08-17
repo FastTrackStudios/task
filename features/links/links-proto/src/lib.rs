@@ -10,8 +10,8 @@
 //! notes↔verses, ideas↔wiki entries. Confidence + visibility are what
 //! enable quality filtering and private-vs-public publishing.
 //!
-//! The sibling `links` crate owns the backing store. See
-//! `plans/knowledge-primitives.md`.
+//! The sibling `links` crate owns the backing store. See the
+//! knowledge-primitives design.
 
 pub mod link;
 pub mod node;

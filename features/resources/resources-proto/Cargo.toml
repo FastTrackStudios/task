@@ -1,6 +1,6 @@
 [package]
 name = "resources-proto"
-description = "Wasm-clean wire contract for the Resource Library — the `#[architect::rpc] ResourcesService` that reads server-side resource sidecars (transcripts, …) for the in-app watch/reader views. See plans/resource-annotations.md."
+description = "Wasm-clean wire contract for the Resource Library — the `#[architect::rpc] ResourcesService` that reads server-side resource sidecars (transcripts, …) for the in-app watch/reader views."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

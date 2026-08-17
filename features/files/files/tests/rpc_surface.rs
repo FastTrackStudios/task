@@ -534,7 +534,7 @@ async fn carving_a_child_root_out_of_tracked_files_keeps_the_history() {
 /// un-registrable forever.
 #[ignore = "needs a close-the-store seam first: re-opening a moved root \
             hangs on the redb lock its old handle still holds (iroh-blobs \
-            runs its own runtime). See plans/media-roots-at-scale.md."]
+            runs its own runtime)."]
 #[tokio::test(flavor = "multi_thread")]
 async fn moving_a_root_folder_re_points_it_and_keeps_its_history() {
     let data_dir = tempfile::tempdir().expect("data tempdir");
@@ -884,8 +884,8 @@ async fn browse_reports_pointer_stubs_for_non_resident_paths() {
 /// they would share the root's single-writer chunk store.
 #[tokio::test(flavor = "multi_thread")]
 async fn browse_reports_divergent_versions_from_concurrent_saves() {
-    use jj_lib::repo_path::RepoPathBuf;
     use files_store::version::checkpoint::{Change, checkpoint};
+    use jj_lib::repo_path::RepoPathBuf;
 
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let root_dir = data_dir.path().join("split-session");

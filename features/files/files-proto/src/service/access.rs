@@ -44,7 +44,10 @@ pub enum Subject {
     /// grant on the content, not from membership of whichever org holds
     /// it — which is what lets two companies collaborate without either
     /// joining the other.
-    Remote { server: String, principal: String },
+    Remote {
+        server: String,
+        principal: String,
+    },
 }
 
 /// A grant of capabilities over a path.
@@ -123,8 +126,7 @@ pub trait AccessService {
 
     /// What the caller may do here, resolved. The question a UI actually
     /// has.
-    async fn effective(&self, root_id: RootId, path: RootPath)
-    -> Result<Effective, FilesFault>;
+    async fn effective(&self, root_id: RootId, path: RootPath) -> Result<Effective, FilesFault>;
 
     /// Mint a public link.
     async fn create_share(

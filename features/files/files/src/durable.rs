@@ -101,9 +101,7 @@ where
         let dir = backend.data_dir().to_path_buf();
         let path = self.file(&dir);
         let mut cells = self.cells();
-        let state = cells
-            .entry(dir)
-            .or_insert_with(|| self.load(&path));
+        let state = cells.entry(dir).or_insert_with(|| self.load(&path));
         let out = f(state);
         save(&path, state);
         out
@@ -151,7 +149,11 @@ fn save<T: Serialize>(path: &Path, state: &T) {
             // that will not serialise would keep working for the life of
             // the process and lose everything on restart — a failure that
             // passes every test and appears only in front of a user.
-            debug_assert!(false, "lane state at {} would not serialise: {err}", path.display());
+            debug_assert!(
+                false,
+                "lane state at {} would not serialise: {err}",
+                path.display()
+            );
             tracing::error!(path = %path.display(), %err, "files: lane state would not serialise");
             return;
         }

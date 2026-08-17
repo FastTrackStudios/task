@@ -20,7 +20,7 @@ use crate::resolve_org_vox_url;
 /// carries them — the command has to work from a checkout that is not
 /// this monorepo.
 static SKILLS: include_dir::Dir<'_> =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../skills/agent-lane");
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../skills/agent-lane");
 
 #[derive(Subcommand, Debug)]
 pub enum SkillsCmd {

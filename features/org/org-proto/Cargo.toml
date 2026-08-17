@@ -1,6 +1,6 @@
 [package]
 name = "org-proto"
-description = "Wire contract for the org feature. An `OrgManifest` is one self-contained federated node's identity record — slug, display name, federation URL, is_home flag. Every persisted type is `#[derive(architect::Entity)]` so the SeaORM `Model` + `RepoStorage` get emitted under the `server` feature; today the manifest is written as `org.toml` for portability/human-readability, but the schema is DB-ready when we want it. Per `plans/federated-task-platform.md`: schema-first, persistence-flexible."
+description = "Wire contract for the org feature. An `OrgManifest` is one self-contained federated node's identity record — slug, display name, federation URL, is_home flag. Every persisted type is `#[derive(architect::Entity)]` so the SeaORM `Model` + `RepoStorage` get emitted under the `server` feature; today the manifest is written as `org.toml` for portability/human-readability, but the schema is DB-ready when we want it. Federated-platform doctrine: schema-first, persistence-flexible."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -17,7 +17,7 @@ walkdir = { workspace = true }
 wiki-proto = { workspace = true }
 
 # Tree-sitter for code-graph extraction (PR 2 of
-# `plans/wiki-graph-parity.md`). Rust grammar to start;
+# wiki-graph parity). Rust grammar to start;
 # TS/JS/Python land in subsequent PRs.
 arborium = { workspace = true, features = ["lang-rust", "lang-typescript", "lang-javascript"] }
 arborium-tree-sitter = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "collection"
-description = "Backing store for the generic ordered-collection primitive. File-backed (JSONL) store of `collection_proto::Collection`s, serving the `#[architect::rpc] CollectionService`. Item ordering reuses vault-live's lexorank fractional-index keys so inserts/reorders stay local. See plans/knowledge-primitives.md."
+description = "Backing store for the generic ordered-collection primitive. File-backed (JSONL) store of `collection_proto::Collection`s, serving the `#[architect::rpc] CollectionService`. Item ordering reuses vault-live's lexorank fractional-index keys so inserts/reorders stay local."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,7 +1,6 @@
 //! MediaSource-backed `<audio>` fed from `MediaService` over vox.
 //!
-//! The playback half of media-over-vox (see
-//! `apps/task/plans/media-over-vox.md`): instead of pointing an
+//! The playback half of media-over-vox: instead of pointing an
 //! `HTMLAudioElement` at an HTTP URL, the element's media comes from a
 //! `MediaSource` whose single `SourceBuffer` is appended from
 //! [`MediaChunk`]s streamed through the org's vox lane. Same origin,

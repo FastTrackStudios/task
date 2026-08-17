@@ -276,8 +276,14 @@ mod tests {
         // these rather than mirroring them. A pattern that is reported
         // but not enforced would be a lie about what is hidden.
         let s = IgnoreSet::new([Capability::MusicProduction]);
-        assert!(s.patterns(Layer::Platform).contains(&".DS_Store".to_string()));
-        assert!(s.patterns(Layer::Capability).contains(&"*.rpp-bak".to_string()));
+        assert!(
+            s.patterns(Layer::Platform)
+                .contains(&".DS_Store".to_string())
+        );
+        assert!(
+            s.patterns(Layer::Capability)
+                .contains(&"*.rpp-bak".to_string())
+        );
         for p in s.patterns(Layer::Capability) {
             let sample = p.replace('*', "x");
             assert_eq!(

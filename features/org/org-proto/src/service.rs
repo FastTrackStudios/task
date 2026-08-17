@@ -18,7 +18,7 @@
 //!   into the home org can mint new federated orgs on this
 //!   server.
 //!
-//! See `plans/federated-task-platform.md` Phase 3.
+//! Federated-platform Phase 3.
 
 use facet::Facet;
 use thiserror::Error;

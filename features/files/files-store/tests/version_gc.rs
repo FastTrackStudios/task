@@ -58,10 +58,7 @@ fn chunk_id_of(jj_id: &jj_lib::backend::FileId) -> files_store::chunk::FileId {
 /// Poll until `id` is gone from the chunk store, or time out — the chunk
 /// blob itself is reclaimed on iroh-blobs' own background schedule (see the
 /// module doc), not synchronously within `sweep`.
-async fn wait_until_chunk_absent(
-    backend: &VersionStoreBackend,
-    id: files_store::chunk::FileId,
-) {
+async fn wait_until_chunk_absent(backend: &VersionStoreBackend, id: files_store::chunk::FileId) {
     let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
     loop {
         if !backend.chunks().has(id).await {

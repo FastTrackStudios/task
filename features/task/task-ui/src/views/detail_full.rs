@@ -7,7 +7,7 @@
 //! `Vec<TaskInfo>` (see `crates/ui`'s `task_wiring`), so no
 //! mirror or converter sits in between.
 //!
-//! Doctrine (plans/project-overview-task-ui.md): all data in via
+//! Doctrine: all data in via
 //! props (pre-resolved labels included — no lookups here), all
 //! intent out via callbacks. RPC wiring (`try_claim`, estimate
 //! writes, session fetch) happens in the page layer later.

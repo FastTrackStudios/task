@@ -21,7 +21,7 @@
 //!   implemented by sibling crates (`mount` for the FS impl,
 //!   future `mount-nextcloud` / `mount-vox-proxy`).
 //!
-//! See `plans/federated-task-platform.md` Phase 2 for the
+//! See federated-platform Phase 2 for the
 //! design context.
 
 mod backend;

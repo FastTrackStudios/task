@@ -202,7 +202,7 @@ share-proto.workspace = true
 # plugin-wiki,…`). Gating removes the crates, the `OrgAppState`
 # fields/backends, the router mounts, and the permit-table entries —
 # `permits_cover_router` proves the three views stay in lockstep under
-# any feature set. See apps/task/plans/plugin-system.md.
+# any feature set.
 default = [
     "plugin-mealplan",
     "plugin-fitness",

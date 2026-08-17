@@ -6,7 +6,7 @@
 //! a seek window, and NotFound for an unknown hash.
 
 use attachments_proto::{AttachmentServiceClient, CompleteUpload, InitiateUpload};
-use media_proto::{MediaChunk, MediaError, AttachmentMediaServiceClient};
+use media_proto::{AttachmentMediaServiceClient, MediaChunk, MediaError};
 use task_server::{AppState, router};
 
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

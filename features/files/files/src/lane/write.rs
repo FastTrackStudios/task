@@ -116,8 +116,14 @@ enum Act {
     /// Rename the existing occupant of this location into staging,
     /// where it stays until the batch commits.
     Displace(PathBuf),
-    Rename { from: PathBuf, to: PathBuf },
-    Copy { from: PathBuf, to: PathBuf },
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    Copy {
+        from: PathBuf,
+        to: PathBuf,
+    },
 }
 
 /// What was actually done, in the order it happened.

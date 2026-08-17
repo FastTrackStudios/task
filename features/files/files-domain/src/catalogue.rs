@@ -237,7 +237,10 @@ impl Catalogue {
     /// Entries published but not yet verified — adoption's tail.
     #[must_use]
     pub fn unverified(&self) -> Vec<&CatalogueEntry> {
-        self.entries.values().filter(|e| e.content.is_none()).collect()
+        self.entries
+            .values()
+            .filter(|e| e.content.is_none())
+            .collect()
     }
 
     /// Total logical bytes. Sums entry metadata, never content, because

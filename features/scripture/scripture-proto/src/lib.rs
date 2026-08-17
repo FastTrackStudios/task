@@ -12,7 +12,7 @@
 //!   integer, so verses sort in canonical order for free.
 //! - [`Translation`] — metadata + licensing posture for the editions we
 //!   ship, encoding the bundle-vs-fetch decision from
-//!   `plans/bible-study.md` directly in the type system.
+//!   the bible-study design directly in the type system.
 //!
 //! The text itself is **read-only**: notes, the wiki, and cross-refs
 //! reference verses by [`VerseId`]; nothing edits the scripture spine.

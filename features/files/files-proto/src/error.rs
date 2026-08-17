@@ -83,10 +83,7 @@ pub enum FilesFault {
     // ── Concurrency ─────────────────────────────────────────────────
     /// The precondition failed — someone else changed it first.
     #[error("stale: {path} changed since {expected}")]
-    Stale {
-        path: RootPath,
-        expected: String,
-    },
+    Stale { path: RootPath, expected: String },
 
     // ── Below us ────────────────────────────────────────────────────
     #[error("io: {0}")]

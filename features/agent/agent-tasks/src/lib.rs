@@ -29,7 +29,7 @@
 //! - `entity` — re-exports the architect-emitted SeaORM items
 //!   from `agent-proto`.
 //!
-//! See `plans/agent-dispatch.md` for the design.
+//! See the `agent-dispatch` crate for the design.
 
 pub mod entity;
 pub mod error;

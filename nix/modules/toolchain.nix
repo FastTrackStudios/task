@@ -92,7 +92,7 @@
         # tailwindcss — apps/{web,desktop,mobile}/assets/tailwind.css is
         # generated build output that `asset!()` resolves at compile
         # time, so a plain `cargo check` needs it built first
-        # (`just --justfile apps/Justfile --working-directory apps css`).
+        # (`just css`).
         tailwindcss_4
       ]
       ++ lib.optionals pkgs.stdenv.isLinux [

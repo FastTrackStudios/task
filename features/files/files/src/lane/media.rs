@@ -79,7 +79,9 @@ use files_proto::model::{RenditionInfo, RenditionKind};
 use files_proto::path::RootPath;
 use files_proto::service::federation::{ByteRange, EndpointId};
 use files_proto::service::legacy::{FilesError, FilesService};
-use files_proto::service::media::{ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService};
+use files_proto::service::media::{
+    ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -420,7 +422,6 @@ impl FilesBackend {
         }
     }
 
-
     /// Generate a tar over a selection, straight into `dest`.
     ///
     /// Nothing is materialised: each file is opened, streamed a buffer at
@@ -738,7 +739,8 @@ impl MediaService for FilesBackend {
             if !record.exists() {
                 continue;
             }
-            match FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind).await
+            match FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
+                .await
             {
                 Ok(info) => out.push(info),
                 // Indexed but unreadable: its content was swept between
@@ -766,10 +768,9 @@ impl MediaService for FilesBackend {
     ) -> Result<ByteTicket, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = readable(&path)?;
-        let info =
-            FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
-                .await
-                .map_err(fault)?;
+        let info = FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
+            .await
+            .map_err(fault)?;
         Ok(self.mint(Grant {
             source: ByteSource::Rendition {
                 root_id: root_id.get(),
@@ -810,7 +811,9 @@ impl MediaService for FilesBackend {
         items: Vec<HandoffItem>,
     ) -> Result<Handoff, FilesFault> {
         if items.is_empty() {
-            return Err(FilesFault::invalid("a handoff with no items delivers nothing"));
+            return Err(FilesFault::invalid(
+                "a handoff with no items delivers nothing",
+            ));
         }
         let mut checked = Vec::with_capacity(items.len());
         for item in items {

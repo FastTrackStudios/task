@@ -102,7 +102,9 @@ impl Holds {
     fn touch(&self, root_id: RootId, path: &RootPath, principal: PrincipalId) -> Occupancy {
         let now = Utc::now();
         let mut guard = self.0.lock().expect("occupancy lock poisoned");
-        let per_path = guard.entry((root_id, path.as_str().to_string())).or_default();
+        let per_path = guard
+            .entry((root_id, path.as_str().to_string()))
+            .or_default();
         per_path.retain(|_, o| o.expires_at > now);
         let entry = per_path.entry(principal).or_insert_with(|| Occupancy {
             root_id,
@@ -168,11 +170,7 @@ impl FilesBackend {
 impl VersionService for FilesBackend {
     // t[impl files.version.unit] — the chain addresses the path the caller
     // opened and follows jj's recorded renames through it
-    async fn chain(
-        &self,
-        root_id: RootId,
-        path: RootPath,
-    ) -> Result<Vec<ChainEntry>, FilesFault> {
+    async fn chain(&self, root_id: RootId, path: RootPath) -> Result<Vec<ChainEntry>, FilesFault> {
         self.known_root(root_id)?;
         FilesService::chain(self, root_id.get(), path.as_str().to_string())
             .await
@@ -256,7 +254,11 @@ impl VersionService for FilesBackend {
             .await
             .map_err(fault)?
             .into_iter()
-            .find(|d| d.sides.iter().any(|s| version_id_of(&s.commit_id) == version))
+            .find(|d| {
+                d.sides
+                    .iter()
+                    .any(|s| version_id_of(&s.commit_id) == version)
+            })
             .ok_or(FilesFault::VersionNotFound(version))?;
 
         // "Mine" is the journal line — the head the live tree is sitting
@@ -413,7 +415,10 @@ mod tests {
 
         let first = holds.touch(root, &path("mix.rpp"), me);
         let second = holds.touch(root, &path("mix.rpp"), me);
-        assert_eq!(second.since, first.since, "the open time is the useful fact");
+        assert_eq!(
+            second.since, first.since,
+            "the open time is the useful fact"
+        );
         assert!(
             second.expires_at >= first.expires_at,
             "a heartbeat pushes the lapse out"

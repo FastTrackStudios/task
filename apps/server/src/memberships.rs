@@ -2,7 +2,7 @@
 //!
 //! One row per `(user_id, org_slug)`. The user id is the HOME org's user
 //! id — the home org's `auth.sqlite` is this server's identity authority
-//! (see `apps/task/plans/one-account-per-server.md`), so a principal is
+//! (one account per server), so a principal is
 //! "a user in the home org, plus the orgs it has rows for".
 //!
 //! ## Why this table exists at all

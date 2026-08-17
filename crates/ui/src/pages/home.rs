@@ -12,8 +12,8 @@
 //!   progress) and its first action. Capped; the full grid lives at
 //!   `/projects`.
 //!
-//! Store-backed like every route page (`plans/atom-store-migration.md`)
-//! — checkbox clicks are optimistic `TaskMutations` against the shared
+//! Store-backed like every route page — checkbox clicks are
+//! optimistic `TaskMutations` against the shared
 //! task store, so the board and the dashboard can't disagree.
 
 use crate::format::status_variant;

@@ -280,10 +280,7 @@ async fn interrupted_transfer_resumes_at_chunk_level() {
     // is a storage decision rather than a test one. Until it is made,
     // this asserts what is true and the property it proves is that
     // whatever was already held is not re-fetched.
-    assert!(
-        !manifest.is_empty(),
-        "the file produced no chunks at all"
-    );
+    assert!(!manifest.is_empty(), "the file produced no chunks at all");
     // "Interrupt": land a strict subset of the chunks on the replica,
     // exactly the state an aborted pull leaves behind. The backend's
     // `sync_*` methods are synchronous and `block_on` internally, so
@@ -665,9 +662,15 @@ async fn a_structure_host_pulls_the_shape_and_none_of_the_bytes() {
     let mut names: Vec<&str> = listed.iter().map(|e| e.name.as_str()).collect();
     names.sort_unstable();
     assert_eq!(names, ["mix.wav", "stems"]);
-    let mix = listed.iter().find(|e| e.name == "mix.wav").expect("mix.wav");
+    let mix = listed
+        .iter()
+        .find(|e| e.name == "mix.wav")
+        .expect("mix.wav");
     assert_eq!(mix.size, Some(96 * 1024));
-    assert!(mix.stub, "a file whose bytes are elsewhere was called resident");
+    assert!(
+        mix.stub,
+        "a file whose bytes are elsewhere was called resident"
+    );
 }
 
 /// Two hosts of one root, in one process, must not share a catalogue.

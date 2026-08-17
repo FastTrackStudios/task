@@ -247,9 +247,7 @@ fn capability_of(root: &FileRootInfo) -> Vec<Capability> {
     }
 }
 
-
 impl FilesBackend {
-
     /// The facet map in force for a root: the capability's tool layouts
     /// plus whatever the project has mapped.
     fn facet_map(&self, root_id: RootId, root: &FileRootInfo) -> FacetMap {
@@ -721,7 +719,9 @@ mod tests {
     #[test]
     fn a_root_with_no_capability_reports_no_capability_layer() {
         assert!(
-            DomainIgnores::default().patterns(Layer::Capability).is_empty(),
+            DomainIgnores::default()
+                .patterns(Layer::Capability)
+                .is_empty(),
             "a software root must not be told its DAW droppings are hidden"
         );
     }

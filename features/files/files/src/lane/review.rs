@@ -111,9 +111,9 @@ fn fault(err: FilesError) -> FilesFault {
 // t[impl files.scale.large-media] — bytes leave by ticket on the byte
 // lane, never inline on this surface
 #[must_use]
-    // t[impl files.review.scope] — the withheld-download rule, as a
-    // property of the scope rather than a check each method remembers
-    pub fn served_rendition(scope: &GuestScope) -> Option<RenditionKind> {
+// t[impl files.review.scope] — the withheld-download rule, as a
+// property of the scope rather than a check each method remembers
+pub fn served_rendition(scope: &GuestScope) -> Option<RenditionKind> {
     if scope.can_download {
         None
     } else {
@@ -222,8 +222,8 @@ impl FilesBackend {
         let this = self.clone();
         let root_id = link.root_id.get();
         let file_path = path.as_str().to_string();
-        let found = crate::lane::blocking(move || this.find_review_inner(root_id, &file_path))
-            .await?;
+        let found =
+            crate::lane::blocking(move || this.find_review_inner(root_id, &file_path)).await?;
         let review = found.ok_or_else(|| {
             FilesFault::invalid(format!(
                 "this link addresses {path}, which has no review to open"
@@ -254,7 +254,9 @@ impl ReviewService for FilesBackend {
     /// because the store's keyed read is private to the backend; a review
     /// list is a handful of rows per org.
     async fn review(&self, review: ReviewId) -> Result<Review, FilesFault> {
-        let all = FilesService::list_reviews(self, None).await.map_err(fault)?;
+        let all = FilesService::list_reviews(self, None)
+            .await
+            .map_err(fault)?;
         all.into_iter()
             .find(|r| r.id == review.get())
             .ok_or(FilesFault::ReviewNotFound(review))
@@ -346,8 +348,7 @@ impl ReviewService for FilesBackend {
     // person, so no guest may remove feedback
     async fn delete_comment(&self, _comment: CommentId) -> Result<ReviewComment, FilesFault> {
         Err(FilesFault::Internal(
-            "not yet implemented: comment ownership — no guest identity reaches this lane"
-                .into(),
+            "not yet implemented: comment ownership — no guest identity reaches this lane".into(),
         ))
     }
 
@@ -402,7 +403,8 @@ mod tests {
         let downloader = scope_of(review, &link(vec![Capability::Read, Capability::Download]));
         assert!(downloader.can_download);
         assert_eq!(
-            served_rendition(&downloader), None,
+            served_rendition(&downloader),
+            None,
             "and a link that does convey download gets the source"
         );
     }
@@ -422,7 +424,11 @@ mod tests {
         // at all — there is no field for them, and that is the point.
         let over = scope_of(
             review,
-            &link(vec![Capability::Write, Capability::Share, Capability::Deposit]),
+            &link(vec![
+                Capability::Write,
+                Capability::Share,
+                Capability::Deposit,
+            ]),
         );
         assert!(!over.can_comment && !over.can_download);
     }

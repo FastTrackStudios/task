@@ -21,11 +21,7 @@ async fn pipeline(dir: &std::path::Path) -> (TranscodePipeline, Arc<ChunkStore>)
 }
 
 /// Store a source (with a media-class magic prefix) and return its id.
-async fn put_source(
-    chunks: &ChunkStore,
-    prefix: &[u8],
-    body: &[u8],
-) -> files_store::chunk::FileId {
+async fn put_source(chunks: &ChunkStore, prefix: &[u8], body: &[u8]) -> files_store::chunk::FileId {
     let mut bytes = prefix.to_vec();
     bytes.extend_from_slice(body);
     chunks.write_stream(&bytes[..]).await.unwrap()

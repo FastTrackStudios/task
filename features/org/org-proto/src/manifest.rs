@@ -15,7 +15,7 @@
 //! - Mounting the same schema into a SQLite registry later
 //!   needs no struct change, just a different writer.
 //!
-//! See `plans/federated-task-platform.md` for the federation
+//! See the federated-platform design for the federation
 //! model context.
 
 use chrono::{DateTime, Utc};
@@ -93,7 +93,7 @@ pub struct OrgManifest {
 
     /// Plugins this org has turned off (deny-list; empty = all on).
     /// Core plugins cannot be disabled — resolution ignores them here.
-    /// See `apps/task/plans/plugin-system.md`.
+    /// See `task-plugin` for the plugin catalog.
     #[serde(default, skip_serializing_if = "DisabledPlugins::is_empty")]
     #[architect(json)]
     pub disabled_plugins: DisabledPlugins,

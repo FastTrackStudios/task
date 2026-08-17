@@ -48,7 +48,7 @@
 //!   questions.
 //! - [`service::tasks::AgentTaskQueue`] — queues + agent tasks
 //!   plus links + comments. Modeled on hermes-webui's kanban;
-//!   see `plans/agent-dispatch.md`.
+//!   see the `agent-dispatch` crate.
 //! - [`service::profiles::Profiles`] — agent identities.
 //! - [`service::projects::Projects`] — workspace registry.
 //! - [`service::backends::Backends`] — backend registry.

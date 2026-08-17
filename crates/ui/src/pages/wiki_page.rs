@@ -8,8 +8,7 @@
 //! [`task_ui::Markdown`] block renderer (frontmatter lifted into
 //! a header strip); edit mode is a plain-markdown textarea over
 //! the raw file — the rich vault editor stays vault-only until
-//! the wiki grows its own document-session transport (see
-//! plans/wiki-feature.md).
+//! the wiki grows its own document-session transport.
 
 use architect_ui::prelude::*;
 use dioxus::prelude::*;

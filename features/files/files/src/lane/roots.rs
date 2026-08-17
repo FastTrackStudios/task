@@ -75,26 +75,23 @@ impl FilesBackend {
         // started, or by the legacy path. Reporting `Complete` is the
         // honest answer: its entries are in the store, and the state
         // machine that watched them arrive is simply gone.
-        self.adoptions()
-            .snapshot(root_id)
-            .map_or_else(
-                || {
-                    crate::lane::root_or_fault(self, root_id).map(|_| AdoptionProgress {
-                        root_id,
-                        phase: AdoptionPhase::Complete,
-                        entries_seen: 0,
-                        entries_hashed: 0,
-                        bytes_seen: 0,
-                        bytes_hashed: 0,
-                        entries_total: None,
-                        started_at: Utc::now(),
-                        updated_at: Utc::now(),
-                    })
-                },
-                |a| Ok(progress_of(root_id, &a)),
-            )
+        self.adoptions().snapshot(root_id).map_or_else(
+            || {
+                crate::lane::root_or_fault(self, root_id).map(|_| AdoptionProgress {
+                    root_id,
+                    phase: AdoptionPhase::Complete,
+                    entries_seen: 0,
+                    entries_hashed: 0,
+                    bytes_seen: 0,
+                    bytes_hashed: 0,
+                    entries_total: None,
+                    started_at: Utc::now(),
+                    updated_at: Utc::now(),
+                })
+            },
+            |a| Ok(progress_of(root_id, &a)),
+        )
     }
-
 }
 
 impl RootsService for FilesBackend {
@@ -109,8 +106,8 @@ impl RootsService for FilesBackend {
             hash_content,
         } = request;
 
-        let root = crate::lane::blocking(move || this.create_root_in_place(path, name, flavor))
-            .await?;
+        let root =
+            crate::lane::blocking(move || this.create_root_in_place(path, name, flavor)).await?;
 
         self.adoptions().begin(RootId::new(root.id), hash_content);
         Ok(root)
@@ -186,11 +183,7 @@ impl RootsService for FilesBackend {
         .await
     }
 
-    async fn rename_root(
-        &self,
-        root_id: RootId,
-        name: String,
-    ) -> Result<FileRootInfo, FilesFault> {
+    async fn rename_root(&self, root_id: RootId, name: String) -> Result<FileRootInfo, FilesFault> {
         if name.trim().is_empty() {
             return Err(FilesFault::invalid("a root's name may not be empty"));
         }
@@ -258,6 +251,9 @@ mod tests {
         let b = RootId::new(uuid::Uuid::from_bytes([2; 16]));
         store.begin(a, true);
         assert!(store.snapshot(a).is_some());
-        assert!(store.snapshot(b).is_none(), "one root's adoption is its own");
+        assert!(
+            store.snapshot(b).is_none(),
+            "one root's adoption is its own"
+        );
     }
 }

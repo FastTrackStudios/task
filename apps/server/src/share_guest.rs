@@ -24,7 +24,7 @@ use files_proto::{
     FilesEvent, GcReport, NamedVersion, NewReviewComment, ProjectVersion, RenditionInfo,
     RenditionKind, RestartMode, Review, ReviewComment, RootFlavor, SnapshotInfo, VersionRef,
 };
-use media_proto::{MediaChunk, MediaError, MediaGrant, MediaInfo, AttachmentMediaService};
+use media_proto::{AttachmentMediaService, MediaChunk, MediaError, MediaGrant, MediaInfo};
 use uuid::Uuid;
 
 use crate::share::{ShareStore, StoredLink};

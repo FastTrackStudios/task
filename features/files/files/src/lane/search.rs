@@ -438,7 +438,10 @@ fn technical(disk: &Path, path: &RootPath) -> Result<Vec<Segment>, std::io::Erro
     if let Some(name) = path.name() {
         text.push_str(&format!("name: {name}\n"));
     }
-    if let Some(ext) = Path::new(path.as_str()).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = Path::new(path.as_str())
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         text.push_str(&format!("extension: {}\n", ext.to_lowercase()));
     }
     text.push_str(&format!("bytes: {}\n", meta.len()));
@@ -661,11 +664,19 @@ fn extract_one(
     };
 
     let Some(sidecar_disk) = sidecar_disk else {
-        return record(backend, fail("sidecar path escapes the root".into()), Some(content));
+        return record(
+            backend,
+            fail("sidecar path escapes the root".into()),
+            Some(content),
+        );
     };
     let rendered = render_sidecar(kind, path, &content, now, &segments);
     if let Err(err) = write_atomically(&sidecar_disk, rendered.as_bytes()) {
-        return record(backend, fail(format!("sidecar not written: {err}")), Some(content));
+        return record(
+            backend,
+            fail(format!("sidecar not written: {err}")),
+            Some(content),
+        );
     }
 
     record(
@@ -770,7 +781,11 @@ fn score(text: &str, terms: &[String]) -> Option<f32> {
         hits += count;
     }
     let length = haystack.chars().count().max(1) as f32;
-    Some((hits as f32 / length.sqrt()).min(1.0).max(f32::MIN_POSITIVE))
+    Some(
+        (hits as f32 / length.sqrt())
+            .min(1.0)
+            .max(f32::MIN_POSITIVE),
+    )
 }
 
 /// A readable window around the first match.
@@ -972,7 +987,13 @@ impl SearchService for FilesBackend {
         if let Some(reason) = kinds
             .iter()
             .all(|k| unimplemented_reason(*k).is_some())
-            .then(|| kinds.iter().filter_map(|k| unimplemented_reason(*k)).collect::<Vec<_>>().join("; "))
+            .then(|| {
+                kinds
+                    .iter()
+                    .filter_map(|k| unimplemented_reason(*k))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
         {
             return Err(FilesFault::Internal(reason));
         }
@@ -1025,7 +1046,10 @@ mod tests {
             DateTime::UNIX_EPOCH,
             &segments,
         );
-        assert!(rendered.starts_with(FORMAT_TAG), "line one names the format");
+        assert!(
+            rendered.starts_with(FORMAT_TAG),
+            "line one names the format"
+        );
         assert!(
             rendered.contains("@@ not a header"),
             "a body line starting with `@` is escaped by doubling"

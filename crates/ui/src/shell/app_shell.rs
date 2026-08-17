@@ -65,7 +65,7 @@ pub fn AppShell() -> Element {
         }
         // Mobile is the primary platform: below `md` the chrome is the
         // top app bar + bottom tab bar. At `md`+ the desktop shell is
-        // Obsidian-shaped (plans/vault-views.md): one full-width top
+        // Obsidian-shaped: one full-width top
         // bar over everything (sidebar toggles, timer, capture — and
         // where tabs will live), then icon rail → vault explorer →
         // the open view.

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use media_proto::{MediaChunk, MediaError, MediaGrant, MediaInfo, AttachmentMediaService};
+use media_proto::{AttachmentMediaService, MediaChunk, MediaError, MediaGrant, MediaInfo};
 
 use crate::attachments::AttachmentServiceImpl;
 
@@ -155,7 +155,10 @@ mod tests {
     use super::*;
     use crate::attachments::{LocalFsStore, ObjectStore};
 
-    async fn service_with_blob(bytes: &[u8], hash: &str) -> (AttachmentMediaServiceImpl, tempfile::TempDir) {
+    async fn service_with_blob(
+        bytes: &[u8],
+        hash: &str,
+    ) -> (AttachmentMediaServiceImpl, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = LocalFsStore::new(tmp.path());
         store.put_blob(hash, bytes).await.expect("put");
@@ -165,7 +168,10 @@ mod tests {
             String::new(),
         ));
         let keypair = attachments.keypair.clone();
-        (AttachmentMediaServiceImpl::new(attachments, "test-org", keypair), tmp)
+        (
+            AttachmentMediaServiceImpl::new(attachments, "test-org", keypair),
+            tmp,
+        )
     }
 
     #[tokio::test]

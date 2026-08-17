@@ -1,0 +1,193 @@
+# Default values for the task chart.
+#
+# Self-hoster quickstart: you usually only need to set
+#   ingress.host      — the hostname your Task instance lives on
+#   server.persistence.size — how much room for your data
+# and (recommended for production)
+#   server.existingSecret — a Secret carrying TASK_SERVER_SEALING_KEY
+#
+# How traffic flows: the web app is a wasm bundle served by nginx. It
+# derives its websocket/API URL from window.location at runtime, so
+# the SAME host must route the API paths to task-server. The Ingress
+# template does exactly that: ingress.serverPaths -> server Service,
+# everything else -> web Service. No per-deployment rebuild of the web
+# bundle is ever needed.
+
+image:
+  # Registry+namespace prefix for all three images. CI (the pure-Nix
+  # images.yml) pushes via skopeo to the in-cluster LAN registry below.
+  # Override if you mirror them somewhere else.
+  registry: registry.starcommand.live:30050
+  pullPolicy: IfNotPresent
+  # e.g. pullSecrets: [{ name: my-registry-cred }]
+  pullSecrets: []
+
+server:
+  image:
+    repository: task-server
+    # Empty = chart appVersion. CI publishes `dev` + `sha-<short>` from
+    # the dev branch and `latest` + `sha-<short>` from main.
+    tag: ""
+  replicas: 1
+
+  # Public base URL of this instance (scheme + host, no trailing
+  # slash). Used by the server to mint signed attachment upload /
+  # download URLs. Empty = derived as https://<ingress.host> when the
+  # ingress is enabled.
+  publicUrl: ""
+
+  # Plain (non-secret) env vars, name -> value. See deploy/README.md's
+  # "Env var reference (task-server)" for the full list. Example:
+  #   env:
+  #     TASK_SERVER_ORG: my-org
+  #     RUST_LOG: info,task_server=debug
+  #
+  # OpenTelemetry is OFF unless you set an endpoint here — the server
+  # exports nothing by default (local-first promise). To ship traces,
+  # logs, and metrics to a collector:
+  #   env:
+  #     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc:4318
+  #     OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  env: {}
+
+  # Name of an existing Secret whose keys are injected via envFrom.
+  # Put TASK_SERVER_SEALING_KEY (openssl rand -hex 32) and any
+  # integration tokens (TASK_FORGEJO_TOKEN, HERMES_*) here. Without a
+  # sealing key the server falls back to a machine-stable dev key and
+  # logs a warning — fine for kicking the tires, not for production.
+  existingSecret: ""
+
+  persistence:
+    # Everything the server owns lives in this one PVC (mounted at
+    # /data = TASK_DATA_ROOT): org sqlites, vault, crdt docs, wiki,
+    # attachment blobs, the server keypair. Backing up this volume
+    # backs up the instance.
+    size: 10Gi
+    # Empty = cluster default StorageClass.
+    storageClass: ""
+    # Use a pre-provisioned claim instead of creating one.
+    existingClaim: ""
+    accessModes:
+      - ReadWriteOnce
+
+  # Media trees mounted alongside /data, for File Roots that live on a
+  # NAS rather than in the PVC.
+  #
+  # The PVC holds what the server OWNS (org sqlites, vault, crdt docs).
+  # A File Root is different: it points at bytes that already exist
+  # somewhere else and stay there — a 25 GB video project has no
+  # business being copied into a 10Gi claim. Mount that tree here and
+  # register the root at the path it appears at inside the pod.
+  #
+  # **Mount at the same absolute path the host uses.** A root stores its
+  # path, and its version store lives inside the tree, so a root
+  # registered as /mnt/storage/… must resolve to the same string in
+  # every process that opens it — the server, a future agent, an
+  # operator running `admin` verbs. Mounting the same tree at a
+  # different path in each is how a root ends up "missing" while the
+  # bytes sit right there.
+  #
+  # The tree must be WRITABLE: checkpoints keep version history in a
+  # `.fts-files/` directory inside the root itself.
+  #
+  # Mount the TREE, not one folder inside it — Projects/, Assets/ and
+  # the inbox all live under it, and a new area should not need a
+  # redeploy to become visible.
+  #
+  #  mediaMounts:
+  #    - name: task-media
+  #      mountPath: /mnt/storage/Task
+  #      nfs: { server: 10.10.10.1, path: /mnt/storage/Task }
+  #    # or, for a single-node cluster:
+  #    - name: task-media
+  #      mountPath: /mnt/storage/Task
+  #      hostPath: /mnt/storage/Task
+  mediaMounts: []
+
+  resources: {}
+  #  e.g.
+  #  resources:
+  #    requests: { cpu: 100m, memory: 256Mi }
+  #    limits: { memory: 1Gi }
+
+  # Extra pod knobs, passed through verbatim.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+web:
+  enabled: true
+  image:
+    repository: task-web
+    tag: ""
+  replicas: 1
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+ingress:
+  enabled: true
+  className: traefik
+  # The one hostname this instance serves. The web app and the API
+  # share it — same-origin is what makes the runtime URL derivation
+  # work.
+  host: task.example.com
+  # Extra annotations (cert-manager, traefik middlewares, …).
+  # WebSockets work through Traefik with no special annotation.
+  annotations: {}
+  # Path prefixes routed to task-server; the rest goes to the static
+  # web app. /org covers per-org endpoints (/org/<slug>/vox, webhooks),
+  # /server the server-management vox, /blobs attachment up/downloads,
+  # /media song stems + manifests served from org resources/ (org-resolved).
+  # /otlp the authenticated telemetry ingest proxy — desktop/iOS clients
+  # export here rather than to the collector, which is a ClusterIP on
+  # purpose. Missing from this list it would silently reach the WEB app
+  # and the exports would vanish into the SPA fallback.
+  serverPaths:
+    - /vox
+    - /org
+    - /server
+    - /blobs
+    - /.well-known
+    - /media
+    - /otlp
+  # TLS is usually terminated OUTSIDE the cluster (or by cert-manager);
+  # passthrough list in standard ingress.spec.tls shape:
+  #   tls:
+  #     - secretName: task-tls
+  #       hosts: [task.example.com]
+  tls: []
+
+# ── Git snapshots of the data root (server-native) ──────────────────
+# task-server runs the snapshot cycle itself: quiesce writes → WAL-
+# checkpoint every sqlite → commit the detached git dirs under
+# /data/.gitstate → push. Two views over the same files: one repo per
+# org (orgs/<slug> → <orgRepoPrefix><slug>, continuing pre-existing
+# vault histories) and one full-state repo (everything → fullRepo).
+# Remote repos are auto-created PRIVATE under remoteBase on first
+# push; pushes are plain fast-forwards, never --force. Committed
+# sqlites are CONSISTENT (checkpointed under the write gate).
+#
+# Enabling this (a) maps the secret + remote config into the server
+# env (TASK_BACKUP_*) and (b) schedules a CronJob that POSTs
+# /server/snapshot on the server service (Bearer GIT_TOKEN). On-demand
+# verbs: `task admin snapshot|log|branch <name>|restore <commit>`.
+backup:
+  git:
+    enabled: false
+    # Cron schedule for snapshot+push cycles.
+    schedule: "*/15 * * * *"
+    # https://<forge-host>/<owner> — repos are created/pushed here.
+    remoteBase: ""
+    # Full-state repo name.
+    fullRepo: task-data
+    # Per-org repos: <prefix><org-slug>.
+    orgRepoPrefix: task-org-
+    # Secret with GIT_USER + GIT_TOKEN (token: repo create + push;
+    # GIT_TOKEN doubles as the /server/snapshot bearer token).
+    existingSecret: ""
+    # Trigger-job image — anything with /bin/sh + wget works.
+    image: alpine/git:2.49.1

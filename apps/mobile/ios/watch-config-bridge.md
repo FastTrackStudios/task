@@ -77,4 +77,4 @@ with no manual entry. Then drop the manual Settings fields to read-only
 - Server bridge that accepts the inherited token: `apps/server/src/watch_bridge.rs`
   (`/watch/v1`, accepts a real `current_session`-validated token OR the static
   `TASK_WATCH_TOKEN`).
-- Federated-account plan: `apps/plans/multi-server-auth.md` item 6.
+- Federated-account plan: multi-server auth, item 6.

@@ -1,0 +1,24 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+vox-codegen.workspace = true
+vox-types.workspace = true
+
+# Proto crates whose vox service descriptors feed `cargo xtask codegen`.
+# The `vox` feature turns on the #[architect::rpc] descriptor fns.
+project = { workspace = true, features = ["vox"] }
+task = { workspace = true, features = ["vox"] }
+auth-proto = { workspace = true, features = ["vox"] }
+milestone-proto = { workspace = true, features = ["vox"] }
+workstream-proto = { workspace = true, features = ["vox"] }
+
+[lints]
+workspace = true

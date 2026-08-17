@@ -1,6 +1,6 @@
 [package]
 name = "cycle"
-description = "Cyclic life-calendar — `Cycle` + `Quarter` entities + a pure-function date generator that turns a start year + first-day-of-week into 4 quarters × (3 cycles × 4 weeks + 1 reset week). Goals, tasks, and reflections anchor to a `Cycle.id` so the cyclic structure is first-class in queries. See `plans/cyclic-life-calendar.md`."
+description = "Cyclic life-calendar — `Cycle` + `Quarter` entities + a pure-function date generator that turns a start year + first-day-of-week into 4 quarters × (3 cycles × 4 weeks + 1 reset week). Goals, tasks, and reflections anchor to a `Cycle.id` so the cyclic structure is first-class in queries."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,7 +1,0 @@
-# ui-lab is its own pnpm workspace (the Task repo root has no
-# package.json). vendor/* holds the copied vox TS runtime packages —
-# see vendor/VENDOR.md for the pinned rev and re-vendor procedure.
-packages:
-  - "vendor/*"
-allowBuilds:
-  esbuild: false

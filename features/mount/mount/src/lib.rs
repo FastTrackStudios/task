@@ -8,7 +8,7 @@
 //!   `TASK_MOUNTS_TOML`). Holds the per-machine `project_id →
 //!   Mount` map.
 //!
-//! See `plans/federated-task-platform.md` Phase 2.
+//! Federated-platform Phase 2.
 
 mod filesystem;
 mod registry;

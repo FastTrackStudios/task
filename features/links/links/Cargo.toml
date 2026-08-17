@@ -1,6 +1,6 @@
 [package]
 name = "links"
-description = "Backing store for the generalized typed-link primitive. File-backed (JSONL) store of `links_proto::TypedLink`s with confidence + visibility, serving the `#[architect::rpc] LinksService`. See plans/knowledge-primitives.md."
+description = "Backing store for the generalized typed-link primitive. File-backed (JSONL) store of `links_proto::TypedLink`s with confidence + visibility, serving the `#[architect::rpc] LinksService`."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

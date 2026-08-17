@@ -5,7 +5,7 @@
 //!
 //! Sits on top of the wasm-clean [`links_proto`] contract (same split as
 //! `locations` over `locations-proto`). [`Store`] is a JSONL-file-backed
-//! [`links_proto::LinksService`] impl. See `plans/knowledge-primitives.md`.
+//! [`links_proto::LinksService`] impl.
 
 #![cfg(not(target_arch = "wasm32"))]
 

@@ -34,6 +34,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use files_store::version::chain::lookup_dyn;
 use jj_lib::backend::{
     Backend, BackendError, CommitId, CopyHistory, CopyId, FileId, Tree, TreeId, TreeValue,
 };
@@ -42,7 +43,6 @@ use jj_lib::object_id::ObjectId as _;
 use jj_lib::repo::{ReadonlyRepo, Repo as _};
 use jj_lib::repo_path::{RepoPath, RepoPathBuf};
 use jj_lib::tree_builder::TreeBuilder;
-use files_store::version::chain::lookup_dyn;
 
 use crate::certify::{MidHashHook, Settled, StatGuard};
 use crate::content::ContentStore;

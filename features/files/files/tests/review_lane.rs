@@ -160,7 +160,10 @@ async fn a_comment_stays_attached_to_the_version_it_was_made_against() {
         .await
         .expect("comment on v1");
 
-    assert_eq!(placed.commit_id, v1_hex, "records the version it was made on");
+    assert_eq!(
+        placed.commit_id, v1_hex,
+        "records the version it was made on"
+    );
     assert!(
         (placed.timecode_secs - 12.5).abs() < f64::EPSILON,
         "and the region it was placed at"
@@ -288,13 +291,14 @@ async fn a_link_resolves_to_the_one_review_it_scopes_to() {
     let review = backend.for_file(root_id, path("cut.mov")).await.unwrap();
 
     let scope = backend
-        .guest_scope(&link(
-            root_id,
-            vec![Capability::Read, Capability::Comment],
-        ))
+        .guest_scope(&link(root_id, vec![Capability::Read, Capability::Comment]))
         .await
         .expect("scope");
-    assert_eq!(scope.review, ReviewId::new(review.id), "one review, and no other");
+    assert_eq!(
+        scope.review,
+        ReviewId::new(review.id),
+        "one review, and no other"
+    );
     assert!(scope.can_comment);
     assert!(!scope.can_download, "download is not implied by commenting");
 }
@@ -314,10 +318,7 @@ async fn a_link_without_download_is_served_a_proxy_rather_than_the_source() {
     assert_eq!(served_rendition(&viewer), Some(RenditionKind::Proxy720));
 
     let downloader = backend
-        .guest_scope(&link(
-            root_id,
-            vec![Capability::Read, Capability::Download],
-        ))
+        .guest_scope(&link(root_id, vec![Capability::Read, Capability::Download]))
         .await
         .expect("scope");
     assert_eq!(

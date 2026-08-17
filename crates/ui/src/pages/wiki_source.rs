@@ -18,7 +18,7 @@
 //! their `^p<page>` anchors as `p. N` chips (link targets,
 //! nothing to seek). v1 is the clean read-only viewer —
 //! "insert note at current time" (getCurrentTime → `## Notes`
-//! bullet) is the planned follow-up, see plans/wiki-archive.md.
+//! bullet) is the planned follow-up.
 
 use architect_ui::prelude::*;
 use dioxus::prelude::*;

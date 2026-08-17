@@ -83,8 +83,11 @@ pub use song_session::SongView;
 // Only the wasm (browser) build streams over these clients; native
 // compiles the module but never calls them.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) async fn media_client(slug: &str) -> Result<media_proto::AttachmentMediaServiceClient, String> {
-    task_ui_core::vox_clients::establish_for::<media_proto::AttachmentMediaServiceClient>(slug).await
+pub(crate) async fn media_client(
+    slug: &str,
+) -> Result<media_proto::AttachmentMediaServiceClient, String> {
+    task_ui_core::vox_clients::establish_for::<media_proto::AttachmentMediaServiceClient>(slug)
+        .await
 }
 
 /// An org's `AttachmentServiceClient` — short-lived signed download

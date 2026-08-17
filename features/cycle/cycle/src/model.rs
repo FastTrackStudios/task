@@ -89,7 +89,7 @@ pub struct Quarter {
 
     /// Bonus "week zero" appended to Q4 on cyclic-leap years.
     /// Conceptually week zero of the *following* year (see
-    /// `plans/cyclic-life-calendar.md`); attached here because
+    /// cyclic life-calendar); attached here because
     /// it lives in calendar time at the end of this quarter.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bonus_week_start: Option<NaiveDate>,

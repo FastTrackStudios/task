@@ -1,0 +1,75 @@
+# EXAMPLE values — the production environment on starcommand (ArgoCD
+# watches the `main` branch with these). Self-hosters: copy as a
+# starting point; the chart defaults are generic.
+#
+#   helm upgrade --install task ./deploy/chart/task \
+#     -n task --create-namespace \
+#     -f deploy/chart/values-prod.yaml
+
+server:
+  image:
+    tag: latest
+  publicUrl: https://tasks.starcommand.live
+  env:
+    # Permission enforcement (issue #109). Until this is set, the gate
+    # evaluates every call, records the decision, and then dispatches
+    # anyway — which is how this server came to serve every org's data to
+    # anonymous visitors while the audit log said `would_deny` 229 times
+    # in 30 minutes.
+    #
+    # DO NOT set this before confirming that signed-in clients actually
+    # present their identity. The token rides the WebSocket upgrade
+    # (browser: `vox.bearer.<token>` subprotocol; native:
+    # `Authorization: Bearer`), and if that is not reaching the server,
+    # enforcing denies EVERY caller including the owner — not just the
+    # anonymous ones. Check first:
+    #   Tempo: {resource.service.name="task-server" && span.auth.outcome="resolved"}
+    #   or devtools → the /vox request → Sec-WebSocket-Protocol should
+    #   list a `vox.bearer.…` entry when signed in.
+    TASK_ENFORCE_PERMISSIONS: "1"
+    # Hermes agent gateway (hermes-agent's OpenAI-compatible API) —
+    # setting this makes Hermes the DEFAULT chat backend for the
+    # /agents page. Points at the in-cluster gateway Service
+    # (starcommand modules/services/hermes/cluster.nix); until that
+    # cutover is live, swap in the node-IP:8642 of the host service.
+    # The bearer token rides in the existingSecret as
+    # TASK_HERMES_API_KEY.
+    TASK_HERMES_URL: http://hermes-gateway.hermes.svc:8642/v1
+    # OpenTelemetry. architect-telemetry's OTLP pipelines are inert unless this
+    # is set, so this one line is what turns traces/logs/metrics on. The
+    # collector (starcommand modules/services/observability) fans them out
+    # to Tempo/Loki/Prometheus — the app never names a backend.
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc:4318
+    OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+    # Distinguishes this deployment's spans from a self-hoster's in a
+    # shared backend, and from the clients that proxy through it.
+    OTEL_RESOURCE_ATTRIBUTES: deployment.environment=prod,service.namespace=task
+    # Authenticated OTLP ingest for out-of-cluster CLIENTS (desktop, iOS):
+    # setting this mounts `/otlp/v1/{traces,logs,metrics}`, which forwards
+    # to the same collector. The collector is a ClusterIP on purpose —
+    # clients reuse the server's auth and TLS instead of a public endpoint.
+    # Unset → the route does not exist. Clients present TASK_OTLP_TOKEN,
+    # which rides in the `task-env` Secret alongside TASK_HERMES_API_KEY.
+    TASK_OTLP_UPSTREAM: http://otel-collector.observability.svc:4318
+  # Env from the cluster-managed `task-env` Secret (starcommand
+  # cluster-secrets app) — carries TASK_HERMES_API_KEY today; add
+  # TASK_SERVER_SEALING_KEY there when rotating off the machine-dev
+  # sealing key.
+  existingSecret: task-env
+  persistence:
+    size: 50Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+web:
+  image:
+    tag: latest
+
+# Component gallery stays dev-only.
+ingress:
+  className: traefik
+  host: tasks.starcommand.live

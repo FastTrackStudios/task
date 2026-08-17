@@ -173,7 +173,7 @@ project = { workspace = true, features = ["vox"] }
 # `task goal list|get` via `GoalServiceClient` + cycle id
 # resolution against the local generator.
 goal = { workspace = true, features = ["vox"] }
-# Org-root layout (Phase 1 of plans/federated-task-platform.md).
+# Org-root layout (Phase 1 of the federated-platform work).
 # Owns `task org init|list` + the `DataRoot` / `OrgRoot` path
 # resolvers. Existing auth/timer/finance paths keep working at
 # their XDG locations until PR 2 migrates them through OrgRoot.
@@ -219,7 +219,7 @@ whisper = ["wiki-archive?/whisper"]
 # schedule + agent tasks, `issue`/`code`/`setup` drive the forges,
 # `inbox` talks to agent backends — so for those plugins only the
 # COMMAND surface compiles out (the arm fails with "not compiled into
-# this build"). See apps/task/plans/plugin-system.md.
+# this build").
 default = [
     "plugin-mealplan",
     "plugin-fitness",

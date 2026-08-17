@@ -1,7 +1,7 @@
 //! Per-field conflict resolution between a local `TaskInfo` and
 //! the forge `Issue` it's linked to via [`crate::IssueLink`].
 //!
-//! `plans/issue-tracker-integration.md` documents a per-field
+//! The issue-tracker integration design documents a per-field
 //! source-of-truth split (superseding the old coarse "forge wins for
 //! open/closed, full stop" rule that lost every Task-only field the
 //! moment the two sides diverged):
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn human_closes_on_forge_while_agent_edits_priority_in_task() {
-        // From plans/issue-tracker-integration.md acceptance
+        // From the issue-tracker integration acceptance
         // criteria: "human closes on GitHub while agent edits
         // priority in Task → both wins land in their respective
         // sources."

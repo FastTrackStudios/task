@@ -60,7 +60,6 @@ pub enum Region {
     Whole,
 }
 
-
 /// A byte range, inclusive at both ends, relative to a ticket.
 ///
 /// Inclusive because HTTP's `Range` is, and the browser adapter's whole

@@ -1,7 +1,6 @@
 //! Bridge between task notes and agent-task queues.
 //!
-//! See `plans/agent-dispatch.md`. This crate is the orchestration
-//! layer that turns a user action ("dispatch this task note to an
+//! This crate is the orchestration layer that turns a user action ("dispatch this task note to an
 //! agent queue") into two coordinated writes:
 //!
 //! 1. INSERT into `agent_tasks` with `source_task` pointing back
@@ -17,9 +16,8 @@
 //!   `complete_instances`.
 //!
 //! All writes go through the vault filesystem and the SeaORM
-//! connection; the crate is **server-side** (per
-//! `plans/agent-dispatch.md` decision: the dispatcher runs on the
-//! server, clients call it over vox).
+//! connection; the crate is **server-side** by design: the
+//! dispatcher runs on the server, clients call it over vox.
 
 #![allow(clippy::large_futures)]
 

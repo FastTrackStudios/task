@@ -7,7 +7,7 @@ crate is the contract between the two: a provider crate builds
 mounts whatever the `WidgetRegistry` says claims the open note.
 
 Widgets are one contribution type of the Task plugin system (see
-`task-plugin` for the catalog and `apps/task/plans/plugin-system.md`
+`task-plugin` for the catalog
 for the design). A spec names its owning plugin id
 (`.plugin("fasttrackstudio")`) so the registry can later drop
 contributions from plugins an org has disabled — today that field is a

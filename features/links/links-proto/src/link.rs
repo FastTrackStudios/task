@@ -1,7 +1,7 @@
 //! The typed-link model: a link is a first-class object carrying its own
 //! relation type, confidence, visibility, and provenance.
 //!
-//! Vocabularies follow the research (see `plans/knowledge-primitives.md`):
+//! Vocabularies follow the knowledge-primitives research:
 //! SKOS topic relations + argument-mapping epistemic relations +
 //! Breadcrumbs hierarchy + scripture-specific kinds; Gwern/Kesselman
 //! ordinal confidence; opt-in (private-default) visibility.

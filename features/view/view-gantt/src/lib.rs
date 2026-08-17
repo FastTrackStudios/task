@@ -28,7 +28,7 @@
 //! - Zoom levels (day/week/month/quarter/year)
 //! - Markers (custom vertical lines)
 //!
-//! Out of scope (follow-ups, see plans/gantt-port.md):
+//! Out of scope (follow-ups):
 //! virtualized scroll, undo/redo, critical path, baselines, auto-
 //! scheduling, calendars/holidays, MS Project import, PDF/PNG export,
 //! split tasks, slack visualization, context menu, hotkeys, toolbar.

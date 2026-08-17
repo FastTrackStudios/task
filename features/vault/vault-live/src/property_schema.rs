@@ -447,7 +447,7 @@ fn enum_opt(value: &str, label: &str, color: &str, icon: &str, order: u32) -> En
 /// The epistemic / knowledge-graph node properties — `confidence`,
 /// `visibility`, `maturity` — shared by every page via the `node` base
 /// schema. These mark how sure a note is (facts vs opinions), whether it
-/// publishes, and how mature it is. See `plans/knowledge-primitives.md`.
+/// publishes, and how mature it is.
 #[must_use]
 pub fn epistemic_properties() -> Vec<PropertyDef> {
     vec![

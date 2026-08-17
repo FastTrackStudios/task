@@ -16,7 +16,7 @@
 //! ids defined here. This crate stays wasm-clean and dependency-light
 //! so every surface — server, wasm UI, CLI — can share it.
 //!
-//! Design: apps/task/plans/plugin-system.md.
+//! Design: the plugin system — ids, catalog, and `PluginSet`.
 
 use serde::{Deserialize, Serialize};
 

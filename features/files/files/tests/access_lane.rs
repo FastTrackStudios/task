@@ -194,7 +194,12 @@ async fn outside_a_granted_subtree_a_path_is_absent_not_forbidden() {
     let (_tmp, backend, root) = adopted().await;
     let sam = colleague();
     backend
-        .grant(sam.clone(), root, p("Sessions/Song"), vec![Capability::Read])
+        .grant(
+            sam.clone(),
+            root,
+            p("Sessions/Song"),
+            vec![Capability::Read],
+        )
         .await
         .unwrap();
 
@@ -219,7 +224,12 @@ async fn inside_the_subtree_a_missing_capability_is_denied() {
     let (_tmp, backend, root) = adopted().await;
     let sam = colleague();
     backend
-        .grant(sam.clone(), root, p("Sessions/Song"), vec![Capability::Read])
+        .grant(
+            sam.clone(),
+            root,
+            p("Sessions/Song"),
+            vec![Capability::Read],
+        )
         .await
         .unwrap();
 
@@ -281,7 +291,13 @@ async fn a_grantee_may_pass_on_only_what_they_hold() {
         .expect("a subset of what Sam holds, inside Sam's subtree");
 
     match backend
-        .grant_as(&sam, dev.clone(), root, p("Sessions"), vec![Capability::Write])
+        .grant_as(
+            &sam,
+            dev.clone(),
+            root,
+            p("Sessions"),
+            vec![Capability::Write],
+        )
         .expect_err("Sam cannot hand out a write they do not have")
     {
         FilesFault::Denied { action, .. } => assert_eq!(action, "Write"),
@@ -330,7 +346,11 @@ async fn grants_lists_what_governs_a_path() {
 async fn a_link_is_paused_and_resumed_without_reissuing_it() {
     let (_tmp, backend, root) = adopted().await;
     let link = backend
-        .create_share(root, p("Renders"), vec![Capability::Read, Capability::Download])
+        .create_share(
+            root,
+            p("Renders"),
+            vec![Capability::Read, Capability::Download],
+        )
         .await
         .expect("create_share");
     assert!(!link.disabled);
@@ -401,7 +421,10 @@ async fn every_method_answers_a_typed_fault_for_an_unknown_root() {
         FilesFault::RootNotFound(_)
     ));
     assert!(matches!(
-        backend.effective(ghost, p("x")).await.expect_err("no such root"),
+        backend
+            .effective(ghost, p("x"))
+            .await
+            .expect_err("no such root"),
         FilesFault::RootNotFound(_)
     ));
     assert!(matches!(
@@ -421,7 +444,10 @@ async fn every_method_answers_a_typed_fault_for_an_unknown_root() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_trait_answers_for_the_process_principal() {
     let (_tmp, backend, root) = adopted().await;
-    let mine = backend.effective(root, p("Renders")).await.expect("effective");
+    let mine = backend
+        .effective(root, p("Renders"))
+        .await
+        .expect("effective");
     assert!(
         mine.capabilities.contains(&Capability::Share),
         "the server holds everything over a root it adopted itself"
@@ -446,7 +472,12 @@ async fn a_grant_survives_a_restart() {
     let (tmp, first, root) = adopted().await;
     let sam = colleague();
     let grant = first
-        .grant(sam.clone(), root, p("Sessions/Song"), vec![Capability::Read])
+        .grant(
+            sam.clone(),
+            root,
+            p("Sessions/Song"),
+            vec![Capability::Read],
+        )
         .await
         .expect("grant");
     drop(first);

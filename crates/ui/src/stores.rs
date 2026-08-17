@@ -23,7 +23,7 @@
 //!
 //! Supersedes the in-house optimistic write-through list helper
 //! (`src/optimistic.rs`), the task wiring shim, and the
-//! refresh-counter pages — see `plans/atom-store-migration.md`.
+//! refresh-counter pages.
 
 use std::collections::HashSet;
 

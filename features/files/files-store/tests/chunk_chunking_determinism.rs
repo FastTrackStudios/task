@@ -7,8 +7,8 @@
 //! chunks they share, and dedup silently stops working. These properties
 //! exercise the public API directly (chunker + manifest), not internals.
 
-use proptest::prelude::*;
 use files_store::chunk::{ChunkRef, ChunkerConfig, Manifest, chunk_to_vec};
+use proptest::prelude::*;
 
 fn chunk_refs(data: &[u8], config: ChunkerConfig) -> Vec<ChunkRef> {
     let rt = tokio::runtime::Runtime::new().unwrap();

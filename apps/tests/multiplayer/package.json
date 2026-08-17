@@ -10,7 +10,7 @@
     "test:headed": "playwright test --headed",
     "report": "playwright show-report"
   },
-  "playwrightPinNote": "@playwright/test must match nixpkgs#playwright-driver.version, which supplies PLAYWRIGHT_BROWSERS_PATH in the dev shell — a mismatched pin looks for a browser build that isn't in the store and every test fails at launch. Same pin as libs/editor/tests. Check with `nix eval --raw nixpkgs#playwright-driver.version`.",
+  "playwrightPinNote": "@playwright/test must match nixpkgs#playwright-driver.version, which supplies PLAYWRIGHT_BROWSERS_PATH in the dev shell — a mismatched pin looks for a browser build that isn't in the store and every test fails at launch. Same pin as features/editor/tests. Check with `nix eval --raw nixpkgs#playwright-driver.version`.",
   "devDependencies": {
     "@playwright/test": "1.59.1"
   }

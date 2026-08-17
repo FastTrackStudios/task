@@ -265,7 +265,7 @@ enum Commands {
     /// export/claim on-disk org directories under the data
     /// root. Distinct from `auth org`, which is about
     /// membership in architect-auth orgs. See
-    /// `plans/federated-task-platform.md` Phase 1.
+    /// Federated-platform Phase 1.
     #[command(subcommand)]
     Org(OrgCmd),
     /// Server administration — server-native git snapshots of the
@@ -278,12 +278,11 @@ enum Commands {
     /// project's bytes live on this box. Reads/writes
     /// `$XDG_CONFIG_HOME/task/mounts.toml` (override via
     /// `TASK_MOUNTS_TOML`). See
-    /// `plans/federated-task-platform.md` Phase 2.
+    /// Federated-platform Phase 2.
     #[command(subcommand)]
     Mount(MountCmd),
     /// Cyclic life-calendar — show / list the 4-week cycles
-    /// that anchor long-term planning. See
-    /// `plans/cyclic-life-calendar.md`.
+    /// that anchor long-term planning.
     #[command(subcommand)]
     Cycle(CycleCmd),
     /// Projects served by the active org. Talks to

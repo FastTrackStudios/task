@@ -114,7 +114,10 @@ async fn a_mix_engineer_takes_sessions_and_leaves_footage_as_stubs() {
             .local_tree()
             .expect("a placed root")
             .join(path);
-        assert!(disk.exists(), "{path} must still be present, sized and browsable");
+        assert!(
+            disk.exists(),
+            "{path} must still be present, sized and browsable"
+        );
     }
 }
 
@@ -129,7 +132,10 @@ async fn unsubscribing_returns_the_space_without_losing_the_file() {
         .expect("subscribe");
     assert!(!is_stub(&backend, root, "01 Song/Audio Files/kick.wav").await);
 
-    backend.subscribe(root, Vec::new()).await.expect("unsubscribe");
+    backend
+        .subscribe(root, Vec::new())
+        .await
+        .expect("unsubscribe");
     assert!(
         is_stub(&backend, root, "01 Song/Audio Files/kick.wav").await,
         "content leaving the subscription becomes a stub at the moment it leaves"
@@ -159,7 +165,10 @@ async fn a_pin_beats_an_unsubscribed_facet() {
     assert!(is_stub(&backend, root, "Proxies/reel.mov").await);
 
     let reel = RootPath::parse("Proxies/reel.mov").unwrap();
-    let sub = backend.pin(root, vec![reel.clone()], true).await.expect("pin");
+    let sub = backend
+        .pin(root, vec![reel.clone()], true)
+        .await
+        .expect("pin");
     assert_eq!(sub.pinned, vec![reel.clone()]);
     assert!(
         !is_stub(&backend, root, "Proxies/reel.mov").await,
@@ -220,12 +229,17 @@ async fn unmapped_directories_are_reported_rather_than_guessed() {
     for path in ["Project Assembly", "Client Notes"] {
         let b = find(path);
         assert_eq!(b.source, FacetSource::Unmapped, "{path}");
-        assert_eq!(b.facet, None, "{path}: guessing is how footage lands on the wrong tier");
+        assert_eq!(
+            b.facet, None,
+            "{path}: guessing is how footage lands on the wrong tier"
+        );
     }
 
     // A classified directory's children are not decisions anyone owes.
     assert!(
-        !bindings.iter().any(|b| b.path.as_str().starts_with("01 Song/Audio Files/")),
+        !bindings
+            .iter()
+            .any(|b| b.path.as_str().starts_with("01 Song/Audio Files/")),
         "a tool directory classifies its whole subtree"
     );
 }
@@ -303,8 +317,16 @@ async fn the_three_ignore_layers_are_reported_and_only_one_is_settable() {
         .await
         .expect("root")
         .path;
-    assert!(std::path::Path::new(path.as_deref().expect("a placed root")).join(".DS_Store").exists());
-    assert!(std::path::Path::new(path.as_deref().expect("a placed root")).join("01 Song/01 Song.rpp-bak").exists());
+    assert!(
+        std::path::Path::new(path.as_deref().expect("a placed root"))
+            .join(".DS_Store")
+            .exists()
+    );
+    assert!(
+        std::path::Path::new(path.as_deref().expect("a placed root"))
+            .join("01 Song/01 Song.rpp-bak")
+            .exists()
+    );
 }
 
 // t[verify files.device.control]
@@ -340,7 +362,11 @@ async fn a_revoked_device_stays_known_and_stops_transferring() {
 async fn an_unknown_device_is_a_typed_fault() {
     let (_tmp, backend, _root) = album("ghostdev").await;
     let ghost = DeviceId::generate();
-    match backend.revoke_device(ghost).await.expect_err("no such device") {
+    match backend
+        .revoke_device(ghost)
+        .await
+        .expect_err("no such device")
+    {
         FilesFault::DeviceNotFound(id) => assert_eq!(id, ghost),
         other => panic!("expected DeviceNotFound, got {other:?}"),
     }
@@ -454,7 +480,11 @@ async fn one_orgs_devices_are_not_anothers() {
         "nor must one org's throttle be another's"
     );
     assert!(
-        a.devices().await.unwrap().iter().any(|d| d.id == me && d.revoked),
+        a.devices()
+            .await
+            .unwrap()
+            .iter()
+            .any(|d| d.id == me && d.revoked),
         "and the org that did revoke it still has"
     );
 }

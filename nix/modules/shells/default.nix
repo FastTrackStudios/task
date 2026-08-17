@@ -9,13 +9,13 @@
   perSystem = { pkgs, lib, config, ... }: {
     devShells.default = pkgs.mkShell ({
       packages = (with pkgs; [
-        # The command runner the repo drives through (apps/Justfile).
+        # The command runner the repo drives through (./Justfile).
         just
         cargo-watch
         cargo-nextest
         bacon
-        # Node + pnpm: apps/ui-lab (pnpm + Vite) and the Playwright suite
-        # under apps/tests; also the tailwindcss module resolution that
+        # Node + pnpm: the Playwright suites under apps/tests and
+        # features/editor/tests; also the tailwindcss module resolution that
         # `@import "tailwindcss"` needs.
         nodejs_22
         pnpm
@@ -73,7 +73,7 @@
         echo ""
         echo "  Task dev shell"
         echo "  ─────────────────────────────────────────────"
-        echo "  just --justfile apps/Justfile --working-directory apps css   # generated tailwind sheets"
+        echo "  just css   # generated tailwind sheets"
         echo "  cargo check --workspace"
         echo "  cargo run -p task-server        # the server"
         echo "  (cd apps/web && dx serve --web --hot-patch false)"

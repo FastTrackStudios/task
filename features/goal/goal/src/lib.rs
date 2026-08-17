@@ -14,7 +14,7 @@
 //! `vault/Goals/<slug>.md` (top-level) and
 //! `vault/Goals/<parent-slug>/<slug>.md` (nested decompositions) —
 //! the `parent_id` field is what the DB reads, the folder layout is
-//! for human navigation. See `plans/cyclic-life-calendar.md` for the
+//! for human navigation. See the cyclic-life-calendar design for the
 //! planning system goals plug into.
 //!
 //! This crate is native-only (it walks the vault via `std::fs`); wasm

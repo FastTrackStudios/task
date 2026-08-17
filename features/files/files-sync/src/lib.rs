@@ -507,7 +507,10 @@ async fn import_tree_closure(
             } else {
                 format!("{dir}/{name}")
             };
-            import_file(local, remote, root_id, &file_id, &path, depth, report, observer).await?;
+            import_file(
+                local, remote, root_id, &file_id, &path, depth, report, observer,
+            )
+            .await?;
         }
     }
     Ok(())

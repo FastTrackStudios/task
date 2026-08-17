@@ -29,13 +29,12 @@ specs (
                 include (
                     features/**/*.rs
                     crates/**/*.rs
-                    libs/**/*.rs
                     apps/**/*.rs
                 )
                 exclude (
                     target/**
                     **/target/**
-                    libs/editor/vendor/**
+                    features/editor/mermaid-rs-renderer/**
                 )
             }
         )

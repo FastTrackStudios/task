@@ -131,10 +131,17 @@ async fn tags_are_replaced_wholesale_and_read_back_folded() {
     let (_tmp, backend, _, root) = adopted("takes").await;
 
     backend
-        .set_tags(root, p("stems/kick.wav"), tags(&["Drums", " drums ", "raw"]))
+        .set_tags(
+            root,
+            p("stems/kick.wav"),
+            tags(&["Drums", " drums ", "raw"]),
+        )
         .await
         .expect("set_tags");
-    let marks = backend.marks(root, p("stems/kick.wav")).await.expect("marks");
+    let marks = backend
+        .marks(root, p("stems/kick.wav"))
+        .await
+        .expect("marks");
     assert_eq!(
         marks.tags,
         tags(&["drums", "raw"]),
@@ -147,11 +154,7 @@ async fn tags_are_replaced_wholesale_and_read_back_folded() {
         .await
         .expect("set_tags");
     assert_eq!(
-        backend
-            .marks(root, p("stems/kick.wav"))
-            .await
-            .unwrap()
-            .tags,
+        backend.marks(root, p("stems/kick.wav")).await.unwrap().tags,
         tags(&["raw"])
     );
 
@@ -160,7 +163,14 @@ async fn tags_are_replaced_wholesale_and_read_back_folded() {
         .set_tags(root, p("stems/kick.wav"), Vec::new())
         .await
         .expect("set_tags");
-    assert!(backend.marks(root, p("stems/kick.wav")).await.unwrap().tags.is_empty());
+    assert!(
+        backend
+            .marks(root, p("stems/kick.wav"))
+            .await
+            .unwrap()
+            .tags
+            .is_empty()
+    );
     assert!(
         backend
             .tagged(tags(&["raw"]), Some(root))
@@ -183,14 +193,21 @@ async fn two_tags_narrow_the_view_and_all_tags_reports_what_exists() {
         .await
         .unwrap();
 
-    let both = backend.tagged(tags(&["keep", "client"]), Some(root)).await.unwrap();
+    let both = backend
+        .tagged(tags(&["keep", "client"]), Some(root))
+        .await
+        .unwrap();
     assert_eq!(
         both.iter().map(|m| m.path.clone()).collect::<Vec<_>>(),
         vec![p("mix.wav")],
         "naming two tags narrows the view rather than widening it"
     );
     assert_eq!(
-        backend.tagged(tags(&["keep"]), Some(root)).await.unwrap().len(),
+        backend
+            .tagged(tags(&["keep"]), Some(root))
+            .await
+            .unwrap()
+            .len(),
         2
     );
     assert_eq!(
@@ -201,7 +218,10 @@ async fn two_tags_narrow_the_view_and_all_tags_reports_what_exists() {
 
     let ghost = RootId::generate();
     assert!(matches!(
-        backend.all_tags(Some(ghost)).await.expect_err("no such root"),
+        backend
+            .all_tags(Some(ghost))
+            .await
+            .expect_err("no such root"),
         FilesFault::RootNotFound(_)
     ));
     assert!(
@@ -240,7 +260,10 @@ async fn a_favourite_is_the_callers_own_and_is_not_a_tag() {
         "a shortlist holds what was put on it and nothing else"
     );
 
-    let cleared = backend.set_favourite(root, p("mix.wav"), false).await.unwrap();
+    let cleared = backend
+        .set_favourite(root, p("mix.wav"), false)
+        .await
+        .unwrap();
     assert!(!cleared.favourite);
 }
 
@@ -284,7 +307,11 @@ async fn every_structural_change_shows_up_in_the_feed() {
     let (_tmp, backend, _, root) = adopted("accountable").await;
 
     let created = backend.activity(root, None, None).await.expect("activity");
-    assert_eq!(created.len(), 1, "a fresh root has been created and nothing else");
+    assert_eq!(
+        created.len(),
+        1,
+        "a fresh root has been created and nothing else"
+    );
     assert_eq!(created[0].action, Action::Created);
     assert!(created[0].path.is_root());
     assert_eq!(created[0].root_id, root);
@@ -299,10 +326,7 @@ async fn every_structural_change_shows_up_in_the_feed() {
         "the checkpoint that propagated is the checkpoint that is recorded: {after:?}"
     );
     assert_eq!(after[0].action, Action::Modified);
-    assert!(
-        after[0].at >= after[after.len() - 1].at,
-        "newest first"
-    );
+    assert!(after[0].at >= after[after.len() - 1].at, "newest first");
     assert_eq!(
         after[after.len() - 1].action,
         Action::Created,
@@ -335,8 +359,14 @@ async fn organising_writes_no_activity_of_its_own() {
     let (_tmp, backend, _, root) = adopted("no-log").await;
     let before = backend.activity(root, None, None).await.unwrap();
 
-    backend.set_tags(root, p("mix.wav"), tags(&["keep"])).await.unwrap();
-    backend.set_favourite(root, p("mix.wav"), true).await.unwrap();
+    backend
+        .set_tags(root, p("mix.wav"), tags(&["keep"]))
+        .await
+        .unwrap();
+    backend
+        .set_favourite(root, p("mix.wav"), true)
+        .await
+        .unwrap();
 
     assert_eq!(
         backend.activity(root, None, None).await.unwrap(),

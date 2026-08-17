@@ -246,11 +246,8 @@ fn walk(root: &FileRootInfo, now: DateTime<Utc>) -> Catalogue {
         // version store live there and nowhere else); `.git` at every
         // depth on a software root, where a nested one is a submodule's
         // object store rather than this root's content.
-        let listed = FilesBackend::list_dir(
-            &dir,
-            dir == root_dir,
-            root.flavor == RootFlavor::Software,
-        );
+        let listed =
+            FilesBackend::list_dir(&dir, dir == root_dir, root.flavor == RootFlavor::Software);
 
         let listed = match listed {
             Ok(listed) => listed,
@@ -525,13 +522,10 @@ impl TreeService for FilesBackend {
             return self.browse_catalogued(root_id, &path);
         }
 
-        let mut listed = <Self as FilesService>::browse(
-            self,
-            root_id.get(),
-            path.as_str().to_string(),
-        )
-        .await
-        .map_err(|e| fault_of(e, &path))?;
+        let mut listed =
+            <Self as FilesService>::browse(self, root_id.get(), path.as_str().to_string())
+                .await
+                .map_err(|e| fault_of(e, &path))?;
 
         // The Ignore set governs listings, not only captures.
         //
@@ -582,7 +576,9 @@ impl TreeService for FilesBackend {
         let this = self.clone();
         let wanted = path.clone();
         crate::lane::blocking(move || {
-            Ok(with_catalogue(&this, root_id, |cat| cat.get(&wanted).cloned()))
+            Ok(with_catalogue(&this, root_id, |cat| {
+                cat.get(&wanted).cloned()
+            }))
         })
         .await??
         .ok_or(FilesFault::PathNotFound(path))
@@ -766,7 +762,9 @@ mod tests {
         let cat = walk(&root(&tmp.path().to_string_lossy()), Utc::now());
 
         assert_eq!(cat.len(), 4, "Sessions, Song, mix.wav, notes.txt");
-        let mix = cat.get(&RootPath::parse("Sessions/Song/mix.wav").unwrap()).unwrap();
+        let mix = cat
+            .get(&RootPath::parse("Sessions/Song/mix.wav").unwrap())
+            .unwrap();
         assert_eq!(mix.kind, EntryKind::File);
         assert_eq!(mix.size, 8);
         assert_eq!(mix.hydration, Hydration::Resident);
@@ -804,7 +802,11 @@ mod tests {
         assert!(first.more, "a caller must not read one page as the whole");
 
         let second = page(&cat, &first.cursor);
-        assert_eq!(second.changed.len(), 10, "and resumes exactly where it left");
+        assert_eq!(
+            second.changed.len(),
+            10,
+            "and resumes exactly where it left"
+        );
         assert!(!second.more);
     }
 

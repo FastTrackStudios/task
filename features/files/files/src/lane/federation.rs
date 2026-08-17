@@ -38,9 +38,7 @@ use files_proto::id::{GrantId, RootId};
 use files_proto::model::BrowseEntry;
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
-use files_proto::service::federation::{
-    ByteRange, EndpointId, FederationService, Offer, Remote,
-};
+use files_proto::service::federation::{ByteRange, EndpointId, FederationService, Offer, Remote};
 use files_proto::service::media::ByteTicket;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -362,7 +360,9 @@ impl FederationService for FilesBackend {
     // t[impl files.topology.federation] — arrives as a first-class item
     async fn accept(&self, offer: Offer) -> Result<Remote, FilesFault> {
         if offer.secret.is_empty() {
-            return Err(FilesFault::invalid("an offer with no secret grants nothing"));
+            return Err(FilesFault::invalid(
+                "an offer with no secret grants nothing",
+            ));
         }
         // A local id, because every other lane addresses it as a root and
         // must not have to know it is not ours. The origin's id is kept
@@ -413,11 +413,7 @@ impl FederationService for FilesBackend {
     /// The origin side of a receiver's browse.
     // t[impl files.topology.federation] — the secret is the authority
     // t[impl files.access.granularity] — resolved inside the offer, never above it
-    async fn read_offered(
-        &self,
-        secret: String,
-        path: RootPath,
-    ) -> Result<ByteTicket, FilesFault> {
+    async fn read_offered(&self, secret: String, path: RootPath) -> Result<ByteTicket, FilesFault> {
         let path = path.validate()?;
         let offered = self.live_offer(&secret, &path)?;
         let within = Self::inside(&offered, &path)?;
@@ -443,7 +439,10 @@ impl FederationService for FilesBackend {
         self.live_offer(&secret, &RootPath::root())?;
 
         let range = ByteRange::new(range.offset, range.len);
-        let last = range.offset.saturating_add(u64::from(range.len)).saturating_sub(1);
+        let last = range
+            .offset
+            .saturating_add(u64::from(range.len))
+            .saturating_sub(1);
         let mut buf = Vec::new();
         self.redeem_bytes(&token, Some((range.offset, last)), &mut buf)
             .await?;

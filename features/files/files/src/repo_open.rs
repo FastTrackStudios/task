@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use files_proto::RootFlavor;
+use files_store::version::VersionStoreBackend;
 use jj_lib::backend::{Backend, BackendInitError, BackendLoadError};
 use jj_lib::config::{ConfigLayer, ConfigSource};
 use jj_lib::default_backend_factories::default_backend_factories;
@@ -37,7 +38,6 @@ use jj_lib::git_backend::GitBackend;
 use jj_lib::repo::{ReadonlyRepo, RepoLoader};
 use jj_lib::settings::UserSettings;
 use jj_lib::signing::Signer;
-use files_store::version::VersionStoreBackend;
 
 use crate::consts::{GIT_DIR, STORE_DIR};
 use crate::error::{Error, Result};
@@ -121,10 +121,8 @@ pub fn open_or_init_repo_at(
         open_existing(repo_path, flavor)?
     } else {
         match flavor {
-            RootFlavor::Media => {
-                files_store::version::repo::open_or_init_repo_blocking(repo_path)
-                    .map_err(Error::from)?
-            }
+            RootFlavor::Media => files_store::version::repo::open_or_init_repo_blocking(repo_path)
+                .map_err(Error::from)?,
             RootFlavor::Software => {
                 let Some(root_path) = tree else {
                     return Err(Error::BadRequest(
@@ -172,8 +170,9 @@ fn software_settings() -> Result<UserSettings> {
 
 fn settings_for(flavor: RootFlavor) -> Result<UserSettings> {
     match flavor {
-        RootFlavor::Media => files_store::version::repo::default_settings()
-            .map_err(|e| Error::Repo(e.to_string())),
+        RootFlavor::Media => {
+            files_store::version::repo::default_settings().map_err(|e| Error::Repo(e.to_string()))
+        }
         RootFlavor::Software => software_settings(),
     }
 }

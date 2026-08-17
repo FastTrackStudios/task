@@ -13,7 +13,7 @@
 //! user's id is the implicit `home_user_id` for every operation
 //! — a caller can only ever see and mutate their own links.
 //!
-//! See `plans/federated-task-platform.md`.
+//! Part of the federated-platform work.
 
 use facet::Facet;
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ pub struct ProfileSyncReport {
     pub updated: Vec<String>,
     /// Links this server cannot push to yet — they live on another
     /// server, and cross-server push needs the federation assertion
-    /// (`plans/federated-task-platform.md` §4). They keep serving
+    /// (federated-platform §4). They keep serving
     /// their cached copy until then.
     pub pending: Vec<String>,
     /// `slug: reason` for links that were reachable and still failed

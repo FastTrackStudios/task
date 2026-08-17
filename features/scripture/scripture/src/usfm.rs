@@ -178,7 +178,7 @@ pub(crate) mod tests {
     /// `strong=`, a mid-verse footnote, and a chapter break — so the
     /// parser is exercised against actual USFM without bundling a whole
     /// book. The corpus itself lives in the resource library, not the
-    /// repo (see `plans/bible-study.md`).
+    /// repo.
     pub(crate) const SAMPLE: &str = r#"\id JHN test fixture
 \h John
 \mt1 John

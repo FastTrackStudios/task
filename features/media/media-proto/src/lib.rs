@@ -123,7 +123,6 @@ pub trait AttachmentMediaService {
     async fn media_grant(&self, prefix: String) -> Result<MediaGrant, MediaError>;
 }
 
-
 // The architect surface, under the names the rest of the workspace
 // uses. `#[architect::rpc]` emits `<Trait>RpcDispatcher` and
 // `<trait>_rpc_service_descriptor`; every other proto crate re-exports

@@ -18,12 +18,12 @@ use std::sync::Arc;
 
 use files::lane::federation::RemoteFiles;
 use files::{FilesBackend, FilesService, RootFlavor};
+use files_proto::FilesFault;
 use files_proto::id::RootId;
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
 use files_proto::service::federation::{ByteRange, EndpointId, FederationService};
 use files_proto::service::media::{ByteTicket, MediaService};
-use files_proto::FilesFault;
 
 /// The transport, in-process.
 ///
@@ -41,7 +41,9 @@ impl RemoteFiles for Direct {
         secret: &str,
         path: &RootPath,
     ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
-        self.0.browse_offered(secret.to_string(), path.clone()).await
+        self.0
+            .browse_offered(secret.to_string(), path.clone())
+            .await
     }
 
     async fn read_offered(
@@ -164,7 +166,10 @@ async fn a_host_serves_bytes_it_does_not_hold() {
 #[tokio::test]
 async fn the_receivers_ticket_is_its_own() {
     let (_o, _r, origin, receiver, remote_root, _offer) = pair(b"vox take one").await;
-    let ticket = receiver.read(remote_root, p("vox.wav")).await.expect("ticket");
+    let ticket = receiver
+        .read(remote_root, p("vox.wav"))
+        .await
+        .expect("ticket");
 
     // Handing back the origin's token would make a federated file a
     // download link to another server — `files.topology.federation`
@@ -185,7 +190,10 @@ async fn a_relay_larger_than_one_chunk_arrives_whole_and_in_order() {
     let bytes: Vec<u8> = (0..len).map(|n| (n % 251) as u8).collect();
     let (_o, _r, _origin, receiver, remote_root, _offer) = pair(&bytes).await;
 
-    let ticket = receiver.read(remote_root, p("vox.wav")).await.expect("ticket");
+    let ticket = receiver
+        .read(remote_root, p("vox.wav"))
+        .await
+        .expect("ticket");
     assert_eq!(ticket.length, Some(len as u64));
     let got = slurp(&receiver, &ticket.token, None).await.expect("relay");
     assert_eq!(got.len(), bytes.len(), "relay lost or duplicated a chunk");
@@ -208,7 +216,10 @@ async fn a_relayed_ticket_seeks() {
     let bytes: Vec<u8> = (0..4096u32).map(|n| (n % 251) as u8).collect();
     let (_o, _r, _origin, receiver, remote_root, _offer) = pair(&bytes).await;
 
-    let ticket = receiver.read(remote_root, p("vox.wav")).await.expect("ticket");
+    let ticket = receiver
+        .read(remote_root, p("vox.wav"))
+        .await
+        .expect("ticket");
     assert!(ticket.seekable);
     let window = slurp(&receiver, &ticket.token, Some((1000, 1099)))
         .await
@@ -222,7 +233,10 @@ async fn revocation_lands_mid_transfer() {
     let bytes: Vec<u8> = (0..4096u32).map(|n| (n % 251) as u8).collect();
     let (_o, _r, origin, receiver, remote_root, offer) = pair(&bytes).await;
 
-    let ticket = receiver.read(remote_root, p("vox.wav")).await.expect("ticket");
+    let ticket = receiver
+        .read(remote_root, p("vox.wav"))
+        .await
+        .expect("ticket");
     assert!(slurp(&receiver, &ticket.token, Some((0, 15))).await.is_ok());
 
     // The grant ends while the receiver holds a live ticket. Checking the
@@ -230,7 +244,9 @@ async fn revocation_lands_mid_transfer() {
     // revocation takes effect "after this 244 GB finishes".
     origin.withdraw(offer.grant).await.expect("withdraw");
     assert!(
-        slurp(&receiver, &ticket.token, Some((16, 31))).await.is_err(),
+        slurp(&receiver, &ticket.token, Some((16, 31)))
+            .await
+            .is_err(),
         "a withdrawn grant still served the next chunk"
     );
 }

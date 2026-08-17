@@ -8,7 +8,7 @@
 //! [`crate::stores::TaskMutations`] (instant patch, reconcile or
 //! rollback + tray notification).
 //!
-//! Defaults to **Active + Relevant** (`plans/relevancy-and-inbox.md`):
+//! Defaults to **Active + Relevant**:
 //! the filtering itself is `task_proto::relevance` — the same domain
 //! functions the server's `TaskService::query` and the CLI's
 //! `task task list --relevant` run — this page only assembles the
@@ -140,7 +140,7 @@ pub fn TasksView() -> Element {
         let ctx = task_proto::RelevanceContext {
             local_hhmm: Some(now.format("%H:%M").to_string()),
             local_date: Some(now.format("%Y-%m-%d").to_string()),
-            // FUTURE(plans/relevancy-and-inbox.md): device from
+            // FUTURE(relevancy-and-inbox): device from
             // user-agent.
             location: (!at_location.is_empty()).then(|| at_location.clone()),
             device: None,

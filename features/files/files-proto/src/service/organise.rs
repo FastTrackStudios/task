@@ -98,8 +98,11 @@ pub trait OrganiseService {
     ) -> Result<Marks, FilesFault>;
 
     /// Everything carrying a tag — the view a tag produces.
-    async fn tagged(&self, tags: Vec<Tag>, root_id: Option<RootId>)
-    -> Result<Vec<Marks>, FilesFault>;
+    async fn tagged(
+        &self,
+        tags: Vec<Tag>,
+        root_id: Option<RootId>,
+    ) -> Result<Vec<Marks>, FilesFault>;
 
     /// Tags in use, for completion and for showing what exists.
     async fn all_tags(&self, root_id: Option<RootId>) -> Result<Vec<Tag>, FilesFault>;

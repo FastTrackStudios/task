@@ -11,8 +11,8 @@
 //! every call here is fully qualified — that ambiguity is the migration
 //! showing through, and it disappears with the legacy impl.
 
-use files::lane::version::version_id_of;
 use files::FilesBackend;
+use files::lane::version::version_id_of;
 use files_proto::id::{RootId, SnapshotId, VersionId};
 use files_proto::model::RootFlavor;
 use files_proto::service::roots::{AdoptRequest, RootsService};
@@ -84,7 +84,9 @@ async fn a_chain_grows_one_entry_per_checkpoint() {
     std::fs::write(dir.join("mix.rpp"), b"take two").unwrap();
     backend.checkpoint(id, Some("v2".into())).await.unwrap();
 
-    let chain = VersionService::chain(&backend, id, file).await.expect("chain");
+    let chain = VersionService::chain(&backend, id, file)
+        .await
+        .expect("chain");
     assert_eq!(chain.len(), 2, "newest first: {chain:?}");
     assert_ne!(
         chain[0].file_id, chain[1].file_id,
@@ -102,10 +104,15 @@ async fn restoring_produces_a_new_version_and_discards_nothing() {
     std::fs::write(dir.join("mix.rpp"), b"take two").unwrap();
     backend.checkpoint(id, Some("v2".into())).await.unwrap();
 
-    let chain = VersionService::chain(&backend, id, file.clone()).await.unwrap();
+    let chain = VersionService::chain(&backend, id, file.clone())
+        .await
+        .unwrap();
     let older = version_id_of(&chain[1].commit_id);
 
-    let restored = backend.restore(id, file.clone(), older).await.expect("restore");
+    let restored = backend
+        .restore(id, file.clone(), older)
+        .await
+        .expect("restore");
     assert_eq!(
         std::fs::read(dir.join("mix.rpp")).unwrap(),
         b"take one",
@@ -152,8 +159,12 @@ async fn version_ids_are_stable_across_reads() {
     let (_tmp, backend, id, _dir) = adopted("stable").await;
     backend.checkpoint(id, None).await.unwrap();
 
-    let a = VersionService::chain(&backend, id, path("mix.rpp")).await.unwrap();
-    let b = VersionService::chain(&backend, id, path("mix.rpp")).await.unwrap();
+    let a = VersionService::chain(&backend, id, path("mix.rpp"))
+        .await
+        .unwrap();
+    let b = VersionService::chain(&backend, id, path("mix.rpp"))
+        .await
+        .unwrap();
     assert_eq!(
         version_id_of(&a[0].commit_id),
         version_id_of(&b[0].commit_id)
@@ -217,7 +228,11 @@ async fn a_hold_is_published_and_gates_nothing() {
     let file = path("mix.rpp");
 
     assert!(
-        backend.occupancy(id, file.clone()).await.unwrap().is_empty(),
+        backend
+            .occupancy(id, file.clone())
+            .await
+            .unwrap()
+            .is_empty(),
         "nobody has it open yet"
     );
 
@@ -226,7 +241,10 @@ async fn a_hold_is_published_and_gates_nothing() {
     assert_eq!(held.path, file);
     assert!(held.expires_at > held.since, "it lapses on its own");
 
-    let who = backend.occupancy(id, file.clone()).await.expect("occupancy");
+    let who = backend
+        .occupancy(id, file.clone())
+        .await
+        .expect("occupancy");
     assert_eq!(who.len(), 1);
     assert_eq!(who[0].principal, held.principal);
 
@@ -269,11 +287,17 @@ async fn every_verb_rejects_an_unknown_root() {
         VersionService::chain(&backend, ghost, path("mix.rpp"))
             .await
             .expect_err("chain"),
-        backend.checkpoint(ghost, None).await.expect_err("checkpoint"),
+        backend
+            .checkpoint(ghost, None)
+            .await
+            .expect_err("checkpoint"),
         VersionService::snapshots(&backend, ghost, None)
             .await
             .expect_err("snapshots"),
-        backend.hold(ghost, path("mix.rpp")).await.expect_err("hold"),
+        backend
+            .hold(ghost, path("mix.rpp"))
+            .await
+            .expect_err("hold"),
         backend
             .occupancy(ghost, path("mix.rpp"))
             .await

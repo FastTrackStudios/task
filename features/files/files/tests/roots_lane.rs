@@ -75,7 +75,14 @@ async fn a_root_has_an_identity_before_its_progress_is_complete() {
 
     // Identity first: it is listable and gettable immediately.
     assert_eq!(backend.get(id).await.expect("get").id, root.id);
-    assert!(backend.list().await.expect("list").iter().any(|r| r.id == root.id));
+    assert!(
+        backend
+            .list()
+            .await
+            .expect("list")
+            .iter()
+            .any(|r| r.id == root.id)
+    );
 
     let progress = backend.adoption_progress(id).await.expect("progress");
     assert_eq!(progress.root_id, id);
@@ -114,7 +121,10 @@ async fn renaming_changes_the_name_and_nothing_else() {
     let root = backend.adopt(request(path.clone(), "Takes")).await.unwrap();
     let id = RootId::new(root.id);
 
-    let renamed = backend.rename_root(id, "Live Takes".into()).await.expect("rename");
+    let renamed = backend
+        .rename_root(id, "Live Takes".into())
+        .await
+        .expect("rename");
     assert_eq!(renamed.name, "Live Takes");
     assert_eq!(renamed.id, root.id, "identity survives a rename");
     assert_eq!(renamed.path, root.path, "and so does its path");
@@ -138,13 +148,21 @@ async fn an_empty_name_is_refused() {
 #[tokio::test(flavor = "multi_thread")]
 async fn releasing_stops_tracking_and_keeps_the_bytes() {
     let (_tmp, backend, path) = staged("archive");
-    let root = backend.adopt(request(path.clone(), "Archive")).await.unwrap();
+    let root = backend
+        .adopt(request(path.clone(), "Archive"))
+        .await
+        .unwrap();
     let id = RootId::new(root.id);
 
     backend.release(id).await.expect("release");
 
     assert!(
-        backend.list().await.unwrap().iter().all(|r| r.id != root.id),
+        backend
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.id != root.id),
         "released roots are no longer tracked"
     );
     assert!(matches!(

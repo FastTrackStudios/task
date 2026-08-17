@@ -1,7 +1,7 @@
 # task — ONE root workspace.
 #
 # Extracted from the FastTrackStudio monorepo into its own repo. Every
-# crate in the tree (apps/, crates/, features/, libs/) is a member here;
+# crate in the tree (apps/, crates/, features/) is a member here;
 # one lockfile, one target/, one [workspace.dependencies] table carrying
 # every intra-repo path dep exactly once.
 #
@@ -28,7 +28,8 @@ members = [
     "crates/ui",
     "crates/ui-core",
     "crates/widgets",
-    "crates/xtask",
+    # ── xtask — build tooling; never in default-members ────────────────
+    "xtask",
     # ── features/ — the feature slices ────────────────────────────────
     "features/agent/agent-codex",
     "features/agent/agent-dispatch",
@@ -168,29 +169,28 @@ members = [
     "features/workflows/workflows-proto",
     "features/workstream/workstream",
     "features/workstream/workstream-proto",
-    # ── libs/editor — the text/markdown/keyflow editor stack ──────────
-    "libs/editor/crates/editor",
-    "libs/editor/crates/editor-crdt",
-    "libs/editor/crates/editor-keyflow",
-    "libs/editor/crates/editor-keyflow-lang",
-    "libs/editor/crates/editor-lsp",
-    "libs/editor/crates/editor-mermaid",
-    "libs/editor/crates/editor-state",
-    "libs/editor/crates/editor-syntax",
-    "libs/editor/crates/editor-typst",
-    "libs/editor/crates/editor-view",
-    "libs/editor/crates/editor-vim",
-    "libs/editor/examples/playground",
+    # ── features/editor — the text/markdown/keyflow editor stack ──────
+    "features/editor/editor",
+    "features/editor/editor-crdt",
+    "features/editor/editor-keyflow",
+    "features/editor/editor-keyflow-lang",
+    "features/editor/editor-lsp",
+    "features/editor/editor-mermaid",
+    "features/editor/editor-state",
+    "features/editor/editor-syntax",
+    "features/editor/editor-typst",
+    "features/editor/editor-view",
+    "features/editor/editor-vim",
+    "features/editor/playground",
     # Editor's vendored mermaid fork (see [patch.crates-io] below).
-    "libs/editor/vendor/mermaid-rs-renderer",
-    # ── libs/ ─────────────────────────────────────────────────────────
-    "libs/spaced-repetition",
+    "features/editor/mermaid-rs-renderer",
+    "features/spaced-repetition/spaced-repetition",
 ]
 exclude = [
     # Quarantined pdf renderer (fulgur/stylo trips a rustc trait-solver
     # recursion limit inside the big workspace graph); it keeps its own
     # [workspace]. `task-pdf-render` is the stdin/stdout interop point.
-    "apps/libs",
+    "features/pdf/pdf",
 ]
 
 [workspace.package]
@@ -356,20 +356,20 @@ view-heatmap = { path = "features/view/view-heatmap" }
 view-kanban = { path = "features/view/view-kanban" }
 view-knowledge-graph = { path = "features/view/view-knowledge-graph" }
 view-table = { path = "features/view/view-table" }
-# libs/editor — the text/markdown/keyflow editor stack
-editor = { path = "libs/editor/crates/editor" }
-editor-crdt = { path = "libs/editor/crates/editor-crdt" }
-editor-keyflow = { path = "libs/editor/crates/editor-keyflow" }
-editor-keyflow-lang = { path = "libs/editor/crates/editor-keyflow-lang" }
-editor-lsp = { path = "libs/editor/crates/editor-lsp" }
-editor-mermaid = { path = "libs/editor/crates/editor-mermaid" }
-editor-state = { path = "libs/editor/crates/editor-state" }
-editor-syntax = { path = "libs/editor/crates/editor-syntax" }
-editor-typst = { path = "libs/editor/crates/editor-typst" }
-editor-view = { path = "libs/editor/crates/editor-view" }
-editor-vim = { path = "libs/editor/crates/editor-vim" }
-# libs/spaced-repetition — the FSRS scheduler the recall deck runs on
-spaced-repetition = { path = "libs/spaced-repetition" }
+# features/editor — the text/markdown/keyflow editor stack
+editor = { path = "features/editor/editor" }
+editor-crdt = { path = "features/editor/editor-crdt" }
+editor-keyflow = { path = "features/editor/editor-keyflow" }
+editor-keyflow-lang = { path = "features/editor/editor-keyflow-lang" }
+editor-lsp = { path = "features/editor/editor-lsp" }
+editor-mermaid = { path = "features/editor/editor-mermaid" }
+editor-state = { path = "features/editor/editor-state" }
+editor-syntax = { path = "features/editor/editor-syntax" }
+editor-typst = { path = "features/editor/editor-typst" }
+editor-view = { path = "features/editor/editor-view" }
+editor-vim = { path = "features/editor/editor-vim" }
+# features/spaced-repetition — the FSRS scheduler the recall deck runs on
+spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
 # ── architect — the entity/RPC framework, its own repo ────────────────
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
@@ -411,7 +411,7 @@ vox = { version = "0.10.0-rc.5", default-features = false, features = ["runtime"
 vox-core = "0.10.0-rc.5"
 vox-types = "0.10.0-rc.5"
 vox-websocket = "0.10.0-rc.5"
-# `cargo xtask` TS-type generation (crates/xtask).
+# `cargo xtask` TS-type generation (xtask/).
 vox-codegen = "0.10.0-rc.5"
 
 # ── UI framework ──────────────────────────────────────────────────────
@@ -538,8 +538,8 @@ phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
 # stable toolchain → E0658 on `become`).
 phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.1.0" }
 # Editor's vendored mermaid-rs-renderer fork (web_time::Instant so the
-# layouter works on wasm32) — see libs/editor/vendor/.
-mermaid-rs-renderer = { path = "libs/editor/vendor/mermaid-rs-renderer" }
+# layouter works on wasm32) — see features/editor/mermaid-rs-renderer/.
+mermaid-rs-renderer = { path = "features/editor/mermaid-rs-renderer" }
 
 # ── Lints ─────────────────────────────────────────────────────────────
 [workspace.lints.rust]

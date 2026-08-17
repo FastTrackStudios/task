@@ -80,82 +80,73 @@ pub use service::legacy::{
 // A lane is granted in `permits.rs` in the same change that mounts it,
 // or every one of its methods fails closed in production.
 #[cfg(feature = "vox")]
-pub use service::roots::{
-    RootsServiceClient, RootsServiceRpcDispatcher as RootsDispatcher,
-    roots_service_rpc_service_descriptor as roots_descriptor,
-    layer as roots_layer, serve as serve_roots,
-};
-#[cfg(feature = "vox")]
-pub use service::tree::{
-    TreeServiceClient, TreeServiceRpcDispatcher as TreeDispatcher,
-    tree_service_rpc_service_descriptor as tree_descriptor,
-    layer as tree_layer, serve as serve_tree,
-};
-#[cfg(feature = "vox")]
-pub use service::write::{
-    WriteServiceClient, WriteServiceRpcDispatcher as WriteDispatcher,
-    write_service_rpc_service_descriptor as write_descriptor,
-    layer as write_layer, serve as serve_write,
-};
-#[cfg(feature = "vox")]
-pub use service::upload::{
-    UploadServiceClient, UploadServiceRpcDispatcher as UploadDispatcher,
-    upload_service_rpc_service_descriptor as upload_descriptor,
-    layer as upload_layer, serve as serve_upload,
-};
-#[cfg(feature = "vox")]
-pub use service::version::{
-    VersionServiceClient, VersionServiceRpcDispatcher as VersionDispatcher,
-    version_service_rpc_service_descriptor as version_descriptor,
-    layer as version_layer, serve as serve_version,
-};
-#[cfg(feature = "vox")]
-pub use service::federation::{
-    FederationServiceClient, FederationServiceRpcDispatcher as FederationDispatcher,
-    federation_service_rpc_service_descriptor as federation_descriptor,
-    layer as federation_layer, serve as serve_federation,
+pub use service::access::{
+    AccessServiceClient, AccessServiceRpcDispatcher as AccessDispatcher,
+    access_service_rpc_service_descriptor as access_descriptor, layer as access_layer,
+    serve as serve_access,
 };
 #[cfg(feature = "vox")]
 pub use service::curation::{
     CurationServiceClient, CurationServiceRpcDispatcher as CurationDispatcher,
-    curation_service_rpc_service_descriptor as curation_descriptor,
-    layer as curation_layer, serve as serve_curation,
+    curation_service_rpc_service_descriptor as curation_descriptor, layer as curation_layer,
+    serve as serve_curation,
 };
 #[cfg(feature = "vox")]
-pub use service::sync::{
-    SyncServiceClient, SyncServiceRpcDispatcher as SyncDispatcher,
-    sync_service_rpc_service_descriptor as sync_descriptor,
-    layer as sync_layer, serve as serve_sync,
+pub use service::federation::{
+    FederationServiceClient, FederationServiceRpcDispatcher as FederationDispatcher,
+    federation_service_rpc_service_descriptor as federation_descriptor, layer as federation_layer,
+    serve as serve_federation,
 };
 #[cfg(feature = "vox")]
 pub use service::media::{
-    MediaServiceClient, MediaServiceRpcDispatcher as MediaDispatcher,
-    media_service_rpc_service_descriptor as media_descriptor,
-    layer as media_layer, serve as serve_media,
-};
-#[cfg(feature = "vox")]
-pub use service::search::{
-    SearchServiceClient, SearchServiceRpcDispatcher as SearchDispatcher,
-    search_service_rpc_service_descriptor as search_descriptor,
-    layer as search_layer, serve as serve_search,
-};
-#[cfg(feature = "vox")]
-pub use service::access::{
-    AccessServiceClient, AccessServiceRpcDispatcher as AccessDispatcher,
-    access_service_rpc_service_descriptor as access_descriptor,
-    layer as access_layer, serve as serve_access,
+    MediaServiceClient, MediaServiceRpcDispatcher as MediaDispatcher, layer as media_layer,
+    media_service_rpc_service_descriptor as media_descriptor, serve as serve_media,
 };
 #[cfg(feature = "vox")]
 pub use service::organise::{
     OrganiseServiceClient, OrganiseServiceRpcDispatcher as OrganiseDispatcher,
-    organise_service_rpc_service_descriptor as organise_descriptor,
-    layer as organise_layer, serve as serve_organise,
+    layer as organise_layer, organise_service_rpc_service_descriptor as organise_descriptor,
+    serve as serve_organise,
 };
 #[cfg(feature = "vox")]
 pub use service::review::{
-    ReviewServiceClient, ReviewServiceRpcDispatcher as ReviewDispatcher,
-    review_service_rpc_service_descriptor as review_descriptor,
-    layer as review_layer, serve as serve_review,
+    ReviewServiceClient, ReviewServiceRpcDispatcher as ReviewDispatcher, layer as review_layer,
+    review_service_rpc_service_descriptor as review_descriptor, serve as serve_review,
+};
+#[cfg(feature = "vox")]
+pub use service::roots::{
+    RootsServiceClient, RootsServiceRpcDispatcher as RootsDispatcher, layer as roots_layer,
+    roots_service_rpc_service_descriptor as roots_descriptor, serve as serve_roots,
+};
+#[cfg(feature = "vox")]
+pub use service::search::{
+    SearchServiceClient, SearchServiceRpcDispatcher as SearchDispatcher, layer as search_layer,
+    search_service_rpc_service_descriptor as search_descriptor, serve as serve_search,
+};
+#[cfg(feature = "vox")]
+pub use service::sync::{
+    SyncServiceClient, SyncServiceRpcDispatcher as SyncDispatcher, layer as sync_layer,
+    serve as serve_sync, sync_service_rpc_service_descriptor as sync_descriptor,
+};
+#[cfg(feature = "vox")]
+pub use service::tree::{
+    TreeServiceClient, TreeServiceRpcDispatcher as TreeDispatcher, layer as tree_layer,
+    serve as serve_tree, tree_service_rpc_service_descriptor as tree_descriptor,
+};
+#[cfg(feature = "vox")]
+pub use service::upload::{
+    UploadServiceClient, UploadServiceRpcDispatcher as UploadDispatcher, layer as upload_layer,
+    serve as serve_upload, upload_service_rpc_service_descriptor as upload_descriptor,
+};
+#[cfg(feature = "vox")]
+pub use service::version::{
+    VersionServiceClient, VersionServiceRpcDispatcher as VersionDispatcher, layer as version_layer,
+    serve as serve_version, version_service_rpc_service_descriptor as version_descriptor,
+};
+#[cfg(feature = "vox")]
+pub use service::write::{
+    WriteServiceClient, WriteServiceRpcDispatcher as WriteDispatcher, layer as write_layer,
+    serve as serve_write, write_service_rpc_service_descriptor as write_descriptor,
 };
 
 // The byte lane's stream sibling. Bytes ride vox like everything else;

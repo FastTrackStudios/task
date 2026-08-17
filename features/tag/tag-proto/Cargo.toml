@@ -1,6 +1,6 @@
 [package]
 name = "tag-proto"
-description = "Wire contract for the tagging feature: the `Tag` registry entity (name + user-chosen `TagIcon` + color) and the `#[architect::rpc] trait TagService` CRUD surface. Tags are referenced by NAME from markdown frontmatter; this registry decorates those names with an icon + color. Evolved from the half-built `label` feature. See plans/tagging-and-icons.md."
+description = "Wire contract for the tagging feature: the `Tag` registry entity (name + user-chosen `TagIcon` + color) and the `#[architect::rpc] trait TagService` CRUD surface. Tags are referenced by NAME from markdown frontmatter; this registry decorates those names with an icon + color. Evolved from the half-built `label` feature."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -447,7 +447,7 @@ async fn mark_inbox_item(
 // ── Inbox AI processing pass ─────────────────────────────────────────
 //
 // `task inbox process` — the "daily processing pass" from
-// plans/relevancy-and-inbox.md: one LLM turn over every open
+// Relevancy/inbox doctrine: one LLM turn over every open
 // fleeting item proposes a `task` / `note` / `skip` promotion per
 // item; the user reviews each proposal (y / n / e-dit title, or
 // `--yes` for all) and accepted ones are applied through the

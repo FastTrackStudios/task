@@ -202,7 +202,9 @@ mod tests {
     #[test]
     fn a_path_resolves_to_the_part_that_answers_for_it() {
         let c = album();
-        let found = c.locate(&RootPath::parse("Sessions/mix.wav").unwrap()).unwrap();
+        let found = c
+            .locate(&RootPath::parse("Sessions/mix.wav").unwrap())
+            .unwrap();
         assert_eq!(found.member.name, "Sessions");
         assert_eq!(found.within.as_str(), "mix.wav");
     }
@@ -213,7 +215,9 @@ mod tests {
         // browsing `Footage/reel.mov` should not have to know that, or
         // where the video company files its work.
         let c = album();
-        let found = c.locate(&RootPath::parse("Footage/reel.mov").unwrap()).unwrap();
+        let found = c
+            .locate(&RootPath::parse("Footage/reel.mov").unwrap())
+            .unwrap();
         assert_eq!(found.within.as_str(), "Proxies/reel.mov");
     }
 
@@ -240,6 +244,9 @@ mod tests {
     #[test]
     fn a_part_needs_a_name() {
         let mut c = Composition::new();
-        assert!(matches!(c.with(member("  ", 1, "")), Err(ComposeError::Unnamed)));
+        assert!(matches!(
+            c.with(member("  ", 1, "")),
+            Err(ComposeError::Unnamed)
+        ));
     }
 }

@@ -158,10 +158,9 @@ async fn a_named_version_is_reachable_by_its_entity_id() {
         .await
         .expect("name_version");
 
-    let removed =
-        CurationService::unname_version(&rig.backend, rig.root, VersionId::new(named.id))
-            .await
-            .expect("unname by entity id");
+    let removed = CurationService::unname_version(&rig.backend, rig.root, VersionId::new(named.id))
+        .await
+        .expect("unname by entity id");
     assert_eq!(removed.id, named.id);
 }
 

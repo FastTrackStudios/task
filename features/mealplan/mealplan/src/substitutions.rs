@@ -5,7 +5,7 @@
 //! single recipe or pantry item.
 //!
 //! Three-layer precedence (matches
-//! `plans/mealplan-grocy-parity.md` phase 8):
+//! mealplan/grocy parity, phase 8):
 //!
 //! 1. **Recipe-ingredient subs** — author intent ("for this
 //!    dish, X behaves like Y"). Most specific; checked first.

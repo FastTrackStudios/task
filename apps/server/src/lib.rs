@@ -66,8 +66,7 @@ use crate::capability::ServerKeypair;
 ///
 /// A principal is "a user in the home org's `auth.sqlite`, plus the orgs
 /// it has membership rows for". Every other org's lane consults this
-/// when a token is not one of its own — see
-/// `plans/one-account-per-server.md`.
+/// when a token is not one of its own (one account per server).
 ///
 /// `None` on a server whose orgs carry no `is_home`, or before
 /// `admin adopt-principal` has created the memberships store: both mean
@@ -133,7 +132,7 @@ pub struct OrgAppState {
     /// The org lane's permission gate: validated-session identity ×
     /// role engine × per-service permit tables. OBSERVE-ONLY by default
     /// (audits would-be denies, enforces nothing) until
-    /// `TASK_ENFORCE_PERMISSIONS=1` — see `plans/architect-permissions.md`.
+    /// `TASK_ENFORCE_PERMISSIONS=1`.
     pub permissions: Arc<architect::permissions_gate::PermissionsGate>,
     /// Share links (`<org>/shares.json`) — link CRUD on the org lane +
     /// the token-checked `/org/{slug}/share/{token}` landing route.
@@ -2551,8 +2550,7 @@ async fn home_membership(state: &AppState, token: &str, slug: &str) -> bool {
 /// Lists every org this server hosts plus its routing URL
 /// suffix. Public, no auth required.
 ///
-/// Per `plans/federated-task-platform.md`: peers fetch this
-/// to learn what slugs are available on a federation host
+/// Peers fetch this to learn what slugs are available on a federation host
 /// before opening a vox connection.
 async fn well_known_handler(
     State(state): State<AppState>,
@@ -2632,8 +2630,8 @@ async fn well_known_handler(
         }));
     }
     // Schema stamps — the proto/server skew guard. Clients
-    // (`task doctor`, ui-lab smoke) compare these against their
-    // own build; see `schema_stamps`.
+    // (`task doctor`) compare these against their own build;
+    // see `schema_stamps`.
     let stamps: serde_json::Map<String, serde_json::Value> = schema_stamps()
         .into_iter()
         .map(|(name, stamp)| (name.to_owned(), serde_json::Value::String(stamp)))
@@ -2850,7 +2848,7 @@ async fn legacy_vox_handler(
 /// for the WebSocket transport here and the in-process `LocalServer`
 /// transport (see [`org_local_server`]).
 /// The role every validated user gets on the org lane until per-row
-/// membership sync lands (see `plans/architect-permissions.md`).
+/// membership sync lands.
 pub const DEFAULT_ORG_ROLE: &str = "member";
 
 /// Is the gate enforcing? **Off unless `TASK_ENFORCE_PERMISSIONS` is
@@ -2950,10 +2948,9 @@ fn build_org_permissions_gate(
 /// binary means one of them predates a `*-proto` change — the
 /// "structural mismatch / InvalidPayload out of nowhere" failure
 /// mode. `task doctor` (which links this very function through
-/// the task-server crate, so the two lists can't drift) and the
-/// ui-lab smoke compare against this map and say "rebuild
-/// task-server" instead of letting the skew surface as decode
-/// errors.
+/// the task-server crate, so the two lists can't drift) compares
+/// against this map and says "rebuild task-server" instead of
+/// letting the skew surface as decode errors.
 ///
 /// The descriptor list is [`permits::mounted_descriptors`] — the
 /// SAME list the permit gate folds, so stamps and permits can no

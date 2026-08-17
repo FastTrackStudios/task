@@ -147,10 +147,10 @@ jobs:
           # BOTH installs are required. -g puts the `tailwindcss` binary on
           # PATH; the local one puts the `tailwindcss` MODULE in node_modules
           # so `@import "tailwindcss"` inside the CSS can resolve it (node
-          # resolution walks up from apps/, so repo-root is enough).
+          # resolution walks up from the crate dir, so repo-root is enough).
           npm install -g @tailwindcss/cli
           npm install --no-save tailwindcss
-          ${NIX_DEV} just --justfile apps/Justfile --working-directory apps css
+          ${NIX_DEV} just css
 
       - name: Manifests + lockfile
         if: needs.plan.outputs.workspace == 'true'
@@ -197,7 +197,7 @@ jobs:
         run: |
           npm install -g @tailwindcss/cli
           npm install --no-save tailwindcss
-          ${NIX_DEV} just --justfile apps/Justfile --working-directory apps css
+          ${NIX_DEV} just css
       - name: cargo nextest run --workspace
         if: needs.plan.outputs.workspace == 'true'
         run: ${NIX_DEV} cargo nextest run --workspace
@@ -228,7 +228,7 @@ jobs:
         run: |
           npm install -g @tailwindcss/cli
           npm install --no-save tailwindcss
-          ${NIX_DEV} just --justfile apps/Justfile --working-directory apps css
+          ${NIX_DEV} just css
       - name: Clippy
         if: needs.plan.outputs.workspace == 'true'
         run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings

@@ -2,7 +2,7 @@
 //!
 //! A **resource** is a read-only primary source (a song, PDF, book,
 //! video) that the vault/wiki annotate and link into without editing it.
-//! This crate is the headless half of `plans/resource-annotations.md`,
+//! This crate is the headless half of the resource-annotations design,
 //! built on the Logseq **two-layer** model:
 //!
 //! - the compact **anchor string** (`song:slug#chorus.L1`, `…#t:90`,

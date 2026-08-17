@@ -4,7 +4,7 @@
 //! disk: `<data_root>/orgs/<slug>/`. Inside it sit the org's
 //! `org.toml` manifest, its `auth.sqlite` / `timer.sqlite` /
 //! `finance.sqlite` databases, the vault, and any other
-//! org-scoped state. See `plans/federated-task-platform.md`
+//! org-scoped state. See the federated-platform design
 //! for the full federation model.
 //!
 //! This crate owns the **layout** — path resolvers, manifest

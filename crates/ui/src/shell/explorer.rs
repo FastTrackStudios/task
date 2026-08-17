@@ -1,6 +1,6 @@
 //! The persistent vault explorer — Obsidian's file tree as the app's
-//! main sidebar (plans/vault-views.md: the vault is the navigation
-//! substrate; pages are views over it).
+//! main sidebar (the vault is the navigation substrate; pages are
+//! views over it).
 //!
 //! Self-contained: fetches the home org's folder index, renders the
 //! same virtual-folder tree the vault page builds, and *navigates*

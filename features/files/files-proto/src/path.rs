@@ -191,7 +191,10 @@ mod tests {
             RootPath::parse("a/../../etc/passwd"),
             Err(PathError::Escapes(_))
         ));
-        assert!(matches!(RootPath::parse("../x"), Err(PathError::Escapes(_))));
+        assert!(matches!(
+            RootPath::parse("../x"),
+            Err(PathError::Escapes(_))
+        ));
     }
 
     #[test]

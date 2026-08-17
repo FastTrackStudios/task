@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
 use files::{FilesBackend, FilesServiceClient, RootFlavor, files_service_layer};
+use files_store::version::VersionStoreBackend;
 use jj_lib::backend::{
     Backend as _, ChangeId, Commit, CommitId, FileId, MillisSinceEpoch, Signature, Timestamp, Tree,
     TreeValue,
@@ -25,7 +26,6 @@ use jj_lib::backend::{
 use jj_lib::merge::Merge;
 use jj_lib::object_id::ObjectId as _;
 use jj_lib::repo_path::{RepoPath, RepoPathComponentBuf};
-use files_store::version::VersionStoreBackend;
 
 /// A backend plus the two directories it straddles: the org's files
 /// area (root content + version stores) and the org vault (the curated

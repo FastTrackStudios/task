@@ -162,7 +162,7 @@ pub fn nav_tabs() -> Vec<NavTab> {
             icon: icon_goals,
             route: Route::GoalsRoute {},
         },
-        // Vault-views shortcut (plans/vault-views.md): the sidebar
+        // Vault-views shortcut: the sidebar
         // item points at the board's VAULT ENTRY, not a bespoke
         // route — [[Views/Tasks]] and this tab open the same thing.
         NavTab {

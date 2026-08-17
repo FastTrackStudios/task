@@ -13,7 +13,7 @@
 //! Wasm-clean baseline (Facet types) so the web UI's icon picker +
 //! render helper bind directly; enable `vox` for the architect-emitted
 //! RPC client + dispatcher. Evolved from the half-built `label` feature
-//! — see plans/tagging-and-icons.md.
+//! — the tagging-and-icons design.
 
 pub mod error;
 pub mod service;

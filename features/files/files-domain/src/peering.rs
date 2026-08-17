@@ -430,7 +430,11 @@ mod tests {
     fn losing_a_host_costs_reach_not_availability() {
         let mut p = both();
         for n in 1..=3 {
-            p.host(org("acme"), host(&format!("region-{n}")), Hosting::working());
+            p.host(
+                org("acme"),
+                host(&format!("region-{n}")),
+                Hosting::working(),
+            );
         }
         // No election, no quorum: whoever is left keeps serving. That is
         // a different question from whether the bytes survived.

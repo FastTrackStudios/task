@@ -8,7 +8,7 @@
 # Today the heavy outputs (shells, crane packages, images) are ordinary
 # perSystem modules speaking the `fts.*` schema (options.nix). New
 # shareable features (e.g. a `task-server` aspect carrying the systemd
-# unit — apps/nix/ still holds those as plain NixOS modules) belong here
+# unit — nix/nixos/ still holds those as plain NixOS modules) belong here
 # as den.aspects.<name>.
 { inputs, ... }:
 {

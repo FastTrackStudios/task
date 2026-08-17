@@ -31,7 +31,7 @@
 //! `set_member`, so today *every* validated user is a member and *nobody*
 //! is an owner: a single `admin` permit would lock every human out of that
 //! method the moment enforcement is switched on. Admin-tier permits wait
-//! for per-row membership sync (see `plans/architect-permissions.md`).
+//! for per-row membership sync.
 //!
 //! `.audited()` marks the methods worth an audit line even when allowed:
 //! deletes, money movements, outbound sends, downloads.
@@ -408,7 +408,7 @@ table!(FILES_STREAM, "files-stream", "files/**", [rd "events"]);
 //   `dl` — bulk content leaving the server.
 
 // Root lifecycle and adoption (`files.adopt.*`).
-// 
+//
 // `adopt` is a write rather than an audited one: it moves, copies and
 // renames nothing (`files.adopt.in-place`), so the worst it does is
 // start reading a tree. `release` IS audited — it removes the org's
@@ -433,7 +433,7 @@ table!(FILES_TREE, "files-tree", "files/**", [
 
 // The write surface (`files.write.surface`) — the lane that did not
 // exist at all until now.
-// 
+//
 // `delete_paths` is audited even though deletion is a checkpoint and the
 // content survives in history: the live tree is what every other
 // application on that NAS sees, and making a file vanish from it is the
@@ -445,7 +445,7 @@ table!(FILES_WRITE, "files-write", "files/**", [
 ]);
 
 // Getting content in (`files.write.upload`).
-// 
+//
 // `complete` is audited because it can displace an existing file:
 // `OnConflict::Replace` checkpoints the outgoing content first, so
 // nothing is lost, but a file at a path stopped being the file that was
@@ -462,7 +462,7 @@ table!(FILES_UPLOAD, "files-upload", "files/**", [
 
 // History, divergence and restore (`files.version.*`,
 // `files.concurrency.*`).
-// 
+//
 // `hold` is a write and not a read: it publishes a signal other clients
 // act on. It is emphatically NOT audited — an advisory signal that
 // generated an audit line every heartbeat would drown the log it shares
@@ -474,7 +474,7 @@ table!(FILES_VERSION, "files-version", "files/**", [
 ]);
 
 // Named and Project Versions.
-// 
+//
 // `unname_version` is audited because a name is what exempts a version
 // from retention collection — dropping one can end an object's
 // protection. `restart_project_version` reshapes the whole live tree.
@@ -485,7 +485,7 @@ table!(FILES_CURATION, "files-curation", "files/**", [
 
 // Facets, ignoring, hydration and devices (`files.facet.*`,
 // `files.ignore.*`, `files.sync.selective`, `files.device.control`).
-// 
+//
 // `hydrate` carries a `resident` flag, so the same method both fetches
 // and releases; the releasing half replaces live-tree content with a
 // stub, which is the one write here that makes files non-resident —
@@ -498,7 +498,7 @@ table!(FILES_SYNC, "files-sync", "files/**", [
 ]);
 
 // Who may see and change what (`files.access.*`).
-// 
+//
 // Every mutation here is audited without exception: granting, revoking
 // and minting a link all change who can reach an org's content, and
 // `files.access.granularity` makes the blast radius of a wrong grant a
@@ -509,7 +509,7 @@ table!(FILES_ACCESS, "files-access", "files/**", [
 ]);
 
 // Hand-organisation and accountability (`files.organise.*`).
-// 
+//
 // Tagging is an ordinary write: `files.organise.manual` says a tag
 // produces a view and never folder membership, so it moves nothing and
 // changes no path. `activity` is a read of the feed.
@@ -864,7 +864,7 @@ table!(FORGE_REVIEWS_STREAM, "forge-reviews-stream", "forge/reviews/**", [rd "re
 ///
 /// `plugin` is a `task_plugin::CATALOG` id (`"core"` for platform
 /// services); the grouping follows the table in
-/// `apps/task/plans/plugin-system.md`. [`mounts_for`] filters on it —
+/// the plugin system. [`mounts_for`] filters on it —
 /// that filtered view is what [`crate::org_layer_router`] must match for
 /// an org with a deny-list.
 pub struct Mount {
@@ -912,11 +912,7 @@ pub fn mounts() -> Vec<Mount> {
             attachments_proto::attachment_descriptor(),
             ATTACHMENTS,
         ),
-        m(
-            "core",
-            media_proto::attachment_media_descriptor(),
-            MEDIA,
-        ),
+        m("core", media_proto::attachment_media_descriptor(), MEDIA),
         m("core", vault_proto::descriptor(), VAULT),
         m("core", vault_proto::stream_descriptor(), VAULT_STREAM),
         m(
@@ -1033,9 +1029,17 @@ pub fn mounts() -> Vec<Mount> {
         m("core", files_proto::sync_descriptor(), FILES_SYNC),
         m("core", files_proto::access_descriptor(), FILES_ACCESS),
         m("core", files_proto::organise_descriptor(), FILES_ORGANISE),
-        m("core", files_proto::federation_descriptor(), FILES_FEDERATION),
+        m(
+            "core",
+            files_proto::federation_descriptor(),
+            FILES_FEDERATION,
+        ),
         m("core", files_proto::media_descriptor(), FILES_MEDIA),
-        m("core", files_proto::media_stream_descriptor(), FILES_MEDIA_STREAM),
+        m(
+            "core",
+            files_proto::media_stream_descriptor(),
+            FILES_MEDIA_STREAM,
+        ),
         m("core", files_proto::search_descriptor(), FILES_SEARCH),
         m("core", files_proto::review_descriptor(), FILES_REVIEW),
         m(
@@ -1744,7 +1748,7 @@ impl<R> AuditedIdentityResolver<R> {
 /// decision to get wrong. Now it is meaningful everywhere on the server
 /// and the row is what says no, which is why a missing row must fail
 /// closed rather than fall through to `DEFAULT_ORG_ROLE`. See
-/// `plans/one-account-per-server.md`.
+/// one account per server.
 pub struct HomeFallbackResolver<R, H> {
     own: R,
     home: H,

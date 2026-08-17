@@ -133,7 +133,10 @@ async fn every_structural_operation_is_reachable() {
         )
         .await
         .expect("copy");
-    assert_eq!(std::fs::read(dir.join("Renders/kick.wav")).unwrap(), b"boom");
+    assert_eq!(
+        std::fs::read(dir.join("Renders/kick.wav")).unwrap(),
+        b"boom"
+    );
     assert!(
         dir.join("stems/kick.wav").exists(),
         "a copy leaves its source alone"
@@ -414,7 +417,10 @@ async fn deletion_is_a_checkpoint_rather_than_a_move_to_trash() {
         .expect("delete a whole subtree");
 
     assert!(!dir.join("stems").exists());
-    assert_eq!(receipt.outcomes[0].landed_at, None, "a delete lands nowhere");
+    assert_eq!(
+        receipt.outcomes[0].landed_at, None,
+        "a delete lands nowhere"
+    );
     assert!(!receipt.operation.is_empty(), "and is one checkpoint");
     assert_eq!(
         tree(&dir),
@@ -472,14 +478,9 @@ async fn a_wire_path_that_escapes_the_root_is_refused() {
 async fn rename_refuses_a_name_that_is_really_a_path() {
     let (_tmp, backend, id, dir) = adopted().await;
     assert!(
-        <FilesBackend as WriteService>::rename(
-            &backend,
-            id,
-            p("mix.wav"),
-            "../outside.wav".into()
-        )
-        .await
-        .is_err()
+        <FilesBackend as WriteService>::rename(&backend, id, p("mix.wav"), "../outside.wav".into())
+            .await
+            .is_err()
     );
     assert!(dir.join("mix.wav").exists());
 }

@@ -1,5 +1,5 @@
 //! Contextual relevance — which Active tasks deserve attention *right
-//! now*. See `plans/relevancy-and-inbox.md`.
+//! now* — the relevancy-and-inbox doctrine.
 //!
 //! Rides on the GTD `contexts` field: a task carrying **gate
 //! contexts** (`@morning`, `@home`, `@phone`, …) is visible only when

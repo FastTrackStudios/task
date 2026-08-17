@@ -5,7 +5,7 @@
 //! conversions (mass↔mass, volume↔volume) are hard-coded with
 //! SI + US-customary factors. Cross-base conversions
 //! (mass↔volume) require density per item and stay out of
-//! scope — see `plans/mealplan-grocy-parity.md` risk register.
+//! scope — see the mealplan/grocy-parity risk register.
 //!
 //! Units stay free-form `String` on the wire so unknown /
 //! custom units round-trip; this module layers typed math

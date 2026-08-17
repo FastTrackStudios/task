@@ -28,8 +28,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use files_store::chunk::{ChunkStore, ChunkerConfig, FileId, GcConfig};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::recipe::{RECIPE_VERSION, RenditionKind};

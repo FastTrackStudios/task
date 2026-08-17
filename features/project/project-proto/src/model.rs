@@ -126,7 +126,7 @@ pub struct ProjectInfo {
     ///
     /// Mirror the same value in the body as a `[[@org/slug]]`
     /// wikilink so the page reads correctly in vanilla
-    /// Obsidian. See `plans/federated-task-platform.md`
+    /// Obsidian. See the federated-platform design
     /// § federated wiki resolution for the `@org/slug`
     /// syntax.
     #[serde(skip_serializing_if = "Option::is_none", default, rename = "sameAs")]

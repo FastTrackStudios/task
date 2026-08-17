@@ -295,7 +295,9 @@ mod tests {
     // t[verify project.identity.declaration]
     #[test]
     fn a_note_declares_its_directory_a_project() {
-        assert!(declares_project("---\ntype: project\ntitle: Mars\n---\n# Mars"));
+        assert!(declares_project(
+            "---\ntype: project\ntitle: Mars\n---\n# Mars"
+        ));
         assert!(declares_project("---\ntype: Project\n---\n"));
         assert!(!declares_project("---\ntype: note\n---\n"));
         assert!(!declares_project("---\ntitle: Mars\n---\n"));
@@ -320,7 +322,8 @@ mod tests {
 
     #[test]
     fn a_malformed_link_is_skipped_not_fatal() {
-        let note = "---\nmedia_roots:\n  - not-a-uuid\n  - 3f9c1e88-0000-4000-8000-000000000001\n---\n";
+        let note =
+            "---\nmedia_roots:\n  - not-a-uuid\n  - 3f9c1e88-0000-4000-8000-000000000001\n---\n";
         assert_eq!(declared_media_roots(note).len(), 1);
     }
 

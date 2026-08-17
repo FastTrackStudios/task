@@ -6,8 +6,8 @@
 //! Sits on top of the wasm-clean [`collection_proto`] contract (same split
 //! as `links` over `links-proto`). [`Store`] is a JSONL-file-backed
 //! [`collection_proto::CollectionService`] impl; item ordering reuses
-//! `vault_live::lexorank` fractional-index keys. See
-//! `plans/knowledge-primitives.md`.
+//! `vault_live::lexorank` fractional-index keys. See the
+//! knowledge-primitives design.
 
 #![cfg(not(target_arch = "wasm32"))]
 

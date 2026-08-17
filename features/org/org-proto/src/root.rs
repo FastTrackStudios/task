@@ -28,7 +28,7 @@
 //! `$HOME/Documents/Task/` ([`default_client_vault_root`]) so
 //! a thin client can mount a slice of content separately from
 //! the server's full state tree. See
-//! `plans/federated-task-platform.md` for the full federation
+//! the federated-platform design for the full federation
 //! model.
 
 use std::path::{Path, PathBuf};
@@ -265,7 +265,7 @@ impl OrgRoot {
     /// server's identity authority — so this file is absent in every
     /// other org, and a non-home org keeps its own `auth.sqlite` as the
     /// local identity it would fall back to if detached onto its own
-    /// server. See `apps/task/plans/one-account-per-server.md`.
+    /// server (one account per server).
     #[must_use]
     pub fn memberships_db(&self) -> PathBuf {
         self.path.join("memberships.sqlite")
@@ -372,7 +372,7 @@ impl OrgRoot {
     ///
     /// A resource is a typed subtree; the Bible lives at
     /// `resources/bible/<TRANSLATION>/` as per-book USFM, located by a
-    /// `scripture_proto::VerseId`. See `plans/bible-study.md`.
+    /// `scripture_proto::VerseId`.
     #[must_use]
     pub fn resources_dir(&self) -> PathBuf {
         self.path.join("resources")

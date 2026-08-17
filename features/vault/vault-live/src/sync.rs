@@ -467,7 +467,7 @@ impl VaultSync for Backend {
             .collect::<Vec<PageMeta>>();
         let mut pages = pages;
         // `.base` view files are first-class vault citizens
-        // (plans/vault-views.md): they appear in the folder index so
+        // (vault views): they appear in the folder index so
         // the tree shows them and deep links resolve. Title = the
         // basename; `page_type: "base"` lets clients badge them.
         for b in &vault.bases {

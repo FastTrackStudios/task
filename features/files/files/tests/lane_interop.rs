@@ -111,9 +111,10 @@ async fn a_named_version_resolves_back_onto_the_chain() {
         .expect("resolve");
 
     assert!(
-        chain[0].commit_id.starts_with(
-            &VersionId::from_commit_hex(&resolved.commit_id).commit_prefix()
-        ) || resolved.commit_id.starts_with(&version.commit_prefix()),
+        chain[0]
+            .commit_id
+            .starts_with(&VersionId::from_commit_hex(&resolved.commit_id).commit_prefix())
+            || resolved.commit_id.starts_with(&version.commit_prefix()),
         "a name must point back at the commit it was given: \
          chain={} resolved={}",
         chain[0].commit_id,
@@ -204,7 +205,11 @@ async fn a_write_is_visible_to_the_tree_lane_at_once() {
 
     // Make the catalogue resident first — the bug only bites a root
     // somebody has already browsed.
-    let before = rig.backend.catalogue(rig.root, None).await.expect("catalogue");
+    let before = rig
+        .backend
+        .catalogue(rig.root, None)
+        .await
+        .expect("catalogue");
     let cursor = before.cursor.clone();
 
     let made = RootPath::parse("Renders").unwrap();
@@ -240,7 +245,10 @@ async fn a_delete_removes_the_entry_rather_than_leaving_it() {
 
     let rig = rig().await;
     let doomed = RootPath::parse("mix.wav").unwrap();
-    rig.backend.catalogue(rig.root, None).await.expect("catalogue");
+    rig.backend
+        .catalogue(rig.root, None)
+        .await
+        .expect("catalogue");
     rig.backend
         .entry(rig.root, doomed.clone())
         .await

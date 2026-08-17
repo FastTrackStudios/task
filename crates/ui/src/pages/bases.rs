@@ -326,7 +326,7 @@ pub fn BaseDoc(base_path: String, on_open: EventHandler<String>) -> Element {
     let snapshot = views.read().clone();
     match snapshot {
         Some(Some(vs)) if !vs.is_empty() => {
-            // App-view dispatch (plans/vault-views.md): a view kind
+            // App-view dispatch: a view kind
             // registered in `crate::app_views` renders the full custom
             // page in place of a generic table — the base entry is the
             // page's vault identity. First registered kind wins (an app

@@ -29,7 +29,7 @@
 //! trait in `service::tasks`, implemented in the `agent-tasks`
 //! crate against the architect-emitted storage.
 //!
-//! See `plans/agent-dispatch.md` for the full design.
+//! See the `agent-dispatch` crate for the full design.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -29,8 +29,7 @@ fn p(s: &str) -> RootPath {
 /// the shape of a host that holds structure and no content.
 async fn rig() -> (tempfile::TempDir, std::path::PathBuf, FilesBackend, RootId) {
     let data = tempfile::tempdir().expect("data dir");
-    let backend =
-        FilesBackend::new(data.path(), data.path().join("vault")).expect("backend");
+    let backend = FilesBackend::new(data.path(), data.path().join("vault")).expect("backend");
 
     let tree = data.path().join("album");
     std::fs::create_dir_all(tree.join("Audio Files")).unwrap();
@@ -159,11 +158,13 @@ async fn the_catalogue_is_on_disk_and_not_merely_in_this_process() {
     // process can answer from memory having never read a byte. This
     // reads the file itself, which is the only claim that survives.
     let file = data.path().join("catalogue.json");
-    let raw = std::fs::read_to_string(&file)
-        .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let raw = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
     assert!(
         raw.contains(&root.to_string()),
         "the durable catalogue does not mention the root it catalogued"
     );
-    assert!(raw.contains("vox.wav"), "entries did not reach disk: {raw:.400}");
+    assert!(
+        raw.contains("vox.wav"),
+        "entries did not reach disk: {raw:.400}"
+    );
 }

@@ -359,8 +359,7 @@ mod tests {
         let plan = plan(paths.iter(), &m, &sub);
         assert_eq!(plan.len(), 3);
         assert!(
-            plan.iter()
-                .all(|(_, d)| d.hydration == Hydration::Stub),
+            plan.iter().all(|(_, d)| d.hydration == Hydration::Stub),
             "unsubscribed is a stub — present and sized — never missing"
         );
     }

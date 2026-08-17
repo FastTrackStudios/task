@@ -206,8 +206,8 @@ impl Harness {
 /// cadence engine (issue #260), which is what writes checkpoints for
 /// real.
 fn checkpoint_into(agent: &InServerAgent, live_tree: &Path, name: &str, content: &[u8]) {
-    use jj_lib::repo::Repo as _;
     use files_store::version::checkpoint::{Change, checkpoint};
+    use jj_lib::repo::Repo as _;
 
     let repo = agent.repo_at_head(live_tree).expect("authoritative repo");
     let parent = repo

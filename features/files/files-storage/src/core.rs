@@ -701,13 +701,10 @@ impl StorageCore {
         let boundary = Path::new(&location.root_path).join(prefix);
         let dest = ConfinedPath {
             boundary: files_store::to_utf8(&boundary).map_err(path_err)?,
-            relative: files_store::to_utf8(
-                &PathBuf::from(REPLICA_DIR).join(root_id.to_string()),
-            )
-            .map_err(path_err)?,
+            relative: files_store::to_utf8(&PathBuf::from(REPLICA_DIR).join(root_id.to_string()))
+                .map_err(path_err)?,
         };
-        let expected =
-            files_store::to_utf8(&boundary.join(&dest.relative)).map_err(path_err)?;
+        let expected = files_store::to_utf8(&boundary.join(&dest.relative)).map_err(path_err)?;
 
         let directive = AgentDirective {
             id: Uuid::new_v4(),

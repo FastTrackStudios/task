@@ -59,7 +59,8 @@ use files_proto::path::RootPath;
 use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::tree::{CatalogueEntry, EntryKind, Hydration};
 use files_proto::service::upload::{
-    ChunkRange, Conflict, UploadPlan, UploadProgress, UploadService, UploadSpec, Received, UploadFrame,
+    ChunkRange, Conflict, Received, UploadFrame, UploadPlan, UploadProgress, UploadService,
+    UploadSpec,
 };
 use files_proto::service::write::OnConflict;
 
@@ -781,7 +782,6 @@ impl FilesBackend {
             .await?
             .ok_or_else(|| FilesFault::Io(format!("{dest}: landed and then vanished")))
     }
-
 }
 
 #[cfg(test)]

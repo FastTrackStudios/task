@@ -47,7 +47,10 @@ pub enum Resolution {
     KeepMine,
     KeepTheirs,
     /// Keep both, each under its own name.
-    KeepBoth { mine: String, theirs: String },
+    KeepBoth {
+        mine: String,
+        theirs: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
@@ -70,8 +73,7 @@ pub enum VersionEvent {
 pub trait VersionService {
     /// A path's version chain, newest first, following recorded renames.
     /// Empty when it has never been checkpointed.
-    async fn chain(&self, root_id: RootId, path: RootPath)
-    -> Result<Vec<ChainEntry>, FilesFault>;
+    async fn chain(&self, root_id: RootId, path: RootPath) -> Result<Vec<ChainEntry>, FilesFault>;
 
     /// Certify a checkpoint now: scan the live tree, diff against head,
     /// write one operation.

@@ -100,39 +100,123 @@ struct ToolDir {
 /// Pro Tools. Observed in the real tree: every `.ptx` session folder
 /// carries these.
 const PRO_TOOLS: &[ToolDir] = &[
-    ToolDir { name: "audio files", facet: "sessions", atomic: true },
-    ToolDir { name: "bounced files", facet: "mixes", atomic: false },
-    ToolDir { name: "session file backups", facet: "session-backups", atomic: false },
-    ToolDir { name: "ara data", facet: "sessions", atomic: true },
-    ToolDir { name: "clip groups", facet: "sessions", atomic: true },
-    ToolDir { name: "rendered files", facet: "sessions", atomic: true },
-    ToolDir { name: "video files", facet: "sessions", atomic: true },
-    ToolDir { name: "wavecache.wfm", facet: "peak-cache", atomic: false },
+    ToolDir {
+        name: "audio files",
+        facet: "sessions",
+        atomic: true,
+    },
+    ToolDir {
+        name: "bounced files",
+        facet: "mixes",
+        atomic: false,
+    },
+    ToolDir {
+        name: "session file backups",
+        facet: "session-backups",
+        atomic: false,
+    },
+    ToolDir {
+        name: "ara data",
+        facet: "sessions",
+        atomic: true,
+    },
+    ToolDir {
+        name: "clip groups",
+        facet: "sessions",
+        atomic: true,
+    },
+    ToolDir {
+        name: "rendered files",
+        facet: "sessions",
+        atomic: true,
+    },
+    ToolDir {
+        name: "video files",
+        facet: "sessions",
+        atomic: true,
+    },
+    ToolDir {
+        name: "wavecache.wfm",
+        facet: "peak-cache",
+        atomic: false,
+    },
 ];
 
 /// Reaper.
 const REAPER: &[ToolDir] = &[
-    ToolDir { name: "media", facet: "sessions", atomic: true },
-    ToolDir { name: "backups", facet: "session-backups", atomic: false },
-    ToolDir { name: "peaks", facet: "peak-cache", atomic: false },
-    ToolDir { name: "renders", facet: "mixes", atomic: false },
+    ToolDir {
+        name: "media",
+        facet: "sessions",
+        atomic: true,
+    },
+    ToolDir {
+        name: "backups",
+        facet: "session-backups",
+        atomic: false,
+    },
+    ToolDir {
+        name: "peaks",
+        facet: "peak-cache",
+        atomic: false,
+    },
+    ToolDir {
+        name: "renders",
+        facet: "mixes",
+        atomic: false,
+    },
 ];
 
 /// Logic — a project is a directory pretending to be a file.
 const LOGIC: &[ToolDir] = &[
-    ToolDir { name: "audio files", facet: "sessions", atomic: true },
-    ToolDir { name: "bounces", facet: "mixes", atomic: false },
-    ToolDir { name: "freeze files", facet: "peak-cache", atomic: false },
-    ToolDir { name: "project file backups", facet: "session-backups", atomic: false },
+    ToolDir {
+        name: "audio files",
+        facet: "sessions",
+        atomic: true,
+    },
+    ToolDir {
+        name: "bounces",
+        facet: "mixes",
+        atomic: false,
+    },
+    ToolDir {
+        name: "freeze files",
+        facet: "peak-cache",
+        atomic: false,
+    },
+    ToolDir {
+        name: "project file backups",
+        facet: "session-backups",
+        atomic: false,
+    },
 ];
 
 /// DaVinci Resolve.
 const RESOLVE: &[ToolDir] = &[
-    ToolDir { name: "cachedclip", facet: "render-cache", atomic: false },
-    ToolDir { name: "proxy", facet: "proxies", atomic: false },
-    ToolDir { name: "proxies", facet: "proxies", atomic: false },
-    ToolDir { name: "optimizedmedia", facet: "proxies", atomic: false },
-    ToolDir { name: "gallery", facet: "grades", atomic: false },
+    ToolDir {
+        name: "cachedclip",
+        facet: "render-cache",
+        atomic: false,
+    },
+    ToolDir {
+        name: "proxy",
+        facet: "proxies",
+        atomic: false,
+    },
+    ToolDir {
+        name: "proxies",
+        facet: "proxies",
+        atomic: false,
+    },
+    ToolDir {
+        name: "optimizedmedia",
+        facet: "proxies",
+        atomic: false,
+    },
+    ToolDir {
+        name: "gallery",
+        facet: "grades",
+        atomic: false,
+    },
 ];
 
 fn layouts_for(capability: Capability) -> &'static [&'static [ToolDir]] {
@@ -292,7 +376,10 @@ mod tests {
     #[test]
     fn sessions_are_atomic_and_bounces_are_not() {
         let m = music();
-        assert!(m.resolve("Audio Files").atomic, "a session must bring its media");
+        assert!(
+            m.resolve("Audio Files").atomic,
+            "a session must bring its media"
+        );
         assert!(!m.resolve("Bounced Files").atomic);
     }
 

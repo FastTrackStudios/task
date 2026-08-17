@@ -1,6 +1,6 @@
 # The Dioxus desktop GUI, built as an ordinary crane package —
 # `nix run .#task-desktop`. Not the bundled/notarized .app release
-# artifact (that's `dx bundle` via apps/deploy); this is a plain native
+# artifact (that's `dx bundle` via deploy/); this is a plain native
 # binary for local dev use, same shape as task-server.nix
 # (cargoArtifacts = null — the workspace is too large/build.rs-heavy for
 # crane's dummy-src deps split).

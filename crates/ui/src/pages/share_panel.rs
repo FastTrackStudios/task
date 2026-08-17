@@ -2,7 +2,7 @@
 //! share links for the focused note. Samply-style: every link ever
 //! created is listed here with its capability, and can be disabled
 //! (reversibly) or deleted after the fact — changes are retroactive on
-//! the server (`plans/collaboration-sharing.md`).
+//! the server.
 
 use dioxus::prelude::*;
 
