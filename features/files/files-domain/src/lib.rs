@@ -37,11 +37,13 @@
 pub mod adopt;
 pub mod cadence;
 pub mod catalogue;
+pub mod collaboration;
 pub mod composition;
 pub mod facet;
 pub mod hydration;
 pub mod ignore;
 pub mod labels;
+pub mod layout;
 pub mod peering;
 pub mod tree;
 

@@ -71,11 +71,25 @@
 //! | `scale.rs`         | a file bigger than a chunk |
 //! | `office.rs`        | the work around the files |
 //! | `peer_to_peer.rs`  | two clients, no server in the middle |
+//! | `studio.rs`        | a studio's disk, read as a tree |
+//! | `archive.rs`       | the same, against a real 6 TB archive |
 //!
 //! These are tests rather than a script that prints `ok`, because a
 //! printed `ok` is only as honest as the eye reading it. A test that
 //! stops asserting fails; a stage that stops asserting still prints.
+//!
+//! # The one chapter that does not always run
+//!
+//! `archive.rs` reads a real archive, and only when `TASK_ARCHIVE_ROOT`
+//! names one. It is skipped otherwise, because several terabytes of
+//! somebody's actual work cannot be committed and must not be required.
+//!
+//! What it buys is the thing a fixture cannot: folders nobody designed
+//! for a test. `studio.rs` runs the same reader over the committed
+//! example vault, whose awkward cases were all copied *from* the archive
+//! after that reader got them wrong.
 
+pub mod archive;
 pub mod client;
 pub mod device;
 pub mod orgs;
