@@ -19,7 +19,7 @@ use files::service::roots::RootsService;
 use files::service::tree::TreeService;
 use files_domain::{HostId, Hosting, OrgId, Peering};
 
-use integration::scenario::{Scenario, pin};
+use integration::scenario::Scenario;
 
 /// The starting arrangement: both orgs known to both servers, with the
 /// content of each on its own company's machine.
@@ -167,9 +167,6 @@ async fn adding_a_server_adds_capacity() {
 #[tokio::test]
 async fn structure_replicates_between_servers_without_moving_content() {
     let s = Scenario::open().await;
-    // There is nothing to replicate until something is pinned: the
-    // commit graph is what crosses the wire.
-    pin(&s.orgs.acme, s.acme_root, "the session as it stands").await;
 
     let link = iroh_link::connect(&s.orgs.vnt.endpoint, s.orgs.acme.endpoint.addr())
         .await

@@ -17,10 +17,15 @@ use files::service::roots::{AdoptRequest, RootsService};
 
 use crate::server::Server;
 
-/// Adopt a directory that is already there.
+/// Adopt a directory that is already there, and wait for it.
 ///
 /// `files.adopt.in-place`: nothing is moved, copied or renamed — the
 /// applications that wrote this tree keep writing it.
+///
+/// The wait is the second half. `adopt` returns as soon as the root has
+/// an identity and reads the tree behind that, so a scenario that did
+/// not wait would be asking about a project mid-adoption and getting
+/// different answers on different runs.
 pub async fn adopt(server: &Server, dir: &str) -> RootId {
     let path = server.tree().join(dir);
     let root = server
@@ -33,7 +38,9 @@ pub async fn adopt(server: &Server, dir: &str) -> RootId {
         })
         .await
         .expect("adopt");
-    RootId::new(root.id)
+    let root = RootId::new(root.id);
+    server.backend.settled(root).await;
+    root
 }
 
 /// Both companies, booted and reachable by endpoint id.

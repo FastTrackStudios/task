@@ -2179,7 +2179,7 @@ impl FilesBackend {
     }
 
     /// The root's whole Ignore set, compiled on first touch and cached.
-    fn ignore_of(
+    pub(crate) fn ignore_of(
         &self,
         root: &FileRootInfo,
     ) -> Result<Arc<jj_lib::gitignore::GitIgnoreFile>, Error> {
@@ -4483,7 +4483,6 @@ impl FilesBackend {
         }
     }
 
-    /// Every file's source CAS `FileId` in `head`'s tree.
     /// Every path at the root's head, with its size.
     ///
     /// The commit graph read as *structure*: trees say what exists and
@@ -4492,6 +4491,23 @@ impl FilesBackend {
     /// it has no tree to walk — and it is why such a host can answer
     /// "how big is this project" correctly while holding none of it.
     pub(crate) fn head_structure(&self, root_id: Uuid) -> Result<Vec<(String, u64)>, Error> {
+        Ok(self
+            .head_addresses(root_id)?
+            .into_iter()
+            .map(|(path, _content, size)| (path, size))
+            .collect())
+    }
+
+    /// The same walk, keeping the content address as well.
+    ///
+    /// The address is what "verified" means. A catalogue entry carrying
+    /// one has had its bytes read and recorded; an entry without one is
+    /// published-but-unverified, which is what adoption's tail looks
+    /// like — so this is the read that ends an adoption.
+    pub(crate) fn head_addresses(
+        &self,
+        root_id: Uuid,
+    ) -> Result<Vec<(String, String, u64)>, Error> {
         let root = self.get_root_info(root_id)?;
         let (repo, _) = self.ensure_repo(&root)?;
         let head = Self::head_of(&repo, root.flavor)?;
@@ -4513,7 +4529,11 @@ impl FilesBackend {
                     .and_then(Result::ok)
                 })
                 .map_or(0, |m| m.chunks.iter().map(|c| c.len).sum());
-            out.push((path.as_internal_file_string().to_owned(), size));
+            out.push((
+                path.as_internal_file_string().to_owned(),
+                id.hex().to_string(),
+                size,
+            ));
         }
         Ok(out)
     }

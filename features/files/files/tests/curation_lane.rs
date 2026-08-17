@@ -47,12 +47,19 @@ async fn rig() -> Rig {
         })
         .await
         .expect("adopt");
+    let root = RootId::new(root.id);
+    // Adoption pins what it read, so its checkpoint is a commit in this
+    // root's history like any other. Waiting for it is what keeps the
+    // tests below reasoning about *their* commits: a driver still
+    // running would land one between a write and the checkpoint meant to
+    // capture it, and the failure would look like a curation bug.
+    backend.settled(root).await;
 
     Rig {
         _tmp: tmp,
         dir,
         backend,
-        root: RootId::new(root.id),
+        root,
     }
 }
 

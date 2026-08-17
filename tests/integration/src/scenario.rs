@@ -47,10 +47,10 @@ impl Scenario {
 
 /// Pin a root's current content, and say why in the message.
 ///
-/// Every chapter that moves bytes needs this first. The byte lane reads
-/// the checkpoint head rather than the disk — a file being written to
-/// right now has no stable length and no stable content — so nothing is
-/// readable, streamable or syncable until something has pinned it.
+/// Adoption pins what it read, so a freshly opened scenario needs no
+/// call to this — it is here for the chapters that write first and then
+/// need the byte lane to see what they wrote, since the lane reads the
+/// pinned head rather than the disk.
 pub async fn pin(server: &Server, root: RootId, why: &str) {
     server
         .backend

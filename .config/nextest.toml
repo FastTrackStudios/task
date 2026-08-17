@@ -6,11 +6,30 @@ fail-fast = true
 status-level = "pass"
 slow-timeout = { period = "2s", terminate-after = 2 }
 
+# The integration suite is not a unit suite with a wide scope: one test
+# boots two servers on real iroh endpoints, adopts two trees and hires
+# four people, and then does its actual work. Alone that is about a
+# second; with the whole suite running at once — every test builds its
+# own world, which is what keeps a subset run honest — contention puts it
+# nearer four.
+#
+# Under the default 2s/×2 that reads as a hang and gets killed, which is
+# how a correct test turns into a flake. The budget below is per test and
+# generous on purpose: `terminate-after` is what catches a genuine stall,
+# and a stall here means a deadlock rather than a slow disk.
+[[profile.default.overrides]]
+filter = 'package(integration)'
+slow-timeout = { period = "10s", terminate-after = 3 }
+
 [profile.ci]
 fail-fast = false
 status-level = "all"
 final-status-level = "flaky"
 slow-timeout = { period = "5s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'package(integration)'
+slow-timeout = { period = "20s", terminate-after = 3 }
 
 [profile.patient]
 slow-timeout = { period = "30s", terminate-after = 4 }

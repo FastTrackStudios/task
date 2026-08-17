@@ -84,17 +84,67 @@ async fn a_root_has_an_identity_before_its_progress_is_complete() {
             .any(|r| r.id == root.id)
     );
 
+    // Tracked from the moment the root exists. Which phase it is *in* is
+    // deliberately not asserted: the driver starts as soon as `adopt`
+    // returns, so on a fixture this small it may already be hashing, and
+    // pinning the phase here would be a test of scheduling rather than
+    // of the lane. `an_adoption_finishes_and_says_so` covers the end of
+    // the run; this covers that there is a run to ask about.
     let progress = backend.adoption_progress(id).await.expect("progress");
     assert_eq!(progress.root_id, id);
-    assert_eq!(
+    assert_ne!(
         progress.phase,
-        AdoptionPhase::Enumerating,
+        AdoptionPhase::Paused,
         "adoption is tracked from the moment the root exists"
     );
+}
+
+/// The tail of `files.adopt.catalogue-first`: the addresses do get
+/// computed, and the entries published without them get them.
+// t[verify files.adopt.catalogue-first]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_adoption_finishes_and_says_so() {
+    let (_tmp, backend, path) = staged("album");
+    let root = backend.adopt(request(path, "Album")).await.expect("adopt");
+    let id = RootId::new(root.id);
+
+    let done = backend.settled(id).await.expect("adoption progress");
+    assert_eq!(done.phase, AdoptionPhase::Complete);
     assert_eq!(
-        progress.entries_total, None,
-        "and reports no denominator until the walk finishes"
+        done.entries_total,
+        Some(2),
+        "two files: mix.wav and stems/kick.wav"
     );
+    assert_eq!(
+        done.entries_hashed, 2,
+        "every file the walk published got an address"
+    );
+    assert!(done.bytes_hashed > 0);
+}
+
+/// A survey reads no bytes.
+///
+/// `hash_content: false` is for a tree being looked at rather than taken
+/// on, and it has to stop after the walk — otherwise the cheap option
+/// costs the same as the expensive one and there is no point offering
+/// it.
+// t[verify files.adopt.catalogue-first]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_survey_publishes_structure_and_reads_no_content() {
+    let (_tmp, backend, path) = staged("album");
+    let root = backend
+        .adopt(AdoptRequest {
+            hash_content: false,
+            ..request(path, "Album")
+        })
+        .await
+        .expect("adopt");
+    let id = RootId::new(root.id);
+
+    let done = backend.settled(id).await.expect("adoption progress");
+    assert_eq!(done.phase, AdoptionPhase::Complete);
+    assert_eq!(done.entries_seen, 2, "the structure is published");
+    assert_eq!(done.entries_hashed, 0, "and nothing was read");
 }
 
 // t[verify files.adopt.resumable]

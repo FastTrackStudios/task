@@ -90,6 +90,15 @@ impl Catalogue {
         self.entries.get(path)
     }
 
+    /// Every entry, in no particular order.
+    ///
+    /// For the passes that are about the catalogue as a whole rather
+    /// than about one listing — adoption counting what it must hash,
+    /// a sweep looking for what has gone stale.
+    pub fn entries(&self) -> impl Iterator<Item = &CatalogueEntry> {
+        self.entries.values()
+    }
+
     /// Direct children of `path`. Serves a browse without touching the
     /// filesystem, which is what makes an offline listing possible.
     #[must_use]

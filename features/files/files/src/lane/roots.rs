@@ -52,6 +52,14 @@ impl Adoptions {
             .get(&id)
             .cloned()
     }
+
+    /// Whether this adoption still has work to do.
+    ///
+    /// A missing adoption reads as "stop" rather than "carry on": a root
+    /// released while it was being adopted must not go on being walked.
+    fn running(&self, id: RootId) -> bool {
+        self.snapshot(id).is_some_and(|a| a.is_running())
+    }
 }
 
 /// Translate the domain's state machine into the wire shape.
@@ -92,6 +100,114 @@ impl FilesBackend {
             |a| Ok(progress_of(root_id, &a)),
         )
     }
+
+    /// Wait for an adoption to stop running.
+    ///
+    /// `adopt` returns before the work starts — that is the point of it
+    /// — so anything that needs the *result* of adoption rather than the
+    /// root's identity has to wait for it. In an application that is a
+    /// progress view; here it is one call, because a test that races the
+    /// driver fails somewhere unrelated and blames the wrong code.
+    ///
+    /// Polling rather than a notification: the state machine is a plain
+    /// value behind a mutex with no waker attached, and giving it one to
+    /// serve this would put a channel in the domain for the benefit of
+    /// the caller that cares least about latency.
+    ///
+    /// Returns the final progress, or what it had reached when the wait
+    /// ran out. It never fails on a slow adoption, because "not finished
+    /// yet" is a legitimate state and this is not the thing that should
+    /// decide otherwise.
+    pub async fn settled(&self, root_id: RootId) -> Option<AdoptionProgress> {
+        for _ in 0..600 {
+            let snapshot = self.adoptions().snapshot(root_id)?;
+            if !snapshot.is_running() {
+                return Some(progress_of(root_id, &snapshot));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        self.adoptions()
+            .snapshot(root_id)
+            .map(|a| progress_of(root_id, &a))
+    }
+
+    /// Walk the tree, then read it — the work behind an `adopt` that has
+    /// already returned.
+    ///
+    /// Two passes, because that is what `files.adopt.catalogue-first`
+    /// describes rather than an implementation convenience:
+    ///
+    /// 1. **Enumerate.** Build the catalogue from what the filesystem
+    ///    already knows. Every entry is published here, unverified, and
+    ///    the tree is browsable from this point on whatever its size.
+    /// 2. **Hash.** Read the bytes into the store and pin them, which
+    ///    gives every file a content address; write those addresses back
+    ///    onto the entries the walk published.
+    ///
+    /// The second pass is one capture rather than a file at a time, and
+    /// the progress counters therefore advance in one step at the end of
+    /// it rather than smoothly. That is a real limitation and not a
+    /// hidden one: the store's snapshot is whole-tree, and the honest
+    /// options were a jumping counter or a second full read of every
+    /// byte purely to animate a bar.
+    ///
+    /// Nothing here blocks the applications that own the tree, and
+    /// nothing here is required for the root to be usable — that is the
+    /// point of it running behind `adopt` rather than inside it.
+    async fn drive_adoption(self, root_id: RootId) {
+        let this = self.clone();
+        let walked = crate::lane::blocking(move || {
+            Ok(crate::lane::tree::enumerate_files(&this, root_id))
+        })
+        .await
+        .and_then(|r| r);
+        let Ok(files) = walked else {
+            // The tree would not walk. The adoption stays where it is
+            // rather than claiming to be complete: `adoption_progress`
+            // reporting `Enumerating` forever is a state someone can see
+            // and resume, and `Complete` over an empty catalogue is not.
+            return;
+        };
+
+        for (_path, size) in &files {
+            if !self.adoptions().running(root_id) {
+                return;
+            }
+            self.adoptions().with(root_id, |a| a.saw(*size, Utc::now()));
+        }
+        self.adoptions().with(root_id, |a| a.enumerated(Utc::now()));
+
+        // `enumerated` decides whether there is a hashing phase at all:
+        // a survey (`hash_content: false`) and an empty tree both land
+        // on `Complete` here, and neither should read a byte.
+        if !self.adoptions().running(root_id) {
+            return;
+        }
+
+        let this = self.clone();
+        let captured = crate::lane::blocking(move || {
+            this.checkpoint_now_inner(root_id.get(), Some("adopted".to_string()))
+        })
+        .await;
+        if captured.is_err() {
+            // Same reasoning as the failed walk: leave it visibly
+            // unfinished. `files.adopt.resumable` is what recovers it.
+            return;
+        }
+
+        let this = self.clone();
+        let verified = crate::lane::blocking(move || {
+            let addressed = this.head_addresses(root_id.get())?;
+            Ok(crate::lane::tree::verify_addresses(&this, root_id, &addressed))
+        })
+        .await
+        .unwrap_or_default();
+
+        for (_path, size) in verified {
+            self.adoptions()
+                .with(root_id, |a| a.hashed(size, Utc::now()));
+        }
+    }
 }
 
 impl RootsService for FilesBackend {
@@ -109,7 +225,15 @@ impl RootsService for FilesBackend {
         let root =
             crate::lane::blocking(move || this.create_root_in_place(path, name, flavor)).await?;
 
-        self.adoptions().begin(RootId::new(root.id), hash_content);
+        // The work happens behind the return, which is the whole of
+        // `files.adopt.catalogue-first`: a 77 GB album is a root the
+        // moment someone asks for it to be one, and reading it is then
+        // something that happens to a root that already exists.
+        let root_id = RootId::new(root.id);
+        self.adoptions().begin(root_id, hash_content);
+        let driver = self.clone();
+        tokio::spawn(async move { driver.drive_adoption(root_id).await });
+
         Ok(root)
     }
 

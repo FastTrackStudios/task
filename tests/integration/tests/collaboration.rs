@@ -19,7 +19,7 @@ use files::service::federation::{EndpointId, FederationService};
 use files::service::media::MediaService;
 use files::service::tree::TreeService;
 
-use integration::scenario::{Scenario, pin};
+use integration::scenario::Scenario;
 
 /// ACME offers its takes to VNT, and VNT accepts.
 ///
@@ -210,8 +210,6 @@ async fn a_project_composes_from_two_servers() {
 #[tokio::test]
 async fn a_deliverable_streams_across_the_company_boundary() {
     let s = Scenario::open().await;
-    // The byte lane reads the pinned head, so ACME pins before sharing.
-    pin(&s.orgs.acme, s.acme_root, "the takes as delivered").await;
     let (_offer, sessions) = share_takes(&s).await;
 
     let ticket = s
@@ -242,7 +240,6 @@ async fn a_deliverable_streams_across_the_company_boundary() {
 #[tokio::test]
 async fn a_relayed_ticket_serves_a_range_rather_than_the_whole_file() {
     let s = Scenario::open().await;
-    pin(&s.orgs.acme, s.acme_root, "the takes as delivered").await;
     let (_offer, sessions) = share_takes(&s).await;
 
     let ticket = s

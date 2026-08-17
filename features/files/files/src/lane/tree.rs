@@ -47,10 +47,12 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use files_domain::catalogue::{Catalogue, Change};
+use jj_lib::gitignore::GitIgnoreFile;
+use jj_lib::repo_path::RepoPathBuf;
 use files_proto::error::FilesFault;
 use files_proto::id::{ContentId, RootId};
 use files_proto::model::{BrowseEntry, FileRootInfo, RootFlavor, TreeNode};
@@ -227,10 +229,29 @@ fn record(
 /// omitted. Dropping the entry, or keeping it as `Resident` with no
 /// children, both produce the one thing the spec forbids: a folder that
 /// looks empty because its content is out of reach.
+///
+/// `ignores` is the root's Ignore set, and it is not an optimisation.
+/// The catalogue is a listing surface — a structure host browses from it
+/// and has no tree to filter against — so junk that reaches it reaches a
+/// user, which `files.ignore.layers` forbids. It also has to agree with
+/// what a capture records: adoption counts the files it published and
+/// then counts the addresses the store gave back, and two walkers
+/// disagreeing about `.DS_Store` leaves every adoption permanently short
+/// of complete.
+///
+/// The chaining is `scan`'s, not a second copy of it. Per-directory
+/// `.gitignore` layering has enough rules in it that a reimplementation
+/// here would drift, and the drift would show up as one walker hiding a
+/// file the other kept.
 // t[impl files.catalogue.complete] — every reachable path gets an entry
 // t[impl files.catalogue.offline] — unreachable is marked, never missing
 // t[impl files.catalogue.staleness] — every entry records when we looked
-fn walk(root: &FileRootInfo, now: DateTime<Utc>) -> Catalogue {
+// t[impl files.ignore.layers] — the catalogue is a listing surface too
+fn walk(
+    root: &FileRootInfo,
+    ignores: &Arc<GitIgnoreFile>,
+    now: DateTime<Utc>,
+) -> Catalogue {
     let mut cat = Catalogue::new(RootId::new(root.id));
     // An unplaced root has nothing to walk. Callers reach the catalogue
     // off disk before they get here, so this is the cold-and-unplaced
@@ -239,9 +260,9 @@ fn walk(root: &FileRootInfo, now: DateTime<Utc>) -> Catalogue {
     let Some(root_dir) = root.local_tree().map(std::path::Path::to_path_buf) else {
         return cat;
     };
-    let mut queue = vec![(RootPath::root(), root_dir.clone())];
+    let mut queue = vec![(RootPath::root(), root_dir.clone(), ignores.clone())];
 
-    while let Some((at, dir)) = queue.pop() {
+    while let Some((at, dir, ignores)) = queue.pop() {
         // `hide_internals` only at the top level (the marker file and
         // version store live there and nowhere else); `.git` at every
         // depth on a software root, where a nested one is a submodule's
@@ -276,11 +297,34 @@ fn walk(root: &FileRootInfo, now: DateTime<Utc>) -> Catalogue {
             let Ok(path) = at.join(&entry.name) else {
                 continue; // a name that is not a single component is not ours to invent a path for
             };
+            let Ok(repo_path) = RepoPathBuf::from_internal_string(path.as_str()) else {
+                continue;
+            };
             let disk = dir.join(&entry.name);
             let is_dir = entry.is_dir;
+
+            if is_dir {
+                if ignores.matches_dir(&repo_path) {
+                    continue;
+                }
+                // A nested root is a submodule: its own store owns its
+                // history, and the outer catalogue walks around it for
+                // the same reason a capture does.
+                if disk.join(crate::consts::MARKER_FILE).exists() {
+                    continue;
+                }
+            } else if ignores.matches_file(&repo_path) {
+                continue;
+            }
+
             cat.upsert(record(root, path.clone(), &entry, &disk, now));
             if is_dir {
-                queue.push((path, disk));
+                let Ok(nested) =
+                    crate::scan::chain_dir_gitignore(&ignores, &repo_path, &disk, root.flavor)
+                else {
+                    continue;
+                };
+                queue.push((path, disk, nested));
             }
         }
     }
@@ -366,13 +410,94 @@ fn with_catalogue<T>(
     // locally": the structure is what converged, and this is where it
     // becomes something to browse.
     let built = match root.local_tree() {
-        Some(_) => walk(&root, Utc::now()),
+        Some(_) => walk(&root, &backend.ignore_of(&root).unwrap_or_else(|_| GitIgnoreFile::empty()), Utc::now()),
         None => from_head(backend, &root, Utc::now()),
     };
     persist(backend, root_id, &built);
     let mut guard = catalogues().lock().expect("catalogue lock poisoned");
     let cat = guard.entry(key).or_insert(built);
     Ok(f(cat))
+}
+
+/// Build the root's catalogue if it has not been built, and report the
+/// files in it.
+///
+/// Adoption's enumerating phase: this is the walk, and its return value
+/// is what the progress counters are counted from. Directories are left
+/// out on purpose — a directory holds no bytes and so has no content
+/// address, and counting one toward the hashing denominator would leave
+/// every adoption of a tree with folders in it permanently short of
+/// complete.
+pub(crate) fn enumerate_files(
+    backend: &FilesBackend,
+    root_id: RootId,
+) -> Result<Vec<(RootPath, u64)>, FilesFault> {
+    with_catalogue(backend, root_id, |cat| {
+        let mut files: Vec<(RootPath, u64)> = cat
+            .entries()
+            .filter(|e| e.kind == EntryKind::File)
+            .map(|e| (e.path.clone(), e.size))
+            .collect();
+        files.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        files
+    })
+}
+
+/// Record the content addresses adoption computed, on the entries that
+/// were published without them.
+///
+/// This is the second half of `files.adopt.catalogue-first`. The walk
+/// published every entry from `name`/`size`/`mtime` with `content:
+/// None`, which the catalogue calls unverified; hashing then produced an
+/// address per file, and until they are written back the tree stays
+/// unverified forever — browsable, and never able to say what it holds.
+///
+/// Returns each entry it verified with that entry's size, which is what
+/// adoption's counters advance on. A path in `addressed` that the
+/// catalogue does not know is skipped rather than inserted: the commit
+/// and the walk disagreeing means the tree changed under us, and
+/// `files.adopt.resumable` says the next pass picks that up. Inventing
+/// an entry here would publish a file from a commit while claiming the
+/// walk saw it.
+pub(crate) fn verify_addresses(
+    backend: &FilesBackend,
+    root_id: RootId,
+    addressed: &[(String, String, u64)],
+) -> Vec<(RootPath, u64)> {
+    let key = key_of(backend, root_id);
+    let now = Utc::now();
+    let mut guard = catalogues().lock().expect("catalogue lock poisoned");
+    let Some(cat) = guard.get_mut(&key) else {
+        return Vec::new();
+    };
+
+    let mut verified = Vec::new();
+    for (path, content, size) in addressed {
+        let Ok(at) = RootPath::parse(path) else {
+            continue;
+        };
+        let Some(existing) = cat.get(&at) else {
+            continue;
+        };
+        // A stub already carries its address — the stub file *is* the
+        // address — and re-marking it from the commit would say the
+        // bytes are here. They are not; that is what a stub means.
+        if existing.content.is_some() {
+            continue;
+        }
+        cat.upsert(CatalogueEntry {
+            content: Some(ContentId(content.clone())),
+            size: *size,
+            confirmed_at: now,
+            ..existing.clone()
+        });
+        verified.push((at, *size));
+    }
+
+    if !verified.is_empty() {
+        persist(backend, root_id, cat);
+    }
+    verified
 }
 
 /// Build a catalogue from the root's head, with no filesystem involved.
@@ -759,7 +884,7 @@ mod tests {
         std::fs::write(tmp.path().join("Sessions/Song/mix.wav"), b"take one").unwrap();
         std::fs::write(tmp.path().join("notes.txt"), b"hi").unwrap();
 
-        let cat = walk(&root(&tmp.path().to_string_lossy()), Utc::now());
+        let cat = walk(&root(&tmp.path().to_string_lossy()), &GitIgnoreFile::empty(), Utc::now());
 
         assert_eq!(cat.len(), 4, "Sessions, Song, mix.wav, notes.txt");
         let mix = cat
@@ -780,7 +905,7 @@ mod tests {
     #[test]
     // t[verify files.catalogue.staleness]
     fn an_unreadable_root_is_reported_unreachable_rather_than_empty_and_current() {
-        let cat = walk(&root("/definitely/not/a/path"), Utc::now());
+        let cat = walk(&root("/definitely/not/a/path"), &GitIgnoreFile::empty(), Utc::now());
         let f = cat.freshness(Utc::now());
         assert!(
             !f.reachable,
@@ -795,7 +920,7 @@ mod tests {
         for i in 0..(PAGE + 10) {
             std::fs::write(tmp.path().join(format!("f{i}")), b"x").unwrap();
         }
-        let cat = walk(&root(&tmp.path().to_string_lossy()), Utc::now());
+        let cat = walk(&root(&tmp.path().to_string_lossy()), &GitIgnoreFile::empty(), Utc::now());
 
         let first = page(&cat, &Cursor("0".into()));
         assert_eq!(first.changed.len(), PAGE);
@@ -816,7 +941,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a"), b"x").unwrap();
         std::fs::write(tmp.path().join("b"), b"x").unwrap();
-        let cat = walk(&root(&tmp.path().to_string_lossy()), Utc::now());
+        let cat = walk(&root(&tmp.path().to_string_lossy()), &GitIgnoreFile::empty(), Utc::now());
 
         let d = page(&cat, &Cursor("not-a-number".into()));
         assert_eq!(d.changed.len(), 2, "safe direction is to send everything");

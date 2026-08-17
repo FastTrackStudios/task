@@ -7,6 +7,7 @@
 
 use files::path::RootPath;
 use files::service::media::MediaService;
+use files::service::roots::AdoptionPhase;
 use files::service::tree::TreeService;
 use files::service::version::VersionService;
 use files::service::write::WriteService;
@@ -120,30 +121,18 @@ async fn a_checkpoint_records_history() {
     assert!(!checkpoint.commit_id.is_empty());
 }
 
-/// Bytes leave by ticket, and only once they are pinned.
+/// Bytes leave by ticket, and adoption is what makes them leavable.
 ///
-/// The lane is explicit that "current" means the checkpoint head rather
-/// than the bytes on disk this instant: a file being written to right
-/// now has no stable length and no stable content, so a ticket for it
-/// could only promise what it cannot keep.
-///
-/// Which is why this checkpoints first. Note what that means for
-/// adoption today — `hash_content: true` starts a progress state
-/// machine and nothing drives it, so an adopted tree has no content in
-/// the store until something checkpoints. The catalogue is published
-/// (the browse above proves it); the hashing that is supposed to run
-/// behind it is not wired yet.
+/// The byte lane reads the pinned head rather than the disk — a file
+/// being written to right now has no stable length and no stable
+/// content, so a ticket for it could only promise what it cannot keep.
+/// Adoption's second pass is what supplies that head: it reads the tree
+/// into the store and pins what it read, so an adopted project is
+/// streamable without anyone having checkpointed it by hand.
 // t[verify files.scale.large-media]
 #[tokio::test]
 async fn a_read_mints_a_ticket_rather_than_returning_bytes() {
     let s = Scenario::open().await;
-    s.orgs
-        .acme
-        .backend
-        .checkpoint(s.acme_root, Some("pin the takes".into()))
-        .await
-        .expect("checkpoint");
-
     let ticket = s
         .orgs
         .acme
@@ -159,20 +148,53 @@ async fn a_read_mints_a_ticket_rather_than_returning_bytes() {
     assert!(ticket.seekable);
 }
 
-/// The other half of the same fact, stated so it cannot be lost.
-// t[verify files.scale.large-media]
+/// Adoption finishes, and says so.
+///
+/// `files.adopt.catalogue-first` is two claims, and this is the second:
+/// the addresses do get computed. The first — that the tree is browsable
+/// before they are — is the test at the top of this file, which runs
+/// against the same fixture and does not wait for anything.
+// t[verify files.adopt.catalogue-first]
 #[tokio::test]
-async fn an_uncheckpointed_file_is_not_readable_through_the_byte_lane() {
+async fn adoption_hashes_the_tree_behind_the_catalogue() {
     let s = Scenario::open().await;
-    let refused = s
+    let done = s
         .orgs
         .acme
         .backend
-        .read(s.acme_root, p("Audio Files/kick.wav"))
-        .await;
+        .settled(s.acme_root)
+        .await
+        .expect("adoption progress");
+
+    assert_eq!(done.phase, AdoptionPhase::Complete);
+    // Four files: the project, two takes, one deliverable. The junk is
+    // not among them — `files.ignore.layers` applies to what adoption
+    // publishes, not only to what a browse renders.
+    assert_eq!(done.entries_total, Some(4), "{done:?}");
+    assert_eq!(done.entries_hashed, 4, "{done:?}");
+    assert!(done.bytes_hashed > 0);
+}
+
+/// The catalogue's entries carry their addresses once hashing has run.
+///
+/// `content: None` is what an unverified entry looks like, and an
+/// adoption that never wrote the addresses back would leave every entry
+/// in that state forever: browsable, and permanently unable to say what
+/// it holds.
+// t[verify files.adopt.catalogue-first]
+#[tokio::test]
+async fn a_hashed_entry_knows_its_content_address() {
+    let s = Scenario::open().await;
+    let kick = s
+        .orgs
+        .acme
+        .backend
+        .entry(s.acme_root, p("Audio Files/kick.wav"))
+        .await
+        .expect("the take is catalogued");
     assert!(
-        refused.is_err(),
-        "a ticket was minted for content nothing has pinned"
+        kick.content.is_some(),
+        "an adopted file stayed unverified: {kick:?}"
     );
 }
 

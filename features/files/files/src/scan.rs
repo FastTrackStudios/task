@@ -97,7 +97,7 @@ impl WalkCtx<'_> {
 }
 
 /// Layer `dir`'s own `.gitignore` onto `parent`, on flavors that honor it.
-fn chain_dir_gitignore(
+pub(crate) fn chain_dir_gitignore(
     parent: &Arc<GitIgnoreFile>,
     prefix: &RepoPath,
     dir: &Path,
