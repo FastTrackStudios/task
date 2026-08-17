@@ -1,12 +1,12 @@
 # Task API reference
 
 <!-- GENERATED — do not edit by hand. Regenerate with:
-     cargo run -p task-cli -- api --markdown > apps/task/docs/api-reference.md
-     Source: `task_server::permits::mounts()` (apps/task/server/src/permits.rs),
+     cargo run -p task-cli -- api --markdown > docs/api-reference.md
+     Source: `task_server::permits::mounts()` (apps/server/src/permits.rs),
      the single registry the router, permit gate, and schema stamps derive from.
      Served live at `GET /org/{slug}/api`. -->
 
-83 services mounted: 65 plain RPC, 18 `#[subscribe]` streams. Every method lists its permit — the `<action>` on `<resource>` the permissions gate checks (see `apps/task/server/src/permits.rs`). `audited` methods emit an audit line even when allowed. A `stream` method takes a `Tx` sink and pushes to the caller instead of returning once.
+83 services mounted: 65 plain RPC, 18 `#[subscribe]` streams. Every method lists its permit — the `<action>` on `<resource>` the permissions gate checks (see `apps/server/src/permits.rs`). `audited` methods emit an audit line even when allowed. A `stream` method takes a `Tx` sink and pushes to the caller instead of returning once.
 
 ## `auth` (AuthService)
 

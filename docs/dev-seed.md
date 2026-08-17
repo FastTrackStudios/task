@@ -6,13 +6,19 @@ surface against — and deterministic enough that Playwright / dioxus
 tests can assert on exact names. It is the standard way to get a dev
 rig with real data; nothing in it is production.
 
+**This is the single-server world.** For the other one — two companies on
+two servers, each with its own iroh endpoint, federating by endpoint id —
+see [the demo](demo.md) (`just demo`). Use that one when what you are
+working on crosses an org boundary; use this one when you want a lot of
+content in front of you.
+
 ## Quick start
 
 ```bash
 # One-shot wrapper (build + seed + guardrails):
-apps/task/scripts/dev-seed.sh seed     # or `fresh` to wipe first
-apps/task/scripts/dev-seed.sh serve    # terminal 1: the server
-apps/task/scripts/dev-seed.sh web      # terminal 2: dx serve, wired up
+scripts/dev-seed.sh seed     # or `fresh` to wipe first
+scripts/dev-seed.sh serve    # terminal 1: the server
+scripts/dev-seed.sh web      # terminal 2: dx serve, wired up
 
 # Or drive the verb directly (TASK_DATA_ROOT is REQUIRED — the seed
 # refuses to run against the default data root, because it plants a
@@ -93,5 +99,5 @@ included). The **home org additionally gets the studio dataset**:
   instant. Don't read a hang into the first skeleton screen.
 - The seed's implementation (and its one-emitter rules: `song_note()`
   for `type: song` frontmatter, `demo_slug()` for root dirs) lives in
-  `apps/task/server/src/admin_cli.rs` — extend the constants there
+  `apps/server/src/admin_cli.rs` — extend the constants there
   and re-run; new entries plant, existing ones stay put.

@@ -212,6 +212,10 @@ fn fault(e: architect::vox::VoxError<FilesFault>) -> FilesFault {
     }
 }
 
+// t[impl files.topology.multi-server] — "where two peers can reach each
+// other, bytes move directly over iroh/QUIC": this is the dialling half,
+// and until it existed the only implementation of the port was in the
+// test harness
 #[async_trait::async_trait]
 impl RemoteFiles for IrohRemotes {
     async fn browse_offered(

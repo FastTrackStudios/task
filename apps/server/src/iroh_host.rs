@@ -104,6 +104,12 @@ impl IrohHost {
 /// down" rather than "the server did not start" — and an operator whose
 /// UDP is blocked gets a working server and a loud log rather than a
 /// boot loop. Returns `None` when nothing bound at all.
+// t[impl files.topology.multi-server] — a second server is a second
+// process binding a second endpoint; before this the binary bound none,
+// so "several servers" was a shape only the test harness could take
+// t[impl files.peering.presence] — an org that is present on a machine
+// is an org that machine can be dialled for, which is what binding an
+// endpoint per org and persisting its key makes true
 pub async fn start(state: &AppState) -> Option<IrohHost> {
     if std::env::var("TASK_IROH_DISABLE").is_ok_and(|v| v != "0") {
         info!("iroh disabled by TASK_IROH_DISABLE");
