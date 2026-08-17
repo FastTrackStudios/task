@@ -30,6 +30,7 @@ specs (
                     features/**/*.rs
                     crates/**/*.rs
                     apps/**/*.rs
+                    tests/**/*.rs
                 )
                 exclude (
                     target/**

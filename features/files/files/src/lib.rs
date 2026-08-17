@@ -25,19 +25,17 @@
 
 mod backend;
 mod badges;
-pub mod watcher;
 pub mod certify;
 mod checkpoint;
 mod consts;
-mod durable;
-mod tarball;
 mod content;
+mod durable;
 mod entity;
 mod error;
 mod git_root;
 pub mod hydration;
-pub mod lane;
 pub mod ignore;
+pub mod lane;
 mod org_tree;
 mod registry;
 /// Opening (and reopening) a root's version-store repo. Public so a
@@ -48,19 +46,67 @@ pub mod repo_open;
 mod restart;
 mod scan;
 pub mod stub;
+mod tarball;
 mod transcode;
 mod versions;
+pub mod watcher;
 
 pub use backend::{Captured, FilesBackend, LocationBoundaries, MaterializeReport, SyncTreeMeta};
 // The cadence engine moved to `files-domain`: it is a state machine
 // about time, and needs neither jj-lib nor the version store. Re-exported
 // here so callers and mount sites are unaffected.
+pub use entity::{NamedVersions, ProjectVersions};
+pub use error::{Error, Result};
 pub use files_domain::cadence;
 pub use files_domain::cadence::{CadenceConfig, CadenceEngine, Clock, SystemClock, TestClock};
 pub use watcher::{ActivitySink, RootWatcher};
-pub use entity::{NamedVersions, ProjectVersions};
-pub use error::{Error, Result};
-pub use files_proto::service;
+// ── The facade ─────────────────────────────────────────────────────
+//
+// `files` is the only crate a consumer names. `files-proto` holds the
+// wire contract and `files-domain` the pure decisions, but splitting a
+// feature into crates is an internal matter — an app that has to know
+// which of them a type lives in is coupled to a layout it should be
+// free to ignore, and every such import is a rename waiting to break
+// somebody else's build.
+//
+// So everything a caller needs is re-exported here, at the path it has
+// in `files-proto`: `files::service::tree::TreeService`,
+// `files::RootPath`, `files::id::PrincipalId`. The modules are
+// re-exported wholesale rather than item by item, so a new type in a
+// lane is reachable without a matching line here.
+// `error` is not among them: this crate has its own `Error` for
+// backend failures, and two things called `files::error` would be a
+// coin toss at every call site. The wire fault is re-exported by name
+// below as `FilesFault`, which is what callers actually reach for.
+pub use files_proto::{id, model, path, service};
+
+// The names callers reach for constantly, without a module path.
+pub use files_proto::{FilesFault, PathError, RootId, RootPath, TreePath};
+
+// The v2 lanes' architect surface: one client / dispatcher / descriptor
+// / `layer` / `serve` per lane. Mount sites stitch these into the org
+// router; the CLI and web UI bind the clients.
+//
+// Ungated: this crate has no `vox` feature — it depends on
+// `files-proto/vox` unconditionally — so a `#[cfg(feature = "vox")]`
+// here is always false, which is how these came to be missing from the
+// facade in the first place.
+pub use files_proto::{
+    AccessServiceClient, CurationServiceClient, FederationServiceClient, MediaServiceClient,
+    OrganiseServiceClient, ReviewServiceClient, RootsServiceClient, SearchServiceClient,
+    SyncServiceClient, TreeServiceClient, UploadServiceClient, VersionServiceClient,
+    WriteServiceClient,
+};
+pub use files_proto::{
+    access_descriptor, access_layer, curation_descriptor, curation_layer, federation_descriptor,
+    federation_layer, media_descriptor, media_layer, media_stream_descriptor, media_stream_layer,
+    organise_descriptor, organise_layer, review_descriptor, review_layer, roots_descriptor,
+    roots_layer, search_descriptor, search_layer, serve_access, serve_curation, serve_federation,
+    serve_media, serve_organise, serve_review, serve_roots, serve_search, serve_sync, serve_tree,
+    serve_upload, serve_version, serve_write, sync_descriptor, sync_layer, tree_descriptor,
+    tree_layer, upload_descriptor, upload_layer, version_descriptor, version_layer,
+    write_descriptor, write_layer,
+};
 // The engine-side rendition vocabulary (tag ↔ kind ↔ MIME) — the
 // rendition streaming route (issue #270) parses its `{kind}` path
 // segment with `from_tag` and serves `mime()` as the Content-Type.

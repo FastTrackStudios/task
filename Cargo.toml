@@ -16,7 +16,6 @@ resolver = "2"
 members = [
     # ── apps ──────────────────────────────────────────────────────────
     "apps/cli",
-    "examples/federation",
     "apps/desktop",
     "apps/mobile",
     "apps/server",
@@ -28,6 +27,8 @@ members = [
     "crates/ui",
     "crates/ui-core",
     "crates/widgets",
+    # ── tests/ — the cross-feature integration suite ──────────────────
+    "tests/integration",
     # ── xtask — build tooling; never in default-members ────────────────
     "xtask",
     # ── features/ — the feature slices ────────────────────────────────

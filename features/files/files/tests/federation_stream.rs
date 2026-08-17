@@ -4,7 +4,7 @@
 //! separate orgs, wired to each other through an in-process
 //! [`RemoteFiles`] port. No iroh here: the port is the seam the transport
 //! plugs into, so testing above it exercises the relay logic without a
-//! network, and `examples/federation` exercises the same path over real
+//! network, and `tests/integration` exercises the same path over real
 //! QUIC.
 //!
 //! The rule under test is the sharp half of `files.peering.serving`: a

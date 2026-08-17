@@ -11172,6 +11172,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration"
+version = "0.1.0"
+dependencies = [
+ "architect",
+ "async-trait",
+ "files",
+ "files-domain",
+ "files-sync",
+ "iroh",
+ "tempfile",
+ "tokio",
+ "vox",
+ "vox-core",
+]
+
+[[package]]
 name = "interim"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18744,22 +18760,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scenario-two-orgs"
-version = "0.1.0"
-dependencies = [
- "architect",
- "async-trait",
- "files",
- "files-domain",
- "files-sync",
- "iroh",
- "tempfile",
- "tokio",
- "vox",
- "vox-core",
 ]
 
 [[package]]
