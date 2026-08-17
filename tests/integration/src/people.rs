@@ -24,19 +24,16 @@ use files::service::access::{Capability, Subject};
 
 use crate::orgs::Orgs;
 
-/// One person: an account, and the principal their grants name.
+/// One person: an account, and the subject their grants name.
 ///
-/// The two are separate on purpose, and the gap between them is real.
-/// `token` is what a client presents on the wire, and the permission
-/// gate resolves it to decide whether this caller may reach a service
-/// at all. `subject` is what the Files access lane checks per path —
-/// and that lane does not read the caller's identity off the
-/// connection, so a signed-in user's fine-grained capabilities are
-/// still asked for explicitly rather than inferred from who is calling.
-///
-/// Two identities for one person is not a design; it is where the
-/// implementation currently is, and the suite says so rather than
-/// hiding it behind a helper that makes them look joined.
+/// **The same id.** `subject` is built from the account's own user id
+/// rather than generated, which is what makes a grant and a session
+/// refer to one person: the gate resolves a token to
+/// `Principal::User { user_id }`, the access lane turns that into this
+/// subject, and the grant made to it governs the calls that token
+/// signs. They were two unrelated ids until the caller reached the
+/// access lane, and while that was true the suite could only assert what
+/// capabilities *computed* to — never that anyone was refused.
 pub struct Person {
     pub subject: Subject,
     /// The session token. Sign a client with it via `Session::open`.
@@ -190,8 +187,16 @@ async fn sign_up(server: &crate::server::Server, email: &str, name: &str) -> Per
         .await
         .unwrap_or_else(|e| panic!("sign {name} up: {e:?}"));
 
+    // The account's own id, not a fresh one — see [`Person`].
+    let id = bundle
+        .user
+        .id
+        .to_string()
+        .parse::<uuid::Uuid>()
+        .expect("architect-auth ids are uuids");
+
     Person {
-        subject: Subject::Person(PrincipalId::generate()),
+        subject: Subject::Person(PrincipalId::new(id)),
         token: bundle.token,
         email: email.to_string(),
     }

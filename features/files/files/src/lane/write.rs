@@ -58,6 +58,7 @@ use std::path::{Path, PathBuf};
 
 use files_proto::error::FilesFault;
 use files_proto::id::RootId;
+use files_proto::service::access::Capability;
 use files_proto::model::FileRootInfo;
 use files_proto::path::RootPath;
 use files_proto::service::media::ByteTicket;
@@ -498,6 +499,24 @@ where
     }
 }
 
+/// Refuse unless the caller may `capability` at every one of `paths`.
+///
+/// All of them, before the first byte moves. A batch that authorised as
+/// it went would leave a partial write when it hit the path the caller
+/// may not touch — and `files.write.surface` exists precisely so a
+/// structural change is one operation that happened or did not.
+fn authorise_all(
+    backend: &FilesBackend,
+    root_id: RootId,
+    paths: &[RootPath],
+    capability: Capability,
+) -> Result<(), FilesFault> {
+    for path in paths {
+        backend.authorise_caller(root_id, path, capability)?;
+    }
+    Ok(())
+}
+
 impl WriteService for FilesBackend {
     /// Create directories, missing parents included.
     ///
@@ -510,6 +529,7 @@ impl WriteService for FilesBackend {
         root_id: RootId,
         paths: Vec<RootPath>,
     ) -> Result<WriteReceipt, FilesFault> {
+        authorise_all(self, root_id, &paths, Capability::Write)?;
         let this = self.clone();
         let description = format!("create {} director{}", paths.len(), plural_y(paths.len()));
         crate::lane::blocking(move || {
@@ -555,6 +575,7 @@ impl WriteService for FilesBackend {
         path: RootPath,
         name: String,
     ) -> Result<WriteReceipt, FilesFault> {
+        self.authorise_caller(root_id, &path, Capability::Write)?;
         let this = self.clone();
         let description = format!("rename {path} to {name}");
         crate::lane::blocking(move || {
@@ -600,6 +621,20 @@ impl WriteService for FilesBackend {
         moves: Vec<Relocation>,
         on_conflict: OnConflict,
     ) -> Result<WriteReceipt, FilesFault> {
+        // Both ends, separately: a relocation crosses two paths and a
+        // caller may hold one of them and not the other.
+        authorise_all(
+            self,
+            root_id,
+            &moves.iter().map(|r| r.from.clone()).collect::<Vec<_>>(),
+            Capability::Write,
+        )?;
+        authorise_all(
+            self,
+            root_id,
+            &moves.iter().map(|r| r.to.clone()).collect::<Vec<_>>(),
+            Capability::Write,
+        )?;
         let this = self.clone();
         let description = format!("move {} path{}", moves.len(), plural_s(moves.len()));
         crate::lane::blocking(move || {
@@ -649,6 +684,20 @@ impl WriteService for FilesBackend {
         copies: Vec<Relocation>,
         on_conflict: OnConflict,
     ) -> Result<WriteReceipt, FilesFault> {
+        // Both ends, separately: a relocation crosses two paths and a
+        // caller may hold one of them and not the other.
+        authorise_all(
+            self,
+            root_id,
+            &copies.iter().map(|r| r.from.clone()).collect::<Vec<_>>(),
+            Capability::Write,
+        )?;
+        authorise_all(
+            self,
+            root_id,
+            &copies.iter().map(|r| r.to.clone()).collect::<Vec<_>>(),
+            Capability::Write,
+        )?;
         let this = self.clone();
         let description = format!("copy {} path{}", copies.len(), plural_s(copies.len()));
         crate::lane::blocking(move || {
@@ -703,6 +752,7 @@ impl WriteService for FilesBackend {
         root_id: RootId,
         paths: Vec<RootPath>,
     ) -> Result<WriteReceipt, FilesFault> {
+        authorise_all(self, root_id, &paths, Capability::Write)?;
         let this = self.clone();
         let description = format!("delete {} path{}", paths.len(), plural_s(paths.len()));
         crate::lane::blocking(move || {
@@ -751,6 +801,11 @@ impl WriteService for FilesBackend {
         root_id: RootId,
         paths: Vec<RootPath>,
     ) -> Result<ByteTicket, FilesFault> {
+        // `Download`, not `Read`. This is how a whole selection leaves
+        // the building, and a client who may review the mix is not
+        // thereby a client who may keep it — the distinction the client
+        // account exists to test.
+        authorise_all(self, root_id, &paths, Capability::Download)?;
         let root = crate::lane::root_or_fault(self, root_id)?;
         if paths.is_empty() {
             return Err(FilesFault::invalid("an archive needs at least one path"));

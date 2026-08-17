@@ -14,6 +14,7 @@
 use files::path::RootPath;
 use files::service::access::{Capability, Subject};
 
+use integration::client::Session;
 use integration::scenario::Scenario;
 
 /// What `who` may do at `path` in ACME's session root.
@@ -120,4 +121,111 @@ async fn a_grant_cannot_convey_what_the_granter_does_not_hold() {
         vec![Capability::Write],
     );
     assert!(over.is_err(), "a read-only client granted write");
+}
+
+// ── What a grant actually stops ──────────────────────────────────────
+//
+// Everything above asks the access lane to compute a capability set,
+// which is a calculation. These ask the server to refuse, which is the
+// part that protects anything — and until the caller reached the access
+// lane, the two were not the same claim: a grant governed a principal
+// nobody's session named, so it computed correctly and stopped nobody.
+
+/// The client cannot see the session folder.
+// t[verify files.access.granularity]
+#[tokio::test]
+async fn the_client_is_refused_at_the_session_folder() {
+    let s = Scenario::open().await;
+    let casey = Session::open(&s.orgs.acme, s.people.casey.token.clone()).await;
+
+    let refused = casey.tree().await.browse(s.acme_root, p("Audio Files")).await;
+    assert!(
+        refused.is_err(),
+        "the client browsed the session folder: {refused:?}"
+    );
+}
+
+/// And can see the one folder they were sent.
+// t[verify files.access.granularity]
+#[tokio::test]
+async fn the_client_can_see_the_deliverables() {
+    let s = Scenario::open().await;
+    let casey = Session::open(&s.orgs.acme, s.people.casey.token.clone()).await;
+
+    let listed = casey
+        .tree()
+        .await
+        .browse(s.acme_root, p("Deliverables"))
+        .await
+        .expect("the client's own folder");
+    assert!(
+        listed.iter().any(|e| e.name == "mix-v1.wav"),
+        "{listed:?}"
+    );
+}
+
+/// `Comment` without `Download`, as a refusal rather than a capability
+/// list.
+///
+/// This is the clause the client account exists for, and it is the one
+/// that could not be tested before: reviewing the mix and keeping it are
+/// different acts, and only the server saying no makes them different.
+// t[verify files.access.granularity]
+#[tokio::test]
+async fn a_client_who_may_review_the_mix_may_not_keep_it() {
+    let s = Scenario::open().await;
+    let casey = Session::open(&s.orgs.acme, s.people.casey.token.clone()).await;
+
+    // Read: allowed — a ticket for the mix.
+    casey
+        .media()
+        .await
+        .read(s.acme_root, p("Deliverables/mix-v1.wav"))
+        .await
+        .expect("the client may play the mix");
+
+    // Download: refused. An archive is how a whole selection leaves.
+    let refused = casey
+        .write()
+        .await
+        .archive(s.acme_root, vec![p("Deliverables")])
+        .await;
+    assert!(
+        refused.is_err(),
+        "the client archived the deliverables: {refused:?}"
+    );
+}
+
+/// The client cannot write to the folder they can read.
+// t[verify files.access.granularity]
+#[tokio::test]
+async fn the_client_cannot_write_where_they_may_read() {
+    let s = Scenario::open().await;
+    let casey = Session::open(&s.orgs.acme, s.people.casey.token.clone()).await;
+
+    let refused = casey
+        .write()
+        .await
+        .create_dirs(s.acme_root, vec![p("Deliverables/Notes")])
+        .await;
+    assert!(refused.is_err(), "the client wrote to the deliverables");
+}
+
+/// The employee can work in the session; the client cannot. Same call,
+/// same path, different person.
+// t[verify files.access.granularity]
+#[tokio::test]
+async fn the_employee_works_where_the_client_cannot() {
+    let s = Scenario::open().await;
+    let sam = Session::open(&s.orgs.acme, s.people.sam.token.clone()).await;
+
+    sam.write()
+        .await
+        .create_dirs(s.acme_root, vec![p("Audio Files/Comps")])
+        .await
+        .expect("the employee works on this project");
+}
+
+fn p(s: &str) -> files::path::RootPath {
+    files::path::RootPath::parse(s).expect("test path")
 }

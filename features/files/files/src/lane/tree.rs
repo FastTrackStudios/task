@@ -57,6 +57,7 @@ use files_proto::error::FilesFault;
 use files_proto::id::{ContentId, RootId};
 use files_proto::model::{BrowseEntry, FileRootInfo, RootFlavor, TreeNode};
 use files_proto::path::{RootPath, TreePath};
+use files_proto::service::access::Capability;
 use files_proto::service::tree::{
     CatalogueDelta, CatalogueEntry, Cursor, EntryKind, Freshness, Hydration, TreeService,
 };
@@ -649,72 +650,24 @@ impl TreeService for FilesBackend {
         root_id: RootId,
         path: RootPath,
     ) -> Result<Vec<BrowseEntry>, FilesFault> {
-        // Re-validate: the type is transparent on the wire, so a hostile
-        // peer's `..` arrives having never seen `parse`.
         let path = path.validate()?;
 
-        // A root accepted from another server has no live tree on this
-        // disk. Walking its path would list an empty directory as though
-        // the subtree were empty, rather than elsewhere — so it resolves
-        // through its origin instead, and the caller cannot tell the
-        // difference. That is what `files.topology.federation` means by
-        // "a first-class item, not a download link".
+        // A root accepted from another server is authorised by the offer
+        // secret, at its origin, on every call — there is no local grant
+        // to consult, and asking for one would refuse a root this org
+        // legitimately holds.
         if self.remote_of(root_id).is_some() {
             return self.browse_remote(root_id, &path).await;
         }
 
-        let root = crate::lane::root_or_fault(self, root_id)?;
-
-        // No tree on this disk, and not a remote root either: this host
-        // holds the org's *structure* and not its content
-        // (`files.peering.replication`), or the holding location is
-        // simply down (`files.catalogue.offline`). Both are the same
-        // situation from here — we know what is there and cannot see it
-        // — and the catalogue is exactly the answer.
-        //
-        // Distinguished from an empty directory on purpose. Walking a
-        // path that is not there returns nothing, which reads as "this
-        // folder is empty" when the truth is "this folder is
-        // elsewhere", and that is the failure the rule names.
-        // Deliberately not `lane_tree`, which refuses: this is the one
-        // place an unplaced root is a normal answer rather than a
-        // missing capability. `None` (this host holds structure) and
-        // `Some(p)` where `p` is gone (the location is down) are the
-        // same situation from here.
-        if !root.local_tree().is_some_and(std::path::Path::exists) {
-            return self.browse_catalogued(root_id, &path);
-        }
-
-        let mut listed =
-            <Self as FilesService>::browse(self, root_id.get(), path.as_str().to_string())
-                .await
-                .map_err(|e| fault_of(e, &path))?;
-
-        // The Ignore set governs listings, not only captures.
-        //
-        // `files.ignore.retained` says an ignored file is absent from
-        // user-facing listings AND from history. It was only ever applied
-        // to the second: the set decided what entered a version, and a
-        // browse returned the raw directory — so a Mac writing to the NAS
-        // put a `._name` beside every file a user could see, which is
-        // most of what a 14,671-file album contains.
-        //
-        // `drive_browse` deliberately does NOT filter: it shows the raw
-        // tree, internals included, which is the distinction the glossary
-        // draws between the two.
-        let store = self.store_of(&root);
-        if let Ok(ignores) = crate::ignore::for_root(&store, root.flavor) {
-            listed.retain(|entry| {
-                let rel = if path.is_root() {
-                    entry.name.clone()
-                } else {
-                    format!("{}/{}", path.as_str(), entry.name)
-                };
-                !crate::ignore::is_ignored(&ignores, &rel)
-            });
-        }
-        Ok(listed)
+        // May this caller see it? The coarse gate in front of the router
+        // answers "is this a member of the org", which is not the same
+        // question — `files.access.granularity` puts access on the
+        // content, so a client granted one folder is refused at the next.
+        self.authorise_caller(root_id, &path, Capability::Read)?;
+        self.listing_of(root_id, path).await
     }
+
 
     /// The org tree — one resolver behind both the explorer and the
     /// WebDAV mount, so a mounted share and the app can never disagree
@@ -736,6 +689,7 @@ impl TreeService for FilesBackend {
     // t[impl files.catalogue.offline] — answered from structure, no filesystem
     async fn entry(&self, root_id: RootId, path: RootPath) -> Result<CatalogueEntry, FilesFault> {
         let path = path.validate()?;
+        self.authorise_caller(root_id, &path, Capability::Read)?;
         let this = self.clone();
         let wanted = path.clone();
         crate::lane::blocking(move || {
@@ -798,6 +752,82 @@ impl TreeService for FilesBackend {
             Ok(out)
         })
         .await
+    }
+}
+
+impl FilesBackend {
+    /// The listing itself, with no question of who is asking.
+    ///
+    /// A trait method rather than an inherent one only because it lives
+    /// in this impl block; the point is the split. One caller genuinely
+    /// has no caller to check — `FederationService::browse_offered`
+    /// serves a receiver on another server whose credential is the offer
+    /// secret and who has no session with this org at all, authorised at
+    /// `live_offer` before it gets here.
+    ///
+    /// Every other path in goes through [`Self::browse`], which is where
+    /// the grant check lives. Keeping them apart makes the bypass a named
+    /// method someone can grep for rather than a flag on the checked one.
+    pub(crate) async fn listing_of(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+    ) -> Result<Vec<BrowseEntry>, FilesFault> {
+        // Re-validated by `browse`; done again because this is `pub` and
+        // the federation path reaches it directly.
+        let path = path.validate()?;
+
+        let root = crate::lane::root_or_fault(self, root_id)?;
+
+        // No tree on this disk, and not a remote root either: this host
+        // holds the org's *structure* and not its content
+        // (`files.peering.replication`), or the holding location is
+        // simply down (`files.catalogue.offline`). Both are the same
+        // situation from here — we know what is there and cannot see it
+        // — and the catalogue is exactly the answer.
+        //
+        // Distinguished from an empty directory on purpose. Walking a
+        // path that is not there returns nothing, which reads as "this
+        // folder is empty" when the truth is "this folder is
+        // elsewhere", and that is the failure the rule names.
+        // Deliberately not `lane_tree`, which refuses: this is the one
+        // place an unplaced root is a normal answer rather than a
+        // missing capability. `None` (this host holds structure) and
+        // `Some(p)` where `p` is gone (the location is down) are the
+        // same situation from here.
+        if !root.local_tree().is_some_and(std::path::Path::exists) {
+            return self.browse_catalogued(root_id, &path);
+        }
+
+        let mut listed =
+            <Self as FilesService>::browse(self, root_id.get(), path.as_str().to_string())
+                .await
+                .map_err(|e| fault_of(e, &path))?;
+
+        // The Ignore set governs listings, not only captures.
+        //
+        // `files.ignore.retained` says an ignored file is absent from
+        // user-facing listings AND from history. It was only ever applied
+        // to the second: the set decided what entered a version, and a
+        // browse returned the raw directory — so a Mac writing to the NAS
+        // put a `._name` beside every file a user could see, which is
+        // most of what a 14,671-file album contains.
+        //
+        // `drive_browse` deliberately does NOT filter: it shows the raw
+        // tree, internals included, which is the distinction the glossary
+        // draws between the two.
+        let store = self.store_of(&root);
+        if let Ok(ignores) = crate::ignore::for_root(&store, root.flavor) {
+            listed.retain(|entry| {
+                let rel = if path.is_root() {
+                    entry.name.clone()
+                } else {
+                    format!("{}/{}", path.as_str(), entry.name)
+                };
+                !crate::ignore::is_ignored(&ignores, &rel)
+            });
+        }
+        Ok(listed)
     }
 }
 

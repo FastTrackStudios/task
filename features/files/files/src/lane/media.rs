@@ -80,6 +80,7 @@ use files_proto::path::RootPath;
 use files_proto::service::federation::{ByteRange, EndpointId};
 use facet::Facet;
 use files_proto::service::legacy::{FilesError, FilesService};
+use files_proto::service::access::Capability;
 use files_proto::service::media::{
     ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService,
 };
@@ -642,7 +643,12 @@ impl MediaService for FilesBackend {
         if self.remote_of(root_id).is_some() {
             return self.read_remote(root_id, &path).await;
         }
-        self.source_ticket(root_id, &path, None).await
+        // A ticket is a bearer capability over these bytes, so the check
+        // belongs at minting rather than at redemption: a token handed
+        // out and refused later is a token that leaked the fact the file
+        // exists.
+        self.authorise_caller(root_id, &path.clone().validate()?, Capability::Read)?;
+        self.ticket_for(root_id, path).await
     }
 
     /// A ticket for a file's content at a past version.
@@ -852,6 +858,26 @@ impl MediaService for FilesBackend {
             book.0.insert(handoff.token.clone(), handoff.clone());
         });
         Ok(handoff)
+    }
+}
+
+impl FilesBackend {
+    /// A ticket, with no question of who is asking.
+    ///
+    /// The byte-lane twin of `listing_of`, and it exists for the one
+    /// caller that has no local caller to check:
+    /// `FederationService::read_offered` serves a receiver on another
+    /// server, authorised by the offer secret at `live_offer` rather than
+    /// by a grant here.
+    ///
+    /// Everything else mints through [`MediaService::read`], which is
+    /// where the grant check lives.
+    pub(crate) async fn ticket_for(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+    ) -> Result<ByteTicket, FilesFault> {
+        self.source_ticket(root_id, &path, None).await
     }
 }
 

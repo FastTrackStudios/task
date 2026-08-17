@@ -117,6 +117,34 @@ pub fn this_principal() -> PrincipalId {
     *ME.get_or_init(PrincipalId::generate)
 }
 
+/// WHO is asking, as the access lane names subjects.
+///
+/// Three answers, and the middle one is the load-bearing one:
+///
+/// - **A signed-in person** → their own subject, so their grants decide.
+///   The id is the account's, not a second identity invented here: a
+///   grant made to a person and a session held by that person have to
+///   name the same principal or the grant governs nobody.
+/// - **No caller at all** → the process itself, which is what
+///   [`this_principal`] has always meant. An in-process call has no wire
+///   and no gate in front of it; it is the server acting on its own
+///   behalf, and that is the case the owner shortcut exists for. Every
+///   call that arrives over a transport passes through
+///   `org_router_guarded`, so "no caller" is not reachable from outside.
+/// - **Anything else** → no subject. A host, a share guest and a service
+///   are all callers with credentials and none of them is a person with
+///   grants, so resolving them to *some* subject could only be a guess.
+fn calling_subject() -> Option<Subject> {
+    match architect::permissions_gate::caller() {
+        None => Some(Subject::Person(this_principal())),
+        Some(architect_permissions::Principal::User { user_id }) => user_id
+            .parse::<uuid::Uuid>()
+            .ok()
+            .map(|id| Subject::Person(PrincipalId::new(id))),
+        Some(_) => None,
+    }
+}
+
 /// Whether a subject is the process's own principal.
 ///
 /// The owner holds everything, everywhere, because a locally adopted
@@ -305,6 +333,35 @@ impl FilesBackend {
         }
     }
 
+    /// Refuse unless the **caller** may do `capability` at `path`.
+    ///
+    /// The one every other lane calls. `authorise` takes an explicit
+    /// subject and is the right shape for the access lane's own methods,
+    /// where the subject is an argument; a lane acting on a request has
+    /// no subject to pass and must not invent one, so it asks about
+    /// whoever is on the other end.
+    ///
+    /// `files.access.granularity` is why this is per path rather than per
+    /// root: a client holding `Deliverables` and nothing else must be
+    /// refused at `Audio Files`, and refused in a way that does not
+    /// distinguish "you may not" from "there is nothing there" — see
+    /// [`resolved`], which fails the lookup rather than returning an
+    /// empty capability set.
+    pub fn authorise_caller(
+        &self,
+        root_id: RootId,
+        path: &RootPath,
+        capability: Capability,
+    ) -> Result<(), FilesFault> {
+        let Some(me) = calling_subject() else {
+            return Err(FilesFault::denied(
+                format!("{capability:?}"),
+                path.clone().validate()?,
+            ));
+        };
+        self.authorise(&me, root_id, path, capability)
+    }
+
     // t[impl files.access.granularity]
     /// [`AccessService::effective`] for an explicit subject — the shape
     /// the trait method will take once a session reaches it.
@@ -441,10 +498,14 @@ impl AccessService for FilesBackend {
 
     // t[impl files.access.granularity] — one resolved answer at this path
     async fn effective(&self, root_id: RootId, path: RootPath) -> Result<Effective, FilesFault> {
-        // Answers for the process principal — see the module doc. This
-        // is the one method that becomes wrong rather than incomplete
-        // when a second user appears on a server.
-        self.effective_for(&Subject::Person(this_principal()), root_id, &path)
+        // Answers for whoever is asking. It used to answer for the
+        // process principal on every call, which made it the one method
+        // that became *wrong* rather than merely incomplete the moment a
+        // second user appeared on a server.
+        let me = calling_subject().ok_or_else(|| {
+            FilesFault::invalid("this caller is not a person, so it holds no capabilities")
+        })?;
+        self.effective_for(&me, root_id, &path)
     }
 
     // t[impl files.access.internal-sharing] — the outward lane, kept

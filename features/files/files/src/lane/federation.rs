@@ -427,7 +427,10 @@ impl FederationService for FilesBackend {
         // content address exactly as a local one is: a checkpoint
         // landing mid-transfer cannot change the bytes under a
         // half-served response on either side of the boundary.
-        <Self as files_proto::service::media::MediaService>::read(self, offered.root_id, within)
+        // `ticket_for`, not `read`: the caller is on another server with
+        // no session here, and the secret checked above is what
+        // authorises it.
+        self.ticket_for(offered.root_id, within)
             .await
             .map_err(|_| FilesFault::PathNotFound(path))
     }
@@ -472,7 +475,14 @@ impl FederationService for FilesBackend {
         // seeing junk the origin's own users do not, which is a worse
         // failure than seeing it locally because it is someone else's
         // tree that looks untidy.
-        <Self as files_proto::service::tree::TreeService>::browse(self, offered.root_id, within)
+        //
+        // `listing_of` rather than `browse`, and this is the one place
+        // that distinction matters: `browse` checks the caller's grants,
+        // and this caller is on another server with no session here at
+        // all. What authorises it is the secret, checked by `live_offer`
+        // above — once, at the chokepoint, so a withdrawal binds on the
+        // next call of any kind.
+        self.listing_of(offered.root_id, within)
             .await
             .map_err(|_| FilesFault::PathNotFound(path))
     }
