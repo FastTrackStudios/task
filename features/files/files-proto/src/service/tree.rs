@@ -9,7 +9,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{ContentId, RootId};
@@ -17,7 +16,7 @@ use crate::model::{BrowseEntry, TreeNode};
 use crate::path::{RootPath, TreePath};
 
 /// Whether an entry's bytes are here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Hydration {
     /// Bytes are resident and readable now.
@@ -30,7 +29,7 @@ pub enum Hydration {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum EntryKind {
     File,
@@ -45,7 +44,7 @@ pub enum EntryKind {
 /// Carries structure and nothing heavier: no content, no renditions, no
 /// extracted text. Roughly 200–300 bytes on the wire, which is what keeps
 /// a 100k-file tree inside a phone's budget.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct CatalogueEntry {
     pub root_id: RootId,
@@ -70,13 +69,12 @@ pub struct CatalogueEntry {
 
 /// An opaque position in the change stream. Hand it back to
 /// [`TreeService::changes_since`] to resume without re-listing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Facet)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
 #[repr(C)]
 pub struct Cursor(pub String);
 
 /// A page of catalogue changes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct CatalogueDelta {
     pub changed: Vec<CatalogueEntry>,
@@ -87,7 +85,7 @@ pub struct CatalogueDelta {
 }
 
 /// How current a client's view of a root is, and of what.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Freshness {
     pub root_id: RootId,
@@ -99,7 +97,7 @@ pub struct Freshness {
     pub entries: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum TreeEvent {
     /// Entries were added or changed. Batched: one event may carry many.

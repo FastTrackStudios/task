@@ -21,11 +21,10 @@
 use std::fmt;
 
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Why a path was rejected.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Facet, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Error)]
 #[repr(u8)]
 pub enum PathError {
     #[error("path is absolute: {0}")]
@@ -67,10 +66,7 @@ fn clean(raw: &str) -> Result<String, PathError> {
 macro_rules! rel_path {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, Facet,
-        )]
-        #[serde(transparent)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Facet, )]
         // The same statement to facet, which is what vox actually
         // encodes with. Without it the two disagree: serde sees a
         // string, facet sees a one-field tuple.

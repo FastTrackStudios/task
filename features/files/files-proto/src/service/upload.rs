@@ -10,7 +10,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{ContentId, RootId, UploadId};
@@ -19,7 +18,7 @@ use crate::service::tree::CatalogueEntry;
 use crate::service::write::OnConflict;
 
 /// What the client wants to put where.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct UploadSpec {
     pub root_id: RootId,
@@ -32,7 +31,7 @@ pub struct UploadSpec {
 }
 
 /// What the server wants, having compared the spec against what it holds.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct UploadPlan {
     pub upload_id: UploadId,
@@ -49,7 +48,7 @@ pub struct UploadPlan {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(C)]
 pub struct ChunkRange {
     pub start: u64,
@@ -58,7 +57,7 @@ pub struct ChunkRange {
 
 /// The occupant of a destination, so a human can choose knowing what they
 /// would displace.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Conflict {
     pub existing: CatalogueEntry,
@@ -69,7 +68,7 @@ pub struct Conflict {
 
 /// How far an upload has got, so resumption is a fact rather than a
 /// guess.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct UploadProgress {
     pub upload_id: UploadId,
@@ -87,7 +86,7 @@ pub struct UploadProgress {
 /// Ingress rides the same transport by handing the server the receiving
 /// end of a channel, which vox binds like any other argument — "in method
 /// args, the handler holds it (handler receives ← caller)".
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum UploadFrame {
     /// Bytes at `offset` from the start of the file.
@@ -103,7 +102,7 @@ pub enum UploadFrame {
 }
 
 /// What the server made of a run of frames.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Received {
     pub upload_id: UploadId,
@@ -114,7 +113,7 @@ pub struct Received {
     pub needed: Vec<ChunkRange>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum UploadEvent {
     Started(UploadId),

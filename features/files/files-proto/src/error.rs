@@ -11,14 +11,13 @@
 //! human; the shape is for the code.
 
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::id::{DeviceId, GrantId, ReviewId, RootId, UploadId, VersionId};
 use crate::path::{PathError, RootPath, TreePath};
 
 /// What went wrong, in terms a caller can branch on.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
+#[derive(Debug, Clone, PartialEq, Facet, Error)]
 #[repr(u8)]
 pub enum FilesFault {
     // ── Identity ────────────────────────────────────────────────────

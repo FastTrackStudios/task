@@ -32,6 +32,7 @@ task-server = { path = "../server", default-features = false }
 architect = { workspace = true, features = ["local"] }
 chrono.workspace = true
 eyre.workspace = true
+facet-json = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 serde.workspace = true
 serde_json.workspace = true

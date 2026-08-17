@@ -440,7 +440,7 @@ async fn deletion_is_a_checkpoint_rather_than_a_move_to_trash() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wire_path_that_escapes_the_root_is_refused() {
     let (_tmp, backend, id, _dir) = adopted().await;
-    let hostile: RootPath = serde_json::from_str("\"../escape\"").expect("transparent newtype");
+    let hostile: RootPath = facet_json::from_str("\"../escape\"").expect("transparent newtype");
 
     assert!(matches!(
         backend

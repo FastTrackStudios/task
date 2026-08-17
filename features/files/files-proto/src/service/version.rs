@@ -13,7 +13,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{PrincipalId, RootId, SnapshotId, VersionId};
@@ -26,7 +25,7 @@ use crate::path::RootPath;
 /// and expires on its own when a client vanishes. A lock that strands a
 /// file when its holder closes a laptop is worse than the collision it
 /// prevents.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Occupancy {
     pub root_id: RootId,
@@ -41,7 +40,7 @@ pub struct Occupancy {
 
 /// How a divergence was settled. Doing nothing keeps both, which is the
 /// point — the safe outcome requires no action.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum Resolution {
     KeepMine,
@@ -53,7 +52,7 @@ pub enum Resolution {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum VersionEvent {
     /// A session ended in a certified checkpoint.

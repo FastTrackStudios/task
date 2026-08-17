@@ -12,14 +12,13 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{GrantId, PrincipalId, RootId, ShareId};
 use crate::path::RootPath;
 
 /// One thing a principal may do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Capability {
     Read,
@@ -35,7 +34,7 @@ pub enum Capability {
 }
 
 /// Who a grant is for.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum Subject {
     Person(PrincipalId),
@@ -51,7 +50,7 @@ pub enum Subject {
 }
 
 /// A grant of capabilities over a path.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Grant {
     pub id: GrantId,
@@ -66,7 +65,7 @@ pub struct Grant {
 }
 
 /// A public link — the outward lane, unchanged in shape from v1.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct ShareLink {
     pub id: ShareId,
@@ -83,7 +82,7 @@ pub struct ShareLink {
 
 /// What the caller may do at a path — one answer rather than a rules
 /// dump, so a UI can enable and disable without re-deriving policy.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Effective {
     pub root_id: RootId,
@@ -91,7 +90,7 @@ pub struct Effective {
     pub capabilities: Vec<Capability>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum AccessEvent {
     Granted(Grant),

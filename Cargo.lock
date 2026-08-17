@@ -21521,6 +21521,7 @@ dependencies = [
  "email-secret",
  "exercises",
  "eyre",
+ "facet-json",
  "files-proto",
  "finance",
  "finance-db",

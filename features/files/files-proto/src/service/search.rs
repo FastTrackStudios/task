@@ -12,7 +12,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::RootId;
@@ -20,7 +19,7 @@ use crate::path::RootPath;
 use crate::service::media::Region;
 
 /// What was pulled out of a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Extract {
     /// Text of a document or PDF.
@@ -34,7 +33,7 @@ pub enum Extract {
 }
 
 /// How far extraction has got for one file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct ExtractState {
     pub root_id: RootId,
@@ -51,7 +50,7 @@ pub struct ExtractState {
 }
 
 /// A query. Free text, optionally narrowed.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Query {
     pub text: String,
@@ -68,7 +67,7 @@ pub struct Query {
 /// A hit addresses a **region**, not a file: the seconds of footage with
 /// a dog in them, the page of the PDF, the block of the note. Opening it
 /// lands there rather than at the top of a two-hour file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Hit {
     pub root_id: RootId,
@@ -80,7 +79,7 @@ pub struct Hit {
     pub score: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum SearchEvent {
     /// A file became searchable, or failed to.

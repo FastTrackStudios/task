@@ -9,19 +9,17 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{ActivityId, PrincipalId, RootId};
 use crate::path::RootPath;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Facet)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Facet)]
 #[repr(C)]
 pub struct Tag(pub String);
 
 /// A file and what has been said about it by hand.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Marks {
     pub root_id: RootId,
@@ -33,7 +31,7 @@ pub struct Marks {
 }
 
 /// What happened.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Action {
     Created,
@@ -55,7 +53,7 @@ pub enum Action {
 /// Derived from the same events that drive live propagation, so what
 /// propagates is what is recorded — an audit trail and a change feed
 /// cannot disagree if they are the same stream.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Activity {
     pub id: ActivityId,
@@ -69,7 +67,7 @@ pub struct Activity {
     pub at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum OrganiseEvent {
     MarksChanged(Marks),

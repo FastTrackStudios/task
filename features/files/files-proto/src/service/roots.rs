@@ -7,7 +7,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::RootId;
@@ -15,7 +14,7 @@ use crate::model::{FileRootInfo, RootFlavor};
 
 /// How far adoption has got. A root is usable at every stage but the
 /// first — `files.adopt.catalogue-first`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum AdoptionPhase {
     /// Walking the tree, publishing entries from name/size/mtime.
@@ -32,7 +31,7 @@ pub enum AdoptionPhase {
 
 /// Adoption's progress, for a UI that must not imply the tree is
 /// incomplete when it is merely unverified.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct AdoptionProgress {
     pub root_id: RootId,
@@ -51,7 +50,7 @@ pub struct AdoptionProgress {
 
 /// Everything needed to adopt a tree. A struct rather than four params
 /// because this is exactly the signature that would break next.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct AdoptRequest {
     /// The existing directory. Nothing under it is moved, copied or
@@ -65,7 +64,7 @@ pub struct AdoptRequest {
     pub hash_content: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum RootEvent {
     Created(FileRootInfo),

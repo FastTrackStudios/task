@@ -86,7 +86,7 @@ async fn browsing_an_unknown_root_names_the_root_it_could_not_find() {
 async fn browse_refuses_a_path_that_escapes_its_root() {
     let (_tmp, backend, id) = adopted().await;
     // Bypass `parse` exactly as a hostile peer's `Deserialize` would.
-    let hostile: RootPath = serde_json::from_str("\"../..\"").expect("transparent decode");
+    let hostile: RootPath = facet_json::from_str("\"../..\"").expect("transparent decode");
     assert!(
         matches!(
             TreeService::browse(&backend, id, hostile).await,

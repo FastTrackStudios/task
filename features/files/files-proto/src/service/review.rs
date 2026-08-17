@@ -11,7 +11,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{CommentId, ReviewId, RootId, VersionId};
@@ -20,7 +19,7 @@ use crate::path::RootPath;
 use crate::service::media::{ByteTicket, Region};
 
 /// A comment being placed, before it has an id.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct NewComment {
     pub review: ReviewId,
@@ -38,7 +37,7 @@ pub struct NewComment {
 }
 
 /// What a guest is allowed to do, resolved from the link.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct GuestScope {
     pub review: ReviewId,
@@ -49,7 +48,7 @@ pub struct GuestScope {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum ReviewEvent {
     Created(Review),

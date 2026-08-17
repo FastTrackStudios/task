@@ -10,17 +10,13 @@
 //! payloads keep parsing.
 
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Declares a transparent newtype over `Uuid` with the usual conversions.
 macro_rules! uuid_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Facet,
-        )]
-        #[serde(transparent)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Facet, )]
         #[repr(C)]
         pub struct $name(pub Uuid);
 
@@ -162,8 +158,7 @@ uuid_id!(
 /// `ContentId` across roots, orgs and servers, which is what makes
 /// `files.scale.small-files` dedup and `files.topology.federation`
 /// zero-transfer sharing work.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Facet)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Facet)]
 #[repr(C)]
 pub struct ContentId(pub String);
 

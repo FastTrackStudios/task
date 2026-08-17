@@ -74,7 +74,6 @@ pub mod version;
 pub mod write;
 
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 // v1, re-exported at its original path so downstream keeps compiling.
 pub use legacy::{FilesError, FilesEvent as LegacyFilesEvent, FilesService};
@@ -101,7 +100,7 @@ pub use write::WriteService;
 ///
 /// The no-snapshot contract is unchanged — fetch current state once
 /// *after* subscribing, then fold these in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum FilesEvent {
     Root(roots::RootEvent),

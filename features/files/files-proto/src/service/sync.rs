@@ -13,21 +13,19 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{DeviceId, RootId};
 use crate::path::RootPath;
 
 /// A named class of content within a project.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Facet)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Facet)]
 #[repr(C)]
 pub struct FacetName(pub String);
 
 /// Where a facet mapping came from. The distinction matters: one is
 /// knowledge about a tool, the other is a decision about a project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum FacetSource {
     /// The capability knows this layout because the application always
@@ -42,7 +40,7 @@ pub enum FacetSource {
 }
 
 /// One directory's facet.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct FacetBinding {
     pub path: RootPath,
@@ -56,7 +54,7 @@ pub struct FacetBinding {
 }
 
 /// A device's subscription to a root.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Subscription {
     pub device: DeviceId,
@@ -69,7 +67,7 @@ pub struct Subscription {
 
 /// Ignore rules, in two independent layers. Neither can defeat the
 /// other, and a file matching either is ignored.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct IgnoreSet {
     /// What an operating system leaves behind: `.DS_Store`, AppleDouble
@@ -84,7 +82,7 @@ pub struct IgnoreSet {
 }
 
 /// Transfer limits for a device.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Facet)]
 #[repr(C)]
 pub struct TransferPolicy {
     /// Bytes per second, `None` for unlimited.
@@ -93,7 +91,7 @@ pub struct TransferPolicy {
     pub paused: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct DeviceInfo {
     pub id: DeviceId,
@@ -105,7 +103,7 @@ pub struct DeviceInfo {
     pub revoked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum SyncEvent {
     /// A path's bytes became resident, or were replaced by a stub.

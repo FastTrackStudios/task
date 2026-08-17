@@ -8,7 +8,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{ContentId, RootId, VersionId};
@@ -21,7 +20,7 @@ use crate::path::RootPath;
 /// `Vec<u8>` return type is how a 244 GB project becomes an out-of-memory
 /// error, and a ticket keeps range requests, resumption and peer-to-peer
 /// transfer available without any of them touching this trait.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct ByteTicket {
     pub token: String,
@@ -39,7 +38,7 @@ pub struct ByteTicket {
 /// One scheme, three consumers — search hits, review annotations and
 /// resource annotations. `files.index.regions` requires exactly this: a
 /// second addressing scheme for the same idea is the failure mode.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum Region {
     /// Seconds from the start, `[start, end)`.
@@ -64,7 +63,7 @@ pub enum Region {
 ///
 /// Inclusive because HTTP's `Range` is, and the browser adapter's whole
 /// job is to answer `Range` without translating a convention twice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(C)]
 pub struct ByteRange {
     pub first: u64,
@@ -72,7 +71,7 @@ pub struct ByteRange {
 }
 
 /// What to read, and how much of it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct ByteRequest {
     /// A token from [`ByteTicket`].
@@ -86,7 +85,7 @@ pub struct ByteRequest {
 /// A frame rather than a bare `Vec<u8>` because a stream has to be able
 /// to say three things a raw byte sequence cannot: how long it will be,
 /// that it finished, and that it did not.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum ByteFrame {
     /// Always first. Carries what an HTTP adapter needs for its headers
@@ -113,7 +112,7 @@ pub enum ByteFrame {
 }
 
 /// Where a handoff should land.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum HandoffTarget {
     /// A bin of clips.
@@ -123,7 +122,7 @@ pub enum HandoffTarget {
 }
 
 /// One item in a handoff: content, and which part of it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct HandoffItem {
     pub root_id: RootId,
@@ -135,7 +134,7 @@ pub struct HandoffItem {
 
 /// A handoff an editor can collect. Content stays in place; nothing is
 /// copied.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Handoff {
     pub name: String,
@@ -146,7 +145,7 @@ pub struct Handoff {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum MediaEvent {
     /// A rendition finished and is now servable.

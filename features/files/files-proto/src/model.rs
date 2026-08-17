@@ -8,7 +8,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A File Root's versioning mode, chosen at creation and immutable
@@ -23,7 +22,7 @@ use uuid::Uuid;
 ///   checkout, while the Files RPC surface reads that same history.
 ///   Heavy stray files are kept out of it by the flavor's Ignore set
 ///   seed plus the tree's own `.gitignore`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum RootFlavor {
     Media,
@@ -42,7 +41,7 @@ pub enum RootFlavor {
 /// That separation is what `files.peering.replication` needs: a host
 /// may hold an org's structure and none of its content, and such a host
 /// knows the root without having anywhere to put it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct FileRootInfo {
     pub id: Uuid,
@@ -96,7 +95,7 @@ impl FileRootInfo {
 /// [`crate::service::FilesService::browse`] or a rootless
 /// [`crate::service::FilesService::drive_browse`] ("Drive" browsing
 /// per the glossary: loose files outside any root).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct BrowseEntry {
     pub name: String,
@@ -127,7 +126,7 @@ pub struct BrowseEntry {
 /// `Projects/` (vault project folders joined with their File Roots),
 /// `Vault/` and `Wiki/` (lensed: Folders + Tags), `Assets/` (loose
 /// files outside any root).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub enum TreeNode {
     /// A listing at this tree path — virtual (areas, lenses, tag
@@ -144,7 +143,7 @@ pub enum TreeNode {
 /// auto-snapshot as a **save point** (display metadata, not a
 /// version)"). A save point is never itself a version — it is a label
 /// riding the capture that followed it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct SavePoint {
     /// Root-relative path of the project file that was saved.
@@ -158,7 +157,7 @@ pub struct SavePoint {
 /// commits branch off the checkpoint line rather than sitting on it, so
 /// [`crate::service::FilesService::chain`] walks straight past them —
 /// and expirable, so a tracking day doesn't drown the history in noise.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct SnapshotInfo {
     pub root_id: Uuid,
@@ -174,7 +173,7 @@ pub struct SnapshotInfo {
 /// One entry in a file's version chain (glossary "File version
 /// chain"), newest first — the wire projection of
 /// `files_store::version::chain::VersionEntry`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct ChainEntry {
     /// Hex-encoded jj `CommitId` that produced this saved state.
@@ -211,7 +210,7 @@ pub struct ChainEntry {
 /// pointer it resolved to when named (what GC protects and what a
 /// share link streams). See
 /// [`crate::service::FilesService::resolve_named_version`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct NamedVersion {
     pub id: Uuid,
@@ -240,7 +239,7 @@ pub struct NamedVersion {
 ///
 /// This ticket (#261) is the entity plus its numbering — the restart
 /// flow that actually flips a root's live tree is #268.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct ProjectVersion {
     pub id: Uuid,
@@ -264,7 +263,7 @@ pub struct ProjectVersion {
 /// "Project Title NEW final2" folder idiom — same folder, new
 /// lineage). Whatever the mode, the old iteration's terminal state is
 /// checkpointed first and stays browsable read-only.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum RestartMode {
     /// The new iteration starts with nothing: every tracked file is
@@ -292,7 +291,7 @@ pub enum RestartMode {
 /// the entity's `change_id` through the root's index when possible, so
 /// a rewritten change still lands on its current commit, and falling
 /// back to the recorded `commit_id` otherwise.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct VersionRef {
     pub root_id: Uuid,
@@ -307,7 +306,7 @@ pub struct VersionRef {
 /// set resolved from the Vault (ADR 0001: "protect set =
 /// index-reachable ∪ Vault-referenced ... the Vault is the authority
 /// on immortality").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(C)]
 pub struct GcReport {
     /// Tree/commit/copy-history objects removed.
@@ -322,7 +321,7 @@ pub struct GcReport {
 
 /// Result of [`crate::service::FilesService::checkpoint_now`] (glossary
 /// "Session checkpoint").
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct CheckpointInfo {
     pub root_id: Uuid,
@@ -350,7 +349,7 @@ pub struct CheckpointInfo {
 /// live-tree content replaced by a pointer stub — or `Hydrated` — exact
 /// content restored over the stub, verified by `FileId`. Carried by
 /// [`crate::service::FilesEvent`] so explorers refresh the one row.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct HydrationChange {
     pub root_id: Uuid,
@@ -363,7 +362,7 @@ pub struct HydrationChange {
 
 /// Result of [`crate::service::FilesService::apply_hydration_policy`]:
 /// what one policy pass changed, root-relative paths, sorted.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Default, PartialEq, Facet)]
 #[repr(C)]
 pub struct HydrationReport {
     /// Stubs the policy matched and restored to resident content.
@@ -386,7 +385,7 @@ pub struct HydrationReport {
 /// One side of a file's Divergent versions (glossary): the commit
 /// (a view head) holding this side and the content identity it has
 /// there — `None` when this side deleted the file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct DivergenceSide {
     /// Hex jj `CommitId` of the head carrying this side.
@@ -400,7 +399,7 @@ pub struct DivergenceSide {
 /// on-disk conflict markers; the UI resolves). Produced by
 /// [`crate::service::FilesService::divergences`], settled by
 /// [`crate::service::FilesService::resolve_divergence`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct DivergenceInfo {
     pub root_id: Uuid,
@@ -413,7 +412,7 @@ pub struct DivergenceInfo {
 
 /// The resolution verdict for one divergent path (glossary "Divergent
 /// versions": pick A / pick B / keep both).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum DivergenceChoice {
     /// Keep the named head's side of this path (pick by commit id —
@@ -427,7 +426,7 @@ pub enum DivergenceChoice {
 /// Which derived rendition of a media file (issue #269) — a proxy for
 /// streaming, an audio rendition, waveform peaks, a filmstrip. The wire
 /// tag mirrors `files_transcode::RenditionKind`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum RenditionKind {
     Proxy1080,
@@ -461,7 +460,7 @@ impl RenditionKind {
 /// `(root, file path)`; it survives new versions of its file — the
 /// comments record the version they were made on, the review itself
 /// records only the file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Review {
     pub id: Uuid,
@@ -480,7 +479,9 @@ pub struct Review {
 /// One point of an annotation stroke, in coordinates normalized to the
 /// video frame (`0..=1` on both axes) — what makes a drawing re-anchor
 /// across renditions and window sizes (issue #270 AC 3).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Facet)]
+/// Serde as well as facet, for the same reason as
+/// [`AnnotationStroke`], which holds these.
+#[derive(Debug, Clone, Copy, PartialEq, Facet, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct AnnotationPoint {
     pub x: f32,
@@ -488,7 +489,13 @@ pub struct AnnotationPoint {
 }
 
 /// One freehand stroke of a frame annotation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+///
+/// The one type in this crate that still derives serde, and the reason
+/// is the format rather than the type: strokes are stored in a note's
+/// YAML frontmatter (`files::entity`), and `facet-yaml` has no release
+/// matching the facet version this workspace pins. Drop the derives the
+/// day it does.
+#[derive(Debug, Clone, PartialEq, Facet, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct AnnotationStroke {
     pub points: Vec<AnnotationPoint>,
@@ -502,7 +509,7 @@ pub struct AnnotationStroke {
 /// body is the comment text. Records the file version (`commit_id`)
 /// the commenter was watching, so a new version of the file keeps old
 /// feedback attributed to the frames it was actually about (AC 2).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct ReviewComment {
     pub id: Uuid,
@@ -524,7 +531,6 @@ pub struct ReviewComment {
     /// Share-link attribution (issue #272 AC 1): the label/token of the
     /// guest link this comment arrived through. Empty for org members.
     /// Stamped by the guest lane server-side — a client never sets it.
-    #[serde(default)]
     pub via_link: String,
     pub created_at: DateTime<Utc>,
 }
@@ -532,7 +538,7 @@ pub struct ReviewComment {
 /// Input half of [`ReviewComment`] for
 /// [`crate::service::FilesService::add_review_comment`] (bundled — RPC
 /// methods carry at most 4 params).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct NewReviewComment {
     pub timecode_secs: f64,
@@ -548,7 +554,7 @@ pub struct NewReviewComment {
 /// A generated (or cached) rendition, ready to stream: its CAS content
 /// id, byte length, and MIME. The Review page (issue #270) resolves a
 /// media file to this, then streams the bytes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct RenditionInfo {
     /// Hex CAS `FileId` of the rendition's bytes.

@@ -8,7 +8,6 @@
 //! constraint, per the monorepo's root CLAUDE.md).
 
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -17,7 +16,7 @@ use crate::model::{
     HydrationReport, NamedVersion, ProjectVersion, SnapshotInfo, TreeNode, VersionRef,
 };
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
+#[derive(Debug, Clone, PartialEq, Facet, Error)]
 #[repr(u8)]
 pub enum FilesError {
     #[error("not found: {0}")]
@@ -34,7 +33,7 @@ pub enum FilesError {
 /// once via `list_roots`/`chain` (after subscribing, so nothing is
 /// missed in between), then fold these in — same no-snapshot-variant
 /// contract as `task_proto::TaskEvent` / `timer_proto::TimerEvent`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum FilesEvent {
     /// A new File Root was created.

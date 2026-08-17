@@ -32,7 +32,6 @@
 
 use chrono::{DateTime, Utc};
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{GrantId, RootId};
@@ -45,8 +44,7 @@ use crate::service::media::ByteTicket;
 /// A public key. Registration is pasting one of these into a device —
 /// there is no host, no port and no certificate to get wrong, and a
 /// server that moves networks keeps its id.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Facet)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Facet)]
 #[repr(C)]
 pub struct EndpointId(pub String);
 
@@ -61,7 +59,7 @@ impl std::fmt::Display for EndpointId {
 /// Everything the receiver needs and nothing it does not: it never
 /// learns the origin's other roots, its principals, or anything about
 /// the subtree's parents.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Offer {
     /// The origin, to dial.
@@ -86,7 +84,7 @@ pub struct Offer {
 }
 
 /// An offer this server has accepted.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Remote {
     /// The local root the offer became. It is an ordinary `RootId` on
@@ -109,7 +107,7 @@ pub struct Remote {
 ///
 /// Half-open: `[offset, offset + len)`. `len` is what keeps a relay's
 /// memory flat regardless of how large the object is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(C)]
 pub struct ByteRange {
     pub offset: u64,
@@ -132,7 +130,7 @@ impl ByteRange {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum FederationEvent {
     Offered(Offer),

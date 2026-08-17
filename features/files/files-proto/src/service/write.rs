@@ -10,7 +10,6 @@
 //! as one, applying atomically across the set.
 
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::RootId;
@@ -21,7 +20,7 @@ use crate::service::tree::CatalogueEntry;
 ///
 /// No default and no inference: `files.write.upload` forbids choosing for
 /// the user, and the same discipline applies to move and copy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum OnConflict {
     /// Refuse, returning [`FilesFault::Exists`]. Ask a human.
@@ -36,7 +35,7 @@ pub enum OnConflict {
 }
 
 /// A move or copy.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Relocation {
     pub from: RootPath,
@@ -44,7 +43,7 @@ pub struct Relocation {
 }
 
 /// What actually happened to one path in a batch.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct Outcome {
     pub path: RootPath,
@@ -56,7 +55,7 @@ pub struct Outcome {
 }
 
 /// The result of one transactional batch.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct WriteReceipt {
     pub root_id: RootId,
@@ -66,7 +65,7 @@ pub struct WriteReceipt {
     pub operation: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum WriteEvent {
     Created(Vec<CatalogueEntry>),

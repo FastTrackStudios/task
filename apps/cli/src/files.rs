@@ -330,7 +330,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("create_root: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&root)?);
+                println!("{}", facet_json::to_string(&root).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!("{} ({})", root.id, placement(&root));
             }
@@ -341,7 +341,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("list_roots: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&roots)?);
+                println!("{}", facet_json::to_string(&roots).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 for r in roots {
                     println!(
@@ -361,7 +361,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("get_root: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&root)?);
+                println!("{}", facet_json::to_string(&root).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "{} [{:?}] ({}){}",
@@ -400,7 +400,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("chain: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&chain)?);
+                println!("{}", facet_json::to_string(&chain).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 for entry in chain {
                     let renamed = entry
@@ -432,7 +432,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("checkpoint_now: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&info)?);
+                println!("{}", facet_json::to_string(&info).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "{}  {} ({} paths changed{}{})",
@@ -458,7 +458,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("snapshots: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&snapshots)?);
+                println!("{}", facet_json::to_string(&snapshots).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 for s in snapshots {
                     let saves: Vec<&str> = s.save_points.iter().map(|p| p.path.as_str()).collect();
@@ -487,7 +487,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("name_version: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&named)?);
+                println!("{}", facet_json::to_string(&named).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "{}  {}  {}  ({})",
@@ -504,7 +504,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("list_named_versions: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&versions)?);
+                println!("{}", facet_json::to_string(&versions).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 for v in versions {
                     println!("{}  {}  {}", v.id, short(&v.commit_id), v.name);
@@ -517,7 +517,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("resolve_named_version: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&target)?);
+                println!("{}", facet_json::to_string(&target).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "root {}  change {}  commit {}",
@@ -544,7 +544,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("start_project_version: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&pv)?);
+                println!("{}", facet_json::to_string(&pv).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!("v{}{}  ({})", pv.number, label_suffix(&pv.label), pv.path);
             }
@@ -555,7 +555,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("list_project_versions: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&versions)?);
+                println!("{}", facet_json::to_string(&versions).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 for v in versions {
                     println!(
@@ -589,7 +589,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("restart_project_version: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&pv)?);
+                println!("{}", facet_json::to_string(&pv).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "restarted as v{}{} at {}",
@@ -622,7 +622,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("copy_forward: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&written)?);
+                println!("{}", facet_json::to_string(&written).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 for path in &written {
                     println!("{path}");
@@ -665,7 +665,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("dehydrate: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&entry)?);
+                println!("{}", facet_json::to_string(&entry).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "{} dehydrated ({} bytes stay addressable in the store)",
@@ -684,7 +684,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("hydrate: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&entry)?);
+                println!("{}", facet_json::to_string(&entry).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "{} hydrated ({} bytes resident, verified by FileId)",
@@ -717,7 +717,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("apply_hydration_policy: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
+                println!("{}", facet_json::to_string(&report).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "hydrated {}, dehydrated {}, skipped {} dirty",
@@ -740,7 +740,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 .await
                 .map_err(|e| eyre::eyre!("gc_root: {e}"))?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
+                println!("{}", facet_json::to_string(&report).map_err(|e| eyre::eyre!("{e}"))?);
             } else {
                 println!(
                     "{} objects, {} manifests swept; {} vault-protected commits",
@@ -776,7 +776,7 @@ fn project_version_suffix(root: &files_proto::FileRootInfo) -> String {
 
 fn print_entries(entries: &[files_proto::BrowseEntry], json: bool) -> eyre::Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(entries)?);
+        println!("{}", facet_json::to_string(entries).map_err(|e| eyre::eyre!("{e}"))?);
         return Ok(());
     }
     for e in entries {
@@ -799,7 +799,7 @@ fn print_entries(entries: &[files_proto::BrowseEntry], json: bool) -> eyre::Resu
 
 fn print_patterns(patterns: &[String], json: bool) -> eyre::Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(patterns)?);
+        println!("{}", facet_json::to_string(patterns).map_err(|e| eyre::eyre!("{e}"))?);
         return Ok(());
     }
     for p in patterns {

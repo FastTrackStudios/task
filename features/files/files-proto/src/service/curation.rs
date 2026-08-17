@@ -8,14 +8,13 @@
 //! immortal where ordinary checkpoints are not.
 
 use facet::Facet;
-use serde::{Deserialize, Serialize};
 
 use crate::error::FilesFault;
 use crate::id::{ProjectVersionId, RootId, VersionId};
 use crate::model::{NamedVersion, ProjectVersion, RestartMode};
 use crate::path::RootPath;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum CurationEvent {
     VersionNamed(NamedVersion),

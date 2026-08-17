@@ -137,9 +137,9 @@ async fn confinement_holds_against_a_deserialised_path() {
 
     // Serialise a legitimate path, then tamper with the wire form the way
     // a hostile peer would.
-    let json = serde_json::to_string(&RootPath::parse("stems").unwrap()).unwrap();
-    assert_eq!(json, "\"stems\"");
-    let escaping: RootPath = serde_json::from_str("\"../../etc\"").expect("deserialises");
+    let json = facet_json::to_string(&RootPath::parse("stems").unwrap()).unwrap();
+    assert_eq!(json, "\"stems\"", "the wire form is the string, not a tuple");
+    let escaping: RootPath = facet_json::from_str("\"../../etc\"").expect("deserialises");
     assert_eq!(
         escaping.as_str(),
         "../../etc",
