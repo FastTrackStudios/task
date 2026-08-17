@@ -16,11 +16,24 @@
 //! Sam and Casey are the two that carry the test. Sam has the run of
 //! the session and cannot hand it on; Casey can see the mix, say what
 //! they think of it, and not walk away with it.
+//!
+//! # Who they are is not decided here
+//!
+//! The four of them, their emails and what each holds live in
+//! [`task_server::example_org::CAST`], beside the tree they work on.
+//! `task-server admin demo` creates the same four from the same list, so
+//! signing into the demo as Casey gets you what this suite asserts Casey
+//! gets.
+//!
+//! Two lists would have drifted, and the drift would have been silent:
+//! a suite proving the client is refused at the session folder, and a
+//! demo handing them the whole org, both read as a passing suite.
 
 use files::RootId;
 use files::id::PrincipalId;
 use files::path::RootPath;
-use files::service::access::{Capability, Subject};
+use files::service::access::Subject;
+use task_server::example_org::{self, Holds};
 
 use crate::orgs::Orgs;
 
@@ -59,40 +72,18 @@ pub struct People {
     pub casey: Person,
 }
 
-/// Everything an owner holds.
-pub fn owner_capabilities() -> Vec<Capability> {
-    vec![
-        Capability::Read,
-        Capability::Write,
-        Capability::History,
-        Capability::Comment,
-        Capability::Download,
-        Capability::Share,
-    ]
-}
-
-/// What an employee holds: the work, but not the guest list.
+/// The example's member with this email, or a panic naming what is
+/// missing.
 ///
-/// Everything an owner has except [`Capability::Share`]. Withholding it
-/// is what makes "Sam cannot widen the client's reach" a property of
-/// the system rather than of Sam.
-pub fn employee_capabilities() -> Vec<Capability> {
-    vec![
-        Capability::Read,
-        Capability::Write,
-        Capability::History,
-        Capability::Comment,
-        Capability::Download,
-    ]
-}
-
-/// What a client holds: read the mix, say what they think of it.
-///
-/// Note what is absent. `Comment` without `Download` is the whole
-/// distinction — a client who can review the deliverable is not thereby
-/// a client who can keep it.
-pub fn client_capabilities() -> Vec<Capability> {
-    vec![Capability::Read, Capability::Comment]
+/// A panic rather than an `Option`: the cast is a compile-time constant
+/// two crates share, so a lookup that misses means someone renamed a
+/// member on one side, and a `None` quietly threaded through setup would
+/// surface as an unexplained denial three chapters later.
+fn member(email: &str) -> example_org::Member {
+    *example_org::CAST
+        .iter()
+        .find(|m| m.email == email)
+        .unwrap_or_else(|| panic!("`{email}` is not in example_org::CAST"))
 }
 
 impl People {
@@ -106,10 +97,17 @@ impl People {
     pub async fn hire(orgs: &Orgs, acme_root: RootId, vnt_root: RootId) -> Self {
         use files::service::access::AccessService;
 
-        let alice = sign_up(&orgs.acme, "alice@acme.test", "Alice").await;
-        let victor = sign_up(&orgs.vnt, "victor@vnt.test", "Victor").await;
-        let sam = sign_up(&orgs.acme, "sam@acme.test", "Sam").await;
-        let casey = sign_up(&orgs.acme, "casey@client.test", "Casey").await;
+        let (m_alice, m_victor, m_sam, m_casey) = (
+            member("alice@acme.test"),
+            member("victor@vnt.test"),
+            member("sam@acme.test"),
+            member("casey@client.test"),
+        );
+
+        let alice = sign_up(&orgs.acme, m_alice).await;
+        let victor = sign_up(&orgs.vnt, m_victor).await;
+        let sam = sign_up(&orgs.acme, m_sam).await;
+        let casey = sign_up(&orgs.acme, m_casey).await;
 
         orgs.acme
             .backend
@@ -117,7 +115,7 @@ impl People {
                 alice.subject.clone(),
                 acme_root,
                 RootPath::root(),
-                owner_capabilities(),
+                Holds::Owner.capabilities(),
             )
             .await
             .expect("ACME grants Alice her own org");
@@ -127,7 +125,7 @@ impl People {
                 victor.subject.clone(),
                 vnt_root,
                 RootPath::root(),
-                owner_capabilities(),
+                Holds::Owner.capabilities(),
             )
             .await
             .expect("VNT grants Victor his own org");
@@ -139,19 +137,21 @@ impl People {
                 sam.subject.clone(),
                 acme_root,
                 RootPath::root(),
-                employee_capabilities(),
+                m_sam.holds.capabilities(),
             )
             .expect("Alice hires Sam onto the project");
 
-        // `Deliverables` and nothing above it.
+        // `Deliverables` and nothing above it. The scope comes from the
+        // cast, so the demo's Casey is confined to the same folder this
+        // chapter asserts they cannot leave.
         orgs.acme
             .backend
             .grant_as(
                 &alice.subject,
                 casey.subject.clone(),
                 acme_root,
-                RootPath::parse("Deliverables").unwrap(),
-                client_capabilities(),
+                RootPath::parse(m_casey.scope).expect("the client's scope is a path"),
+                m_casey.holds.capabilities(),
             )
             .expect("Alice sends the client the deliverables");
 
@@ -170,13 +170,16 @@ impl People {
 /// gate resolves the token this returns, and a suite whose callers are
 /// all anonymous cannot tell a permit table that covers a method from
 /// one that does not.
-async fn sign_up(server: &crate::server::Server, email: &str, name: &str) -> Person {
+/// The password is the example's, so a token minted here and a sign-in
+/// on the demo server are the same credential.
+async fn sign_up(server: &crate::server::Server, member: example_org::Member) -> Person {
+    let name = member.name;
     let bundle = server
         .auth
         .auth
         .create_email_password_user(architect_auth::CreateEmailPasswordUser {
-            email: email.to_string(),
-            password: "correct-horse-battery-staple".into(),
+            email: member.email.to_string(),
+            password: example_org::PASSWORD.into(),
             name: Some(name.to_string()),
             username: None,
             image: None,
@@ -198,6 +201,6 @@ async fn sign_up(server: &crate::server::Server, email: &str, name: &str) -> Per
     Person {
         subject: Subject::Person(PrincipalId::new(id)),
         token: bundle.token,
-        email: email.to_string(),
+        email: member.email.to_string(),
     }
 }

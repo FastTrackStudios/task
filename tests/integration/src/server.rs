@@ -35,10 +35,12 @@
 //! traverses the NAT, and falls back to a relay only if it must; the
 //! caller never learns which happened.
 //!
-//! The secret key is fresh per run. A real server persists it
-//! (`EngineHost::iroh(key_path, id_path)`) so its id survives a restart
-//! — which is the entire point of registering a device against an id
-//! rather than an address.
+//! The secret key is fresh per run. A real server persists it at
+//! `orgs/<slug>/iroh-key.ed25519` (`task_server::iroh_host`) so its id
+//! survives a restart — which is the entire point of registering a
+//! device against an id rather than an address. [`Server::restart`]
+//! keeps the key for the same reason, in memory rather than on disk,
+//! because a test process is the only thing it has to outlive.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -89,6 +91,17 @@ impl Server {
     /// `fixture` writes the tree this org starts with, under the org's
     /// own files directory: the tree is *already there* before anyone
     /// adopts it, which is the premise the adoption chapter rests on.
+    ///
+    /// `examples/studio` is planted first, so this org holds the same
+    /// projects `task-server admin demo` gives you — `Example Album`,
+    /// `Shared Project`, the folders named to break a reader. The
+    /// closure then adds what a chapter needs on top.
+    ///
+    /// Both, rather than one: the example is a studio's disk and says
+    /// nothing about chunk boundaries, while the generated takes the
+    /// `scale` chapter needs are megabytes and do not belong in git. A
+    /// world that had only the first could not test transfer, and one
+    /// with only the second is not a world anybody could be shown.
     pub async fn start(name: &'static str, slug: &str, fixture: impl Fn(&Path)) -> Self {
         let data = tempfile::tempdir().expect("data dir");
         let auth = AuthState::open("sqlite::memory:", SECRET)
@@ -115,6 +128,11 @@ impl Server {
         let mut org = state.org(slug).expect("the org we just scaffolded");
         let tree = data.path().join("orgs").join(slug).join("files");
         std::fs::create_dir_all(&tree).expect("files dir");
+        task_server::example_org::install(
+            &org_proto::DataRoot::new(data.path().into()).org(slug),
+            slug,
+        )
+        .expect("plant the example studio");
         fixture(&tree);
 
         let key = iroh::SecretKey::generate();

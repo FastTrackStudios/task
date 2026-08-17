@@ -26,6 +26,21 @@
 //! is no network to discover them over, and why that is a property of
 //! the endpoint rather than a branch in the dialler.
 //!
+//! # The world here is the world you can run
+//!
+//! Every server boots from `examples/studio` — the same tree
+//! `task-server admin demo` plants — and hires the same four people from
+//! the same list (`task_server::example_org::CAST`). So `just demo`
+//! gives you this suite's world with a browser pointed at it, and a
+//! chapter that passes is a claim about something you can go and look
+//! at.
+//!
+//! It was not always so. The scenario booted from eight files written
+//! inline in `orgs.rs` while the example tree was read by two chapters
+//! as a *tree*, and the demo seeder invented a third world of its own —
+//! three arrangements, no two of them the same, and a passing suite that
+//! said nothing about either of the others.
+//!
 //! # Why the fixtures are tiny
 //!
 //! Almost every byte here is written by the harness, and most fixtures
