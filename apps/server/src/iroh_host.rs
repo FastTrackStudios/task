@@ -115,7 +115,7 @@ pub async fn start(state: &AppState) -> Option<IrohHost> {
         let book = AddressBook::new();
         // Read once before binding, so an endpoint that dials
         // immediately already knows about whoever came up first.
-        absorb(dir, &book);
+        absorb_addrs(dir, &book);
         book
     });
 
@@ -141,7 +141,7 @@ pub async fn start(state: &AppState) -> Option<IrohHost> {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(RESCAN).await;
-                absorb(&dir, &book);
+                absorb_addrs(&dir, &book);
             }
         });
     }
@@ -193,18 +193,25 @@ async fn bind_org(
 }
 
 /// Write this endpoint's address where sibling servers will read it.
+///
+/// # Errors
+///
+/// Any filesystem error creating the directory or writing the record.
+pub fn publish_addr(dir: &Path, slug: &str, endpoint: &iroh::Endpoint) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let json = serde_json::to_vec_pretty(&endpoint.addr())
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    // Write-then-rename: a reader scanning this directory on its own
+    // clock must never see half a record.
+    let tmp = dir.join(format!(".{slug}.addr.json.tmp"));
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(tmp, dir.join(format!("{slug}.addr.json")))
+}
+
+/// Publish, and log rather than fail — a server that cannot write its
+/// address is still a server, just one nobody offline can find.
 fn publish(dir: &Path, slug: &str, endpoint: &iroh::Endpoint) {
-    let write = || -> std::io::Result<()> {
-        std::fs::create_dir_all(dir)?;
-        let json = serde_json::to_vec_pretty(&endpoint.addr())
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        // Write-then-rename: a reader scanning this directory on its own
-        // clock must never see half a record.
-        let tmp = dir.join(format!(".{slug}.addr.json.tmp"));
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(tmp, dir.join(format!("{slug}.addr.json")))
-    };
-    if let Err(e) = write() {
+    if let Err(e) = publish_addr(dir, slug, endpoint) {
         warn!(dir = %dir.display(), error = %e, "iroh: could not publish this endpoint's address");
     }
 }
@@ -215,7 +222,7 @@ fn publish(dir: &Path, slug: &str, endpoint: &iroh::Endpoint) {
 /// written by peers on their own schedule, so a file being absent, half
 /// written or left over from an older version is ordinary rather than an
 /// error this process can act on.
-fn absorb(dir: &Path, book: &AddressBook) {
+pub fn absorb_addrs(dir: &Path, book: &AddressBook) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

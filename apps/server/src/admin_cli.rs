@@ -49,6 +49,9 @@ pub async fn dispatch() -> eyre::Result<bool> {
         // unknown subcommand.
         #[cfg(debug_assertions)]
         Some("seed") => seed(&args[2..]).await.map(|()| true),
+        // Also dev-only, and for the same reason.
+        #[cfg(debug_assertions)]
+        Some("demo") => crate::demo_cli::demo(&args[2..]).await.map(|()| true),
         Some("webdav") => webdav(&args[2..]).map(|()| true),
         other => {
             eprintln!(
@@ -65,6 +68,9 @@ pub async fn dispatch() -> eyre::Result<bool> {
                  [--name <display>] [--username <handle>] (reads the password from STDIN)\n  \
                  task-server admin seed [--orgs <a,b,c>] [--email <address>] \\\n    \
                  [--password <pw>] [--no-divergence] (stands up a local multi-org dev vault)\n  \
+                 task-server admin demo --org <acme-audio|vnt-video>\n    \
+                 (plants `examples/studio` as one org on this data root — `just demo`\n     \
+                 runs it twice, on two data roots, for two servers that federate)\n  \
                  task-server admin webdav --org <slug> [--hide <root-id>|--show <root-id>]\n    \
                  (no flag lists the org's File Roots and their WebDAV visibility)\n"
             );
@@ -76,7 +82,7 @@ pub async fn dispatch() -> eyre::Result<bool> {
 /// Minimal `--flag value` parsing. Deliberately not clap: this is two
 /// operator verbs on a server binary, and adding an arg parser to it for
 /// them would be the larger change.
-fn flag(args: &[String], name: &str) -> Option<String> {
+pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
@@ -1056,7 +1062,7 @@ async fn seed_owner(
 
 /// Create one auth account if it doesn't exist yet (idempotent seed).
 #[cfg(debug_assertions)]
-async fn seed_account(
+pub(crate) async fn seed_account(
     auth: &crate::AuthState,
     email: &str,
     password: &str,

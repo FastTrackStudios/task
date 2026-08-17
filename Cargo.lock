@@ -21846,6 +21846,7 @@ dependencies = [
  "identity-proto",
  "inbox",
  "inbox-proto",
+ "include_dir",
  "intake",
  "inventory 0.1.0",
  "links",

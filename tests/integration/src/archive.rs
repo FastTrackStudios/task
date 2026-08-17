@@ -15,18 +15,22 @@ use std::path::{Path, PathBuf};
 
 use files_domain::layout::{self, Entry};
 
-/// The example data root, committed at `tests/integration/Data`.
+/// The example studio, committed at `examples/studio`.
 ///
-/// `Data` rather than `vault`, because a vault is one of the things an
-/// org *has* — beside its wiki, its assets, its inbox and its projects —
-/// and naming the whole tree after one of its parts made the other four
-/// look like exceptions.
+/// It sat under this crate as `Data/` while this suite was the only
+/// thing that read it. It is now also what a demo boots from and what
+/// `task-server admin demo` plants, so it belongs to the repository
+/// rather than to the tests — a fixture two things share and one of them
+/// owns is a fixture the other one breaks.
 ///
 /// Found relative to this file rather than to the working directory,
 /// because `cargo` and `nextest` disagree about what that is.
 #[must_use]
 pub fn example_data() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("Data")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/studio")
+        .canonicalize()
+        .expect("examples/studio is committed")
 }
 
 /// The real archive, when this machine has one.
@@ -248,7 +252,9 @@ fn find_sessions(dir: &Path, left: usize, out: &mut Vec<PathBuf>) {
     let mut holds_session = false;
     let mut subdirs = Vec::new();
     for entry in entries.flatten() {
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };

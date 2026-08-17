@@ -5,7 +5,7 @@
 //! years before any of this software read it, and asks whether the model
 //! can say what is on it.
 //!
-//! The tree it reads is committed at `tests/integration/Data`. Its
+//! The tree it reads is committed at `examples/studio`. Its
 //! names are invented so a failure names the case; its *shapes* are all
 //! ones a real 6 TB archive produced, and every awkward one was copied
 //! from there after breaking the first reader. `archive.rs` runs the same

@@ -104,6 +104,24 @@ dev:
 dev-seed *ARGS="seed":
     scripts/dev-seed.sh {{ARGS}}
 
+# The example studio, running: two companies on two servers, each with
+# its own iroh endpoint, federating by endpoint id. This is
+# `examples/studio` — the tree the integration suite reads and the four
+# people it hires — planted on disk and served, so the world the tests
+# assert against is a world you can sign into.
+#
+# `dev-seed` is the other one: several orgs in one process, for
+# eyeballing multi-org UI. Use this when the thing under test is two
+# companies who are not members of each other.
+#
+#   just demo              # build + plant both orgs (idempotent)
+#   just demo fresh        # wipe + replant
+#   just demo serve        # both servers (:9101 ACME, :9102 VNT)
+#   just demo web          # the web app pointed at ACME (:8766)
+#   just demo ids          # each org's endpoint id
+demo *ARGS="plant":
+    scripts/demo.sh {{ARGS}}
+
 # ── Build & Test ─────────────────────────────────────────────────────────
 
 # All recipes assume the dev shell is already loaded (`.envrc` does

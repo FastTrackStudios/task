@@ -9,7 +9,10 @@
 # library / setlists / events, and 13 media Files roots with real
 # ffmpeg-generated video/audio (ffmpeg must be on PATH for playable
 # media; placeholders otherwise). Deterministic names, idempotent +
-# healing re-runs. Full guide: apps/task/docs/dev-seed.md
+# healing re-runs. Full guide: docs/dev-seed.md
+#
+# For the OTHER local world — the example studio as two companies on two
+# servers federating over iroh — see scripts/demo.sh (`just demo`).
 #
 #   ./dev-seed.sh seed     # build + seed the dev vault ($DATA_ROOT)
 #   ./dev-seed.sh fresh    # wipe $DATA_ROOT, then seed from scratch
@@ -26,7 +29,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+# `..`, not `../../..`: this script moved to the repo root's `scripts/`
+# when the workspace stopped being nested inside `apps/`, and the old
+# depth resolved to two directories above the checkout.
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 DATA_ROOT="${TASK_DEV_SEED_ROOT:-$HOME/.local/share/task-dev-seed}"
 PORT="${PORT:-9099}"
 WEB_PORT="${WEB_PORT:-8765}"
@@ -63,7 +69,7 @@ serve() {
 
 web() {
   echo ">> web app on http://127.0.0.1:$WEB_PORT → server ws://127.0.0.1:$PORT/vox"
-  cd "$REPO_ROOT/apps/task/web"
+  cd "$REPO_ROOT/apps/web"
   # Serve WITHOUT hot-patching — dx serve's default hot-patch breaks the
   # wasm build on edits (LinkError/subsecond panic).
   exec env TASK_VOX_URL_WEB="ws://127.0.0.1:$PORT/vox" \

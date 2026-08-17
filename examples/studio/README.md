@@ -1,17 +1,30 @@
-# The example data root
+# The example studio
 
 A studio's disk, small enough to commit. Every *shape* here was read off a
 real 6 TB archive; the names are invented, so that a test failing on
 "Track Two" tells you which case broke without you having to know whose
 album it was.
 
-`Data/` rather than `Vault/`, because a vault is one of the things an org
-*has* — beside its wiki, its assets, its inbox and its projects — and
-naming the whole tree after one part made the other four look like
-exceptions.
+Not `Vault/`, because a vault is one of the things an org *has* — beside
+its wiki, its assets, its inbox and its projects — and naming the whole
+tree after one part made the other four look like exceptions.
+
+## Who reads this
+
+- `tests/integration/tests/studio.rs` runs the tree reader over it, which
+  is what it was first committed for.
+- `task-server admin demo` plants it as real orgs on real servers.
+  `apps/server/src/example_org.rs` owns the translation from this layout
+  to an org root's, and explains why the translation is there rather than
+  here.
+- The integration suite's scenario boots from it, so the world the
+  chapters assert against and the world you can sign into are one world.
+
+It lived under `tests/integration/Data/` while the first of those was the
+only one.
 
 ```
-Data/
+studio/
   <org>/                             one org, and everything it has
     Assets/                          its library — content owned by no project
     Inbox/                           arrived, not filed into a project yet

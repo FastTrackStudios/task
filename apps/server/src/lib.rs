@@ -25,6 +25,9 @@ pub mod attachments;
 pub mod capability;
 #[cfg(feature = "plugin-forge")]
 pub mod connections;
+#[cfg(debug_assertions)]
+pub mod demo_cli;
+pub mod example_org;
 pub mod identity_mgmt;
 pub mod iroh_host;
 pub mod link_sync;
