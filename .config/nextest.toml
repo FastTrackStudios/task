@@ -21,11 +21,42 @@ slow-timeout = { period = "2s", terminate-after = 2 }
 filter = 'package(integration)'
 slow-timeout = { period = "10s", terminate-after = 3 }
 
+# Tests that measure PHYSICAL disk usage — "did storing this file consume
+# a second copy", "did linking it consume no space".
+#
+# They read free space off the *filesystem*, because that is the only
+# measure that sees extent sharing: a reflink makes a new inode whose
+# `blocks()` reports the full size, so a per-directory byte count reads
+# a clone as a copy. (Tried. It does.)
+#
+# The cost of that is they cannot be measured beside heavy I/O — the
+# budget is 16 MiB against a 256 MiB copy, and any other test writing
+# more than that during the window fails this one. Alone they take a
+# second and a half and always pass; in a full-workspace run they fail
+# or time out perhaps one run in three.
+#
+# One at a time and with room to finish, which helps and does not cure
+# it: the noise is the rest of the workspace, not this group. A real fix
+# is a filesystem-level measurement that survives concurrency, and there
+# may not be one.
+[test-groups]
+disk-measurement = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(chunk_whole_file)'
+test-group = 'disk-measurement'
+slow-timeout = { period = "20s", terminate-after = 3 }
+
 [profile.ci]
 fail-fast = false
 status-level = "all"
 final-status-level = "flaky"
 slow-timeout = { period = "5s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(chunk_whole_file)'
+test-group = 'disk-measurement'
+slow-timeout = { period = "40s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 filter = 'package(integration)'

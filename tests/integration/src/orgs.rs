@@ -43,6 +43,27 @@ pub async fn adopt(server: &Server, dir: &str) -> RootId {
     root
 }
 
+/// `len` bytes that do not compress to nothing and are the same every
+/// run.
+///
+/// A deterministic pattern rather than random: two calls with the same
+/// `seed` must produce identical files or the dedup assertion is
+/// measuring the random number generator. Not all-zeroes either — a
+/// content-defined chunker splits on the data, and a uniform file gives
+/// it nothing to split on.
+fn take_bytes(len: usize, seed: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(len);
+    let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    while out.len() < len {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
 /// Both companies, booted and reachable by endpoint id.
 pub struct Orgs {
     pub acme: Server,
@@ -69,6 +90,27 @@ impl Orgs {
             )
             .unwrap();
             std::fs::write(session.join("Audio Files").join("vox.wav"), b"vox take one").unwrap();
+            // One take big enough to cross a chunk boundary. Everything
+            // else here is a few hundred bytes against a 1 MiB average
+            // chunk, so without this the whole storage layer — chunking,
+            // dedup, what a transfer resumes from — is exercised by
+            // nothing. Generated rather than committed: a fixture that
+            // has to be large is a fixture that does not belong in git.
+            std::fs::write(
+                session.join("Audio Files").join("drums.wav"),
+                take_bytes(3 << 20, 1),
+            )
+            .unwrap();
+            // Byte-identical to the take above. Two files with the same
+            // content are the ordinary case in a session folder — a
+            // bounced stem, a duplicated take — and what the store does
+            // about it is the difference between a project costing its
+            // size and costing twice its size.
+            std::fs::write(
+                session.join("Audio Files").join("drums-copy.wav"),
+                take_bytes(3 << 20, 1),
+            )
+            .unwrap();
             // What leaves the building. The client sees this and nothing
             // else; the session internals above are not their business.
             std::fs::create_dir_all(session.join("Deliverables")).unwrap();

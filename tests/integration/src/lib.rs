@@ -21,12 +21,18 @@
 //!
 //! # Why the fixtures are tiny
 //!
-//! Every byte here is written by the harness, so the fixtures are a few
-//! hundred bytes each. The scenario in `docs/spec/scenario-album.md` is
+//! Almost every byte here is written by the harness, and most fixtures
+//! are a few hundred bytes. The scenario in `docs/spec/scenario-album.md` is
 //! written against 77 GB and 244 GB projects; what matters for a test is
 //! the *shape* — a session folder, its media, a render, two orgs on two
 //! servers — not the size. Anything that only breaks at scale needs a
 //! different harness and honest labelling, not a large fixture in git.
+//!
+//! The exception is the pair of 3 MiB takes `scale.rs` needs. Below a
+//! chunk boundary, chunking and dedup are exercised by nothing — every
+//! file is one chunk and no two can share one — so that chapter
+//! generates content large enough to cross one. Generated, not
+//! committed: a fixture that has to be large does not belong in git.
 //!
 //! # Layout
 //!
@@ -62,6 +68,8 @@
 //! | `peering.rs`       | an org on as many servers as it wants |
 //! | `reachable.rs`     | can a client reach any of this at all |
 //! | `restart.rs`       | what survives the process |
+//! | `scale.rs`         | a file bigger than a chunk |
+//! | `office.rs`        | the work around the files |
 //!
 //! These are tests rather than a script that prints `ok`, because a
 //! printed `ok` is only as honest as the eye reading it. A test that

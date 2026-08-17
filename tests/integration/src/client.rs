@@ -26,6 +26,8 @@ use files::{
     TreeServiceClient, VersionServiceClient, WriteServiceClient,
 };
 use files_sync::SyncServiceClient;
+use project::ProjectServiceClient;
+use task_proto::TaskServiceClient;
 
 use crate::server::Server;
 
@@ -130,6 +132,16 @@ impl Session {
         self.establish().await
     }
 
+    /// The org's projects — vault pages, not Files roots.
+    pub async fn projects(&self) -> ProjectServiceClient {
+        self.establish().await
+    }
+
+    /// The org's tasks.
+    pub async fn tasks(&self) -> TaskServiceClient {
+        self.establish().await
+    }
+
     /// The replica lane: the commit graph and the chunks under it.
     ///
     /// A peer host calls this, not a person — but it is signed with a
@@ -140,15 +152,31 @@ impl Session {
     }
 }
 
-/// A device's own endpoint.
+/// The endpoint every session in this process dials from.
 ///
-/// Fresh per session, because a device is not a server and has no
-/// persisted identity to reuse — and because two sessions sharing one
-/// endpoint would make "who dialled" ambiguous the moment a test cares.
+/// One, shared, and bound once. It was one per `Session`, which is
+/// tidier to describe and produced a genuinely nasty flake: a `Session`
+/// owns its endpoint, so `s.as_alice().await.projects().await` — a
+/// temporary — dropped the endpoint at the end of the statement and the
+/// client it had just handed back failed its next call with
+/// `SendFailed`. Sometimes. Depending on timing.
+///
+/// Sharing costs nothing here. Sessions are people's devices, and one
+/// machine holding several people's logins is the ordinary case; what
+/// distinguishes them on the wire is the per-call bearer, which beats
+/// anything the connection carries. Servers dial from their *own*
+/// endpoints ([`crate::server::Server::dial_replica`]), which is where
+/// endpoint identity actually means something.
 async fn device_endpoint() -> iroh::Endpoint {
-    iroh_link::bind_endpoint(iroh::SecretKey::generate())
+    static DEVICE: tokio::sync::OnceCell<iroh::Endpoint> = tokio::sync::OnceCell::const_new();
+    DEVICE
+        .get_or_init(|| async {
+            iroh_link::bind_endpoint(iroh::SecretKey::generate())
+                .await
+                .expect("bind a device endpoint")
+        })
         .await
-        .expect("bind a device endpoint")
+        .clone()
 }
 
 /// The one thing every generated client has in common that this file
@@ -180,4 +208,6 @@ signable!(
     AccessServiceClient,
     FederationServiceClient,
     SyncServiceClient,
+    ProjectServiceClient,
+    TaskServiceClient,
 );
