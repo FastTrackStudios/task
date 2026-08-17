@@ -51,7 +51,9 @@ fn volume_root(data_root: &Path) -> PathBuf {
 /// Extra volumes this server speaks for, from `TASK_STORAGE_VOLUMES`:
 /// `key=/abs/path` pairs, comma-separated.
 ///
-///     TASK_STORAGE_VOLUMES="media=/mnt/storage/Task"
+/// ```text
+/// TASK_STORAGE_VOLUMES="media=/mnt/storage/Task"
+/// ```
 ///
 /// The in-server agent announces only `primary`, under the data root —
 /// which on a cluster deployment is the server's own PVC. Media that
@@ -116,7 +118,9 @@ struct GrantEntry {
 /// Org admissions onto this server's volumes, from `TASK_STORAGE_GRANTS`:
 /// `org@volume:prefix[:quota]` entries, comma-separated.
 ///
-///     TASK_STORAGE_GRANTS="cbu@media:cbu,tombrooksmusic@media:tombrooksmusic:8T"
+/// ```text
+/// TASK_STORAGE_GRANTS="cbu@media:cbu,tombrooksmusic@media:tombrooksmusic:8T"
+/// ```
 ///
 /// A location is deployment-scoped; an org's reach into it is a grant,
 /// with the `prefix` naming the org's own subtree. Without one, a

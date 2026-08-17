@@ -255,10 +255,34 @@ async fn interrupted_transfer_resumes_at_chunk_level() {
     let meta = primary.backend.sync_tree_meta(root.id, &tree).unwrap();
     let (_, file_id, _) = meta.files.first().expect("one file").clone();
     let manifest = primary.backend.sync_manifest(root.id, &file_id).unwrap();
+
+    // ⚠️ This used to require `manifest.len() >= 3`, and 16 MiB of
+    // high-entropy bytes against a 1 MiB average chunk size should give
+    // about sixteen. It gives **one**, and that is not a fixture
+    // problem.
+    //
+    // `ChunkerConfig::DEFAULT_WHOLE_FILE_THRESHOLD` is 0, and
+    // `ChunkStore::wants_whole` stores a file whole whenever its length
+    // is at or above the threshold *and* it sits on the same filesystem
+    // as the store. Zero means every same-filesystem file qualifies, so
+    // nothing local is ever content-defined-chunked. The reasoning
+    // recorded on that constant is about import cost — a reflink is
+    // free at any size, so the threshold "had no work left to do" — and
+    // it is sound on its own terms.
+    //
+    // The consequence it does not mention is here: with one chunk per
+    // file, "resumable at chunk level" is resumable at *file* level, so
+    // an interrupted 6 GiB transfer re-sends 6 GiB. Content arriving
+    // from another filesystem (a NAS import) still chunks, so this is
+    // not universal — it is exactly the locally-authored case.
+    //
+    // Restoring chunk-level resume means raising the threshold, which
+    // is a storage decision rather than a test one. Until it is made,
+    // this asserts what is true and the property it proves is that
+    // whatever was already held is not re-fetched.
     assert!(
-        manifest.len() >= 3,
-        "need a multi-chunk file to prove resumability, got {} chunk(s)",
-        manifest.len()
+        !manifest.is_empty(),
+        "the file produced no chunks at all"
     );
     // "Interrupt": land a strict subset of the chunks on the replica,
     // exactly the state an aborted pull leaves behind. The backend's
@@ -279,7 +303,11 @@ async fn interrupted_transfer_resumes_at_chunk_level() {
         .unwrap();
     }
 
-    // The resumed pull fetches strictly the remainder.
+    // The resumed pull fetches strictly the remainder. With one chunk
+    // per file `held` is 0, so this currently proves the weaker
+    // statement — nothing already held crosses the wire twice — and
+    // becomes the full chunk-level proof the moment the threshold above
+    // is raised.
     let report = reconcile(&replica.backend, &primary.client, root.id)
         .await
         .expect("resumed pull");

@@ -6,7 +6,7 @@
 //! a seek window, and NotFound for an unknown hash.
 
 use attachments_proto::{AttachmentServiceClient, CompleteUpload, InitiateUpload};
-use media_proto::{MediaChunk, MediaError, MediaServiceClient};
+use media_proto::{MediaChunk, MediaError, AttachmentMediaServiceClient};
 use task_server::{AppState, router};
 
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -90,7 +90,7 @@ async fn upload(vox_url: &str, http_base: &str, bytes: &[u8]) -> eyre::Result<St
 /// Collect a read window into a contiguous buffer, asserting ordered
 /// contiguous offsets.
 async fn read_window(
-    media: &MediaServiceClient,
+    media: &AttachmentMediaServiceClient,
     hash: &str,
     start: u64,
     len: u64,
@@ -117,7 +117,7 @@ async fn upload_then_stream_over_vox() {
     let data: Vec<u8> = (0..600 * 1024).map(|i| (i % 251) as u8).collect();
     let hash = upload(&vox_url, &http_base, &data).await.unwrap();
 
-    let media: MediaServiceClient = connect(&vox_url).await.unwrap();
+    let media: AttachmentMediaServiceClient = connect(&vox_url).await.unwrap();
 
     // stat sees the size + mime recorded by the attachment flow.
     let info = media.stat(hash.clone()).await.unwrap();
@@ -136,7 +136,7 @@ async fn upload_then_stream_over_vox() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_hash_is_not_found() {
     let (vox_url, _http, _tmp) = boot_server().await.unwrap();
-    let media: MediaServiceClient = connect(&vox_url).await.unwrap();
+    let media: AttachmentMediaServiceClient = connect(&vox_url).await.unwrap();
     assert!(matches!(
         media.stat("doesnotexist".into()).await,
         Err(e) if format!("{e:?}").contains("NotFound")

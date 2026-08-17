@@ -2992,19 +2992,29 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             attachments_proto::attachment_service_service_descriptor(),
             attachments_proto::AttachmentServiceDispatcher::new((*org.attachments).clone()),
         )
-        // Media — the same blobs streamed over vox (Tx<MediaChunk>),
-        // no HTTP side-channel. Read-side view over the attachment
-        // store for the session player's stems + large media.
+        // Attachment blobs streamed over vox (`Tx<MediaChunk>`), no
+        // HTTP side-channel — the session player's stems and large
+        // media, addressed by content hash.
+        //
+        // Distinct from `files_proto`'s byte lane below, which reads
+        // *file roots* by root and path. Both traits were called
+        // `MediaService` until now, and both `#[vox::service]` and
+        // `#[architect::rpc]` derive their wire identity from the trait
+        // name, so the two could not be mounted together. Only one ever
+        // was, which is why the clash stayed invisible until the files
+        // byte lane was wired up.
         .with(
-            media_proto::media_service_service_descriptor(),
-            media_proto::MediaServiceDispatcher::new(crate::media::MediaServiceImpl::new(
-                org.attachments.clone(),
-                org.slug.clone(),
-                // Same process-wide keypair the media route verifies
-                // with (`AppState::keypair`, threaded through
-                // `build_org_state`) — sign and verify cannot drift.
-                org.attachments.keypair.clone(),
-            )),
+            media_proto::attachment_media_service_service_descriptor(),
+            media_proto::AttachmentMediaServiceDispatcher::new(
+                crate::media::AttachmentMediaServiceImpl::new(
+                    org.attachments.clone(),
+                    org.slug.clone(),
+                    // Same process-wide keypair the media route verifies
+                    // with (`AppState::keypair`, threaded through
+                    // `build_org_state`) — sign and verify cannot drift.
+                    org.attachments.keypair.clone(),
+                ),
+            ),
         )
         // Vault file replication (manifest / get / put / delete).
         .with(
@@ -3406,6 +3416,24 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         .with(
             files_proto::federation_descriptor(),
             files_proto::serve_federation(org.files.clone()),
+        )
+        // The byte lane, both halves. `media` mints tickets and lists
+        // renditions; `media_stream` is the subscription those tickets
+        // are redeemed on. Neither was mounted, so every v2 path to a
+        // file's *content* — reads, previews, editor handoff — was
+        // unreachable on the server while passing its own tests.
+        .with(
+            files_proto::media_descriptor(),
+            files_proto::serve_media(org.files.clone()),
+        )
+        .merge(files_proto::media_stream_layer(org.files.clone()))
+        .with(
+            files_proto::search_descriptor(),
+            files_proto::serve_search(org.files.clone()),
+        )
+        .with(
+            files_proto::review_descriptor(),
+            files_proto::serve_review(org.files.clone()),
         )
         // Placement — Storage Locations this org was granted, where its
         // roots live, and blob replicas (issue #262). The operator and

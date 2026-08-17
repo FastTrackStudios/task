@@ -3,7 +3,7 @@
 //! The attachments flow (Phase 7) moves blob *bytes* out-of-band over
 //! HTTP against signed URLs; that leaves large-media consumers (the
 //! session player's stems, part bundles, sample previews) hand-rolling
-//! HTTP Range plumbing next to the vox surface. [`MediaService`] is the
+//! HTTP Range plumbing next to the vox surface. [`AttachmentMediaService`] is the
 //! architect-native alternative: content-addressed reads streamed as
 //! [`MediaChunk`]s through a `Tx` lane, so browser, native, and CLI
 //! clients all reach media through the same per-org vox router — same
@@ -95,7 +95,7 @@ unsafe impl vox_types::Reborrow for MediaGrant {
 /// `AttachmentService`; hashes are the same blob-store namespace.
 #[cfg(feature = "vox")]
 #[vox::service]
-pub trait MediaService {
+pub trait AttachmentMediaService {
     /// Size + mime for a blob — what a player needs before it
     /// requests windows.
     async fn stat(&self, content_hash: String) -> Result<MediaInfo, MediaError>;

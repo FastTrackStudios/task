@@ -120,9 +120,9 @@ pub fn cached_suffix(org: &str, slug: &str) -> String {
 
 async fn mint(org: &str, prefix: &str) -> Option<media_proto::MediaGrant> {
     use crate::vox_clients::establish_for;
-    use media_proto::MediaServiceClient;
+    use media_proto::AttachmentMediaServiceClient;
 
-    let client: MediaServiceClient = establish_for(org).await.ok()?;
+    let client: AttachmentMediaServiceClient = establish_for(org).await.ok()?;
     match client.media_grant(prefix.to_owned()).await {
         Ok(grant) => Some(grant),
         Err(e) => {

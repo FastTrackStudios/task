@@ -518,6 +518,32 @@ table!(FILES_ACCESS, "files-access", "files/**", [
 // moves file bytes.
 table!(FILES_MEDIA_STREAM, "files-media-stream", "files/**", [dl "bytes"]);
 
+// The byte lane's RPC half: tickets and derived previews. Nothing here
+// returns content inline — a read mints a ticket redeemed on the stream
+// lane above — so these are `rd` rather than `dl`. `handoff` is `wr`: it
+// hands a path to an editor, which is the point at which something else
+// starts writing.
+table!(FILES_MEDIA, "files-media", "files/**", [
+    rd "read", rd "read_at", rd "read_content",
+    rd "renditions", rd "rendition", wr "handoff",
+]);
+
+// `files.index.*`. `extract` is `wr` — it derives and stores a sidecar,
+// which `files.index.portable` puts beside the source — and the rest
+// read what extraction produced.
+table!(FILES_SEARCH, "files-search", "files/**", [
+    rd "search", rd "extract_state", rd "pending", wr "extract",
+]);
+
+// The guest lane (`files.review.*`). Comments are `cm`, the tier that
+// exists for exactly this: a reviewer may say things about content
+// without being able to change it. `delete_comment` is `wa` — removing
+// somebody else's words is the one act here that destroys.
+table!(FILES_REVIEW, "files-review", "files/**", [
+    rd "scope", rd "review", rd "playback", rd "comments",
+    cm "comment", wa "delete_comment", rd "for_file",
+]);
+
 // Content across a server boundary. `offer` and `withdraw` are audited
 // without exception, for the same reason every mutation in the access
 // lane is: they change who can reach an org's content, and here the
@@ -888,7 +914,7 @@ pub fn mounts() -> Vec<Mount> {
         ),
         m(
             "core",
-            media_proto::media_service_service_descriptor(),
+            media_proto::attachment_media_service_service_descriptor(),
             MEDIA,
         ),
         m("core", vault_proto::descriptor(), VAULT),
@@ -1008,7 +1034,10 @@ pub fn mounts() -> Vec<Mount> {
         m("core", files_proto::access_descriptor(), FILES_ACCESS),
         m("core", files_proto::organise_descriptor(), FILES_ORGANISE),
         m("core", files_proto::federation_descriptor(), FILES_FEDERATION),
+        m("core", files_proto::media_descriptor(), FILES_MEDIA),
         m("core", files_proto::media_stream_descriptor(), FILES_MEDIA_STREAM),
+        m("core", files_proto::search_descriptor(), FILES_SEARCH),
+        m("core", files_proto::review_descriptor(), FILES_REVIEW),
         m(
             "core",
             files_storage::storage_service_descriptor(),

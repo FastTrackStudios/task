@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Subcommand;
-use media_proto::{MediaChunk, MediaServiceClient};
+use media_proto::{MediaChunk, AttachmentMediaServiceClient};
 use sha2::{Digest, Sha256};
 
 use crate::errors;
@@ -186,16 +186,16 @@ pub async fn run_media(cmd: MediaCmd) -> eyre::Result<()> {
     Ok(())
 }
 
-async fn client(org: Option<&str>, server: Option<String>) -> eyre::Result<MediaServiceClient> {
+async fn client(org: Option<&str>, server: Option<String>) -> eyre::Result<AttachmentMediaServiceClient> {
     let active = crate::org_ctx::resolve_active(org)?;
     let slug = active.root.slug().to_string();
-    crate::establish_client::<MediaServiceClient>(server, &slug).await
+    crate::establish_client::<AttachmentMediaServiceClient>(server, &slug).await
 }
 
 /// Stream one read window into a contiguous buffer, asserting the
 /// chunks arrive in order.
 async fn stream_window(
-    client: &MediaServiceClient,
+    client: &AttachmentMediaServiceClient,
     hash: &str,
     start: u64,
     len: u64,

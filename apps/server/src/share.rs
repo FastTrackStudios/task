@@ -1059,7 +1059,7 @@ pub async fn share_guest_vox_handler(
         &link,
     );
     let media = crate::share_guest::GuestMediaService::new(
-        crate::media::MediaServiceImpl::new(
+        crate::media::AttachmentMediaServiceImpl::new(
             org.attachments.clone(),
             org.slug.clone(),
             org.attachments.keypair.clone(),
@@ -1075,8 +1075,8 @@ pub async fn share_guest_vox_handler(
         .merge(files::files_service_layer(guest.clone()))
         .merge(files_proto::files_service_stream_layer(guest))
         .with(
-            media_proto::media_service_service_descriptor(),
-            media_proto::MediaServiceDispatcher::new(media),
+            media_proto::attachment_media_service_service_descriptor(),
+            media_proto::AttachmentMediaServiceDispatcher::new(media),
         );
     let router = crate::snapshot::GatedRouter::new(router, state.write_gate.clone());
     ws.protocols([crate::VOX_SUBPROTOCOL])

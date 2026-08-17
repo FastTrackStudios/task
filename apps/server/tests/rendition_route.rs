@@ -82,10 +82,10 @@ async fn boot() -> eyre::Result<(String, AppState, uuid::Uuid, tempfile::TempDir
 /// Mint a grant the way a client does — through the service, so the test
 /// exercises the real signing path.
 async fn grant(state: &AppState, prefix: &str) -> String {
-    use media_proto::MediaService as _;
+    use media_proto::AttachmentMediaService as _;
     let org = state.org("media-test").expect("org hosted");
     let keypair = org.attachments.keypair.clone();
-    let svc = task_server::media::MediaServiceImpl::new(
+    let svc = task_server::media::AttachmentMediaServiceImpl::new(
         org.attachments.clone(),
         org.slug.clone(),
         keypair,

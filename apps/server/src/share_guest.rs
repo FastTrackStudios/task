@@ -24,7 +24,7 @@ use files_proto::{
     FilesEvent, GcReport, NamedVersion, NewReviewComment, ProjectVersion, RenditionInfo,
     RenditionKind, RestartMode, Review, ReviewComment, RootFlavor, SnapshotInfo, VersionRef,
 };
-use media_proto::{MediaChunk, MediaError, MediaGrant, MediaInfo, MediaService};
+use media_proto::{MediaChunk, MediaError, MediaGrant, MediaInfo, AttachmentMediaService};
 use uuid::Uuid;
 
 use crate::share::{ShareStore, StoredLink};
@@ -460,7 +460,7 @@ impl files_proto::service::legacy::FilesServiceStreamSource for GuestFilesServic
 /// gap for leaked ids.
 #[derive(Clone)]
 pub struct GuestMediaService {
-    inner: crate::media::MediaServiceImpl,
+    inner: crate::media::AttachmentMediaServiceImpl,
     shares: Arc<ShareStore>,
     token: String,
     password_at_connect: Option<String>,
@@ -469,7 +469,7 @@ pub struct GuestMediaService {
 
 impl GuestMediaService {
     pub fn new(
-        inner: crate::media::MediaServiceImpl,
+        inner: crate::media::AttachmentMediaServiceImpl,
         shares: Arc<ShareStore>,
         link: &StoredLink,
         root_id: Uuid,
@@ -497,7 +497,7 @@ impl GuestMediaService {
     }
 }
 
-impl MediaService for GuestMediaService {
+impl AttachmentMediaService for GuestMediaService {
     async fn stat(&self, _content_hash: String) -> Result<MediaInfo, MediaError> {
         Err(MediaError::Internal(
             "not available on a guest review link".into(),

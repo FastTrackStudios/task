@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use media_proto::{MediaChunk, MediaError, MediaGrant, MediaInfo, MediaService};
+use media_proto::{MediaChunk, MediaError, MediaGrant, MediaInfo, AttachmentMediaService};
 
 use crate::attachments::AttachmentServiceImpl;
 
@@ -24,7 +24,7 @@ const CHUNK_BYTES: u64 = 256 * 1024;
 const GRANT_TTL_SECONDS: i64 = 6 * 60 * 60;
 
 #[derive(Clone)]
-pub struct MediaServiceImpl {
+pub struct AttachmentMediaServiceImpl {
     /// Blob store + catalog live on the attachment service; media is
     /// a read-side view over the same namespace.
     attachments: Arc<AttachmentServiceImpl>,
@@ -35,7 +35,7 @@ pub struct MediaServiceImpl {
     keypair: crate::capability::ServerKeypair,
 }
 
-impl MediaServiceImpl {
+impl AttachmentMediaServiceImpl {
     pub fn new(
         attachments: Arc<AttachmentServiceImpl>,
         slug: impl Into<String>,
@@ -56,7 +56,7 @@ fn store_err(e: attachments_proto::AttachmentError) -> MediaError {
     }
 }
 
-impl MediaService for MediaServiceImpl {
+impl AttachmentMediaService for AttachmentMediaServiceImpl {
     async fn stat(&self, content_hash: String) -> Result<MediaInfo, MediaError> {
         let size_bytes = self
             .attachments
@@ -155,7 +155,7 @@ mod tests {
     use super::*;
     use crate::attachments::{LocalFsStore, ObjectStore};
 
-    async fn service_with_blob(bytes: &[u8], hash: &str) -> (MediaServiceImpl, tempfile::TempDir) {
+    async fn service_with_blob(bytes: &[u8], hash: &str) -> (AttachmentMediaServiceImpl, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = LocalFsStore::new(tmp.path());
         store.put_blob(hash, bytes).await.expect("put");
@@ -165,7 +165,7 @@ mod tests {
             String::new(),
         ));
         let keypair = attachments.keypair.clone();
-        (MediaServiceImpl::new(attachments, "test-org", keypair), tmp)
+        (AttachmentMediaServiceImpl::new(attachments, "test-org", keypair), tmp)
     }
 
     #[tokio::test]
