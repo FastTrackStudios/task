@@ -56,6 +56,19 @@ async fn main() -> eyre::Result<()> {
     // `/org/<slug>/...`.
     let org_slug = std::env::var("TASK_SERVER_ORG").ok();
     let state = AppState::new(org_slug.as_deref()).await?;
+
+    // Every hosted org gets an iroh endpoint, and gets it *before* the
+    // router is built: `iroh_host::start` installs the dialler on each
+    // org's backend, and a router built first would dispatch into the
+    // backends as they were. Held for the life of the process — dropping
+    // the last endpoint handle stops the endpoint accepting.
+    let iroh = task_server::iroh_host::start(&state).await;
+    if let Some(host) = &iroh {
+        for (slug, id) in host.ids() {
+            info!(%slug, endpoint_id = %id, "reachable by endpoint id");
+        }
+    }
+
     // Hold the construction scope so DB pools tear down in LIFO order
     // on shutdown; `router` takes ownership of `state`.
     let scope = state.scope.clone();
@@ -182,6 +195,7 @@ async fn main() -> eyre::Result<()> {
         .await?;
 
     info!("shutdown — closing backend resources");
+    drop(iroh);
     scope.close().await;
     Ok(())
 }

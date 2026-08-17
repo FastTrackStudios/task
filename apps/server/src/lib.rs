@@ -26,6 +26,7 @@ pub mod capability;
 #[cfg(feature = "plugin-forge")]
 pub mod connections;
 pub mod identity_mgmt;
+pub mod iroh_host;
 pub mod link_sync;
 pub mod mcp;
 pub mod media;
@@ -3779,12 +3780,11 @@ pub fn org_router_guarded(
 /// every remote root — mounted, permitted, and unable to do the one
 /// thing they exist for.
 ///
-/// **Nothing in the server binary calls this yet**, because nothing in
-/// the server binary binds an iroh endpoint: a deployment needs a
-/// persisted endpoint key and an address book before it can, and that is
-/// its own piece of work. Until then the peering lanes are exercised by
-/// the integration suite and by nothing else, which is worth knowing
-/// before reading their tests as proof a deployment can federate.
+/// [`iroh_host::start`] calls this once per hosted org as the process
+/// comes up, with [`files::IrohRemotes`] over that org's own endpoint.
+/// It did not, for a while, and the peering lanes were mounted and
+/// permitted and answered `Unavailable` for every remote root — which is
+/// worth remembering, because nothing about the router said so.
 ///
 /// Takes `&mut` because the backend holds the port by value —
 /// `FilesBackend::with_remotes` is a consuming builder, so installing it
