@@ -90,27 +90,36 @@ impl Orgs {
             )
             .unwrap();
             std::fs::write(session.join("Audio Files").join("vox.wav"), b"vox take one").unwrap();
-            // One take big enough to cross a chunk boundary. Everything
-            // else here is a few hundred bytes against a 1 MiB average
-            // chunk, so without this the whole storage layer — chunking,
-            // dedup, what a transfer resumes from — is exercised by
-            // nothing. Generated rather than committed: a fixture that
-            // has to be large is a fixture that does not belong in git.
+            // One take big enough to cross a transfer window, and
+            // **unique**. Everything else here is a few hundred bytes
+            // against a 1 MiB average chunk, so without it the storage
+            // layer — chunking, what a transfer resumes from, what a
+            // corrupt partial does — is exercised by nothing. Generated
+            // rather than committed: a fixture that has to be large is a
+            // fixture that does not belong in git.
+            //
+            // Unique matters more than it looks. The transfer tests
+            // stage a partial for this take's content and expect the
+            // pull to use it; if another file shared the content, that
+            // file would fetch it cleanly first and the partial would
+            // sit there unread while the test passed for no reason.
             std::fs::write(
                 session.join("Audio Files").join("drums.wav"),
                 take_bytes(3 << 20, 1),
             )
             .unwrap();
-            // Byte-identical to the take above. Two files with the same
-            // content are the ordinary case in a session folder — a
-            // bounced stem, a duplicated take — and what the store does
-            // about it is the difference between a project costing its
-            // size and costing twice its size.
-            std::fs::write(
-                session.join("Audio Files").join("drums-copy.wav"),
-                take_bytes(3 << 20, 1),
-            )
-            .unwrap();
+            // A byte-identical pair, and deliberately not the take above.
+            // Two files with the same content are the ordinary case in a
+            // session folder — a bounced stem, a duplicated take — and
+            // what the store does about it is the difference between a
+            // project costing its size and costing twice its size.
+            for name in ["stems-a.wav", "stems-b.wav"] {
+                std::fs::write(
+                    session.join("Audio Files").join(name),
+                    take_bytes(3 << 19, 2),
+                )
+                .unwrap();
+            }
             // What leaves the building. The client sees this and nothing
             // else; the session internals above are not their business.
             std::fs::create_dir_all(session.join("Deliverables")).unwrap();

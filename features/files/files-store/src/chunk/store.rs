@@ -552,6 +552,141 @@ impl ChunkStore {
             .join(hex.as_str())
     }
 
+    /// Where a chunk being received lands while it is incomplete.
+    ///
+    /// Beside the finished blob rather than in a temp directory, and
+    /// deliberately *not* at [`ChunkStore::whole_path`]: a file at a
+    /// content address is a promise that its bytes hash to that address,
+    /// and a half-received one does not. Anything that reads the store
+    /// must not be able to find this.
+    fn partial_path(&self, hash: &blake3::Hash) -> PathBuf {
+        let hex = hash.to_hex();
+        self.whole_dir
+            .join(&hex[0..2])
+            .join(&hex[2..4])
+            .join(format!("{}.partial", hex.as_str()))
+    }
+
+    /// How much of `hash` has already been received, in bytes.
+    ///
+    /// Zero when nothing has. This is the resume cursor: a transfer asks
+    /// it before requesting anything, so an interrupted 800 GB pull
+    /// resumes where it stopped instead of starting the file again.
+    ///
+    /// It is a length rather than a set of ranges because the receiver
+    /// only ever appends — windows are requested in order, so what is
+    /// present is always a prefix. That is a smaller promise than
+    /// rsync's and it is the one that matches how this fetches.
+    pub async fn staged_len(&self, hash: blake3::Hash) -> Result<u64> {
+        match tokio::fs::metadata(self.partial_path(&hash)).await {
+            Ok(meta) => Ok(meta.len()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(Error::Io(e)),
+        }
+    }
+
+    /// Append received bytes to a chunk in progress.
+    ///
+    /// `offset` must be exactly what [`ChunkStore::staged_len`] reports —
+    /// a mismatch means the sender and the receiver disagree about where
+    /// the transfer had got to, and writing anyway would leave a file
+    /// that is the right length and the wrong content.
+    pub async fn stage_chunk_range(
+        &self,
+        hash: blake3::Hash,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<()> {
+        use tokio::io::AsyncWriteExt as _;
+
+        let path = self.partial_path(&hash);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let have = self.staged_len(hash).await?;
+        if have != offset {
+            return Err(Error::Store(format!(
+                "chunk {hash}: staged {have} bytes, peer sent from {offset}"
+            )));
+        }
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await?;
+        file.write_all(bytes).await.map_err(Error::Io)?;
+        // Durable before the length is reported as progress: a length
+        // the store would not have after a crash is a resume point that
+        // skips bytes it never received.
+        file.sync_all().await.map_err(Error::Io)?;
+        Ok(())
+    }
+
+    /// Verify a fully-received chunk and admit it to the store.
+    ///
+    /// The staged file is hashed and compared to the address it was
+    /// received under. This is the authoritative check and it is why a
+    /// partial is never placed early: a transfer that ends anywhere but
+    /// here leaves a `.partial` nothing reads and the next run resumes,
+    /// rather than a plausible file at a content address.
+    ///
+    /// A mismatch deletes the staging file, because the bytes are known
+    /// wrong and keeping them would resume a transfer that can only fail
+    /// again at exactly this point.
+    pub async fn finish_staged_chunk(&self, hash: blake3::Hash) -> Result<()> {
+        let staged = self.partial_path(&hash);
+        let actual = Self::hash_file(&staged).await?;
+        if actual != hash {
+            let _ = tokio::fs::remove_file(&staged).await;
+            return Err(Error::Store(format!(
+                "received chunk hashes to {actual}, peer claimed {hash}"
+            )));
+        }
+        let dest = self.whole_path(&hash);
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        // Rename, so the blob appears at its content address whole or
+        // not at all.
+        tokio::fs::rename(&staged, &dest).await.map_err(Error::Io)?;
+        Ok(())
+    }
+
+    /// Read a window of one stored chunk.
+    ///
+    /// The serving half of a resumable transfer. Both tiers seek, so a
+    /// window of a whole-tier blob costs the window rather than the
+    /// blob — which is the difference between serving a 244 GB file and
+    /// taking the server down with it.
+    pub async fn read_chunk_range<W>(
+        &self,
+        hash: blake3::Hash,
+        offset: u64,
+        len: u64,
+        dest: &mut W,
+    ) -> Result<u64>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        use tokio::io::AsyncReadExt as _;
+
+        if let Some(mut file) = self.open_whole(&hash).await? {
+            tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(Error::Io)?;
+            return tokio::io::copy(&mut file.take(len), dest)
+                .await
+                .map_err(Error::Io);
+        }
+        let mut reader = self.blobs.reader(*hash.as_bytes());
+        tokio::io::AsyncSeekExt::seek(&mut reader, std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(Error::Io)?;
+        tokio::io::copy(&mut reader.take(len), dest)
+            .await
+            .map_err(Error::Io)
+    }
+
     /// Derive the [`FileId`] `source` *would* have in this store,
     /// writing nothing — no chunks, no manifest, no locks. The pure
     /// half of [`ChunkStore::write_stream`]: same chunker config, same

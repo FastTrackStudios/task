@@ -3899,6 +3899,63 @@ impl FilesBackend {
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))
     }
 
+    /// One window of one chunk — the serving half of a resumable pull.
+    ///
+    /// Distinct from [`Self::sync_read_chunk`] because a chunk is not
+    /// always chunk-sized: the store links large files whole, so a
+    /// manifest for an 800 GB take names one chunk 800 GB long. Reading
+    /// that whole is not a slower version of this, it is a different
+    /// thing that cannot finish.
+    pub fn sync_read_chunk_range(
+        &self,
+        root_id: Uuid,
+        hash_hex: &str,
+        offset: u64,
+        len: u64,
+    ) -> Result<Vec<u8>, FilesError> {
+        let hash = chunk_hash_from_hex(hash_hex)?;
+        self.with_version_store(root_id, |vs| {
+            let mut out = Vec::new();
+            pollster::block_on(vs.chunks().read_chunk_range(hash, offset, len, &mut out))
+                .map(|_| out)
+        })?
+        .map_err(|e| to_files_error(Error::VersionStore(e.into())))
+    }
+
+    /// How much of `hash` this store has already received — the resume
+    /// cursor a pull reads before asking for anything.
+    pub fn sync_staged_len(&self, root_id: Uuid, hash_hex: &str) -> Result<u64, FilesError> {
+        let hash = chunk_hash_from_hex(hash_hex)?;
+        self.with_version_store(root_id, |vs| {
+            pollster::block_on(vs.chunks().staged_len(hash))
+        })?
+        .map_err(|e| to_files_error(Error::VersionStore(e.into())))
+    }
+
+    /// Append a received window to a chunk in progress.
+    pub fn sync_stage_chunk_range(
+        &self,
+        root_id: Uuid,
+        hash_hex: &str,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), FilesError> {
+        let hash = chunk_hash_from_hex(hash_hex)?;
+        self.with_version_store(root_id, |vs| {
+            pollster::block_on(vs.chunks().stage_chunk_range(hash, offset, bytes))
+        })?
+        .map_err(|e| to_files_error(Error::VersionStore(e.into())))
+    }
+
+    /// Verify a fully-received chunk and admit it to the store.
+    pub fn sync_finish_chunk(&self, root_id: Uuid, hash_hex: &str) -> Result<(), FilesError> {
+        let hash = chunk_hash_from_hex(hash_hex)?;
+        self.with_version_store(root_id, |vs| {
+            pollster::block_on(vs.chunks().finish_staged_chunk(hash))
+        })?
+        .map_err(|e| to_files_error(Error::VersionStore(e.into())))
+    }
+
     /// Hold GC quiescent for a file's whole chunk+manifest import
     /// (issue #264 / PR #291 review): synced chunks have no manifest
     /// protecting them until the manifest lands, so the caller holds

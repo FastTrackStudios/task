@@ -522,8 +522,13 @@ table!(FILES_SYNC, "files-sync", "files/**", [
 /// Members are unaffected: their rule is `**`.
 pub const REPLICA_RESOURCE: &str = "files/replica";
 
+// `chunk_range` is `dl` for the same reason `chunks` is, and it is the
+// method that actually moves a large file: the store links big files
+// whole, so their manifest names one chunk of the file's whole length
+// and `chunks` cannot serve it. A window at a time is how an 800 GB take
+// crosses a wire and how an interrupted one resumes.
 table!(FILES_REPLICA, "files-replica", REPLICA_RESOURCE, [
-    rd "heads", rd "object", rd "manifest", dl "chunks",
+    rd "heads", rd "object", rd "manifest", dl "chunks", dl "chunk_range",
 ]);
 
 // Who may see and change what (`files.access.*`).

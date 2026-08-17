@@ -176,14 +176,14 @@ async fn adoption_hashes_the_tree_behind_the_catalogue() {
         .expect("adoption progress");
 
     assert_eq!(done.phase, AdoptionPhase::Complete);
-    // Six files: the project, four takes (two of them the large pair the
-    // scale chapter needs), one deliverable. The junk is not among them
-    // — `files.ignore.layers` applies to what adoption publishes, not
-    // only to what a browse renders.
-    assert_eq!(done.entries_total, Some(6), "{done:?}");
-    assert_eq!(done.entries_hashed, 6, "{done:?}");
-    // Both 3 MiB takes are in there, so this is not a handful of bytes.
-    assert!(done.bytes_hashed > 6 << 20, "{done:?}");
+    // Seven files: the project, five takes (one large and unique, plus
+    // the identical pair the scale chapter needs), one deliverable. The
+    // junk is not among them — `files.ignore.layers` applies to what
+    // adoption publishes, not only to what a browse renders.
+    assert_eq!(done.entries_total, Some(7), "{done:?}");
+    assert_eq!(done.entries_hashed, 7, "{done:?}");
+    // The large takes are in there, so this is not a handful of bytes.
+    assert!(done.bytes_hashed > 4 << 20, "{done:?}");
 }
 
 /// The catalogue's entries carry their addresses once hashing has run.

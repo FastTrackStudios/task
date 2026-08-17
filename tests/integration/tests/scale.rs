@@ -28,6 +28,42 @@ fn p(s: &str) -> RootPath {
 /// average, so anything that splits has room to.
 const TAKE: u64 = 3 << 20;
 
+/// The hash of the single stored chunk behind `path`.
+///
+/// **Not** its `ContentId`. That is the hash of the *manifest*, which is
+/// what addresses a file; the chunk inside it has an address of its own,
+/// and the transfer machinery is keyed by the latter. Staging a partial
+/// under the content id puts it somewhere nothing looks — which is
+/// exactly what these tests did until a probe showed the pull fetching
+/// the whole file and passing anyway.
+async fn chunk_hash_of(s: &Scenario, path: &str) -> String {
+    let content = s
+        .as_alice()
+        .await
+        .tree()
+        .await
+        .entry(s.acme_root, p(path))
+        .await
+        .expect("the file is catalogued")
+        .content
+        .expect("hashed");
+
+    s.orgs
+        .acme
+        .backend
+        .with_version_store(s.acme_root.get(), |vs| {
+            let id = files_store::chunk::FileId::from_hex(content.as_str()).expect("content id");
+            let manifest = pollster::block_on(vs.chunks().manifest(id)).expect("manifest");
+            assert_eq!(
+                manifest.chunks.len(),
+                1,
+                "this helper assumes the whole-file tier"
+            );
+            manifest.chunks[0].hash.to_hex().to_string()
+        })
+        .expect("version store")
+}
+
 /// A replica with a tree, ready to pull content into.
 ///
 /// Distinct from a structure host, and the difference is the whole of
@@ -126,16 +162,16 @@ async fn identical_takes_share_one_copy_of_the_content() {
     let tree = alice.tree().await;
 
     let one = tree
-        .entry(s.acme_root, p("Audio Files/drums.wav"))
+        .entry(s.acme_root, p("Audio Files/stems-a.wav"))
         .await
-        .expect("the take");
+        .expect("the stem");
     let copy = tree
-        .entry(s.acme_root, p("Audio Files/drums-copy.wav"))
+        .entry(s.acme_root, p("Audio Files/stems-b.wav"))
         .await
-        .expect("the copy");
+        .expect("its twin");
 
-    assert_eq!(one.size, TAKE);
-    assert_eq!(copy.size, TAKE);
+    assert_eq!(one.size, TAKE / 2);
+    assert_eq!(copy.size, TAKE / 2);
     assert_eq!(
         one.content, copy.content,
         "two byte-identical takes were stored as two different things"
@@ -144,8 +180,8 @@ async fn identical_takes_share_one_copy_of_the_content() {
     // Both still on disk as themselves — the saving is in the store, and
     // adoption in place means the tree is untouched.
     let dir = s.orgs.acme.tree().join("Song").join("Audio Files");
-    assert!(dir.join("drums.wav").exists());
-    assert!(dir.join("drums-copy.wav").exists());
+    assert!(dir.join("stems-a.wav").exists());
+    assert!(dir.join("stems-b.wav").exists());
 }
 
 /// Structure still costs nothing, now that the project is not tiny.
@@ -190,24 +226,125 @@ async fn structure_of_a_multi_megabyte_project_still_moves_no_content() {
     );
 }
 
-/// What a transfer actually resumes from.
+/// An interrupted transfer resumes at the byte it reached.
 ///
-/// `chunks_fetched`/`chunks_skipped` are documented as the resumability
-/// counters, and this measures the granularity behind them: a 3 MiB take
-/// is **one** chunk, because the store links whole files rather than
-/// splitting them (`ChunkerConfig::DEFAULT_WHOLE_FILE_THRESHOLD` is 0 —
-/// a link costs nothing at any size, and measuring a real import showed
-/// a threshold saved nothing).
+/// The store links large files whole, so a big take is **one** chunk
+/// however large it is — 800 GB of video is one chunk of 800 GB. While
+/// the transfer unit was the chunk, that meant a failure at 99% cost the
+/// whole file again, and an 800 GB response could not be assembled at
+/// all.
 ///
-/// The consequence is worth being explicit about rather than discovering
-/// during an incident: resume is **file-level**. An interrupted transfer
-/// re-sends whole files, not the tail of one, so a 6 GiB take that fails
-/// at 99% costs 6 GiB to retry. That is a fine trade for a session of
-/// stems and a bad one for a single enormous video file, and which of
-/// those a deployment has is not something this decision currently asks.
+/// So the unit is the byte. This stages a partial transfer by hand — the
+/// prefix a killed pull would have left — and asserts the file completes
+/// correctly on top of it.
+///
+/// On its own that would prove very little: a pull that ignored the
+/// partial and fetched all 3 MiB would produce the same correct file and
+/// pass. What makes it meaningful is
+/// [`a_corrupt_partial_is_refused_rather_than_admitted`] below — a
+/// *wrong* prefix has to make the pull fail, and it only can if the
+/// staged bytes are the ones being completed. The pair is the assertion;
+/// either alone is decoration. (Both passed, vacuously, while the
+/// partial was staged under the wrong key.)
 // t[verify files.scale.transport]
 #[tokio::test]
-async fn a_large_take_is_one_chunk_so_resume_is_file_level() {
+async fn an_interrupted_transfer_resumes_where_it_stopped() {
+    let s = Scenario::open().await;
+    s.orgs
+        .acme
+        .backend
+        .admit_host(s.orgs.vnt.host_id(), Hosting::working());
+    let peer = s.orgs.vnt.dial_replica(&s.orgs.acme).await;
+    let (_dir, tree, backend) = replica(&s).await;
+
+    let chunk = chunk_hash_of(&s, "Audio Files/drums.wav").await;
+
+    // Two thirds of it arrive, then the transfer dies.
+    let cut = (TAKE / 3) * 2;
+    let prefix = std::fs::read(
+        s.orgs
+            .acme
+            .tree()
+            .join("Song")
+            .join("Audio Files")
+            .join("drums.wav"),
+    )
+    .expect("the origin has it")[..usize::try_from(cut).unwrap()]
+        .to_vec();
+    backend
+        .sync_stage_chunk_range(s.acme_root.get(), &chunk, 0, &prefix)
+        .expect("stage the prefix a killed pull would have left");
+    assert_eq!(
+        backend
+            .sync_staged_len(s.acme_root.get(), &chunk)
+            .expect("staged length"),
+        cut,
+        "the resume cursor does not see the partial"
+    );
+
+    files_sync::reconcile(&backend, &peer, s.acme_root.get())
+        .await
+        .expect("resume the pull");
+
+    // Whole, and right — the resumed third joined the staged two thirds
+    // without a seam.
+    let landed = std::fs::read(tree.join("Audio Files").join("drums.wav")).expect("landed");
+    assert_eq!(landed.len() as u64, TAKE);
+    assert_eq!(
+        landed[..usize::try_from(cut).unwrap()],
+        prefix[..],
+        "the resumed transfer rewrote bytes it already had"
+    );
+}
+
+/// A staged prefix that is *wrong* is caught, and does not become a file.
+///
+/// The failure a length-only resume cursor invites: a partial whose bytes
+/// are not the file's. It is verified against the address it was received
+/// under before anything is admitted to the store, so the pull fails and
+/// the tree keeps no file at all — rather than gaining one of exactly the
+/// right size that nothing hashes to.
+// t[verify files.scale.transport]
+#[tokio::test]
+async fn a_corrupt_partial_is_refused_rather_than_admitted() {
+    let s = Scenario::open().await;
+    s.orgs
+        .acme
+        .backend
+        .admit_host(s.orgs.vnt.host_id(), Hosting::working());
+    let peer = s.orgs.vnt.dial_replica(&s.orgs.acme).await;
+    let (_dir, tree, backend) = replica(&s).await;
+
+    let chunk = chunk_hash_of(&s, "Audio Files/drums.wav").await;
+
+    // The right length of the wrong bytes.
+    let cut = usize::try_from((TAKE / 3) * 2).unwrap();
+    backend
+        .sync_stage_chunk_range(s.acme_root.get(), &chunk, 0, &vec![0xAB; cut])
+        .expect("stage a corrupt prefix");
+
+    let refused = files_sync::reconcile(&backend, &peer, s.acme_root.get()).await;
+    assert!(
+        refused.is_err(),
+        "a corrupt partial was completed and admitted"
+    );
+    assert!(
+        !tree.join("Audio Files").join("drums.wav").exists(),
+        "a file nothing hashes to reached the tree"
+    );
+}
+
+/// The granularity behind the counters, pinned so a storage change has to
+/// look at it.
+///
+/// A 3 MiB take is one chunk because the store links whole files
+/// (`ChunkerConfig::DEFAULT_WHOLE_FILE_THRESHOLD` is 0 — a link costs
+/// nothing at any size, and measuring a real import showed a threshold
+/// saved nothing). That is fine now that transfers move bytes rather than
+/// chunks; it was the whole problem while they moved chunks.
+// t[verify files.scale.transport]
+#[tokio::test]
+async fn a_large_take_is_still_stored_as_one_chunk() {
     let s = Scenario::open().await;
     let entry = s
         .as_alice()
