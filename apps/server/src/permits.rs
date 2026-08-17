@@ -1949,16 +1949,15 @@ impl<R: IdentityResolver> IdentityResolver for HostResolver<R> {
                 return Principal::Anonymous;
             }
             wide::set("auth.host", "admitted");
-            // `Guest` because it is the one variant that carries a
-            // credential without conveying membership: `Service` bypasses
-            // the role engine outright and `User` picks up
-            // `DEFAULT_ORG_ROLE`, either of which would hand a host the
-            // run of the org. A `Host` variant belongs upstream in
-            // architect-permissions; until then this is the honest fit,
-            // and `HostEngine` below is what grants it anything at all.
-            Principal::Guest {
-                link_id: format!("{HOST_BEARER_PREFIX}{endpoint}"),
-                display: None,
+            // Its own variant, and each alternative was wrong for its own
+            // reason: `User` picks up `DEFAULT_ORG_ROLE`, `Service` rides
+            // the role engine's in-process bypass, and a `Guest`'s
+            // credential is a link somebody minted rather than the peer's
+            // own proved identity. `Principal::Host` carries no rights at
+            // all — `HostEngine` below is the only thing that grants it
+            // anything.
+            Principal::Host {
+                endpoint: endpoint.to_string(),
             }
         })
     }
@@ -1982,11 +1981,7 @@ impl architect_permissions::PermissionEngine for HostEngine {
         what: &architect_permissions::Resource,
         action: &architect_permissions::Action,
     ) -> architect_permissions::Decision {
-        let is_host = matches!(
-            who,
-            Principal::Guest { link_id, .. } if link_id.starts_with(HOST_BEARER_PREFIX)
-        );
-        if is_host
+        if matches!(who, Principal::Host { .. })
             && what.as_str() == REPLICA_RESOURCE
             && matches!(action.as_str(), "read" | "download")
         {
@@ -2010,11 +2005,7 @@ impl architect_permissions::PermissionEngine for HostEngine {
         architect_permissions::Resource,
         Vec<architect_permissions::Action>,
     )> {
-        let is_host = matches!(
-            who,
-            Principal::Guest { link_id, .. } if link_id.starts_with(HOST_BEARER_PREFIX)
-        );
-        if !is_host {
+        if !matches!(who, Principal::Host { .. }) {
             return Vec::new();
         }
         vec![(

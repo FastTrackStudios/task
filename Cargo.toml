@@ -376,15 +376,15 @@ spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.1.1" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.4.0" }
 
 # ── FastTrackStudio monorepo — the music-production domains ───────────
 # These stay in the FTS monorepo; Task consumes them cross-repo. REPIN
