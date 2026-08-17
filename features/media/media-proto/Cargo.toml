@@ -13,15 +13,20 @@ license.workspace = true
 # ONE architect surface with no HTTP side-channel.
 
 [dependencies]
+architect = { workspace = true }
 facet.workspace = true
 thiserror.workspace = true
 
+# `#[architect::rpc]` expands to `::architect::vox::service`, which in
+# turn emits bare `vox::` paths — so the dependency has to be in scope
+# even though nothing here names it directly any more. Same reason
+# `files-proto` keeps it.
 vox = { workspace = true, optional = true }
 vox-types = { workspace = true, optional = true }
 
 [features]
 default = ["vox"]
-vox = ["dep:vox", "dep:vox-types"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
 
 [lints]
 workspace = true

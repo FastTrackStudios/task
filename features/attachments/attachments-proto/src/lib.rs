@@ -132,7 +132,7 @@ unsafe impl vox_types::Reborrow for SignedDownloadUrl {
     type Ref<'a> = SignedDownloadUrl;
 }
 
-#[cfg_attr(feature = "vox", vox::service)]
+#[cfg_attr(feature = "vox", architect::rpc)]
 pub trait AttachmentService {
     async fn initiate_upload(&self, req: InitiateUpload) -> Result<UploadTicket, AttachmentError>;
 
@@ -144,3 +144,12 @@ pub trait AttachmentService {
         arg: ContentHashArg,
     ) -> Result<SignedDownloadUrl, AttachmentError>;
 }
+
+
+// The architect surface under the workspace's usual names — see
+// `media-proto` for why `layer`/`serve` are emitted unqualified.
+#[cfg(feature = "vox")]
+pub use self::{
+    AttachmentServiceRpcDispatcher as AttachmentDispatcher,
+    attachment_service_rpc_service_descriptor as attachment_descriptor,
+};

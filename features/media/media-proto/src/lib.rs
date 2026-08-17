@@ -94,7 +94,7 @@ unsafe impl vox_types::Reborrow for MediaGrant {
 /// Content-addressed media reads over vox. Mounted per org next to
 /// `AttachmentService`; hashes are the same blob-store namespace.
 #[cfg(feature = "vox")]
-#[vox::service]
+#[architect::rpc]
 pub trait AttachmentMediaService {
     /// Size + mime for a blob — what a player needs before it
     /// requests windows.
@@ -109,7 +109,7 @@ pub trait AttachmentMediaService {
         content_hash: String,
         start: u64,
         len: u64,
-        tx: vox::Tx<MediaChunk>,
+        tx: architect::vox::Tx<MediaChunk>,
     ) -> Result<(), MediaError>;
 
     /// Mint a [`MediaGrant`] covering `prefix` under this org's
@@ -122,3 +122,17 @@ pub trait AttachmentMediaService {
     /// an unauthenticated caller to obtain a token in the first place.
     async fn media_grant(&self, prefix: String) -> Result<MediaGrant, MediaError>;
 }
+
+
+// The architect surface, under the names the rest of the workspace
+// uses. `#[architect::rpc]` emits `<Trait>RpcDispatcher` and
+// `<trait>_rpc_service_descriptor`; every other proto crate re-exports
+// those under a shorter name, and mounting code reads better for it.
+//
+// `layer` and `serve` are emitted unqualified, which is why a module
+// annotated with `#[architect::rpc]` holds exactly one trait.
+#[cfg(feature = "vox")]
+pub use self::{
+    AttachmentMediaServiceRpcDispatcher as AttachmentMediaDispatcher,
+    attachment_media_service_rpc_service_descriptor as attachment_media_descriptor,
+};

@@ -2988,10 +2988,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
                 .with_middleware(AuthServerMiddleware),
         )
         // Attachments — signed blob upload/download.
-        .with(
-            attachments_proto::attachment_service_service_descriptor(),
-            attachments_proto::AttachmentServiceDispatcher::new((*org.attachments).clone()),
-        )
+        .merge(attachments_proto::layer((*org.attachments).clone()))
         // Attachment blobs streamed over vox (`Tx<MediaChunk>`), no
         // HTTP side-channel — the session player's stems and large
         // media, addressed by content hash.
@@ -3003,19 +3000,16 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // name, so the two could not be mounted together. Only one ever
         // was, which is why the clash stayed invisible until the files
         // byte lane was wired up.
-        .with(
-            media_proto::attachment_media_service_service_descriptor(),
-            media_proto::AttachmentMediaServiceDispatcher::new(
-                crate::media::AttachmentMediaServiceImpl::new(
-                    org.attachments.clone(),
-                    org.slug.clone(),
-                    // Same process-wide keypair the media route verifies
-                    // with (`AppState::keypair`, threaded through
-                    // `build_org_state`) — sign and verify cannot drift.
-                    org.attachments.keypair.clone(),
-                ),
+        .merge(media_proto::layer(
+            crate::media::AttachmentMediaServiceImpl::new(
+                org.attachments.clone(),
+                org.slug.clone(),
+                // Same process-wide keypair the media route verifies
+                // with (`AppState::keypair`, threaded through
+                // `build_org_state`) — sign and verify cannot drift.
+                org.attachments.keypair.clone(),
             ),
-        )
+        ))
         // Vault file replication (manifest / get / put / delete).
         .with(
             vault_proto::descriptor(),

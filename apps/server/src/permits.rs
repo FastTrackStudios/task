@@ -909,12 +909,12 @@ pub fn mounts() -> Vec<Mount> {
         ),
         m(
             "core",
-            attachments_proto::attachment_service_service_descriptor(),
+            attachments_proto::attachment_descriptor(),
             ATTACHMENTS,
         ),
         m(
             "core",
-            media_proto::attachment_media_service_service_descriptor(),
+            media_proto::attachment_media_descriptor(),
             MEDIA,
         ),
         m("core", vault_proto::descriptor(), VAULT),

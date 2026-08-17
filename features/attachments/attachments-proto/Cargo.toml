@@ -17,12 +17,16 @@ facet.workspace = true
 thiserror.workspace = true
 uuid = { workspace = true, features = ["js", "serde"] }
 
+# `#[architect::rpc]` expands to `::architect::vox::service`, which
+# emits bare `vox::` paths, so the dependency stays in scope even though
+# nothing here names it directly.
+architect = { workspace = true }
 vox = { workspace = true, optional = true }
 vox-types = { workspace = true, optional = true }
 
 [features]
 default = ["vox"]
-vox = ["dep:vox", "dep:vox-types"]
+vox = ["dep:vox", "dep:vox-types", "architect/vox"]
 
 [lints]
 workspace = true
