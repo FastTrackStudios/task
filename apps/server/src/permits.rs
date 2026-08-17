@@ -497,6 +497,24 @@ table!(FILES_SYNC, "files-sync", "files/**", [
     rd "devices", wr "set_transfer_policy", wa "revoke_device",
 ]);
 
+// Replica sync — the commit graph and the chunks under it
+// (`files.peering.replication`).
+//
+// A peer hosting the same org pulls structure over this: `heads` and
+// `object` walk the graph, `manifest` says what a file is made of, and
+// `chunks` moves the bytes. Every method is a read, and `chunks` is
+// `dl` for the same reason `archive` is — it is how a whole library
+// leaves, a batch at a time, and "who pulled a copy of everything"
+// is the question an audit log exists to answer.
+//
+// This lane was implemented, tested, and mounted by nothing: peer
+// replication could not happen on a real server, only in a harness
+// that mounted it itself. Which is why the integration suite now
+// serves `org_router_guarded` rather than a router of its own.
+table!(FILES_REPLICA, "files-replica", "files/**", [
+    rd "heads", rd "object", rd "manifest", dl "chunks",
+]);
+
 // Who may see and change what (`files.access.*`).
 //
 // Every mutation here is audited without exception: granting, revoking
@@ -556,11 +574,34 @@ table!(FILES_REVIEW, "files-review", "files/**", [
 // attached: `fetch_offered` is the second method on the v2 surface that
 // moves file content, and it does so to a caller on another server, so
 // `dl` here is the tier it would have earned even without the audit.
-table!(FILES_FEDERATION, "files-federation", "files/**", [
-    wa "offer", wa "withdraw", rd "offered",
-    wa "accept", rd "remotes", wa "forget",
-    dl "browse_offered", dl "read_offered", dl "fetch_offered",
-]);
+//
+// Which is why the three `*_offered` methods sit on `public/**` rather
+// than `files/**`, and it is not a relaxation: their credential is the
+// offer secret, validated at one chokepoint (`FilesBackend::live_offer`)
+// so a withdrawal binds on the next call of any kind. A receiver on
+// another server has no session with this org and never will — asking
+// the coarse gate "is this caller a member" can only ever answer no. On
+// `files/**` they were mounted, implemented, audited and unreachable
+// the moment enforcement came on, which is the same failure as not
+// mounting them.
+//
+// They keep `.audited()`. Self-guarding decides *whether* the call is
+// allowed; the audit line is about a copy of someone's content leaving
+// the building, and that is worth recording either way.
+const FILES_FEDERATION: ServicePermits = ServicePermits {
+    service: "files-federation",
+    methods: &[
+        MethodPermit::new("offer", Action::WRITE, "files/**").audited(),
+        MethodPermit::new("withdraw", Action::WRITE, "files/**").audited(),
+        MethodPermit::new("offered", Action::READ, "files/**"),
+        MethodPermit::new("accept", Action::WRITE, "files/**").audited(),
+        MethodPermit::new("remotes", Action::READ, "files/**"),
+        MethodPermit::new("forget", Action::WRITE, "files/**").audited(),
+        MethodPermit::new("browse_offered", Action::READ, "public/files-offer").audited(),
+        MethodPermit::new("read_offered", Action::READ, "public/files-offer").audited(),
+        MethodPermit::new("fetch_offered", Action::READ, "public/files-offer").audited(),
+    ],
+};
 
 table!(FILES_ORGANISE, "files-organise", "files/**", [
     rd "marks", wr "set_tags", wr "set_favourite", rd "tagged", rd "all_tags",
@@ -1027,6 +1068,7 @@ pub fn mounts() -> Vec<Mount> {
         m("core", files_proto::version_descriptor(), FILES_VERSION),
         m("core", files_proto::curation_descriptor(), FILES_CURATION),
         m("core", files_proto::sync_descriptor(), FILES_SYNC),
+        m("core", files_sync::sync_service_service_descriptor(), FILES_REPLICA),
         m("core", files_proto::access_descriptor(), FILES_ACCESS),
         m("core", files_proto::organise_descriptor(), FILES_ORGANISE),
         m(
@@ -2066,9 +2108,17 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
+        // `FederationService` is here for its three `*_offered`
+        // methods and nothing else. A receiver on another server has no
+        // session with this org and never will, so the coarse gate can
+        // only answer "not a member"; what authenticates the call is
+        // the offer secret, checked at one chokepoint so a withdrawal
+        // binds on the next call of any kind. The other six methods on
+        // that service — `offer`, `withdraw`, `accept`, `forget` and
+        // the two reads — stay on `files/**`.
         assert_eq!(
             public,
-            vec!["AuthService", "PermissionsService"],
+            vec!["AuthService", "FederationService", "PermissionsService"],
             "the anonymous surface changed — every entry must be a service \
              that authenticates its own callers",
         );

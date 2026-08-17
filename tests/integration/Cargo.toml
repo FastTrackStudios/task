@@ -21,6 +21,9 @@ architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
 files-sync = { workspace = true }
 files-domain = { workspace = true }
+task-server = { workspace = true }
+org-proto = { workspace = true }
+architect-auth = { workspace = true }
 iroh = { workspace = true }
 async-trait = { workspace = true }
 vox = { workspace = true }

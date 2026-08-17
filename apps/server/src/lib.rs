@@ -3007,6 +3007,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
                 org.attachments.keypair.clone(),
             ),
         ))
+        // Replica sync: the commit graph and the chunks under it, which
+        // is how a second host of this org converges its structure
+        // (`files.peering.replication`). Mounted here rather than left
+        // to whoever happened to be serving — a peer dials the org's
+        // endpoint and expects the org's router.
+        .merge(files_sync::layer(files_sync::SyncHost::new(
+            org.files.clone(),
+        )))
         // Vault file replication (manifest / get / put / delete).
         .with(
             vault_proto::descriptor(),
@@ -3715,25 +3723,49 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
         .find(|t| !t.is_empty())
 }
 
+/// The org router as it must actually be served: permission gate
+/// outermost, snapshot write gate under it, `org_layer_router` inside.
+///
+/// A function rather than three lines inside the WebSocket handler,
+/// because the composition is the security boundary and it was reachable
+/// from exactly one transport. Anything else serving `org_layer_router`
+/// — an iroh endpoint, a `LocalServer`, a test harness — got the bare
+/// router: no permission gate, no snapshot parking, and no way to notice
+/// from the call site, since the bare router answers every call
+/// perfectly well. `files.topology.multi-server` means more than one
+/// transport is the expected case, so the guarded form has to be the one
+/// that is easy to reach.
+///
+/// `bearer` is the identity presented at establish, applied to every
+/// call on the connection that does not carry its own `authorization`
+/// metadata. Transports without a handshake to read it from pass `None`
+/// and rely on per-call metadata.
+pub fn org_router_guarded(
+    org: &OrgAppState,
+    gate: snapshot::WriteGate,
+    bearer: Option<String>,
+) -> architect::permissions_gate::PermissionedRouter<snapshot::GatedRouter> {
+    // Every request parks at the snapshot write gate on dispatch
+    // entry — see `snapshot::GatedRouter`. Free when no snapshot is
+    // running.
+    let router = snapshot::GatedRouter::new(org_layer_router(org), gate);
+    // Outermost: the permission gate (deny before snapshot-parking or
+    // dispatch). One shared gate per org, wrapped per connection — which
+    // is why the connection's bearer can be baked in here.
+    architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(
+        org.permissions.clone(),
+        router,
+        bearer,
+    )
+}
+
 fn serve_org_vox(
     org: OrgAppState,
     gate: snapshot::WriteGate,
     ws: WebSocketUpgrade,
     headers: &axum::http::HeaderMap,
 ) -> axum::response::Response {
-    let bearer = upgrade_bearer(headers);
-    // Every request parks at the snapshot write gate on dispatch
-    // entry — see `snapshot::GatedRouter`. Free when no snapshot is
-    // running.
-    let router = snapshot::GatedRouter::new(org_layer_router(&org), gate);
-    // Outermost: the permission gate (deny before snapshot-parking or
-    // dispatch). One shared gate per org, wrapped per connection — which
-    // is why the connection's bearer can be baked in here.
-    let router = architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(
-        org.permissions.clone(),
-        router,
-        bearer,
-    );
+    let router = org_router_guarded(&org, gate, upgrade_bearer(headers));
     ws.protocols([VOX_SUBPROTOCOL])
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
         .into_response()

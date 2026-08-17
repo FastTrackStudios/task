@@ -84,6 +84,7 @@ files-storage = { workspace = true }
 files-transcode = { workspace = true, features = ["ffmpeg"] }
 # Wire types the share serving routes name directly (issue #271):
 # BrowseEntry listings and RenditionKind tags.
+files-sync = { workspace = true }
 files-proto = { workspace = true, features = ["vox"] }
 # `TryStreamExt::map_err` — the share upload streams its body to disk.
 futures-util = { workspace = true }

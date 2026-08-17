@@ -4,14 +4,18 @@
 //! and the two ways bytes leave: a ticket and an archive. Everything
 //! here happens inside one org on one server; the collaboration starts
 //! in `collaboration.rs`.
+//!
+//! Every assertion goes over the wire, as Alice. Not because the
+//! transport is interesting — it is the same answer either way when
+//! things work — but because "the backend computes this" and "a
+//! signed-in person can get this" are different claims, and only the
+//! second is the product. A lane missing from the router, or from the
+//! permit tables, fails here and nowhere else.
 
 use files::path::RootPath;
-use files::service::media::MediaService;
 use files::service::roots::AdoptionPhase;
-use files::service::tree::TreeService;
-use files::service::version::VersionService;
-use files::service::write::WriteService;
 
+use integration::client::Session;
 use integration::scenario::Scenario;
 
 fn p(s: &str) -> RootPath {
@@ -27,9 +31,10 @@ async fn a_tree_is_browsable_the_moment_it_is_adopted() {
     // project that is invisible until it is hashed is a project nobody
     // can work on that day.
     let listing = s
-        .orgs
-        .acme
-        .backend
+        .as_alice()
+        .await
+        .tree()
+        .await
         .browse(s.acme_root, RootPath::root())
         .await
         .expect("browse");
@@ -43,9 +48,9 @@ async fn a_tree_is_browsable_the_moment_it_is_adopted() {
 #[tokio::test]
 async fn adoption_moves_nothing() {
     let s = Scenario::open().await;
-    // The files are still where their applications put them. This is
-    // the whole promise of adoption: REAPER keeps writing the same
-    // paths it was writing before, during and after.
+    // The one assertion in this chapter that is not over the wire, and
+    // could not be: the claim is about this machine's disk, and asking
+    // the server would only report what the server believes.
     let session = s.orgs.acme.tree().join("Song");
     assert_eq!(
         std::fs::read(session.join("Audio Files").join("kick.wav")).unwrap(),
@@ -58,17 +63,14 @@ async fn adoption_moves_nothing() {
 #[tokio::test]
 async fn platform_junk_never_surfaces() {
     let s = Scenario::open().await;
-    let root = s
-        .orgs
-        .acme
-        .backend
+    let alice = s.as_alice().await;
+    let tree = alice.tree().await;
+
+    let root = tree
         .browse(s.acme_root, RootPath::root())
         .await
         .expect("browse");
-    let audio = s
-        .orgs
-        .acme
-        .backend
+    let audio = tree
         .browse(s.acme_root, p("Audio Files"))
         .await
         .expect("browse");
@@ -87,10 +89,11 @@ async fn platform_junk_never_surfaces() {
 #[tokio::test]
 async fn a_write_is_one_operation_and_reaches_the_catalogue() {
     let s = Scenario::open().await;
-    let receipt = s
-        .orgs
-        .acme
-        .backend
+    let alice = s.as_alice().await;
+
+    let receipt = alice
+        .write()
+        .await
         .create_dirs(s.acme_root, vec![p("Renders")])
         .await
         .expect("mkdir");
@@ -99,9 +102,9 @@ async fn a_write_is_one_operation_and_reaches_the_catalogue() {
     // Without a restart, and as a delta rather than a re-listing —
     // `files.catalogue.concurrent`. A catalogue that only hears about
     // writes at startup is a catalogue that is wrong all day.
-    s.orgs
-        .acme
-        .backend
+    alice
+        .tree()
+        .await
         .entry(s.acme_root, p("Renders"))
         .await
         .expect("the catalogue did not hear about the write");
@@ -112,9 +115,10 @@ async fn a_write_is_one_operation_and_reaches_the_catalogue() {
 async fn a_checkpoint_records_history() {
     let s = Scenario::open().await;
     let checkpoint = s
-        .orgs
-        .acme
-        .backend
+        .as_alice()
+        .await
+        .version()
+        .await
         .checkpoint(s.acme_root, Some("first".into()))
         .await
         .expect("checkpoint");
@@ -126,17 +130,18 @@ async fn a_checkpoint_records_history() {
 /// The byte lane reads the pinned head rather than the disk — a file
 /// being written to right now has no stable length and no stable
 /// content, so a ticket for it could only promise what it cannot keep.
-/// Adoption's second pass is what supplies that head: it reads the tree
-/// into the store and pins what it read, so an adopted project is
-/// streamable without anyone having checkpointed it by hand.
+/// Adoption's second pass supplies that head: it reads the tree into the
+/// store and pins what it read, so an adopted project is streamable
+/// without anyone having checkpointed it by hand.
 // t[verify files.scale.large-media]
 #[tokio::test]
 async fn a_read_mints_a_ticket_rather_than_returning_bytes() {
     let s = Scenario::open().await;
     let ticket = s
-        .orgs
-        .acme
-        .backend
+        .as_alice()
+        .await
+        .media()
+        .await
         .read(s.acme_root, p("Audio Files/kick.wav"))
         .await
         .expect("a byte ticket");
@@ -153,7 +158,11 @@ async fn a_read_mints_a_ticket_rather_than_returning_bytes() {
 /// `files.adopt.catalogue-first` is two claims, and this is the second:
 /// the addresses do get computed. The first — that the tree is browsable
 /// before they are — is the test at the top of this file, which runs
-/// against the same fixture and does not wait for anything.
+/// against the same fixture and waits for nothing.
+///
+/// Asked of the backend rather than over the wire: progress is a
+/// server-side fact about work in flight, and `settled` is a test
+/// affordance rather than a lane.
 // t[verify files.adopt.catalogue-first]
 #[tokio::test]
 async fn adoption_hashes_the_tree_behind_the_catalogue() {
@@ -186,9 +195,10 @@ async fn adoption_hashes_the_tree_behind_the_catalogue() {
 async fn a_hashed_entry_knows_its_content_address() {
     let s = Scenario::open().await;
     let kick = s
-        .orgs
-        .acme
-        .backend
+        .as_alice()
+        .await
+        .tree()
+        .await
         .entry(s.acme_root, p("Audio Files/kick.wav"))
         .await
         .expect("the take is catalogued");
@@ -203,9 +213,10 @@ async fn a_hashed_entry_knows_its_content_address() {
 async fn an_archive_is_generated_as_it_is_sent() {
     let s = Scenario::open().await;
     let archive = s
-        .orgs
-        .acme
-        .backend
+        .as_alice()
+        .await
+        .write()
+        .await
         .archive(s.acme_root, vec![p("Audio Files")])
         .await
         .expect("an archive ticket");
@@ -216,4 +227,24 @@ async fn an_archive_is_generated_as_it_is_sent() {
     // the body then fails to match is worse than admitting it.
     assert_eq!(archive.length, None);
     assert!(!archive.seekable, "a one-pass stream claimed to be seekable");
+}
+
+/// The same write, by someone who was never given it.
+///
+/// Not a duplicate of `people.rs`: that chapter asks the access lane
+/// what a person's capabilities are, which is a computation. This asks
+/// whether the server refuses the call, which is the part that protects
+/// anything.
+// t[verify files.access.granularity]
+#[tokio::test]
+async fn a_stranger_cannot_write_to_the_session() {
+    let s = Scenario::open().await;
+    let stranger = Session::anonymous(&s.orgs.acme).await;
+
+    let refused = stranger
+        .write()
+        .await
+        .create_dirs(s.acme_root, vec![p("Renders")])
+        .await;
+    assert!(refused.is_err(), "an anonymous caller wrote to the session");
 }

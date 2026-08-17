@@ -59,7 +59,7 @@ impl Orgs {
         let known = Arc::new(Mutex::new(HashMap::new()));
 
         // ACME Audio: the sessions and stems half of the job.
-        let acme = Server::start("ACME Audio", Arc::clone(&known), |tree| {
+        let acme = Server::start("ACME Audio", "acme-audio", Arc::clone(&known), |tree| {
             let session = tree.join("Song");
             std::fs::create_dir_all(session.join("Audio Files")).unwrap();
             std::fs::write(session.join("Song.rpp"), b"REAPER project (fixture)").unwrap();
@@ -81,7 +81,7 @@ impl Orgs {
 
         // VNT Video: the footage and cut half, a different company on a
         // different server.
-        let vnt = Server::start("VNT Video", Arc::clone(&known), |tree| {
+        let vnt = Server::start("VNT Video", "vnt-video", Arc::clone(&known), |tree| {
             let cut = tree.join("Cut");
             std::fs::create_dir_all(cut.join("Proxies")).unwrap();
             std::fs::write(cut.join("Cut.drp"), b"Resolve project (fixture)").unwrap();

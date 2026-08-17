@@ -35,7 +35,8 @@
 //!
 //! | file | concept |
 //! |---|---|
-//! | [`server`]   | a server: one org's backend on one iroh endpoint |
+//! | [`server`]   | a server: one org, the real router, one endpoint |
+//! | [`client`]   | a person talking to a server, over the wire |
 //! | [`device`]   | a laptop: one project, partly carried |
 //! | [`orgs`]     | the two companies, and what is on their disks |
 //! | [`people`]   | the four accounts, and what each was granted |
@@ -56,6 +57,7 @@
 //! printed `ok` is only as honest as the eye reading it. A test that
 //! stops asserting fails; a stage that stops asserting still prints.
 
+pub mod client;
 pub mod device;
 pub mod orgs;
 pub mod people;

@@ -11176,11 +11176,14 @@ name = "integration"
 version = "0.1.0"
 dependencies = [
  "architect",
+ "architect-auth",
  "async-trait",
  "files",
  "files-domain",
  "files-sync",
  "iroh",
+ "org-proto",
+ "task-server",
  "tempfile",
  "tokio",
  "vox",
@@ -21696,6 +21699,7 @@ dependencies = [
  "files",
  "files-proto",
  "files-storage",
+ "files-sync",
  "files-transcode",
  "files-webdav",
  "finance",

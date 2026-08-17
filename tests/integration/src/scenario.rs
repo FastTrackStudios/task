@@ -28,6 +28,21 @@ pub struct Scenario {
 }
 
 impl Scenario {
+    /// A signed-in session as ACME's owner.
+    ///
+    /// Most chapters want a caller who is allowed to do the thing, so
+    /// that what they assert is the behaviour rather than the refusal.
+    /// The refusals get their own tests, and they name who is being
+    /// refused.
+    pub async fn as_alice(&self) -> crate::client::Session {
+        crate::client::Session::open(&self.orgs.acme, self.people.alice.token.clone()).await
+    }
+
+    /// A signed-in session as VNT's owner, on VNT's server.
+    pub async fn as_victor(&self) -> crate::client::Session {
+        crate::client::Session::open(&self.orgs.vnt, self.people.victor.token.clone()).await
+    }
+
     /// Boot both servers, adopt both trees, hire everybody.
     pub async fn open() -> Self {
         let orgs = Orgs::boot().await;

@@ -24,6 +24,26 @@ use files::service::access::{Capability, Subject};
 
 use crate::orgs::Orgs;
 
+/// One person: an account, and the principal their grants name.
+///
+/// The two are separate on purpose, and the gap between them is real.
+/// `token` is what a client presents on the wire, and the permission
+/// gate resolves it to decide whether this caller may reach a service
+/// at all. `subject` is what the Files access lane checks per path —
+/// and that lane does not read the caller's identity off the
+/// connection, so a signed-in user's fine-grained capabilities are
+/// still asked for explicitly rather than inferred from who is calling.
+///
+/// Two identities for one person is not a design; it is where the
+/// implementation currently is, and the suite says so rather than
+/// hiding it behind a helper that makes them look joined.
+pub struct Person {
+    pub subject: Subject,
+    /// The session token. Sign a client with it via `Session::open`.
+    pub token: String,
+    pub email: String,
+}
+
 /// The four accounts, and what each was given.
 ///
 /// Held as [`Subject`]s because that is what the access lane takes: a
@@ -33,13 +53,13 @@ use crate::orgs::Orgs;
 /// colleague.
 pub struct People {
     /// Owns ACME Audio.
-    pub alice: Subject,
+    pub alice: Person,
     /// Owns VNT Video.
-    pub victor: Subject,
+    pub victor: Person,
     /// Works at ACME, on this project.
-    pub sam: Subject,
+    pub sam: Person,
     /// The client. Here to look at deliverables.
-    pub casey: Subject,
+    pub casey: Person,
 }
 
 /// Everything an owner holds.
@@ -89,15 +109,15 @@ impl People {
     pub async fn hire(orgs: &Orgs, acme_root: RootId, vnt_root: RootId) -> Self {
         use files::service::access::AccessService;
 
-        let alice = Subject::Person(PrincipalId::generate());
-        let victor = Subject::Person(PrincipalId::generate());
-        let sam = Subject::Person(PrincipalId::generate());
-        let casey = Subject::Person(PrincipalId::generate());
+        let alice = sign_up(&orgs.acme, "alice@acme.test", "Alice").await;
+        let victor = sign_up(&orgs.vnt, "victor@vnt.test", "Victor").await;
+        let sam = sign_up(&orgs.acme, "sam@acme.test", "Sam").await;
+        let casey = sign_up(&orgs.acme, "casey@client.test", "Casey").await;
 
         orgs.acme
             .backend
             .grant(
-                alice.clone(),
+                alice.subject.clone(),
                 acme_root,
                 RootPath::root(),
                 owner_capabilities(),
@@ -107,7 +127,7 @@ impl People {
         orgs.vnt
             .backend
             .grant(
-                victor.clone(),
+                victor.subject.clone(),
                 vnt_root,
                 RootPath::root(),
                 owner_capabilities(),
@@ -118,8 +138,8 @@ impl People {
         orgs.acme
             .backend
             .grant_as(
-                &alice,
-                sam.clone(),
+                &alice.subject,
+                sam.subject.clone(),
                 acme_root,
                 RootPath::root(),
                 employee_capabilities(),
@@ -130,8 +150,8 @@ impl People {
         orgs.acme
             .backend
             .grant_as(
-                &alice,
-                casey.clone(),
+                &alice.subject,
+                casey.subject.clone(),
                 acme_root,
                 RootPath::parse("Deliverables").unwrap(),
                 client_capabilities(),
@@ -144,5 +164,35 @@ impl People {
             sam,
             casey,
         }
+    }
+}
+
+/// Create a real account on `server` and take its session.
+///
+/// A real one, not a `Subject` conjured in the test: the permission
+/// gate resolves the token this returns, and a suite whose callers are
+/// all anonymous cannot tell a permit table that covers a method from
+/// one that does not.
+async fn sign_up(server: &crate::server::Server, email: &str, name: &str) -> Person {
+    let bundle = server
+        .auth
+        .auth
+        .create_email_password_user(architect_auth::CreateEmailPasswordUser {
+            email: email.to_string(),
+            password: "correct-horse-battery-staple".into(),
+            name: Some(name.to_string()),
+            username: None,
+            image: None,
+            metadata_json: None,
+            ip_address: None,
+            user_agent: None,
+        })
+        .await
+        .unwrap_or_else(|e| panic!("sign {name} up: {e:?}"));
+
+    Person {
+        subject: Subject::Person(PrincipalId::generate()),
+        token: bundle.token,
+        email: email.to_string(),
     }
 }

@@ -12,13 +12,13 @@
 //! servers, over iroh, by replicating the commit graph and re-deriving
 //! the catalogue locally.
 
-use architect::iroh_link;
 use files::model::RootFlavor;
 use files::path::RootPath;
 use files::service::roots::RootsService;
 use files::service::tree::TreeService;
 use files_domain::{HostId, Hosting, OrgId, Peering};
 
+use integration::client::Session;
 use integration::scenario::Scenario;
 
 /// The starting arrangement: both orgs known to both servers, with the
@@ -163,18 +163,33 @@ async fn adding_a_server_adds_capacity() {
 /// over iroh. What arrives is the shape: what exists, where, and how
 /// big. What does not arrive is a single chunk, which is the whole
 /// point.
+///
+/// # What signing this call reveals
+///
+/// The pull is signed with an ACME session token, and it has to be: the
+/// replica lane sits behind the same permission gate as everything else
+/// and asks "is this caller a member of this org", which an anonymous
+/// peer can only ever fail.
+///
+/// A host is not a person, so there is no host credential to present —
+/// what stands in here is a user account on the org being replicated.
+/// That is a real gap and this is where it shows: admitting a server to
+/// host an org is a different act from hiring someone, and until it has
+/// its own credential, "which hosts may pull this org" is answered by
+/// who happens to hold a login.
+///
+/// The alternative was worse and was the state until this suite served
+/// the real router: the lane mounted nowhere, so replication worked in
+/// a harness and nowhere else.
 // t[verify files.peering.replication]
 #[tokio::test]
 async fn structure_replicates_between_servers_without_moving_content() {
     let s = Scenario::open().await;
 
-    let link = iroh_link::connect(&s.orgs.vnt.endpoint, s.orgs.acme.endpoint.addr())
-        .await
-        .expect("dial ACME");
-    let peer: files_sync::SyncServiceClient = vox_core::initiator_on(link)
-        .establish()
-        .await
-        .expect("establish the sync lane");
+    // VNT dials ACME as an admitted host. The credential is Alice's,
+    // for want of a host's own — see above.
+    let admitted = Session::open(&s.orgs.acme, s.people.alice.token.clone()).await;
+    let peer = admitted.replica().await;
 
     // The receiving side of `files.peering.replication`: the root
     // becomes real here, with the id it has everywhere, and no tree
@@ -212,4 +227,24 @@ async fn structure_replicates_between_servers_without_moving_content() {
     // answers correctly on a host holding none of it.
     let bytes: u64 = listed.iter().filter_map(|e| e.size).sum();
     assert!(bytes > 0, "the structure arrived without sizes");
+}
+
+/// The gap above, stated so it cannot quietly close the wrong way.
+///
+/// Nothing about an unauthenticated peer should be able to walk an org's
+/// commit graph: `object` returns raw commits and trees, and `chunks`
+/// returns content. If someone makes the replica lane public to "get
+/// peering working", this fails — which is the point of writing it down
+/// as a test rather than as a comment.
+// t[verify files.peering.replication]
+#[tokio::test]
+async fn an_unadmitted_peer_cannot_walk_the_commit_graph() {
+    let s = Scenario::open().await;
+    let stranger = Session::anonymous(&s.orgs.acme).await;
+
+    let refused = stranger.replica().await.heads(s.acme_root.get()).await;
+    assert!(
+        refused.is_err(),
+        "an anonymous peer read an org's heads: {refused:?}"
+    );
 }

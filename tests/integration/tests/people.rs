@@ -37,11 +37,11 @@ fn can(s: &Scenario, who: &Subject, path: &str) -> Result<Vec<Capability>, files
 async fn the_same_path_answers_differently_depending_on_who_asks() {
     let s = Scenario::open().await;
 
-    let sam = can(&s, &s.people.sam, "Audio Files").expect("Sam works on this project");
+    let sam = can(&s, &s.people.sam.subject, "Audio Files").expect("Sam works on this project");
     assert!(sam.contains(&Capability::Write), "{sam:?}");
 
     assert!(
-        can(&s, &s.people.casey, "Audio Files").is_err(),
+        can(&s, &s.people.casey.subject, "Audio Files").is_err(),
         "the client could see the session folder"
     );
 }
@@ -53,7 +53,7 @@ async fn the_same_path_answers_differently_depending_on_who_asks() {
 #[tokio::test]
 async fn a_client_may_review_the_mix_without_taking_it() {
     let s = Scenario::open().await;
-    let caps = can(&s, &s.people.casey, "Deliverables").expect("the client's own folder");
+    let caps = can(&s, &s.people.casey.subject, "Deliverables").expect("the client's own folder");
 
     assert!(caps.contains(&Capability::Read), "{caps:?}");
     assert!(caps.contains(&Capability::Comment), "{caps:?}");
@@ -75,13 +75,13 @@ async fn owning_one_org_reaches_nothing_in_the_other() {
         .orgs
         .vnt
         .backend
-        .effective_for(&s.people.victor, s.vnt_root, &RootPath::root())
+        .effective_for(&s.people.victor.subject, s.vnt_root, &RootPath::root())
         .map(|e| e.capabilities)
         .expect("Victor at his own company");
     assert!(his.contains(&Capability::Write), "{his:?}");
 
     assert!(
-        can(&s, &s.people.victor, "Audio Files").is_err(),
+        can(&s, &s.people.victor.subject, "Audio Files").is_err(),
         "owning one org reached into the other"
     );
 }
@@ -95,8 +95,8 @@ async fn owning_one_org_reaches_nothing_in_the_other() {
 async fn an_employee_without_share_cannot_widen_the_guest_list() {
     let s = Scenario::open().await;
     let leak = s.orgs.acme.backend.grant_as(
-        &s.people.sam,
-        s.people.casey.clone(),
+        &s.people.sam.subject,
+        s.people.casey.subject.clone(),
         s.acme_root,
         RootPath::root(),
         vec![Capability::Read],
@@ -113,8 +113,8 @@ async fn an_employee_without_share_cannot_widen_the_guest_list() {
 async fn a_grant_cannot_convey_what_the_granter_does_not_hold() {
     let s = Scenario::open().await;
     let over = s.orgs.acme.backend.grant_as(
-        &s.people.casey,
-        s.people.sam.clone(),
+        &s.people.casey.subject,
+        s.people.sam.subject.clone(),
         s.acme_root,
         RootPath::parse("Deliverables").unwrap(),
         vec![Capability::Write],
