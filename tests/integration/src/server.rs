@@ -60,6 +60,17 @@ use task_server::{AppState, AuthState, capability::ServerKeypair};
 /// in `apps/server` rather than here.
 static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Open this data root's auth store, creating it on first call.
+///
+/// A file rather than `sqlite::memory:`, so a restart comes back to the
+/// same accounts. A test that has to re-hire everybody after a restart
+/// cannot ask whether a token still works, and "does a session survive
+/// the server" is a question about the product.
+async fn open_auth(data: &Path) -> AuthState {
+    let url = format!("sqlite://{}?mode=rwc", data.join("auth.sqlite").display());
+    AuthState::open(&url, SECRET).await.expect("auth db")
+}
+
 /// The secret every test server signs sessions with. Fixed, because
 /// nothing here protects anything — and long enough that
 /// `ArchitectAuth` accepts it.
@@ -104,9 +115,7 @@ impl Server {
     /// with only the second is not a world anybody could be shown.
     pub async fn start(name: &'static str, slug: &str, fixture: impl Fn(&Path)) -> Self {
         let data = tempfile::tempdir().expect("data dir");
-        let auth = AuthState::open("sqlite::memory:", SECRET)
-            .await
-            .expect("auth db");
+        let auth = open_auth(data.path()).await;
 
         let state = {
             let _guard = ENV.lock().await;
@@ -186,27 +195,55 @@ impl Server {
     /// survives is whatever was written down, which is the only thing a
     /// restart test can honestly be about.
     ///
-    /// The auth database does *not* survive — it is `sqlite::memory:`,
-    /// so sessions and accounts go with the old process. That is a
-    /// property of the harness rather than of the product, and it is why
-    /// the restart chapter asserts about catalogues and admissions
-    /// rather than about people.
+    /// The auth database survives too, because it is a file on the same
+    /// disk. It was `sqlite::memory:` for a while, which meant accounts
+    /// and sessions went with the process and the restart chapter could
+    /// only ask about catalogues and admissions. That was a property of
+    /// the harness rather than of the product, and it put
+    /// `scenario.album.rebuild` — "delete every database and lose
+    /// nothing a human wrote" — out of reach, since the thing under test
+    /// there is precisely what a restart finds on disk.
     pub async fn restart(self) -> Self {
+        self.restart_with(|_| {}).await
+    }
+
+    /// Stop, do something to the disk, and start again.
+    ///
+    /// The ordering is the whole point and it is the ordering an
+    /// operator has: **stop the server, then touch its files, then
+    /// start it.** `before_boot` runs with nothing holding the data
+    /// root — every pool closed, the store flushed, the endpoint shut.
+    ///
+    /// Deleting a sqlite file out from under a live pool is not a
+    /// smaller version of losing a database; it is a different event,
+    /// and the one it produces here is a boot that never finishes. The
+    /// rebuild chapter found that by hanging for thirty seconds, which
+    /// is a fair description of what the same mistake does in
+    /// production.
+    pub async fn restart_with(self, before_boot: impl FnOnce(&Path)) -> Self {
         let Self {
             name,
             key,
             slug,
             endpoint,
+            state: old_state,
+            backend: old_backend,
             _data: data,
             ..
         } = self;
         // Close the old endpoint before rebinding the same key, or the
         // two race for the identity.
         endpoint.close().await;
+        // Then everything holding the disk: the content store's own
+        // handles first, then every DB pool the scope owns, in the LIFO
+        // order the real shutdown path uses.
+        old_backend.shutdown().await;
+        old_state.scope.close().await;
 
-        let auth = AuthState::open("sqlite::memory:", SECRET)
-            .await
-            .expect("auth db");
+        before_boot(data.path());
+
+        // The same file the first boot opened — see `open_auth`.
+        let auth = open_auth(data.path()).await;
         let state = {
             let _guard = ENV.lock().await;
             // SAFETY: held under `ENV` for the whole window in which
@@ -279,6 +316,15 @@ impl Server {
             .establish()
             .await
             .expect("establish the replica lane")
+    }
+
+    /// This org's root on disk — `orgs/<slug>/`.
+    ///
+    /// Its vault, its wiki, its sqlite projections and its files. The
+    /// rebuild chapter needs it to delete things a lane would never
+    /// offer to delete.
+    pub fn org_root(&self) -> std::path::PathBuf {
+        self._data.path().join("orgs").join(&self.slug)
     }
 
     /// This org's files directory — where its trees sit on this disk.
