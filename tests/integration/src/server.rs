@@ -318,6 +318,23 @@ impl Server {
             .expect("establish the replica lane")
     }
 
+    /// Take this server off the network, leaving its disk alone.
+    ///
+    /// Closes the endpoint, so a peer dialling this org's id finds
+    /// nothing. Deliberately **not** a shutdown: the process is still
+    /// running, the content is still on disk, and the org is still
+    /// hosted. What is gone is reach — which is the distinction
+    /// `files.catalogue.offline` and `project.location.degraded` are
+    /// both about, and which a test that killed the whole server could
+    /// not draw.
+    ///
+    /// There is no coming back. Rebinding the same key needs a fresh
+    /// `Endpoint`, which is [`Self::restart`]; an outage that ends is a
+    /// restart, and modelling it as one keeps a single path.
+    pub async fn go_offline(&self) {
+        self.endpoint.close().await;
+    }
+
     /// This org's root on disk — `orgs/<slug>/`.
     ///
     /// Its vault, its wiki, its sqlite projections and its files. The

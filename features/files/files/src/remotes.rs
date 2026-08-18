@@ -51,6 +51,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use architect::iroh_link::{self, iroh};
 use files_proto::error::FilesFault;
@@ -94,6 +95,22 @@ pub async fn bind_endpoint(
     }
     builder.bind().await
 }
+
+/// How long a dial may take before the origin counts as unreachable.
+///
+/// Without a bound, `connect` waits for an origin that is not coming
+/// back — and a browse of federated content becomes a hang rather than
+/// an answer. That is the one outcome `files.catalogue.offline` rules
+/// out by name: unavailable content is *marked*, never missing, and a
+/// surface cannot mark what it is still waiting for.
+///
+/// Five seconds is chosen against discovery rather than against
+/// patience: resolving an id through n0's DNS and opening a QUIC
+/// connection is well under a second on a working network, and the
+/// interesting case here is the network that is not working. A caller
+/// who would rather wait longer has a root that is not reachable, which
+/// is a different problem from a slow one.
+const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The [`RemoteFiles`] port, dialling other servers over iroh.
 ///
@@ -179,11 +196,22 @@ impl IrohRemotes {
     /// [`iroh::address_lookup::MemoryLookup`] where there is nothing to
     /// discover.
     async fn redial(&self, id: iroh::EndpointId) -> Result<iroh::endpoint::Connection, FilesFault> {
-        let connection = self
-            .endpoint
-            .connect(id, iroh_link::VOX_ALPN)
-            .await
-            .map_err(|e| FilesFault::Io(format!("dial {id}: {e}")))?;
+        let dialled =
+            tokio::time::timeout(DIAL_TIMEOUT, self.endpoint.connect(id, iroh_link::VOX_ALPN))
+                .await;
+        // `Unavailable` rather than `Io` for the timeout: the caller's
+        // reasonable response is to mark this content unreachable and
+        // carry on, which is a different response from "something went
+        // wrong on the wire" — and the same one an offline origin gets.
+        let connection = match dialled {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(e)) => return Err(FilesFault::Io(format!("dial {id}: {e}"))),
+            Err(_elapsed) => {
+                return Err(FilesFault::Unavailable {
+                    path: RootPath::root(),
+                });
+            }
+        };
         self.pool.lock().await.insert(id, connection.clone());
         Ok(connection)
     }
