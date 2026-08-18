@@ -7643,6 +7643,7 @@ dependencies = [
  "architect-permissions 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "async-trait",
  "bao-tree",
+ "blake3",
  "chrono",
  "facet",
  "facet-json",

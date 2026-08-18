@@ -23,6 +23,7 @@ pub mod access;
 pub mod curation;
 pub mod federation;
 pub mod hosts;
+pub mod ingest;
 pub mod media;
 pub mod organise;
 pub mod review;

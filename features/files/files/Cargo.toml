@@ -17,6 +17,10 @@ architect-permissions = { workspace = true }
 files-domain.workspace = true
 files-proto = { workspace = true, features = ["vox"] }
 async-trait = "0.1"
+# Ingest identifies a file by its own hash before deciding whether to
+# hand it to the store — see `lane::ingest` on why the ledger key is
+# computed here rather than taken from the store's reply.
+blake3 = { workspace = true }
 # The BLAKE3 range types the resumable-transfer seams speak. Pinned to
 # iroh-blobs' own version, since the types cross that boundary.
 bao-tree = "0.16"
