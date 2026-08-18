@@ -31,8 +31,9 @@ pub mod verify;
 
 pub use model::{ProjectInfo, Status, Tags};
 pub use parts::{
-    Audience, Capabilities, Capability, Cardinality, Component, ComponentKind, Deliverable,
-    DeliverableItem, Deliverables, Divergence, Form, Medium, Part, Parts, Piece, Scope,
+    Audience, Capabilities, Capability, Cardinality, Component, ComponentKind, Conflict,
+    Deliverable, DeliverableItem, Deliverables, Divergence, Form, Medium, Merged, Part, Parts,
+    Piece, Scope,
 };
 pub use service::{ProjectError, ProjectEvent, ProjectService, ProjectServiceRpc};
 pub use states::{StateDef, StateGroup, StatesConfig, default_states, resolve_state_group};

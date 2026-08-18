@@ -239,6 +239,8 @@ fn take_parts(map: &serde_yaml::Mapping) -> project_proto::Parts {
             id: Option<Uuid>,
             name: String,
             #[serde(default)]
+            references: Option<Uuid>,
+            #[serde(default)]
             components: Vec<project_proto::Component>,
         },
     }
@@ -248,13 +250,14 @@ fn take_parts(map: &serde_yaml::Mapping) -> project_proto::Parts {
     let project_id = yaml::str_at(map, "id").unwrap_or_default();
     let mut parts = Vec::with_capacity(written.len());
     for entry in written {
-        let (id, name, components) = match entry {
-            Written::Named(name) => (None, name, Vec::new()),
+        let (id, name, references, components) = match entry {
+            Written::Named(name) => (None, name, None, Vec::new()),
             Written::Full {
                 id,
                 name,
+                references,
                 components,
-            } => (id, name, components),
+            } => (id, name, references, components),
         };
         let name = name.trim().to_owned();
         if name.is_empty() {
@@ -269,6 +272,7 @@ fn take_parts(map: &serde_yaml::Mapping) -> project_proto::Parts {
         parts.push(project_proto::Part {
             id,
             name,
+            references,
             components,
         });
     }

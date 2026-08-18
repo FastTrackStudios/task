@@ -172,11 +172,13 @@ mod tests {
             crate::Part {
                 id: overture,
                 name: "Overture".into(),
+                references: None,
                 components: Vec::new(),
             },
             crate::Part {
                 id: Uuid::new_v4(),
                 name: "Daybreak".into(),
+                references: None,
                 components: Vec::new(),
             },
         ]);

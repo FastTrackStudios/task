@@ -180,6 +180,10 @@ pub struct ProjectInfo {
     #[architect(filterable)]
     pub parent_id: Option<Uuid>,
 
+    // t[impl project.lifecycle.merge-identity] — a merged-away half
+    // becomes an alias here, and `ProjectService::get` follows it. The
+    // field always claimed "the resolver follows the link"; merge is
+    // what finally made a resolver exist
     /// Federation pointer — `Some("@tombrooksmusic/png-worship-collective-album")`
     /// means this row is a *reference* to the canonical
     /// project owned by another org (e.g. a collaboration

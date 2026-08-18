@@ -51,8 +51,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use files_domain::catalogue::{Catalogue, Change};
-use jj_lib::gitignore::GitIgnoreFile;
-use jj_lib::repo_path::RepoPathBuf;
 use files_proto::error::FilesFault;
 use files_proto::id::{ContentId, RootId};
 use files_proto::model::{BrowseEntry, FileRootInfo, RootFlavor, TreeNode};
@@ -62,6 +60,8 @@ use files_proto::service::tree::{
     CatalogueDelta, CatalogueEntry, Cursor, EntryKind, Freshness, Hydration, TreeService,
 };
 use files_proto::{FilesError, FilesService};
+use jj_lib::gitignore::GitIgnoreFile;
+use jj_lib::repo_path::RepoPathBuf;
 
 use crate::backend::FilesBackend;
 use crate::durable::Scoped;
@@ -288,13 +288,12 @@ fn record(
 // than ten thousand stats
 // t[impl files.catalogue.complete] — every reachable path gets an entry
 // t[impl files.catalogue.offline] — unreachable is marked, never missing
+// t[impl project.location.degraded] — the same mechanism seen from the
+// project: structure comes from the catalogue, which is local, so a
+// project whose content is on an unreachable server still opens
 // t[impl files.catalogue.staleness] — every entry records when we looked
 // t[impl files.ignore.layers] — the catalogue is a listing surface too
-fn walk(
-    root: &FileRootInfo,
-    ignores: &Arc<GitIgnoreFile>,
-    now: DateTime<Utc>,
-) -> Catalogue {
+fn walk(root: &FileRootInfo, ignores: &Arc<GitIgnoreFile>, now: DateTime<Utc>) -> Catalogue {
     let mut cat = Catalogue::new(RootId::new(root.id));
     // An unplaced root has nothing to walk. Callers reach the catalogue
     // off disk before they get here, so this is the cold-and-unplaced
@@ -453,7 +452,13 @@ fn with_catalogue<T>(
     // locally": the structure is what converged, and this is where it
     // becomes something to browse.
     let built = match root.local_tree() {
-        Some(_) => walk(&root, &backend.ignore_of(&root).unwrap_or_else(|_| GitIgnoreFile::empty()), Utc::now()),
+        Some(_) => walk(
+            &root,
+            &backend
+                .ignore_of(&root)
+                .unwrap_or_else(|_| GitIgnoreFile::empty()),
+            Utc::now(),
+        ),
         None => from_head(backend, &root, Utc::now()),
     };
     persist(backend, root_id, &built);
@@ -671,7 +676,6 @@ impl TreeService for FilesBackend {
         self.authorise_caller(root_id, &path, Capability::Read)?;
         self.listing_of(root_id, path).await
     }
-
 
     /// The org tree — one resolver behind both the explorer and the
     /// WebDAV mount, so a mounted share and the app can never disagree
@@ -956,7 +960,11 @@ mod tests {
         std::fs::write(tmp.path().join("Sessions/Song/mix.wav"), b"take one").unwrap();
         std::fs::write(tmp.path().join("notes.txt"), b"hi").unwrap();
 
-        let cat = walk(&root(&tmp.path().to_string_lossy()), &GitIgnoreFile::empty(), Utc::now());
+        let cat = walk(
+            &root(&tmp.path().to_string_lossy()),
+            &GitIgnoreFile::empty(),
+            Utc::now(),
+        );
 
         assert_eq!(cat.len(), 4, "Sessions, Song, mix.wav, notes.txt");
         let mix = cat
@@ -977,7 +985,11 @@ mod tests {
     #[test]
     // t[verify files.catalogue.staleness]
     fn an_unreadable_root_is_reported_unreachable_rather_than_empty_and_current() {
-        let cat = walk(&root("/definitely/not/a/path"), &GitIgnoreFile::empty(), Utc::now());
+        let cat = walk(
+            &root("/definitely/not/a/path"),
+            &GitIgnoreFile::empty(),
+            Utc::now(),
+        );
         let f = cat.freshness(Utc::now());
         assert!(
             !f.reachable,
@@ -992,7 +1004,11 @@ mod tests {
         for i in 0..(PAGE + 10) {
             std::fs::write(tmp.path().join(format!("f{i}")), b"x").unwrap();
         }
-        let cat = walk(&root(&tmp.path().to_string_lossy()), &GitIgnoreFile::empty(), Utc::now());
+        let cat = walk(
+            &root(&tmp.path().to_string_lossy()),
+            &GitIgnoreFile::empty(),
+            Utc::now(),
+        );
 
         let first = page(&cat, &Cursor("0".into()));
         assert_eq!(first.changed.len(), PAGE);
@@ -1013,7 +1029,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a"), b"x").unwrap();
         std::fs::write(tmp.path().join("b"), b"x").unwrap();
-        let cat = walk(&root(&tmp.path().to_string_lossy()), &GitIgnoreFile::empty(), Utc::now());
+        let cat = walk(
+            &root(&tmp.path().to_string_lossy()),
+            &GitIgnoreFile::empty(),
+            Utc::now(),
+        );
 
         let d = page(&cat, &Cursor("not-a-number".into()));
         assert_eq!(d.changed.len(), 2, "safe direction is to send everything");

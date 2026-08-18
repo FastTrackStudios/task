@@ -19,7 +19,8 @@ use vault::Vault;
 
 use crate::model::ProjectInfo;
 use crate::parts::{
-    Audience, Component, Deliverable, DeliverableItem, Divergence, Part, Piece, Scope,
+    Audience, Component, Conflict, Deliverable, DeliverableItem, Divergence, Merged, Part, Piece,
+    Scope,
 };
 use crate::scan::scan_vault;
 use crate::service::{ProjectError, ProjectService};
@@ -101,14 +102,36 @@ impl ProjectBackend {
 
 impl ProjectService for ProjectBackend {
     fn list(&self) -> Result<Vec<ProjectInfo>, ProjectError> {
-        self.list_inner()
+        // Aliases are not projects. They still resolve through `get` —
+        // that is the whole point of keeping them — but a merged-away
+        // half appearing in every listing is the duplication the merge
+        // was performed to end.
+        let mut all = self.list_inner()?;
+        all.retain(|p| alias_target(p).is_none());
+        Ok(all)
     }
 
+    // t[impl project.lifecycle.merge-identity] — a former identity
+    // resolves to the merged project rather than dangling
     fn get(&self, id: Uuid) -> Result<ProjectInfo, ProjectError> {
-        self.list_inner()?
-            .into_iter()
-            .find(|p| p.id == id)
-            .ok_or_else(|| ProjectError::NotFound(id.to_string()))
+        let all = self.list_inner()?;
+        let mut at = id;
+        // Bounded, because a merge chain is a chain someone could make
+        // circular by editing two pages in Obsidian. Following forever
+        // would hang the lane; stopping says which id could not settle.
+        for _ in 0..MERGE_HOPS {
+            let found = all
+                .iter()
+                .find(|p| p.id == at)
+                .ok_or_else(|| ProjectError::NotFound(at.to_string()))?;
+            match alias_target(found) {
+                Some(next) => at = next,
+                None => return Ok(found.clone()),
+            }
+        }
+        Err(ProjectError::BadRequest(format!(
+            "{id} is in a merge chain that does not settle"
+        )))
     }
 
     fn get_by_path(&self, path: &str) -> Result<ProjectInfo, ProjectError> {
@@ -209,6 +232,7 @@ impl ProjectService for ProjectBackend {
         let part = Part {
             id: Uuid::new_v4(),
             name: name.to_owned(),
+            references: None,
             components: Vec::new(),
         };
         p.parts.0.push(part.clone());
@@ -375,6 +399,7 @@ impl ProjectService for ProjectBackend {
         let part = parent.parts.get(project).cloned().unwrap_or(Part {
             id: project,
             name: subproject.title.clone(),
+            references: None,
             components: Vec::new(),
         });
         if parent.parts.get(project).is_none() {
@@ -523,6 +548,254 @@ impl ProjectService for ProjectBackend {
         Ok(items)
     }
 
+    // t[impl project.identity.adoption] — one page written inside a tree
+    // that is not moved, copied or renamed. The applications writing to
+    // it never notice, which is the entire requirement
+    fn adopt(&self, dir: &str, title: &str) -> Result<ProjectInfo, ProjectError> {
+        if dir.is_empty() || dir.contains("..") || dir.starts_with('/') {
+            return Err(ProjectError::BadRequest(format!("bad directory: {dir}")));
+        }
+        let abs = self.vault_root.join(dir);
+        if !abs.is_dir() {
+            return Err(ProjectError::NotFound(format!(
+                "{dir} is not a directory in this vault"
+            )));
+        }
+
+        // Already adopted? Come back as what it is. Adoption is
+        // something a person may reasonably do twice — having forgotten,
+        // or after a scan proposed it again — and the second time must
+        // not produce a second project over one tree.
+        let page = format!("{}/project.md", dir.trim_end_matches('/'));
+        if let Ok(existing) = self.get_by_path(&page) {
+            return Ok(existing);
+        }
+
+        let title = if title.trim().is_empty() {
+            // The directory's own name, which is what a person called
+            // it when they made it.
+            std::path::Path::new(dir)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(dir)
+                .to_owned()
+        } else {
+            title.trim().to_owned()
+        };
+
+        let now = Utc::now();
+        let mut adopted = ProjectInfo {
+            id: Uuid::new_v4(),
+            path: page,
+            title,
+            date_created: Some(now),
+            date_modified: Some(now),
+            ..ProjectInfo::default()
+        };
+        // Nothing is moved: the page is written *into* the tree, beside
+        // whatever was already there.
+        write_project(&self.vault_root, &mut adopted, false)
+            .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
+        self.publish(crate::service::ProjectEvent::Upserted(adopted.clone()));
+        Ok(adopted)
+    }
+
+    // t[impl project.setlist.source] — by reference: the roster entry
+    // holds the referenced piece's id, and the project owning that piece
+    // is not touched. Reordering is reordering this list
+    fn set_setlist(&self, project: Uuid, songs: Vec<Uuid>) -> Result<Vec<Piece>, ProjectError> {
+        let all = self.list_inner()?;
+        let mut setlist = all
+            .iter()
+            .find(|p| p.id == project)
+            .cloned()
+            .ok_or_else(|| ProjectError::NotFound(project.to_string()))?;
+
+        let mut roster = Vec::with_capacity(songs.len());
+        for song in songs {
+            // Resolve the reference now so a setlist cannot be built out
+            // of ids that name nothing — a performance is a bad moment
+            // to discover a song was a typo.
+            let named = all
+                .iter()
+                .find_map(|p| p.parts.get(song).map(|part| part.name.clone()))
+                .or_else(|| {
+                    // A promoted song is a project, and its name is its
+                    // title. `project.setlist.source` says a setlist
+                    // references songs "promoted or not", so both.
+                    all.iter().find(|p| p.id == song).map(|p| p.title.clone())
+                })
+                .ok_or_else(|| ProjectError::NotFound(song.to_string()))?;
+            roster.push(Part {
+                // A setlist entry has its own id — it is a position in
+                // this performance, not the song. Two setlists holding
+                // one song hold two entries, and reordering one does not
+                // reorder the other.
+                id: Uuid::new_v4(),
+                name: named,
+                references: Some(song),
+                components: Vec::new(),
+            });
+        }
+        setlist.parts = crate::Parts(roster);
+        let saved = self.save(setlist)?;
+        Ok(saved
+            .parts
+            .0
+            .iter()
+            .map(|part| Piece {
+                id: part.id,
+                name: part.name.clone(),
+                promoted: false,
+            })
+            .collect())
+    }
+
+    fn setlist(&self, project: Uuid) -> Result<Vec<Piece>, ProjectError> {
+        let all = self.list_inner()?;
+        let setlist = all
+            .iter()
+            .find(|p| p.id == project)
+            .ok_or_else(|| ProjectError::NotFound(project.to_string()))?;
+        Ok(setlist
+            .parts
+            .0
+            .iter()
+            .filter(|part| part.references.is_some())
+            .map(|part| Piece {
+                id: part.references.unwrap_or(part.id),
+                name: part.name.clone(),
+                // Whether the referenced song has a page of its own.
+                promoted: part
+                    .references
+                    .is_some_and(|r| all.iter().any(|p| p.id == r)),
+            })
+            .collect())
+    }
+
+    // t[impl project.lifecycle.merge] — capabilities union, parts and
+    // deliverables combine, and every disagreement comes back as a
+    // `Conflict` with both values rather than being resolved quietly
+    // t[impl project.lifecycle.merge-identity] — the absorbed id keeps
+    // answering, because its page becomes an alias rather than being
+    // deleted
+    fn merge(&self, into: Uuid, absorbed: Uuid) -> Result<Merged, ProjectError> {
+        if into == absorbed {
+            return Err(ProjectError::BadRequest(
+                "a project cannot absorb itself".into(),
+            ));
+        }
+        let all = self.list_inner()?;
+        let mut keep = all
+            .iter()
+            .find(|p| p.id == into)
+            .cloned()
+            .ok_or_else(|| ProjectError::NotFound(into.to_string()))?;
+        let gone = all
+            .iter()
+            .find(|p| p.id == absorbed)
+            .cloned()
+            .ok_or_else(|| ProjectError::NotFound(absorbed.to_string()))?;
+
+        let mut conflicts = Vec::new();
+
+        // Titles. Both halves named the job, and neither name is wrong.
+        if !gone.title.eq_ignore_ascii_case(&keep.title) {
+            conflicts.push(Conflict {
+                field: "title".into(),
+                kept: keep.title.clone(),
+                absorbed: gone.title.clone(),
+            });
+        }
+        // Form. `None` on either side is not a disagreement — one half
+        // simply did not say, and the half that did is the answer.
+        match (keep.form, gone.form) {
+            (Some(a), Some(b)) if a != b => conflicts.push(Conflict {
+                field: "form".into(),
+                kept: a.to_string(),
+                absorbed: b.to_string(),
+            }),
+            (None, Some(b)) => keep.form = Some(b),
+            _ => {}
+        }
+
+        // Capabilities union. A concert that was recorded and filmed
+        // holds both, and that is the rule's own example of normal.
+        let mut held = keep.capabilities.held.clone();
+        for c in &gone.capabilities.held {
+            if !held.contains(c) {
+                held.push(*c);
+            }
+        }
+        keep.capabilities.held = held;
+
+        // Parts. Same id is the same piece — two halves of one job that
+        // already agreed. Same *name* under different ids is the case
+        // the rule means by "the identity of a part": both are kept, and
+        // a human decides whether they are one song.
+        for part in &gone.parts.0 {
+            if keep.parts.get(part.id).is_some() {
+                continue;
+            }
+            if keep.parts.has_name(&part.name) {
+                conflicts.push(Conflict {
+                    field: format!("part:{}", part.name),
+                    kept: "already named here under a different id".into(),
+                    absorbed: part.id.to_string(),
+                });
+            }
+            keep.parts.0.push(part.clone());
+        }
+
+        // Deliverables, on the same terms.
+        for d in &gone.deliverables.0 {
+            if keep.deliverables.get(d.id).is_some() {
+                continue;
+            }
+            if keep.deliverables.has_name(&d.name) {
+                conflicts.push(Conflict {
+                    field: format!("deliverable:{}", d.name),
+                    kept: "already declared here under a different id".into(),
+                    absorbed: d.id.to_string(),
+                });
+                continue;
+            }
+            keep.deliverables.0.push(d.clone());
+        }
+
+        // Anything parented to the absorbed project is now parented
+        // here. Without this its subprojects would point at an alias,
+        // and every listing that walks parentage would lose them.
+        for child in all.iter().filter(|c| c.parent_id == Some(absorbed)) {
+            let mut child = child.clone();
+            child.parent_id = Some(into);
+            self.save(child)?;
+        }
+
+        self.save(keep)?;
+
+        // The absorbed page stops being a project and becomes an alias.
+        // Not deleted: `project.lifecycle.merge-identity` needs its id to
+        // keep answering for links, tasks, time and a share link already
+        // in somebody's hands.
+        let mut alias = gone.clone();
+        alias.same_as = Some(into.to_string());
+        // "The merge records what it absorbed so the history stays
+        // legible to someone who only knew one half."
+        alias.details = format!(
+            "{}\n\nMerged into {into}. This page is an alias: the id above still \
+             resolves, and resolves to the merged project.\n",
+            gone.details.trim_end()
+        );
+        self.save(alias)?;
+
+        Ok(Merged {
+            project: into,
+            absorbed,
+            conflicts,
+        })
+    }
+
     fn delete(&self, id: Uuid) -> Result<(), ProjectError> {
         let all = self.list_inner()?;
         let p = all
@@ -582,6 +855,31 @@ fn expand(project: &ProjectInfo, pieces: &[Piece]) -> Vec<DeliverableItem> {
         }
     }
     out
+}
+
+/// How many merges deep a chain may be before it is called circular.
+///
+/// Generous: a project absorbed into one that was itself absorbed is an
+/// ordinary sequence of events over a year, and each hop is a page read
+/// from a list already in memory.
+const MERGE_HOPS: usize = 16;
+
+/// The project this page is an alias for, if it is one.
+///
+/// `same_as` predates merge and was parsed by the entity reader and used
+/// by nothing. It means "this row is a reference to the canonical
+/// project", which is exactly what a merged-away half is — so merge
+/// gives the field the meaning its own doc comment always claimed.
+///
+/// A non-uuid value is not an alias. `same_as` also holds the
+/// `@org/slug` federation form, which points somewhere this lane cannot
+/// follow; treating it as a local alias would make a federated reference
+/// resolve to `NotFound` instead of to itself.
+fn alias_target(project: &ProjectInfo) -> Option<Uuid> {
+    project
+        .same_as
+        .as_deref()
+        .and_then(|s| Uuid::parse_str(s.trim()).ok())
 }
 
 /// The `#[subscribe]` backend contract: hand the emitted stream host

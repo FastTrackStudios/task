@@ -77,6 +77,21 @@ pub struct Part {
     pub id: Uuid,
     /// What a person calls it: "Overture", "Scene 4", "Episode 2".
     pub name: String,
+    /// For a setlist entry: the piece this references, elsewhere.
+    ///
+    /// `project.setlist.source` — a setlist is assembled "by reference
+    /// rather than by copying", so a `live-set`'s roster entries point
+    /// at songs owned by other projects instead of holding copies of
+    /// them. `None` for an ordinary part, which *is* the thing rather
+    /// than a reference to it.
+    ///
+    /// The same roster either way, so reordering a setlist is the same
+    /// operation as reordering an album's tracks, and a song can be
+    /// referenced by any number of setlists because a reference costs
+    /// the referenced project nothing.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub references: Option<Uuid>,
+
     /// What this piece is kept in — its chart, its sessions.
     ///
     /// On the roster rather than on the promoted project, which is what
@@ -597,6 +612,45 @@ pub fn divergences(form: Option<Form>, parts: &Parts) -> Vec<Divergence> {
     out
 }
 
+// ── Lifecycle ────────────────────────────────────────────────────────
+
+/// Something the two halves of a merge disagreed about.
+///
+/// `project.lifecycle.merge` says "a human chooses, and nothing is
+/// silently discarded". A conflict is how the disagreement survives long
+/// enough for that to happen: both values are here, the merged project
+/// holds the one it was merged *into*, and a surface asks.
+///
+/// Not an error. A merge with conflicts is a successful merge — the two
+/// halves of one job were started separately, which is the normal
+/// outcome the rule describes, and people who did that disagree about
+/// titles.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+#[repr(C)]
+pub struct Conflict {
+    /// What disagreed: `title`, `form`, or a part's name.
+    pub field: String,
+    /// What the surviving project says.
+    pub kept: String,
+    /// What the absorbed project said. Kept, not discarded.
+    pub absorbed: String,
+}
+
+/// The result of a merge.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+#[repr(C)]
+pub struct Merged {
+    /// The project that now holds everything.
+    pub project: Uuid,
+    /// The id that was absorbed. Still resolves — see
+    /// `project.lifecycle.merge-identity`.
+    pub absorbed: Uuid,
+    /// What a human has to settle. Empty is the ordinary case.
+    pub conflicts: Vec<Conflict>,
+}
+
 // ── Deliverables ─────────────────────────────────────────────────────
 
 /// What a deliverable is made of.
@@ -780,6 +834,7 @@ mod tests {
         let parts = Parts(vec![Part {
             id: Uuid::nil(),
             name: "Overture".into(),
+            references: None,
             components: Vec::new(),
         }]);
         assert!(parts.has_name("overture"));

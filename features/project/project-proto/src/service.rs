@@ -11,7 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::model::ProjectInfo;
-use crate::parts::{Component, Deliverable, DeliverableItem, Divergence, Part, Piece};
+use crate::parts::{Component, Deliverable, DeliverableItem, Divergence, Merged, Part, Piece};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
 #[repr(u8)]
@@ -244,6 +244,64 @@ pub trait ProjectService {
     /// Ordered by scope then medium, which is the organisation the rule
     /// asks for: the whole performance, then a specific song.
     fn client_deliverables(&self, project: Uuid) -> Result<Vec<DeliverableItem>, ProjectError>;
+
+    /// Declare an existing directory to be a project, in place.
+    ///
+    /// `project.identity.adoption`: an existing tree becomes a project
+    /// "without moving, copying or renaming a byte, and stays usable by
+    /// the applications already writing to it". So this writes one
+    /// markdown page and touches nothing else — the tree is where it
+    /// was, and Reaper is still saving into it.
+    ///
+    /// `dir` is vault-relative. The page lands *inside* it, which is the
+    /// one place a project declaration can live without the tree having
+    /// to move: `project.nesting.explicit` means containment expresses
+    /// no hierarchy, so a page inside the directory it describes is a
+    /// convenience rather than a claim.
+    ///
+    /// Idempotent: a directory that already declares a project comes
+    /// back as that project rather than gaining a second declaration.
+    fn adopt(&self, dir: &str, title: &str) -> Result<ProjectInfo, ProjectError>;
+
+    // ── Live performance ────────────────────────────────────
+
+    /// Assemble a setlist from pieces of other projects.
+    ///
+    /// `project.setlist.source`: a setlist references songs "as parts,
+    /// promoted or not", and is assembled *by reference rather than by
+    /// copying*. So this takes piece ids and stores them; the songs stay
+    /// where they are, and reordering the setlist changes no project.
+    ///
+    /// The setlist is itself a project — one whose form is `live-set` —
+    /// which is why this is a verb here and not a lane of its own.
+    fn set_setlist(&self, project: Uuid, songs: Vec<Uuid>) -> Result<Vec<Piece>, ProjectError>;
+
+    /// What this setlist references, resolved.
+    ///
+    /// A song appearing in several setlists is the ordinary case, so
+    /// nothing here is exclusive and nothing is consumed.
+    fn setlist(&self, project: Uuid) -> Result<Vec<Piece>, ProjectError>;
+
+    // ── Lifecycle ───────────────────────────────────────────
+
+    /// Merge `absorbed` into `into`, and report what a human must settle.
+    ///
+    /// `project.lifecycle.merge`. Capabilities union, parts and
+    /// deliverables combine, and nothing is silently discarded: where
+    /// the two disagree — on form, on title, on the identity of a part —
+    /// the disagreement comes back as a [`Conflict`] and the *absorbed*
+    /// side's value is kept alongside rather than dropped.
+    ///
+    /// Content does not move. Two projects on two servers compose (see
+    /// `project.location.composed`), and a merge that copied bytes would
+    /// be a migration wearing a merge's name.
+    ///
+    /// The absorbed project stops being a project and becomes an alias:
+    /// `project.lifecycle.merge-identity` requires references to it —
+    /// links, tasks, time, a share link already in a client's hands — to
+    /// keep resolving, so its id has to keep answering. [`Self::get`]
+    /// follows the alias.
+    fn merge(&self, into: Uuid, absorbed: Uuid) -> Result<Merged, ProjectError>;
 
     /// Every project change, as it happens — fires on each
     /// successful create / update / rename / delete. See

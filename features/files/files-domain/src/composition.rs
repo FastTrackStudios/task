@@ -67,6 +67,12 @@ pub enum ComposeError {
 
 /// A project's content, wherever it lives.
 #[derive(Debug, Clone, Default)]
+// t[impl project.location.composed] — a set of members with no field for
+// "the real one": the moment one exists, every other member is a guest in
+// its own project and losing it loses the project rather than a part
+// t[impl project.location.federated] — a member names the root and the
+// host that answers for it, so members on different servers owned by
+// different orgs compose the same way as two roots on one disk
 pub struct Composition {
     members: BTreeMap<String, Member>,
 }

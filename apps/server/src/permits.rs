@@ -347,6 +347,13 @@ table!(PROJECT, "project", "projects/**", [
     // listing — what makes it a client view is that it filters, not that
     // it is reached differently.
     rd "divergences", wr "attach_component", wr "detach_component",
+    // Merge ends one project's separate existence, which is `delete`'s
+    // weight even though nothing is deleted.
+    wa "merge",
+    rd "setlist", wr "set_setlist",
+    // Adoption declares a tree to be a project. A write, not an admin
+    // act — it creates one page and moves nothing.
+    wr "adopt",
     rd "deliverables", wr "declare_deliverable", wa "withdraw_deliverable",
     rd "deliverable_items", rd "client_deliverables",
 ]);
