@@ -1,12 +1,26 @@
 # Building `project.*`
 
-**Status: slices one and two are built.** Parts and capabilities landed
-with the three blocking decisions answered — the word is "part",
-capabilities read both fields and write one, and nothing is created
-automatically. See `features/project/spec/project.md` § Decided for the
-reasoning, and `tests/integration/tests/parts.rs` for what is asserted.
-The rest of this document stands as written: promotion, deliverables and
-merge are next, in that order.
+**Status: parts, capabilities and promotion are built.** The three
+blocking decisions were answered — the word is "part", capabilities read
+both fields and write one, and nothing is created automatically. See
+`features/project/spec/project.md` § Decided for the reasoning, and
+`tests/integration/tests/parts.rs` for what is asserted.
+
+Writing promotion added two rules the spec was missing —
+`project.part.listing` and `project.part.demotable` — and corrected the
+model for how a parent tracks its pieces (a roster, not a list of the
+unpromoted ones). Deliverables and merge are next, in that order.
+
+Two things found on the way, neither fixed here:
+
+- **`project.vault.write-path` is not met.** Project pages are written
+  with `std::fs::write`, not through the Files API. The scenario doc
+  claimed otherwise "by construction"; it now says so honestly. Closing
+  it is its own piece of work and touches every vault entity, not just
+  projects.
+- **`ProjectInfo` has no `Default`.** Adding two fields meant editing
+  seven struct literals across server, CLI, UI and tests. A `Default`
+  impl or a builder would make the next field much cheaper.
 
 The original proposal follows.
 
