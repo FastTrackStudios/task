@@ -11,7 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::model::ProjectInfo;
-use crate::parts::Part;
+use crate::parts::{Part, Piece};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
 #[repr(u8)]
@@ -142,6 +142,33 @@ pub trait ProjectService {
     /// leaves the references dangling, which is the same contract
     /// `delete` has for a project.
     fn remove_part(&self, project: Uuid, part: Uuid) -> Result<(), ProjectError>;
+
+    /// Every piece of this project's work, in the project's own order.
+    ///
+    /// `project.part.listing`. Parts and promoted subprojects in one
+    /// list, each saying which it is — so a track listing reads it and
+    /// ignores the flag, and a "promote" button reads the flag.
+    ///
+    /// Order survives promotion: an album's fourth track is its fourth
+    /// track before and after it grows a page.
+    fn pieces(&self, project: Uuid) -> Result<Vec<Piece>, ProjectError>;
+
+    /// Turn a part into a subproject, keeping its id.
+    ///
+    /// `project.part.promotion`. The new project *is* the part — same
+    /// id, so every link, deliverable, setlist reference and time entry
+    /// already attached keeps resolving without being told. It leaves
+    /// the parent's part list as it gains a page, because a piece is on
+    /// exactly one side of the line at a time.
+    fn promote_part(&self, project: Uuid, part: Uuid) -> Result<ProjectInfo, ProjectError>;
+
+    /// Turn a subproject back into a part of its parent, keeping its id.
+    ///
+    /// `project.part.demotable`. Refused when the subproject has
+    /// subprojects of its own, since a part cannot have them. Content —
+    /// files, tasks, time, deliverables — is not an obstacle: a part
+    /// carries exactly those.
+    fn demote_project(&self, project: Uuid) -> Result<Part, ProjectError>;
 
     /// Every project change, as it happens — fires on each
     /// successful create / update / rename / delete. See

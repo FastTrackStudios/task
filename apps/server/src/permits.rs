@@ -339,6 +339,10 @@ table!(PROJECT, "project", "projects/**", [
     // permission that treated adding one as a privileged act would be
     // pricing it.
     rd "parts", wr "add_part", wr "rename_part", wr "remove_part",
+    // Promotion. `pieces` is a listing; promoting and demoting create
+    // and remove a page, which is what `create` and `delete` are gated
+    // as — so they match those rather than the part verbs.
+    rd "pieces", wr "promote_part", wa "demote_project",
 ]);
 table!(PROJECT_STREAM, "project-stream", "projects/**", [rd "events"]);
 table!(GOAL, "goal", "goals/**", [

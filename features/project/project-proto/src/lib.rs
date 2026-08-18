@@ -30,7 +30,7 @@ pub mod states;
 pub mod verify;
 
 pub use model::{ProjectInfo, Status, Tags};
-pub use parts::{Capabilities, Capability, Part, Parts};
+pub use parts::{Capabilities, Capability, Part, Parts, Piece};
 pub use service::{ProjectError, ProjectEvent, ProjectService, ProjectServiceRpc};
 pub use states::{StateDef, StateGroup, StatesConfig, default_states, resolve_state_group};
 pub use verify::{project_default as verify_project_default, resolve as resolve_verify_command};

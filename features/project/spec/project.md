@@ -114,6 +114,60 @@ a part. Promotion preserves identity: links, deliverables, setlist references
 and time already attached to the part continue to resolve, and nothing that
 referenced it needs to know which side of the line it now sits on.
 
+Identity is preserved by **reuse, not by mapping**: the subproject a part
+becomes carries the part's own id, and demotion returns that same id to the
+parent's parts. There is no table relating a part id to a project id, because
+such a table is a thing that can be missing, stale, or unavailable on a machine
+holding only half the project — and every reference the rule promises to keep
+resolving would go through it.
+
+A parent's part list is a **roster of its pieces, not a list of the ones that
+are not projects**. Promotion adds a page; it does not edit the roster, and
+demotion removes the page and leaves the roster alone. So an album lists ten
+songs before and after three of them are promoted, in the same order, and
+promotion is reversible without the parent being touched at all.
+
+That leaves "is this piece a project?" with exactly one answer, from exactly
+one place: whether a page declares it. A roster entry is not a competing claim
+— it says the album has a fourth track, which stays true either way.
+
+---
+
+### A project's pieces are one list, however they are stored
+
+t[project.part.listing]
+Every piece of a project's work is enumerable in one call, in the project's own
+order, whether each piece is a part or a promoted subproject. A caller asking
+what an album consists of gets ten songs, and learns which of them have pages
+only if it asks.
+
+This is what makes the promotion rule true rather than aspirational. Without
+it, "nothing that referenced it needs to know which side of the line it sits
+on" holds only for callers that already had an id: everything that starts from
+the project — a setlist being assembled, a deliverable scoped per song, a
+person reading a track listing — would have to query two surfaces and merge
+them, and would therefore need to know exactly the thing the rule says it
+should not.
+
+Order is the project's, and survives promotion — it is the roster's order, and
+promotion does not touch the roster. An album's fourth track is its fourth
+track before and after it grows a page.
+
+---
+
+### Demotion refuses what a part cannot hold
+
+t[project.part.demotable]
+A subproject is demotable when everything it carries fits in a part. Where it
+does not — it has subprojects of its own, which a part cannot have — demotion
+is refused, and says which. The alternative is a demotion that silently orphans
+or deletes, and `project.part.promotion` is a promise about not losing things.
+
+Content is not among the obstacles. A subproject holding files, tasks, time or
+deliverables demotes with all of them still attached, because a part is
+addressable and carries exactly those — that is `project.part.unit`, and it is
+the reason demotion can be offered at all.
+
 ---
 
 ## Capabilities

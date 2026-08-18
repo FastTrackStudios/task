@@ -214,6 +214,219 @@ async fn removing_a_part_leaves_the_others_alone() {
     assert_eq!(names, ["Prelude", "Finale"]);
 }
 
+// t[verify project.part.promotion]
+// t[verify project.identity.stable]
+/// A promoted part *is* the same thing, with a page.
+///
+/// The id is the assertion. Everything attached to a piece — links,
+/// deliverables, setlist references, time — addresses it by id, so a
+/// promotion that minted a new one would break all of it at once, and
+/// would do it silently because the name would still be right.
+#[tokio::test]
+async fn promoting_a_part_keeps_the_id_everything_points_at() {
+    let s = Scenario::open().await;
+    let (alice, album) = album(&s).await;
+
+    let piece = alice
+        .projects()
+        .await
+        .add_part(album.id, "Nocturne".into())
+        .await
+        .expect("name a piece");
+
+    let promoted = alice
+        .projects()
+        .await
+        .promote_part(album.id, piece.id)
+        .await
+        .expect("promote it");
+
+    assert_eq!(
+        promoted.id, piece.id,
+        "promotion minted a new id, so every reference to this piece now \
+         points at nothing"
+    );
+    assert_eq!(
+        promoted.parent_id,
+        Some(album.id),
+        "and it knows its parent"
+    );
+
+    // The id resolves as a project now, and it is the same id that
+    // resolved as a part a moment ago.
+    let fetched = alice
+        .projects()
+        .await
+        .get(piece.id)
+        .await
+        .expect("the piece resolves as a project");
+    assert_eq!(fetched.title, "Nocturne");
+}
+
+// t[verify project.part.listing]
+/// Ten songs, three promoted, one list, same order.
+///
+/// The stage `scenario.album.promote` describes: "three songs are
+/// promoted, seven are not... the album is built the same way either
+/// way". A caller reading a track listing must not be able to tell.
+#[tokio::test]
+async fn an_albums_pieces_are_one_list_before_and_after_promotion() {
+    let s = Scenario::open().await;
+    let (alice, album) = album(&s).await;
+
+    let mut named = Vec::new();
+    for piece in PIECES {
+        named.push(
+            alice
+                .projects()
+                .await
+                .add_part(album.id, piece.into())
+                .await
+                .expect("name a piece"),
+        );
+    }
+
+    let before: Vec<String> = alice
+        .projects()
+        .await
+        .pieces(album.id)
+        .await
+        .expect("read the pieces")
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(before, PIECES, "the roster, in order");
+
+    // Promote the second and the fifth — deliberately not the first, so
+    // an implementation that appends promoted pieces to the end fails.
+    for i in [1, 4] {
+        alice
+            .projects()
+            .await
+            .promote_part(album.id, named[i].id)
+            .await
+            .expect("promote");
+    }
+
+    let after = alice
+        .projects()
+        .await
+        .pieces(album.id)
+        .await
+        .expect("read the pieces again");
+    let names: Vec<&str> = after.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        names, PIECES,
+        "promotion changed the album's track listing — order is the \
+         roster's, and promotion does not touch the roster"
+    );
+
+    // The flag is there for whoever asks, and only for them.
+    let promoted: Vec<&str> = after
+        .iter()
+        .filter(|p| p.promoted)
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(promoted, ["Nocturne", "Elegy"]);
+}
+
+// t[verify project.part.promotion]
+/// Demotion gives the id back, and the album never noticed.
+#[tokio::test]
+async fn a_demoted_subproject_rejoins_its_album_where_it_was() {
+    let s = Scenario::open().await;
+    let (alice, album) = album(&s).await;
+
+    let mut named = Vec::new();
+    for piece in ["Prelude", "Nocturne", "Finale"] {
+        named.push(
+            alice
+                .projects()
+                .await
+                .add_part(album.id, piece.into())
+                .await
+                .expect("name a piece"),
+        );
+    }
+    alice
+        .projects()
+        .await
+        .promote_part(album.id, named[1].id)
+        .await
+        .expect("promote the middle one");
+
+    let back = alice
+        .projects()
+        .await
+        .demote_project(named[1].id)
+        .await
+        .expect("demote it again");
+    assert_eq!(back.id, named[1].id, "demotion minted a new id");
+
+    let pieces = alice
+        .projects()
+        .await
+        .pieces(album.id)
+        .await
+        .expect("read the pieces");
+    let names: Vec<&str> = pieces.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Prelude", "Nocturne", "Finale"],
+        "a round trip through promotion moved the piece"
+    );
+    assert!(
+        pieces.iter().all(|p| !p.promoted),
+        "the page should be gone: {pieces:?}"
+    );
+    // And it no longer resolves as a project.
+    assert!(
+        alice.projects().await.get(named[1].id).await.is_err(),
+        "the subproject's page outlived its demotion"
+    );
+}
+
+// t[verify project.part.demotable]
+/// A subproject with a subproject cannot become a part, and says so.
+#[tokio::test]
+async fn demotion_refuses_what_a_part_cannot_hold() {
+    let s = Scenario::open().await;
+    let (alice, album) = album(&s).await;
+
+    let piece = alice
+        .projects()
+        .await
+        .add_part(album.id, "Nocturne".into())
+        .await
+        .expect("name a piece");
+    let song = alice
+        .projects()
+        .await
+        .promote_part(album.id, piece.id)
+        .await
+        .expect("promote it");
+
+    // The song grows a subproject of its own — the video treatment.
+    let mut cut = draft("Nocturne — concert film");
+    cut.parent_id = Some(song.id);
+    alice
+        .projects()
+        .await
+        .create(cut)
+        .await
+        .expect("the song gains its own subproject");
+
+    let refused = alice.projects().await.demote_project(song.id).await;
+    let Err(e) = refused else {
+        panic!("a subproject with children was demoted, orphaning them");
+    };
+    let said = format!("{e:?}");
+    assert!(
+        said.contains("concert film"),
+        "the refusal should name the child the caller has to deal with: {said}"
+    );
+}
+
 // t[verify project.capability.multiple]
 // t[verify project.capability.closed]
 /// A project holds a set of capabilities, and only real ones.

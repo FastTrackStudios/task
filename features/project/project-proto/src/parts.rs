@@ -121,6 +121,30 @@ impl Parts {
 
 // t[impl project.capability.closed] — a closed enum, small enough to
 // enumerate, so adding one is a design act rather than a string
+// t[impl project.part.listing] — the type that makes one list possible:
+// a piece says what it is called and, only if asked, whether it has a page
+/// One piece of a project's work, whichever side of the line it is on.
+///
+/// `project.part.listing`: a caller asking what an album consists of
+/// gets ten songs, and learns which have pages only if it asks. The
+/// alternative — two surfaces to query and merge — would make every
+/// caller that starts from the project need to know exactly the thing
+/// `project.part.promotion` says it should not.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+#[repr(C)]
+pub struct Piece {
+    /// The same id on both sides. A promotion does not mint one and a
+    /// demotion does not retire one — see [`Part`].
+    pub id: Uuid,
+    pub name: String,
+    /// Whether this piece has a page of its own.
+    ///
+    /// Present so a surface *can* ask, not so it must: a track listing
+    /// ignores it, and a "promote" button reads it.
+    pub promoted: bool,
+}
+
 /// What a project does, and therefore what conventions apply to it.
 ///
 /// Closed and small on purpose (`project.capability.closed`): each

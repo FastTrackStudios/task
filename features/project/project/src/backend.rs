@@ -18,7 +18,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::ProjectInfo;
-use crate::parts::Part;
+use crate::parts::{Part, Piece};
 use crate::scan::scan_vault;
 use crate::service::{ProjectError, ProjectService};
 use crate::write::{default_project_path, write_project};
@@ -255,6 +255,134 @@ impl ProjectService for ProjectBackend {
         Ok(())
     }
 
+    // t[impl project.part.listing] — one list, the roster's order, with
+    // promoted-ness read off the pages rather than stored beside the
+    // roster: one question, one answer, from the place that declares it
+    fn pieces(&self, project: Uuid) -> Result<Vec<Piece>, ProjectError> {
+        let all = self.list_inner()?;
+        let parent = all
+            .iter()
+            .find(|p| p.id == project)
+            .ok_or_else(|| ProjectError::NotFound(project.to_string()))?;
+        // Promoted-ness is read off the pages, not off the roster: one
+        // question, one answer, from the place that declares it.
+        Ok(parent
+            .parts
+            .0
+            .iter()
+            .map(|part| Piece {
+                id: part.id,
+                name: part.name.clone(),
+                promoted: all.iter().any(|p| p.id == part.id),
+            })
+            .collect())
+    }
+
+    // t[impl project.part.promotion] — the part's own id becomes the
+    // project's id, so there is no mapping table and nothing referencing
+    // the piece has to be found and rewritten
+    // t[impl project.identity.stable] — identity survives promotion by
+    // being the same identity
+    fn promote_part(&self, project: Uuid, part: Uuid) -> Result<ProjectInfo, ProjectError> {
+        let all = self.list_inner()?;
+        let parent = all
+            .iter()
+            .find(|p| p.id == project)
+            .ok_or_else(|| ProjectError::NotFound(project.to_string()))?;
+        let named = parent
+            .parts
+            .get(part)
+            .ok_or_else(|| ProjectError::NotFound(part.to_string()))?
+            .clone();
+        if all.iter().any(|p| p.id == part) {
+            return Err(ProjectError::AlreadyExists(format!(
+                "{} is already a project",
+                named.name
+            )));
+        }
+
+        // The part's own id becomes the project's id. That is the whole
+        // mechanism `project.part.promotion` rests on — no mapping
+        // table, so nothing referencing this piece has to be found and
+        // rewritten, and nothing breaks on a machine holding half the
+        // project.
+        let mut promoted = ProjectInfo {
+            id: named.id,
+            parent_id: Some(project),
+            title: named.name.clone(),
+            // Inherited, because a song of a music-production album is
+            // music production. `project.capability.mutable` is how it
+            // becomes something else.
+            capabilities: parent.capabilities.clone(),
+            ..blank_like(parent)
+        };
+        promoted.path = default_project_path(&named.name);
+        if self.vault_root.join(&promoted.path).exists() {
+            return Err(ProjectError::AlreadyExists(promoted.path));
+        }
+        let now = Utc::now();
+        promoted.date_created = Some(now);
+        promoted.date_modified = Some(now);
+        write_project(&self.vault_root, &mut promoted, false)
+            .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
+        // The roster is not touched — see `project.part.listing`. The
+        // album still lists ten songs, in the same order.
+        self.publish(crate::service::ProjectEvent::Upserted(promoted.clone()));
+        Ok(promoted)
+    }
+
+    // t[impl project.part.demotable] — refuses only what a part cannot
+    // hold, and names it. Content is not an obstacle: a part is
+    // addressable and carries exactly that
+    fn demote_project(&self, project: Uuid) -> Result<Part, ProjectError> {
+        let all = self.list_inner()?;
+        let subproject = all
+            .iter()
+            .find(|p| p.id == project)
+            .ok_or_else(|| ProjectError::NotFound(project.to_string()))?;
+        let Some(parent_id) = subproject.parent_id else {
+            return Err(ProjectError::BadRequest(format!(
+                "{} has no parent, so there is nothing for it to be a part of",
+                subproject.title
+            )));
+        };
+        // A part cannot have subprojects, so a subproject that has them
+        // cannot become one. Named, rather than refused vaguely: the
+        // caller's next move is to deal with that child.
+        if let Some(child) = all.iter().find(|c| c.parent_id == Some(project)) {
+            return Err(ProjectError::BadRequest(format!(
+                "{} has a subproject ({}), and a part cannot; \
+                 reparent or demote it first",
+                subproject.title, child.title
+            )));
+        }
+        let parent = all
+            .iter()
+            .find(|p| p.id == parent_id)
+            .ok_or_else(|| ProjectError::NotFound(parent_id.to_string()))?;
+
+        // The roster entry it was promoted from, still where it was.
+        // Absent only if someone removed it while this was a project,
+        // in which case demotion puts it back at the end rather than
+        // failing — the piece existing matters more than its position,
+        // and refusing would leave a project nobody can un-promote.
+        let part = parent.parts.get(project).cloned().unwrap_or(Part {
+            id: project,
+            name: subproject.title.clone(),
+        });
+        if parent.parts.get(project).is_none() {
+            let mut parent = parent.clone();
+            parent.parts.0.push(part.clone());
+            self.save(parent)?;
+        }
+
+        let abs = self.vault_root.join(&subproject.path);
+        std::fs::remove_file(&abs)
+            .map_err(|e| ProjectError::Io(format!("remove {}: {e}", abs.display())))?;
+        self.publish(crate::service::ProjectEvent::Deleted(project));
+        Ok(part)
+    }
+
     fn delete(&self, id: Uuid) -> Result<(), ProjectError> {
         let all = self.list_inner()?;
         let p = all
@@ -275,6 +403,45 @@ impl ProjectService for ProjectBackend {
             .map_err(|e| ProjectError::Io(format!("remove {}: {e}", abs.display())))?;
         self.publish(crate::service::ProjectEvent::Deleted(id));
         Ok(())
+    }
+}
+
+/// A project with a parent's conventions and none of its content.
+///
+/// Everything a promoted part should *not* inherit: its parent's status,
+/// lead, dates, billing, body. A song is not "active since March at
+/// £90/hour" because its album is. Capabilities and parentage are set by
+/// the caller, since those are the two things it does inherit.
+fn blank_like(_parent: &ProjectInfo) -> ProjectInfo {
+    ProjectInfo {
+        id: Uuid::nil(),
+        path: String::new(),
+        title: String::new(),
+        status: "active".into(),
+        priority: "normal".into(),
+        project_type: String::new(),
+        lead: String::new(),
+        tags: crate::model::Tags::default(),
+        parts: crate::Parts::default(),
+        capabilities: crate::Capabilities::default(),
+        parent_id: None,
+        same_as: None,
+        target_date: None,
+        progress_percent: -1,
+        details: String::new(),
+        client_id: None,
+        billable_default: false,
+        currency: String::new(),
+        default_rate_cents: 0,
+        estimated_seconds: 0,
+        agent_profile: String::new(),
+        verify_command: String::new(),
+        color: String::new(),
+        image: String::new(),
+        archived: false,
+        states: None,
+        date_created: None,
+        date_modified: None,
     }
 }
 
