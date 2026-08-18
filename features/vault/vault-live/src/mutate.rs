@@ -112,10 +112,13 @@ pub fn delete_page(vault: &mut Vault, rel_path: &str) -> Result<(), MutateError>
 // rename. The same-directory part is load-bearing: a rename across
 // filesystems is a copy, and a copy is exactly the torn write this
 // avoids
-// t[impl project.vault.write-path] — the single choke point every vault
-// page passes through. The rule wants this to be the Files API rather
-// than `std::fs`, which it is not yet; what makes that a tractable
-// migration is that this is one function and not eighty call sites
+// NOT `project.vault.write-path`, deliberately. This is the single choke
+// point every vault page passes through, which is what makes that rule a
+// tractable migration rather than eighty call sites — but the rule wants
+// the write to go through the Files API and this is `std::fs`. An impl
+// marker here would have made `tracey query uncovered` disagree with
+// `docs/spec/unmet.md`, and the coverage number is only worth anything
+// while it means what it says.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
