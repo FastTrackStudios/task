@@ -304,6 +304,27 @@ as parts are added or removed, and are unaffected by whether a part is promoted.
 
 ---
 
+### A declaration is not yet a file
+
+t[project.deliverable.binding]
+`project.deliverable.kind` says deliverables are declared rather than discovered
+by guessing which renders look final. The consequence is that a declaration and
+the content satisfying it are two things, and the content is attached
+deliberately: nothing becomes the album master by being named `master.wav`.
+
+So an item may be **declared and unbound**, and that is a legible state rather
+than an error — it is a project saying what it owes before it owes it, which is
+what a deliverable list is for at the start of a job. A client view shows such
+an item as outstanding rather than hiding it, because "the per-song video is not
+done yet" is the answer the client came for.
+
+An excerpt is the case that makes this obvious. `project.deliverable.scope`
+expands whole-project and per-part declarations on its own, and cannot expand an
+excerpt: which seconds of which recording is a choice, so an excerpt exists
+exactly when something has been bound to it.
+
+---
+
 ### The client sees deliverables, not the tree
 
 t[project.deliverable.client-view]

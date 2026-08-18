@@ -18,7 +18,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::ProjectInfo;
-use crate::parts::{Part, Piece};
+use crate::parts::{Audience, Deliverable, DeliverableItem, Part, Piece, Scope};
 use crate::scan::scan_vault;
 use crate::service::{ProjectError, ProjectService};
 use crate::write::{default_project_path, write_project};
@@ -314,7 +314,10 @@ impl ProjectService for ProjectBackend {
             // music production. `project.capability.mutable` is how it
             // becomes something else.
             capabilities: parent.capabilities.clone(),
-            ..blank_like(parent)
+            // Everything else is a project with nothing said about it:
+            // a song is not "active since March at £90/hour" because its
+            // album is.
+            ..ProjectInfo::default()
         };
         promoted.path = default_project_path(&named.name);
         if self.vault_root.join(&promoted.path).exists() {
@@ -383,6 +386,74 @@ impl ProjectService for ProjectBackend {
         Ok(part)
     }
 
+    fn deliverables(&self, project: Uuid) -> Result<Vec<Deliverable>, ProjectError> {
+        Ok(self.get(project)?.deliverables.0)
+    }
+
+    fn declare_deliverable(
+        &self,
+        project: Uuid,
+        mut deliverable: Deliverable,
+    ) -> Result<Deliverable, ProjectError> {
+        let name = deliverable.name.trim().to_owned();
+        if name.is_empty() {
+            return Err(ProjectError::BadRequest(
+                "a deliverable needs a name".into(),
+            ));
+        }
+        deliverable.name = name;
+        let mut p = self.get(project)?;
+        if p.deliverables.has_name(&deliverable.name) {
+            return Err(ProjectError::AlreadyExists(format!(
+                "{} already owes something called {}",
+                p.title, deliverable.name
+            )));
+        }
+        if deliverable.id.is_nil() {
+            deliverable.id = Uuid::new_v4();
+        }
+        p.deliverables.0.push(deliverable.clone());
+        self.save(p)?;
+        Ok(deliverable)
+    }
+
+    fn withdraw_deliverable(&self, project: Uuid, deliverable: Uuid) -> Result<(), ProjectError> {
+        let mut p = self.get(project)?;
+        let before = p.deliverables.len();
+        p.deliverables.0.retain(|d| d.id != deliverable);
+        if p.deliverables.len() == before {
+            return Err(ProjectError::NotFound(deliverable.to_string()));
+        }
+        self.save(p)?;
+        Ok(())
+    }
+
+    // t[impl project.deliverable.scope] — the expansion, derived on read.
+    // Storing it would make "stays in step" a job somebody has to
+    // remember to run, and the failure would be an album quietly owing
+    // ten deliverables after growing an eleventh song
+    fn deliverable_items(&self, project: Uuid) -> Result<Vec<DeliverableItem>, ProjectError> {
+        let pieces = self.pieces(project)?;
+        let declared = self.get(project)?;
+        Ok(expand(&declared, &pieces))
+    }
+
+    // t[impl project.deliverable.client-view] — the filter is the surface,
+    // not a parameter: there is nothing to pass, so nothing to pass wrong
+    fn client_deliverables(&self, project: Uuid) -> Result<Vec<DeliverableItem>, ProjectError> {
+        let mut items = self.deliverable_items(project)?;
+        items.retain(|i| i.audience > Audience::Internal);
+        // Organised by scope then medium, which is what the rule asks a
+        // client view to be: the whole performance, then a song.
+        items.sort_by(|a, b| {
+            a.part
+                .is_some()
+                .cmp(&b.part.is_some())
+                .then_with(|| format!("{:?}", a.medium).cmp(&format!("{:?}", b.medium)))
+        });
+        Ok(items)
+    }
+
     fn delete(&self, id: Uuid) -> Result<(), ProjectError> {
         let all = self.list_inner()?;
         let p = all
@@ -406,43 +477,42 @@ impl ProjectService for ProjectBackend {
     }
 }
 
-/// A project with a parent's conventions and none of its content.
+/// Expand a project's declarations against its pieces.
 ///
-/// Everything a promoted part should *not* inherit: its parent's status,
-/// lead, dates, billing, body. A song is not "active since March at
-/// £90/hour" because its album is. Capabilities and parentage are set by
-/// the caller, since those are the two things it does inherit.
-fn blank_like(_parent: &ProjectInfo) -> ProjectInfo {
-    ProjectInfo {
-        id: Uuid::nil(),
-        path: String::new(),
-        title: String::new(),
-        status: "active".into(),
-        priority: "normal".into(),
-        project_type: String::new(),
-        lead: String::new(),
-        tags: crate::model::Tags::default(),
-        parts: crate::Parts::default(),
-        capabilities: crate::Capabilities::default(),
-        parent_id: None,
-        same_as: None,
-        target_date: None,
-        progress_percent: -1,
-        details: String::new(),
-        client_id: None,
-        billable_default: false,
-        currency: String::new(),
-        default_rate_cents: 0,
-        estimated_seconds: 0,
-        agent_profile: String::new(),
-        verify_command: String::new(),
-        color: String::new(),
-        image: String::new(),
-        archived: false,
-        states: None,
-        date_created: None,
-        date_modified: None,
+/// A whole-project declaration is one item; a per-part one is an item
+/// per piece, in the roster's order; an excerpt expands to nothing,
+/// because an excerpt is picked rather than derived.
+///
+/// Promotion is not consulted, and that is the point — `project.deliverable.scope`
+/// says per-part deliverables are "unaffected by whether a part is
+/// promoted", and the pieces list already made that free.
+fn expand(project: &ProjectInfo, pieces: &[Piece]) -> Vec<DeliverableItem> {
+    let mut out = Vec::new();
+    for d in &project.deliverables.0 {
+        match d.scope {
+            Scope::WholeProject => out.push(DeliverableItem {
+                deliverable: d.id,
+                name: d.name.clone(),
+                medium: d.medium,
+                audience: d.audience,
+                part: None,
+                title: d.name.clone(),
+            }),
+            Scope::PerPart => out.extend(pieces.iter().map(|piece| DeliverableItem {
+                deliverable: d.id,
+                name: d.name.clone(),
+                medium: d.medium,
+                audience: d.audience,
+                part: Some(piece.id),
+                title: piece.name.clone(),
+            })),
+            // Nothing to derive. An excerpt exists once somebody chooses
+            // one, which is a binding this lane does not yet have — see
+            // `project.deliverable.binding` in the spec.
+            Scope::Excerpt => {}
+        }
     }
+    out
 }
 
 /// The `#[subscribe]` backend contract: hand the emitted stream host

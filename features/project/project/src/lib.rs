@@ -45,7 +45,10 @@ pub mod model;
 /// Parts and capabilities — re-exported from the wasm-clean proto
 /// crate, like [`model`].
 pub mod parts {
-    pub use project_proto::parts::{Capabilities, Capability, Part, Parts, Piece};
+    pub use project_proto::parts::{
+        Audience, Capabilities, Capability, Deliverable, DeliverableItem, Deliverables, Medium,
+        Part, Parts, Piece, Scope,
+    };
 }
 pub mod service;
 pub mod states;
@@ -64,7 +67,10 @@ pub mod write;
 pub use entity::Projects;
 pub use model::{ProjectInfo, Status};
 pub use parse::{ParseError, looks_like_project, parse_page, parse_str};
-pub use parts::{Capabilities, Capability, Part, Parts, Piece};
+pub use parts::{
+    Audience, Capabilities, Capability, Deliverable, DeliverableItem, Deliverables, Medium, Part,
+    Parts, Piece, Scope,
+};
 pub use service::{ProjectError, ProjectEvent, ProjectService, ProjectServiceRpc};
 #[cfg(feature = "vox")]
 pub use service::{

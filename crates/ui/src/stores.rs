@@ -934,33 +934,9 @@ pub fn use_project(id: String) -> AtomResult<OrgProject, String> {
 pub fn draft_project(title: String) -> ProjectInfo {
     ProjectInfo {
         id: Uuid::nil(),
-        path: String::new(),
         title,
-        status: "active".into(),
-        priority: "normal".into(),
         project_type: "general".into(),
-        lead: String::new(),
-        tags: project_proto::model::Tags::default(),
-        parts: Default::default(),
-        capabilities: Default::default(),
-        parent_id: None,
-        same_as: None,
-        target_date: None,
-        progress_percent: -1,
-        details: String::new(),
-        client_id: None,
-        billable_default: false,
-        currency: String::new(),
-        default_rate_cents: 0,
-        estimated_seconds: 0,
-        agent_profile: String::new(),
-        verify_command: String::new(),
-        color: String::new(),
-        image: String::new(),
-        archived: false,
-        states: None,
-        date_created: None,
-        date_modified: None,
+        ..Default::default()
     }
 }
 

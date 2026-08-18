@@ -100,6 +100,11 @@ impl VaultEntity for Projects {
                 part.id = Uuid::new_v4();
             }
         }
+        for d in &mut owned.deliverables.0 {
+            if d.id.is_nil() {
+                d.id = Uuid::new_v4();
+            }
+        }
         // `path` and `details` are `#[serde(skip)]` on the model, so
         // serializing the whole `ProjectInfo` yields exactly the
         // frontmatter keys; `details` becomes the markdown body.
@@ -188,6 +193,7 @@ pub(crate) fn from_parts(
         archived: yaml::bool_at(&map, "archived").unwrap_or(false),
         parts: take_parts(&map),
         capabilities: take_capabilities(&map, &project_type_for_caps),
+        deliverables: take_deliverables(&map),
         states: take_states(&map),
         date_created: yaml::timestamp_at(&map, "dateCreated"),
         date_modified: yaml::timestamp_at(&map, "dateModified"),
@@ -272,6 +278,32 @@ fn take_capabilities(map: &serde_yaml::Mapping, project_type: &str) -> project_p
         }
     }
     project_proto::Capabilities::from_project_type(project_type)
+}
+
+/// Parse the optional `deliverables:` list.
+///
+/// Tolerant like the rest: a malformed list reads as none rather than
+/// failing the page. A declaration with no id gets one from the project
+/// and its name, for the reason parts do — things point at deliverables,
+/// and a per-scan id breaks every pointer.
+fn take_deliverables(map: &serde_yaml::Mapping) -> project_proto::Deliverables {
+    let Some(value) = map.get("deliverables") else {
+        return project_proto::Deliverables::default();
+    };
+    let Ok(mut declared) = serde_yaml::from_value::<Vec<project_proto::Deliverable>>(value.clone())
+    else {
+        return project_proto::Deliverables::default();
+    };
+    let project_id = yaml::str_at(map, "id").unwrap_or_default();
+    for d in &mut declared {
+        if d.id.is_nil() {
+            d.id = Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("{project_id}/deliverables/{}", d.name).as_bytes(),
+            );
+        }
+    }
+    project_proto::Deliverables(declared)
 }
 
 /// Parse the optional `states:` registry. Tolerant: an unparseable or

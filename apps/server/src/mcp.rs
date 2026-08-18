@@ -2177,37 +2177,17 @@ fn call_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value
         // ── Projects / goals / milestones ────────────────────────
         "create_project" => {
             let draft = project::ProjectInfo {
-                id: uuid::Uuid::nil(),
-                path: String::new(),
                 title: required_str(args, "title")?,
                 status: arg_str(args, "status").unwrap_or_else(|| "active".into()),
                 priority: arg_str(args, "priority").unwrap_or_else(|| "normal".into()),
                 project_type: "general".into(),
-                lead: String::new(),
-                tags: project::model::Tags::default(),
-                parts: Default::default(),
-                capabilities: Default::default(),
                 parent_id: match arg_str(args, "parent_id") {
                     Some(p) => Some(parse_uuid(&p, "project")?),
                     None => None,
                 },
-                same_as: None,
-                target_date: None,
-                progress_percent: -1,
                 details: arg_str(args, "details").unwrap_or_default(),
-                client_id: None,
-                billable_default: false,
-                currency: String::new(),
-                default_rate_cents: 0,
-                estimated_seconds: 0,
-                agent_profile: String::new(),
                 verify_command: arg_str(args, "verify_command").unwrap_or_default(),
-                color: String::new(),
-                image: String::new(),
-                archived: false,
-                states: None,
-                date_created: None,
-                date_modified: None,
+                ..Default::default()
             };
             let title = draft.title.clone();
             let created = org

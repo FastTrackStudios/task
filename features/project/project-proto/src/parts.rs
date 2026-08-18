@@ -335,6 +335,139 @@ impl<'de> Deserialize<'de> for Capabilities {
     }
 }
 
+// ── Deliverables ─────────────────────────────────────────────────────
+
+/// What a deliverable is made of.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Facet, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[repr(u8)]
+pub enum Medium {
+    Audio,
+    Video,
+    Image,
+    Document,
+}
+
+/// Who a deliverable is for.
+///
+/// The ordering is deliberate and load-bearing: `Internal < Client <
+/// Public`, so "reachable by at most this audience" is a comparison
+/// rather than a match somebody has to keep exhaustive.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Facet, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+#[repr(u8)]
+pub enum Audience {
+    /// The org's own. Never reachable from a client view.
+    Internal,
+    /// The people who commissioned the work.
+    Client,
+    /// Anyone.
+    Public,
+}
+
+/// How much of the project one deliverable covers.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Facet, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u8)]
+pub enum Scope {
+    /// One, for the project as a whole — the album master.
+    WholeProject,
+    /// One per piece, and it stays in step as pieces come and go.
+    PerPart,
+    /// A chosen extract. Does not expand on its own: an excerpt is
+    /// picked rather than derived, so it exists once something is bound
+    /// to it.
+    Excerpt,
+}
+
+// t[impl project.deliverable.kind] — named, with a medium, a scope and
+// an audience, and *declared*: there is no path here for anything to be
+// discovered by looking at which renders seem final
+/// A declaration of output the project owes someone.
+///
+/// `project.deliverable.scope`: five declarations, not twenty-one files
+/// named individually. A `PerPart` audio deliverable of a ten-song album
+/// is **one** of these.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+#[repr(C)]
+pub struct Deliverable {
+    pub id: Uuid,
+    /// What it is called: "Album master", "Per-song video".
+    pub name: String,
+    pub medium: Medium,
+    pub scope: Scope,
+    pub audience: Audience,
+}
+
+/// A project's deliverable declarations.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(
+    architect::JsonField, Debug, Clone, Default, PartialEq, Eq, Facet, Serialize, Deserialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct Deliverables(pub Vec<Deliverable>);
+
+impl Deliverables {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub fn get(&self, id: Uuid) -> Option<&Deliverable> {
+        self.0.iter().find(|d| d.id == id)
+    }
+
+    #[must_use]
+    pub fn has_name(&self, name: &str) -> bool {
+        self.0.iter().any(|d| d.name.eq_ignore_ascii_case(name))
+    }
+}
+
+// t[impl project.deliverable.binding] — an item exists as soon as it is
+// declared, with nothing attached. Declared-and-unbound is the state a
+// project is in at the start of a job, and the client view shows it as
+// outstanding rather than hiding it
+/// One concrete thing a declaration resolves to.
+///
+/// The expansion of a declaration against the project's pieces. A
+/// `PerPart` audio declaration over ten songs is ten of these, and
+/// eleven the moment an eleventh song is named — which is what
+/// `project.deliverable.scope` means by "stay in step".
+///
+/// Derived on every read rather than stored. Storing it would make
+/// "stays in step" a job somebody has to remember to run, and the
+/// failure would be an album quietly owing ten deliverables after
+/// growing an eleventh song.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+#[repr(C)]
+pub struct DeliverableItem {
+    /// The declaration this came from.
+    pub deliverable: Uuid,
+    pub name: String,
+    pub medium: Medium,
+    pub audience: Audience,
+    /// The piece it covers, for a per-part item. `None` for a
+    /// whole-project one.
+    pub part: Option<Uuid>,
+    /// What to call this item — the declaration's name for a
+    /// whole-project item, the piece's for a per-part one.
+    pub title: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

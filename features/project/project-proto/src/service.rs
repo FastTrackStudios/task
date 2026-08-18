@@ -11,7 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::model::ProjectInfo;
-use crate::parts::{Part, Piece};
+use crate::parts::{Deliverable, DeliverableItem, Part, Piece};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
 #[repr(u8)]
@@ -169,6 +169,52 @@ pub trait ProjectService {
     /// files, tasks, time, deliverables — is not an obstacle: a part
     /// carries exactly those.
     fn demote_project(&self, project: Uuid) -> Result<Part, ProjectError>;
+
+    // ── Deliverables ────────────────────────────────────────
+
+    /// What this project has declared it owes.
+    ///
+    /// Declarations, not files: `project.deliverable.scope` wants five
+    /// of these for a concert, not twenty-one.
+    fn deliverables(&self, project: Uuid) -> Result<Vec<Deliverable>, ProjectError>;
+
+    /// Declare one. `AlreadyExists` on a duplicate name.
+    fn declare_deliverable(
+        &self,
+        project: Uuid,
+        deliverable: Deliverable,
+    ) -> Result<Deliverable, ProjectError>;
+
+    /// Withdraw a declaration.
+    ///
+    /// Withdraws what the project *owes*; it does not touch content
+    /// anything was bound to, for the same reason removing a capability
+    /// does not — a declaration is a statement about obligation, and
+    /// deleting the work on the strength of one being retracted is not
+    /// a thing a person asking for this could mean.
+    fn withdraw_deliverable(&self, project: Uuid, deliverable: Uuid) -> Result<(), ProjectError>;
+
+    /// Every declaration expanded against the project's pieces.
+    ///
+    /// A per-part audio declaration over ten songs is ten items here,
+    /// and eleven the moment an eleventh song is named — derived on
+    /// read, so "stays in step" is not a job anybody has to remember to
+    /// run. Unaffected by whether a piece is promoted.
+    ///
+    /// The **member** view: everything, including what is internal.
+    fn deliverable_items(&self, project: Uuid) -> Result<Vec<DeliverableItem>, ProjectError>;
+
+    /// The same expansion, as a client may see it.
+    ///
+    /// A separate verb rather than an audience parameter, because
+    /// `project.deliverable.client-view` says nothing marked internal is
+    /// *reachable* from a client's view — and a parameter is a thing a
+    /// caller can get wrong, once, quietly. There is nothing to pass
+    /// here, so there is nothing to pass incorrectly.
+    ///
+    /// Ordered by scope then medium, which is the organisation the rule
+    /// asks for: the whole performance, then a specific song.
+    fn client_deliverables(&self, project: Uuid) -> Result<Vec<DeliverableItem>, ProjectError>;
 
     /// Every project change, as it happens — fires on each
     /// successful create / update / rename / delete. See

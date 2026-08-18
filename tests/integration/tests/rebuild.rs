@@ -37,34 +37,9 @@ use integration::scenario::Scenario;
 /// test is about.
 fn draft(title: &str) -> project::ProjectInfo {
     project::ProjectInfo {
-        id: uuid::Uuid::nil(),
-        path: String::new(),
         title: title.into(),
-        status: "active".into(),
-        priority: "normal".into(),
         project_type: "general".into(),
-        lead: String::new(),
-        tags: project::model::Tags::default(),
-        parts: project::Parts::default(),
-        capabilities: project::Capabilities::default(),
-        parent_id: None,
-        same_as: None,
-        target_date: None,
-        progress_percent: -1,
-        details: String::new(),
-        client_id: None,
-        billable_default: false,
-        currency: String::new(),
-        default_rate_cents: 0,
-        estimated_seconds: 0,
-        agent_profile: String::new(),
-        verify_command: String::new(),
-        color: String::new(),
-        image: String::new(),
-        archived: false,
-        states: None,
-        date_created: None,
-        date_modified: None,
+        ..Default::default()
     }
 }
 

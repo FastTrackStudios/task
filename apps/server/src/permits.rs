@@ -343,6 +343,11 @@ table!(PROJECT, "project", "projects/**", [
     // and remove a page, which is what `create` and `delete` are gated
     // as — so they match those rather than the part verbs.
     rd "pieces", wr "promote_part", wa "demote_project",
+    // Deliverables. `client_deliverables` is `rd` like every other
+    // listing — what makes it a client view is that it filters, not that
+    // it is reached differently.
+    rd "deliverables", wr "declare_deliverable", wa "withdraw_deliverable",
+    rd "deliverable_items", rd "client_deliverables",
 ]);
 table!(PROJECT_STREAM, "project-stream", "projects/**", [rd "events"]);
 table!(GOAL, "goal", "goals/**", [

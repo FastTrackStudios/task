@@ -71,33 +71,10 @@ mod tests {
     fn project(verify: &str, parent: Option<Uuid>) -> ProjectInfo {
         ProjectInfo {
             id: Uuid::new_v4(),
-            path: String::new(),
             title: "p".into(),
-            status: "active".into(),
-            priority: "normal".into(),
-            project_type: String::new(),
-            lead: String::new(),
-            tags: crate::model::Tags::default(),
-            parts: crate::parts::Parts::default(),
-            capabilities: crate::parts::Capabilities::default(),
+            verify_command: verify.into(),
             parent_id: parent,
-            same_as: None,
-            target_date: None,
-            progress_percent: -1,
-            details: String::new(),
-            client_id: None,
-            billable_default: false,
-            currency: String::new(),
-            default_rate_cents: 0,
-            estimated_seconds: 0,
-            agent_profile: String::new(),
-            verify_command: verify.to_string(),
-            color: String::new(),
-            image: String::new(),
-            archived: false,
-            states: None,
-            date_created: None,
-            date_modified: None,
+            ..ProjectInfo::default()
         }
     }
 

@@ -428,34 +428,16 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
             };
             let details = resolve_body(details)?;
             let new_project = project::ProjectInfo {
-                id: uuid::Uuid::nil(),
                 path: path.unwrap_or_default(),
                 title,
                 status: status.unwrap_or_else(|| "active".into()),
                 priority: priority.unwrap_or_else(|| "normal".into()),
                 project_type: project_type.unwrap_or_else(|| "general".into()),
-                lead: String::new(),
                 tags: project::model::Tags(tags),
-                parts: project::Parts::default(),
-                capabilities: project::Capabilities::default(),
                 parent_id,
-                same_as: None,
-                target_date: None,
-                progress_percent: -1,
                 details,
-                client_id: None,
-                billable_default: false,
-                currency: String::new(),
-                default_rate_cents: 0,
-                estimated_seconds: 0,
-                agent_profile: String::new(),
                 verify_command: verify.unwrap_or_default(),
-                color: String::new(),
-                image: String::new(),
-                archived: false,
-                states: None,
-                date_created: None,
-                date_modified: None,
+                ..Default::default()
             };
             let created = client
                 .create(new_project)

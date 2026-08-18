@@ -46,6 +46,52 @@ impl Tags {
 // t[impl project.definition.single] — the one definition. Not testable
 // by any run, as `docs/spec/scenario-album.md` says: what violates it is
 // a *second* struct appearing, so the marker sits on the first
+/// A project with nothing said about it yet.
+///
+/// Hand-written rather than derived, because two fields have defaults
+/// that are not their type's: `status` and `priority` have canonical
+/// values, and `progress_percent` uses `-1` as "no tracked tasks yet"
+/// rather than "0% done".
+///
+/// It exists so adding a field to [`ProjectInfo`] does not mean editing
+/// every struct literal in the workspace. It meant seven, across the
+/// server, the CLI, the UI and three test suites, the last time.
+impl Default for ProjectInfo {
+    fn default() -> Self {
+        Self {
+            id: Uuid::nil(),
+            path: String::new(),
+            title: String::new(),
+            status: "active".into(),
+            priority: "normal".into(),
+            project_type: String::new(),
+            lead: String::new(),
+            tags: Tags::default(),
+            parts: crate::parts::Parts::default(),
+            capabilities: crate::parts::Capabilities::default(),
+            deliverables: crate::parts::Deliverables::default(),
+            parent_id: None,
+            same_as: None,
+            target_date: None,
+            progress_percent: default_progress(),
+            details: String::new(),
+            client_id: None,
+            billable_default: false,
+            currency: String::new(),
+            default_rate_cents: 0,
+            estimated_seconds: 0,
+            agent_profile: String::new(),
+            verify_command: String::new(),
+            color: String::new(),
+            image: String::new(),
+            archived: false,
+            states: None,
+            date_created: None,
+            date_modified: None,
+        }
+    }
+}
+
 /// One project. Lives as `Projects/<slug>.md` in the vault.
 #[cfg_attr(feature = "fake", derive(::fake::Dummy))]
 #[derive(architect::Entity, Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
@@ -279,6 +325,15 @@ pub struct ProjectInfo {
     #[serde(skip_serializing_if = "crate::parts::Capabilities::is_empty", default)]
     #[architect(json)]
     pub capabilities: crate::parts::Capabilities,
+
+    /// What this project produces for someone else —
+    /// `project.deliverable.kind`.
+    ///
+    /// Declarations, not files: "per-song audio" is one entry however
+    /// many songs there are. See [`crate::parts::Deliverable`].
+    #[serde(skip_serializing_if = "crate::parts::Deliverables::is_empty", default)]
+    #[architect(json)]
+    pub deliverables: crate::parts::Deliverables,
 
     // ── State registry ──────────────────────────────────────
     /// Optional per-project state registry: custom status names
