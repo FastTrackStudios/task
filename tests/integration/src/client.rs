@@ -136,6 +136,11 @@ impl Session {
         self.establish().await
     }
 
+    /// The organise lane — tags, favourites, and the activity feed.
+    pub async fn organise(&self) -> files::OrganiseServiceClient {
+        self.establish().await
+    }
+
     /// The live event stream — `FilesService`'s `#[subscribe]` sibling.
     ///
     /// Its own lane and its own connection, which is the point: what
@@ -224,6 +229,7 @@ macro_rules! signable {
 
 signable!(
     files::FilesServiceStreamClient,
+    files::OrganiseServiceClient,
     files::SearchServiceClient,
     ReviewServiceClient,
     RootsServiceClient,
