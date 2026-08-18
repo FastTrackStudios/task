@@ -2185,6 +2185,8 @@ fn call_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value
                 project_type: "general".into(),
                 lead: String::new(),
                 tags: project::model::Tags::default(),
+                parts: Default::default(),
+                capabilities: Default::default(),
                 parent_id: match arg_str(args, "parent_id") {
                     Some(p) => Some(parse_uuid(&p, "project")?),
                     None => None,

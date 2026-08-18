@@ -78,6 +78,8 @@ mod tests {
             project_type: String::new(),
             lead: String::new(),
             tags: crate::model::Tags::default(),
+            parts: crate::parts::Parts::default(),
+            capabilities: crate::parts::Capabilities::default(),
             parent_id: parent,
             same_as: None,
             target_date: None,

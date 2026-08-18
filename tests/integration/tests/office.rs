@@ -28,6 +28,8 @@ fn draft(title: &str) -> project::ProjectInfo {
         project_type: "general".into(),
         lead: String::new(),
         tags: project::model::Tags::default(),
+        parts: project::Parts::default(),
+        capabilities: project::Capabilities::default(),
         parent_id: None,
         same_as: None,
         target_date: None,

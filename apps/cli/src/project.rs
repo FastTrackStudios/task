@@ -436,6 +436,8 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
                 project_type: project_type.unwrap_or_else(|| "general".into()),
                 lead: String::new(),
                 tags: project::model::Tags(tags),
+                parts: project::Parts::default(),
+                capabilities: project::Capabilities::default(),
                 parent_id,
                 same_as: None,
                 target_date: None,

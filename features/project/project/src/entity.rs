@@ -74,6 +74,29 @@ impl VaultEntity for Projects {
         if owned.id.is_nil() {
             owned.id = Uuid::new_v4();
         }
+        // The migration, and it happens on save rather than on read:
+        // whatever the page carried, what goes back is `capabilities`.
+        // `projectType` is dropped once its meaning has been carried
+        // across, so a page has one field for this and not two — which
+        // is what `project.definition.single` is about, and the reason
+        // the legacy field is read-only everywhere else.
+        //
+        // Dropped only when something was carried across. A type nobody
+        // could interpret is left exactly as written: deleting it would
+        // destroy the only record of what its author meant, on a save
+        // that had nothing to do with it.
+        if !owned.capabilities.held.is_empty() {
+            owned.project_type = String::new();
+        }
+        // Parts get real ids before they reach disk, for the reason in
+        // `project_proto::parts`: everything that points at a part
+        // points at its id, and an id assigned later is an id every
+        // pointer predates.
+        for part in &mut owned.parts.0 {
+            if part.id.is_nil() {
+                part.id = Uuid::new_v4();
+            }
+        }
         // `path` and `details` are `#[serde(skip)]` on the model, so
         // serializing the whole `ProjectInfo` yields exactly the
         // frontmatter keys; `details` becomes the markdown body.
@@ -130,6 +153,10 @@ pub(crate) fn from_parts(
         .or_else(|| yaml::str_at(&map, "project_type"))
         .unwrap_or_default();
 
+    // Cloned before the struct takes ownership: `capabilities` is read
+    // *through* the legacy field, so both need it.
+    let project_type_for_caps = project_type.clone();
+
     Ok(ProjectInfo {
         path: rel_path.to_string(),
         id,
@@ -156,10 +183,92 @@ pub(crate) fn from_parts(
         color: yaml::str_at(&map, "color").unwrap_or_default(),
         image: yaml::str_at(&map, "image").unwrap_or_default(),
         archived: yaml::bool_at(&map, "archived").unwrap_or(false),
+        parts: take_parts(&map),
+        capabilities: take_capabilities(&map, &project_type_for_caps),
         states: take_states(&map),
         date_created: yaml::timestamp_at(&map, "dateCreated"),
         date_modified: yaml::timestamp_at(&map, "dateModified"),
     })
+}
+
+/// Parse the optional `parts:` list.
+///
+/// Tolerant, like `states:`: a malformed list reads as no parts rather
+/// than failing the page, because a project whose parts we cannot read
+/// is still a project and `vault.index.tolerant` says a parse failure
+/// costs one page, not the vault.
+///
+/// A part with no id gets a deterministic one, derived from the
+/// project's id and the part's name, so a hand-written `parts:` list
+/// resolves to the same ids on every scan and on every machine — the
+/// same v5 trick the page's own id fallback uses, and for the same
+/// reason: things point at parts, and a per-scan id breaks every
+/// pointer. The next save persists it.
+fn take_parts(map: &serde_yaml::Mapping) -> project_proto::Parts {
+    let Some(value) = map.get("parts") else {
+        return project_proto::Parts::default();
+    };
+    // Two spellings, because a human writing this by hand writes the
+    // short one: `parts: [Overture, Daybreak]` as well as the full
+    // `- id: … / name: …` form.
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Written {
+        Named(String),
+        Full {
+            #[serde(default)]
+            id: Option<Uuid>,
+            name: String,
+        },
+    }
+    let Ok(written) = serde_yaml::from_value::<Vec<Written>>(value.clone()) else {
+        return project_proto::Parts::default();
+    };
+    let project_id = yaml::str_at(map, "id").unwrap_or_default();
+    let mut parts = Vec::with_capacity(written.len());
+    for entry in written {
+        let (id, name) = match entry {
+            Written::Named(name) => (None, name),
+            Written::Full { id, name } => (id, name),
+        };
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            continue;
+        }
+        let id = id.unwrap_or_else(|| {
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("{project_id}/parts/{name}").as_bytes(),
+            )
+        });
+        parts.push(project_proto::Part { id, name });
+    }
+    project_proto::Parts(parts)
+}
+
+// t[impl project.identity.declaration] — capabilities are read from the
+// project's own frontmatter and nowhere else, so nothing outside that
+// file is needed to interpret it
+/// Parse `capabilities:`, falling back to the legacy `projectType`.
+///
+/// The compatibility path described in `project_proto::parts`: a page
+/// that declares capabilities is read as written, and a page carrying
+/// only the old free-string type is read through it. A page with both
+/// is read from `capabilities` — it is the field this code writes, so
+/// it is the one that was most recently meant.
+fn take_capabilities(map: &serde_yaml::Mapping, project_type: &str) -> project_proto::Capabilities {
+    if let Some(value) = map.get("capabilities") {
+        // A single string is accepted as a set of one, because
+        // `capabilities: music-production` is what a person writes.
+        let names = match value {
+            serde_yaml::Value::String(one) => vec![one.clone()],
+            other => serde_yaml::from_value::<Vec<String>>(other.clone()).unwrap_or_default(),
+        };
+        if !names.is_empty() {
+            return project_proto::Capabilities::from_names(names);
+        }
+    }
+    project_proto::Capabilities::from_project_type(project_type)
 }
 
 /// Parse the optional `states:` registry. Tolerant: an unparseable or

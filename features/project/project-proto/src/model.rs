@@ -86,6 +86,13 @@ pub struct ProjectInfo {
     /// issues & PRs, personal projects hide the repo, general is the
     /// neutral default. Free-form so more types slot in without a
     /// schema bump; empty is treated as `general`.
+    ///
+    /// **Superseded by [`Self::capabilities`]**, and read-only from
+    /// here on. `project.capability.closed` wants a closed vocabulary
+    /// and this is a free string, so a page carrying only this parses
+    /// into `capabilities` and saving emits `capabilities` instead. The
+    /// field stays because every page in every vault has one and a
+    /// vault we do not host cannot be migrated in place.
     #[serde(
         default,
         rename = "projectType",
@@ -244,6 +251,25 @@ pub struct ProjectInfo {
     #[serde(default)]
     #[architect(filterable)]
     pub archived: bool,
+
+    // ── Parts and capabilities ──────────────────────────────
+    /// The project's named divisions — `project.part.unit`.
+    ///
+    /// A song, a scene, an episode. Costs nothing on disk beyond this
+    /// list: no directory, no marker, no page. See
+    /// [`crate::parts`] on why each carries an id from creation.
+    #[serde(skip_serializing_if = "crate::parts::Parts::is_empty", default)]
+    #[architect(json)]
+    pub parts: crate::parts::Parts,
+
+    /// What this project does — `project.capability.multiple`.
+    ///
+    /// A *set*, drawn from a closed vocabulary. Supersedes
+    /// [`Self::project_type`]: a page carrying only the old field parses
+    /// into this one, and saving writes this one. Never both.
+    #[serde(skip_serializing_if = "crate::parts::Capabilities::is_empty", default)]
+    #[architect(json)]
+    pub capabilities: crate::parts::Capabilities,
 
     // ── State registry ──────────────────────────────────────
     /// Optional per-project state registry: custom status names

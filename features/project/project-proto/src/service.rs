@@ -11,6 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::model::ProjectInfo;
+use crate::parts::Part;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
 #[repr(u8)]
@@ -101,6 +102,46 @@ pub trait ProjectService {
     /// already gone. Refuses if any other project lists this
     /// one as `parent_id`.
     fn delete(&self, id: Uuid) -> Result<(), ProjectError>;
+
+    // ── Parts ───────────────────────────────────────────────
+    //
+    // Four verbs and no store. A part lives in its project's
+    // frontmatter (`project.part.unit`: "no directory, no marker, no
+    // capabilities of its own"), so every one of these is a read,
+    // an edit and a save of one page.
+    //
+    // They are on the project lane rather than a lane of their own for
+    // the same reason: a lane implies a thing with an address, and the
+    // whole claim about a part is that it is not one. `parts` returns
+    // the list because a caller holding a project id should not have to
+    // fetch the page to read it.
+
+    /// This project's parts, in declaration order.
+    fn parts(&self, project: Uuid) -> Result<Vec<Part>, ProjectError>;
+
+    /// Name a new part. Returns it, with the id it was given.
+    ///
+    /// `AlreadyExists` when the project already has a part of that name
+    /// — case-insensitively, because one song with two spellings is a
+    /// project whose setlist references are ambiguous.
+    fn add_part(&self, project: Uuid, name: &str) -> Result<Part, ProjectError>;
+
+    /// Rename a part, keeping its id.
+    ///
+    /// The id is the point: everything attached to a part addresses it
+    /// by id, so renaming is a display change and nothing else has to
+    /// hear about it.
+    fn rename_part(&self, project: Uuid, part: Uuid, name: &str) -> Result<Part, ProjectError>;
+
+    /// Remove a part.
+    ///
+    /// Nothing cascades, because nothing is owned: a part has no files
+    /// and no page. What it may have is *references* — and those are
+    /// somebody else's rows, which this lane cannot see and must not
+    /// silently invalidate. Removing a referenced part is allowed and
+    /// leaves the references dangling, which is the same contract
+    /// `delete` has for a project.
+    fn remove_part(&self, project: Uuid, part: Uuid) -> Result<(), ProjectError>;
 
     /// Every project change, as it happens — fires on each
     /// successful create / update / rename / delete. See

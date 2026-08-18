@@ -333,6 +333,12 @@ table!(AGENT_BACKENDS, "agent-backends", "agent/runners/**", [
 
 table!(PROJECT, "project", "projects/**", [
     rd "list", rd "get", rd "get_by_path", wr "create", wr "update", wr "rename", wa "delete",
+    // Parts. `wr` rather than `wa` for the mutations: naming a division
+    // of a project's work is ordinary editing, not administration —
+    // `project.part.unit` is explicit that a part costs nothing, and a
+    // permission that treated adding one as a privileged act would be
+    // pricing it.
+    rd "parts", wr "add_part", wr "rename_part", wr "remove_part",
 ]);
 table!(PROJECT_STREAM, "project-stream", "projects/**", [rd "events"]);
 table!(GOAL, "goal", "goals/**", [

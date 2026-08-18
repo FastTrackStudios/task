@@ -941,6 +941,8 @@ pub fn draft_project(title: String) -> ProjectInfo {
         project_type: "general".into(),
         lead: String::new(),
         tags: project_proto::model::Tags::default(),
+        parts: Default::default(),
+        capabilities: Default::default(),
         parent_id: None,
         same_as: None,
         target_date: None,

@@ -18,6 +18,7 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::ProjectInfo;
+use crate::parts::Part;
 use crate::scan::scan_vault;
 use crate::service::{ProjectError, ProjectService};
 use crate::write::{default_project_path, write_project};
@@ -73,6 +74,19 @@ impl ProjectBackend {
     #[must_use]
     pub fn vault_root(&self) -> &Path {
         &self.vault_root
+    }
+
+    /// Write a project back to its page and announce it.
+    ///
+    /// The part verbs all have the same shape — read the page, change
+    /// one list, save — and routing them through `update` would carry
+    /// the caller's whole `ProjectInfo` when what changed is one field.
+    fn save(&self, mut project: ProjectInfo) -> Result<ProjectInfo, ProjectError> {
+        project.date_modified = Some(Utc::now());
+        write_project(&self.vault_root, &mut project, true)
+            .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
+        self.publish(crate::service::ProjectEvent::Upserted(project.clone()));
+        Ok(project)
     }
 
     fn list_inner(&self) -> Result<Vec<ProjectInfo>, ProjectError> {
@@ -171,6 +185,74 @@ impl ProjectService for ProjectBackend {
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
         self.publish(crate::service::ProjectEvent::Upserted(p.clone()));
         Ok(p)
+    }
+
+    fn parts(&self, project: Uuid) -> Result<Vec<Part>, ProjectError> {
+        Ok(self.get(project)?.parts.0)
+    }
+
+    fn add_part(&self, project: Uuid, name: &str) -> Result<Part, ProjectError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ProjectError::BadRequest("a part needs a name".into()));
+        }
+        let mut p = self.get(project)?;
+        if p.parts.has_name(name) {
+            return Err(ProjectError::AlreadyExists(format!(
+                "{} already has a part called {name}",
+                p.title
+            )));
+        }
+        // An id now, not at promotion time — see `project_proto::parts`.
+        let part = Part {
+            id: Uuid::new_v4(),
+            name: name.to_owned(),
+        };
+        p.parts.0.push(part.clone());
+        self.save(p)?;
+        Ok(part)
+    }
+
+    fn rename_part(&self, project: Uuid, part: Uuid, name: &str) -> Result<Part, ProjectError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ProjectError::BadRequest("a part needs a name".into()));
+        }
+        let mut p = self.get(project)?;
+        // A rename onto a name another part holds is the same collision
+        // `add_part` refuses; renaming a part to what it already is, is
+        // not.
+        if p.parts
+            .0
+            .iter()
+            .any(|x| x.id != part && x.name.eq_ignore_ascii_case(name))
+        {
+            return Err(ProjectError::AlreadyExists(format!(
+                "{} already has a part called {name}",
+                p.title
+            )));
+        }
+        let found = p
+            .parts
+            .0
+            .iter_mut()
+            .find(|x| x.id == part)
+            .ok_or_else(|| ProjectError::NotFound(part.to_string()))?;
+        found.name = name.to_owned();
+        let renamed = found.clone();
+        self.save(p)?;
+        Ok(renamed)
+    }
+
+    fn remove_part(&self, project: Uuid, part: Uuid) -> Result<(), ProjectError> {
+        let mut p = self.get(project)?;
+        let before = p.parts.len();
+        p.parts.0.retain(|x| x.id != part);
+        if p.parts.len() == before {
+            return Err(ProjectError::NotFound(part.to_string()));
+        }
+        self.save(p)?;
+        Ok(())
     }
 
     fn delete(&self, id: Uuid) -> Result<(), ProjectError> {

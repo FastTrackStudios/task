@@ -147,6 +147,123 @@ mod tests {
         assert_eq!(back.verify_command, "cargo check -p task-proto");
     }
 
+    /// Parts survive a serialize → parse round trip, ids intact.
+    ///
+    /// The ids are what the round trip is about. Everything that
+    /// attaches to a part addresses it by id, so a save that reassigned
+    /// them would break every reference on every write — silently, since
+    /// the names would still look right.
+    #[test]
+    fn parts_round_trip_with_their_ids() {
+        let mut p = crate::parse_str(
+            "Projects/album.md",
+            "album",
+            "---\ntype: project\ntitle: Crescendum\n---\n",
+        )
+        .expect("minimal project parses");
+        p.id = Uuid::new_v4();
+        assert!(p.parts.is_empty(), "absent key parses as no parts");
+
+        // A project with no parts must not grow the key.
+        assert!(!serialize_project(&p).expect("serialize").contains("parts:"));
+
+        let overture = Uuid::new_v4();
+        p.parts = crate::Parts(vec![
+            crate::Part {
+                id: overture,
+                name: "Overture".into(),
+            },
+            crate::Part {
+                id: Uuid::new_v4(),
+                name: "Daybreak".into(),
+            },
+        ]);
+        let raw = serialize_project(&p).expect("serialize");
+        let back = crate::parse_str("Projects/album.md", "album", &raw).expect("re-parse");
+        assert_eq!(back.parts, p.parts);
+        assert_eq!(
+            back.parts.get(overture).map(|x| x.name.as_str()),
+            Some("Overture")
+        );
+    }
+
+    /// A hand-written `parts:` list of bare names gets stable ids.
+    ///
+    /// Stable meaning the same on every scan and every machine — the
+    /// same v5-over-the-path trick the page's own id fallback uses,
+    /// because a per-scan id breaks every pointer that was written
+    /// against the last one.
+    #[test]
+    fn hand_written_part_names_get_ids_that_do_not_move() {
+        let raw = "---\ntype: project\nid: 018f0000-0000-7000-8000-000000000001\ntitle: Crescendum\nparts:\n  - Overture\n  - Daybreak\n---\n";
+        let once = crate::parse_str("Projects/album.md", "album", raw).expect("parses");
+        let twice = crate::parse_str("Projects/album.md", "album", raw).expect("parses");
+
+        assert_eq!(once.parts.len(), 2);
+        assert_eq!(once.parts.0[0].name, "Overture");
+        assert_eq!(
+            once.parts, twice.parts,
+            "two scans of one page produced different part ids"
+        );
+        assert!(!once.parts.0[0].id.is_nil());
+    }
+
+    /// A page carrying only the legacy `projectType` reads as a
+    /// capability set, and saving migrates it.
+    #[test]
+    fn a_legacy_project_type_migrates_on_save() {
+        let mut p = crate::parse_str(
+            "Projects/doc.md",
+            "doc",
+            "---\ntype: project\ntitle: Doc\nprojectType: video\n---\n",
+        )
+        .expect("parses");
+        p.id = Uuid::new_v4();
+        assert_eq!(
+            p.capabilities.held,
+            vec![crate::Capability::VideoProduction]
+        );
+
+        let raw = serialize_project(&p).expect("serialize");
+        assert!(
+            raw.contains("capabilities"),
+            "saving must write the field that supersedes: {raw}"
+        );
+        assert!(
+            !raw.contains("projectType"),
+            "and must drop the one it superseded, or a page has two: {raw}"
+        );
+
+        let back = crate::parse_str("Projects/doc.md", "doc", &raw).expect("re-parse");
+        assert_eq!(
+            back.capabilities.held,
+            vec![crate::Capability::VideoProduction]
+        );
+    }
+
+    /// A `projectType` nobody can interpret is left exactly as written.
+    ///
+    /// Dropping it would destroy the only record of what its author
+    /// meant, on a save that had nothing to do with it.
+    #[test]
+    fn an_uninterpretable_project_type_is_not_thrown_away() {
+        let mut p = crate::parse_str(
+            "Projects/odd.md",
+            "odd",
+            "---\ntype: project\ntitle: Odd\nprojectType: wedding-thing\n---\n",
+        )
+        .expect("parses");
+        p.id = Uuid::new_v4();
+        assert!(p.capabilities.is_empty(), "nothing was recognised");
+
+        let raw = serialize_project(&p).expect("serialize");
+        assert!(
+            raw.contains("wedding-thing"),
+            "an uninterpretable type must survive a save that could not \
+             read it: {raw}"
+        );
+    }
+
     /// The slug rule, and the fallback for a title that slugifies to
     /// nothing — which lands under `Projects/` like every other title.
     /// It used to drop the folder and write to the vault root.

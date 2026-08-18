@@ -86,6 +86,8 @@ async fn entity_streams_deliver_mutations_end_to_end() {
         project_type: "general".into(),
         lead: String::new(),
         tags: project::model::Tags::default(),
+        parts: Default::default(),
+        capabilities: Default::default(),
         parent_id: None,
         same_as: None,
         target_date: None,
