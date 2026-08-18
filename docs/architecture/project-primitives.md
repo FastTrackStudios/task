@@ -1,15 +1,23 @@
 # Building `project.*`
 
-**Status: parts, capabilities and promotion are built.** The three
+**Status: parts, capabilities, promotion and deliverables are built.** The three
 blocking decisions were answered — the word is "part", capabilities read
 both fields and write one, and nothing is created automatically. See
 `features/project/spec/project.md` § Decided for the reasoning, and
 `tests/integration/tests/parts.rs` for what is asserted.
 
-Writing promotion added two rules the spec was missing —
-`project.part.listing` and `project.part.demotable` — and corrected the
-model for how a parent tracks its pieces (a roster, not a list of the
-unpromoted ones). Deliverables and merge are next, in that order.
+Each slice added rules the spec was missing, which is the pattern worth
+noting: promotion needed `project.part.listing` and
+`project.part.demotable`, and corrected how a parent tracks its pieces
+(a roster, not a list of the unpromoted ones); deliverables needed
+`project.deliverable.binding`. The spec is 119 rules now, up from 116.
+
+**Merge is what remains**, and it is the one slice whose difficulty is
+not in the primitives. `project.lifecycle.merge-identity` requires a
+share link sent a week before the merge to still resolve afterwards,
+which means merge cannot be "copy one project into the other and
+delete" — both former identities have to keep answering. `same_as` is
+parsed today and read by nothing, which is where that starts.
 
 Two things found on the way, neither fixed here:
 
@@ -18,9 +26,9 @@ Two things found on the way, neither fixed here:
   claimed otherwise "by construction"; it now says so honestly. Closing
   it is its own piece of work and touches every vault entity, not just
   projects.
-- **`ProjectInfo` has no `Default`.** Adding two fields meant editing
-  seven struct literals across server, CLI, UI and tests. A `Default`
-  impl or a builder would make the next field much cheaper.
+- ~~**`ProjectInfo` has no `Default`.**~~ Fixed while adding
+  deliverables: the impl is hand-written (three fields have defaults
+  that are not their type's) and the seven literals now use it.
 
 The original proposal follows.
 
