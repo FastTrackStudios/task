@@ -90,6 +90,11 @@ async fn guest_client(base: &str, token: &str, pw: &str) -> eyre::Result<FilesSe
 }
 
 #[tokio::test(flavor = "multi_thread")]
+// t[verify files.review.scope] — the link reaches its own review and
+// nothing else: another file's rendition is refused, browsing is refused,
+// and `list_reviews` answers with exactly one. The re-resolution half is
+// the password case at the end — setting one refuses the *upgrade*, so a
+// change binds on the next call rather than at the next connection
 async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
     let (base, state, root_id, _tmp) = boot().await?;
     let org = state.org("guest-test").expect("org");

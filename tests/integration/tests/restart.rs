@@ -52,6 +52,11 @@ fn p(s: &str) -> RootPath {
 
 /// The id a device was registered against outlives the process.
 // t[verify files.topology.multi-server]
+// t[verify files.device.identity] — "an identity it holds and persists
+// itself... surviving restart": the key is the identity, so coming back
+// on the same id is the rule holding. A server rather than a laptop, but
+// the mechanism is one mechanism — see `device.rs` on why a machine has
+// one identity and not two
 #[tokio::test]
 async fn a_server_comes_back_on_the_same_endpoint_id() {
     let s = Scenario::open().await;

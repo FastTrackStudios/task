@@ -729,6 +729,12 @@ impl FilesBackend {
         .map_err(|e| FilesError::Io(format!("seed join: {e}")))?
     }
 
+    // t[impl files.live.propagation] — the "other clients receive it as a
+    // `FilesEvent` and update without polling" half. The optimistic half
+    // (render before the server acknowledges, revert if rejected) is the
+    // client's, in `files-ui`; the reconnect-without-re-listing half is
+    // the catalogue's, since a subscriber that missed events converges by
+    // reading the catalogue rather than by walking the tree
     fn publish(&self, event: FilesEvent) {
         self.events.publish(event);
     }

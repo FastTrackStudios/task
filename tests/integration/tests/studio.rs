@@ -204,6 +204,8 @@ async fn the_sessions_are_found_wherever_the_daw_put_them() {
 /// `Track One-2024-10-11_1700.rpp-bak` sits beside `Track One.RPP` and
 /// would make its folder a session twice over if the extension check were
 /// a prefix check.
+// t[verify files.version.native] — a DAW's own saves are recognised as
+// the application's, never surfaced as a user-facing version
 #[tokio::test]
 async fn a_daws_backup_saves_are_not_sessions() {
     let root = archive::example_data();

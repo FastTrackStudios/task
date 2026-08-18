@@ -343,6 +343,10 @@ impl ChunkStore {
     /// Bounded memory: `source` is never read into a single buffer. At
     /// most one chunk (at most `chunker_config.max_size` bytes) is held at
     /// a time, so this is safe to call on a multi-GB source.
+    // t[impl files.scale.small-files] — "identical content is stored once,
+    // and re-referencing it transfers nothing": skipping chunks the blob
+    // store already holds is both halves at once, since a re-reference
+    // finds every chunk present and writes none
     pub async fn write_stream<R>(&self, source: R) -> Result<FileId>
     where
         R: AsyncRead + Unpin + Send,

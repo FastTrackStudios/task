@@ -207,6 +207,9 @@ impl Peering {
         self
     }
 
+    // t[impl files.peering.scope] — revocable per org: this takes an
+    // `org` and touches only that org's entry, so withdrawing one leaves
+    // the peer's others alone
     /// Stop hosting `org` on `host`.
     ///
     /// Refuses to remove the last host holding content: an org whose
@@ -235,6 +238,9 @@ impl Peering {
         self.hosts.get(org).into_iter().flatten()
     }
 
+    // t[impl files.peering.scope] — "a peer sees nothing about an org it
+    // does not host": the peer's whole world is what this returns, so a
+    // shared backup machine is not a way to learn who else uses it
     /// Every org a host serves.
     ///
     /// The peer's whole world: it sees nothing of an org it does not
@@ -256,6 +262,9 @@ impl Peering {
             .is_some_and(|hosts| hosts.contains_key(host))
     }
 
+    // t[impl files.peering.scale] — "the org's room is the sum of its
+    // hosts": the sum is over exactly this set, and nothing here caps how
+    // many there may be
     /// Hosts that store any of this org's content — where a read may be
     /// served, and what the org's capacity is the sum of.
     pub fn content_hosts(&self, org: &OrgId) -> impl Iterator<Item = &HostId> {
@@ -275,6 +284,9 @@ impl Peering {
             .map(|(id, _)| id)
     }
 
+    // t[impl files.peering.backup] — a backup is an ordinary peer with no
+    // members, not a mode: it is the same `Hosting` shape, filtered, and
+    // nothing downstream branches on it
     /// Hosts that keep content and serve nobody.
     pub fn backups(&self, org: &OrgId) -> impl Iterator<Item = &HostId> {
         self.hosts_of(org)
@@ -290,6 +302,10 @@ impl Peering {
     /// place that says so, because the tempting wrong answer — only
     /// hosts holding content can serve — is what turns peers into
     /// caches.
+    // t[impl files.peering.serving] — "whether or not that machine stores
+    // the bytes involved": true for every host, which is the whole rule.
+    // The tempting wrong answer — only content hosts serve — is what
+    // turns peers into caches
     #[must_use]
     pub fn serves(&self, host: &HostId, org: &OrgId) -> bool {
         self.hosts_org(host, org)

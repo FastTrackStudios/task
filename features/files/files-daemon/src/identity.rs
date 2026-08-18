@@ -34,6 +34,10 @@ impl DeviceIdentity {
         data_dir.join("device-identity.json")
     }
 
+    // t[impl files.device.identity] — the device holds and persists its own
+    // id, in a file read at start rather than in any login session's
+    // state, so it survives both restart and session expiry. The server
+    // records what is announced; it does not mint it
     /// Load this machine's identity, minting a fresh device id (no
     /// secret yet — enrollment fills it) on first run. Persisted
     /// immediately so a crash before enrollment still keeps one stable

@@ -48,6 +48,11 @@ const PLATFORM: &[&str] = &[
     "@eaDir",
 ];
 
+// t[impl files.version.native] — "each project type declares what its
+// application generates for itself": the capability layer IS that
+// declaration, and excluding a `.rpp-bak` from history is what stops it
+// surfacing as a user-facing version. The other half of the rule —
+// excluded from history is not excluded from sync — is `files.ignore.retained`
 /// What applications leave behind, per capability.
 fn capability_patterns(capability: Capability) -> &'static [&'static str] {
     match capability {

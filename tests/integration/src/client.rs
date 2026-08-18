@@ -22,8 +22,8 @@
 
 use architect::iroh_link;
 use files::{
-    AccessServiceClient, FederationServiceClient, MediaServiceClient, RootsServiceClient,
-    TreeServiceClient, VersionServiceClient, WriteServiceClient,
+    AccessServiceClient, FederationServiceClient, MediaServiceClient, ReviewServiceClient,
+    RootsServiceClient, TreeServiceClient, VersionServiceClient, WriteServiceClient,
 };
 use files_sync::SyncServiceClient;
 use project::ProjectServiceClient;
@@ -136,6 +136,29 @@ impl Session {
         self.establish().await
     }
 
+    /// The live event stream — `FilesService`'s `#[subscribe]` sibling.
+    ///
+    /// Its own lane and its own connection, which is the point: what
+    /// this chapter asserts is that a client which did *not* make a
+    /// change hears about it.
+    pub async fn files_stream(&self) -> files::FilesServiceStreamClient {
+        self.establish().await
+    }
+
+    /// The search lane — extraction and region hits.
+    pub async fn search(&self) -> files::SearchServiceClient {
+        self.establish().await
+    }
+
+    /// The review lane — what a client is shown instead of the tree.
+    ///
+    /// Reached here as a member, on the org router. A guest reaches the
+    /// same backend through `/org/<slug>/share/<token>/vox`, which is
+    /// HTTP because a browser opening a link has no other way in.
+    pub async fn review(&self) -> ReviewServiceClient {
+        self.establish().await
+    }
+
     /// The org's projects — vault pages, not Files roots.
     pub async fn projects(&self) -> ProjectServiceClient {
         self.establish().await
@@ -200,6 +223,9 @@ macro_rules! signable {
 }
 
 signable!(
+    files::FilesServiceStreamClient,
+    files::SearchServiceClient,
+    ReviewServiceClient,
     RootsServiceClient,
     TreeServiceClient,
     WriteServiceClient,

@@ -282,6 +282,10 @@ fn record(
 /// `.gitignore` layering has enough rules in it that a reimplementation
 /// here would drift, and the drift would show up as one walker hiding a
 /// file the other kept.
+// t[impl files.scale.small-files] — "directory operations are proportional
+// to the directory, not to its file count": a browse reads this catalogue
+// and returns one listing, so ten thousand files is one request rather
+// than ten thousand stats
 // t[impl files.catalogue.complete] — every reachable path gets an entry
 // t[impl files.catalogue.offline] — unreachable is marked, never missing
 // t[impl files.catalogue.staleness] — every entry records when we looked

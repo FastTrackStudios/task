@@ -142,6 +142,8 @@ async fn a_take_larger_than_a_chunk_survives_the_wire() {
 /// repeat, so a client can reconcile on a timer without paying for the
 /// project every time.
 // t[verify files.scale.transport]
+// t[verify files.scale.small-files] — "re-referencing it transfers nothing",
+// and the sync compares tree state rather than statting per file
 #[tokio::test]
 async fn a_second_pull_moves_no_bytes() {
     let s = Scenario::open().await;
@@ -170,6 +172,7 @@ async fn a_second_pull_moves_no_bytes() {
 /// tree keeps both files, because adoption moves nothing and the DAW
 /// wrote two — what is shared is the content behind them.
 // t[verify files.scale.capacity]
+// t[verify files.scale.small-files] — "identical content is stored once"
 #[tokio::test]
 async fn identical_takes_share_one_copy_of_the_content() {
     let s = Scenario::open().await;

@@ -350,6 +350,11 @@ impl StorageCore {
         Ok(info)
     }
 
+    // t[impl files.scale.capacity] — "capacity grows by registering a
+    // storage location: no downtime, no migration, no path changes".
+    // Admitting a volume adds room and nothing else; a path still
+    // resolves to content and content to a location, so no path here
+    // changes and nothing is moved
     /// Admit one announced volume of an already-approved agent.
     pub fn register_location(
         &self,
