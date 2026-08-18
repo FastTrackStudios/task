@@ -69,6 +69,8 @@ fn delete_projections(root: &std::path::Path) -> usize {
 }
 
 // t[verify storage.projection.rebuildable]
+// t[verify scenario.album.rebuild] — every projection database deleted,
+// and nothing a human wrote is gone
 // t[verify storage.tier.authored]
 /// The project survives losing every database.
 #[tokio::test]

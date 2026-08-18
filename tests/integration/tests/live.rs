@@ -84,6 +84,8 @@ async fn expect_event(
 }
 
 // t[verify files.live.propagation]
+// t[verify scenario.album.rename] — a rename appears on every other
+// connected client without a refresh
 /// A rename made on one connection arrives on another.
 ///
 /// Two connections as one person, which is the ordinary case this rule

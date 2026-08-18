@@ -41,6 +41,11 @@ use facet::Facet;
 
 use crate::backend::FilesBackend;
 
+// t[impl storage.tier.observed] — machine-observed facts (device
+// registrations, sync and hydration state, subscriptions) in a store
+// rather than in markdown. The module docs are candid that the ones a
+// *human* chose — tags, favourites, grants — are here too and belong in
+// the vault; that is a step, not the destination
 /// State partitioned by org, loaded on first touch and written on change.
 ///
 /// Declared as a `static` in the lane that owns it:

@@ -56,6 +56,8 @@ async fn share_takes(s: &Scenario) -> (files::service::federation::Offer, RootId
 }
 
 // t[verify files.topology.federation]
+// t[verify scenario.album.federate] — the other server holds half the
+// project, and it composes as one tree with no location privileged
 #[tokio::test]
 async fn an_accepted_offer_browses_like_any_other_root() {
     let s = Scenario::open().await;

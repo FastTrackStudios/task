@@ -23,6 +23,11 @@ pub struct Registry {
 }
 
 impl Registry {
+    // t[impl storage.projection.rebuildable] — the roots register is read
+    // back from disk on boot, and where it is gone the marker each root
+    // carries in its own tree is the authority. Deleting every database
+    // costs a re-read, not a project: the marker travels with the folder,
+    // which is why `cp -r` of a root arrives intact
     pub fn open(data_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(data_dir)?;
         let path = data_dir.join("roots.json");

@@ -132,11 +132,19 @@ impl<E: VaultEntity> VaultEntityStore<E> {
     }
 
     /// Every page of this type, parse failures logged and skipped.
+    // t[impl storage.projection.external-edits] — every call scans the
+    // vault fresh, so a page changed by an editor, a sync client or a
+    // shell is picked up on the next read with no restart and no
+    // conflict. The vault having other writers is the normal case
     pub fn list(&self) -> Vec<E::Model> {
         Self::scan(&self.lock())
     }
 
     /// Free-standing scan, for callers holding their own vault.
+    // t[impl vault.index.tolerant] — a page that fails to parse is
+    // skipped and reported with its path and reason, and every other page
+    // is still returned. It also stays a page in `vault.pages`, so it is
+    // listed as unparsed rather than vanishing
     pub fn scan(vault: &Vault) -> Vec<E::Model> {
         vault
             .pages
@@ -172,6 +180,13 @@ impl<E: VaultEntity> VaultEntityStore<E> {
         self.find(|m| E::id(m) == id)
     }
 
+    // t[impl storage.projection.write-through] — the file is written by
+    // `create_page` and the in-memory projection is this `Vault`'s page
+    // list, updated in the same call. A crash between them leaves the
+    // file correct and the projection stale, which is the direction the
+    // rule requires
+    // t[impl storage.tier.authored] — what a human wrote goes out as
+    // markdown with YAML frontmatter and nothing else is needed to read it
     pub fn create(&self, mut model: E::Model) -> Result<E::Model, EntityError> {
         if E::id(&model).is_nil() {
             E::set_id(&mut model, Uuid::new_v4());

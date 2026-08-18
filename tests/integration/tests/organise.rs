@@ -24,6 +24,8 @@ fn take() -> RootPath {
 }
 
 // t[verify files.organise.manual]
+// t[verify scenario.album.organise] — takes tagged `keeper` appear in a
+// view without moving on disk
 /// A tagged take is findable, and has not moved.
 #[tokio::test]
 async fn tagging_a_take_files_it_without_moving_it() {

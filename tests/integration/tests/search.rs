@@ -85,6 +85,8 @@ async fn a_file_becomes_searchable_with_no_credential_anywhere() {
 }
 
 // t[verify files.index.regions]
+// t[verify scenario.album.search] — a search returns the region inside
+// the file, not the file
 /// A hit is a region, not a file.
 ///
 /// The whole difference between this and grep: "it is in this file

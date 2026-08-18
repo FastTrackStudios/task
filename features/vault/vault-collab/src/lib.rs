@@ -70,6 +70,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+// t[impl storage.crdt.layer] — concurrent structured state merges
+// through `architect-crdt` over Loro, and the doc is a means of
+// converging on what the file will say rather than a competing record of
+// what it already says: it flushes to the file, and the file is the
+// authored fact
 use crdt::codec::TextOp;
 use crdt::loro::LoroText;
 use crdt::registry::DocRegistry;

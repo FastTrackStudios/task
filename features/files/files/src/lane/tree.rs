@@ -286,6 +286,9 @@ fn record(
 // to the directory, not to its file count": a browse reads this catalogue
 // and returns one listing, so ten thousand files is one request rather
 // than ten thousand stats
+// t[impl storage.tier.derived] — the catalogue is computed from the tree
+// and disposable: losing it costs a walk, which is why `durable.rs`
+// deliberately does not persist it
 // t[impl files.catalogue.complete] — every reachable path gets an entry
 // t[impl files.catalogue.offline] — unreachable is marked, never missing
 // t[impl project.location.degraded] — the same mechanism seen from the

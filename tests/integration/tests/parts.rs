@@ -190,6 +190,8 @@ async fn removing_a_part_leaves_the_others_alone() {
 
 // t[verify project.part.promotion]
 // t[verify project.identity.stable]
+// t[verify scenario.album.promote] — three songs are promoted, seven are
+// not, and the album is built the same way either way
 /// A promoted part *is* the same thing, with a page.
 ///
 /// The id is the assertion. Everything attached to a piece — links,
@@ -305,6 +307,8 @@ async fn an_albums_pieces_are_one_list_before_and_after_promotion() {
 }
 
 // t[verify project.part.promotion]
+// t[verify scenario.piano.promote-demote] — promoted, then demoted, and
+// everything attached still resolves through both moves
 /// Demotion gives the id back, and the album never noticed.
 #[tokio::test]
 async fn a_demoted_subproject_rejoins_its_album_where_it_was() {
@@ -448,6 +452,8 @@ async fn capabilities_are_a_set_drawn_from_a_closed_vocabulary() {
 }
 
 // t[verify project.capability.mutable]
+// t[verify scenario.piano.capability-churn] — video added to a piece and
+// later withdrawn, and not one byte goes with it
 /// A capability is added and withdrawn without touching a byte.
 ///
 /// `scenario.piano.capability-churn`: video is added to a piece and

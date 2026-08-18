@@ -60,6 +60,8 @@ async fn federated(s: &Scenario) -> RootId {
 
 // t[verify project.location.degraded]
 // t[verify files.catalogue.offline]
+// t[verify scenario.album.outage] — the other server goes away and work
+// continues on everything still reachable
 /// VNT keeps working when ACME is unreachable.
 #[tokio::test]
 async fn an_orgs_own_work_survives_the_other_server_going_away() {

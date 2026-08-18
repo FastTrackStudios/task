@@ -108,6 +108,14 @@ pub fn delete_page(vault: &mut Vault, rel_path: &str) -> Result<(), MutateError>
 
 /// Write `bytes` to `path` atomically — write to a sibling temp
 /// file, then rename over the target. Survives partial writes.
+// t[impl vault.write.atomic] — temp file in the same directory, then
+// rename. The same-directory part is load-bearing: a rename across
+// filesystems is a copy, and a copy is exactly the torn write this
+// avoids
+// t[impl project.vault.write-path] — the single choke point every vault
+// page passes through. The rule wants this to be the Files API rather
+// than `std::fs`, which it is not yet; what makes that a tractable
+// migration is that this is one function and not eighty call sites
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()

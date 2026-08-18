@@ -38,6 +38,8 @@ async fn revise(s: &Scenario, body: &[u8], why: &str) {
 }
 
 // t[verify files.version.restore]
+// t[verify scenario.album.restore] — a year-old session restored, and
+// restoring discards nothing
 /// A past version opens, and restoring loses nothing.
 ///
 /// The assertion that matters is the *count*: after a restore the chain
@@ -186,6 +188,8 @@ async fn two_people_holding_one_file_are_recorded_as_one() {
 }
 
 // t[verify files.version.keep-both]
+// t[verify scenario.album.diverge] — two engineers save one session and
+// both survive, and a human keeps one, both, or both renamed
 /// Two saves of one file survive as two versions, and a human picks.
 ///
 /// `seed_divergent_file` is the backend's own way of producing the state
