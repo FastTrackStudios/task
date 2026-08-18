@@ -21,6 +21,7 @@
 //! `permits_cover_router` catches a lane with no table; only a call
 //! catches a method the table forgot.
 
+use files::service::tree::TreeService;
 use integration::client::Session;
 use integration::scenario::Scenario;
 
@@ -470,6 +471,189 @@ async fn capabilities_are_a_set_drawn_from_a_closed_vocabulary() {
         read.capabilities.unrecognised.is_empty(),
         "an unrecognised capability was written back to the page: {:?}",
         read.capabilities.unrecognised
+    );
+}
+
+// t[verify project.capability.mutable]
+/// A capability is added and withdrawn without touching a byte.
+///
+/// `scenario.piano.capability-churn`: video is added to a piece and
+/// later dropped from the release, "and not one byte goes with it".
+/// Removal is not deletion, and re-adding restores the surface over the
+/// same content.
+#[tokio::test]
+async fn a_capability_is_added_and_withdrawn_over_content_that_stays() {
+    let s = Scenario::open().await;
+    let (alice, album) = album(&s).await;
+
+    // The album's content is a Files root, not the project page — which
+    // is the point: capabilities are declared on the page and the bytes
+    // are somewhere else entirely.
+    let takes_before = s
+        .as_alice()
+        .await
+        .tree()
+        .await
+        .browse(
+            s.acme_root,
+            files::path::RootPath::parse("Audio Files").unwrap(),
+        )
+        .await
+        .expect("browse the takes");
+
+    let mut with_video = album.clone();
+    with_video.capabilities =
+        project::Capabilities::from_names(["music-production", "video-production"]);
+    alice
+        .projects()
+        .await
+        .update(with_video)
+        .await
+        .expect("video is added to the release");
+
+    let mut without = alice.projects().await.get(album.id).await.expect("read");
+    without.capabilities = project::Capabilities::from_names(["music-production"]);
+    let dropped = alice
+        .projects()
+        .await
+        .update(without)
+        .await
+        .expect("video is dropped from the release");
+    assert_eq!(
+        dropped.capabilities.held,
+        vec![project::Capability::MusicProduction]
+    );
+
+    let takes_after = s
+        .as_alice()
+        .await
+        .tree()
+        .await
+        .browse(
+            s.acme_root,
+            files::path::RootPath::parse("Audio Files").unwrap(),
+        )
+        .await
+        .expect("browse again");
+    assert_eq!(
+        takes_before
+            .iter()
+            .map(|e| e.name.clone())
+            .collect::<Vec<_>>(),
+        takes_after
+            .iter()
+            .map(|e| e.name.clone())
+            .collect::<Vec<_>>(),
+        "withdrawing a capability took content with it"
+    );
+
+    // And re-adding it restores the declaration over the same content.
+    let mut again = alice.projects().await.get(album.id).await.expect("read");
+    again.capabilities =
+        project::Capabilities::from_names(["music-production", "video-production"]);
+    let restored = alice.projects().await.update(again).await.expect("re-add");
+    assert!(
+        restored
+            .capabilities
+            .has(project::Capability::VideoProduction)
+    );
+}
+
+// t[verify project.nesting.uniform]
+/// A subproject is a project, including in having parts of its own.
+///
+/// "Anything true of a project is true of a subproject." The cheapest
+/// way to be wrong here is to special-case depth somewhere — parts only
+/// at the top, or capabilities only at the top — so the test is that a
+/// promoted song does the things an album does.
+#[tokio::test]
+async fn a_subproject_does_everything_a_project_does() {
+    let s = Scenario::open().await;
+    let (alice, album) = album(&s).await;
+
+    let piece = alice
+        .projects()
+        .await
+        .add_part(album.id, "Nocturne".into())
+        .await
+        .expect("name a piece");
+    let song = alice
+        .projects()
+        .await
+        .promote_part(album.id, piece.id)
+        .await
+        .expect("promote it");
+
+    // It has parts of its own — a song divided into movements.
+    for movement in ["Andante", "Allegro"] {
+        alice
+            .projects()
+            .await
+            .add_part(song.id, movement.into())
+            .await
+            .unwrap_or_else(|e| panic!("a subproject may have parts too: {e:?}"));
+    }
+    let movements = alice
+        .projects()
+        .await
+        .pieces(song.id)
+        .await
+        .expect("read them back");
+    assert_eq!(movements.len(), 2);
+
+    // And those promote, which is nesting without limit.
+    alice
+        .projects()
+        .await
+        .promote_part(song.id, movements[0].id)
+        .await
+        .expect("a part of a subproject promotes like any other");
+}
+
+// t[verify project.nesting.explicit]
+/// Parentage is the declared link, not where the file sits.
+///
+/// A promoted song's page lands under `Projects/` like every other
+/// project — nowhere near its album's page — and is still its child.
+/// "Hardcoded directory names express no hierarchy and are not
+/// consulted."
+#[tokio::test]
+async fn parentage_is_declared_rather_than_read_off_the_path() {
+    let s = Scenario::open().await;
+    let (alice, album) = album(&s).await;
+
+    let piece = alice
+        .projects()
+        .await
+        .add_part(album.id, "Nocturne".into())
+        .await
+        .expect("name a piece");
+    let song = alice
+        .projects()
+        .await
+        .promote_part(album.id, piece.id)
+        .await
+        .expect("promote it");
+
+    assert_eq!(song.parent_id, Some(album.id));
+    // Siblings on disk, parent and child in the model.
+    let album_dir = std::path::Path::new(&album.path).parent();
+    let song_dir = std::path::Path::new(&song.path).parent();
+    assert_eq!(
+        album_dir, song_dir,
+        "this test assumes both land under Projects/; if that changed, \
+         the assertion below is the one that still matters"
+    );
+    assert!(
+        !song.path.contains(
+            std::path::Path::new(&album.path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("album")
+        ),
+        "the child's path is nested under the parent's, which would make \
+         containment look like hierarchy: {}",
+        song.path
     );
 }
 

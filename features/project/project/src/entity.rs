@@ -85,6 +85,9 @@ impl VaultEntity for Projects {
         // could interpret is left exactly as written: deleting it would
         // destroy the only record of what its author meant, on a save
         // that had nothing to do with it.
+        // t[impl project.capability.mutable] — capabilities are whatever
+        // the page now says. Adding or removing one rewrites this field
+        // and nothing else, so no content moves either way
         if !owned.capabilities.held.is_empty() {
             owned.project_type = String::new();
         }

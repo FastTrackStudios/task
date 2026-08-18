@@ -420,8 +420,12 @@ Exercised by some stage above: every rule in `files.*`, `project.*` and
 - `project.definition.single` and `project.capability.closed` — properties of the
   codebase, not of a run. No scenario can exercise either; a second definition,
   or a free-form capability string, is what violates them.
-- `project.vault.write-path` — asserted throughout rather than at any stage:
-  every write above goes through the Files API by construction.
+- `project.vault.write-path` — **not met, and this line used to claim it was.**
+  It said every write goes through the Files API by construction; project pages
+  are written with `std::fs::write` from `project::write`, and deleted with
+  `std::fs::remove_file` from the backend. "By construction" was an assumption
+  about code nobody had checked, which is the one kind of coverage claim worth
+  less than none. It needs a stage of its own once the write path exists.
 - `storage.query.reach` — a platform constraint. The scenario should be run once
   with a browser client to exercise it.
 - `vault.index.parse-once`, `vault.index.tolerant`, `vault.write.granular`,

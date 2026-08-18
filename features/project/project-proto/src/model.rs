@@ -43,6 +43,9 @@ impl Tags {
     }
 }
 
+// t[impl project.definition.single] — the one definition. Not testable
+// by any run, as `docs/spec/scenario-album.md` says: what violates it is
+// a *second* struct appearing, so the marker sits on the first
 /// One project. Lives as `Projects/<slug>.md` in the vault.
 #[cfg_attr(feature = "fake", derive(::fake::Dummy))]
 #[derive(architect::Entity, Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
@@ -114,6 +117,12 @@ pub struct ProjectInfo {
     #[architect(json)]
     pub tags: Tags,
 
+    // t[impl project.nesting.uniform] — one entity, and the only thing a
+    // subproject has that its parent may not is this field set. Nothing
+    // downstream branches on depth, because there is nothing to branch on
+    // t[impl project.nesting.explicit] — parentage is this declared link.
+    // No directory name is consulted anywhere, and a child's page sits
+    // wherever any other project's page sits
     /// Parent project. `None` for top-level projects;
     /// `Some(uuid)` for subprojects (e.g. `Fitness` /
     /// `Nutrition` / `Sleep Tracking` parented under
