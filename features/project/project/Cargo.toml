@@ -15,6 +15,12 @@ architect = { workspace = true }
 # This crate is the vault-backed half sitting on top of it, and
 # re-exports every proto item at its historical `project::…` path.
 project-proto = { workspace = true }
+# The capability *conventions* — which artifacts a tool leaves behind,
+# which facets its work produces. `project_proto::Capability` is the
+# declaration vocabulary and this is what a declaration means; see
+# `crate::conventions` on why they are two enums and what keeps them
+# from drifting.
+files-domain = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_yaml = { workspace = true }

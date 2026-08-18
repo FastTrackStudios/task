@@ -11,7 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::model::ProjectInfo;
-use crate::parts::{Deliverable, DeliverableItem, Part, Piece};
+use crate::parts::{Component, Deliverable, DeliverableItem, Divergence, Part, Piece};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
 #[repr(u8)]
@@ -169,6 +169,35 @@ pub trait ProjectService {
     /// files, tasks, time, deliverables — is not an obstacle: a part
     /// carries exactly those.
     fn demote_project(&self, project: Uuid) -> Result<Part, ProjectError>;
+
+    // ── Form ────────────────────────────────────────────────
+
+    /// Where this project diverges from the form it declared.
+    ///
+    /// `project.form.grammar` — flagged, never rejected. Empty for a
+    /// project that declares no form: there is nothing to diverge from,
+    /// and unclassified is a state rather than a violation.
+    fn divergences(&self, project: Uuid) -> Result<Vec<Divergence>, ProjectError>;
+
+    /// Attach a component to a piece.
+    ///
+    /// A component is not a project: no identity to promote, no parts,
+    /// no deliverables. It attaches to the roster entry, which is what
+    /// makes `project.form.components`' "components survive a part's
+    /// promotion unchanged" true by construction.
+    ///
+    /// Accepts a component the form does not describe. The grammar
+    /// flags; it does not refuse.
+    fn attach_component(
+        &self,
+        project: Uuid,
+        part: Uuid,
+        component: Component,
+    ) -> Result<Part, ProjectError>;
+
+    /// Detach one, by kind and name.
+    fn detach_component(&self, project: Uuid, part: Uuid, name: &str)
+    -> Result<Part, ProjectError>;
 
     // ── Deliverables ────────────────────────────────────────
 

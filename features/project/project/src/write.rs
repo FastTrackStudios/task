@@ -172,10 +172,12 @@ mod tests {
             crate::Part {
                 id: overture,
                 name: "Overture".into(),
+                components: Vec::new(),
             },
             crate::Part {
                 id: Uuid::new_v4(),
                 name: "Daybreak".into(),
+                components: Vec::new(),
             },
         ]);
         let raw = serialize_project(&p).expect("serialize");

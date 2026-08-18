@@ -69,6 +69,7 @@ impl Default for ProjectInfo {
             tags: Tags::default(),
             parts: crate::parts::Parts::default(),
             capabilities: crate::parts::Capabilities::default(),
+            form: None,
             deliverables: crate::parts::Deliverables::default(),
             parent_id: None,
             same_as: None,
@@ -325,6 +326,14 @@ pub struct ProjectInfo {
     #[serde(skip_serializing_if = "crate::parts::Capabilities::is_empty", default)]
     #[architect(json)]
     pub capabilities: crate::parts::Capabilities,
+
+    /// What shape of thing this is — `project.form.grammar`.
+    ///
+    /// At most one, and optional: `None` means unclassified, which is a
+    /// real state rather than a failure to classify.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[architect(filterable)]
+    pub form: Option<crate::parts::Form>,
 
     /// What this project produces for someone else —
     /// `project.deliverable.kind`.

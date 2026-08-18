@@ -346,6 +346,7 @@ table!(PROJECT, "project", "projects/**", [
     // Deliverables. `client_deliverables` is `rd` like every other
     // listing — what makes it a client view is that it filters, not that
     // it is reached differently.
+    rd "divergences", wr "attach_component", wr "detach_component",
     rd "deliverables", wr "declare_deliverable", wa "withdraw_deliverable",
     rd "deliverable_items", rd "client_deliverables",
 ]);

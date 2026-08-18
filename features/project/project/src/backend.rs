@@ -18,7 +18,9 @@ use uuid::Uuid;
 use vault::Vault;
 
 use crate::model::ProjectInfo;
-use crate::parts::{Audience, Deliverable, DeliverableItem, Part, Piece, Scope};
+use crate::parts::{
+    Audience, Component, Deliverable, DeliverableItem, Divergence, Part, Piece, Scope,
+};
 use crate::scan::scan_vault;
 use crate::service::{ProjectError, ProjectService};
 use crate::write::{default_project_path, write_project};
@@ -207,6 +209,7 @@ impl ProjectService for ProjectBackend {
         let part = Part {
             id: Uuid::new_v4(),
             name: name.to_owned(),
+            components: Vec::new(),
         };
         p.parts.0.push(part.clone());
         self.save(p)?;
@@ -372,6 +375,7 @@ impl ProjectService for ProjectBackend {
         let part = parent.parts.get(project).cloned().unwrap_or(Part {
             id: project,
             name: subproject.title.clone(),
+            components: Vec::new(),
         });
         if parent.parts.get(project).is_none() {
             let mut parent = parent.clone();
@@ -384,6 +388,71 @@ impl ProjectService for ProjectBackend {
             .map_err(|e| ProjectError::Io(format!("remove {}: {e}", abs.display())))?;
         self.publish(crate::service::ProjectEvent::Deleted(project));
         Ok(part)
+    }
+
+    // t[impl project.form.grammar] — reports, never refuses: a studio's
+    // real tree diverges from every grammar somebody writes for it
+    fn divergences(&self, project: Uuid) -> Result<Vec<Divergence>, ProjectError> {
+        let p = self.get(project)?;
+        Ok(project_proto::parts::divergences(p.form, &p.parts))
+    }
+
+    // t[impl project.form.components] — the component lands on the roster
+    // entry, so promotion (which does not touch the roster) cannot
+    // disturb it
+    fn attach_component(
+        &self,
+        project: Uuid,
+        part: Uuid,
+        component: Component,
+    ) -> Result<Part, ProjectError> {
+        let name = component.name.trim().to_owned();
+        if name.is_empty() {
+            return Err(ProjectError::BadRequest("a component needs a name".into()));
+        }
+        let mut p = self.get(project)?;
+        let found = p
+            .parts
+            .0
+            .iter_mut()
+            .find(|x| x.id == part)
+            .ok_or_else(|| ProjectError::NotFound(part.to_string()))?;
+        if found
+            .components
+            .iter()
+            .any(|c| c.name.eq_ignore_ascii_case(&name))
+        {
+            return Err(ProjectError::AlreadyExists(name));
+        }
+        found.components.push(Component { name, ..component });
+        let updated = found.clone();
+        self.save(p)?;
+        Ok(updated)
+    }
+
+    fn detach_component(
+        &self,
+        project: Uuid,
+        part: Uuid,
+        name: &str,
+    ) -> Result<Part, ProjectError> {
+        let mut p = self.get(project)?;
+        let found = p
+            .parts
+            .0
+            .iter_mut()
+            .find(|x| x.id == part)
+            .ok_or_else(|| ProjectError::NotFound(part.to_string()))?;
+        let before = found.components.len();
+        found
+            .components
+            .retain(|c| !c.name.eq_ignore_ascii_case(name));
+        if found.components.len() == before {
+            return Err(ProjectError::NotFound(name.to_owned()));
+        }
+        let updated = found.clone();
+        self.save(p)?;
+        Ok(updated)
     }
 
     fn deliverables(&self, project: Uuid) -> Result<Vec<Deliverable>, ProjectError> {

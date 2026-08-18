@@ -194,6 +194,11 @@ pub(crate) fn from_parts(
         parts: take_parts(&map),
         capabilities: take_capabilities(&map, &project_type_for_caps),
         deliverables: take_deliverables(&map),
+        // An unrecognised form reads as *no* form, not as an error:
+        // `project.form.closed` says unclassified is a real state.
+        form: yaml::str_at(&map, "form")
+            .as_deref()
+            .and_then(project_proto::Form::parse),
         states: take_states(&map),
         date_created: yaml::timestamp_at(&map, "dateCreated"),
         date_modified: yaml::timestamp_at(&map, "dateModified"),
@@ -224,10 +229,17 @@ fn take_parts(map: &serde_yaml::Mapping) -> project_proto::Parts {
     #[serde(untagged)]
     enum Written {
         Named(String),
+        /// The full form. Carries `components` because a part that has
+        /// any must not lose them on a read — an untagged variant
+        /// listing only `id` and `name` parses such an entry happily and
+        /// silently drops the rest, which is the shape of bug that gets
+        /// noticed when somebody's chart disappears.
         Full {
             #[serde(default)]
             id: Option<Uuid>,
             name: String,
+            #[serde(default)]
+            components: Vec<project_proto::Component>,
         },
     }
     let Ok(written) = serde_yaml::from_value::<Vec<Written>>(value.clone()) else {
@@ -236,9 +248,13 @@ fn take_parts(map: &serde_yaml::Mapping) -> project_proto::Parts {
     let project_id = yaml::str_at(map, "id").unwrap_or_default();
     let mut parts = Vec::with_capacity(written.len());
     for entry in written {
-        let (id, name) = match entry {
-            Written::Named(name) => (None, name),
-            Written::Full { id, name } => (id, name),
+        let (id, name, components) = match entry {
+            Written::Named(name) => (None, name, Vec::new()),
+            Written::Full {
+                id,
+                name,
+                components,
+            } => (id, name, components),
         };
         let name = name.trim().to_owned();
         if name.is_empty() {
@@ -250,7 +266,11 @@ fn take_parts(map: &serde_yaml::Mapping) -> project_proto::Parts {
                 format!("{project_id}/parts/{name}").as_bytes(),
             )
         });
-        parts.push(project_proto::Part { id, name });
+        parts.push(project_proto::Part {
+            id,
+            name,
+            components,
+        });
     }
     project_proto::Parts(parts)
 }

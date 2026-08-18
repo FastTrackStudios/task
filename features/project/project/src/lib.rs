@@ -46,8 +46,8 @@ pub mod model;
 /// crate, like [`model`].
 pub mod parts {
     pub use project_proto::parts::{
-        Audience, Capabilities, Capability, Deliverable, DeliverableItem, Deliverables, Medium,
-        Part, Parts, Piece, Scope,
+        Audience, Capabilities, Capability, Cardinality, Component, ComponentKind, Deliverable,
+        DeliverableItem, Deliverables, Divergence, Form, Medium, Part, Parts, Piece, Scope,
     };
 }
 pub mod service;
@@ -59,6 +59,7 @@ pub mod states;
 // consumers take `project-proto` instead of this crate, so none of
 // it needs a target gate.
 pub mod backend;
+pub mod conventions;
 pub mod entity;
 pub mod parse;
 pub mod scan;
@@ -68,8 +69,8 @@ pub use entity::Projects;
 pub use model::{ProjectInfo, Status};
 pub use parse::{ParseError, looks_like_project, parse_page, parse_str};
 pub use parts::{
-    Audience, Capabilities, Capability, Deliverable, DeliverableItem, Deliverables, Medium, Part,
-    Parts, Piece, Scope,
+    Audience, Capabilities, Capability, Cardinality, Component, ComponentKind, Deliverable,
+    DeliverableItem, Deliverables, Divergence, Form, Medium, Part, Parts, Piece, Scope,
 };
 pub use service::{ProjectError, ProjectEvent, ProjectService, ProjectServiceRpc};
 #[cfg(feature = "vox")]

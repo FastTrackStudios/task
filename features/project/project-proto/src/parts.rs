@@ -77,6 +77,14 @@ pub struct Part {
     pub id: Uuid,
     /// What a person calls it: "Overture", "Scene 4", "Episode 2".
     pub name: String,
+    /// What this piece is kept in — its chart, its sessions.
+    ///
+    /// On the roster rather than on the promoted project, which is what
+    /// makes `project.form.components`' "components survive a part's
+    /// promotion unchanged" true by construction: promotion does not
+    /// touch the roster, so it cannot touch these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<Component>,
 }
 
 /// A project's parts — the optional `parts:` list in frontmatter.
@@ -335,6 +343,260 @@ impl<'de> Deserialize<'de> for Capabilities {
     }
 }
 
+// ── Form ─────────────────────────────────────────────────────────────
+
+// t[impl project.form.closed] — a fixed enum, and *optional*: the
+// absence is `None` rather than a member, so "unclassified" never became
+// a classification every match arm has to guess the meaning of
+/// What shape of thing a project is — `project.form.closed`.
+///
+/// A fixed enum extended only in code, so conventions and UI can be
+/// written against every member. **Optional**, and the absence is a real
+/// state rather than a member: a project whose shape is not one we
+/// recognise declares no form and is valid, nestable and complete
+/// without one. A `Form::Other` would have made "unclassified" into a
+/// classification, and every match arm would then have to guess what it
+/// meant.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Facet, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u8)]
+pub enum Form {
+    Song,
+    Single,
+    Ep,
+    Lp,
+    Album,
+    Concert,
+    LiveSet,
+}
+
+// t[impl project.form.components] — a component has no identity to
+// promote, no parts and no deliverables. That is the whole difference
+// between it and a project, and the reason a session is one
+/// Something that may attach to a project or to one of its parts.
+///
+/// `project.form.components`: "a session is a component, not a project".
+/// The distinction is that a component has no identity of its own to
+/// promote, no parts, and no deliverables — it is a thing the work is
+/// kept in.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Facet, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u8)]
+pub enum ComponentKind {
+    /// A chart or lead sheet.
+    Chart,
+    /// A DAW session — Reaper, Pro Tools, Resolve.
+    Session,
+    /// A written score.
+    Score,
+    /// Lyrics.
+    Lyrics,
+}
+
+/// How many of a component a thing may carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cardinality {
+    /// Absent or present. A song has at most one chart.
+    Optional,
+    /// Absent, present, or present several times. A song may be tracked
+    /// in Reaper *and* Pro Tools, which the real archive does.
+    Many,
+}
+
+/// One component actually attached.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+#[repr(C)]
+pub struct Component {
+    pub kind: ComponentKind,
+    /// What it is called. Where its bytes are is the Files layer's
+    /// business — see `project.deliverable.binding`, which is the same
+    /// distinction for the same reason.
+    pub name: String,
+}
+
+impl Form {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Song => "song",
+            Self::Single => "single",
+            Self::Ep => "ep",
+            Self::Lp => "lp",
+            Self::Album => "album",
+            Self::Concert => "concert",
+            Self::LiveSet => "live-set",
+        }
+    }
+
+    /// Parse a form name. `None` for anything outside the vocabulary —
+    /// which reads as *no form*, because unclassified is a real state.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "song" => Some(Self::Song),
+            "single" => Some(Self::Single),
+            "ep" => Some(Self::Ep),
+            "lp" => Some(Self::Lp),
+            "album" => Some(Self::Album),
+            "concert" => Some(Self::Concert),
+            "live-set" | "live_set" | "liveset" => Some(Self::LiveSet),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Song,
+            Self::Single,
+            Self::Ep,
+            Self::Lp,
+            Self::Album,
+            Self::Concert,
+            Self::LiveSet,
+        ]
+    }
+
+    // t[impl project.form.grammar] — the grammar describes parts, and
+    // says nothing about how many are promoted
+    /// What this form expects its parts to be — `project.form.grammar`.
+    ///
+    /// `None` where the form expects no parts at all: a song is the unit
+    /// its containers are made of, so a song expecting songs would be a
+    /// grammar that never bottoms out.
+    #[must_use]
+    pub fn expects(self) -> Option<&'static str> {
+        match self {
+            Self::Song => None,
+            Self::Single | Self::Ep | Self::Lp | Self::Album | Self::Concert | Self::LiveSet => {
+                Some("song")
+            }
+        }
+    }
+
+    /// The components a part of this form may carry.
+    #[must_use]
+    pub fn part_components(self) -> &'static [(ComponentKind, Cardinality)] {
+        match self {
+            Self::Song => &[],
+            // A song optionally carries a chart and zero or more
+            // sessions, which is the rule's own example.
+            Self::Single | Self::Ep | Self::Lp | Self::Album => &[
+                (ComponentKind::Chart, Cardinality::Optional),
+                (ComponentKind::Session, Cardinality::Many),
+                (ComponentKind::Lyrics, Cardinality::Optional),
+            ],
+            Self::Concert | Self::LiveSet => &[
+                (ComponentKind::Chart, Cardinality::Optional),
+                (ComponentKind::Score, Cardinality::Optional),
+                (ComponentKind::Lyrics, Cardinality::Optional),
+            ],
+        }
+    }
+}
+
+impl std::fmt::Display for Form {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Where a project does not match the form it declared.
+///
+/// `project.form.grammar`: "a project that does not match its form is
+/// valid and flagged, never rejected". So this is what a surface renders
+/// as a note beside the project, and nothing anywhere refuses a write on
+/// the strength of it.
+#[cfg_attr(feature = "fake", derive(::fake::Dummy))]
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+#[repr(C)]
+pub struct Divergence {
+    /// The piece this is about, where it is about one.
+    pub part: Option<Uuid>,
+    /// What a person should read.
+    pub note: String,
+}
+
+/// Where a project diverges from the form it declared.
+///
+/// Reports; never refuses. `project.form.grammar` is explicit that a
+/// project not matching its form "is valid and flagged, never
+/// rejected" — a studio's real tree diverges from every grammar
+/// somebody writes for it, and software that refused the divergence
+/// would be software they stop using rather than a tree that changes.
+///
+/// Empty for a project that declares no form, because there is nothing
+/// to diverge from. Not "everything is wrong" — unclassified is a state,
+/// not a violation.
+#[must_use]
+pub fn divergences(form: Option<Form>, parts: &Parts) -> Vec<Divergence> {
+    let mut out = Vec::new();
+    let Some(form) = form else {
+        return out;
+    };
+
+    match form.expects() {
+        // A container with nothing in it. Worth saying — an album with
+        // no songs is a job someone has not started describing — and
+        // worth saying gently, since that is exactly what a project
+        // looks like on day one.
+        Some(expected) if parts.is_empty() => out.push(Divergence {
+            part: None,
+            note: format!("a {form} expects {expected}s, and none are named yet"),
+        }),
+        Some(_) => {}
+        // A form that expects no parts, carrying some. Not an error
+        // either: a song divided into movements is a real thing, and
+        // the grammar simply does not describe it.
+        None if !parts.is_empty() => out.push(Divergence {
+            part: None,
+            note: format!(
+                "a {form} expects no parts, and this one names {}",
+                parts.len()
+            ),
+        }),
+        None => {}
+    }
+
+    // Components a piece carries that its form does not describe. The
+    // useful direction: a missing optional component is not news, and an
+    // unexpected one means either the grammar is short or somebody typed
+    // something odd — and both are worth a person seeing.
+    let allowed = form.part_components();
+    for part in &parts.0 {
+        for component in &part.components {
+            if !allowed.iter().any(|(kind, _)| *kind == component.kind) {
+                out.push(Divergence {
+                    part: Some(part.id),
+                    note: format!(
+                        "{} carries a {:?}, which a {form}'s parts do not describe",
+                        part.name, component.kind
+                    ),
+                });
+            }
+        }
+        // And cardinality: at most one chart, however many sessions.
+        for (kind, card) in allowed {
+            if *card == Cardinality::Optional {
+                let n = part.components.iter().filter(|c| c.kind == *kind).count();
+                if n > 1 {
+                    out.push(Divergence {
+                        part: Some(part.id),
+                        note: format!(
+                            "{} carries {n} {kind:?}s, and a {form}'s parts carry at most one",
+                            part.name
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
 // ── Deliverables ─────────────────────────────────────────────────────
 
 /// What a deliverable is made of.
@@ -518,6 +780,7 @@ mod tests {
         let parts = Parts(vec![Part {
             id: Uuid::nil(),
             name: "Overture".into(),
+            components: Vec::new(),
         }]);
         assert!(parts.has_name("overture"));
         assert!(!parts.has_name("Daybreak"));

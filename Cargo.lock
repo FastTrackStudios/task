@@ -17349,6 +17349,7 @@ dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "chrono",
  "fake",
+ "files-domain",
  "project-proto",
  "sea-orm",
  "serde",
