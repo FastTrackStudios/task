@@ -36,6 +36,19 @@ pub fn serialize_project(project: &ProjectInfo) -> Result<String, WriteError> {
 /// Write a project to `<vault_root>/<project.path>`. Creates
 /// parent directories. Refuses to overwrite an existing file
 /// unless `overwrite` is true. Backfills `id` if nil.
+///
+/// # One write path, and it is atomic
+///
+/// Through `vault::save_page`, which writes to a temp file in the same
+/// directory and renames — so a crash mid-write leaves the previous page
+/// intact rather than a truncated one. This used to be a bare
+/// `std::fs::write`, which meant project pages were the one vault entity
+/// that could be torn in half by a power cut, and nothing said so.
+///
+/// It is also the direction `project.vault.write-path` points. That rule
+/// wants every vault write to go through the Files API; what makes that
+/// reachable is there being *one* place a page is written, and this is
+/// the last caller that was not it.
 pub fn write_project(
     vault_root: &Path,
     project: &mut ProjectInfo,
@@ -51,11 +64,31 @@ pub fn write_project(
     if !overwrite && abs.exists() {
         return Err(WriteError::Exists(abs.display().to_string()));
     }
-    if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| WriteError::Io(e.to_string()))?;
-    }
     let serialized = serialize_project(project)?;
-    std::fs::write(&abs, serialized).map_err(|e| WriteError::Io(e.to_string()))?;
+
+    // A one-page vault over the target's own directory: `save_page`
+    // needs the page in memory to write it, and opening the whole org
+    // vault to save one file would make every write O(vault).
+    let mut page = vault::Vault {
+        root: vault_root.to_path_buf(),
+        pages: vec![vault::VaultPage {
+            rel_path: project.path.clone(),
+            basename: std::path::Path::new(&project.path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            folder: std::path::Path::new(&project.path)
+                .parent()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default(),
+            raw: serialized,
+            mtime: std::time::SystemTime::now(),
+        }],
+        bases: Vec::new(),
+        property_types: vault::PropertyTypes::default(),
+    };
+    vault::save_page(&mut page, &project.path).map_err(|e| WriteError::Io(e.to_string()))?;
     Ok(abs)
 }
 

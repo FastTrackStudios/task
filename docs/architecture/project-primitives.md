@@ -1,6 +1,8 @@
 # Building `project.*`
 
-**Status: parts, capabilities, promotion and deliverables are built.** The three
+**Status: `project.*` is built, except the write path.** 23 of its 24
+rules are covered and verified; `project.vault.write-path` is a
+migration rather than a feature and the spec now records what it needs. The three
 blocking decisions were answered — the word is "part", capabilities read
 both fields and write one, and nothing is created automatically. See
 `features/project/spec/project.md` § Decided for the reasoning, and
@@ -12,20 +14,22 @@ noting: promotion needed `project.part.listing` and
 (a roster, not a list of the unpromoted ones); deliverables needed
 `project.deliverable.binding`. The spec is 119 rules now, up from 116.
 
-**Merge is what remains**, and it is the one slice whose difficulty is
-not in the primitives. `project.lifecycle.merge-identity` requires a
-share link sent a week before the merge to still resolve afterwards,
-which means merge cannot be "copy one project into the other and
-delete" — both former identities have to keep answering. `same_as` is
-parsed today and read by nothing, which is where that starts.
+Merge landed the way that predicted: the absorbed project becomes an
+alias rather than being deleted, and `same_as` — parsed since before any
+of this and read by nothing — is what it becomes an alias *through*.
+
+**What remains is `project.vault.write-path`**, and it is a migration.
+The useful finding is that it is one choke point rather than eighty call
+sites: every vault page in the system is written by
+`vault_live::mutate::write_atomic`. See the rule in the spec.
 
 Two things found on the way, neither fixed here:
 
-- **`project.vault.write-path` is not met.** Project pages are written
-  with `std::fs::write`, not through the Files API. The scenario doc
-  claimed otherwise "by construction"; it now says so honestly. Closing
-  it is its own piece of work and touches every vault entity, not just
-  projects.
+- **`project.vault.write-path` is not met**, and is the last one. Project
+  pages no longer bypass the shared write path — they were the only
+  caller doing a bare `std::fs::write`, which also made them the one
+  vault entity a power cut could tear in half — so the migration is now
+  one function plus a port.
 - ~~**`ProjectInfo` has no `Default`.**~~ Fixed while adding
   deliverables: the impl is hand-written (three fields have defaults
   that are not their type's) and the seven literals now use it.
