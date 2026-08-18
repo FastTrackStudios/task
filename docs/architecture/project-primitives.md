@@ -1,5 +1,17 @@
 # Building `project.*`
 
+**Status: slices one and two are built.** Parts and capabilities landed
+with the three blocking decisions answered — the word is "part",
+capabilities read both fields and write one, and nothing is created
+automatically. See `features/project/spec/project.md` § Decided for the
+reasoning, and `tests/integration/tests/parts.rs` for what is asserted.
+The rest of this document stands as written: promotion, deliverables and
+merge are next, in that order.
+
+The original proposal follows.
+
+---
+
 A proposal, not a decision. `features/project/spec/project.md` describes
 parts, promotion, capabilities, form, deliverables and merge; the code
 implements none of them. This says what the smallest useful slice is,
@@ -136,6 +148,11 @@ requires a link sent a week earlier to still resolve — which means merge
 cannot be implemented as "copy one into the other and delete".
 
 ## Three questions to answer first
+
+*(All three answered; the first two are recorded in the spec under
+§ Decided, the third remains open. Kept here because the reasoning about
+what each one blocks is what made them worth asking before writing
+code.)*
 
 The spec records these as open. Two of them block slice one.
 

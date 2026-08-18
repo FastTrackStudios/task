@@ -159,6 +159,12 @@ enough that a sync client, a placement policy and a UI can each reason about
 every member. A need that does not fit an existing capability is a request for
 a new one, never a free-form string.
 
+Closed is a claim about what the system **writes**. A vault is hand-editable
+and gets edited elsewhere, so a name outside the vocabulary is read as *no*
+capability and reported as unrecognised — never guessed at, and never written
+back. A project whose declaration nobody can interpret is a project with no
+conventions, which is a legible state; inventing one for it is not.
+
 ---
 
 ## Form
@@ -329,20 +335,34 @@ write path and not the on-disk result.
 
 ---
 
+## Decided
+
+**"Part" is the word.** It covers a song, a scene and an episode without being
+a project. Considered and rejected: *piece* (concrete, but costs a rename
+across every rule here), *item* (collides with inbox items, setlist items,
+deliverable items, and greps badly), *work* (already means the whole project's
+output in the layout reader's vocabulary, so it is ambiguous at the wrong
+level). The word lands in the lane's verbs, the frontmatter key and every
+error message, so it was settled before any of those existed.
+
+**A form's expected parts are never created automatically.** `add_part` is
+explicit. Adoption does not touch the project lane: reading a tree of fifteen
+song folders is not consent to write fifteen entries into somebody's project
+page, and a proposal surface can be added later without a migration because the
+ids already exist. An `album` that expects songs and has none is a project
+someone has not finished describing, not an error.
+
+**The legacy `projectType` is read, not written.** Every project page predates
+capabilities and carries a free-string type. It is interpreted on read where it
+maps onto a capability, dropped on save once its meaning has been carried
+across, and left untouched where nobody could interpret it — deleting a value
+we could not read would destroy the only record of what its author meant.
+
 ## Open decisions
 
 Recorded because they are not yet settled, and each blocks a rule above.
-
-**Whether "part" is the right word.** It has to cover a song, a scene and an
-episode without being a project. Alternatives considered: item, unit, work,
-piece, segment, track.
 
 **How two sessions for one song relate.** `project.form.components` lets a song
 carry both a Pro Tools and a Reaper session, which the real tree does. Whether
 that pair needs relating to each other — same work, different tool — rather
 than merely co-existing is unanswered.
-
-**Whether a form's expected parts are ever created automatically.** An `album`
-expects songs, and adopting a tree of fifteen song folders could propose fifteen
-parts. Whether the system proposes them, creates them, or waits to be told is
-undecided.
