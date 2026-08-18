@@ -5,12 +5,19 @@
 //!
 //! Each test spawns the real `task` binary in a scratch
 //! `TASK_DATA_ROOT`, so nothing races env vars in-process and the
-//! tests parallelize safely. The working directory is the scratch
-//! root, so the flat wiki commands' `--vault examples/vault`
-//! default does NOT resolve locally — which is exactly the
-//! condition that routes them to the org wiki over vox (the FS
-//! path is the escape hatch, the vox path is the default on a
-//! machine without a local dev vault).
+//! tests parallelize safely.
+//!
+//! The flat wiki commands run with no `--vault`, which is what
+//! routes them to the org wiki over vox: the FS path is the escape
+//! hatch and the org is the default.
+//!
+//! That used to depend on the working directory. `--vault`
+//! defaulted to `examples/vault`, so what selected the vox path was
+//! that directory failing to resolve from the scratch cwd — the
+//! test passed because of where it ran rather than what it asked
+//! for, and it would have started querying a local tree the moment
+//! anyone ran it from the repo root. The flag is optional now and
+//! the routing says what it means.
 
 use std::path::Path;
 use std::process::Output;
@@ -225,9 +232,7 @@ fn wiki_bootstrap_and_health_over_embedded_vox() {
     let out = task(tmp.path(), &["--org", "t", "wiki", "schema", "bootstrap"]);
     assert!(ok(&out).contains("bootstrapped default"));
 
-    // The flat `wiki health` (no local vault anywhere near the
-    // cwd) now answers over vox instead of erroring with
-    // `vault examples/vault: No such file or directory`.
+    // The flat `wiki health`, with no `--vault`, answers over vox.
     let out = task(tmp.path(), &["--org", "t", "wiki", "health"]);
     let stdout = ok(&out);
     assert!(

@@ -21,18 +21,27 @@ const ORG_WIKI_ID: &str = "default";
 /// address a wiki by filesystem path (`--vault`). Unification
 /// rule:
 ///
-/// - `--vault` (or its `examples/vault` default) names an
-///   EXISTING local directory → FS-native behaviour, unchanged
-///   from the pre-vox code path. An explicit on-disk path is
-///   authoritative; this is the documented local escape hatch
-///   (dev vaults under `examples/`, offline inspection of a
-///   copied tree).
-/// - the path does NOT exist (previously a hard `canonicalize`
-///   error) → route to the active org's wiki over vox — remote
+/// - no `--vault` → the active org's wiki, over vox — remote
 ///   server or embedded in-process backend alike — so the same
 ///   command works wherever the session points, and plugin
 ///   gating + permissions apply because the data comes through
-///   the org router.
+///   the org router. This is the ordinary case.
+/// - `--vault <dir>` → FS-native behaviour, unchanged from the
+///   pre-vox code path. The local escape hatch: offline
+///   inspection of a copied tree, or a vault no server hosts.
+///
+/// # An explicit path that does not exist is an error
+///
+/// It used to fall through to vox, because the flag's default was
+/// `examples/vault` and that directory was usually absent — so
+/// "the default did not resolve" and "you asked for a directory
+/// that is not there" had to mean the same thing. They are not the
+/// same thing, and conflating them meant `--vault ./exmaples/vault`
+/// silently queried a completely different wiki.
+///
+/// With the flag optional, absence says "use the org" and a path
+/// says "use this path". A typo now fails.
+#[derive(Debug)]
 enum VaultRoute {
     /// Canonicalized local vault root.
     Local(std::path::PathBuf),
@@ -40,12 +49,37 @@ enum VaultRoute {
     Vox(String),
 }
 
-fn route_vault(vault: &std::path::Path) -> eyre::Result<VaultRoute> {
-    if let Ok(p) = vault.canonicalize() {
-        return Ok(VaultRoute::Local(p));
+fn route_vault(vault: Option<&std::path::Path>) -> eyre::Result<VaultRoute> {
+    match vault {
+        Some(path) => Ok(VaultRoute::Local(local_vault(Some(path))?)),
+        None => {
+            let slug = resolve_active_org(None)?;
+            Ok(VaultRoute::Vox(resolve_org_vox_url(None, &slug)))
+        }
     }
-    let slug = resolve_active_org(None)?;
-    Ok(VaultRoute::Vox(resolve_org_vox_url(None, &slug)))
+}
+
+/// Resolve `--vault` for a command that has no vox path yet.
+///
+/// The FS-only commands (`context`, `code`, `lint`, `dedup`,
+/// `research`, `ingest`, `deepen`, `watch-sources`) read and write
+/// a tree directly and have no lane to route to, so for them the
+/// flag is not optional — it is required and simply had a default
+/// that happened to exist in this checkout.
+///
+/// Saying so is the point of this helper: "vault: No such file or
+/// directory" for a path the caller never typed is a worse message
+/// than naming the flag they need.
+fn local_vault(vault: Option<&std::path::Path>) -> eyre::Result<std::path::PathBuf> {
+    let path = vault.ok_or_else(|| {
+        eyre::eyre!(
+            "this command reads a vault directory — pass `--vault <dir>`. \
+             (Commands that can answer from the active org over vox default \
+             to it; this one has no such lane.)"
+        )
+    })?;
+    path.canonicalize()
+        .map_err(|e| eyre::eyre!("vault {}: {e}", path.display()))
 }
 
 // A clap command enum: constructed once per invocation, so the
@@ -59,8 +93,8 @@ pub(crate) enum WikiCmd {
     /// Build the 4-signal wiki graph and dump it as JSON or
     /// a terse text summary. No LLM — pure walk + compute.
     Graph {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         /// Filter by substring (matches title or path).
         #[arg(long, default_value = "")]
         query: String,
@@ -88,8 +122,8 @@ pub(crate) enum WikiCmd {
     Context {
         /// Free-text query. Empty = top-centrality view.
         query: String,
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         /// `concept` / `entity` / `source` filter on
         /// `type:` frontmatter.
         #[arg(long, default_value = "")]
@@ -151,24 +185,24 @@ pub(crate) enum WikiCmd {
     /// Surface knowledge gaps — orphan pages (degree ≤ 1)
     /// and missing-page wikilinks. No LLM.
     Gaps {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         #[arg(long)]
         json: bool,
     },
     /// Louvain communities — partition the wiki graph and
     /// print each cluster with its cohesion score.
     Clusters {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
     },
     /// Token search over `Wiki/`. TF-IDF over page bodies;
     /// `--hybrid` opts into vector retrieval where the
     /// `vector` feature has been built in (else
     /// downgrades to token).
     Search {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         /// Query string.
         query: String,
         /// Filter by `type:` frontmatter.
@@ -192,8 +226,8 @@ pub(crate) enum WikiCmd {
     /// debounced burst, rescan + (optionally) enqueue.
     /// Runs until interrupted.
     WatchSources {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         #[arg(long, default_value_t = 2)]
         debounce_secs: u64,
         /// Don't auto-enqueue diffs — just print them.
@@ -203,15 +237,15 @@ pub(crate) enum WikiCmd {
     /// One-shot wiki health snapshot — queue depth, open
     /// findings, source count, last ingest/rescan.
     Health {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
     },
     /// Recursively import a directory of files into
     /// `Wiki/raw/sources/`. Doesn't enqueue ingest tasks —
     /// follow with `task wiki rescan` to do that.
     Import {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         /// Directory to walk.
         #[arg(short, long)]
         dir: std::path::PathBuf,
@@ -228,16 +262,16 @@ pub(crate) enum WikiCmd {
     /// files. Doesn't enqueue (yet) — pass `--enqueue` to
     /// also push diffs into the ingest queue.
     Rescan {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         #[arg(long)]
         enqueue: bool,
     },
     /// Run one semantic lint pass via the LLM. Persists
     /// new findings under `Wiki/_state/lint_findings.json`.
     Lint {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         #[arg(short, long)]
         model: Option<String>,
         #[arg(long, default_value_t = 180)]
@@ -247,8 +281,8 @@ pub(crate) enum WikiCmd {
     },
     /// List open lint findings.
     Findings {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
     },
     /// Layered-access wikilink lint. Scans
     /// `<org_root>/wiki/Knowledge/` + `wiki/LLM/` for
@@ -266,8 +300,8 @@ pub(crate) enum WikiCmd {
     /// pass `--merge <slug-csv>` to merge one (writes via
     /// `record_pages`).
     Dedup {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         #[arg(short, long)]
         model: Option<String>,
         #[arg(long, default_value_t = 180)]
@@ -276,8 +310,8 @@ pub(crate) enum WikiCmd {
     /// Propose a research plan for a knowledge gap (output
     /// of `task wiki gaps`).
     Research {
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         /// Gap kind (`Orphan`, `MissingPage`, `SparseCluster`, `Bridge`).
         #[arg(long, default_value = "MissingPage")]
         gap_kind: String,
@@ -302,13 +336,14 @@ pub(crate) enum WikiCmd {
     ///
     /// Example:
     ///   task wiki ingest \
-    ///     -v examples/vault \
-    ///     -s examples/vault/Wiki/raw/sources/karpathy-llm-wiki.md \
+    ///     -v ~/Documents/Task \
+    ///     -s ~/Documents/Task/Wiki/raw/sources/some-paper.md \
     ///     -m gpt-5.4-mini
     Ingest {
-        /// Vault root.
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        /// Vault root. Required: ingest writes a tree directly
+        /// and has no vox lane to fall back to.
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         /// Path to the source file to ingest. Bytes get
         /// copied into `Wiki/raw/sources/<filename>`.
         #[arg(short, long)]
@@ -349,8 +384,8 @@ pub(crate) enum WikiCmd {
     /// structure, overwrites the page in place.
     Deepen {
         /// Vault root (the `Wiki/Knowledge/` parent).
-        #[arg(short, long, default_value = "examples/vault")]
-        vault: std::path::PathBuf,
+        #[arg(short, long)]
+        vault: Option<std::path::PathBuf>,
         /// Page path relative to the wiki root, e.g.
         /// `wiki/concepts/borrowing-over-cloning.md`.
         #[arg(short, long)]
@@ -905,7 +940,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             // Same `WikiGraph` shape either way — the server runs
             // the identical `wiki_graph::build_graph` over its
             // vault root.
-            let graph = match route_vault(&vault)? {
+            let graph = match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => wiki_graph::build_graph(&vault, opts)
                     .map_err(|e| eyre::eyre!("build_graph: {e}"))?,
                 VaultRoute::Vox(url) => {
@@ -965,9 +1000,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             notes,
             links,
         } => {
-            let vault = vault
-                .canonicalize()
-                .map_err(|e| eyre::eyre!("vault {}: {e}", vault.display()))?;
+            let vault = local_vault(vault.as_deref())?;
             // Typed-link overlay: note↔note links become
             // direct-link edges (verses aren't graph nodes;
             // endpoints missing from the graph are dropped
@@ -1133,7 +1166,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             Ok(())
         }
         WikiCmd::Gaps { vault, json } => {
-            let gaps = match route_vault(&vault)? {
+            let gaps = match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => {
                     wiki_graph::find_gaps(&vault).map_err(|e| eyre::eyre!("find_gaps: {e}"))?
                 }
@@ -1198,7 +1231,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                 },
                 node_type,
             };
-            let hits = match route_vault(&vault)? {
+            let hits = match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => {
                     wiki_search::search(&vault, opts).map_err(|e| eyre::eyre!("search: {e}"))?
                 }
@@ -1226,7 +1259,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             Ok(())
         }
         WikiCmd::Clusters { vault } => {
-            let clusters = match route_vault(&vault)? {
+            let clusters = match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => wiki_graph::build_clusters(&vault)
                     .map_err(|e| eyre::eyre!("build_clusters: {e}"))?,
                 VaultRoute::Vox(url) => {
@@ -1260,9 +1293,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             // watcher (`task wiki watch on|off`), and no RPC
             // streams FS events — watching a remote org's disk
             // from here is not a thing.
-            let vault = vault
-                .canonicalize()
-                .map_err(|e| eyre::eyre!("vault {}: {e}", vault.display()))?;
+            let vault = local_vault(vault.as_deref())?;
             let wiki = wiki_live::WikiLive::open(&vault);
             wiki.bootstrap()
                 .map_err(|e| eyre::eyre!("bootstrap: {e}"))?;
@@ -1300,7 +1331,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             Ok(())
         }
         WikiCmd::Health { vault } => {
-            match route_vault(&vault)? {
+            match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     let h = wiki.health().map_err(|e| eyre::eyre!("health: {e}"))?;
@@ -1352,7 +1383,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             let include_exts: Vec<String> =
                 ext.split(',').map(|s| s.trim().to_lowercase()).collect();
             let exclude_substrings = [".git/", "node_modules/", "target/"];
-            let refs = match route_vault(&vault)? {
+            let refs = match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     wiki.bootstrap()
@@ -1456,7 +1487,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             Ok(())
         }
         WikiCmd::Rescan { vault, enqueue } => {
-            match route_vault(&vault)? {
+            match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     let diff = wiki
@@ -1558,9 +1589,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             timeout_secs,
             language,
         } => {
-            let vault = vault
-                .canonicalize()
-                .map_err(|e| eyre::eyre!("vault {}: {e}", vault.display()))?;
+            let vault = local_vault(vault.as_deref())?;
             let wiki = wiki_live::WikiLive::open(&vault);
             wiki.bootstrap()
                 .map_err(|e| eyre::eyre!("bootstrap: {e}"))?;
@@ -1580,7 +1609,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             Ok(())
         }
         WikiCmd::Findings { vault } => {
-            match route_vault(&vault)? {
+            match route_vault(vault.as_deref())? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     let open = wiki
@@ -1649,9 +1678,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             model,
             timeout_secs,
         } => {
-            let vault = vault
-                .canonicalize()
-                .map_err(|e| eyre::eyre!("vault {}: {e}", vault.display()))?;
+            let vault = local_vault(vault.as_deref())?;
             let wiki = wiki_live::WikiLive::open(&vault);
             let backend = agent_codex::CodexBackend::new();
             let groups = agent_wiki::bridge::run_dedup_detect(
@@ -1682,9 +1709,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             timeout_secs,
             language,
         } => {
-            let vault = vault
-                .canonicalize()
-                .map_err(|e| eyre::eyre!("vault {}: {e}", vault.display()))?;
+            let vault = local_vault(vault.as_deref())?;
             let wiki = wiki_live::WikiLive::open(&vault);
             let backend = agent_codex::CodexBackend::new();
             let plan = agent_wiki::bridge::run_propose_research(
@@ -1715,9 +1740,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             language,
             timeout_secs,
         } => {
-            let vault = vault
-                .canonicalize()
-                .map_err(|e| eyre::eyre!("vault {}: {e}", vault.display()))?;
+            let vault = local_vault(vault.as_deref())?;
             let bytes = std::fs::read(&source)
                 .map_err(|e| eyre::eyre!("read source {}: {e}", source.display()))?;
             let fname = filename.unwrap_or_else(|| {
@@ -1768,9 +1791,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             timeout_secs,
             language,
         } => {
-            let vault = vault
-                .canonicalize()
-                .map_err(|e| eyre::eyre!("vault {}: {e}", vault.display()))?;
+            let vault = local_vault(vault.as_deref())?;
             let wiki = WikiLive::open(&vault);
             let backend = CodexBackend::new();
             eprintln!(
@@ -3474,11 +3495,31 @@ mod tests {
     #[test]
     fn route_vault_prefers_an_existing_local_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        match route_vault(dir.path()).expect("route") {
+        match route_vault(Some(dir.path())).expect("route") {
             VaultRoute::Local(p) => {
                 assert_eq!(p, dir.path().canonicalize().unwrap());
             }
             VaultRoute::Vox(url) => panic!("existing dir must route local, got {url}"),
         }
+    }
+
+    /// A `--vault` that names nothing fails, rather than quietly
+    /// answering from the org.
+    ///
+    /// This is what changed when the flag stopped defaulting to
+    /// `examples/vault`. While it had a default, "the path is
+    /// absent" was the *normal* case and so had to mean "use vox" —
+    /// which meant a mistyped path meant it too, and the command
+    /// reported on a different wiki than the one asked for without
+    /// saying so.
+    #[test]
+    fn an_explicit_vault_that_does_not_exist_is_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("no-such-vault");
+        let err = route_vault(Some(&missing)).expect_err("a named path that is absent must fail");
+        assert!(
+            err.to_string().contains("no-such-vault"),
+            "the error should name the path the caller typed: {err}"
+        );
     }
 }

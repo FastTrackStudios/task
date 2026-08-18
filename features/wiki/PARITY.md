@@ -113,29 +113,48 @@ Updated as slices land.
 
 ## Demo state today
 
-```bash
-# Ingest
-task wiki ingest -v examples/vault \
-  -s examples/vault/Wiki/raw/sources/karpathy-llm-wiki.md
+These used to be written against `examples/vault`, a committed corpus
+that was the `--vault` default. It is gone: the wiki now lives in an org
+like everything else, and the commands that can reach one do so by
+default. So the first step is having an org with a wiki in it.
 
+```bash
+# A throwaway org to work against. `just demo` also works — its orgs
+# have wikis, just small ones.
+just dev-seed
+just dev-seed serve          # in another terminal
+
+task wiki schema bootstrap   # scaffold the wiki in the active org
+task wiki import --dir /path/to/notes
+```
+
+Then, with no `--vault`, every flat command answers from that org over
+vox — remote server or embedded backend alike, with plugin gating and
+permissions applied because it comes through the org router:
+
+```bash
 # Graph
-task wiki graph -v examples/vault --limit 20
-task wiki gaps -v examples/vault       # orphan + missing + sparse + bridge
-task wiki clusters -v examples/vault   # Louvain
-task wiki health -v examples/vault
+task wiki graph --limit 20
+task wiki gaps          # orphan + missing + sparse + bridge
+task wiki clusters      # Louvain
+task wiki health
 
 # Sources
-task wiki import -v examples/vault --dir /path/to/notes
-task wiki rescan -v examples/vault --enqueue
-task wiki watch-sources -v examples/vault
-
-# LLM-driven maintenance
-task wiki lint -v examples/vault
-task wiki findings -v examples/vault
-task wiki dedup -v examples/vault
-task wiki research -v examples/vault --gap-title "PageRank"
+task wiki rescan --enqueue
 
 # Search
-task wiki search -v examples/vault "wikilink graph louvain"
-task wiki search -v examples/vault "embedding" --hybrid   # downgrades to token
+task wiki search "wikilink graph louvain"
+task wiki search "embedding" --hybrid   # downgrades to token
+```
+
+`--vault <dir>` still points any of them at a tree on disk — offline
+inspection, or a vault no server hosts. The commands that only work that
+way (`ingest`, `lint`, `dedup`, `research`, `deepen`, `watch-sources`,
+`context`) now *require* it, since they have no lane to fall back to:
+
+```bash
+task wiki ingest -v /path/to/vault -s /path/to/vault/Wiki/raw/sources/some.md
+task wiki lint     -v /path/to/vault
+task wiki dedup    -v /path/to/vault
+task wiki research -v /path/to/vault --gap-title "PageRank"
 ```
