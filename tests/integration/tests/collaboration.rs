@@ -56,6 +56,8 @@ async fn share_takes(s: &Scenario) -> (files::service::federation::Offer, RootId
 }
 
 // t[verify files.topology.federation]
+// t[verify project.location.federated] — two orgs on two servers, and
+// access derives from a grant on the content rather than from membership
 // t[verify scenario.album.federate] — the other server holds half the
 // project, and it composes as one tree with no location privileged
 #[tokio::test]

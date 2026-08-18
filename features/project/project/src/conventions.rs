@@ -120,6 +120,9 @@ mod tests {
     }
 
     /// A declared capability brings its tool's artifacts with it.
+    // t[verify project.capability.conventions] — the half that exists:
+    // a declared capability brings its tool's artifacts with it, and
+    // declaring nothing does not guess
     #[test]
     fn declaring_music_production_ignores_a_daws_backups() {
         use files_domain::ignore::Layer;

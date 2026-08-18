@@ -412,8 +412,24 @@ _Exercises_ `storage.projection.rebuildable` · `storage.tier.derived` ·
 
 ## Coverage
 
+**24 of the 25 stages below are verified by `tests/integration/tests/`.**
+`tracey query . untested` and the `t[verify scenario.*]` markers are the
+current answer; this section is what the scenario says about itself.
+
+One caveat on the tooling: tracey counts a rule as "covered" only when
+something carries a `t[impl …]` reference, and a scenario stage has no
+implementation — it is a composition of rules, verified and never
+implemented. So `scenario.*` reads as entirely uncovered however much of
+it runs, and the number that means anything here is the verified one.
+
 Exercised by some stage above: every rule in `files.*`, `project.*` and
 `storage.*` except those listed below.
+
+**The one stage not verified.** `scenario.album.ingest` — a device
+uploading what it originates with no per-item action. `files.device.ingest`
+has no implementation: nothing in the repository does unattended
+origination upload, so the stage is blocked on a feature rather than on a
+test.
 
 **Not reached by this scenario, and why:**
 

@@ -803,6 +803,9 @@ mod tests {
     }
 
     // t[verify files.write.upload]
+    // t[verify scenario.album.collide] — the resumption half: an upload
+    // that dropped mid-transfer asks for the ranges it is missing and
+    // transfers only chunks not already held
     #[test]
     fn consecutive_missing_chunks_are_one_gap() {
         // A resumed transfer should ask for a range, not for a chunk at

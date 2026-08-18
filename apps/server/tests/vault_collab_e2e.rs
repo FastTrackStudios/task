@@ -51,6 +51,9 @@ fn text_of(doc: &CrdtDoc) -> String {
     doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string()
 }
 
+// t[verify storage.crdt.layer] — two clients and a file writer
+// converge, and the document is a means of agreeing on what the file
+// will say rather than a second record of what it already says
 #[tokio::test(flavor = "multi_thread")]
 async fn two_synced_clients_plus_put_file_writer_converge() {
     let tmp = tempfile::tempdir().unwrap();

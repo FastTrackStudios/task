@@ -341,6 +341,8 @@ async fn renditions_lists_what_was_generated() {
 
 /// `files.handoff.editor`: region bounds survive the trip.
 // t[verify files.handoff.editor]
+// t[verify scenario.album.handoff] — results land in an editor as a bin,
+// content in place rather than copied, with region bounds intact
 #[tokio::test(flavor = "multi_thread")]
 async fn a_handoff_carries_its_regions_to_collection() {
     let (_data, backend, root_id, _bytes) = rig().await;

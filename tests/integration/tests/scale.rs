@@ -172,6 +172,9 @@ async fn a_second_pull_moves_no_bytes() {
 /// tree keeps both files, because adoption moves nothing and the DAW
 /// wrote two — what is shared is the content behind them.
 // t[verify files.scale.capacity]
+// t[verify scenario.album.placement] — content resolves by address rather
+// than by path, which is what lets footage move to another location
+// without a path changing or a link breaking
 // t[verify files.scale.small-files] — "identical content is stored once"
 #[tokio::test]
 async fn identical_takes_share_one_copy_of_the_content() {

@@ -44,6 +44,9 @@ async fn take_the_sessions(laptop: &Laptop) {
 /// Resolve proxy directory — so the vocabulary is there before anyone
 /// configures anything.
 // t[verify files.facet.tool-layout]
+// t[verify scenario.album.facets] — the mix engineer and the video editor
+// subscribe to different halves, and neither configured the tool
+// directories: the vocabulary is there before anyone says anything
 #[tokio::test]
 async fn the_tools_own_layout_names_the_facets() {
     let laptop = Laptop::open().await;
@@ -61,6 +64,10 @@ async fn the_tools_own_layout_names_the_facets() {
 
 /// The subscription decides what is resident.
 // t[verify files.sync.selective]
+// t[verify scenario.album.offline] — an engineer works the album on a
+// plane: the tree browses whole, and what was not asked for is visibly a
+// stub rather than absent
+// t[verify files.catalogue.offline]
 #[tokio::test]
 async fn what_the_device_did_not_ask_for_becomes_a_stub() {
     let laptop = Laptop::open().await;

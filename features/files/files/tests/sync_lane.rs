@@ -330,6 +330,10 @@ async fn the_three_ignore_layers_are_reported_and_only_one_is_settable() {
 }
 
 // t[verify files.device.control]
+// t[verify storage.tier.observed] — device registrations are
+// machine-observed facts in a store, not markdown: a revoked device stays
+// *known*, which is a record nobody authored and nobody would want in a
+// note
 #[tokio::test(flavor = "multi_thread")]
 async fn a_revoked_device_stays_known_and_stops_transferring() {
     let (_tmp, backend, _root) = album("devices").await;
