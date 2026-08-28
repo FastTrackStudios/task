@@ -6487,6 +6487,7 @@ dependencies = [
 name = "editor-keyflow"
 version = "0.1.0"
 dependencies = [
+ "editor-state",
  "engraver",
  "keyflow-text",
  "thiserror 2.0.20",
@@ -6526,7 +6527,6 @@ dependencies = [
 name = "editor-state"
 version = "0.1.0"
 dependencies = [
- "editor-keyflow",
  "editor-mermaid",
  "editor-syntax",
  "editor-typst",
@@ -21739,6 +21739,7 @@ dependencies = [
  "editor",
  "editor-keyflow",
  "editor-keyflow-lang",
+ "editor-state",
  "eyre",
  "gloo-timers",
  "js-sys",

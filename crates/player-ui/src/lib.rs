@@ -67,7 +67,7 @@ pub mod song_session;
 pub mod vox_media_source;
 pub mod widgets;
 
-pub use self::widgets::widgets;
+pub use self::widgets::{register_chart_fences, widgets};
 pub use context::{NowPlaying, NowPlayingRequest, SongPlayRequest, provide_player_contexts};
 pub use now_playing::{
     GlobalNowPlayer, NowPlayingCtl, NowPlayingStripHighlighter, NowPlayingTab, NpCmd,

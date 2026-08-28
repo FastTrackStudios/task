@@ -27,7 +27,6 @@ uuid = { version = "1", features = ["v7", "js"] }
 # skrifa — default-features off drops the wgpu/vello GPU stack and the
 # PDF deps), which compiles cleanly to wasm32-unknown-unknown. (The
 # old native-only gate predated engraver's `svg` feature split.)
-editor-keyflow = { workspace = true }
 
 # wasm-only: `performance.now()` for the live-preview perf
 # trace (native uses `Instant`, which traps on wasm32-unknown-

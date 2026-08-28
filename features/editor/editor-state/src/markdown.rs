@@ -1706,7 +1706,7 @@ fn scan_blocks(
                                 r#"<div class="md-keyflow-header"><span class="md-keyflow-lang">{tag}</span><button class="md-code-copy" data-copy-from="{content_start}" data-copy-to="{body_end}" title="Copy">⧉</button>{toggle}</div>"#,
                                 tag = escape_html(info),
                             );
-                            let highlighted = editor_keyflow::highlight_html(body);
+                            let highlighted = keyflow::highlight_keyflow(body);
                             let html = if let Some(svg) = svg {
                                 // Chart present: header anchors to the
                                 // chart's top-right; the source block (if
@@ -2969,6 +2969,37 @@ mod tests {
     use crate::doc::Doc;
     use crate::selection::Selection;
 
+    /// A stand-in chart renderer.
+    ///
+    /// `editor-state` deliberately cannot reach the real one — the chart
+    /// language lives above this crate — so what is testable *here* is the
+    /// plumbing: that a `kf` fence resolves a renderer, embeds what it
+    /// returns, and builds the right widget around it. That a real chart
+    /// engraves is `editor-keyflow`'s test, where the real renderer lives.
+    struct StubCharts;
+
+    impl crate::fence_renderer::FenceRenderer for StubCharts {
+        fn render_svg(&self, source: &str) -> Option<String> {
+            // Mirrors the real contract: a body that is a syntax
+            // illustration rather than a chart declines to render.
+            (!source.contains('\u{2192}'))
+                .then(|| format!("<svg data-src=\"{}\"></svg>", source.len()))
+        }
+        fn highlight_html(&self, source: &str) -> String {
+            format!("<span class=\"kf-root\">{}</span>", escape_html(source))
+        }
+    }
+
+    /// Install [`StubCharts`] for the `kf` family. Idempotent, and safe to
+    /// call from every test: the registry is process-wide and nextest runs
+    /// each test in its own process anyway.
+    fn with_stub_charts() {
+        crate::fence_renderer::register_fence_renderer(
+            crate::markdown::keyflow::LANGUAGE,
+            std::sync::Arc::new(StubCharts),
+        );
+    }
+
     fn state(text: &str, caret: usize) -> EditorState {
         EditorState {
             doc: Doc::from_str(text),
@@ -3740,6 +3771,7 @@ mod tests {
         // The exact snippet the keyflow guide's chords chapter ships.
         // editor-keyflow wraps engraver's CPU-only svg tier, so this
         // path runs on wasm32 too (the old native-only gate is gone).
+        with_stub_charts();
         let s = state("```kf\nCmaj7 | F#m7b5 | Bbmaj9 | G7b9\n```\n\ntail", 44);
         let decs = live_preview(&s);
         let widget = decs.iter().find_map(|d| match &d.kind {
@@ -3783,6 +3815,7 @@ mod tests {
     #[test]
     fn kf_dash_fence_is_highlighted_source_only() {
         // ```kf- — highlighted source, NO chart, always shown.
+        with_stub_charts();
         let s = state("```kf-\nCmaj7 | Dm7\n```\n\ntail", 40);
         let decs = live_preview(&s);
         let widget = decs.iter().find_map(|d| match &d.kind {
@@ -3821,6 +3854,7 @@ mod tests {
     fn kf_plus_fence_shows_source_and_chart() {
         // ```kf+ — the author opts into source + chart together; the
         // widget ships with the show-source class already on.
+        with_stub_charts();
         let s = state("```kf+\nCmaj7 | F#m7b5\n```\n\ntail", 30);
         let decs = live_preview(&s);
         let widget = decs.iter().find_map(|d| match &d.kind {

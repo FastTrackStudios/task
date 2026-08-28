@@ -340,6 +340,12 @@ pub fn App() -> Element {
     // learns who provided a widget. Registration is explicit — no
     // linker magic — so this list IS the app's widget roster.
     let widget_registry = use_context_provider(|| {
+        // Same spirit as the widget roster: the editor renders ```kf
+        // fences through a registry, not a dependency (editor-state must
+        // stay below the notation domain), so the app names the renderer
+        // explicitly. Without this, charts in notes show as source.
+        task_player_ui::register_chart_fences();
+
         let registry = task_widgets::WidgetRegistry::new();
         registry.register(task_player_ui::widgets());
         registry.register(task_note_tabs::widgets());

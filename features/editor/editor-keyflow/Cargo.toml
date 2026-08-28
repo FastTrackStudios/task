@@ -8,6 +8,10 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# The fence-renderer trait this crate implements. The dependency points
+# THIS way on purpose: editor-state must not know about keyflow, so the
+# chart renderer registers itself instead. See `Fences`.
+editor-state = { workspace = true }
 # CPU-only layout + SVG export from keyflow's engraver. `svg` drops
 # the wgpu/vello GPU stack and the PDF deps, leaving a pure-Rust path
 # (kurbo/peniko/skrifa/smufl) that compiles for wasm32.

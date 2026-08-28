@@ -38,18 +38,35 @@ pub(crate) fn render_keyflow(body: &str) -> Option<String> {
     }
     COMPILE_BUDGET.with(|c| c.set(budget - 1));
 
-    // `editor-keyflow` wraps engraver's CPU-only `svg` tier (kurbo/
-    // peniko/skrifa — no wgpu, no tokio), which compiles for wasm32
-    // too, so `kf` fences engrave everywhere the editor runs.
-    match editor_keyflow::render_svg(body) {
-        Ok(svg) => {
+    // Resolved through the fence registry rather than a direct dependency:
+    // the chart renderer lives above this crate (it needs `keyflow-text`
+    // and `engraver`), so depending on it here would drag the whole editor
+    // stack above the notation domain. See `crate::fence_renderer`.
+    //
+    // Nothing registered means charts render as source, which is the same
+    // fallback any unknown fence language gets.
+    let renderer = crate::fence_renderer::fence_renderer(LANGUAGE)?;
+    match renderer.render_svg(body) {
+        Some(svg) => {
             with_keyflow_cache(|c| c.put(body.to_string(), svg.clone()));
             Some(svg)
         }
-        Err(e) => {
-            tracing::debug!(?e, body_len = body.len(), "keyflow render failed");
+        None => {
+            tracing::debug!(body_len = body.len(), "keyflow render declined");
             None
         }
+    }
+}
+
+/// Registry key for the keyflow fence family (`kf`, `kf+`, `kf-`).
+pub(crate) const LANGUAGE: &str = "kf";
+
+/// Syntax-highlight a keyflow fence body, falling back to escaped source
+/// when no chart renderer is registered.
+pub(crate) fn highlight_keyflow(body: &str) -> String {
+    match crate::fence_renderer::fence_renderer(LANGUAGE) {
+        Some(r) => r.highlight_html(body),
+        None => super::escape_html(body),
     }
 }
 

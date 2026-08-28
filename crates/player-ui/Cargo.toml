@@ -35,6 +35,8 @@ keyflow = { workspace = true, features = ["engraver", "text"] }
 editor = { workspace = true }
 # `@font-face` glyph payload for the engraved chart SVG.
 editor-keyflow = { workspace = true }
+# The fence registry the chart renderer installs itself into.
+editor-state = { workspace = true }
 editor-keyflow-lang = { workspace = true }
 
 # Stem sources: signed blob download URLs (attachments) and the

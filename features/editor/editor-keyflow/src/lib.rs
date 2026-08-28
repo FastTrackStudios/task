@@ -348,3 +348,34 @@ mod tests {
             .replace("&#39;", "'")
     }
 }
+
+/// The chart renderer, as an `editor-state` fence renderer.
+///
+/// `editor-state` cannot depend on this crate — it would put the whole
+/// editor stack above the notation domain and stop the editor being
+/// embeddable on its own — so the dependency is inverted through a
+/// registry. Register once at application start:
+///
+/// ```ignore
+/// editor_state::fence_renderer::register_fence_renderer(
+///     "kf",
+///     std::sync::Arc::new(editor_keyflow::Fences),
+/// );
+/// ```
+pub struct Fences;
+
+impl editor_state::fence_renderer::FenceRenderer for Fences {
+    fn render_svg(&self, source: &str) -> Option<String> {
+        match render_svg(source) {
+            Ok(svg) => Some(svg),
+            Err(e) => {
+                tracing::debug!(?e, len = source.len(), "keyflow fence render failed");
+                None
+            }
+        }
+    }
+
+    fn highlight_html(&self, source: &str) -> String {
+        highlight_html(source)
+    }
+}

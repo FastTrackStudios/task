@@ -287,3 +287,20 @@ fn SongCard(title: String, on_play: EventHandler<()>, on_open: EventHandler<()>)
         }
     }
 }
+
+/// Install the Keyflow chart renderer into the editor's fence registry.
+///
+/// `editor-state` renders ```` ```kf ```` fences through a registry rather
+/// than a direct dependency — depending on the chart renderer would put the
+/// whole editor stack above the notation domain and stop the editor being
+/// embeddable on its own. Nothing registered means charts fall back to
+/// showing their source, so this is what makes them engrave.
+///
+/// Exposed here because `editor-keyflow` is this crate's business, not the
+/// shell's. Call once, at the app root, alongside the widget roster.
+pub fn register_chart_fences() {
+    editor_state::fence_renderer::register_fence_renderer(
+        "kf",
+        std::sync::Arc::new(editor_keyflow::Fences),
+    );
+}
