@@ -274,6 +274,58 @@ async fn a_tick_captures_the_local_session_before_it_pulls() {
     );
 }
 
+/// Un-admitting a machine is possible, and it keeps the content.
+///
+/// Admission is the one list that decides who may read this machine's
+/// whole history. A list you can add to and not remove from is not a
+/// list anybody should trust — and the removal has to leave the files
+/// alone, because "stop syncing with that laptop" is not "delete the
+/// album".
+#[tokio::test(flavor = "multi_thread")]
+async fn forgetting_a_peer_stops_the_sync_and_keeps_the_files() {
+    let server = Machine::open().await;
+    let laptop = Machine::open().await;
+    let album = server.with_album(b"the stems").await;
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    laptop.daemon.admit_peer(&server.endpoint_id);
+    laptop
+        .daemon
+        .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("choose the album");
+    laptop.daemon.tick().await;
+    assert_eq!(laptop.read("mix.wav"), b"the stems");
+
+    // The laptop stops trusting the server, and stops pulling it.
+    laptop.daemon.dismiss_peer(&server.endpoint_id);
+    laptop.daemon.remove_sync_choice(album);
+
+    assert!(
+        laptop.daemon.peers().is_empty(),
+        "the peer is still admitted: {:?}",
+        laptop.daemon.peers()
+    );
+    assert!(
+        laptop.daemon.status().roots.is_empty(),
+        "it is still set to pull from a machine it no longer admits"
+    );
+    assert_eq!(
+        laptop.read("mix.wav"),
+        b"the stems",
+        "forgetting a peer deleted the content it had brought"
+    );
+
+    // And it stays stopped: new work on the server does not arrive.
+    std::fs::write(server.album_tree().join("mix.wav"), b"a newer mix").unwrap();
+    server
+        .backend
+        .checkpoint_now(album, None)
+        .await
+        .expect("checkpoint");
+    laptop.daemon.tick().await;
+    assert_eq!(laptop.read("mix.wav"), b"the stems");
+}
+
 /// What a machine was syncing survives a restart.
 ///
 /// A background service that forgets its choices when the machine

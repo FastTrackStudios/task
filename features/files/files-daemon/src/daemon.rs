@@ -834,6 +834,7 @@ impl SyncDaemon {
                 RootStatus {
                     root_id: *id,
                     name: cfg.name.clone(),
+                    peer: cfg.peer_endpoint.clone(),
                     state,
                     slice: cfg.slice.clone(),
                     files: rs.map(|s| s.files.clone()).unwrap_or_default(),

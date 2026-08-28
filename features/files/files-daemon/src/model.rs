@@ -68,6 +68,11 @@ impl FileProgress {
 pub struct RootStatus {
     pub root_id: Uuid,
     pub name: String,
+    /// The endpoint this root is pulled from, when it was chosen against
+    /// one. "Where does this come from" is the first question about a
+    /// root that is not updating, and without it the answer lived only
+    /// in a client the status surface could not describe.
+    pub peer: Option<String>,
     pub state: RootSyncState,
     /// The selective-sync slice, empty for "the whole root" (gitignore
     /// dialect, the hydration-policy patterns — a partial replica keeps

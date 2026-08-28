@@ -70,6 +70,7 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon checkpoint <root-id>     force a save point now (before unplugging)
     fts-files-daemon share <dir> [--name N]   share a folder from this machine
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
+    fts-files-daemon forget <endpoint-id>     stop admitting a machine, and stop pulling it
 
 install options:
     --coordinator <endpoint-id>   the org endpoint to sync with
@@ -90,7 +91,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some("id") => Some(print_endpoint_id()),
         // Handled in `main`: they dial something, so they need the async
         // runtime rather than avoiding it.
-        Some("status" | "checkpoint" | "share" | "peer") => None,
+        Some("status" | "checkpoint" | "share" | "peer" | "forget") => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             Some(Ok(()))
@@ -257,10 +258,17 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
     }
     for root in &status.roots {
         println!(
-            "root       {}  {:?}  {}%{}",
+            "root       {}  {:?}  {}%{}{}",
             root.name,
             root.state,
             root.percent(),
+            // Where it comes from, shortened: a root that is not moving
+            // is a question about its peer, and a full endpoint id
+            // buries the state a person is scanning for.
+            root.peer
+                .as_deref()
+                .map(|p| format!("  from {}", &p[..p.len().min(8)]))
+                .unwrap_or_default(),
             root.last_error
                 .as_deref()
                 .map(|e| format!("  ({e})"))
@@ -362,6 +370,39 @@ fn is_not_admitted(e: &impl std::fmt::Display) -> bool {
     text.contains("permission denied") || text.contains("may not read")
 }
 
+/// Stop admitting a machine, and stop pulling from it.
+///
+/// The counterpart of `peer`, and its absence was a hole with a shape:
+/// a person could add a machine to the one list that decides who may
+/// read this one's whole history, and then had no way to take it off
+/// again short of editing the store by hand.
+///
+/// Both halves, again for `peer`'s reason. Dismissing without dropping
+/// the sync choices leaves an agent dialling a machine it no longer
+/// trusts, every tick, forever.
+async fn forget(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let before = client.status().await?;
+    client.dismiss_peer(endpoint_id.to_string()).await?;
+
+    // A root chosen against that peer has nowhere to pull from now.
+    // Local content stays exactly where it is — this stops syncing it,
+    // it does not delete it.
+    let mut dropped = 0;
+    for root in &before.roots {
+        if root.peer.as_deref() == Some(endpoint_id) {
+            client.remove_sync_choice(root.root_id).await?;
+            println!("stopped syncing {} (its content stays)", root.name);
+            dropped += 1;
+        }
+    }
+    println!("forgot {endpoint_id}");
+    if dropped == 0 {
+        println!("nothing was being pulled from it.");
+    }
+    Ok(())
+}
+
 /// This machine's endpoint id, for printing in instructions.
 fn endpoint_id() -> Result<String, Box<dyn std::error::Error>> {
     let data_dir = PathBuf::from(
@@ -405,6 +446,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("peer") => {
             let id = args.get(1).ok_or("peer needs an endpoint id")?.clone();
             return peer(&id).await;
+        }
+        Some("forget") => {
+            let id = args.get(1).ok_or("forget needs an endpoint id")?.clone();
+            return forget(&id).await;
         }
         _ => {}
     }
