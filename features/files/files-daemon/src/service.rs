@@ -105,6 +105,13 @@ pub trait DaemonControlService {
         under: String,
     ) -> Result<Vec<Pulled>, DaemonError>;
 
+    /// Remember to sync with `endpoint_id` once it can be reached.
+    ///
+    /// "Sync with my laptop" is usually said while the laptop is shut —
+    /// that is why it is being said. The intent is kept and retried on
+    /// the tick instead of failing with a dial timeout and evaporating.
+    async fn remember_peer(&self, endpoint_id: String) -> Result<(), DaemonError>;
+
     /// Admit `endpoint_id` to this machine's own replica lane.
     ///
     /// Sync is two pulls, so being *pullable* is half of syncing: a

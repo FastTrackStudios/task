@@ -467,6 +467,18 @@ async fn peer(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
             println!("run this there, then re-run this command:");
             println!("    fts-files-daemon peer {}", endpoint_id_or_unknown());
         }
+        // Asleep, or off, or on a network that cannot be reached — which
+        // is the *usual* state of the machine somebody is asking to sync
+        // with, because that is why they are asking. The intent is kept
+        // and retried on the tick rather than thrown away with a
+        // timeout.
+        Err(e) if is_unreachable(&e) => {
+            client.remember_peer(endpoint_id.to_string()).await?;
+            println!();
+            println!("it is not reachable right now (asleep, off, or on another network).");
+            println!("this machine will take what it shares as soon as it answers —");
+            println!("nothing more to run.");
+        }
         Err(e) => return Err(e.into()),
     }
     Ok(())
@@ -482,6 +494,12 @@ async fn peer(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn is_not_admitted(e: &impl std::fmt::Display) -> bool {
     let text = e.to_string();
     text.contains("permission denied") || text.contains("may not read")
+}
+
+/// Whether a dial failed because the machine is not there right now.
+fn is_unreachable(e: &impl std::fmt::Display) -> bool {
+    let text = e.to_string();
+    text.contains("timed out") || text.contains("dialling") || text.contains("no route")
 }
 
 /// Settle a path two machines changed, keeping both sides.

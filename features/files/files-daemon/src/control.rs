@@ -92,6 +92,11 @@ impl DaemonControlService for DaemonControl {
         self.daemon.pull_all(&endpoint_id, &under).await
     }
 
+    async fn remember_peer(&self, endpoint_id: String) -> Result<(), DaemonError> {
+        self.daemon.remember_peer(&endpoint_id);
+        Ok(())
+    }
+
     async fn admit_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError> {
         self.daemon.admit_peer(&endpoint_id);
         Ok(self.daemon.status())

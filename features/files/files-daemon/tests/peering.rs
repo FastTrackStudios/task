@@ -294,6 +294,57 @@ async fn a_tick_captures_the_local_session_before_it_pulls() {
 // to `Error` with "vox connection closed", and see it return to `Idle`
 // on a later tick without being restarted.
 
+/// A root syncs with every machine it was told about, not the last one.
+///
+/// Choosing a root against a second peer used to *replace* the first, so
+/// a desk with three machines quietly became a chain: tell the studio
+/// box about the laptop, then about the server, and it stops hearing
+/// from the laptop. Nothing says so — the root looks healthy and simply
+/// never sees that machine's work again.
+///
+/// Found on three real machines the moment a third was added.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_root_pulls_from_every_machine_it_was_told_about() {
+    let hub = Machine::open().await;
+    let one = Machine::open().await;
+    let two = Machine::open().await;
+    let album = hub.with_album(b"the shared album").await;
+
+    for other in [&one, &two] {
+        hub.daemon.admit_peer(&other.endpoint_id);
+        other.daemon.admit_peer(&hub.endpoint_id);
+        other
+            .daemon
+            .sync_from_peer(&hub.endpoint_id, album, vec![], &other.dir)
+            .await
+            .expect("take the album from the hub");
+        other.daemon.tick().await;
+    }
+
+    // The hub is told about both, one after the other.
+    for other in [&one, &two] {
+        hub.daemon
+            .sync_from_peer(&other.endpoint_id, album, vec![], &hub.dir)
+            .await
+            .expect("the hub pulls this machine too");
+    }
+
+    // Work on the machine the hub was told about FIRST — the one a
+    // last-writer-wins choice would have dropped.
+    std::fs::write(one.album_tree().join("mix.wav"), b"work from the first machine").unwrap();
+    one.daemon
+        .checkpoint_now(album)
+        .await
+        .expect("checkpoint on the first machine");
+
+    hub.daemon.tick().await;
+    assert_eq!(
+        hub.read("mix.wav"),
+        b"work from the first machine",
+        "the hub stopped hearing from the machine it was told about first"
+    );
+}
+
 /// Un-admitting a machine is possible, and it keeps the content.
 ///
 /// Admission is the one list that decides who may read this machine's

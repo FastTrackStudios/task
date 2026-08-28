@@ -28,16 +28,33 @@ struct SyncedRoot {
     name: String,
     slice: Vec<String>,
     paused: bool,
-    /// The peer that serves this root's content (the coordinator, or
-    /// another replica). One client per root keeps the wiring simple.
-    peer: SyncServiceClient,
-    /// That peer's endpoint id, when it was dialled by one.
+    /// Every peer that serves this root — plural, and that is the
+    /// point.
+    ///
+    /// It was one, which is correct for two machines and wrong for
+    /// three: choosing a root against a second peer *replaced* the
+    /// first, so a studio machine that had been told about a laptop and
+    /// then about a server quietly stopped hearing from the laptop.
+    /// Nothing said so; the root simply never saw that machine's work
+    /// again.
+    ///
+    /// Any peer may hold the newest heads, so a tick asks all of them.
+    /// Reconcile is idempotent and cheap when there is nothing new — a
+    /// heads call and no transfer — so asking three machines costs
+    /// three round trips, not three copies.
+    peers: Vec<PeerLink>,
+}
+
+/// One peer a root is pulled from.
+struct PeerLink {
+    client: SyncServiceClient,
+    /// Its endpoint id, when it was dialled by one.
     ///
     /// A client cannot be written to disk, so this is what a restart
-    /// restores from — see [`Choices`]. `None` for a peer handed in by
-    /// an embedder (a test, an in-process link), which has no address to
-    /// come back to.
-    peer_endpoint: Option<String>,
+    /// restores from — see [`Choices`] — and what a failed pull redials.
+    /// `None` for a peer handed in by an embedder (a test, an in-process
+    /// link), which has no address to come back to.
+    endpoint: Option<String>,
 }
 
 /// The sync choices, as they survive a restart.
@@ -320,6 +337,24 @@ impl SyncDaemon {
         self.inner
             .backend
             .dismiss_host(&files_domain::HostId(endpoint_id.to_string()));
+
+        // And stop pulling from it — but only from *it*. A root synced
+        // with three machines loses one peer here, not the root: the
+        // work the other two are doing is none of this machine's
+        // business to drop.
+        {
+            let mut roots = self.inner.roots.lock().expect("roots lock");
+            for root in roots.values_mut() {
+                root.peers
+                    .retain(|p| p.endpoint.as_deref() != Some(endpoint_id));
+            }
+            // A root left with no peer is one nothing can update. It
+            // stays on disk (dismissing is not deleting) and stops being
+            // a sync choice, which is what the status should say.
+            roots.retain(|_, root| !root.peers.is_empty());
+        }
+        self.save_choices();
+        self.inner.events.publish(self.status());
     }
 
     /// Every peer this machine admits.
@@ -363,21 +398,22 @@ impl SyncDaemon {
     /// Best effort by design: a peer that is genuinely gone (shut lid,
     /// no network) fails here too, and the right response is to try
     /// again next tick rather than to drop a choice the person made.
-    async fn redial(&self, root_id: Uuid) {
-        let endpoint = {
-            let roots = self.inner.roots.lock().expect("roots lock");
-            let Some(root) = roots.get(&root_id) else {
-                return;
-            };
-            let Some(endpoint) = root.peer_endpoint.clone() else {
-                return;
-            };
-            endpoint
-        };
-        match self.dial(&endpoint).await {
+    async fn redial(&self, root_id: Uuid, endpoint: &str) {
+        match self.dial(endpoint).await {
             Ok(fresh) => {
-                if let Some(root) = self.inner.roots.lock().expect("roots lock").get_mut(&root_id) {
-                    root.peer = fresh;
+                if let Some(link) = self
+                    .inner
+                    .roots
+                    .lock()
+                    .expect("roots lock")
+                    .get_mut(&root_id)
+                    .and_then(|root| {
+                        root.peers
+                            .iter_mut()
+                            .find(|p| p.endpoint.as_deref() == Some(endpoint))
+                    })
+                {
+                    link.client = fresh;
                 }
                 tracing::info!(%root_id, peer = %endpoint, "files-daemon: reconnected to the peer");
             }
@@ -486,6 +522,83 @@ impl SyncDaemon {
             });
         }
         Ok(outcomes)
+    }
+
+    /// Machines this one has been told to sync with but has not managed
+    /// to reach yet.
+    ///
+    /// "Sync with my laptop" is usually said while the laptop is shut —
+    /// that is *why* it is being said. Before this, naming an
+    /// unreachable machine failed with a dial timeout and recorded
+    /// nothing, so the intent evaporated and had to be repeated once the
+    /// other machine happened to be awake and somebody happened to
+    /// remember.
+    ///
+    /// Persisted, because the same is true across a reboot, and cleared
+    /// the moment the peer answers.
+    fn pending_path(&self) -> std::path::PathBuf {
+        self.inner.data_dir.join("pending-peers.json")
+    }
+
+    fn pending_peers(&self) -> Vec<String> {
+        std::fs::read_to_string(self.pending_path())
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn set_pending_peers(&self, peers: &[String]) {
+        let path = self.pending_path();
+        if peers.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        match serde_json::to_vec_pretty(peers) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    tracing::warn!(error = %e, "could not record the peers still to reach");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not serialize the pending peers"),
+        }
+    }
+
+    /// Remember to sync with `endpoint_id` once it is reachable.
+    pub fn remember_peer(&self, endpoint_id: &str) {
+        let mut pending = self.pending_peers();
+        if !pending.iter().any(|p| p == endpoint_id) {
+            pending.push(endpoint_id.to_string());
+            self.set_pending_peers(&pending);
+        }
+    }
+
+    /// Try every machine this one is still waiting to reach.
+    ///
+    /// Runs on the tick, so a laptop that opens its lid is picked up
+    /// within a cadence rather than when somebody thinks to re-run a
+    /// command.
+    async fn reach_pending(&self, under: &std::path::Path) {
+        let pending = self.pending_peers();
+        if pending.is_empty() {
+            return;
+        }
+        let mut still_waiting = Vec::new();
+        for peer in pending {
+            match self.pull_all(&peer, under).await {
+                Ok(taken) => {
+                    tracing::info!(
+                        peer = %peer,
+                        roots = taken.len(),
+                        "files-daemon: reached a machine we were waiting for"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(peer = %peer, error = %e, "files-daemon: still cannot reach it");
+                    still_waiting.push(peer);
+                }
+            }
+        }
+        self.set_pending_peers(&still_waiting);
     }
 
     /// Where this agent lands roots it adopts — reported in the status
@@ -620,16 +733,28 @@ impl SyncDaemon {
             .set_hydration_policy(root_id, slice.clone())
             .await?;
         let mut roots = self.inner.roots.lock().expect("roots lock");
-        roots.insert(
-            root_id,
-            SyncedRoot {
-                name: name.to_string(),
-                slice,
-                paused: false,
-                peer,
-                peer_endpoint,
-            },
-        );
+        let entry = roots.entry(root_id).or_insert_with(|| SyncedRoot {
+            name: name.to_string(),
+            slice: slice.clone(),
+            paused: false,
+            peers: Vec::new(),
+        });
+        entry.name = name.to_string();
+        entry.slice = slice;
+        // Added, not replaced — unless it is the same machine again, in
+        // which case the fresh client supersedes the old one (that is
+        // what a redial is).
+        match entry
+            .peers
+            .iter_mut()
+            .find(|p| p.endpoint.is_some() && p.endpoint == peer_endpoint)
+        {
+            Some(existing) => existing.client = peer,
+            None => entry.peers.push(PeerLink {
+                client: peer,
+                endpoint: peer_endpoint,
+            }),
+        }
         drop(roots);
         self.save_choices();
         self.inner.events.publish(self.status());
@@ -655,13 +780,19 @@ impl SyncDaemon {
                 .lock()
                 .expect("roots lock")
                 .iter()
-                .filter_map(|(id, r)| {
-                    r.peer_endpoint.as_ref().map(|peer| Choice {
-                        root_id: *id,
-                        name: r.name.clone(),
-                        slice: r.slice.clone(),
-                        peer: peer.clone(),
-                    })
+                // One row per (root, peer), so a machine that syncs a
+                // root with two others comes back syncing it with both.
+                .flat_map(|(id, r)| {
+                    r.peers
+                        .iter()
+                        .filter_map(|p| p.endpoint.as_ref())
+                        .map(|peer| Choice {
+                            root_id: *id,
+                            name: r.name.clone(),
+                            slice: r.slice.clone(),
+                            peer: peer.clone(),
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect(),
         };
@@ -845,14 +976,26 @@ impl SyncDaemon {
         if !captured.is_empty() {
             tracing::debug!(count = captured.len(), "files-daemon: captured local work");
         }
-        let jobs: Vec<(Uuid, SyncServiceClient, bool)> = {
+
+        // Machines somebody named while they were asleep. Cheap when
+        // there are none, which is the ordinary case.
+        let under = self.roots_dir();
+        self.reach_pending(&under).await;
+        // One job per (root, peer): any peer may hold the newest heads,
+        // so a machine that syncs with three others asks all three.
+        let jobs: Vec<(Uuid, SyncServiceClient, Option<String>, bool)> = {
             let roots = self.inner.roots.lock().expect("roots lock");
             roots
                 .iter()
-                .map(|(id, r)| (*id, r.peer.clone(), r.paused))
+                .flat_map(|(id, r)| {
+                    r.peers
+                        .iter()
+                        .map(|p| (*id, p.client.clone(), p.endpoint.clone(), r.paused))
+                        .collect::<Vec<_>>()
+                })
                 .collect()
         };
-        for (root_id, peer, paused) in jobs {
+        for (root_id, peer, peer_endpoint, paused) in jobs {
             if paused {
                 continue;
             }
@@ -885,7 +1028,9 @@ impl SyncDaemon {
                     // the fresh connection. Only when the peer was
                     // reached by an endpoint id; one handed in by an
                     // embedder has no address to redial.
-                    self.redial(root_id).await;
+                    if let Some(endpoint) = peer_endpoint.as_deref() {
+                        self.redial(root_id, endpoint).await;
+                    }
                 }
             }
 
@@ -973,7 +1118,17 @@ impl SyncDaemon {
                 RootStatus {
                     root_id: *id,
                     name: cfg.name.clone(),
-                    peer: cfg.peer_endpoint.clone(),
+                    // Every peer it pulls from, joined: on a desk with
+                    // three machines "where does this come from" has
+                    // more than one answer, and showing the first would
+                    // be picking one arbitrarily.
+                    peer: (!cfg.peers.is_empty()).then(|| {
+                        cfg.peers
+                            .iter()
+                            .map(|p| p.endpoint.clone().unwrap_or_else(|| "(direct)".into()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }),
                     state,
                     slice: cfg.slice.clone(),
                     files: rs.map(|s| s.files.clone()).unwrap_or_default(),
