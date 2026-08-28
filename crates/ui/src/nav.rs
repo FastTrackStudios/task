@@ -6,7 +6,8 @@
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Dumbbell,
     Flag, FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Mail, MapPin, Notebook,
-    Package, ReceiptText, Scale, Settings as SettingsIcon, Target, Timer, Users, Utensils, Wallet,
+    Package, ReceiptText, RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users,
+    Utensils, Wallet,
     Waypoints, Youtube,
 };
 use dioxus::prelude::*;
@@ -114,6 +115,9 @@ fn icon_goals() -> Element {
 }
 fn icon_settings() -> Element {
     rsx! { SettingsIcon { size: 16 } }
+}
+fn icon_sync() -> Element {
+    rsx! { RefreshCw { size: 16 } }
 }
 
 pub fn nav_tabs() -> Vec<NavTab> {
@@ -317,6 +321,15 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "files",
             icon: icon_files,
             route: Route::FilesRoute {},
+        },
+        NavTab {
+            label: "Sync",
+            // Under the files plugin, because that is what it syncs: an
+            // org with Files turned off has no folders to keep in step
+            // and should not be offered a page about them.
+            plugin: "files",
+            icon: icon_sync,
+            route: Route::SyncRoute {},
         },
         NavTab {
             label: "Settings",

@@ -262,6 +262,13 @@ gloo-timers = { workspace = true, features = ["futures"] }
 # Native session-token persistence (desktop/mobile) — architect-auth's
 # FileTokenStore, used in `cfg(not(target_arch = "wasm32"))` blocks in auth.rs.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The WebSocket transport, so `connect_lane("ws://…")` can reach the
+# sync agent's control socket on this machine. Without it that call
+# fails at runtime with "unknown transport scheme" on a URL that looks
+# perfectly correct — which is how pairing came to reinstall the service
+# instead of telling the running agent. The browser has no agent to talk
+# to and its own transport.
+vox = { workspace = true, features = ["transport-websocket"] }
 architect-auth = { workspace = true, features = ["client"] }
 # Native org discovery (desktop/mobile/iOS) — `window.fetch` is wasm-only,
 # so `orgs::fetch_orgs` uses reqwest (rustls) for the `.well-known` GET.

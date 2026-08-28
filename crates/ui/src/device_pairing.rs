@@ -68,14 +68,14 @@ pub fn use_device_pairing() {
 /// The browser build: nothing to pair, and no subprocess to pair it
 /// with. Kept as a same-shaped stub so the call site needs no `cfg`.
 #[cfg(target_arch = "wasm32")]
-mod native {
+pub(crate) mod native {
     pub async fn pair(_slug: &str) -> String {
         "sync: the web app has no local agent to pair".to_string()
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-mod native {
+pub(crate) mod native {
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -127,6 +127,25 @@ mod native {
         id.get(..8).unwrap_or(id)
     }
 
+    /// What went wrong talking to the agent, in terms a person can act
+    /// on.
+    ///
+    /// The interesting case is version skew. An app newer than the
+    /// installed agent gets `"writer and reader schema kinds differ"`
+    /// from the decoder — true, and useless to somebody who wants to
+    /// know why their files are not moving. The two are separate
+    /// programs updated separately, so this will happen to real people
+    /// and deserves its own sentence.
+    pub(crate) fn agent_error(e: &impl std::fmt::Display) -> String {
+        let text = e.to_string();
+        if text.contains("schema") {
+            return "the sync agent on this machine is an older version than the app \
+                    — reinstall it (`fts-files-daemon install`) to pair"
+                .to_string();
+        }
+        format!("the agent refused the request ({text})")
+    }
+
     /// The agent running on this machine, over its local control socket.
     ///
     /// The same surface the `fts-files-daemon` CLI drives — the app is
@@ -176,14 +195,22 @@ mod native {
         // interrupts transfers to deliver a string it could simply have
         // been handed — and on a machine syncing with other machines,
         // that restart is felt by all of them.
-        if let Ok(client) = local_agent().await {
-            if client.set_coordinator(coordinator.clone()).await.is_ok() {
-                return format!(
-                    "sync: this machine ({}) is paired with {slug} ({})",
-                    short(&endpoint),
-                    short(&coordinator)
-                );
-            }
+        match local_agent().await {
+            Ok(client) => match client.set_coordinator(coordinator.clone()).await {
+                Ok(_) => {
+                    return format!(
+                        "sync: this machine ({}) is paired with {slug} ({}) — told the running agent",
+                        short(&endpoint),
+                        short(&coordinator)
+                    );
+                }
+                // Said out loud rather than swallowed. Falling through
+                // silently is how this came to reinstall a service
+                // nobody needed reinstalled, while reporting the same
+                // cheerful line either way.
+                Err(e) => tracing::warn!("sync: {}", agent_error(&e)),
+            },
+            Err(e) => tracing::info!("sync: no agent answering ({e}) — installing one"),
         }
 
         // No agent answering: this machine has the binary but no
@@ -193,7 +220,7 @@ mod native {
             .output()
         {
             Ok(out) if out.status.success() => format!(
-                "sync: this machine ({}) is paired with {slug} ({})",
+                "sync: this machine ({}) is paired with {slug} ({}) — installed the agent as a service",
                 short(&endpoint),
                 short(&coordinator)
             ),

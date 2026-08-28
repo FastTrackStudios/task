@@ -495,12 +495,52 @@ fn linux_plan(home: &Path, config: &ServiceConfig) -> Plan {
                 "--now",
                 UNIT_NAME,
             ])),
+            // And restart, because `enable --now` only *starts* a service
+            // that is stopped. Re-installing an agent that is already
+            // running left the new unit on disk and the old environment
+            // in the process — so `install --coordinator` wrote the
+            // coordinator down, reported success, and changed nothing
+            // about what the agent was doing. macOS does not have this
+            // problem: bootout/bootstrap replaces the job.
+            Action::Run(Step::required(["systemctl", "--user", "restart", UNIT_NAME])),
         ],
         notes: vec![
             "a user service runs while you are logged in; `loginctl enable-linger $USER` keeps it running after you log out".into(),
             format!("logs: journalctl --user -u {UNIT_NAME} -f"),
         ],
     }
+}
+
+/// What the installed unit already sets for `key`, if anything.
+///
+/// An install that is not *told* a setting must keep the one already in
+/// force. Upgrading the binary is the common reason to re-run this, and
+/// a re-install that rewrote the unit from defaults silently undid the
+/// pairing somebody had just done in the app: the coordinator was in the
+/// unit, the new unit had no coordinator, and the agent came back
+/// syncing with nobody while reporting a successful install.
+///
+/// Reads both unit dialects — `Environment=K=V` for systemd, the
+/// `<key>K</key><string>V</string>` pair for launchd — because the
+/// answer has to survive whichever platform wrote it.
+#[must_use]
+pub fn configured(home: &Path, key: &str) -> Option<String> {
+    let unit = std::fs::read_to_string(unit_path(home)).ok()?;
+
+    if let Some(value) = unit.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Environment=")
+            .and_then(|kv| kv.strip_prefix(key))
+            .and_then(|rest| rest.strip_prefix('='))
+    }) {
+        return Some(value.trim().to_string()).filter(|v| !v.is_empty());
+    }
+
+    // launchd: the value is the <string> after the matching <key>.
+    let marker = format!("<key>{key}</key>");
+    let after = unit.split_once(&marker)?.1;
+    let value = after.split_once("<string>")?.1.split_once("</string>")?.0;
+    Some(value.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 /// Whether the service is registered for `home`.

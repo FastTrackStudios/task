@@ -74,7 +74,14 @@ fn AgentPanel() -> Element {
     use_future(move || async move {
         loop {
             let read = match agent().await {
-                Ok(client) => client.status().await.map_err(|e| e.to_string()),
+                // Version skew reads as a decoder complaint about
+                // schemas, which tells a person nothing about why their
+                // files are not moving — `agent_error` turns it into the
+                // sentence they can act on.
+                Ok(client) => client
+                    .status()
+                    .await
+                    .map_err(|e| crate::device_pairing::native::agent_error(&e)),
                 Err(e) => Err(e),
             };
             status.set(Some(read));

@@ -231,6 +231,21 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         config.program = installed.clone();
     }
 
+    // Anything not named on this run keeps the value the installed unit
+    // already had. Upgrading the binary is the usual reason to re-run
+    // `install`, and rewriting the unit from defaults silently undid the
+    // pairing done in the app.
+    for (key, slot) in [
+        ("FTS_FILES_DAEMON_COORDINATOR", &mut config.coordinator),
+    ] {
+        if slot.is_none() {
+            *slot = files_daemon::install::configured(&home, key);
+        }
+    }
+    if let Some(kept) = &config.coordinator {
+        println!("keep    coordinator {kept}");
+    }
+
     let plan = files_daemon::install::install_plan(&home, &config)?;
     if copy_binary {
         println!("copy    {} → {}", std::env::current_exe()?.display(), installed.display());
@@ -589,8 +604,36 @@ fn endpoint_id_or_unknown() -> String {
     endpoint_id().unwrap_or_else(|_| "<this machine's id>".into())
 }
 
+/// Die quietly when the reader goes away, as a Unix tool does.
+///
+/// Rust ignores SIGPIPE and turns the failed write into a panic, so
+/// `fts-files-daemon status | head -4` ends in a backtrace about broken
+/// pipes — which looks like the agent crashed and is only `head`
+/// closing the pipe it was done with.
+#[cfg(unix)]
+fn die_quietly_on_broken_pipe() {
+    // SAFETY: restoring a signal to its default disposition takes no
+    // handler and touches no state of ours.
+    unsafe {
+        signal(SIGPIPE, SIG_DFL);
+    }
+}
+
+#[cfg(unix)]
+const SIGPIPE: i32 = 13;
+#[cfg(unix)]
+const SIG_DFL: usize = 0;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(signum: i32, handler: usize) -> usize;
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    die_quietly_on_broken_pipe();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(result) = run_command(&args) {
         return result;
@@ -778,9 +821,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The coordinator: the peer this daemon syncs with by default.
     // Optional, because a daemon with none is still useful — it serves
     // its own replica lane, so another machine can pull it.
-    match env("FTS_FILES_DAEMON_COORDINATOR") {
+    // The unit's environment first, then what the agent was told over
+    // its socket the last time somebody paired it from the app.
+    match env("FTS_FILES_DAEMON_COORDINATOR").or_else(|| daemon.remembered_coordinator()) {
         None => tracing::warn!(
-            "no FTS_FILES_DAEMON_COORDINATOR set — this daemon serves its content but pulls nothing"
+            "no coordinator — this daemon serves its content but pulls nothing"
         ),
         Some(coordinator) if coordinator.starts_with("ws://") || coordinator.starts_with("wss://") => {
             // The dev path: a local server over a WebSocket, where the

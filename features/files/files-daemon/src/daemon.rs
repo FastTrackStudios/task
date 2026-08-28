@@ -380,7 +380,29 @@ impl SyncDaemon {
     pub async fn set_coordinator_peer(&self, endpoint_id: &str) -> Result<()> {
         let peer = self.dial(endpoint_id).await?;
         self.set_coordinator(peer);
+        // Written down, because being *told* the org over the socket and
+        // being *started* with it in the environment should not differ
+        // after a reboot. Without this, an agent paired from the app
+        // came back knowing nothing about the org — the same class of
+        // quiet forgetting as the sync choices.
+        let path = self.inner.data_dir.join("coordinator");
+        if let Err(e) = std::fs::write(&path, endpoint_id) {
+            tracing::warn!(error = %e, "could not record the coordinator");
+        }
         Ok(())
+    }
+
+    /// The org this agent was last told to sync with, if any.
+    ///
+    /// The environment wins when both are set: a service unit is an
+    /// operator's explicit configuration, and a file this wrote is a
+    /// memory of what somebody chose in the app.
+    #[must_use]
+    pub fn remembered_coordinator(&self) -> Option<String> {
+        std::fs::read_to_string(self.inner.data_dir.join("coordinator"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
 
     /// Hold the boundary this daemon's shared folders are recorded in,
