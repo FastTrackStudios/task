@@ -133,6 +133,7 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon checkpoint <root-id>     force a save point now (before unplugging)
     fts-files-daemon share <dir> [--name N]   share a folder from this machine
     fts-files-daemon shares                   every root this machine holds
+    fts-files-daemon unshare <root>           stop holding one (the files stay)
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
     fts-files-daemon forget <endpoint-id>     stop admitting a machine, and stop pulling it
     fts-files-daemon resolve <root> <path>    two machines changed it — keep both sides
@@ -158,7 +159,8 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         // Handled in `main`: they dial something, so they need the async
         // runtime rather than avoiding it.
         Some(
-            "status" | "checkpoint" | "share" | "shares" | "peer" | "forget" | "resolve",
+            "status" | "checkpoint" | "share" | "shares" | "unshare" | "peer" | "forget"
+            | "resolve",
         ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -526,6 +528,23 @@ fn is_unreachable(e: &impl std::fmt::Display) -> bool {
     text.contains("timed out") || text.contains("dialling") || text.contains("no route")
 }
 
+/// Stop holding a root. The files stay where they are.
+async fn unshare(root: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let (id, name, path) = client
+        .shares()
+        .await?
+        .into_iter()
+        .find(|(id, name, _)| name == root || id.to_string() == root)
+        .ok_or_else(|| format!("this machine holds no root called {root}"))?;
+    client.unshare(id).await?;
+    println!("stopped holding {name}");
+    if !path.is_empty() {
+        println!("{path} is untouched — nothing was deleted.");
+    }
+    Ok(())
+}
+
 /// Settle a path two machines changed, keeping both sides.
 async fn resolve(root: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let client = control().await?;
@@ -674,6 +693,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("forget") => {
             let id = args.get(1).ok_or("forget needs an endpoint id")?.clone();
             return forget(&id).await;
+        }
+        Some("unshare") => {
+            let root = args.get(1).ok_or("unshare needs a root id or name")?.clone();
+            return unshare(&root).await;
         }
         Some("resolve") => {
             let root = args.get(1).ok_or("resolve needs a root id or name")?.clone();

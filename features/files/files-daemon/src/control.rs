@@ -75,6 +75,10 @@ impl DaemonControlService for DaemonControl {
         Ok((root.id, root.name))
     }
 
+    async fn unshare(&self, root_id: Uuid) -> Result<(), DaemonError> {
+        self.daemon.unshare(root_id)
+    }
+
     async fn pull_all(
         &self,
         endpoint_id: String,

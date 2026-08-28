@@ -90,8 +90,23 @@ And once it is running:
 ```
 fts-files-daemon id                  # this machine's endpoint id
 fts-files-daemon status              # what it is syncing, and how far along
+fts-files-daemon shares              # every folder this machine holds
+fts-files-daemon share ~/Sessions    # start holding one
+fts-files-daemon unshare Sessions    # stop holding one (the files stay)
+fts-files-daemon peer <id>           # sync with that machine
+fts-files-daemon forget <id>         # stop syncing with it (the files stay)
 fts-files-daemon checkpoint "Album"  # force a save point before unplugging
+fts-files-daemon resolve Album mix.wav   # two machines changed it — keep both
 ```
+
+The desktop app shows the same thing at **`/sync`**: what is syncing,
+how far along, when it last did, and the paths two machines changed with
+the button that settles them. It reads the agent's control socket, so
+the app and the CLI cannot disagree about what is happening.
+
+**`--roots` defaults to `~/Task`, which may not be empty.** Adopted
+folders land beside whatever is already there; point it somewhere of its
+own if you keep something else at that path.
 
 It registers a **user** agent — a launchd `LaunchAgent` on macOS, a
 systemd user unit on Linux — that starts at login and restarts if it

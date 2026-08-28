@@ -111,6 +111,11 @@ pub trait DaemonControlService {
     async fn share(&self, path: String, name: Option<String>)
     -> Result<(Uuid, String), DaemonError>;
 
+    /// Stop holding a root: no longer served, no longer pulled, and
+    /// left on disk exactly as it is. "Stop tracking this", never
+    /// "delete my project".
+    async fn unshare(&self, root_id: Uuid) -> Result<(), DaemonError>;
+
     /// Take everything `endpoint_id` offers, adopting what this machine
     /// does not have under `under` (empty for this agent's own roots
     /// directory, which is nearly always what a caller wants — see

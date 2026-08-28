@@ -504,6 +504,26 @@ impl SyncDaemon {
         Ok(root)
     }
 
+    /// Stop holding a root: no longer served to peers, no longer
+    /// pulled, and left on disk exactly as it is.
+    ///
+    /// The counterpart of [`Self::share`], and its absence was the same
+    /// shape of hole as `forget`'s: a folder could be handed to the
+    /// agent and never taken back, so a directory adopted by mistake
+    /// stayed adopted, kept being offered to every admitted machine, and
+    /// the only way out was editing the store by hand.
+    ///
+    /// Content is untouched. This is "stop tracking this", not "delete
+    /// my project" — and the version history stays in the tree's own
+    /// `.fts-files`, so re-sharing it later resumes rather than starts
+    /// over.
+    pub fn unshare(&self, root_id: Uuid) -> Result<()> {
+        self.remove_sync_choice(root_id);
+        self.inner.backend.forget_root(root_id)?;
+        self.inner.events.publish(self.status());
+        Ok(())
+    }
+
     /// Sync everything `endpoint_id` offers, adopting what this machine
     /// does not have under `under`.
     ///

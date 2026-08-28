@@ -2772,6 +2772,23 @@ impl FilesBackend {
     /// through [`FilesBackend::enable_watching`] or their own
     /// `spawn_blocking` (PR #283 review). The watchers map is locked
     /// only around the lookup and the insert, never across that walk.
+    /// Stop holding `root_id`: drop it from the registry and stop
+    /// watching its tree. The files stay exactly where they are.
+    ///
+    /// The registry has always been able to do this and nothing above
+    /// it could ask — so a root adopted by mistake stayed adopted, and
+    /// kept being offered to every machine this store serves. Deliberately
+    /// not a delete: the tree keeps its `.fts-files` history, so taking
+    /// the same folder back later resumes rather than starts over.
+    pub fn forget_root(&self, root_id: Uuid) -> Result<(), FilesError> {
+        self.watchers
+            .lock()
+            .expect("watcher map poisoned")
+            .remove(&root_id);
+        self.registry.remove(root_id).map_err(to_files_error)?;
+        Ok(())
+    }
+
     pub fn watch_root(&self, root_id: Uuid) -> Result<(), FilesError> {
         let root = self.get_root_info(root_id).map_err(to_files_error)?;
         if self
