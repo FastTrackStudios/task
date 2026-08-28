@@ -28,6 +28,12 @@ pub fn MiniPlayer(
     org: ReadSignal<String>,
     root_id: ReadSignal<Uuid>,
     path: ReadSignal<String>,
+    /// Expansion override: a host with a UNIFIED media session (the
+    /// app shell's dock ⇄ zoom system) opens the full screen there
+    /// instead of this mount opening a private overlay — one playback
+    /// surface, not one per embed. `None` = self-contained, as ever.
+    #[props(default)]
+    on_expand: Option<EventHandler<()>>,
 ) -> Element {
     let mut expanded = use_signal(|| false);
 
@@ -46,7 +52,10 @@ pub fn MiniPlayer(
                 org,
                 root_id,
                 path,
-                on_expand: move |()| expanded.set(true),
+                on_expand: move |()| match &on_expand {
+                    Some(host) => host.call(()),
+                    None => expanded.set(true),
+                },
             }
         }
     }
@@ -111,6 +120,8 @@ fn MiniBody(
                             video_id: video_id.clone(),
                             src: src.proxy.clone(),
                             mini: true,
+                            poster: src.filmstrip.clone(),
+                            waveform: src.peaks.clone(),
                         }
                         // The door to the full experience.
                         button {

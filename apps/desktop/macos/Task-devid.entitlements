@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Developer-ID / direct-download entitlements. The sibling
+       Task.entitlements is the App Store one; the difference is not
+       cosmetic:
+
+       NO com.apple.security.app-sandbox here, deliberately. A sandboxed
+       app may not write into ~/Library/LaunchAgents, so it cannot
+       register the sync agent that keeps files moving after the window
+       closes — the whole reason this build exists. Sandboxing it would
+       produce an app that installs nothing and reports success.
+
+       Hardened runtime IS on (codesign --options runtime), because
+       notarization requires it. The keys below are the holes that
+       runtime needs left open, and nothing else. -->
+
+  <!-- The vox client: WebSockets and HTTP out to task-server, plus
+       whatever the WKWebView loads. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Inbound: the sync agent binds a local control socket
+       (127.0.0.1:4055) that this app connects to, and an iroh/QUIC
+       endpoint that other machines dial to pull this one's work. A pull
+       engine with no listener can only ever sync one way. -->
+  <key>com.apple.security.network.server</key>
+  <true/>
+
+  <!-- WKWebView's JavaScript JIT. The web content runs in its own
+       system processes, but the runtime refuses the mapping without
+       this on some macOS versions and the failure looks like a blank
+       window rather than an error. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>

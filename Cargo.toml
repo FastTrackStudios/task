@@ -215,6 +215,7 @@ agent-worktree = { path = "features/agent/agent-worktree" }
 # features/files — the Files platform (CAS chunk store, version store,
 # RPC surface, placement, sync, transcode, WebDAV bridge)
 files = { path = "features/files/files" }
+files-daemon = { path = "features/files/files-daemon" }
 files-domain = { path = "features/files/files-domain" }
 files-proto = { path = "features/files/files-proto", default-features = false }
 files-storage = { path = "features/files/files-storage" }
@@ -514,6 +515,19 @@ tempfile = "3"
 
 # ── Patches ───────────────────────────────────────────────────────────
 [patch.crates-io]
+# vox-core with `Caller::with_global_middleware` — the service-agnostic
+# middleware seam the native iroh transport needs to present a bearer on
+# every call of a connection (crates/ui-core/src/vox_clients.rs; the CLI
+# documents the same gap in `dial_authenticated`). The branch is
+# `feat/global-client-middleware` on the vox repo, one additive change
+# over the published rc.5 (its vox-core is byte-identical to the
+# crates.io release).
+#
+# LOCAL PATH — this builds only on machines with the vox worktree
+# checked out at this path. Replace with the git branch (or drop the
+# patch entirely once a vox release carries the change) before anyone
+# else needs to build this.
+vox-core = { path = "/run/media/Development/vox-global-mw/rust/vox-core" }
 # Blitz from the FTS fork (0.3.0-beta.1 line, upstream 02523b83 +
 # fts-focus: focus-follows-pointerdown for all focusable content —
 # upstream only click-focuses text inputs, leaving the editor's tabindex

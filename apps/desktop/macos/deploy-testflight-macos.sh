@@ -120,6 +120,26 @@ APP="$(ls -d $APP_GLOB 2>/dev/null | head -1)"
 PLIST="$APP/Contents/Info.plist"
 echo "=== app bundle: $APP ==="
 
+# ── The sync agent, shipped inside the app ──────────────────────────────────
+# The app installs this as a LaunchAgent on first run (see
+# apps/desktop/src/sync_service.rs), which is what keeps files syncing after
+# the window is closed. It has to live in Contents/MacOS: that is where the
+# app looks (next to its own executable), and it is where nested code may be
+# signed as part of the bundle.
+#
+# NOTE for the App Store path: a sandboxed app may not write into
+# ~/Library/LaunchAgents. This bundling is what a Developer-ID build needs;
+# a MAS build additionally needs the agent registered through SMAppService
+# with its plist under Contents/Library/LaunchAgents. Not wired yet.
+echo "=== building the sync agent ==="
+"$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
+    set -euo pipefail
+    cd '$ROOT'
+    cargo build --release -p files-daemon --features daemon-bin --bin fts-files-daemon
+"
+cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
+echo "agent: $APP/Contents/MacOS/fts-files-daemon"
+
 # ── Info.plist: identity, versions, category, SDK metadata ───────────────────
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
 MARKETING_VER="${MARKETING_VER:-0.0.2}"
@@ -218,6 +238,10 @@ find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0
     | while IFS= read -r -d '' f; do
         codesign --force --keychain "$KEYCHAIN" --timestamp --sign "$SIGN_ID" "$f"
       done
+# The nested agent binary, signed before the bundle that contains it —
+# inside-out, or the outer signature is invalidated by signing it after.
+codesign --force --keychain "$KEYCHAIN" --timestamp --sign "$SIGN_ID" \
+    "$APP/Contents/MacOS/fts-files-daemon"
 codesign --force --keychain "$KEYCHAIN" --timestamp \
     --entitlements /tmp/task-ent.plist --sign "$SIGN_ID" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"

@@ -116,29 +116,36 @@ async fn status_reports_per_file_progress_during_a_sync() {
     assert_eq!(s.roots[0].name, "session");
 
     // Watch per-file progress WHILE a pull runs: tick in the
-    // background, and poll status until a file reports partial chunk
-    // progress (proving it's granular, not just "syncing").
+    // background, and poll status until a file reports partial progress
+    // (proving it's granular, not just "syncing").
+    //
+    // Partial *bytes*, not partial chunks. The store links a file this
+    // size whole, so its manifest has one chunk and it moves as verified
+    // 1 MiB windows — chunk counts are 0-then-1 for the whole transfer,
+    // and bytes are what actually climb. Asserting on chunks here was
+    // asserting that a six-megabyte file is chunked, which is a claim
+    // about the chunker rather than about progress reporting.
     let d = rig.daemon.clone();
     let ticking = tokio::spawn(async move { d.tick().await });
     let mut saw_partial = false;
-    for _ in 0..200 {
+    for _ in 0..2000 {
         let s = rig.control.status().await.unwrap();
         if let Some(root) = s.roots.first() {
             if root.state == RootSyncState::Syncing
                 && root.files.iter().any(|f| {
-                    f.chunks_total > 1 && f.chunks_done > 0 && f.chunks_done < f.chunks_total
+                    f.logical_bytes > 0 && f.bytes_done > 0 && f.bytes_done < f.logical_bytes
                 })
             {
                 saw_partial = true;
                 break;
             }
         }
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
     ticking.await.unwrap();
     assert!(
         saw_partial,
-        "status never showed granular mid-file chunk progress"
+        "status never showed granular mid-file progress"
     );
 
     // After the pull: idle, content resident, last_synced_at set.
@@ -244,7 +251,8 @@ async fn a_slice_choice_makes_a_partial_replica_then_hydrates() {
 
 /// AC 1 (survives session expiry) + AC 2 (revocation) at the identity
 /// layer: the device id is persisted, so a fresh daemon over the same
-/// data dir is the SAME device — it does not re-enroll as a new one.
+/// data dir is the SAME device — it does not come back as a stranger.
+// t[verify files.device.identity]
 #[tokio::test(flavor = "multi_thread")]
 async fn device_identity_persists_across_restart() {
     let dir = tempfile::tempdir().unwrap();
@@ -253,15 +261,10 @@ async fn device_identity_persists_across_restart() {
 
     let d1 = SyncDaemon::open(backend.clone(), &data).unwrap();
     let id1 = d1.device_id();
-    assert!(!d1.status().enrolled, "no secret yet");
-    d1.record_enrollment("operator-approved-secret".into())
-        .unwrap();
-    assert!(d1.status().enrolled);
 
-    // "Restart": a new daemon over the same data dir — same id, still
-    // enrolled (the secret survived, so it re-announces as itself and
-    // keeps syncing without an interactive login).
+    // "Restart": a new daemon over the same data dir — same id, no
+    // interactive login involved, which is the whole point of keeping
+    // it in a file rather than in a session.
     let d2 = SyncDaemon::open(backend, &data).unwrap();
     assert_eq!(d2.device_id(), id1, "same device across restart");
-    assert!(d2.status().enrolled, "enrollment secret persisted");
 }

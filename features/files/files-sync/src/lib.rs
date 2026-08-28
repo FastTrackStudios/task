@@ -113,9 +113,40 @@ fn from_files(err: files_proto::FilesError) -> SyncError {
     }
 }
 
+/// One root a peer holds, as it announces itself.
+///
+/// The three fields are exactly what the other side needs to adopt it as
+/// a replica ([`files::FilesBackend::adopt_replica`]): the id makes the
+/// two copies the same root, the name is what a person picks it out by,
+/// and the flavor decides which capabilities — and so which facets —
+/// apply to it.
+// Facet only, no serde: `RootFlavor` is a facet type (as is
+// `FileRootInfo`, which crosses the same wire), and the derive pair the
+// other wire structs here carry is incidental rather than required.
+#[derive(Debug, Clone, PartialEq, facet::Facet)]
+#[repr(C)]
+pub struct WireRoot {
+    pub id: Uuid,
+    pub name: String,
+    pub flavor: files_proto::model::RootFlavor,
+}
+
 /// The per-root sync surface one backend serves to its peers.
 #[architect::rpc]
 pub trait SyncService {
+    /// Every root this peer holds.
+    ///
+    /// Without this a puller has to be *told* the ids it wants, which is
+    /// workable for an app that already browsed the org and impossible
+    /// for the two callers that have nobody to ask: a server reconciling
+    /// from a laptop it admitted, and a daemon on a fresh machine that
+    /// holds nothing yet. Both need to start from "what have you got".
+    ///
+    /// It is a `read` on the replica resource like [`Self::heads`] — the
+    /// names of the roots a peer already admits the other side to are not
+    /// a further disclosure.
+    async fn roots(&self) -> Result<Vec<WireRoot>, SyncError>;
+
     /// The root's visible heads, hex, this side's own line first.
     async fn heads(&self, root_id: Uuid) -> Result<Vec<String>, SyncError>;
 
@@ -253,6 +284,44 @@ pub async fn serve_peer(
     .await;
 }
 
+/// How long dialling a peer may take before it counts as unreachable.
+///
+/// Matches `files::remotes`' own dial timeout, and for its reason: the
+/// interesting case is the network that is not working, and a sync pass
+/// that waits forever on a laptop that is shut never reaches the peers
+/// that are awake.
+pub const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Open the replica lane on `peer`, dialling from `endpoint`.
+///
+/// The dialling half of [`serve_peer`], and it lives beside it because
+/// both callers are the same shape: a server collecting what a laptop
+/// did offline, and a laptop collecting what the server did while it was
+/// shut. Neither presents a credential — what reaches the far gate is
+/// the endpoint iroh proved during the handshake, so what authorises the
+/// pull is the far side having admitted this machine.
+#[cfg(feature = "vox")]
+pub async fn dial_peer(
+    endpoint: &architect::iroh_link::iroh::Endpoint,
+    peer: &str,
+) -> Result<SyncServiceClient, SyncError> {
+    use architect::iroh_link;
+
+    let id: iroh_link::iroh::EndpointId = peer
+        .parse()
+        // A malformed id is not an outage. Saying "unavailable" here
+        // would tell the caller to retry something that cannot come back.
+        .map_err(|e| SyncError::BadRequest(format!("not an endpoint id: {peer} ({e})")))?;
+    let link = tokio::time::timeout(DIAL_TIMEOUT, iroh_link::connect(endpoint, id))
+        .await
+        .map_err(|_| SyncError::Io(format!("dialling {peer}: timed out")))?
+        .map_err(|e| SyncError::Io(format!("dialling {peer}: {e}")))?;
+    architect::vox::initiator_on(link)
+        .establish()
+        .await
+        .map_err(|e| SyncError::Io(format!("establishing the replica lane on {peer}: {e}")))
+}
+
 /// [`SyncService`] served straight off a [`FilesBackend`] — the shape
 /// both the in-server hosting and the sync daemon (#265) mount.
 #[derive(Clone, architect::HasDispatcher)]
@@ -280,6 +349,23 @@ impl SyncHost {
 // and server share one runtime, so a blocked server worker also stalls
 // the client — the deadlock that wedged the first test run.
 impl SyncService for SyncHost {
+    async fn roots(&self) -> Result<Vec<WireRoot>, SyncError> {
+        // `list_roots` is already the async, blocking-pool-aware method
+        // (the registry read plus a vault overlay), so it does not go
+        // through `off_thread` as the `sync_*` calls do.
+        let roots = files::FilesService::list_roots(&self.backend)
+            .await
+            .map_err(from_files)?;
+        Ok(roots
+            .into_iter()
+            .map(|r| WireRoot {
+                id: r.id,
+                name: r.name,
+                flavor: r.flavor,
+            })
+            .collect())
+    }
+
     async fn heads(&self, root_id: Uuid) -> Result<Vec<String>, SyncError> {
         let b = self.backend.clone();
         off_thread(move || b.sync_heads(root_id).map_err(from_files)).await

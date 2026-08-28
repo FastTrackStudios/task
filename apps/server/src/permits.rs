@@ -514,10 +514,18 @@ table!(FILES_CURATION, "files-curation", "files/**", [
 // stub, which is the one write here that makes files non-resident —
 // audited for the same reason v1's `dehydrate` was. `revoke_device` cuts
 // a device off AND destroys its local copy of org content.
+//
+// `enroll_device` is audited too, and is the widest of them: it admits a
+// machine to this org's whole commit graph. It is a member's call
+// because a member sitting at the machine is the authority pairing has —
+// but "which laptops hold this org" is exactly what an operator reads an
+// audit log to find out. `coordinator` is a plain read: the org's own
+// endpoint id is the address it publishes, not a secret.
 table!(FILES_SYNC, "files-sync", "files/**", [
     rd "facets", wr "map_facet", rd "ignore_set", wr "set_project_ignores",
     rd "subscription", wr "subscribe", wr "pin", wa "hydrate",
     rd "devices", wr "set_transfer_policy", wa "revoke_device",
+    wa "enroll_device", rd "coordinator",
 ]);
 
 // Replica sync — the commit graph and the chunks under it

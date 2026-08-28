@@ -395,6 +395,51 @@ fn to_files_error(err: Error) -> FilesError {
 ///
 /// The seam itself lives in `task-files-util`, shared with
 /// `files-storage` — it was a verbatim copy in both (PR #284 review).
+/// Run sync store work from wherever the caller is, without parking a
+/// runtime worker on it.
+///
+/// This crate's sync bodies drive jj-lib and the chunk store with
+/// `pollster::block_on`. That is correct on a thread that is *not* a
+/// runtime worker — the blocking pool, a bare thread — and a hang on one
+/// that is: a parked worker keeps the tasks it just woke in its own LIFO
+/// slot, where no other worker can steal them, and the future it is
+/// polling waits on exactly those tasks. The RPC methods avoid this by
+/// convention (`spawn_blocking` for every `*_inner`), but the entry
+/// points reachable from *inside* the process — the vault page sink, the
+/// ingest bridge — are called from whatever thread the caller is on.
+///
+/// So: on a runtime thread, `f` runs on a scoped helper thread that has
+/// *entered* the runtime (so `tokio::fs` and friends still find it) but
+/// is not a worker of it — every wakeup it produces goes to the
+/// injection queue, where a free worker takes it. Off a runtime, `f`
+/// runs inline; there is nothing to stall.
+pub(crate) fn off_worker<R, F>(f: F) -> R
+where
+    F: FnOnce() -> R + Send,
+    R: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => std::thread::scope(|s| {
+            s.spawn(move || {
+                let _entered = handle.enter();
+                f()
+            })
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        }),
+        Err(_) => f(),
+    }
+}
+
+/// [`off_worker`] for one future: the ingest bridge's shape.
+fn drive_off_worker<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    off_worker(|| pollster::block_on(fut))
+}
+
 async fn blocking<T, F>(f: F) -> Result<T, FilesError>
 where
     F: FnOnce() -> Result<T, Error> + Send + 'static,
@@ -573,7 +618,8 @@ impl FilesBackend {
         self.remotes.clone()
     }
 
-    pub(crate) fn endpoint_id(&self) -> Option<String> {
+    #[must_use]
+    pub fn endpoint_id(&self) -> Option<String> {
         self.endpoint_id.clone()
     }
 
@@ -610,6 +656,12 @@ impl FilesBackend {
 
     pub(crate) fn registry_list(&self) -> Vec<FileRootInfo> {
         self.registry.list()
+    }
+
+    /// This backend's own data directory — what identifies one backend
+    /// among several in a process.
+    pub(crate) fn data_dir_path(&self) -> PathBuf {
+        self.data_dir.clone()
     }
 
     /// The org vault the curated version entities live in.
@@ -752,6 +804,7 @@ impl FilesBackend {
     /// is inert rather than still ticking against a store the next
     /// backend is about to open (PR #283 review).
     pub async fn shutdown(&self) {
+        self.release_vault();
         if let Some(driver) = self.driver.lock().expect("driver lock poisoned").take() {
             driver.abort();
         }
@@ -1166,6 +1219,22 @@ impl FilesBackend {
         // a rejected path never even reaches the marker/registry
         // checks below.
         let canonical = self.confine(&requested)?;
+        self.register_root(canonical, name, flavor)
+    }
+
+    /// The half of [`FilesBackend::create_root_inner`] after confinement:
+    /// marker, overlap check, repo, registry, watch. `canonical` is
+    /// trusted — it has either passed [`FilesBackend::confine`] or is a
+    /// path this backend owns outright, which is how the org's own vault
+    /// becomes a root (`lane::vault`) without being inside the files
+    /// boundary.
+    pub(crate) fn register_root(
+        &self,
+        canonical: PathBuf,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<FileRootInfo, Error> {
+        let path = canonical.display().to_string();
         let canonical_str = canonical
             .to_str()
             .ok_or_else(|| Error::BadRequest(format!("{path}: not valid UTF-8")))?
@@ -3878,10 +3947,23 @@ impl FilesBackend {
     /// store rather than tracked alongside it. Chunking here is also
     /// what makes the upload dedup against everything already held: an
     /// identical chunk costs nothing to add.
+    ///
+    /// Safe to call from any thread, including a runtime worker. The
+    /// store's write is real async work — `tokio::fs`, `spawn_blocking`,
+    /// the iroh-blobs actor — and driving it with `pollster::block_on`
+    /// *on* a worker parks that worker with the tasks it just woke sitting
+    /// in its own LIFO slot, where no other worker can steal them. That is
+    /// the "third consecutive call stalls" bug `docs/spec/unmet.md`
+    /// recorded: it is not the third call that is special, it is whichever
+    /// call's wakeups land on the parked thread. So when there *is* an
+    /// ambient runtime, the future is driven from a helper thread instead
+    /// — wakeups from a non-worker thread go to the injection queue — and
+    /// the worker waits on the join. Off a runtime it is the plain poll
+    /// loop every other bridge here uses.
     pub fn sync_ingest_path(&self, root_id: Uuid, path: &Path) -> Result<String, FilesError> {
         let owned = path.to_path_buf();
         self.with_version_store(root_id, |vs| {
-            pollster::block_on(vs.chunks().write_path(&owned))
+            drive_off_worker(vs.chunks().write_path(&owned))
         })?
         .map(|file_id| file_id.to_string())
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))

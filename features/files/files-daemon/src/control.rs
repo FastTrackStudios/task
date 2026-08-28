@@ -53,6 +53,38 @@ impl DaemonControlService for DaemonControl {
         Ok(self.daemon.status())
     }
 
+    async fn admit_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError> {
+        self.daemon.admit_peer(&endpoint_id);
+        Ok(self.daemon.status())
+    }
+
+    async fn dismiss_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError> {
+        self.daemon.dismiss_peer(&endpoint_id);
+        Ok(self.daemon.status())
+    }
+
+    async fn peer_roots(&self, endpoint_id: String) -> Result<Vec<(Uuid, String)>, DaemonError> {
+        Ok(self
+            .daemon
+            .peer_roots(&endpoint_id)
+            .await?
+            .into_iter()
+            .map(|r| (r.id, r.name))
+            .collect())
+    }
+
+    async fn sync_from_peer(
+        &self,
+        endpoint_id: String,
+        root_id: Uuid,
+        slice: Vec<String>,
+        under: String,
+    ) -> Result<DaemonStatus, DaemonError> {
+        self.daemon
+            .sync_from_peer(&endpoint_id, root_id, slice, std::path::Path::new(&under))
+            .await
+    }
+
     async fn pause(&self, root_id: Option<Uuid>) -> Result<DaemonStatus, DaemonError> {
         self.daemon.pause(root_id);
         Ok(self.daemon.status())

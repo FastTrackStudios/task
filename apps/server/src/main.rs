@@ -67,6 +67,10 @@ async fn main() -> eyre::Result<()> {
         for (slug, id) in host.ids() {
             info!(%slug, endpoint_id = %id, "reachable by endpoint id");
         }
+        // And the other direction: sync is two pulls, so a server that
+        // only serves the replica lane collects nothing its devices did
+        // offline. This is the pull the server runs.
+        task_server::device_sync::start(&state, host);
     }
 
     // Hold the construction scope so DB pools tear down in LIFO order

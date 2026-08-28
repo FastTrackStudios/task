@@ -6,11 +6,17 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# The window-chrome context this frameless shell provides (drag /
+# minimize / maximize / close callbacks the shared top bar renders).
+task-ui-core.workspace = true
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
 # `otel` so shipped clients export traces/logs/metrics through the
 # server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
 architect-telemetry = { workspace = true, features = ["otel"] }
+# One line at startup saying what happened to the sync agent — it runs
+# before any window exists, so the log is the only place to say it.
+tracing = { workspace = true }
 
 [features]
 default = ["desktop"]

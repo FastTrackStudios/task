@@ -7,7 +7,7 @@
 //! chip, detachable), and a pending drawing forces the pin: drawn
 //! feedback without its frame would be a lie.
 
-use architect_ui::lucide_dioxus::{Clock, Pencil, SendHorizontal, X};
+use architect_ui::lucide_dioxus::{Clock, Pencil, SendHorizontal, SquareCheckBig, X};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use files_proto::{NewReviewComment, ReviewComment};
@@ -96,6 +96,7 @@ fn CommentRow(comment: ReviewComment, head_commit: String, video_id: String) -> 
     let mut draw = DrawCtx::use_ctx();
     let toast = use_toast();
     let mut busy = use_signal(|| false);
+    let task_hook = try_use_context::<super::ReviewTaskHook>();
 
     let tc = comment.timecode_secs;
     // Only badge against a KNOWN head — an unloaded chain must not
@@ -193,13 +194,38 @@ fn CommentRow(comment: ReviewComment, head_commit: String, video_id: String) -> 
                         }
                     }
                 }
-                if task_ui_core::vox_session::guest_share().is_none() {
-                    button {
-                        class: "shrink-0 flex h-5 w-5 items-center justify-center rounded text-muted-foreground opacity-0 group-hover/comment:opacity-100 hover:text-destructive transition-opacity",
-                        title: "Delete comment",
-                        disabled: busy(),
-                        onclick: delete,
-                        X { size: 12 }
+                div { class: "flex shrink-0 items-center gap-1",
+                    // "File as task" — only where the app said tasks
+                    // can go (a project page provides the hook; the
+                    // guest lane and bare pages don't).
+                    if let Some(hook) = task_hook {
+                        button {
+                            class: "flex h-5 w-5 items-center justify-center rounded text-muted-foreground opacity-0 group-hover/comment:opacity-100 hover:text-primary transition-opacity",
+                            title: "File as a task",
+                            onclick: {
+                                let comment = comment.clone();
+                                let path = data.path.peek().clone();
+                                move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    hook.0.call(super::ReviewTaskRequest {
+                                        body: comment.body.clone(),
+                                        author: comment.author.clone(),
+                                        timecode_secs: comment.timecode_secs,
+                                        path: path.clone(),
+                                    });
+                                }
+                            },
+                            SquareCheckBig { size: 12 }
+                        }
+                    }
+                    if task_ui_core::vox_session::guest_share().is_none() {
+                        button {
+                            class: "flex h-5 w-5 items-center justify-center rounded text-muted-foreground opacity-0 group-hover/comment:opacity-100 hover:text-destructive transition-opacity",
+                            title: "Delete comment",
+                            disabled: busy(),
+                            onclick: delete,
+                            X { size: 12 }
+                        }
                     }
                 }
             }
@@ -215,6 +241,12 @@ fn Composer(video_id: String, watching: ReadSignal<Option<String>>) -> Element {
     let player = PlayerCtx::use_ctx();
     let mut draw = DrawCtx::use_ctx();
     let toast = use_toast();
+
+    // Signed-in surfaces attribute automatically; the Name field only
+    // exists for lanes with no identity (the guest share). An
+    // anonymous-by-default review tool isn't one.
+    let ident = try_use_context::<task_ui_core::identity::CurrentIdentity>();
+    let signed_name = ident.and_then(|i| i.name());
 
     let author = use_signal(String::new);
     let body = use_signal(String::new);
@@ -264,7 +296,9 @@ fn Composer(video_id: String, watching: ReadSignal<Option<String>>) -> Element {
         };
         let comment = NewReviewComment {
             timecode_secs,
-            author: author.peek().trim().to_string(),
+            author: ident
+                .and_then(|i| i.name())
+                .unwrap_or_else(|| author.peek().trim().to_string()),
             body: text,
             commit_id,
             annotation: strokes,
@@ -352,11 +386,20 @@ fn Composer(video_id: String, watching: ReadSignal<Option<String>>) -> Element {
                     },
                     Pencil { size: 16 }
                 }
-                Input {
-                    value: author,
-                    size: InputSize::Small,
-                    placeholder: "Name".to_string(),
-                    class: "max-w-28 ml-auto",
+                if let Some(name) = signed_name.clone() {
+                    // Attribution is visible, not editable: you sign as
+                    // who you are.
+                    span { class: "ml-auto max-w-28 truncate text-[11px] text-muted-foreground",
+                        title: "Commenting as {name}",
+                        "{name}"
+                    }
+                } else {
+                    Input {
+                        value: author,
+                        size: InputSize::Small,
+                        placeholder: "Name".to_string(),
+                        class: "max-w-28 ml-auto",
+                    }
                 }
                 button {
                     class: "flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",

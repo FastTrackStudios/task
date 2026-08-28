@@ -74,6 +74,115 @@ pub fn is_video_path(path: &str) -> bool {
     )
 }
 
+/// Card art for a project: the proxy stream of the first video in its
+/// root's `Deliverables/` folder — render it as a muted
+/// `preload="metadata"` `<video>` and the first frame is the art.
+/// `None` when the project has no adopted root, no video deliverable,
+/// or no rendition yet — the caller's card simply stays textual.
+pub async fn deliverable_poster(org: &str, root_name: &str) -> Option<String> {
+    let c = crate::client(org).await.ok()?;
+    let root = c
+        .list_roots()
+        .await
+        .ok()?
+        .into_iter()
+        .find(|r| r.name == root_name)?;
+    let file = c
+        .browse(root.id, "Deliverables".to_owned())
+        .await
+        .ok()?
+        .into_iter()
+        .find(|e| !e.is_dir && is_video_path(&e.name))?;
+    let path = format!("Deliverables/{}", file.name);
+    let proxy = c
+        .rendition(root.id, path, RenditionKind::Proxy720)
+        .await
+        .ok()?;
+    let tok = task_ui_core::media_grant::suffix_for_prefix(
+        org,
+        &format!("files/renditions/{}", root.id),
+    )
+    .await;
+    Some(rendition_url(
+        org,
+        root.id,
+        RenditionKind::Proxy720,
+        &proxy.file_id,
+        &tok,
+    ))
+}
+
+/// A request to file a review comment as a task — "hold this frame
+/// longer" is almost always work, and the platform the review lives in
+/// happens to run on tasks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReviewTaskRequest {
+    /// The comment's text, verbatim.
+    pub body: String,
+    /// Who said it.
+    pub author: String,
+    /// The pinned frame, or [`UNPINNED`] for a general note.
+    pub timecode_secs: f64,
+    /// Root-relative path of the file under review.
+    pub path: String,
+}
+
+/// App-provided hook behind the comment rail's "file as task" action.
+/// Provided as a context by the surface that knows where tasks go (a
+/// project page files under its project); absent — the guest lane, a
+/// bare files page — the action simply isn't offered.
+#[derive(Clone, Copy)]
+pub struct ReviewTaskHook(pub EventHandler<ReviewTaskRequest>);
+
+/// Resolve a file inside a *named* root to the `(root_id, path)` a
+/// [`MiniPlayer`] / [`ReviewScreen`] mounts on — for callers that know
+/// a root by convention rather than by id (a project page looking for
+/// its deliverable in the root named after the project). `None` when
+/// the root isn't adopted or the file isn't in it, so the caller can
+/// fall back to its outstanding state instead of mounting a player
+/// over a hole.
+pub async fn locate_in_root(org: &str, root_name: &str, path: &str) -> Option<(Uuid, String)> {
+    let c = crate::client(org).await.ok()?;
+    let roots = c.list_roots().await.ok()?;
+    let root = roots.into_iter().find(|r| r.name == root_name)?;
+    let (dir, file) = path.rsplit_once('/').unwrap_or(("", path));
+    let entries = c.browse(root.id, dir.to_owned()).await.ok()?;
+    entries
+        .iter()
+        .any(|e| !e.is_dir && e.name == file)
+        .then(|| (root.id, path.to_owned()))
+}
+
+/// Extensions the review surface treats as audio — reviewed with a
+/// waveform stage instead of frames, streamed via the Audio rendition.
+pub fn is_audio_path(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or_default().to_lowercase();
+    matches!(
+        ext.as_str(),
+        "wav" | "mp3" | "m4a" | "aac" | "flac" | "ogg" | "aif" | "aiff"
+    )
+}
+
+/// Resolve a deliverable by TITLE inside the root named `root_name`:
+/// the file in `Deliverables/` whose stem is the title, whatever its
+/// extension — the review-side half of the "file named like the item"
+/// binding convention. `None` = not adopted / not delivered yet.
+pub async fn locate_titled(org: &str, root_name: &str, title: &str) -> Option<(Uuid, String)> {
+    let c = crate::client(org).await.ok()?;
+    let roots = c.list_roots().await.ok()?;
+    let root = roots.into_iter().find(|r| r.name == root_name)?;
+    let entries = c.browse(root.id, "Deliverables".to_owned()).await.ok()?;
+    let file = entries.into_iter().find(|e| {
+        !e.is_dir
+            && (is_video_path(&e.name) || is_audio_path(&e.name))
+            && std::path::Path::new(&e.name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                == Some(title)
+    })?;
+    Some((root.id, format!("Deliverables/{}", file.name)))
+}
+
 /// The guest lane's "what can I see": its one review.
 pub async fn guest_scoped_review(org: &str) -> Result<Review, String> {
     let reviews = crate::client(org)
@@ -114,6 +223,9 @@ fn rendition_url(
 pub(crate) struct Sources {
     pub proxy: String,
     pub filmstrip: Option<String>,
+    /// The peaks rendition (raw mono s16le PCM) — an audio file's
+    /// stage draws its waveform from this instead of frames.
+    pub peaks: Option<String>,
 }
 
 /// Resolve the opened file to its streamable sources: proxy + filmstrip
@@ -137,19 +249,35 @@ pub(crate) async fn resolve_sources(
             }
         }
     };
-    let proxy = rendition(RenditionKind::Proxy720)
-        .await
-        .map_err(|e| e.to_string())?;
-    // No filmstrip is not an error — the proxy still plays; the scrub
-    // preview simply doesn't render.
-    let filmstrip = rendition(RenditionKind::Filmstrip).await.ok();
+    // Video first; an audio file has no Proxy720, so fall through to
+    // its own ladder (AAC stream + waveform peaks). One surface, both
+    // media — the transport, timeline and comments don't care which.
+    let (kind, main) = match rendition(RenditionKind::Proxy720).await {
+        Ok(p) => (RenditionKind::Proxy720, p),
+        Err(video_err) => match rendition(RenditionKind::Audio).await {
+            Ok(a) => (RenditionKind::Audio, a),
+            // The video error is the one worth reading — it names the
+            // original failure mode; the audio attempt was a fallback.
+            Err(_) => return Err(video_err.to_string()),
+        },
+    };
     let tok =
         task_ui_core::media_grant::suffix_for_prefix(org, &format!("files/renditions/{root_id}"))
             .await;
+    // Neither companion is an error to lack — the stream still plays;
+    // the scrub preview (video) or waveform (audio) simply doesn't
+    // render.
+    let (filmstrip, peaks) = if kind == RenditionKind::Audio {
+        (None, rendition(RenditionKind::Peaks).await.ok())
+    } else {
+        (rendition(RenditionKind::Filmstrip).await.ok(), None)
+    };
     Ok(Sources {
-        proxy: rendition_url(org, root_id, RenditionKind::Proxy720, &proxy.file_id, &tok),
+        proxy: rendition_url(org, root_id, kind, &main.file_id, &tok),
         filmstrip: filmstrip
             .map(|f| rendition_url(org, root_id, RenditionKind::Filmstrip, &f.file_id, &tok)),
+        peaks: peaks
+            .map(|p| rendition_url(org, root_id, RenditionKind::Peaks, &p.file_id, &tok)),
     })
 }
 

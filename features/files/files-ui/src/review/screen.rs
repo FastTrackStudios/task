@@ -30,11 +30,19 @@ pub fn ReviewScreen(
     /// Present when the screen is an overlay someone can leave (the
     /// files page); absent on dedicated pages (the guest entry).
     on_close: Option<EventHandler<()>>,
+    /// Media-element id override, for a host that OWNS the playback
+    /// element's identity beyond this mount (the app shell's unified
+    /// media session drives dock chrome against the same id). `None` =
+    /// a private per-mount id, as ever.
+    #[props(default)]
+    element_id: Option<String>,
 ) -> Element {
     // Stable per-mount element ids — the eval seams address the live
     // elements by id, and two open files must not cross wires.
     let container_id = use_hook(|| format!("review-screen-{}", Uuid::new_v4().simple()));
-    let video_id = use_hook(|| format!("review-video-{}", Uuid::new_v4().simple()));
+    let video_id = use_hook(move || {
+        element_id.unwrap_or_else(|| format!("review-video-{}", Uuid::new_v4().simple()))
+    });
     let stage_id = use_hook(|| format!("review-stage-{}", Uuid::new_v4().simple()));
     let cmp_video_id = use_hook(|| format!("review-cmp-{}", Uuid::new_v4().simple()));
 
@@ -217,6 +225,11 @@ pub fn ReviewScreen(
                                         video_id: video_id.clone(),
                                         src: src.proxy.clone(),
                                         mini: false,
+                                        // No poster here: the full stage
+                                        // letterboxes, and a background
+                                        // crop can't match the contained
+                                        // picture box.
+                                        waveform: src.peaks.clone(),
                                     }
                                     if comparing {
                                         span { class: "absolute left-2 top-2 rounded bg-sky-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-white",

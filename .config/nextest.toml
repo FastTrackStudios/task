@@ -21,6 +21,33 @@ slow-timeout = { period = "2s", terminate-after = 2 }
 filter = 'package(integration)'
 slow-timeout = { period = "10s", terminate-after = 3 }
 
+# The cadence tests in `files` are real-time: a recording storm is
+# simulated by sleeping past the quiescence window, and a file changing
+# mid-hash is a race the test deliberately sets up. Under the default
+# 2s/×2 they pass alone and time out one run in several when fifty
+# binaries start cold at once — the same shape as the integration case
+# above, and the same cure.
+[[profile.default.overrides]]
+filter = 'package(files) and binary(cadence)'
+slow-timeout = { period = "10s", terminate-after = 3 }
+
+# The daemon's peering tests bind real iroh endpoints and dial between
+# them, and one of them exists to prove a dial to an absent machine
+# *gives up* — which takes the dial timeout (5s, matching
+# `files::remotes`) by construction. A budget shorter than the timeout
+# under test can only fail.
+[[profile.default.overrides]]
+filter = 'package(files-daemon) and binary(peering)'
+slow-timeout = { period = "15s", terminate-after = 3 }
+
+# `task-server`'s e2e binaries boot a whole `AppState` — every org under
+# the data root, which on a developer machine is the real `~/.task` —
+# before the first assertion. Three to four seconds of boot against a 4s
+# budget is a test that passes or times out on machine load.
+[[profile.default.overrides]]
+filter = 'package(task-server)'
+slow-timeout = { period = "10s", terminate-after = 3 }
+
 # Tests that measure PHYSICAL disk usage — "did storing this file consume
 # a second copy", "did linking it consume no space".
 #

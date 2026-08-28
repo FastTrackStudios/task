@@ -32,6 +32,7 @@ pub mod search;
 pub mod sync;
 pub mod tree;
 pub mod upload;
+pub mod vault;
 pub mod version;
 pub mod write;
 

@@ -492,3 +492,88 @@ async fn one_orgs_devices_are_not_anothers() {
         "and the org that did revoke it still has"
     );
 }
+
+/// Pairing, from the org's side: a member's machine hands over the
+/// endpoint id it minted, and the org admits it.
+///
+/// The assertion that matters is the second one. A device row is a
+/// record; the *admitted set* is what a pull is actually gated on, so
+/// enrolment that wrote a row and left admission alone would produce a
+/// device the org can see, believes it enrolled, and refuses.
+// t[verify files.device.identity]
+#[tokio::test]
+async fn enrolling_a_device_admits_the_endpoint_it_presents() {
+    let (_dir, backend, _root) = album("Album").await;
+    let endpoint = "8badf00d8badf00d8badf00d8badf00d8badf00d8badf00d8badf00d8badf00d";
+
+    let device = backend
+        .enroll_device(endpoint.into(), "cody's macbook".into())
+        .await
+        .expect("enrol");
+    assert_eq!(device.endpoint.as_deref(), Some(endpoint));
+    assert!(!device.revoked);
+    assert!(
+        backend
+            .admits(&files_domain::HostId(endpoint.into()))
+            .is_some(),
+        "the enrolled machine was recorded but never admitted, so it cannot sync"
+    );
+}
+
+/// Enrolling twice is one machine, not two.
+///
+/// A laptop that reinstalls the app mints the same endpoint from the same
+/// key file. Two rows for it would mean revoking either one leaves it
+/// syncing through the other — a revocation that silently does nothing.
+#[tokio::test]
+async fn re_enrolling_the_same_machine_keeps_one_row() {
+    let (_dir, backend, _root) = album("Album").await;
+    let endpoint = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    let first = backend.enroll_device(endpoint.into(), "laptop".into()).await.unwrap();
+    let again = backend
+        .enroll_device(endpoint.into(), "cody's laptop".into())
+        .await
+        .unwrap();
+
+    assert_eq!(first.id, again.id, "one machine became two devices");
+    assert_eq!(again.name, "cody's laptop", "re-enrolling renames it");
+    let enrolled: Vec<_> = backend
+        .devices()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.endpoint.as_deref() == Some(endpoint))
+        .collect();
+    assert_eq!(enrolled.len(), 1, "{enrolled:?}");
+}
+
+/// Revoking cuts the machine off in the only place that gates a pull.
+///
+/// `files.device.control` says a revoked device is refused sync. The row
+/// flag is what a person sees; dismissing its endpoint is what refuses
+/// it — and before enrolment carried an endpoint there was nothing to
+/// dismiss, so the flag was the whole of it.
+// t[verify files.device.control]
+#[tokio::test]
+async fn revoking_a_device_stops_admitting_its_endpoint() {
+    let (_dir, backend, _root) = album("Album").await;
+    let endpoint = "2222222222222222222222222222222222222222222222222222222222222222";
+    let device = backend.enroll_device(endpoint.into(), "laptop".into()).await.unwrap();
+
+    backend.revoke_device(device.id).await.expect("revoke");
+
+    assert_eq!(
+        backend.admits(&files_domain::HostId(endpoint.into())),
+        None,
+        "a revoked device is still admitted, so it still syncs"
+    );
+    // And letting it back in is the same call that let it in first —
+    // by the same authority, which is a person signed into the org.
+    backend.enroll_device(endpoint.into(), "laptop".into()).await.unwrap();
+    assert!(
+        backend
+            .admits(&files_domain::HostId(endpoint.into()))
+            .is_some()
+    );
+}

@@ -199,6 +199,12 @@ fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut SyncState) -> T) ->
         s.devices.entry(local.to_string()).or_insert(DeviceInfo {
             id: local,
             name: "this device".to_string(),
+            // The machine this backend is running on, which for a server
+            // is the org's own endpoint. It is not enrolled and does not
+            // need to be — a host does not admit itself — but a row with
+            // no address at all would read as "a device that cannot
+            // sync", and this one is the one every sync goes through.
+            endpoint: backend.endpoint_id(),
             last_seen: Utc::now(),
             transfer: TransferPolicy {
                 max_bytes_per_sec: None,
@@ -687,7 +693,7 @@ impl SyncService for FilesBackend {
 
     // t[impl files.device.control] — revoked, refused sync, wipes on next contact
     async fn revoke_device(&self, device: DeviceId) -> Result<DeviceInfo, FilesFault> {
-        with_state(self, |s| {
+        let revoked = with_state(self, |s| {
             let info = s
                 .devices
                 .get_mut(&device.to_string())
@@ -697,7 +703,79 @@ impl SyncService for FilesBackend {
             // in. The wipe happens on the device, on next contact.
             info.revoked = true;
             info.transfer.paused = true;
-            Ok(info.clone())
+            Ok::<_, FilesFault>(info.clone())
+        })?;
+        // And it stops being admitted, which is the half that actually
+        // refuses it. A flag on a row the sync path never consults is a
+        // revocation the revoked machine does not notice: what gates a
+        // pull is the admitted set, so revoking has to reach it.
+        if let Some(endpoint) = &revoked.endpoint {
+            self.dismiss_host(&files_domain::HostId(endpoint.clone()));
+        }
+        Ok(revoked)
+    }
+
+    // t[impl files.device.identity] — the device presents the identity it
+    // holds (its endpoint key) and the org records it; nothing here mints
+    // one for it
+    async fn enroll_device(
+        &self,
+        endpoint: String,
+        name: String,
+    ) -> Result<DeviceInfo, FilesFault> {
+        if endpoint.trim().is_empty() {
+            return Err(FilesFault::Io("a device must present an endpoint id".into()));
+        }
+        let info = with_state(self, |s| {
+            // Keyed by endpoint, not by row id: a laptop that reinstalls
+            // mints the same endpoint from the same key file and must not
+            // become a second device — the org would then hold two rows
+            // for one machine and revoking either would cut it.
+            if let Some(existing) = s
+                .devices
+                .values_mut()
+                .find(|d| d.endpoint.as_deref() == Some(endpoint.as_str()))
+            {
+                existing.name = name;
+                existing.last_seen = Utc::now();
+                // Re-enrolling is how a revoked machine is let back in,
+                // by the same authority that admitted it first.
+                existing.revoked = false;
+                return existing.clone();
+            }
+            let info = DeviceInfo {
+                id: DeviceId::generate(),
+                name,
+                endpoint: Some(endpoint.clone()),
+                last_seen: Utc::now(),
+                transfer: TransferPolicy {
+                    max_bytes_per_sec: None,
+                    paused: false,
+                },
+                revoked: false,
+            };
+            s.devices.insert(info.id.to_string(), info.clone());
+            info
+        });
+        // The admission itself. `Hosting::working()` because a device
+        // holds the content it subscribes to, not merely the structure.
+        self.admit_host(
+            files_domain::HostId(endpoint),
+            files_domain::Hosting::working(),
+        );
+        Ok(info)
+    }
+
+    async fn coordinator(&self) -> Result<String, FilesFault> {
+        self.endpoint_id().ok_or_else(|| {
+            // Not "not found": the org exists and has no address, which
+            // is a deployment that did not bind an endpoint (or has iroh
+            // disabled). A device cannot sync with it and retrying will
+            // not change that until an operator does something.
+            FilesFault::Io(
+                "this org has no endpoint — the server is not reachable by id (iroh disabled?)"
+                    .into(),
+            )
         })
     }
 }

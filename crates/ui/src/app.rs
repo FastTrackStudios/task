@@ -321,6 +321,11 @@ pub fn App() -> Element {
     // the iOS shell registered one). After provide_auth — it reads the
     // active-account context.
     crate::watch_sync::use_watch_config_publisher();
+    // Pair this machine with the org for file sync: the local agent's
+    // endpoint id to the org, the org's back to the agent, on the
+    // authority of the sign-in this app already holds. Once per launch,
+    // native only, and it prompts nobody — see the module docs.
+    crate::device_pairing::use_device_pairing();
     // Per-user prefs (server-backed) — after auth, which it watches.
     crate::prefs::provide_prefs();
     // Theme persistence: seed the org-theme overrides above from prefs

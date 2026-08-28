@@ -14,13 +14,28 @@ vox = ["dep:vox", "architect/vox"]
 # The headless binary — pulls in the ws server transport + an axum
 # host. Kept behind a feature so the library (and the app embed) don't
 # drag the server stack.
-daemon-bin = ["vox", "architect/server", "dep:axum", "dep:tracing-subscriber"]
+#
+# `vox/transport-websocket` is what lets the binary *dial* a WebSocket,
+# which is how its own `status` / `checkpoint` commands reach the running
+# agent's control socket (and how a `ws://` coordinator was always
+# supposed to work — without it `connect_lane` fails with "unknown
+# transport scheme", at runtime, on a URL that looks perfectly correct).
+daemon-bin = [
+    "vox",
+    "vox/transport-websocket",
+    "architect/server",
+    "dep:axum",
+    "dep:tracing-subscriber",
+]
 
 [dependencies]
 architect = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 facet = { workspace = true }
 files = { workspace = true }
+# The peering vocabulary (`HostId`, `Hosting`): who this device admits
+# to its own replica lane. The decision types are domain, not backend.
+files-domain = { workspace = true }
 files-proto = { workspace = true }
 files-sync = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

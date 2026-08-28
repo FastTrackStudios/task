@@ -71,6 +71,22 @@ desktop: desktop-css
 desktop-release: desktop-css
     cd apps/desktop && dx serve --platform desktop --release
 
+# The shippable macOS build: a Developer-ID .dmg, notarized and
+# stapled, with the sync agent inside the bundle — so installing the app
+# installs background file sync (an App Store build cannot: a sandboxed
+# app may not register a LaunchAgent).
+#
+# macOS only, and needs a "Developer ID Application" certificate in the
+# keychain. `DRY_RUN=1 just dmg` stops at a signed, un-notarized image.
+dmg:
+    bash apps/desktop/macos/build-dmg.sh
+
+# The sync agent on this machine: install it as a background service,
+# see what it is doing, take it away again. `just sync install
+# --coordinator <org endpoint id>` is the whole setup on a fresh box.
+sync *ARGS="status":
+    cargo run --quiet -p files-daemon --features daemon-bin --bin fts-files-daemon -- {{ARGS}}
+
 # Regenerate apps/mobile/assets/tailwind.css (package `task-app-mobile`).
 mobile-css: css
 
@@ -118,7 +134,10 @@ dev-seed *ARGS="seed":
 #   just demo fresh        # wipe + replant
 #   just demo serve        # both servers (:9101 ACME, :9102 VNT)
 #   just demo web          # the web app pointed at ACME (:8766)
+#   just demo desktop      # the desktop app pointed at ACME
+#   just demo daemon       # a laptop: the sync agent replicating ACME
 #   just demo ids          # each org's endpoint id
+#   just demo telemetry    # local Grafana/Tempo/Loki/Prom; serve+desktop attach
 demo *ARGS="plant":
     scripts/demo.sh {{ARGS}}
 

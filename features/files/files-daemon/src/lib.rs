@@ -31,7 +31,9 @@ mod daemon;
 mod error;
 mod hub;
 pub mod identity;
+pub mod install;
 pub mod model;
+pub mod peering;
 pub mod service;
 
 /// Re-exported so the headless binary (and embedders) can name the

@@ -6928,6 +6928,7 @@ version = "0.50.0-rc.5"
 source = "git+https://github.com/FastTrackStudios/vendor?tag=v0.2.0#3cc215ef23893d58191a376347e8c2a810ef9088"
 dependencies = [
  "autocfg",
+ "camino",
  "chrono",
  "const-fnv1a-hash",
  "iddqd",
@@ -7271,6 +7272,7 @@ dependencies = [
  "chrono",
  "facet",
  "files",
+ "files-domain",
  "files-proto",
  "files-sync",
  "serde",
@@ -10756,9 +10758,11 @@ dependencies = [
  "org-proto",
  "pollster 0.4.0",
  "project",
+ "serde_json",
  "task",
  "task-proto",
  "task-server",
+ "task-ui-core",
  "tempfile",
  "tokio",
  "uuid",
@@ -20572,6 +20576,8 @@ version = "0.1.0"
 dependencies = [
  "architect-telemetry",
  "dioxus",
+ "task-ui-core",
+ "tracing",
  "ui",
 ]
 
@@ -20805,6 +20811,7 @@ dependencies = [
  "eyre",
  "facet",
  "files",
+ "files-daemon",
  "files-domain",
  "files-proto",
  "files-storage",
@@ -20910,6 +20917,7 @@ dependencies = [
 name = "task-ui-core"
 version = "0.1.0"
 dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "dioxus",
  "futures-channel",
@@ -20917,12 +20925,14 @@ dependencies = [
  "js-sys",
  "media-proto",
  "serde",
+ "serde_json",
  "task-plugin",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "uuid",
  "vox-core",
+ "vox-types",
  "vox-websocket",
  "wasm-bindgen",
  "web-sys",
@@ -22185,6 +22195,7 @@ dependencies = [
  "editor-crdt",
  "email-ui",
  "fake",
+ "files-proto",
  "files-ui",
  "finance-proto",
  "fitness-proto",
@@ -22653,6 +22664,7 @@ dependencies = [
  "chrono",
  "editor-state",
  "facet",
+ "files-proto",
  "indexmap 2.14.0",
  "notify 8.2.0",
  "notify-debouncer-mini 0.7.0",
@@ -22952,8 +22964,6 @@ dependencies = [
 [[package]]
 name = "vox-core"
 version = "0.10.0-rc.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad73520876bf518dc141af989180e4ce6336a5c63510d5df2912b3fefd13a15d"
 dependencies = [
  "facet",
  "facet-core",

@@ -254,6 +254,9 @@ plugin-recall = ["dep:recall-proto", "dep:recall"]
 plugin-home = ["dep:locations", "dep:inventory"]
 
 [dev-dependencies]
+# `device_sync_e2e` drives a real sync daemon against this server, which
+# is the deployment shape the device-pull loop exists for.
+files-daemon = { workspace = true }
 vox = { workspace = true, features = ["transport-websocket"] }
 futures = { workspace = true }
 attachments-proto = { workspace = true }

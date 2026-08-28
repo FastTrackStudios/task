@@ -21,12 +21,93 @@ pub(crate) fn VideoStage(
     /// Compact chrome (the mini player) caps the stage height instead
     /// of flexing to fill.
     mini: bool,
+    /// A frame to stand behind the `<video>` until it paints — the
+    /// filmstrip sprite, left-cropped to its first tile. Some browsers
+    /// leave `preload="metadata"` black until play; the stage should
+    /// never be a black box when a frame is already paid for.
+    #[props(default)]
+    poster: Option<String>,
+    /// The peaks rendition URL for an AUDIO file — the stage draws its
+    /// waveform instead of frames (the `<video>` element still runs
+    /// the transport; an audio/mp4 stream just has nothing to paint).
+    #[props(default)]
+    waveform: Option<String>,
 ) -> Element {
     let player = PlayerCtx::use_ctx();
     let mut draw = DrawCtx::use_ctx();
 
     // The stroke under the pointer right now, in frame coordinates.
     let mut active = use_signal(|| Option::<AnnotationStroke>::None);
+
+    // The audio waveform: fetch the peaks PCM (raw mono s16le), reduce
+    // to one max-amplitude bar per column, draw once. Pure JS because
+    // the canvas and the bytes both live on that side of the seam.
+    let wave_id = use_hook(|| format!("review-wave-{}", uuid::Uuid::new_v4().simple()));
+    {
+        let wave_id = wave_id.clone();
+        let waveform = waveform.clone();
+        use_effect(use_reactive!(|(waveform,)| {
+            if let Some(url) = waveform {
+                let js = format!(
+                    "(async function(){{\
+                       var c=document.getElementById('{wave_id}');if(!c)return;\
+                       try{{\
+                         var r=await fetch('{url}');if(!r.ok)return;\
+                         var d=new Int16Array(await r.arrayBuffer());\
+                         var W=c.width=c.clientWidth*2,H=c.height=c.clientHeight*2;\
+                         var x=c.getContext('2d');if(!x)return;\
+                         x.clearRect(0,0,W,H);\
+                         var step=6,n=Math.max(1,Math.floor(W/step)),per=Math.max(1,Math.floor(d.length/n));\
+                         x.fillStyle='rgba(129,140,248,0.85)';\
+                         for(var i=0;i<n;i++){{\
+                           var m=0,s=i*per,e=Math.min(d.length,s+per);\
+                           for(var j=s;j<e;j++){{var v=Math.abs(d[j]);if(v>m)m=v;}}\
+                           var h=Math.max(3,m/32768*H*0.85);\
+                           x.fillRect(i*step,(H-h)/2,step*0.6,h);\
+                         }}\
+                       }}catch(e){{}}\
+                     }})();"
+                );
+                let _ = dioxus::document::eval(&js);
+            }
+        }));
+    }
+
+    // Resume where you left off: position persists per rendition file
+    // (the URL minus its grant token — stable per version, so a new
+    // version starts fresh) and clears when playback reaches the end.
+    // Lives on the element via JS because the element owns the clock;
+    // the key rides `dataset` so a version swap on the same mount
+    // re-targets the save without stacking listeners.
+    {
+        let video_id = video_id.clone();
+        let key = format!(
+            "task.review.pos.{}",
+            src.split('?').next().unwrap_or(src.as_str())
+        );
+        use_effect(use_reactive!(|(key,)| {
+            let js = format!(
+                "(function(){{\
+                   var v=document.getElementById('{video_id}');if(!v)return;\
+                   v.dataset.taskResumeKey='{key}';\
+                   var r=function(){{try{{\
+                     var p=parseFloat(localStorage.getItem(v.dataset.taskResumeKey)||'0');\
+                     if(p>1&&v.duration&&p<v.duration-2){{v.currentTime=p;}}\
+                   }}catch(e){{}}}};\
+                   if(v.readyState>=1){{r();}}else{{v.addEventListener('loadedmetadata',r,{{once:true}});}}\
+                   if(!v.dataset.taskResumeWired){{v.dataset.taskResumeWired='1';\
+                     v.addEventListener('timeupdate',function(){{try{{\
+                       if(!v.paused&&v.currentTime>1){{localStorage.setItem(v.dataset.taskResumeKey,String(v.currentTime));}}\
+                     }}catch(e){{}}}});\
+                     v.addEventListener('ended',function(){{try{{\
+                       localStorage.removeItem(v.dataset.taskResumeKey);\
+                     }}catch(e){{}}}});\
+                   }}\
+                 }})();"
+            );
+            let _ = dioxus::document::eval(&js);
+        }));
+    }
 
     let (fx, fy, fw, fh) = (player.frame_rect)();
     let frame_style = format!("left:{fx}px;top:{fy}px;width:{fw}px;height:{fh}px;");
@@ -47,6 +128,21 @@ pub(crate) fn VideoStage(
             } else {
                 "relative flex-1 min-h-0 bg-black overflow-hidden"
             },
+            // Gone the moment the clock moves: from then on the video
+            // has painted, and a backdrop would only leak through the
+            // letterbox bars.
+            if let Some(p) = poster.as_ref().filter(|_| (player.now)() <= 0.05) {
+                div {
+                    class: "absolute inset-0 pointer-events-none",
+                    style: "background-image:url('{p}');background-size:cover;background-position:left center;background-repeat:no-repeat;",
+                }
+            }
+            if waveform.is_some() {
+                canvas {
+                    id: wave_id.clone(),
+                    class: "absolute inset-y-0 left-6 right-6 h-full pointer-events-none",
+                }
+            }
             video {
                 id: video_id.clone(),
                 src,

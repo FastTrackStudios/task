@@ -57,6 +57,10 @@ task-note-tabs.workspace = true
 # widget (`type: file-root` notes and embeds of them). Owns its own
 # `FilesService` calls — the shell only routes and registers.
 files-ui.workspace = true
+# The Files sync lane, for `device_pairing`: enrolling this machine with
+# the org and asking the org for its endpoint id. Already in the graph
+# under `files-ui`; named here because this crate calls it directly.
+files-proto = { workspace = true, features = ["vox"] }
 share-proto = { workspace = true }
 # `vox` for the `DayTemplatesClient` the schedule page calls to load
 # the day-plan overlay. Wasm-clean (serde-only client side).

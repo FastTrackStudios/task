@@ -27,6 +27,7 @@ pub mod capability;
 pub mod connections;
 #[cfg(debug_assertions)]
 pub mod demo_cli;
+pub mod device_sync;
 pub mod example_org;
 pub mod identity_mgmt;
 pub mod iroh_host;
@@ -1324,6 +1325,31 @@ pub(crate) async fn build_org_state(
                 Arc::clone(storage),
                 org_root.slug().to_owned(),
             )));
+        // t[impl project.vault.write-path] — the org vault is a File
+        // Root from boot, and every vault page the server writes from
+        // here on goes through the Files API rather than `std::fs`.
+        // Before `enable_watching`, so the vault is watched like any
+        // other root. A vault that cannot be adopted still serves — the
+        // pages fall back to the filesystem write they always had — but
+        // that is a degraded server and is logged as one.
+        // On the blocking pool, like every other sync entry into the
+        // Files backend: adoption opens the root's store, which is
+        // `pollster`-driven jj/iroh-blobs work that must not park a
+        // runtime worker.
+        let adopting = files.clone();
+        match tokio::task::spawn_blocking(move || adopting.adopt_vault()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => tracing::error!(
+                org = %org_root.slug(),
+                %err,
+                "files: the org vault could not be adopted as a root; vault writes bypass Files"
+            ),
+            Err(err) => tracing::error!(
+                org = %org_root.slug(),
+                %err,
+                "files: vault adoption panicked; vault writes bypass Files"
+            ),
+        }
         let files_webdav = files_webdav::WebdavBridge::new(files.clone());
         // Placement lane. The coordinator is the deployment's, owned by
         // `AppState` and passed in — this is just this org's view of it.
@@ -2632,6 +2658,18 @@ async fn well_known_handler(
             "member": member,
             "vox": format!("/org/{slug}/vox"),
             "health": format!("/org/{slug}/health"),
+            // The org's iroh endpoint id — the whole of its non-HTTP
+            // address, written by `iroh_host` as the endpoint binds and
+            // stable across restarts (the key beside it is persisted).
+            // Discovery is how a native client learns to dial the org
+            // over iroh instead of this WebSocket; `null` until the
+            // first bind, or when iroh is disabled.
+            "iroh": std::fs::read_to_string(
+                state.data_root.org(slug.as_str()).path().join("iroh-endpoint-id"),
+            )
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
         }));
     }
     // Schema stamps — the proto/server skew guard. Clients

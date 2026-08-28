@@ -45,10 +45,23 @@ async fn tree_browse(org: &str, path: &str) -> Result<TreeNode, String> {
 
 /// The tree browser for one area. Keyed by (org, area) at the mount,
 /// so switches remount with fresh state.
+///
+/// `start` scopes the browse to a subtree: navigation begins there and
+/// the crumbs never climb above it — how a project page embeds the
+/// explorer over ITS directory without offering the whole org. This is
+/// presentation scoping only; what the caller may actually see is the
+/// server's per-path authorisation, same as everywhere.
 #[component]
-pub fn TreeExplorer(org: String, area: TreeArea) -> Element {
-    // The path INSIDE the tree, always rooted at the area.
-    let mut path = use_signal(|| area.as_str().to_string());
+pub fn TreeExplorer(
+    org: String,
+    area: TreeArea,
+    #[props(default)] start: Option<String>,
+) -> Element {
+    // The path INSIDE the tree, always rooted at the area (or the
+    // caller's floor within it).
+    let floor = start.unwrap_or_else(|| area.as_str().to_string());
+    let floor_for_crumbs = floor.clone();
+    let mut path = use_signal(|| floor.clone());
     let mut selected = use_signal(|| Option::<String>::None);
 
     let node = {
@@ -91,6 +104,10 @@ pub fn TreeExplorer(org: String, area: TreeArea) -> Element {
                 acc.push_str(seg);
                 (seg.to_string(), acc.clone())
             })
+            // Crumbs strictly above the floor are outside the scope the
+            // caller mounted — a project's explorer must not offer the
+            // rest of the org as a click.
+            .filter(|(_, to)| to.len() >= floor_for_crumbs.len())
             .collect()
     };
 

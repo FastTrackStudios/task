@@ -75,6 +75,18 @@ async fn fetch_roots(org: &str) -> Result<Vec<FileRootInfo>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The adopted root named `name`, if any — the convention project
+/// surfaces resolve their material through (a project's root is named
+/// after the project). `None` covers both "not adopted" and "can't
+/// ask", which callers treat the same: fall back, don't error.
+pub async fn root_named(org: &str, name: &str) -> Option<FileRootInfo> {
+    fetch_roots(org)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|r| r.name == name)
+}
+
 async fn fetch_entries(org: &str, scope: &Location) -> Result<Vec<BrowseEntry>, String> {
     let c = client(org).await?;
     match scope {

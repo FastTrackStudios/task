@@ -56,6 +56,33 @@ pub trait DaemonControlService {
     /// content stays; nothing is deleted.
     async fn remove_sync_choice(&self, root_id: Uuid) -> Result<DaemonStatus, DaemonError>;
 
+    /// Admit `endpoint_id` to this machine's own replica lane.
+    ///
+    /// Sync is two pulls, so being *pullable* is half of syncing: a
+    /// server that has admitted this device still cannot collect the
+    /// work it did offline until this device admits the server back.
+    async fn admit_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError>;
+
+    /// Stop admitting `endpoint_id`. Takes effect on its next call,
+    /// not on its agreement.
+    async fn dismiss_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError>;
+
+    /// What `endpoint_id` holds, as `(root id, name)` — "what have you
+    /// got", which is where a machine that holds nothing has to start.
+    async fn peer_roots(&self, endpoint_id: String)
+    -> Result<Vec<(Uuid, String)>, DaemonError>;
+
+    /// Sync `root_id` from `endpoint_id`, adopting it under `under` if
+    /// this machine has never seen it. `slice` is the selective-sync
+    /// choice (empty = the whole root).
+    async fn sync_from_peer(
+        &self,
+        endpoint_id: String,
+        root_id: Uuid,
+        slice: Vec<String>,
+        under: String,
+    ) -> Result<DaemonStatus, DaemonError>;
+
     /// Pause all syncing (or one root when `root_id` is set). No pulls
     /// run until resumed.
     async fn pause(&self, root_id: Option<Uuid>) -> Result<DaemonStatus, DaemonError>;

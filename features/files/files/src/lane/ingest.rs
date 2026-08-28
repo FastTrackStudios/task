@@ -153,11 +153,10 @@ impl crate::durable::Durable for Ingested {
 /// - it is wasteful — the store re-chunks content it already holds, to
 ///   tell us a thing our own ledger knows;
 /// - and it is a *sync bridge*. `sync_ingest_path` blocks on an async
-///   store from a synchronous caller, and repeating it inside one
-///   runtime stalls: a sweep that hands the store four already-held
-///   files deadlocks on the third. That is a bug in the bridge and it is
-///   filed as one — but a sweep on a timer has no business calling into
-///   it for files it already sent, whether or not the bridge is fixed.
+///   store from a synchronous caller, and repeating it inline on a
+///   runtime worker used to stall (see `backend::off_worker`, which is
+///   the fix) — but a sweep on a timer has no business calling into it
+///   for files it already sent, whether or not the bridge is fixed.
 ///
 /// So the ledger is keyed by a hash this lane computes, and the store is
 /// touched exactly once per genuinely new file.

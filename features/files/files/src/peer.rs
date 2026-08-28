@@ -76,6 +76,7 @@ pub const REPLICA_PERMITS: architect_permissions::ServicePermits =
     architect_permissions::ServicePermits {
         service: "files-replica",
         methods: &[
+            architect_permissions::MethodPermit::new("roots", Action::READ, REPLICA_RESOURCE),
             architect_permissions::MethodPermit::new("heads", Action::READ, REPLICA_RESOURCE),
             architect_permissions::MethodPermit::new("object", Action::READ, REPLICA_RESOURCE),
             architect_permissions::MethodPermit::new("manifest", Action::READ, REPLICA_RESOURCE),

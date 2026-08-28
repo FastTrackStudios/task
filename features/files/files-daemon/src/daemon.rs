@@ -132,6 +132,11 @@ struct DaemonInner {
     backend: FilesBackend,
     identity: Mutex<DeviceIdentity>,
     data_dir: std::path::PathBuf,
+    /// This machine's endpoint: its address, its identity, and the thing
+    /// it serves its own replica lane on. `None` until
+    /// [`SyncDaemon::bind_peering`] — a daemon can pull without one, and
+    /// cannot be pulled from without one.
+    endpoint: Mutex<Option<architect::iroh_link::iroh::Endpoint>>,
     roots: Mutex<BTreeMap<Uuid, SyncedRoot>>,
     /// The coordinator this daemon pulls from — its `SyncService` peer.
     /// Set once the daemon knows where to sync from; the control
@@ -154,6 +159,7 @@ impl SyncDaemon {
                 backend,
                 identity: Mutex::new(identity),
                 data_dir,
+                endpoint: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
                 coordinator: Mutex::new(None),
                 live: LiveStatus {
@@ -183,6 +189,180 @@ impl SyncDaemon {
     /// Point the daemon at the coordinator it pulls from.
     pub fn set_coordinator(&self, peer: SyncServiceClient) {
         *self.inner.coordinator.lock().expect("coordinator lock") = Some(peer);
+    }
+
+    // ── The device as a peer ───────────────────────────────────────
+    //
+    // Everything above this line is the pulling half. What follows is
+    // the half that makes sync bidirectional in a deployment rather
+    // than only in a test: a machine nobody can dial has no way to hand
+    // over the work it did offline, because the engine has no push.
+
+    // t[impl files.topology.multi-server] — the device half: a machine
+    // that serves its own replica lane can be reached directly by
+    // another, so "bytes move directly over iroh/QUIC where two peers
+    // can reach each other" stops requiring one of them to be a server
+    /// Bind this machine's endpoint and start serving the replica lane
+    /// on it.
+    ///
+    /// Returns the endpoint id — the address to admit on the other side.
+    /// Idempotent in effect: binding twice would mint a second address
+    /// for one machine, so a daemon that already has an endpoint returns
+    /// the one it has.
+    pub async fn bind_peering(&self, book: Option<files::AddressBook>) -> Result<String> {
+        if let Some(id) = self.endpoint_id() {
+            return Ok(id);
+        }
+        let key = DeviceIdentity::endpoint_key(&self.inner.data_dir)?;
+        let endpoint = crate::peering::bind(key, book).await?;
+        Ok(self.attach_endpoint(endpoint))
+    }
+
+    /// Serve on an endpoint bound by the caller — the embedder's door
+    /// (the desktop app binds its own, as does the integration suite,
+    /// which seeds an address book to resolve ids with no internet).
+    pub fn attach_endpoint(&self, endpoint: architect::iroh_link::iroh::Endpoint) -> String {
+        let id = endpoint.id().to_string();
+        *self.inner.endpoint.lock().expect("endpoint lock") = Some(endpoint.clone());
+        let backend = self.inner.backend.clone();
+        let whose = format!("device {}", self.device_id());
+        tokio::spawn(async move {
+            crate::peering::serve(backend, whose, endpoint).await;
+        });
+        tracing::info!(endpoint_id = %id, "files-daemon: serving the replica lane");
+        id
+    }
+
+    /// This machine's endpoint id, once bound.
+    #[must_use]
+    pub fn endpoint_id(&self) -> Option<String> {
+        self.inner
+            .endpoint
+            .lock()
+            .expect("endpoint lock")
+            .as_ref()
+            .map(|e| e.id().to_string())
+    }
+
+    fn endpoint(&self) -> Result<architect::iroh_link::iroh::Endpoint> {
+        self.inner
+            .endpoint
+            .lock()
+            .expect("endpoint lock")
+            .clone()
+            .ok_or_else(|| {
+                DaemonError::BadRequest(
+                    "this daemon has no endpoint — call bind_peering first".into(),
+                )
+            })
+    }
+
+    /// Admit a peer to this machine's replica lane.
+    ///
+    /// The symmetric half of the org admitting this device: a server
+    /// that is going to *pull* this laptop's offline checkpoints has to
+    /// be on the laptop's own list, because the laptop's gate knows
+    /// nothing but endpoint ids.
+    pub fn admit_peer(&self, endpoint_id: &str) {
+        self.inner.backend.admit_host(
+            files_domain::HostId(endpoint_id.to_string()),
+            // A device's peers hold the whole thing, structure and
+            // content alike; a structure-only relationship is a server
+            // arrangement and not something a laptop hands out.
+            files_domain::Hosting::working(),
+        );
+    }
+
+    /// Stop admitting a peer. Takes effect on its next call.
+    pub fn dismiss_peer(&self, endpoint_id: &str) {
+        self.inner
+            .backend
+            .dismiss_host(&files_domain::HostId(endpoint_id.to_string()));
+    }
+
+    /// Every peer this machine admits.
+    #[must_use]
+    pub fn peers(&self) -> Vec<String> {
+        self.inner
+            .backend
+            .admitted_hosts()
+            .into_iter()
+            .map(|(h, _)| h.0)
+            .collect()
+    }
+
+    /// Open the replica lane on `endpoint_id`.
+    pub async fn dial(&self, endpoint_id: &str) -> Result<SyncServiceClient> {
+        crate::peering::dial(&self.endpoint()?, endpoint_id).await
+    }
+
+    /// Dial `endpoint_id` and keep it as the coordinator this daemon
+    /// pulls from — the deployed replacement for handing the binary a
+    /// `ws://` URL, and the reason enrollment needs no token: the org
+    /// admitted this device's endpoint, and the handshake proves it.
+    pub async fn set_coordinator_peer(&self, endpoint_id: &str) -> Result<()> {
+        let peer = self.dial(endpoint_id).await?;
+        self.set_coordinator(peer);
+        Ok(())
+    }
+
+    /// What `endpoint_id` holds — the "what have you got" a fresh
+    /// machine starts from.
+    pub async fn peer_roots(&self, endpoint_id: &str) -> Result<Vec<files_sync::WireRoot>> {
+        let peer = self.dial(endpoint_id).await?;
+        Self::remote_roots(&peer).await
+    }
+
+    /// One place the `roots` RPC's transport error becomes a
+    /// [`DaemonError`] — a vox error is a transport failure, so it is
+    /// `Io` rather than anything the caller can act on differently.
+    async fn remote_roots(peer: &SyncServiceClient) -> Result<Vec<files_sync::WireRoot>> {
+        peer.roots()
+            .await
+            .map_err(|e| DaemonError::Io(format!("roots rpc: {e}")))
+    }
+
+    /// Sync `root_id` from `endpoint_id`, adopting it locally first if
+    /// this machine has never seen it.
+    ///
+    /// The adoption is what makes this usable on a new machine. A root
+    /// the daemon does not hold cannot be reconciled into nothing —
+    /// `adopt_replica` is what gives the pull an id, a name, a flavor
+    /// and somewhere on this disk to land, and `under` is where the
+    /// caller says which disk.
+    pub async fn sync_from_peer(
+        &self,
+        endpoint_id: &str,
+        root_id: Uuid,
+        slice: Vec<String>,
+        under: &std::path::Path,
+    ) -> Result<DaemonStatus> {
+        let peer = self.dial(endpoint_id).await?;
+        let name = match self.inner.backend.get_root(root_id).await {
+            Ok(local) => local.name,
+            Err(_) => {
+                let remote = Self::remote_roots(&peer)
+                    .await?
+                    .into_iter()
+                    .find(|r| r.id == root_id)
+                    .ok_or_else(|| {
+                        DaemonError::NotFound(format!("{endpoint_id} holds no root {root_id}"))
+                    })?;
+                let tree = under.join(&remote.name);
+                std::fs::create_dir_all(&tree).map_err(|e| DaemonError::Io(e.to_string()))?;
+                self.inner.backend.adopt_replica(
+                    root_id,
+                    &remote.name,
+                    tree.to_str().ok_or_else(|| {
+                        DaemonError::BadRequest(format!("{} is not utf-8", tree.display()))
+                    })?,
+                    remote.flavor,
+                )?;
+                remote.name
+            }
+        };
+        self.set_sync_choice(root_id, &name, slice, peer).await?;
+        Ok(self.status())
     }
 
     /// Choose `root_id` for sync against the coordinator, resolving the
@@ -316,9 +496,36 @@ impl SyncDaemon {
     /// what a scheduled driver calls on a timer. Errors are recorded
     /// per-root in the status (and retried next tick), never propagated,
     /// so one unreachable peer doesn't stop the others.
+    /// Start watching every root on this machine, so local edits become
+    /// checkpoints without anyone asking.
+    ///
+    /// This is what a server does at startup (`enable_watching`), and a
+    /// device needs it more, not less: on a server the work arrives
+    /// through the write path, and on a laptop it arrives through Pro
+    /// Tools writing a session file that nothing told us about. Without
+    /// it a daemon's local changes were never captured, so "sync both
+    /// ways" had nothing to send in one of the directions — the pull was
+    /// working perfectly against a history that never moved.
+    ///
+    /// The watcher only *hints*; [`Self::tick`] runs the cadence pass
+    /// that decides when a hint becomes a capture.
+    pub async fn start_capture(&self) {
+        self.inner.backend.enable_watching().await;
+    }
+
     pub async fn tick(&self) {
         if self.is_paused() {
             return;
+        }
+        // Capture before pulling. The order matters on the machine that
+        // has been offline: its own work becomes a commit first, so the
+        // reconcile that follows brings the other side's line into a
+        // store that already holds this one — which is what makes the
+        // two lines siblings to be resolved rather than one silently
+        // overwriting the other on the next materialize.
+        let captured = self.inner.backend.tick().await;
+        if !captured.is_empty() {
+            tracing::debug!(count = captured.len(), "files-daemon: captured local work");
         }
         let jobs: Vec<(Uuid, SyncServiceClient, bool)> = {
             let roots = self.inner.roots.lock().expect("roots lock");
@@ -396,7 +603,26 @@ impl SyncDaemon {
             .collect();
         DaemonStatus {
             device_id: Some(identity.device_id),
-            enrolled: identity.secret.is_some(),
+            endpoint_id: self
+                .inner
+                .endpoint
+                .lock()
+                .expect("endpoint lock")
+                .as_ref()
+                .map(|e| e.id().to_string()),
+            peers: self
+                .inner
+                .backend
+                .admitted_hosts()
+                .into_iter()
+                .map(|(h, _)| h.0)
+                .collect(),
+            coordinator: self
+                .inner
+                .coordinator
+                .lock()
+                .expect("coordinator lock")
+                .is_some(),
             paused: self.is_paused(),
             roots,
         }

@@ -43,8 +43,18 @@ pub struct FileProgress {
 
 impl FileProgress {
     /// 0..=100, saturating — the number a progress bar shows.
+    ///
+    /// Bytes first, chunks only as a fallback. The store links a large
+    /// file whole (a link costs nothing at any size), so a multi-gigabyte
+    /// take is a *one-chunk* manifest pulled as verified windows: counted
+    /// in chunks its progress is 0% for the length of the transfer and
+    /// 100% at the end, which is the one file where a person actually
+    /// needs the bar. Bytes move the whole way down either path.
     #[must_use]
     pub fn percent(&self) -> u8 {
+        if self.logical_bytes > 0 {
+            return ((self.bytes_done * 100) / self.logical_bytes).min(100) as u8;
+        }
         if self.chunks_total == 0 {
             return 100;
         }
@@ -78,12 +88,18 @@ pub struct RootStatus {
 impl RootStatus {
     /// Aggregate percent across the files in flight — the single number
     /// a compact UI shows for the whole root.
+    ///
+    /// Weighted by bytes for [`FileProgress::percent`]'s reason, and
+    /// because the alternative is worse here than per-file: a root
+    /// holding one 80 GB reel beside two hundred small stems would
+    /// otherwise read as nearly finished while the only file that costs
+    /// anything had not started.
     #[must_use]
     pub fn percent(&self) -> u8 {
         let (done, total): (u64, u64) = self
             .files
             .iter()
-            .map(|f| (u64::from(f.chunks_done), u64::from(f.chunks_total)))
+            .map(|f| (f.bytes_done, f.logical_bytes))
             .fold((0, 0), |(d, t), (fd, ft)| (d + fd, t + ft));
         if total == 0 {
             return 100;
@@ -97,10 +113,21 @@ impl RootStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(C)]
 pub struct DaemonStatus {
-    /// This machine's device (agent) id, once enrolled.
+    /// This machine's device id — minted on first run, persisted, and
+    /// the same across every restart.
     pub device_id: Option<Uuid>,
-    /// Whether the operator has approved this device.
-    pub enrolled: bool,
+    /// This machine's endpoint id: its address on the network and the
+    /// string an org admits to let it sync. `None` until the daemon has
+    /// bound its endpoint, which is also the state in which nothing can
+    /// pull *from* this machine.
+    pub endpoint_id: Option<String>,
+    /// The endpoints this machine admits to its own replica lane — the
+    /// symmetric half of an org admitting the device, and what lets a
+    /// server pull this machine's offline work.
+    pub peers: Vec<String>,
+    /// Whether a coordinator has been dialled: the peer this daemon
+    /// pulls from by default.
+    pub coordinator: bool,
     /// Global pause — no root syncs while set.
     pub paused: bool,
     /// Every root the daemon is set to sync.

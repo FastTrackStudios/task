@@ -96,6 +96,14 @@ pub struct TransferPolicy {
 pub struct DeviceInfo {
     pub id: DeviceId,
     pub name: String,
+    /// The machine's iroh endpoint id — its address and, because an
+    /// iroh connection is mutually authenticated, its credential.
+    ///
+    /// `None` for a row from before enrolment carried one. Admission is
+    /// keyed by this, so a device without it is a row the org can see
+    /// and cannot sync with: revoking it would revoke nothing, which is
+    /// why enrolment sets it and nothing else does.
+    pub endpoint: Option<String>,
     pub last_seen: DateTime<Utc>,
     pub transfer: TransferPolicy,
     /// A revoked device is refused sync and destroys its local copy of
@@ -169,6 +177,33 @@ pub trait SyncService {
 
     /// Devices registered to this org.
     async fn devices(&self) -> Result<Vec<DeviceInfo>, FilesFault>;
+
+    /// Enrol the calling person's machine as a device of this org.
+    ///
+    /// The authority is the caller's own sign-in. Admission — which
+    /// machines may hold this org's whole commit graph — is the widest
+    /// grant the system has, so the question is who may widen it, and
+    /// "a member, from a session this server issued, naming a machine
+    /// they are sitting at" is an answer with a person behind it. The
+    /// alternative that needs no sign-in is a machine asserting its own
+    /// admission, which is not admission at all.
+    ///
+    /// Idempotent on `endpoint`: re-enrolling the same machine updates
+    /// its name and leaves one row, because a laptop that reinstalls the
+    /// app is the same laptop.
+    async fn enroll_device(
+        &self,
+        endpoint: String,
+        name: String,
+    ) -> Result<DeviceInfo, FilesFault>;
+
+    /// This org's own endpoint id — what a device sets as the peer it
+    /// syncs with.
+    ///
+    /// Pairing needs both halves and a person should have to carry
+    /// neither: [`SyncService::enroll_device`] hands the org the
+    /// machine's id, and this hands the machine the org's.
+    async fn coordinator(&self) -> Result<String, FilesFault>;
 
     /// Throttle, pause or resume a device's transfers. Pausing loses no
     /// progress.

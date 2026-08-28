@@ -21,6 +21,9 @@ pub(crate) enum FilesCmd {
     /// File Root CRUD (create / list / get).
     #[command(subcommand)]
     Root(FilesRootCmd),
+    /// The machines that sync this org's files.
+    #[command(subcommand)]
+    Device(FilesDeviceCmd),
     /// Root-scoped directory listing — the marker file and version
     /// store are hidden. Empty `subpath` lists the root itself.
     Browse {
@@ -307,12 +310,163 @@ pub(crate) enum FilesRootCmd {
     },
 }
 
+/// `task files device …` — pairing a machine with this org.
+///
+/// The desktop app does this for itself when somebody signs in. This is
+/// the same exchange for machines with no app to sign into: a studio
+/// rig, a build box, a server. The authority is the CLI's own stored
+/// session, which is the point — a machine does not admit itself.
+#[derive(Subcommand)]
+pub(crate) enum FilesDeviceCmd {
+    /// Pair this machine: enrol the local sync agent's endpoint id with
+    /// the org, and print the coordinator to point it at.
+    ///
+    /// Needs `fts-files-daemon` on PATH (or `--endpoint` to name an id
+    /// read from another machine's `fts-files-daemon id`).
+    Pair {
+        /// The endpoint id to enrol. Defaults to this machine's.
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// How the org's device list should name it. Defaults to this
+        /// machine's hostname.
+        #[arg(long)]
+        name: Option<String>,
+        /// Print the install command instead of running it — for
+        /// pairing a machine that is not this one.
+        #[arg(long)]
+        no_install: bool,
+    },
+    /// The machines this org syncs with.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cut a machine off: it is refused further sync and wipes its copy
+    /// of org content on next contact.
+    Revoke { device_id: uuid::Uuid },
+}
+
+/// Ask the local agent a one-line question.
+fn agent_says(args: &[&str]) -> eyre::Result<String> {
+    let out = std::process::Command::new("fts-files-daemon")
+        .args(args)
+        .output()
+        .map_err(|e| eyre::eyre!("running fts-files-daemon: {e} (is the sync agent installed?)"))?;
+    if !out.status.success() {
+        eyre::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+async fn run_files_device(
+    cmd: FilesDeviceCmd,
+    slug: &str,
+    vox_url: &str,
+) -> eyre::Result<()> {
+    use files_proto::service::sync::SyncServiceClient;
+
+    let sync: SyncServiceClient = establish_for_url(vox_url).await?;
+    match cmd {
+        FilesDeviceCmd::Pair {
+            endpoint,
+            name,
+            no_install,
+        } => {
+            let endpoint = match endpoint {
+                Some(id) => id,
+                None => agent_says(&["id"])?,
+            };
+            let name = name.unwrap_or_else(|| {
+                std::process::Command::new("hostname")
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "this machine".into())
+            });
+
+            let device = sync
+                .enroll_device(endpoint.clone(), name)
+                .await
+                .map_err(|e| eyre::eyre!("enrolling {endpoint}: {e}"))?;
+            let coordinator = sync
+                .coordinator()
+                .await
+                .map_err(|e| eyre::eyre!("asking {slug} for its endpoint id: {e}"))?;
+
+            println!("machine      {endpoint}");
+            println!("enrolled as  {} ({})", device.name, device.id);
+            println!("coordinator  {coordinator}");
+            if no_install {
+                println!();
+                println!("on that machine, run:");
+                println!("    fts-files-daemon install --coordinator {coordinator}");
+                return Ok(());
+            }
+            // The other half: point the local agent at the org and make
+            // it a background service. Pairing that stops at "enrolled"
+            // leaves a machine the org admits and that syncs nothing.
+            let installed = std::process::Command::new("fts-files-daemon")
+                .args(["install", "--coordinator", &coordinator])
+                .status()
+                .map_err(|e| eyre::eyre!("installing the agent's service: {e}"))?;
+            if !installed.success() {
+                eyre::bail!("the agent's installer exited with {installed}");
+            }
+        }
+        FilesDeviceCmd::List { json } => {
+            let devices = sync.devices().await?;
+            if json {
+                // `facet_json`, like every other `--json` here: the wire
+                // types are facet types, and a second serializer would
+                // be a second shape for the same data.
+                println!(
+                    "{}",
+                    facet_json::to_string(&devices).map_err(|e| eyre::eyre!("{e}"))?
+                );
+                return Ok(());
+            }
+            for d in devices {
+                println!(
+                    "{}  {:<24}  {}{}",
+                    d.id,
+                    d.name,
+                    d.endpoint.as_deref().unwrap_or("(no endpoint)"),
+                    if d.revoked { "  REVOKED" } else { "" }
+                );
+            }
+        }
+        FilesDeviceCmd::Revoke { device_id } => {
+            let device = sync.revoke_device(files_proto::id::DeviceId::new(device_id)).await?;
+            println!("revoked {} ({})", device.name, device.id);
+            println!("it is refused further sync and wipes its copy on next contact.");
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre::Result<()> {
     let slug = crate::resolve_slug(org_override)?;
     let vox_url = resolve_org_vox_url(None, &slug);
+
+    // The device lane before the `FilesService` client is established:
+    // pairing needs the sync service and nothing else, and a machine
+    // with no roots yet should not wait on a handshake it has no use
+    // for. Taken here rather than as a match arm below because that
+    // match establishes the other client first.
+    if matches!(cmd, FilesCmd::Device(_)) {
+        let FilesCmd::Device(cmd) = cmd else {
+            unreachable!("just matched")
+        };
+        return run_files_device(cmd, &slug, &vox_url).await;
+    }
+
     let client: FilesServiceClient = establish_for_url(&vox_url).await?;
 
     match cmd {
+        // Handled above, before this client existed.
+        FilesCmd::Device(_) => unreachable!("device commands return earlier"),
         FilesCmd::Root(FilesRootCmd::Create {
             path,
             name,

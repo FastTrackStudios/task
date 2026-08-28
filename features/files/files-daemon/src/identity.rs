@@ -64,6 +64,29 @@ impl DeviceIdentity {
         self.save(data_dir)
     }
 
+    /// This machine's **endpoint** secret key, minted on first run and
+    /// read back on every later one.
+    ///
+    /// The public half of this key is the address other peers dial and
+    /// the id an org admits, so a key that changed on restart would make
+    /// every admission a lie with a one-process expiry — the same reason
+    /// the server keeps its org key on disk (`apps/server/src/iroh_host.rs`).
+    ///
+    /// It sits beside [`DeviceIdentity`] rather than inside it because a
+    /// secret key is not JSON: it is written 0600 by
+    /// `iroh_link::load_or_create_secret_key`, and the identity file is
+    /// an ordinary readable record. Two files, one identity — losing the
+    /// key is losing this machine's address, which costs it its
+    /// admissions and nothing else.
+    #[cfg(feature = "vox")]
+    pub fn endpoint_key(
+        data_dir: &Path,
+    ) -> Result<architect::iroh_link::iroh::SecretKey> {
+        std::fs::create_dir_all(data_dir).map_err(|e| DaemonError::Io(e.to_string()))?;
+        architect::iroh_link::load_or_create_secret_key(&data_dir.join("device-key.ed25519"))
+            .map_err(|e| DaemonError::Io(format!("device endpoint key: {e}")))
+    }
+
     fn save(&self, data_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(data_dir).map_err(|e| DaemonError::Io(e.to_string()))?;
         let path = Self::path(data_dir);
