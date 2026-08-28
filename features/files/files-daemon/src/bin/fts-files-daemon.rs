@@ -58,6 +58,69 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
 }
 
+/// Prove the agent can actually use its directories, before it needs to.
+///
+/// Every path here is one an operator chose, and the interesting failure
+/// is not "permission denied" — that returns an error and says so. It is
+/// the one this hit on a Mac with its store on an external SSD: a
+/// launchd agent touching a volume macOS guards asks the system for
+/// consent, no window can appear for a background job, and the `mkdir`
+/// **never returns**. The service sits there, `launchctl` calls it
+/// running, the log is empty, and nothing anywhere says why.
+///
+/// So the first filesystem work happens on a thread with a deadline, and
+/// a deadline that expires names the path, the platform's reason, and
+/// the fix. A background service is allowed to fail; it is not allowed
+/// to hang and look healthy.
+fn preflight(dirs: &[&std::path::Path]) -> Result<(), Box<dyn std::error::Error>> {
+    const PATIENCE: Duration = Duration::from_secs(10);
+
+    for dir in dirs {
+        let dir = dir.to_path_buf();
+        let probing = dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let dir = probing;
+            // A create *and* a write: consent can be granted for reading
+            // a volume and withheld for writing it, and a store that
+            // cannot be written to is not a store.
+            let probe = std::fs::create_dir_all(&dir).and_then(|()| {
+                let file = dir.join(".fts-writable");
+                std::fs::write(&file, b"")?;
+                std::fs::remove_file(&file)
+            });
+            let _ = tx.send(probe);
+        });
+        match rx.recv_timeout(PATIENCE) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(format!("{}: {e}", dir.display()).into()),
+            Err(_) => {
+                let secs = PATIENCE.as_secs();
+                return Err(format!(
+                    "{} did not answer in {secs}s.\n\
+                     \n\
+                     On macOS this is what a background agent looks like when the system \
+                     is waiting for permission it cannot ask for: an external or removable \
+                     volume needs consent, and no window can appear for a launchd job.\n\
+                     Grant it in System Settings → Privacy & Security → Full Disk Access, \
+                     adding:\n    {}\n\
+                     then `launchctl kickstart -k gui/$(id -u)/{}`.\n\
+                     \n\
+                     Elsewhere: an unmounted volume, or a network filesystem that is not \
+                     answering.",
+                    dir.display(),
+                    std::env::current_exe()
+                        .unwrap_or_else(|_| PathBuf::from("this binary"))
+                        .display(),
+                    files_daemon::install::SERVICE_LABEL,
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 const USAGE: &str = "\
 fts-files-daemon — the Task file sync agent
 
@@ -80,6 +143,7 @@ install options:
     --roots <dir>                 where synced projects land      [~/Task]
     --bind <addr>                 control socket                  [127.0.0.1:4055]
     --interval <secs>             reconcile cadence               [30]
+    --program <path>              register this binary where it is, do not copy it
     --dry-run                     print what would happen, change nothing
 ";
 
@@ -123,6 +187,7 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut dry_run = false;
+    let mut keep_program = false;
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
         let mut value = || {
@@ -136,6 +201,14 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "--roots" => config.roots_dir = PathBuf::from(value()?),
             "--bind" => config.bind = value()?,
             "--interval" => config.interval_secs = value()?.parse()?,
+            // Naming a program is also saying "leave it there": a
+            // machine whose internal disk is nearly full wants the
+            // binary on the volume it chose, not copied onto the one it
+            // is trying to spare.
+            "--program" => {
+                config.program = PathBuf::from(value()?).canonicalize()?;
+                keep_program = true;
+            }
             "--dry-run" => dry_run = true,
             other => return Err(format!("unknown option: {other}\n\n{USAGE}").into()),
         }
@@ -146,7 +219,8 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // unit pointing into `target/debug` works until the next
     // `cargo clean` and then fails at every login, silently.
     let installed = files_daemon::install::ServiceConfig::installed_binary(&home);
-    let copy_binary = config.program != installed
+    let copy_binary = !keep_program
+        && config.program != installed
         && !config.program.starts_with(home.join(".local/bin"))
         && !config.program.starts_with("/usr")
         && !config.program.starts_with("/nix/store")
@@ -565,8 +639,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is a sibling (curated version entities ride the vault, not the
     // replica content).
     let store = data_dir.join("store");
-    std::fs::create_dir_all(&store)?;
-    std::fs::create_dir_all(&roots_under)?;
+    // Before anything else touches them — see `preflight` on why this is
+    // a deadline rather than a plain `create_dir_all`.
+    preflight(&[&store, &roots_under]).inspect_err(|e| {
+        tracing::error!("{e}");
+    })?;
     // The roots directory is declared as a permitted location, or every
     // adoption into it is refused as "outside the permitted boundary" —
     // see `peering::DeviceRoots` on why a device's boundary is not a
