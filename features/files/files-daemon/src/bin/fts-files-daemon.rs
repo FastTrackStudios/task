@@ -353,7 +353,7 @@ async fn peer(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         Ok(taken) => {
             for root in &taken {
                 match &root.error {
-                    None => println!("syncing {} → {roots}/{}", root.name, root.name),
+                    None => println!("syncing {} → {}", root.name, root.path),
                     // Reported, not swallowed. A root that could not be
                     // taken is the whole reason the person ran this.
                     Some(why) => println!("could NOT take {}: {why}", root.name),

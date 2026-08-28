@@ -439,8 +439,20 @@ impl SyncDaemon {
                     Some(e.to_string())
                 }
             };
+            // Asked of the backend rather than assembled from `under`:
+            // a root this machine already held kept the path it already
+            // had, and only a newly adopted one lands under `under`.
+            let path = self
+                .inner
+                .backend
+                .get_root(root.id)
+                .await
+                .ok()
+                .and_then(|r| r.path)
+                .unwrap_or_default();
             outcomes.push(crate::service::Pulled {
                 name: root.name,
+                path,
                 error,
             });
         }

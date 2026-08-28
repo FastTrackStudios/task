@@ -30,6 +30,13 @@ pub enum DaemonError {
 #[repr(C)]
 pub struct Pulled {
     pub name: String,
+    /// Where it lives on this machine.
+    ///
+    /// Not `<roots dir>/<name>`, which is only where a *new* root
+    /// lands: one this machine already held stays where it already is,
+    /// and printing the would-be path told a person their project had
+    /// moved when it had not.
+    pub path: String,
     /// Why it was not taken, if it was not.
     pub error: Option<String>,
 }
