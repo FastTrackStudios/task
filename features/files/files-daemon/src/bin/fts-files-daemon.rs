@@ -356,13 +356,22 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
             root.name,
             root.state,
             root.percent(),
-            // Where it comes from, shortened: a root that is not moving
-            // is a question about its peer, and a full endpoint id
-            // buries the state a person is scanning for.
-            root.peer
-                .as_deref()
-                .map(|p| format!("  from {}", &p[..p.len().min(8)]))
-                .unwrap_or_default(),
+            // Where it comes from, each id shortened *before* they are
+            // joined: a full endpoint id buries the state a person is
+            // scanning for, and shortening the joined list instead cut
+            // every peer but the first off the end.
+            if root.peers.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "  from {}",
+                    root.peers
+                        .iter()
+                        .map(|p| p[..p.len().min(8)].to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
             root.last_error
                 .as_deref()
                 .map(|e| format!("  ({e})"))
@@ -538,15 +547,25 @@ async fn forget(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let before = client.status().await?;
     client.dismiss_peer(endpoint_id.to_string()).await?;
 
-    // A root chosen against that peer has nowhere to pull from now.
-    // Local content stays exactly where it is — this stops syncing it,
-    // it does not delete it.
+    // Dropping the peer from every root is the daemon's job — it holds
+    // the choices, and doing it here as well would mean two places that
+    // have to agree about what "forget" does. This reports the
+    // difference; content is untouched either way.
+    let after = client.status().await?;
     let mut dropped = 0;
     for root in &before.roots {
-        if root.peer.as_deref() == Some(endpoint_id) {
-            client.remove_sync_choice(root.root_id).await?;
-            println!("stopped syncing {} (its content stays)", root.name);
-            dropped += 1;
+        if !root.peers.iter().any(|p| p == endpoint_id) {
+            continue;
+        }
+        dropped += 1;
+        match after.roots.iter().find(|r| r.root_id == root.root_id) {
+            // Still syncing, with the machines that remain.
+            Some(now) => println!(
+                "{} now syncs with {} machine(s) (its content stays)",
+                root.name,
+                now.peers.len()
+            ),
+            None => println!("stopped syncing {} (its content stays)", root.name),
         }
     }
     println!("forgot {endpoint_id}");

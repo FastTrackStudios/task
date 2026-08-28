@@ -1118,17 +1118,15 @@ impl SyncDaemon {
                 RootStatus {
                     root_id: *id,
                     name: cfg.name.clone(),
-                    // Every peer it pulls from, joined: on a desk with
-                    // three machines "where does this come from" has
-                    // more than one answer, and showing the first would
-                    // be picking one arbitrarily.
-                    peer: (!cfg.peers.is_empty()).then(|| {
-                        cfg.peers
-                            .iter()
-                            .map(|p| p.endpoint.clone().unwrap_or_else(|| "(direct)".into()))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }),
+                    // Every peer it pulls from: on a desk with three
+                    // machines "where does this come from" has more than
+                    // one answer, and showing the first would be picking
+                    // one arbitrarily.
+                    peers: cfg
+                        .peers
+                        .iter()
+                        .map(|p| p.endpoint.clone().unwrap_or_else(|| "(direct)".into()))
+                        .collect(),
                     state,
                     slice: cfg.slice.clone(),
                     files: rs.map(|s| s.files.clone()).unwrap_or_default(),
