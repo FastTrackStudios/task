@@ -84,6 +84,7 @@ impl Machine {
             _dir: dir,
             backend,
             daemon,
+
             endpoint_id,
             key,
             clock,
@@ -273,6 +274,25 @@ async fn a_tick_captures_the_local_session_before_it_pulls() {
         "a quiet session was never captured, so a peer pulling this machine would get its old work"
     );
 }
+
+// A peer *restarting* — the case where the stored client is a dead
+// connection and `SyncDaemon::redial` has to replace it — has no test
+// here, and the reason is worth writing down rather than leaving as an
+// absence.
+//
+// The scenario needs the peer to rebind the same endpoint key in this
+// process, and a dial to that rebound endpoint times out in this
+// harness: the address book holds the endpoint's previous address for
+// that id, so the dialler keeps trying somewhere nothing is listening.
+// A test that failed for *that* reason would look exactly like the
+// daemon not redialling, which makes it worse than no test — it would
+// report a bug in the fix every time the harness's networking was the
+// problem.
+//
+// It is verified on real machines instead, which is where it was found:
+// upgrade the agent on one of a synced pair, watch the other's root go
+// to `Error` with "vox connection closed", and see it return to `Idle`
+// on a later tick without being restarted.
 
 /// Un-admitting a machine is possible, and it keeps the content.
 ///

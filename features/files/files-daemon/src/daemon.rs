@@ -358,6 +358,35 @@ impl SyncDaemon {
         *self.inner.shared.lock().expect("shared dirs lock") = Some(dirs);
     }
 
+    /// Replace a root's peer connection with a fresh one.
+    ///
+    /// Best effort by design: a peer that is genuinely gone (shut lid,
+    /// no network) fails here too, and the right response is to try
+    /// again next tick rather than to drop a choice the person made.
+    async fn redial(&self, root_id: Uuid) {
+        let endpoint = {
+            let roots = self.inner.roots.lock().expect("roots lock");
+            let Some(root) = roots.get(&root_id) else {
+                return;
+            };
+            let Some(endpoint) = root.peer_endpoint.clone() else {
+                return;
+            };
+            endpoint
+        };
+        match self.dial(&endpoint).await {
+            Ok(fresh) => {
+                if let Some(root) = self.inner.roots.lock().expect("roots lock").get_mut(&root_id) {
+                    root.peer = fresh;
+                }
+                tracing::info!(%root_id, peer = %endpoint, "files-daemon: reconnected to the peer");
+            }
+            Err(e) => {
+                tracing::debug!(%root_id, peer = %endpoint, error = %e, "files-daemon: peer still unreachable");
+            }
+        }
+    }
+
     /// Every root this machine holds, shared or synced.
     pub async fn shares(&self) -> Result<Vec<files_proto::model::FileRootInfo>> {
         Ok(self.inner.backend.list_roots().await?)
@@ -844,6 +873,19 @@ impl SyncDaemon {
                 }
                 Err(e) => {
                     tracing::warn!(%root_id, error = %e, "files-daemon: pull failed");
+                    // A client is a live connection, and the peer at the
+                    // other end restarts, sleeps, changes networks. The
+                    // stored client is then dead for good: every tick
+                    // fails with "vox connection closed" and the root
+                    // sits in Error until *this* machine is restarted —
+                    // which is a background service that stops working
+                    // because the other one was upgraded.
+                    //
+                    // So a failed pull redials, and the next tick uses
+                    // the fresh connection. Only when the peer was
+                    // reached by an endpoint id; one handed in by an
+                    // embedder has no address to redial.
+                    self.redial(root_id).await;
                 }
             }
 
