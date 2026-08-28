@@ -171,20 +171,9 @@ members = [
     "features/workstream/workstream",
     "features/workstream/workstream-proto",
     # ── features/editor — the text/markdown/keyflow editor stack ──────
-    "features/editor/editor",
-    "features/editor/editor-crdt",
     "features/editor/editor-keyflow",
     "features/editor/editor-keyflow-lang",
-    "features/editor/editor-lsp",
-    "features/editor/editor-mermaid",
-    "features/editor/editor-state",
-    "features/editor/editor-syntax",
-    "features/editor/editor-typst",
-    "features/editor/editor-view",
-    "features/editor/editor-vim",
-    "features/editor/playground",
     # Editor's vendored mermaid fork (see [patch.crates-io] below).
-    "features/editor/mermaid-rs-renderer",
     "features/spaced-repetition/spaced-repetition",
 ]
 exclude = [
@@ -357,18 +346,27 @@ view-heatmap = { path = "features/view/view-heatmap" }
 view-kanban = { path = "features/view/view-kanban" }
 view-knowledge-graph = { path = "features/view/view-knowledge-graph" }
 view-table = { path = "features/view/view-table" }
-# features/editor — the text/markdown/keyflow editor stack
-editor = { path = "features/editor/editor" }
-editor-crdt = { path = "features/editor/editor-crdt" }
+# ── editor — its own repo since the 2026-08 split ─────────────────────
+# (FastTrackStudios/editor: the document model, the markdown pass, the
+# Dioxus view, vim, tree-sitter syntax, CRDT, LSP.) It sits BELOW keyflow
+# and depends on dioxus and crates.io only — that is what makes it
+# embeddable, and why it is no longer hosted here.
+#
+# `editor-keyflow` and `editor-keyflow-lang` stayed: they need
+# `keyflow-text` and `engraver`, so they belong above the editor. The
+# chart renderer registers itself through `editor_state::fence_renderer`
+# rather than editor-state depending on it. See docs/SPLIT.md in that repo.
+editor = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-lsp = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-mermaid = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-syntax = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-typst = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-view = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor-vim = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
 editor-keyflow = { path = "features/editor/editor-keyflow" }
 editor-keyflow-lang = { path = "features/editor/editor-keyflow-lang" }
-editor-lsp = { path = "features/editor/editor-lsp" }
-editor-mermaid = { path = "features/editor/editor-mermaid" }
-editor-state = { path = "features/editor/editor-state" }
-editor-syntax = { path = "features/editor/editor-syntax" }
-editor-typst = { path = "features/editor/editor-typst" }
-editor-view = { path = "features/editor/editor-view" }
-editor-vim = { path = "features/editor/editor-vim" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
@@ -545,9 +543,9 @@ phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" 
 # EVERY timestamp on every vox RPC to the second — and anything ordered
 # by one could invert when two events shared a second.
 facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
-# Editor's vendored mermaid-rs-renderer fork (web_time::Instant so the
-# layouter works on wasm32) — see features/editor/mermaid-rs-renderer/.
-mermaid-rs-renderer = { path = "features/editor/mermaid-rs-renderer" }
+# The editor's vendored mermaid-rs-renderer fork now lives in the editor
+# repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
+# and needs no patch entry here.
 
 # ── Lints ─────────────────────────────────────────────────────────────
 [workspace.lints.rust]

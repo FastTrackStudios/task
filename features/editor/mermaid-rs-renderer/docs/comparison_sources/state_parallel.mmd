@@ -1,8 +1,0 @@
-stateDiagram-v2
-[*] --> Idle
-Idle --> Working : start
-state Working {
-  [*] --> TaskA
-  TaskA --> TaskB
-}
-Working --> [*]
