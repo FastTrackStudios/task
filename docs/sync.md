@@ -175,6 +175,40 @@ just demo daemon    # a third machine: the agent, replicating ACME
 used. Edit a file under the device's `roots/` directory, wait a sweep,
 and it appears in the server's tree.
 
+## Putting it on a second machine
+
+Until a Developer-ID build exists, the fastest route is to build the
+agent where it will run:
+
+```
+cargo build --release -p files-daemon --features daemon-bin --bin fts-files-daemon
+./target/release/fts-files-daemon install       # launchd agent / systemd user unit
+./target/release/fts-files-daemon id            # this machine's endpoint id
+```
+
+Then introduce the two machines — on each, naming the other:
+
+```
+fts-files-daemon peer <the other machine's endpoint id>
+```
+
+The first one to run it is told the other side has not admitted it yet;
+run it on that side and re-run. Then share a folder from whichever
+machine has the files:
+
+```
+fts-files-daemon share ~/Music/Sessions
+```
+
+**A snag you will hit before any of that**: this repo's `[patch.crates-io]`
+points `vox-core` at an absolute path on one machine
+(`/run/media/Development/vox-global-mw`), so a checkout anywhere else
+fails to build with `failed to read …/vox-core/Cargo.toml`. The branch
+it patches in exists only in that local worktree; pushing
+`feat/global-client-middleware` to the vox repo and referencing it by
+git is what makes this repo buildable on a second machine. Copying the
+worktree across and repointing the patch locally works meanwhile.
+
 ## Shipping it on macOS
 
 `just dmg` (on a Mac) builds a **Developer-ID disk image**: hardened

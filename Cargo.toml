@@ -524,9 +524,21 @@ tempfile = "3"
 # crates.io release).
 #
 # LOCAL PATH — this builds only on machines with the vox worktree
-# checked out at this path. Replace with the git branch (or drop the
-# patch entirely once a vox release carries the change) before anyone
-# else needs to build this.
+# checked out at this path, and the day someone else needed to build it
+# has arrived: putting the sync agent on a second machine failed here
+# first, with `failed to read …/vox-global-mw/rust/vox-core/Cargo.toml`.
+#
+# The fix this comment has always named is one push away and is not
+# mine to make: the branch `feat/global-client-middleware` on
+# codeberg.org/FastTrackStudios/vox (commit 98d6798d) exists only in a
+# local worktree. Push it and this becomes
+#
+#   vox-core = { git = "https://codeberg.org/FastTrackStudios/vox.git",
+#                branch = "feat/global-client-middleware" }
+#
+# after which any machine can build this repo. Until then, a second
+# machine needs the worktree copied to it and this line pointed at the
+# copy — which is what voyager has, locally and uncommitted.
 vox-core = { path = "/run/media/Development/vox-global-mw/rust/vox-core" }
 # Blitz from the FTS fork (0.3.0-beta.1 line, upstream 02523b83 +
 # fts-focus: focus-follows-pointerdown for all focusable content —
