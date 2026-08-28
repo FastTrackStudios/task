@@ -446,5 +446,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::ReposRoute {} => "Repos",
         Route::FilesRoute {} => "Files",
         Route::SettingsRoute {} => "Settings",
+        Route::SyncRoute {} => "Sync",
     }
 }

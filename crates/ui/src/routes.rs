@@ -166,6 +166,9 @@ pub enum Route {
 
         #[route("/settings")]
         SettingsRoute {},
+
+        #[route("/sync")]
+        SyncRoute {},
 }
 
 #[component]
@@ -464,4 +467,9 @@ fn AgentsRoute(session: String) -> Element {
 #[component]
 fn SettingsRoute() -> Element {
     rsx! { pages::settings::SettingsView {} }
+}
+
+#[component]
+fn SyncRoute() -> Element {
+    rsx! { pages::sync::SyncView {} }
 }

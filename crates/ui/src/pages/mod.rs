@@ -35,6 +35,7 @@ pub mod recipe_read;
 pub mod repos;
 pub mod schedule;
 pub mod settings;
+pub mod sync;
 pub mod share_panel;
 pub mod shopping;
 pub mod task_detail;
