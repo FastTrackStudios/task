@@ -446,6 +446,47 @@ async fn a_restart_resumes_what_it_was_syncing() {
     );
 }
 
+/// An org that cannot be reached is not a reason to stop working.
+///
+/// The agent used to exit when its coordinator failed to dial, and
+/// systemd restarted it — every twelve seconds, for as long as the
+/// server was off. A laptop booting in a café is exactly that case, and
+/// what it should do there is sync with the machines it *can* reach and
+/// keep trying the one it cannot.
+///
+/// The daemon-level property is the one worth pinning: dialling an
+/// absent peer returns an error to its caller rather than taking
+/// anything else down with it, and a root already chosen keeps ticking.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreachable_org_does_not_stop_the_machines_that_are_there() {
+    let hub = Machine::open().await;
+    let laptop = Machine::open().await;
+    let album = hub.with_album(b"work from the hub").await;
+    hub.daemon.admit_peer(&laptop.endpoint_id);
+    laptop.daemon.admit_peer(&hub.endpoint_id);
+    laptop
+        .daemon
+        .sync_from_peer(&hub.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("take the album from the hub");
+
+    // An org that is not there. This is the call whose error used to
+    // reach `main` and end the process.
+    let absent = iroh::SecretKey::generate().public().to_string();
+    assert!(
+        laptop.daemon.set_coordinator_peer(&absent).await.is_err(),
+        "dialling a machine that does not exist reported success"
+    );
+
+    // And the peer that *is* there keeps working.
+    laptop.daemon.tick().await;
+    assert_eq!(
+        laptop.read("mix.wav"),
+        b"work from the hub",
+        "an absent org stopped a peer that was reachable"
+    );
+}
+
 /// Restarting keeps the address, or every admission it was given
 /// becomes a lie.
 // t[verify files.device.identity]

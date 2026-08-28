@@ -237,10 +237,24 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // already had. Upgrading the binary is the usual reason to re-run
     // `install`, and rewriting the unit from defaults silently undid the
     // pairing done in the app.
+    //
+    // `--coordinator ""` is the exception, and deliberately: it is how a
+    // person says "no org", which otherwise had no spelling at all — the
+    // value would be kept forever because keeping is the default.
+    let cleared = config.coordinator.as_deref() == Some("");
+    if cleared {
+        config.coordinator = None;
+        // The agent also remembers a coordinator it was told over the
+        // socket; clearing means clearing both, or the next start reads
+        // the old one back.
+        let remembered = config.data_dir.join("daemon").join("coordinator");
+        let _ = std::fs::remove_file(remembered);
+        println!("clear   coordinator");
+    }
     for (key, slot) in [
         ("FTS_FILES_DAEMON_COORDINATOR", &mut config.coordinator),
     ] {
-        if slot.is_none() {
+        if slot.is_none() && !cleared {
             *slot = files_daemon::install::configured(&home, key);
         }
     }
@@ -862,12 +876,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!(%coordinator, "coordinator connected (websocket)");
         }
         Some(coordinator) => {
-            daemon.set_coordinator_peer(&coordinator).await?;
-            // Admit it in return. Syncing *with* a peer means each side
-            // pulls the other, so a coordinator this machine will not
-            // answer can never collect what this machine did offline.
+            // Admit it whether or not it answers right now: admission is
+            // this machine's own list, and it has to be in place before
+            // the org can pull back.
             daemon.admit_peer(&coordinator);
-            tracing::info!(%coordinator, "coordinator connected (iroh)");
+
+            // An unreachable org must NOT be fatal. It was: the dial
+            // error propagated out of `main`, the process exited 1, and
+            // systemd restarted it — every twelve seconds, forever, on
+            // a machine whose only problem was that its server was off.
+            // A laptop that boots in a café is exactly this case, and
+            // the right behaviour there is to sync with the machines it
+            // *can* reach and keep trying the one it cannot.
+            match daemon.set_coordinator_peer(&coordinator).await {
+                Ok(()) => tracing::info!(%coordinator, "coordinator connected (iroh)"),
+                Err(e) => {
+                    tracing::warn!(
+                        %coordinator,
+                        error = %e,
+                        "coordinator not reachable — will keep trying; other peers are unaffected"
+                    );
+                    daemon.remember_peer(&coordinator);
+                }
+            }
 
             if env("FTS_FILES_DAEMON_SYNC_ALL").as_deref() != Some("0") {
                 match daemon.peer_roots(&coordinator).await {
