@@ -193,8 +193,15 @@ fts-files-daemon peer <the other machine's endpoint id>
 ```
 
 The first one to run it is told the other side has not admitted it yet;
-run it on that side and re-run. Then share a folder from whichever
-machine has the files:
+run it on that side and re-run.
+
+With three or more machines, name each of the others on each machine —
+a root is pulled from **every** peer it was told about, so there is no
+hub to designate and no order to get right. And a machine that is
+asleep when you name it is fine: the intent is kept and acted on when it
+answers, without running anything again.
+
+Then share a folder from whichever machine has the files:
 
 ```
 fts-files-daemon share ~/Music/Sessions
