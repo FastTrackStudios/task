@@ -56,6 +56,23 @@ pub trait DaemonControlService {
     /// content stays; nothing is deleted.
     async fn remove_sync_choice(&self, root_id: Uuid) -> Result<DaemonStatus, DaemonError>;
 
+    /// Share a folder from this machine: version it, checkpoint it, and
+    /// serve it to admitted peers. Returns the root's id and name.
+    ///
+    /// Without this the agent could only ever hold what somebody else
+    /// already held — fine for a laptop taking an org's projects, and
+    /// useless for two machines that just want the same folder.
+    async fn share(&self, path: String, name: Option<String>)
+    -> Result<(Uuid, String), DaemonError>;
+
+    /// Take everything `endpoint_id` offers, adopting what this machine
+    /// does not have under `under`. Returns the root names taken.
+    async fn pull_all(
+        &self,
+        endpoint_id: String,
+        under: String,
+    ) -> Result<Vec<String>, DaemonError>;
+
     /// Admit `endpoint_id` to this machine's own replica lane.
     ///
     /// Sync is two pulls, so being *pullable* is half of syncing: a

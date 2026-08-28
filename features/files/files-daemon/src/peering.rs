@@ -95,26 +95,87 @@ pub async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<SyncServiceCl
 /// So a device declares its roots directory as a permitted location.
 /// Same seam a deployment's Storage Locations use; the only difference
 /// is who decides, and on a device that is the person who installed it.
+/// The directories this device may hold live trees in.
+///
+/// Mutable and persisted, because a person adds one whenever they share
+/// a folder: `fts-files-daemon share ~/Music/Sessions` has to widen the
+/// boundary or the adoption it is asking for would be refused by the
+/// backend that just agreed to it. A boundary fixed at startup would
+/// mean "restart the agent to share a folder", and forgetting to
+/// persist it would mean "the folder you shared is refused after a
+/// reboot".
 #[derive(Debug)]
-pub struct DeviceRoots(Vec<std::path::PathBuf>);
+pub struct DeviceRoots {
+    dirs: std::sync::RwLock<Vec<std::path::PathBuf>>,
+    /// Where the list lives, so it survives a restart.
+    file: std::path::PathBuf,
+}
 
 impl DeviceRoots {
-    /// Permit `dir`, creating it first — a boundary that does not exist
-    /// cannot be canonicalized, and a first sync is precisely when it
-    /// does not exist yet.
-    pub fn at(dir: impl Into<std::path::PathBuf>) -> Result<Self> {
-        let dir = dir.into();
-        std::fs::create_dir_all(&dir)
+    /// The boundary for a daemon whose data dir is `data_dir` and whose
+    /// adopted replicas land under `roots_dir`.
+    ///
+    /// Both are created first: a boundary that does not exist cannot be
+    /// canonicalized, and a first sync is precisely when it does not
+    /// exist yet.
+    pub fn open(data_dir: &std::path::Path, roots_dir: &std::path::Path) -> Result<Self> {
+        let file = data_dir.join("shared-dirs.json");
+        let mut dirs = vec![Self::ready(roots_dir)?];
+        if let Ok(raw) = std::fs::read_to_string(&file) {
+            for saved in serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default() {
+                // A shared folder that has gone away — an unplugged
+                // drive, a deleted directory — is skipped rather than
+                // fatal: the rest of this machine's sync is none of its
+                // business.
+                match std::path::PathBuf::from(&saved).canonicalize() {
+                    Ok(dir) if !dirs.contains(&dir) => dirs.push(dir),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(dir = %saved, error = %e, "shared directory is not reachable"),
+                }
+            }
+        }
+        Ok(Self {
+            dirs: std::sync::RwLock::new(dirs),
+            file,
+        })
+    }
+
+    /// A boundary over one directory and nothing persisted — for tests
+    /// and embedders that manage their own list.
+    pub fn at(dir: impl AsRef<std::path::Path>) -> Result<Self> {
+        Ok(Self {
+            dirs: std::sync::RwLock::new(vec![Self::ready(dir.as_ref())?]),
+            file: std::path::PathBuf::new(),
+        })
+    }
+
+    fn ready(dir: &std::path::Path) -> Result<std::path::PathBuf> {
+        std::fs::create_dir_all(dir)
             .map_err(|e| DaemonError::Io(format!("creating {}: {e}", dir.display())))?;
-        let dir = dir
-            .canonicalize()
-            .map_err(|e| DaemonError::Io(format!("resolving {}: {e}", dir.display())))?;
-        Ok(Self(vec![dir]))
+        dir.canonicalize()
+            .map_err(|e| DaemonError::Io(format!("resolving {}: {e}", dir.display())))
+    }
+
+    /// Permit `dir` from now on, and after the next restart.
+    pub fn permit(&self, dir: &std::path::Path) -> Result<std::path::PathBuf> {
+        let dir = Self::ready(dir)?;
+        let mut dirs = self.dirs.write().expect("shared dirs lock");
+        if !dirs.contains(&dir) {
+            dirs.push(dir.clone());
+        }
+        if !self.file.as_os_str().is_empty() {
+            let saved: Vec<String> = dirs.iter().map(|d| d.to_string_lossy().into_owned()).collect();
+            let bytes = serde_json::to_vec_pretty(&saved)
+                .map_err(|e| DaemonError::Io(format!("shared dirs: {e}")))?;
+            std::fs::write(&self.file, bytes)
+                .map_err(|e| DaemonError::Io(format!("writing {}: {e}", self.file.display())))?;
+        }
+        Ok(dir)
     }
 }
 
 impl files::LocationBoundaries for DeviceRoots {
     fn permitted(&self) -> Vec<std::path::PathBuf> {
-        self.0.clone()
+        self.dirs.read().expect("shared dirs lock").clone()
     }
 }

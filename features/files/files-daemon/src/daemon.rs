@@ -137,6 +137,9 @@ struct DaemonInner {
     /// [`SyncDaemon::bind_peering`] — a daemon can pull without one, and
     /// cannot be pulled from without one.
     endpoint: Mutex<Option<architect::iroh_link::iroh::Endpoint>>,
+    /// The boundary this machine's shared folders are recorded in —
+    /// see `SyncDaemon::share`.
+    shared: Mutex<Option<Arc<crate::peering::DeviceRoots>>>,
     roots: Mutex<BTreeMap<Uuid, SyncedRoot>>,
     /// The coordinator this daemon pulls from — its `SyncService` peer.
     /// Set once the daemon knows where to sync from; the control
@@ -160,6 +163,7 @@ impl SyncDaemon {
                 identity: Mutex::new(identity),
                 data_dir,
                 endpoint: Mutex::new(None),
+                shared: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
                 coordinator: Mutex::new(None),
                 live: LiveStatus {
@@ -304,6 +308,93 @@ impl SyncDaemon {
         let peer = self.dial(endpoint_id).await?;
         self.set_coordinator(peer);
         Ok(())
+    }
+
+    /// Hold the boundary this daemon's shared folders are recorded in,
+    /// so [`Self::share`] can widen it.
+    ///
+    /// Optional because an embedder may manage the backend's boundaries
+    /// itself; a daemon without one can still sync everything it was
+    /// given, it just cannot be told to share a new folder.
+    pub fn with_shared_dirs(&self, dirs: Arc<crate::peering::DeviceRoots>) {
+        *self.inner.shared.lock().expect("shared dirs lock") = Some(dirs);
+    }
+
+    /// Share a folder from this machine: version it, checkpoint it, and
+    /// serve it to admitted peers.
+    ///
+    /// This is the other half of a two-machine setup and the half that
+    /// was missing. Everything else here syncs roots that came from
+    /// somewhere else; a person with a project on *this* disk had no way
+    /// to say so — the agent would happily serve a replica lane holding
+    /// nothing anyone asked it to hold.
+    ///
+    /// The checkpoint is not a nicety: content reaches a peer from the
+    /// store, so a root that has never been captured is a root that
+    /// syncs as an empty tree.
+    pub async fn share(
+        &self,
+        path: &std::path::Path,
+        name: Option<String>,
+    ) -> Result<files_proto::model::FileRootInfo> {
+        let path = path
+            .canonicalize()
+            .map_err(|e| DaemonError::Io(format!("{}: {e}", path.display())))?;
+        if !path.is_dir() {
+            return Err(DaemonError::BadRequest(format!(
+                "{} is not a directory — a File Root is a folder",
+                path.display()
+            )));
+        }
+        // Widen the boundary before adopting inside it, or the backend
+        // refuses the very folder this call exists to accept.
+        if let Some(dirs) = self.inner.shared.lock().expect("shared dirs lock").clone() {
+            dirs.permit(&path)?;
+        }
+        let name = name.unwrap_or_else(|| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned())
+        });
+        let root = self
+            .inner
+            .backend
+            .create_root(
+                path.to_string_lossy().into_owned(),
+                name,
+                files_proto::model::RootFlavor::Media,
+            )
+            .await?;
+        self.inner.backend.checkpoint_now(root.id, None).await?;
+        // Watched from here on, so later edits are captured without
+        // anyone asking — the same thing `start_capture` does for the
+        // roots that already existed.
+        self.inner.backend.watch_root(root.id)?;
+        self.inner.events.publish(self.status());
+        Ok(root)
+    }
+
+    /// Sync everything `endpoint_id` offers, adopting what this machine
+    /// does not have under `under`.
+    ///
+    /// The device-to-device shape: two laptops, no server, each holding
+    /// what the other shared.
+    pub async fn pull_all(
+        &self,
+        endpoint_id: &str,
+        under: &std::path::Path,
+    ) -> Result<Vec<String>> {
+        let mut taken = Vec::new();
+        for root in self.peer_roots(endpoint_id).await? {
+            match self
+                .sync_from_peer(endpoint_id, root.id, vec![], under)
+                .await
+            {
+                Ok(_) => taken.push(root.name),
+                Err(e) => tracing::warn!(root = %root.name, error = %e, "could not take this root"),
+            }
+        }
+        Ok(taken)
     }
 
     /// What `endpoint_id` holds — the "what have you got" a fresh

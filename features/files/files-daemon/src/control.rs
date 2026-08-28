@@ -53,6 +53,25 @@ impl DaemonControlService for DaemonControl {
         Ok(self.daemon.status())
     }
 
+    async fn share(
+        &self,
+        path: String,
+        name: Option<String>,
+    ) -> Result<(Uuid, String), DaemonError> {
+        let root = self.daemon.share(std::path::Path::new(&path), name).await?;
+        Ok((root.id, root.name))
+    }
+
+    async fn pull_all(
+        &self,
+        endpoint_id: String,
+        under: String,
+    ) -> Result<Vec<String>, DaemonError> {
+        self.daemon
+            .pull_all(&endpoint_id, std::path::Path::new(&under))
+            .await
+    }
+
     async fn admit_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError> {
         self.daemon.admit_peer(&endpoint_id);
         Ok(self.daemon.status())

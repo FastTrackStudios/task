@@ -66,6 +66,19 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
+    /// Where an installed agent's binary lives.
+    ///
+    /// A service unit names a path, and that path has to outlive the
+    /// thing that wrote it. `cargo build` output does not: install from
+    /// `target/debug` and the unit points into a build directory that
+    /// the next `cargo clean` empties, leaving a login agent that fails
+    /// forever with no obvious cause. So an install *copies the binary*
+    /// somewhere stable and points the unit there.
+    #[must_use]
+    pub fn installed_binary(home: &Path) -> PathBuf {
+        home.join(".local/bin/fts-files-daemon")
+    }
+
     /// The defaults an installer starts from: this binary, this user's
     /// home, the standard socket.
     pub fn for_this_binary(home: &Path) -> Result<Self> {

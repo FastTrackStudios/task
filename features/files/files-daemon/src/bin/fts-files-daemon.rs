@@ -68,6 +68,8 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon id                       this machine's endpoint id (admit it on the server)
     fts-files-daemon status                   what the running agent is doing
     fts-files-daemon checkpoint <root-id>     force a save point now (before unplugging)
+    fts-files-daemon share <dir> [--name N]   share a folder from this machine
+    fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
 
 install options:
     --coordinator <endpoint-id>   the org endpoint to sync with
@@ -88,7 +90,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some("id") => Some(print_endpoint_id()),
         // Handled in `main`: they dial something, so they need the async
         // runtime rather than avoiding it.
-        Some("status" | "checkpoint") => None,
+        Some("status" | "checkpoint" | "share" | "peer") => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             Some(Ok(()))
@@ -134,12 +136,41 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Copy this binary somewhere stable and register *that*, unless it
+    // already lives there or the caller named a program explicitly. A
+    // unit pointing into `target/debug` works until the next
+    // `cargo clean` and then fails at every login, silently.
+    let installed = files_daemon::install::ServiceConfig::installed_binary(&home);
+    let copy_binary = config.program != installed
+        && !config.program.starts_with(home.join(".local/bin"))
+        && !config.program.starts_with("/usr")
+        && !config.program.starts_with("/nix/store")
+        // Inside a macOS app bundle the binary is already where it
+        // belongs, and copying it out would leave the copy unsigned.
+        && !config.program.to_string_lossy().contains(".app/Contents/");
+    if copy_binary {
+        config.program = installed.clone();
+    }
+
     let plan = files_daemon::install::install_plan(&home, &config)?;
+    if copy_binary {
+        println!("copy    {} → {}", std::env::current_exe()?.display(), installed.display());
+    }
     print!("{}", plan.describe());
     if dry_run {
         return Ok(());
     }
     std::fs::create_dir_all(&config.roots_dir)?;
+    if copy_binary {
+        let from = std::env::current_exe()?;
+        std::fs::create_dir_all(installed.parent().expect("a parent"))?;
+        // Copy to a temp name and rename: overwriting a running binary
+        // in place is what "text file busy" is, and the agent being
+        // upgraded is usually running.
+        let tmp = installed.with_extension("new");
+        std::fs::copy(&from, &tmp)?;
+        std::fs::rename(&tmp, &installed)?;
+    }
     plan.apply()?;
     println!(
         "\ninstalled. the agent starts at login and restarts if it dies.\n\
@@ -261,6 +292,90 @@ async fn checkpoint(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Share a folder from this machine, through the running agent.
+async fn share(dir: &str, name: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::fs::canonicalize(dir).map_err(|e| format!("{dir}: {e}"))?;
+    let (id, name) = control()
+        .await?
+        .share(path.to_string_lossy().into_owned(), name)
+        .await?;
+    println!("sharing {name}  ({id})");
+    println!("{}", path.display());
+    println!();
+    println!("on the other machine:");
+    println!("    fts-files-daemon peer {}", endpoint_id()?);
+    Ok(())
+}
+
+/// Admit a machine and take whatever it shares.
+///
+/// Both halves in one command, because they are one intention: a person
+/// naming another machine means "sync with that", and admitting without
+/// pulling (or pulling without admitting) is half of it — the half that
+/// looks like nothing happening.
+async fn peer(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    client.admit_peer(endpoint_id.to_string()).await?;
+
+    let roots = env("FTS_FILES_DAEMON_ROOTS").unwrap_or_else(|| {
+        format!(
+            "{}/.local/share/fts-files/roots",
+            home().display()
+        )
+    });
+    println!("admitted {endpoint_id}");
+
+    // The pull is the second half, and it fails on a first run for a
+    // reason that is not a failure: admission is symmetric, so until
+    // that machine has admitted this one it refuses to be read. Saying
+    // "permission denied" there would report the *successful* half as an
+    // error and leave a person with no idea what to do next.
+    match client.pull_all(endpoint_id.to_string(), roots.clone()).await {
+        Ok(taken) if taken.is_empty() => {
+            println!("it is sharing nothing yet — nothing to take.");
+        }
+        Ok(taken) => {
+            for name in &taken {
+                println!("syncing {name} → {roots}/{name}");
+            }
+        }
+        Err(e) if is_not_admitted(&e) => {
+            println!();
+            println!("that machine has not admitted this one yet, so it will not be read.");
+            println!("run this there, then re-run this command:");
+            println!("    fts-files-daemon peer {}", endpoint_id_or_unknown());
+        }
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+/// Whether a pull failed because the far side has not admitted us.
+///
+/// Matched on the gate's own words rather than a typed variant: the
+/// refusal crosses the wire as a `permission denied` payload, and the
+/// alternative — a distinct error kind for it — would have to be
+/// threaded through the replica lane, which serves peers that are not
+/// supposed to learn why they were refused.
+fn is_not_admitted(e: &impl std::fmt::Display) -> bool {
+    let text = e.to_string();
+    text.contains("permission denied") || text.contains("may not read")
+}
+
+/// This machine's endpoint id, for printing in instructions.
+fn endpoint_id() -> Result<String, Box<dyn std::error::Error>> {
+    let data_dir = PathBuf::from(
+        env("FTS_FILES_DAEMON_DATA")
+            .unwrap_or_else(|| format!("{}/.local/share/fts-files", home().display())),
+    );
+    let key = files_daemon::identity::DeviceIdentity::endpoint_key(&data_dir.join("daemon"))?;
+    Ok(key.public().to_string())
+}
+
+fn endpoint_id_or_unknown() -> String {
+    endpoint_id().unwrap_or_else(|_| "<this machine's id>".into())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -277,6 +392,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("checkpoint needs a root id or name")?
                 .clone();
             return checkpoint(&root).await;
+        }
+        Some("share") => {
+            let dir = args.get(1).ok_or("share needs a directory")?.clone();
+            let name = args
+                .iter()
+                .position(|a| a == "--name")
+                .and_then(|i| args.get(i + 1))
+                .cloned();
+            return share(&dir, name).await;
+        }
+        Some("peer") => {
+            let id = args.get(1).ok_or("peer needs an endpoint id")?.clone();
+            return peer(&id).await;
         }
         _ => {}
     }
@@ -326,16 +454,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         config
     };
+    // Where this machine may hold live trees: the replica directory,
+    // plus every folder somebody has shared from here (persisted, so a
+    // restart does not un-share them).
+    let shared = std::sync::Arc::new(files_daemon::peering::DeviceRoots::open(
+        &data_dir,
+        &roots_under,
+    )?);
     let backend = FilesBackend::with_cadence(
         &store,
         data_dir.join("vault"),
         cadence,
         std::sync::Arc::new(files::SystemClock),
     )?
-    .with_location_boundaries(std::sync::Arc::new(files_daemon::peering::DeviceRoots::at(
-        &roots_under,
-    )?));
+    .with_location_boundaries(shared.clone());
     let daemon = SyncDaemon::open(backend, data_dir.join("daemon"))?;
+    daemon.with_shared_dirs(shared);
 
     // Bind and serve before dialling anything: a device that pulls but
     // cannot be pulled from is the one-way arrangement this daemon
