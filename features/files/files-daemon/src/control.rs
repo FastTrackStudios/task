@@ -53,6 +53,19 @@ impl DaemonControlService for DaemonControl {
         Ok(self.daemon.status())
     }
 
+    async fn shares(&self) -> Result<Vec<(Uuid, String, String)>, DaemonError> {
+        Ok(self
+            .daemon
+            .shares()
+            .await?
+            .into_iter()
+            // A root with no path on *this* host is one whose structure
+            // arrived but whose tree lives elsewhere — real, and worth
+            // listing as such rather than hiding.
+            .map(|r| (r.id, r.name, r.path.unwrap_or_default()))
+            .collect())
+    }
+
     async fn share(
         &self,
         path: String,
@@ -66,10 +79,17 @@ impl DaemonControlService for DaemonControl {
         &self,
         endpoint_id: String,
         under: String,
-    ) -> Result<Vec<String>, DaemonError> {
-        self.daemon
-            .pull_all(&endpoint_id, std::path::Path::new(&under))
-            .await
+    ) -> Result<Vec<crate::service::Pulled>, DaemonError> {
+        // An empty `under` means "wherever this agent keeps its roots",
+        // which is what a caller wants unless it has a reason not to —
+        // and saves it from reconstructing a path the agent already
+        // knows.
+        let under = if under.trim().is_empty() {
+            self.daemon.roots_dir()
+        } else {
+            std::path::PathBuf::from(under)
+        };
+        self.daemon.pull_all(&endpoint_id, &under).await
     }
 
     async fn admit_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError> {

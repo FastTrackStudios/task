@@ -25,6 +25,15 @@ pub enum DaemonError {
     Io(String),
 }
 
+/// What became of one root a peer offered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct Pulled {
+    pub name: String,
+    /// Why it was not taken, if it was not.
+    pub error: Option<String>,
+}
+
 /// Live status changes pushed to a subscriber — the app's status panel
 /// folds these in rather than polling [`DaemonControlService::status`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
@@ -56,6 +65,16 @@ pub trait DaemonControlService {
     /// content stays; nothing is deleted.
     async fn remove_sync_choice(&self, root_id: Uuid) -> Result<DaemonStatus, DaemonError>;
 
+    /// Every root this machine holds — what it serves to admitted peers,
+    /// whether it originated here or arrived from one.
+    ///
+    /// Distinct from the roots in [`crate::model::DaemonStatus`], which
+    /// are the ones this machine *pulls*. A folder shared from here is
+    /// not pulled from anywhere, so it appeared in no listing at all:
+    /// the agent would serve it perfectly and be unable to say it had
+    /// it, and `checkpoint <name>` could not resolve the name.
+    async fn shares(&self) -> Result<Vec<(Uuid, String, String)>, DaemonError>;
+
     /// Share a folder from this machine: version it, checkpoint it, and
     /// serve it to admitted peers. Returns the root's id and name.
     ///
@@ -66,12 +85,18 @@ pub trait DaemonControlService {
     -> Result<(Uuid, String), DaemonError>;
 
     /// Take everything `endpoint_id` offers, adopting what this machine
-    /// does not have under `under`. Returns the root names taken.
+    /// does not have under `under` (empty for this agent's own roots
+    /// directory, which is nearly always what a caller wants — see
+    /// [`crate::model::DaemonStatus::roots_dir`]).
+    ///
+    /// One outcome per root, failures included. Returning only the
+    /// successes reads as "the peer had nothing", which is what it did
+    /// read as while every adoption was being refused.
     async fn pull_all(
         &self,
         endpoint_id: String,
         under: String,
-    ) -> Result<Vec<String>, DaemonError>;
+    ) -> Result<Vec<Pulled>, DaemonError>;
 
     /// Admit `endpoint_id` to this machine's own replica lane.
     ///

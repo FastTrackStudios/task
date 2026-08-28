@@ -81,6 +81,16 @@ pub struct RootStatus {
     /// Files currently mid-transfer, most-recently-touched first. Empty
     /// when [`RootSyncState::Idle`].
     pub files: Vec<FileProgress>,
+    /// Paths that two machines changed independently, awaiting a
+    /// person's decision.
+    ///
+    /// Sync never merges content: concurrent edits survive as sibling
+    /// heads and someone picks. Two machines editing the same project is
+    /// the *ordinary* case for this product, so a status surface that
+    /// cannot say "these two files disagree" leaves the one thing
+    /// needing attention invisible — and the tree quietly showing one
+    /// side of it.
+    pub divergent: Vec<String>,
     /// Cumulative counters for the pull in flight (or the last one).
     pub chunks_fetched: u64,
     pub chunks_skipped: u64,
@@ -133,6 +143,16 @@ pub struct DaemonStatus {
     /// Whether a coordinator has been dialled: the peer this daemon
     /// pulls from by default.
     pub coordinator: bool,
+    /// Where this agent lands roots it adopts from a peer.
+    ///
+    /// Reported rather than assumed, because a client that guesses gets
+    /// it wrong: the agent's default and the CLI's default were the same
+    /// string in two places, the install wrote a different one into the
+    /// service unit, and every adoption was then refused as "outside the
+    /// permitted boundary" — with the failure swallowed into an empty
+    /// list, so the CLI cheerfully reported that the other machine was
+    /// sharing nothing.
+    pub roots_dir: String,
     /// Global pause — no root syncs while set.
     pub paused: bool,
     /// Every root the daemon is set to sync.

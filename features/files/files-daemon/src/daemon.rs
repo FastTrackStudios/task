@@ -70,6 +70,8 @@ struct RootRuntimeStatus {
     chunks_skipped: u64,
     last_synced_at: Option<chrono::DateTime<Utc>>,
     last_error: Option<String>,
+    /// Paths this root's heads disagree about, as of the last pull.
+    divergent: Vec<String>,
 }
 
 /// The shared status map the [`SyncObserver`] mutates during a pull and
@@ -165,6 +167,8 @@ struct DaemonInner {
     /// [`SyncDaemon::bind_peering`] — a daemon can pull without one, and
     /// cannot be pulled from without one.
     endpoint: Mutex<Option<architect::iroh_link::iroh::Endpoint>>,
+    /// Where adopted roots land, reported in the status.
+    roots_dir: Mutex<std::path::PathBuf>,
     /// The boundary this machine's shared folders are recorded in —
     /// see `SyncDaemon::share`.
     shared: Mutex<Option<Arc<crate::peering::DeviceRoots>>>,
@@ -185,12 +189,18 @@ impl SyncDaemon {
     pub fn open(backend: FilesBackend, data_dir: impl Into<std::path::PathBuf>) -> Result<Self> {
         let data_dir = data_dir.into();
         let identity = DeviceIdentity::load_or_create(&data_dir)?;
+        // A default the embedder overrides with `set_roots_dir`. Beside
+        // the data dir rather than inside it, because "somewhere under
+        // an application-support directory" is a poor place for a
+        // person's projects and a worse one to have guessed silently.
+        let data_dir_for_roots = data_dir.join("roots");
         Ok(Self {
             inner: Arc::new(DaemonInner {
                 backend,
                 identity: Mutex::new(identity),
                 data_dir,
                 endpoint: Mutex::new(None),
+                roots_dir: Mutex::new(data_dir_for_roots.clone()),
                 shared: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
                 coordinator: Mutex::new(None),
@@ -348,6 +358,11 @@ impl SyncDaemon {
         *self.inner.shared.lock().expect("shared dirs lock") = Some(dirs);
     }
 
+    /// Every root this machine holds, shared or synced.
+    pub async fn shares(&self) -> Result<Vec<files_proto::model::FileRootInfo>> {
+        Ok(self.inner.backend.list_roots().await?)
+    }
+
     /// Share a folder from this machine: version it, checkpoint it, and
     /// serve it to admitted peers.
     ///
@@ -411,18 +426,37 @@ impl SyncDaemon {
         &self,
         endpoint_id: &str,
         under: &std::path::Path,
-    ) -> Result<Vec<String>> {
-        let mut taken = Vec::new();
+    ) -> Result<Vec<crate::service::Pulled>> {
+        let mut outcomes = Vec::new();
         for root in self.peer_roots(endpoint_id).await? {
-            match self
+            let error = match self
                 .sync_from_peer(endpoint_id, root.id, vec![], under)
                 .await
             {
-                Ok(_) => taken.push(root.name),
-                Err(e) => tracing::warn!(root = %root.name, error = %e, "could not take this root"),
-            }
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!(root = %root.name, error = %e, "could not take this root");
+                    Some(e.to_string())
+                }
+            };
+            outcomes.push(crate::service::Pulled {
+                name: root.name,
+                error,
+            });
         }
-        Ok(taken)
+        Ok(outcomes)
+    }
+
+    /// Where this agent lands roots it adopts — reported in the status
+    /// so a client never has to guess it.
+    pub fn set_roots_dir(&self, dir: impl Into<std::path::PathBuf>) {
+        *self.inner.roots_dir.lock().expect("roots dir lock") = dir.into();
+    }
+
+    /// Where this agent lands roots it adopts.
+    #[must_use]
+    pub fn roots_dir(&self) -> std::path::PathBuf {
+        self.inner.roots_dir.lock().expect("roots dir lock").clone()
     }
 
     /// What `endpoint_id` holds — the "what have you got" a fresh
@@ -800,8 +834,59 @@ impl SyncDaemon {
                     tracing::warn!(%root_id, error = %e, "files-daemon: pull failed");
                 }
             }
+
+            // What the two sides disagree about, after the pull that
+            // could have introduced it. Cheap when there is nothing to
+            // say — a root with one visible head returns immediately
+            // without walking a tree — and the only moment this can
+            // change is right here, so it is not worth a surface of its
+            // own.
+            let divergent: Vec<String> = self
+                .inner
+                .backend
+                .divergences(root_id)
+                .await
+                .map(|d| d.into_iter().map(|info| info.path.to_string()).collect())
+                .unwrap_or_default();
+            if !divergent.is_empty() {
+                tracing::warn!(
+                    %root_id,
+                    paths = divergent.len(),
+                    "files-daemon: two machines changed the same files — waiting for a decision"
+                );
+            }
+            if let Some(s) = self
+                .inner
+                .live
+                .roots
+                .lock()
+                .expect("status lock")
+                .get_mut(&root_id)
+            {
+                s.divergent = divergent;
+            }
             self.inner.events.publish(self.status());
         }
+    }
+
+    /// Settle one divergent path by keeping every side.
+    ///
+    /// Only `KeepBoth` is offered here, and the restraint is the point:
+    /// a person at a terminal, told two machines disagree about a file,
+    /// cannot see either version from there. Picking one would be
+    /// choosing which work to stop showing on the strength of a path
+    /// name. Keeping both puts each side on the disk under its own name
+    /// (`<stem> (divergent n).<ext>`), where the file can be opened and
+    /// the real decision made by whoever knows what is in it — which is
+    /// the app's job, and `resolve_divergence`'s `Pick` is how it does
+    /// it.
+    pub async fn keep_both(&self, root_id: Uuid, path: String) -> Result<()> {
+        self.inner
+            .backend
+            .resolve_divergence(root_id, path, files_proto::model::DivergenceChoice::KeepBoth)
+            .await?;
+        self.inner.events.publish(self.status());
+        Ok(())
     }
 
     /// Hydrate one path on demand (issue #263).
@@ -838,6 +923,7 @@ impl SyncDaemon {
                     state,
                     slice: cfg.slice.clone(),
                     files: rs.map(|s| s.files.clone()).unwrap_or_default(),
+                    divergent: rs.map(|s| s.divergent.clone()).unwrap_or_default(),
                     chunks_fetched: rs.map_or(0, |s| s.chunks_fetched),
                     chunks_skipped: rs.map_or(0, |s| s.chunks_skipped),
                     last_synced_at: rs.and_then(|s| s.last_synced_at),
@@ -861,6 +947,7 @@ impl SyncDaemon {
                 .into_iter()
                 .map(|(h, _)| h.0)
                 .collect(),
+            roots_dir: self.inner.roots_dir.lock().expect("roots dir lock").to_string_lossy().into_owned(),
             coordinator: self
                 .inner
                 .coordinator

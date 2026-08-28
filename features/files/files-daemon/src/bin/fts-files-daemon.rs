@@ -69,6 +69,7 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon status                   what the running agent is doing
     fts-files-daemon checkpoint <root-id>     force a save point now (before unplugging)
     fts-files-daemon share <dir> [--name N]   share a folder from this machine
+    fts-files-daemon shares                   every root this machine holds
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
     fts-files-daemon forget <endpoint-id>     stop admitting a machine, and stop pulling it
 
@@ -91,7 +92,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some("id") => Some(print_endpoint_id()),
         // Handled in `main`: they dial something, so they need the async
         // runtime rather than avoiding it.
-        Some("status" | "checkpoint" | "share" | "peer" | "forget") => None,
+        Some("status" | "checkpoint" | "share" | "shares" | "peer" | "forget") => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             Some(Ok(()))
@@ -284,16 +285,22 @@ async fn checkpoint(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     let client = control().await?;
     // By id, or by the name the status surface shows — a person reads
     // the name and should be able to type what they read.
+    // By id, or by name — and the name is looked up among every root
+    // this machine holds, not only the ones it pulls. A folder shared
+    // from here is pulled from nowhere, so checking the sync choices
+    // alone answered "no synced root called sharetest" about a root the
+    // agent was serving at that moment.
     let id = match root.parse::<uuid::Uuid>() {
         Ok(id) => id,
-        Err(_) => client
-            .status()
-            .await?
-            .roots
-            .iter()
-            .find(|r| r.name == root)
-            .ok_or_else(|| format!("no synced root called {root}"))?
-            .root_id,
+        Err(_) => {
+            client
+                .shares()
+                .await?
+                .into_iter()
+                .find(|(_, name, _)| name == root)
+                .ok_or_else(|| format!("this machine holds no root called {root}"))?
+                .0
+        }
     };
     client.checkpoint_now(id).await?;
     println!("checkpointed {root}");
@@ -323,14 +330,15 @@ async fn share(dir: &str, name: Option<String>) -> Result<(), Box<dyn std::error
 /// looks like nothing happening.
 async fn peer(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let client = control().await?;
-    client.admit_peer(endpoint_id.to_string()).await?;
+    let status = client.admit_peer(endpoint_id.to_string()).await?;
 
-    let roots = env("FTS_FILES_DAEMON_ROOTS").unwrap_or_else(|| {
-        format!(
-            "{}/.local/share/fts-files/roots",
-            home().display()
-        )
-    });
+    // Where the agent puts adopted roots is the agent's business, and
+    // asking beats guessing: the two defaults were the same string
+    // written in two places, they drifted the moment `install` chose a
+    // different one, and every adoption was then refused as "outside the
+    // permitted boundary" while the CLI reported the other machine as
+    // sharing nothing.
+    let roots = status.roots_dir.clone();
     println!("admitted {endpoint_id}");
 
     // The pull is the second half, and it fails on a first run for a
@@ -343,8 +351,13 @@ async fn peer(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
             println!("it is sharing nothing yet — nothing to take.");
         }
         Ok(taken) => {
-            for name in &taken {
-                println!("syncing {name} → {roots}/{name}");
+            for root in &taken {
+                match &root.error {
+                    None => println!("syncing {} → {roots}/{}", root.name, root.name),
+                    // Reported, not swallowed. A root that could not be
+                    // taken is the whole reason the person ran this.
+                    Some(why) => println!("could NOT take {}: {why}", root.name),
+                }
             }
         }
         Err(e) if is_not_admitted(&e) => {
@@ -433,6 +446,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("checkpoint needs a root id or name")?
                 .clone();
             return checkpoint(&root).await;
+        }
+        Some("shares") => {
+            for (id, name, path) in control().await?.shares().await? {
+                println!("{id}  {name}");
+                if !path.is_empty() {
+                    println!("    {path}");
+                }
+            }
+            return Ok(());
         }
         Some("share") => {
             let dir = args.get(1).ok_or("share needs a directory")?.clone();
@@ -527,6 +549,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_location_boundaries(shared.clone());
     let daemon = SyncDaemon::open(backend, data_dir.join("daemon"))?;
     daemon.with_shared_dirs(shared);
+    daemon.set_roots_dir(&roots_under);
+
+    // The control socket FIRST, before any of the network setup below.
+    //
+    // Everything after this line talks to the world — binding an iroh
+    // endpoint waits on relay probes, restoring choices dials each
+    // remembered peer — and on a real machine that added up to about
+    // seventy-five seconds. With the socket bound last, `status` in that
+    // window answered "no agent answering — is it running?" about an
+    // agent that was running perfectly well, which is a lie told to the
+    // person who is trying to find out what is happening. The point of a
+    // control surface is to be reachable while the thing it describes is
+    // still starting.
+    let control = DaemonControl::new(daemon.clone());
+    let app = axum::Router::new().route(
+        "/vox",
+        any(move |ws: WebSocketUpgrade| {
+            let router = LayerRouter::new()
+                .merge(files_daemon::service::layer(control.clone()))
+                .merge(files_daemon::service::stream_layer(control.clone()));
+            async move {
+                ws.protocols([VOX_SUBPROTOCOL])
+                    .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
+                    .into_response()
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    tracing::info!(%bind, "fts-files-daemon control socket listening");
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            tracing::error!(error = %e, "the control socket stopped");
+        }
+    });
 
     // Bind and serve before dialling anything: a device that pulls but
     // cannot be pulled from is the one-way arrangement this daemon
@@ -597,34 +653,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // The reconcile tick loop — captures local work, then pulls every
-    // chosen root.
-    let ticker = daemon.clone();
-    tokio::spawn(async move {
-        let mut timer = tokio::time::interval(interval);
-        loop {
-            timer.tick().await;
-            ticker.tick().await;
-        }
-    });
-
-    // The control surface on a local WebSocket.
-    let control = DaemonControl::new(daemon);
-    let app = axum::Router::new().route(
-        "/vox",
-        any(move |ws: WebSocketUpgrade| {
-            let router = LayerRouter::new()
-                .merge(files_daemon::service::layer(control.clone()))
-                .merge(files_daemon::service::stream_layer(control.clone()));
-            async move {
-                ws.protocols([VOX_SUBPROTOCOL])
-                    .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
-                    .into_response()
-            }
-        }),
-    );
-
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!(%bind, "fts-files-daemon control socket listening");
-    axum::serve(listener, app).await?;
-    Ok(())
+    // chosen root. This is what the process stays alive for; the control
+    // socket has been answering since before any of the above ran.
+    let mut timer = tokio::time::interval(interval);
+    loop {
+        timer.tick().await;
+        daemon.tick().await;
+    }
 }

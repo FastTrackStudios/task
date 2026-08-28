@@ -127,6 +127,15 @@ impl ServiceConfig {
 pub struct Step {
     pub argv: Vec<String>,
     pub best_effort: bool,
+    /// How many extra attempts, a second apart.
+    ///
+    /// For the one thing that genuinely needs it: `launchctl bootout`
+    /// returns before the job is actually gone, so the `bootstrap` right
+    /// after it fails with `Bootstrap failed: 5: Input/output error` —
+    /// on *re*-install only, which is to say on every upgrade. Waiting
+    /// and asking again is what the race calls for; a fixed sleep before
+    /// it would be the same wait, guessed rather than measured.
+    pub retries: u8,
 }
 
 impl Step {
@@ -134,6 +143,7 @@ impl Step {
         Self {
             argv: argv.iter().map(|s| (*s).to_string()).collect(),
             best_effort: false,
+            retries: 0,
         }
     }
 
@@ -141,7 +151,13 @@ impl Step {
         Self {
             argv: argv.iter().map(|s| (*s).to_string()).collect(),
             best_effort: true,
+            retries: 0,
         }
+    }
+
+    fn retrying(mut self, retries: u8) -> Self {
+        self.retries = retries;
+        self
     }
 }
 
@@ -241,25 +257,31 @@ impl Plan {
     }
 }
 
-/// Run one step, tolerating a best-effort failure.
+/// Run one step, retrying and tolerating failure as the step asks.
 fn run(step: &Step) -> Result<()> {
     let Some((program, args)) = step.argv.split_first() else {
         return Ok(());
     };
-    let output = std::process::Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| DaemonError::Io(format!("running {program}: {e}")))?;
-    if output.status.success() {
-        return Ok(());
+    let mut complaint = String::new();
+    for attempt in 0..=step.retries {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        let output = std::process::Command::new(program)
+            .args(args)
+            .output()
+            .map_err(|e| DaemonError::Io(format!("running {program}: {e}")))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        complaint = format!(
+            "{} {}: {}{}",
+            program,
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim(),
+            String::from_utf8_lossy(&output.stdout).trim(),
+        );
     }
-    let complaint = format!(
-        "{} {}: {}{}",
-        program,
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr).trim(),
-        String::from_utf8_lossy(&output.stdout).trim(),
-    );
     if step.best_effort {
         tracing::debug!("{complaint}");
         return Ok(());
@@ -420,12 +442,13 @@ fn macos_plan(home: &Path, config: &ServiceConfig) -> Plan {
                 "bootout",
                 &format!("{domain}/{SERVICE_LABEL}"),
             ])),
-            Action::Run(Step::required([
-                "launchctl",
-                "bootstrap",
-                &domain,
-                &path.to_string_lossy(),
-            ])),
+            Action::Run(
+                Step::required(["launchctl", "bootstrap", &domain, &path.to_string_lossy()])
+                    // The bootout above returns before launchd has
+                    // finished unloading the job, so a re-install races
+                    // it. Five seconds of asking again covers it.
+                    .retrying(5),
+            ),
         ],
         notes: vec![format!("logs: {}", log.display())],
     }
