@@ -87,8 +87,7 @@ async fn an_org_holds_more_than_its_projects() {
 /// The ordinary project: work, client, one session.
 #[tokio::test]
 async fn a_folder_name_carries_the_work_and_the_client() {
-    let Entry::Project(p) = at(&data(), "acme-audio/Projects/First Single - Example Client")
-    else {
+    let Entry::Project(p) = at(&data(), "acme-audio/Projects/First Single - Example Client") else {
         panic!("not read as a project");
     };
     assert_eq!(p.work, "First Single");
@@ -195,7 +194,10 @@ async fn the_sessions_are_found_wherever_the_daw_put_them() {
         "vnt-video/Projects/Example Documentary - First Client, Second Client",
         "vnt-video/Projects/Shared Project/Shared Cut",
     ] {
-        assert!(found.iter().any(|f| f == expected), "missing {expected}\nfound: {found:#?}");
+        assert!(
+            found.iter().any(|f| f == expected),
+            "missing {expected}\nfound: {found:#?}"
+        );
     }
 }
 
@@ -214,7 +216,10 @@ async fn a_daws_backup_saves_are_not_sessions() {
         .iter()
         .filter(|p| p.to_string_lossy().contains("Example Album"))
         .count();
-    assert_eq!(tracks, 3, "an album of three tracks found {tracks} sessions");
+    assert_eq!(
+        tracks, 3,
+        "an album of three tracks found {tracks} sessions"
+    );
 }
 
 /// Two orgs on one project, on the disk of neither the one that started

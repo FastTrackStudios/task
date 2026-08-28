@@ -659,4 +659,3 @@ mod tests {
         assert_eq!(a.len(), 2, "and a duplicate is not a second capability");
     }
 }
-

@@ -172,12 +172,10 @@ pub fn classify(parts: &[&str]) -> Entry {
             Entry::Inbox(InboxScope::Org((*org).to_string()))
         }
         [org, "Projects", name] => classify_project(org, name),
-        [org, "Projects", project, name] if is_inbox(name) => {
-            Entry::Inbox(InboxScope::Project {
-                org: (*org).to_string(),
-                project: (*project).to_string(),
-            })
-        }
+        [org, "Projects", project, name] if is_inbox(name) => Entry::Inbox(InboxScope::Project {
+            org: (*org).to_string(),
+            project: (*project).to_string(),
+        }),
         // Inside a project: a session, or material a session uses. Which
         // of those needs the disk to answer — a folder is a session
         // because it holds a `.RPP`, not because of its name — so the
@@ -232,11 +230,7 @@ fn classify_project(org: &str, name: &str) -> Entry {
     // Lowercase first letter in a tree where people capitalise. Only when
     // the name is *all* lowercase — `iPhone Footage` is a person's name
     // for something, `tasks` is not.
-    if name
-        .chars()
-        .all(|c| !c.is_ascii_uppercase())
-        && name.chars().any(char::is_alphabetic)
-    {
+    if name.chars().all(|c| !c.is_ascii_uppercase()) && name.chars().any(char::is_alphabetic) {
         return Entry::NotAProject {
             org,
             why: NotAProject::MachineOwned,
@@ -306,10 +300,7 @@ mod tests {
 
     #[test]
     fn an_org_directory_is_a_placement_not_an_owner() {
-        assert_eq!(
-            classify(&["acme-audio"]),
-            Entry::Org("acme-audio".into())
-        );
+        assert_eq!(classify(&["acme-audio"]), Entry::Org("acme-audio".into()));
     }
 
     #[test]
@@ -405,8 +396,10 @@ mod tests {
 
     #[test]
     fn inboxes_know_which_level_they_are_at() {
-        assert_eq!(classify(&["acme-audio", "Inbox"]),
-            Entry::Inbox(InboxScope::Org("acme-audio".into())));
+        assert_eq!(
+            classify(&["acme-audio", "Inbox"]),
+            Entry::Inbox(InboxScope::Org("acme-audio".into()))
+        );
         assert_eq!(
             classify(&["acme-audio", "Projects", "Example Album", "Inbox"]),
             Entry::Inbox(InboxScope::Project {
@@ -429,7 +422,12 @@ mod tests {
             "Archive - Original Camera Files",
         ] {
             assert_eq!(
-                classify(&["vnt-video", "Projects", "Example Documentary - First Client", name]),
+                classify(&[
+                    "vnt-video",
+                    "Projects",
+                    "Example Documentary - First Client",
+                    name
+                ]),
                 Entry::Material {
                     org: "vnt-video".into(),
                     project: "Example Documentary - First Client".into(),

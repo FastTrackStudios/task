@@ -227,7 +227,8 @@ mod tests {
         let mut a = c.clone();
         a.left_by(&org("acme-audio")).expect("a member may leave");
         let mut b = c.clone();
-        b.left_by(&org("vnt-video")).expect("the origin may leave too");
+        b.left_by(&org("vnt-video"))
+            .expect("the origin may leave too");
 
         // Either can be handed the default.
         let mut d = c.clone();

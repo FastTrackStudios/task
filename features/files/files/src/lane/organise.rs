@@ -75,10 +75,10 @@
 //!   change only. Closing this needs a published read event, not more
 //!   code in this file.
 
+use facet::Facet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::OnceLock;
-use facet::Facet;
 
 use chrono::{DateTime, Utc};
 use files_domain::cadence::Journal;

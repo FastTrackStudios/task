@@ -12,10 +12,10 @@
 //! content-defined chunker splits on the data and a uniform file gives
 //! it nothing to split on.
 
+use files::model::RootFlavor;
 use files::path::RootPath;
 use files::service::roots::RootsService;
 use files::service::tree::TreeService;
-use files::model::RootFlavor;
 use files_domain::Hosting;
 
 use integration::scenario::Scenario;
@@ -87,8 +87,8 @@ async fn chunk_hash_of(s: &Scenario, path: &str) -> String {
 async fn replica(s: &Scenario) -> (tempfile::TempDir, std::path::PathBuf, files::FilesBackend) {
     let dir = tempfile::tempdir().expect("replica dir");
     let tree = dir.path().join("replica");
-    let backend = files::FilesBackend::new(dir.path(), dir.path().join("vault"))
-        .expect("replica backend");
+    let backend =
+        files::FilesBackend::new(dir.path(), dir.path().join("vault")).expect("replica backend");
     backend
         .adopt_replica(
             s.acme_root.get(),
@@ -161,7 +161,10 @@ async fn a_second_pull_moves_no_bytes() {
         .await
         .expect("second pull");
 
-    assert_eq!(again.chunks_fetched, 0, "a settled replica re-fetched content");
+    assert_eq!(
+        again.chunks_fetched, 0,
+        "a settled replica re-fetched content"
+    );
 }
 
 /// Two identical takes are one thing in the store.
@@ -353,9 +356,12 @@ async fn a_tampered_window_is_refused_where_it_lands() {
     let chunks_in = TAKE / 1024;
     let origin_backend = s.orgs.acme.backend.clone();
     let (root, h) = (s.acme_root.get(), chunk.clone());
-    let mut bao =
-        off_thread(move || origin_backend.sync_export_ranges(root, &h, 0, chunks_in).expect("export"))
-            .await;
+    let mut bao = off_thread(move || {
+        origin_backend
+            .sync_export_ranges(root, &h, 0, chunks_in)
+            .expect("export")
+    })
+    .await;
     // Flip a byte deep in the payload, past the header and the first
     // parent hashes.
     let at = bao.len() / 2;

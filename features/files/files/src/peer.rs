@@ -253,11 +253,8 @@ where
             loop {
                 match connection.accept_bi().await {
                     Ok((send, recv)) => {
-                        let link = architect::iroh_link::IrohLink::new(
-                            connection.clone(),
-                            send,
-                            recv,
-                        );
+                        let link =
+                            architect::iroh_link::IrohLink::new(connection.clone(), send, recv);
                         let acceptor = architect::layer::handler_acceptor(handler.clone());
                         tokio::spawn(architect::iroh_link::serve_link(link, acceptor));
                     }
@@ -283,14 +280,14 @@ where
 /// refusing; a device's gate has one rule that has always been true, so
 /// there is nothing to observe first.
 #[must_use]
-pub fn device_gate(files: &FilesBackend, whose: &str) -> architect::permissions_gate::PermissionsGate {
+pub fn device_gate(
+    files: &FilesBackend,
+    whose: &str,
+) -> architect::permissions_gate::PermissionsGate {
     use architect::permissions_gate::{PermissionsGate, UnlistedPolicy};
 
-    let identity: Arc<dyn IdentityResolver + Send + Sync> = Arc::new(HostResolver::new(
-        AnonymousFallback,
-        files.clone(),
-        whose,
-    ));
+    let identity: Arc<dyn IdentityResolver + Send + Sync> =
+        Arc::new(HostResolver::new(AnonymousFallback, files.clone(), whose));
     PermissionsGate::new(Arc::new(HostEngine), identity)
         // A method with no permit row is refused. On a server that is
         // `Allow`, because an org router mounts forty services and a

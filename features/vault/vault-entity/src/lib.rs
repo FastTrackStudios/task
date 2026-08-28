@@ -47,9 +47,9 @@
 //!   wasm-visible should depend on: `vault-entity = { workspace = true,
 //!   default-features = false }`.
 
-pub mod index;
 pub mod error;
 pub mod frontmatter;
+pub mod index;
 pub mod slug;
 pub mod yaml;
 

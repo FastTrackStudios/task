@@ -35,9 +35,17 @@ fn both_orgs_on_both_servers(s: &Scenario) -> (Peering, OrgId, OrgId, HostId, Ho
     let mut peering = Peering::new();
     peering
         .host(acme_org.clone(), acme_host.clone(), Hosting::working())
-        .host(acme_org.clone(), vnt_host.clone(), Hosting::structure_only())
+        .host(
+            acme_org.clone(),
+            vnt_host.clone(),
+            Hosting::structure_only(),
+        )
         .host(vnt_org.clone(), vnt_host.clone(), Hosting::working())
-        .host(vnt_org.clone(), acme_host.clone(), Hosting::structure_only());
+        .host(
+            vnt_org.clone(),
+            acme_host.clone(),
+            Hosting::structure_only(),
+        );
 
     (peering, acme_org, vnt_org, acme_host, vnt_host)
 }
@@ -49,7 +57,11 @@ async fn an_org_can_be_known_by_a_server_that_holds_none_of_it() {
     let s = Scenario::open().await;
     let (peering, acme_org, ..) = both_orgs_on_both_servers(&s);
 
-    assert_eq!(peering.hosts_of(&acme_org).count(), 2, "both servers know it");
+    assert_eq!(
+        peering.hosts_of(&acme_org).count(),
+        2,
+        "both servers know it"
+    );
     assert_eq!(
         peering.content_hosts(&acme_org).count(),
         1,
@@ -112,7 +124,9 @@ async fn a_host_that_holds_no_bytes_still_serves_the_org() {
     }
 
     assert!(
-        peering.hosts_of(&acme_org).all(|(h, _)| peering.serves(h, &acme_org)),
+        peering
+            .hosts_of(&acme_org)
+            .all(|(h, _)| peering.serves(h, &acme_org)),
         "a host that holds no bytes was treated as a cache"
     );
     assert!(peering.serves(&vnt_host, &acme_org));
@@ -287,12 +301,9 @@ async fn an_admitted_host_cannot_do_anything_but_replicate() {
         .admit_host(s.orgs.vnt.host_id(), Hosting::structure_only());
 
     // Same endpoint, same admission, a different lane.
-    let link = architect::iroh_link::connect(
-        &s.orgs.vnt.endpoint,
-        s.orgs.acme.endpoint.addr(),
-    )
-    .await
-    .expect("dial");
+    let link = architect::iroh_link::connect(&s.orgs.vnt.endpoint, s.orgs.acme.endpoint.addr())
+        .await
+        .expect("dial");
     let tree: files::TreeServiceClient = vox_core::initiator_on(link)
         .establish()
         .await

@@ -160,12 +160,12 @@ where
         facet_json::from_slice::<T::Wire>(&bytes)
             .map(T::from_wire)
             .unwrap_or_else(|err| {
-            tracing::warn!(
-                path = %path.display(),
-                %err,
-                "files: lane state unreadable, continuing without it"
-            );
-            T::default()
+                tracing::warn!(
+                    path = %path.display(),
+                    %err,
+                    "files: lane state unreadable, continuing without it"
+                );
+                T::default()
             })
     }
 }

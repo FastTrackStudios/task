@@ -156,11 +156,10 @@ impl FilesBackend {
     /// point of it running behind `adopt` rather than inside it.
     async fn drive_adoption(self, root_id: RootId) {
         let this = self.clone();
-        let walked = crate::lane::blocking(move || {
-            Ok(crate::lane::tree::enumerate_files(&this, root_id))
-        })
-        .await
-        .and_then(|r| r);
+        let walked =
+            crate::lane::blocking(move || Ok(crate::lane::tree::enumerate_files(&this, root_id)))
+                .await
+                .and_then(|r| r);
         let Ok(files) = walked else {
             // The tree would not walk. The adoption stays where it is
             // rather than claiming to be complete: `adoption_progress`
@@ -198,7 +197,9 @@ impl FilesBackend {
         let this = self.clone();
         let verified = crate::lane::blocking(move || {
             let addressed = this.head_addresses(root_id.get())?;
-            Ok(crate::lane::tree::verify_addresses(&this, root_id, &addressed))
+            Ok(crate::lane::tree::verify_addresses(
+                &this, root_id, &addressed,
+            ))
         })
         .await
         .unwrap_or_default();

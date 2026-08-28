@@ -3952,9 +3952,7 @@ impl FilesBackend {
             let first: Option<bao_tree::ChunkNum> = missing.boundaries().first().copied();
             Ok(first.map(|c| c.0))
         })?
-        .map_err(|e: files_store::chunk::Error| {
-            to_files_error(Error::VersionStore(e.into()))
-        })
+        .map_err(|e: files_store::chunk::Error| to_files_error(Error::VersionStore(e.into())))
     }
 
     /// Bao-encode a window of `hash`: the bytes, plus the proof they

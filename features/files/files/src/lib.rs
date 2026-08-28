@@ -39,12 +39,12 @@ pub mod lane;
 mod org_tree;
 pub mod peer;
 mod registry;
+pub mod remotes;
 /// Opening (and reopening) a root's version-store repo. Public so a
 /// test — or a future sibling crate, e.g. the cadence engine (#260) —
 /// can reach the same repo the backend serves, without duplicating
 /// jj-lib's loader wiring.
 pub mod repo_open;
-pub mod remotes;
 mod restart;
 mod scan;
 pub mod stub;

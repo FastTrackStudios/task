@@ -23,8 +23,8 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeDelta, Utc};
-use files_proto::{SavePoint, SnapshotInfo};
 use facet::Facet;
+use files_proto::{SavePoint, SnapshotInfo};
 use uuid::Uuid;
 
 use super::Result;

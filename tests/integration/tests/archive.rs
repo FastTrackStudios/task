@@ -43,9 +43,7 @@ macro_rules! archive_or_skip {
         match archive::real_archive() {
             Some(root) => root,
             None => {
-                eprintln!(
-                    "skipped: set TASK_ARCHIVE_ROOT to a Task tree to run this"
-                );
+                eprintln!("skipped: set TASK_ARCHIVE_ROOT to a Task tree to run this");
                 return;
             }
         }
@@ -138,7 +136,10 @@ async fn most_projects_have_no_page_of_their_own() {
 
     let mut with_page = 0;
     let mut total = 0;
-    for read in reads.iter().filter(|r| matches!(r.entry, Entry::Project(_))) {
+    for read in reads
+        .iter()
+        .filter(|r| matches!(r.entry, Entry::Project(_)))
+    {
         total += 1;
         // Rebuild the on-disk path from the org root, since the parts
         // above are in the model's vocabulary rather than the disk's.
@@ -203,9 +204,7 @@ async fn no_inbox_anywhere_is_read_as_a_project() {
 
     let misread: Vec<String> = reads
         .iter()
-        .filter(|r| {
-            matches!(&r.entry, Entry::Project(p) if p.work.eq_ignore_ascii_case("Z"))
-        })
+        .filter(|r| matches!(&r.entry, Entry::Project(p) if p.work.eq_ignore_ascii_case("Z")))
         .map(Read::path)
         .collect();
     assert!(

@@ -73,14 +73,14 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
+use facet::Facet;
 use files_proto::error::FilesFault;
 use files_proto::id::{ContentId, RootId, VersionId};
 use files_proto::model::{RenditionInfo, RenditionKind};
 use files_proto::path::RootPath;
-use files_proto::service::federation::{ByteRange, EndpointId};
-use facet::Facet;
-use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::access::Capability;
+use files_proto::service::federation::{ByteRange, EndpointId};
+use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::media::{
     ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService,
 };
@@ -1041,4 +1041,3 @@ mod tests {
         assert_ne!(a, b);
     }
 }
-

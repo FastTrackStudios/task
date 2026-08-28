@@ -18,9 +18,9 @@
 use std::io::Read as _;
 use std::path::Path;
 
+use facet::Facet;
 use jj_lib::backend::FileId;
 use jj_lib::object_id::ObjectId as _;
-use facet::Facet;
 
 use crate::error::{Error, Result};
 
@@ -74,7 +74,11 @@ impl Stub {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = MAGIC.as_bytes().to_vec();
         // Infallible: the struct is three plain scalars.
-        out.extend(facet_json::to_string(self).expect("stub serializes").into_bytes());
+        out.extend(
+            facet_json::to_string(self)
+                .expect("stub serializes")
+                .into_bytes(),
+        );
         out.push(b'\n');
         out
     }

@@ -47,8 +47,8 @@ pub mod model;
 pub mod parts {
     pub use project_proto::parts::{
         Audience, Capabilities, Capability, Cardinality, Component, ComponentKind, Conflict,
-        Deliverable, DeliverableItem, Deliverables, Divergence, Form, Medium, Merged, Part,
-        Parts, Piece, Scope,
+        Deliverable, DeliverableItem, Deliverables, Divergence, Form, Medium, Merged, Part, Parts,
+        Piece, Scope,
     };
 }
 pub mod service;

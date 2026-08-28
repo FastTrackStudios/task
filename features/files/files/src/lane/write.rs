@@ -58,9 +58,9 @@ use std::path::{Path, PathBuf};
 
 use files_proto::error::FilesFault;
 use files_proto::id::RootId;
-use files_proto::service::access::Capability;
 use files_proto::model::FileRootInfo;
 use files_proto::path::RootPath;
+use files_proto::service::access::Capability;
 use files_proto::service::media::ByteTicket;
 use files_proto::service::write::{OnConflict, Outcome, Relocation, WriteReceipt, WriteService};
 

@@ -75,7 +75,10 @@ async fn what_the_device_did_not_ask_for_becomes_a_stub() {
 
     let audio = laptop
         .backend
-        .browse(laptop.album, RootPath::parse("Sessions/Audio Files").unwrap())
+        .browse(
+            laptop.album,
+            RootPath::parse("Sessions/Audio Files").unwrap(),
+        )
         .await
         .expect("browse the sessions");
     assert!(

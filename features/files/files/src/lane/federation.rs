@@ -544,4 +544,3 @@ mod tests {
         assert!(!offered.offer.capabilities.contains(&Capability::Read));
     }
 }
-

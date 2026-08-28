@@ -48,8 +48,8 @@ impl Laptop {
     /// Set the laptop up with the project already on it and pinned.
     pub async fn open() -> Self {
         let dir = tempfile::tempdir().expect("laptop data dir");
-        let backend = files::FilesBackend::new(dir.path(), dir.path().join("vault"))
-            .expect("laptop backend");
+        let backend =
+            files::FilesBackend::new(dir.path(), dir.path().join("vault")).expect("laptop backend");
 
         // The project as it lands on a device: both companies' halves,
         // under the names the composition gave them.
@@ -122,8 +122,8 @@ impl Laptop {
     pub async fn empty_peer(album: RootId) -> Self {
         let dir = tempfile::tempdir().expect("laptop data dir");
         let tree = dir.path().join("Album");
-        let backend = files::FilesBackend::new(dir.path(), dir.path().join("vault"))
-            .expect("laptop backend");
+        let backend =
+            files::FilesBackend::new(dir.path(), dir.path().join("vault")).expect("laptop backend");
         backend
             .adopt_replica(
                 album.get(),

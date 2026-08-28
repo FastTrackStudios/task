@@ -134,7 +134,10 @@ async fn two_laptops_sync_without_the_server_taking_part() {
         .expect("laptop-to-laptop pull");
 
     assert!(
-        tree.join("Sessions").join("Audio Files").join("vox.wav").exists(),
+        tree.join("Sessions")
+            .join("Audio Files")
+            .join("vox.wav")
+            .exists(),
         "the take did not arrive"
     );
 }

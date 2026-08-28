@@ -97,7 +97,10 @@ async fn a_write_is_one_operation_and_reaches_the_catalogue() {
         .create_dirs(s.acme_root, vec![p("Renders")])
         .await
         .expect("mkdir");
-    assert!(!receipt.operation.is_empty(), "a write with no operation id");
+    assert!(
+        !receipt.operation.is_empty(),
+        "a write with no operation id"
+    );
 
     // Without a restart, and as a delta rather than a re-listing —
     // `files.catalogue.concurrent`. A catalogue that only hears about
@@ -228,7 +231,10 @@ async fn an_archive_is_generated_as_it_is_sent() {
     // until it has been produced, and putting a guess on the wire that
     // the body then fails to match is worse than admitting it.
     assert_eq!(archive.length, None);
-    assert!(!archive.seekable, "a one-pass stream claimed to be seekable");
+    assert!(
+        !archive.seekable,
+        "a one-pass stream claimed to be seekable"
+    );
 }
 
 /// The same write, by someone who was never given it.

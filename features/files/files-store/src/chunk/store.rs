@@ -517,9 +517,9 @@ impl ChunkStore {
     /// otherwise succeeded. What it costs is in-flight verification for
     /// that one blob, which is worth strictly less than the bytes.
     async fn reference_whole(&self, placed: &Path) -> Result<()> {
+        use iroh_blobs::BlobFormat;
         use iroh_blobs::api::blobs::AddPathOptions;
         use iroh_blobs::api::proto::ImportMode;
-        use iroh_blobs::BlobFormat;
 
         let outcome = self
             .blobs

@@ -1103,7 +1103,11 @@ pub fn mounts() -> Vec<Mount> {
         m("core", files_proto::version_descriptor(), FILES_VERSION),
         m("core", files_proto::curation_descriptor(), FILES_CURATION),
         m("core", files_proto::sync_descriptor(), FILES_SYNC),
-        m("core", files_sync::sync_service_service_descriptor(), FILES_REPLICA),
+        m(
+            "core",
+            files_sync::sync_service_service_descriptor(),
+            FILES_REPLICA,
+        ),
         m("core", files_proto::access_descriptor(), FILES_ACCESS),
         m("core", files_proto::organise_descriptor(), FILES_ORGANISE),
         m(
@@ -1911,7 +1915,7 @@ impl<R: IdentityResolver, H: IdentityResolver> IdentityResolver for HomeFallback
 /// the server binary to find out who it may talk to. It moved to
 /// `files::peer` with the rest of the peering feature; these keep the
 /// paths this module's own tables and docs refer to.
-pub use files::peer::{HostEngine, HostResolver, HOST_BEARER_PREFIX};
+pub use files::peer::{HOST_BEARER_PREFIX, HostEngine, HostResolver};
 
 impl<R: IdentityResolver> IdentityResolver for AuditedIdentityResolver<R> {
     fn resolve<'a>(&'a self, bearer_token: Option<&'a str>) -> BoxIdentityFuture<'a> {

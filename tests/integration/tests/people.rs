@@ -138,7 +138,11 @@ async fn the_client_is_refused_at_the_session_folder() {
     let s = Scenario::open().await;
     let casey = Session::open(&s.orgs.acme, s.people.casey.token.clone()).await;
 
-    let refused = casey.tree().await.browse(s.acme_root, p("Audio Files")).await;
+    let refused = casey
+        .tree()
+        .await
+        .browse(s.acme_root, p("Audio Files"))
+        .await;
     assert!(
         refused.is_err(),
         "the client browsed the session folder: {refused:?}"
@@ -158,10 +162,7 @@ async fn the_client_can_see_the_deliverables() {
         .browse(s.acme_root, p("Deliverables"))
         .await
         .expect("the client's own folder");
-    assert!(
-        listed.iter().any(|e| e.name == "mix-v1.wav"),
-        "{listed:?}"
-    );
+    assert!(listed.iter().any(|e| e.name == "mix-v1.wav"), "{listed:?}");
 }
 
 /// `Comment` without `Download`, as a refusal rather than a capability

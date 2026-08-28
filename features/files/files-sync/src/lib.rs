@@ -238,10 +238,10 @@ pub async fn serve_peer(
     // The one table a device has. Its gate refuses anything unlisted, so
     // without this it would refuse the lane it exists to serve — which is
     // what it did, loudly, the first time this ran.
-    let gate = std::sync::Arc::new(
-        files::peer::device_gate(&backend, &whose)
-            .permit(sync_service_service_descriptor(), files::peer::REPLICA_PERMITS),
-    );
+    let gate = std::sync::Arc::new(files::peer::device_gate(&backend, &whose).permit(
+        sync_service_service_descriptor(),
+        files::peer::REPLICA_PERMITS,
+    ));
     let router = architect::LayerRouter::new().merge(layer(SyncHost::new(backend)));
     files::peer::serve_over_iroh(endpoint, move |bearer| {
         architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(

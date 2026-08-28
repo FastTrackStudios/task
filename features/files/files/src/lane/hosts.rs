@@ -69,7 +69,12 @@ impl crate::durable::Durable for Admitted {
     }
 
     fn from_wire(wire: AdmittedWire) -> Self {
-        Self(wire.hosts.into_iter().map(|r| (r.host, r.hosting)).collect())
+        Self(
+            wire.hosts
+                .into_iter()
+                .map(|r| (r.host, r.hosting))
+                .collect(),
+        )
     }
 }
 
@@ -148,7 +153,11 @@ mod tests {
         assert_eq!(backend.admitted_hosts().len(), 1);
 
         backend.admit_host(host("eu-west"), Hosting::backup());
-        assert_eq!(backend.admitted_hosts().len(), 1, "a role change is not a new host");
+        assert_eq!(
+            backend.admitted_hosts().len(),
+            1,
+            "a role change is not a new host"
+        );
         assert_eq!(backend.admits(&host("eu-west")), Some(Hosting::backup()));
     }
 
