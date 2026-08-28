@@ -230,6 +230,30 @@ provisions, and a one-time download from developer.apple.com.
 `DRY_RUN=1 just dmg` stops at a signed, un-notarized image for
 iterating.
 
+## Keeping the store on an external drive (macOS)
+
+`--data` and `--roots` put the store and the synced projects wherever
+you like, which is what you want on a machine whose internal disk is
+small. On macOS there is one step that is not obvious and produces no
+error message:
+
+**A launchd agent touching an external or removable volume needs Full
+Disk Access.** Without it the access does not fail — macOS waits for
+consent it cannot ask a background job for, and the syscall never
+returns. `launchctl` reports the service as running, the log stays
+empty, and `status` says "no agent answering — is it running?"
+
+The agent now refuses to sit there: after ten seconds it says which
+directory did not answer and what to do. The fix is one grant:
+
+1. System Settings → Privacy & Security → Full Disk Access
+2. add `~/.local/bin/fts-files-daemon` (or wherever the binary lives)
+3. `launchctl kickstart -k gui/$(id -u)/app.fasttrackstudio.task.sync`
+
+Running the same binary from a terminal works without this, which is
+what makes it confusing: an SSH session and a launchd agent do not get
+the same answer from the same `mkdir`.
+
 ## Known gaps
 
 - **A device's new root is adopted only if asked.** `TASK_DEVICE_SYNC_ADOPT=1`
