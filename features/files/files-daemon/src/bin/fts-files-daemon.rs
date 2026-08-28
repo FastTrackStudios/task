@@ -261,8 +261,24 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
         println!("admits     {peer}");
     }
     for root in &status.roots {
+        // How long ago it last synced, which is the question "is this
+        // thing actually running?" — and the one the status surface
+        // could not answer. A root sitting at `Idle` looks identical
+        // whether it reconciled four seconds ago or has not ticked
+        // since the machine woke up.
+        let ago = root
+            .last_synced_at
+            .map(|t| {
+                let secs = (chrono::Utc::now() - t).num_seconds().max(0);
+                match secs {
+                    0..=90 => format!("  {secs}s ago"),
+                    91..=5400 => format!("  {}m ago", secs / 60),
+                    _ => format!("  {}h ago", secs / 3600),
+                }
+            })
+            .unwrap_or_else(|| "  never".into());
         println!(
-            "root       {}  {:?}  {}%{}{}",
+            "root       {}  {:?}  {}%{ago}{}{}",
             root.name,
             root.state,
             root.percent(),
