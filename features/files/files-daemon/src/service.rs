@@ -144,6 +144,18 @@ pub trait DaemonControlService {
     /// not yet local — a pull brings it first.
     async fn hydrate(&self, root_id: Uuid, path: String) -> Result<(), DaemonError>;
 
+    /// Settle one path two machines changed independently, by keeping
+    /// every side: the first keeps the name, the others land beside it
+    /// as `<stem> (divergent n).<ext>`.
+    ///
+    /// Keeping both rather than picking is the only honest choice from
+    /// here — a person at a terminal has been told two machines disagree
+    /// about a file and can see neither version. Picking one would be
+    /// choosing which work to discard on the strength of a path name;
+    /// this puts both on the disk, where the file can be opened and the
+    /// real decision made.
+    async fn keep_both(&self, root_id: Uuid, path: String) -> Result<(), DaemonError>;
+
     /// Checkpoint one synced root's live tree now — the same explicit
     /// Session checkpoint the RPC surface exposes, driven locally so a
     /// user can force a save point before unplugging.

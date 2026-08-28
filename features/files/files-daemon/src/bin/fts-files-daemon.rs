@@ -72,6 +72,7 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon shares                   every root this machine holds
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
     fts-files-daemon forget <endpoint-id>     stop admitting a machine, and stop pulling it
+    fts-files-daemon resolve <root> <path>    two machines changed it — keep both sides
 
 install options:
     --coordinator <endpoint-id>   the org endpoint to sync with
@@ -92,7 +93,9 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some("id") => Some(print_endpoint_id()),
         // Handled in `main`: they dial something, so they need the async
         // runtime rather than avoiding it.
-        Some("status" | "checkpoint" | "share" | "shares" | "peer" | "forget") => None,
+        Some(
+            "status" | "checkpoint" | "share" | "shares" | "peer" | "forget" | "resolve",
+        ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             Some(Ok(()))
@@ -275,6 +278,14 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|e| format!("  ({e})"))
                 .unwrap_or_default()
         );
+        // The one thing here that needs a person. Named, not counted:
+        // "2 divergent paths" tells somebody there is a problem and
+        // nothing about which file, and the next thing they would have
+        // to do is go looking.
+        for path in &root.divergent {
+            println!("    ⚠ two machines changed  {path}");
+            println!("      settle it:  fts-files-daemon resolve {} {path}", root.name);
+        }
     }
     Ok(())
 }
@@ -383,6 +394,27 @@ fn is_not_admitted(e: &impl std::fmt::Display) -> bool {
     text.contains("permission denied") || text.contains("may not read")
 }
 
+/// Settle a path two machines changed, keeping both sides.
+async fn resolve(root: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let id = match root.parse::<uuid::Uuid>() {
+        Ok(id) => id,
+        Err(_) => {
+            client
+                .shares()
+                .await?
+                .into_iter()
+                .find(|(_, name, _)| name == root)
+                .ok_or_else(|| format!("this machine holds no root called {root}"))?
+                .0
+        }
+    };
+    client.keep_both(id, path.to_string()).await?;
+    println!("kept both sides of {path}");
+    println!("the other side is beside it, named `<stem> (divergent 1).<ext>`.");
+    Ok(())
+}
+
 /// Stop admitting a machine, and stop pulling from it.
 ///
 /// The counterpart of `peer`, and its absence was a hole with a shape:
@@ -472,6 +504,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("forget") => {
             let id = args.get(1).ok_or("forget needs an endpoint id")?.clone();
             return forget(&id).await;
+        }
+        Some("resolve") => {
+            let root = args.get(1).ok_or("resolve needs a root id or name")?.clone();
+            let path = args
+                .get(2)
+                .ok_or("resolve needs the path both machines changed")?
+                .clone();
+            return resolve(&root, &path).await;
         }
         _ => {}
     }

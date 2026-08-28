@@ -138,6 +138,10 @@ impl DaemonControlService for DaemonControl {
         self.daemon.hydrate(root_id, path).await
     }
 
+    async fn keep_both(&self, root_id: Uuid, path: String) -> Result<(), DaemonError> {
+        self.daemon.keep_both(root_id, path).await
+    }
+
     async fn checkpoint_now(&self, root_id: Uuid) -> Result<(), DaemonError> {
         self.daemon.checkpoint_now(root_id).await
     }
