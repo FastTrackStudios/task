@@ -56,6 +56,9 @@ struct Machine {
     backend: FilesBackend,
     daemon: SyncDaemon,
     endpoint_id: String,
+    /// This machine's key, kept so a "restart" can come back at the same
+    /// address — which is what a real one does, reading it off disk.
+    key: iroh::SecretKey,
     clock: std::sync::Arc<TestClock>,
 }
 
@@ -73,7 +76,8 @@ impl Machine {
         )
         .expect("backend");
         let daemon = SyncDaemon::open(backend.clone(), dir.path().join("daemon")).expect("daemon");
-        let endpoint = bind(iroh::SecretKey::generate()).await;
+        let key = iroh::SecretKey::generate();
+        let endpoint = bind(key.clone()).await;
         let endpoint_id = daemon.attach_endpoint(endpoint);
         Self {
             dir: dir.path().to_path_buf(),
@@ -81,6 +85,7 @@ impl Machine {
             backend,
             daemon,
             endpoint_id,
+            key,
             clock,
         }
     }
@@ -266,6 +271,55 @@ async fn a_tick_captures_the_local_session_before_it_pulls() {
     assert_ne!(
         before, after,
         "a quiet session was never captured, so a peer pulling this machine would get its old work"
+    );
+}
+
+/// What a machine was syncing survives a restart.
+///
+/// A background service that forgets its choices when the machine
+/// reboots is a background service that stops syncing — quietly, at the
+/// least convenient moment, and looking exactly like one that is up to
+/// date. The peer is dialled again on the way back, so the assertion is
+/// on the *restored* daemon actually pulling.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_resumes_what_it_was_syncing() {
+    let server = Machine::open().await;
+    let laptop = Machine::open().await;
+    let album = server.with_album(b"before the reboot").await;
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    laptop.daemon.admit_peer(&server.endpoint_id);
+
+    laptop
+        .daemon
+        .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("choose the album");
+    laptop.daemon.tick().await;
+
+    // The reboot: a second daemon over the same data dir and store,
+    // told nothing about any peer.
+    let restarted = SyncDaemon::open(laptop.backend.clone(), laptop.dir.join("daemon"))
+        .expect("reopen the daemon");
+    // On the same key: a real restart reads it off disk and comes back
+    // at the same address, which is what the server admitted.
+    restarted.attach_endpoint(bind(laptop.key.clone()).await);
+    let resumed = restarted.restore_choices().await;
+    assert_eq!(resumed, 1, "the laptop came back syncing nothing");
+
+    // And it is a live choice, not a remembered name: new work on the
+    // server reaches the restarted machine without anyone choosing
+    // anything again.
+    std::fs::write(server.album_tree().join("mix.wav"), b"after the reboot").unwrap();
+    server
+        .backend
+        .checkpoint_now(album, None)
+        .await
+        .expect("checkpoint");
+    restarted.tick().await;
+    assert_eq!(
+        laptop.read("mix.wav"),
+        b"after the reboot",
+        "the restarted machine is not pulling any more"
     );
 }
 

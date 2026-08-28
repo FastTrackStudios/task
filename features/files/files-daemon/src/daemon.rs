@@ -31,6 +31,34 @@ struct SyncedRoot {
     /// The peer that serves this root's content (the coordinator, or
     /// another replica). One client per root keeps the wiring simple.
     peer: SyncServiceClient,
+    /// That peer's endpoint id, when it was dialled by one.
+    ///
+    /// A client cannot be written to disk, so this is what a restart
+    /// restores from — see [`Choices`]. `None` for a peer handed in by
+    /// an embedder (a test, an in-process link), which has no address to
+    /// come back to.
+    peer_endpoint: Option<String>,
+}
+
+/// The sync choices, as they survive a restart.
+///
+/// A background service that forgets what it was syncing when the
+/// machine reboots is a background service that stops syncing, quietly,
+/// at the least convenient moment. The choice is a decision a person
+/// made — `storage.tier.authored` — so it belongs on disk.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct Choices {
+    roots: Vec<Choice>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct Choice {
+    root_id: Uuid,
+    name: String,
+    slice: Vec<String>,
+    /// The peer to dial for it. A choice with no endpoint cannot be
+    /// restored and is not written.
+    peer: String,
 }
 
 /// The mutable per-root status the observer writes and `status` reads.
@@ -452,7 +480,16 @@ impl SyncDaemon {
                 remote.name
             }
         };
-        self.set_sync_choice(root_id, &name, slice, peer).await?;
+        // With the endpoint, so a restart dials this peer again rather
+        // than coming back having quietly stopped syncing this root.
+        self.set_sync_choice_from(
+            root_id,
+            &name,
+            slice,
+            peer,
+            Some(endpoint_id.to_string()),
+        )
+        .await?;
         Ok(self.status())
     }
 
@@ -484,6 +521,20 @@ impl SyncDaemon {
         slice: Vec<String>,
         peer: SyncServiceClient,
     ) -> Result<()> {
+        self.set_sync_choice_from(root_id, name, slice, peer, None)
+            .await
+    }
+
+    /// [`Self::set_sync_choice`], remembering which endpoint served it
+    /// so a restart can dial the same peer again.
+    pub async fn set_sync_choice_from(
+        &self,
+        root_id: Uuid,
+        name: &str,
+        slice: Vec<String>,
+        peer: SyncServiceClient,
+        peer_endpoint: Option<String>,
+    ) -> Result<()> {
         // Always write the policy — including an empty one — so
         // re-choosing a root with slice=[] ("the whole root") CLEARS a
         // stale partial policy instead of leaving the replica silently
@@ -501,11 +552,109 @@ impl SyncDaemon {
                 slice,
                 paused: false,
                 peer,
+                peer_endpoint,
             },
         );
         drop(roots);
+        self.save_choices();
         self.inner.events.publish(self.status());
         Ok(())
+    }
+
+    /// Where the choices live.
+    fn choices_path(&self) -> std::path::PathBuf {
+        self.inner.data_dir.join("sync-choices.json")
+    }
+
+    /// Write the choices that can be restored.
+    ///
+    /// Only the ones with an endpoint: a choice against a peer handed in
+    /// by an embedder has no address to dial on the way back, and
+    /// recording a name we cannot act on would make a restart look like
+    /// it had restored something.
+    fn save_choices(&self) {
+        let choices = Choices {
+            roots: self
+                .inner
+                .roots
+                .lock()
+                .expect("roots lock")
+                .iter()
+                .filter_map(|(id, r)| {
+                    r.peer_endpoint.as_ref().map(|peer| Choice {
+                        root_id: *id,
+                        name: r.name.clone(),
+                        slice: r.slice.clone(),
+                        peer: peer.clone(),
+                    })
+                })
+                .collect(),
+        };
+        let path = self.choices_path();
+        match serde_json::to_vec_pretty(&choices) {
+            // Losing this costs "what was I syncing" across a restart,
+            // not correctness now, so it warns rather than fails a call
+            // the person asked for.
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    tracing::warn!(path = %path.display(), error = %e, "could not record the sync choices");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not serialize the sync choices"),
+        }
+    }
+
+    /// Re-establish the choices this machine had before it restarted.
+    ///
+    /// Dials each remembered peer; one that is unreachable is skipped
+    /// with a warning rather than dropped, because a laptop that is shut
+    /// right now is the ordinary case and its choice is still the
+    /// person's. Returns how many came back.
+    pub async fn restore_choices(&self) -> usize {
+        let path = self.choices_path();
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return 0;
+        };
+        let choices: Choices = match serde_json::from_str(&raw) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "sync choices unreadable");
+                return 0;
+            }
+        };
+        let mut restored = 0;
+        for choice in choices.roots {
+            match self.dial(&choice.peer).await {
+                Ok(peer) => {
+                    if let Err(e) = self
+                        .set_sync_choice_from(
+                            choice.root_id,
+                            &choice.name,
+                            choice.slice.clone(),
+                            peer,
+                            Some(choice.peer.clone()),
+                        )
+                        .await
+                    {
+                        tracing::warn!(root = %choice.name, error = %e, "could not resume this root");
+                    } else {
+                        restored += 1;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        root = %choice.name,
+                        peer = %choice.peer,
+                        error = %e,
+                        "peer unreachable — will retry on the next restart"
+                    );
+                }
+            }
+        }
+        if restored > 0 {
+            tracing::info!(restored, "resumed syncing");
+        }
+        restored
     }
 
     /// Stop syncing `root_id`. Local content is untouched.
@@ -521,6 +670,9 @@ impl SyncDaemon {
             .lock()
             .expect("status lock")
             .remove(&root_id);
+        // Persisted too, or "stop syncing this" lasts until the next
+        // restart brings it back.
+        self.save_choices();
         self.inner.events.publish(self.status());
     }
 

@@ -409,7 +409,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    tracing_subscriber::fmt::init();
+    // `info` unless RUST_LOG says otherwise. The default filter is
+    // near-silent, which for a foreground run is tidy and for an
+    // installed service is a hole: `journalctl -u task-sync` printed the
+    // start line and nothing else, so "is it syncing?" had no answer
+    // anywhere on the machine. iroh and jj are noisy at info and are
+    // turned down rather than the rest turned off.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,iroh=warn,jj_lib=warn,netwatch=warn")
+            }),
+        )
+        .init();
 
     let data_dir = PathBuf::from(env("FTS_FILES_DAEMON_DATA").unwrap_or_else(|| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
@@ -486,6 +498,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Local work becomes history on its own; without this the pull half
     // would be reconciling against a store nothing ever writes to.
     daemon.start_capture().await;
+
+    // What this machine was syncing before it restarted. A peer that is
+    // shut right now is skipped and retried on the next start — its
+    // choice is still the person's.
+    daemon.restore_choices().await;
 
     // The coordinator: the peer this daemon syncs with by default.
     // Optional, because a daemon with none is still useful — it serves
