@@ -61,6 +61,11 @@ files-ui.workspace = true
 # the org and asking the org for its endpoint id. Already in the graph
 # under `files-ui`; named here because this crate calls it directly.
 files-proto = { workspace = true, features = ["vox"] }
+# The sync agent's control surface — the wire contract only, so the
+# app can ask the local agent for status without depending on the agent
+# (jj-lib, a CAS store, an iroh endpoint), which also could not build
+# for wasm.
+files-daemon-proto = { workspace = true }
 share-proto = { workspace = true }
 # `vox` for the `DayTemplatesClient` the schedule page calls to load
 # the day-plan overlay. Wasm-clean (serde-only client side).

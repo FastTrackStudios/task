@@ -1,0 +1,13 @@
+{
+  "slug": "live-session-recording",
+  "title": "Live session recording",
+  "artist": "ACME Audio",
+  "bpm": 134,
+  "duration_sec": 15.84,
+  "stems": [
+    {
+      "name": "Reference Mix",
+      "file": "Live session recording.wav"
+    }
+  ]
+}

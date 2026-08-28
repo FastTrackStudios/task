@@ -52,19 +52,15 @@
       shellHook = ''
         [ -f .env ] && { set -a; source .env; set +a; }
 
-        # sccache — a compiler cache in front of rustc. It gives ~100%
-        # hits when the SAME path is rebuilt after target/ is wiped, and
-        # 0% across different worktrees (the target-dir path is part of
-        # sccache's Rust cache key). So it does not dedupe worktrees;
-        # what it does is make a full target/ wipe cheap to recover from.
-        #
-        # Only dependencies are cached: cargo passes -C incremental for
-        # workspace members only, and sccache skips those — so the edit
-        # loop keeps incremental compilation. Opt out with
-        # TASK_NO_SCCACHE=1.
-        if [ -z "''${TASK_NO_SCCACHE:-}" ] && [ -z "''${CI:-}" ]; then
-          export RUSTC_WRAPPER=sccache
-        fi
+        # No RUSTC_WRAPPER. sccache lived here once (a compiler cache in
+        # front of rustc — full-wipe recovery, nothing more: 0% hits
+        # across worktrees since the target path keys the cache), but it
+        # cannot coexist with `dx serve`, which interposes its own rustc
+        # wrapper — sccache is handed dx's wrapper as "the compiler",
+        # probes it as C, and every dx build dies with "Compiler not
+        # supported". A cache that breaks the app dev loop costs more
+        # than the wipes it saves.
+        unset RUSTC_WRAPPER
         # Append (not prepend): store-provided tools (dx, wasm-bindgen)
         # must win over stale cargo-installed copies; cargo bins only
         # need to be reachable.

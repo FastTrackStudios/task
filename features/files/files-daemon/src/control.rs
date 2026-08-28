@@ -92,6 +92,15 @@ impl DaemonControlService for DaemonControl {
         self.daemon.pull_all(&endpoint_id, &under).await
     }
 
+    async fn set_coordinator(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError> {
+        self.daemon.set_coordinator_peer(&endpoint_id).await?;
+        // Admitted in return: syncing *with* an org means it pulls this
+        // machine too, and a coordinator this machine will not answer
+        // can never collect what it did offline.
+        self.daemon.admit_peer(&endpoint_id);
+        Ok(self.daemon.status())
+    }
+
     async fn remember_peer(&self, endpoint_id: String) -> Result<(), DaemonError> {
         self.daemon.remember_peer(&endpoint_id);
         Ok(())

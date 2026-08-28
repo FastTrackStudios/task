@@ -694,6 +694,19 @@ pub fn ProjectPresenceStrip(project_id: Uuid) -> Element {
         .filter(|(_, e)| e.project_id == Some(project_id))
         .collect();
     sort_entries(&mut here);
+    // One person, one chip: the same account in two tabs (or over two
+    // connections) is still one person. Keyed by email when the entry
+    // carries one, by name otherwise — and since `sort_entries` ran
+    // first, the surviving row is the most-present one.
+    let mut seen = HashSet::new();
+    here.retain(|(_, e)| {
+        seen.insert(
+            e.email
+                .clone()
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| e.name.to_lowercase()),
+        )
+    });
     if here.is_empty() {
         return rsx! {};
     }

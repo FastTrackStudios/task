@@ -149,15 +149,13 @@ impl GoalService for GoalBackend {
             .into_iter()
             .find(|g| g.id == id)
             .ok_or_else(|| GoalError::NotFound(id.to_string()))?;
-        let from = self.vault_root.join(&g.path);
-        let to = self.vault_root.join(new_path);
-        if to.exists() {
+        if self.vault_root.join(new_path).exists() {
             return Err(GoalError::AlreadyExists(new_path.to_owned()));
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| GoalError::Io(format!("mkdir: {e}")))?;
-        }
-        std::fs::rename(&from, &to).map_err(|e| GoalError::Io(format!("rename: {e}")))?;
+        // Through the vault's write path, like every other page mutation
+        // here (`project.vault.write-path`).
+        vault::move_page_at(&self.vault_root, &g.path, new_path)
+            .map_err(|e| GoalError::Io(format!("rename: {e}")))?;
         g.path = new_path.to_owned();
         g.date_modified = Some(Utc::now());
         write_goal(&self.vault_root, &mut g, true)
@@ -178,9 +176,8 @@ impl GoalService for GoalBackend {
                 g.title, child.title
             )));
         }
-        let abs = self.vault_root.join(&g.path);
-        std::fs::remove_file(&abs)
-            .map_err(|e| GoalError::Io(format!("remove {}: {e}", abs.display())))?;
+        vault::delete_page_at(&self.vault_root, &g.path)
+            .map_err(|e| GoalError::Io(format!("remove {}: {e}", g.path)))?;
         self.publish(crate::service::GoalEvent::Deleted(id));
         Ok(())
     }

@@ -7,5 +7,5 @@
  * crate root, and neither can dx's detection.
  *
  * `@source` paths inside the shared file resolve relative to THAT file
- * (apps/task/), not to this one. */
+ * (apps/), not to this one. */
 @import "../tailwind.css";

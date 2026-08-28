@@ -1,0 +1,13 @@
+{
+  "slug": "track-two",
+  "title": "Track Two",
+  "artist": "ACME Audio",
+  "bpm": 150,
+  "duration_sec": 14.3,
+  "stems": [
+    {
+      "name": "Reference Mix",
+      "file": "Track Two.wav"
+    }
+  ]
+}

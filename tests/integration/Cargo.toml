@@ -36,6 +36,11 @@ vox-core = "0.10.0-rc.5"
 tempfile = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# `ui_iroh.rs` drives the REAL app client (`vox_clients::establish_for`)
+# over iroh — the one chapter where the client under test is the app's
+# own rather than this harness's `Session`.
+task-ui-core = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

@@ -308,15 +308,13 @@ impl TaskService for TaskBackend {
             .into_iter()
             .find(|t| t.id == id)
             .ok_or_else(|| TaskError::NotFound(id.to_string()))?;
-        let from = self.vault_root.join(&t.path);
-        let to = self.vault_root.join(new_path);
-        if to.exists() {
+        if self.vault_root.join(new_path).exists() {
             return Err(TaskError::AlreadyExists(new_path.to_owned()));
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| TaskError::Io(format!("mkdir: {e}")))?;
-        }
-        std::fs::rename(&from, &to).map_err(|e| TaskError::Io(format!("rename: {e}")))?;
+        // Through the vault's write path, like every other page mutation
+        // here (`project.vault.write-path`).
+        vault::move_page_at(&self.vault_root, &t.path, new_path)
+            .map_err(|e| TaskError::Io(format!("rename: {e}")))?;
         t.path = new_path.to_owned();
         t.date_modified = Some(Utc::now());
         write_task(&self.vault_root, &mut t, true)
@@ -331,9 +329,8 @@ impl TaskService for TaskBackend {
             .into_iter()
             .find(|t| t.id == id)
             .ok_or_else(|| TaskError::NotFound(id.to_string()))?;
-        let abs = self.vault_root.join(&t.path);
-        std::fs::remove_file(&abs)
-            .map_err(|e| TaskError::Io(format!("remove {}: {e}", abs.display())))?;
+        vault::delete_page_at(&self.vault_root, &t.path)
+            .map_err(|e| TaskError::Io(format!("remove {}: {e}", t.path)))?;
         self.publish(TaskEvent::Deleted(id));
         Ok(())
     }

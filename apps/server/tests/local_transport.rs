@@ -6,20 +6,28 @@
 //! `LayerRouter` — no socket, no running `task-server`. This is what
 //! lets a native binary (CLI / desktop) drive the backend embedded.
 //!
-//! Boots `AppState` over the data root (same as the WS e2e tests), then
-//! serves the first hosted org locally and round-trips `list()`.
+//! Boots `AppState` over the repo's example studio (see `support`,
+//! same as the WS e2e tests), then serves the example org locally and
+//! round-trips `list()`.
 
 use architect::Scope;
 use project::ProjectServiceClient;
-use task_server::AppState;
+
+// Not every binary uses every helper the shared module offers.
+#[allow(dead_code)]
+mod support;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_transport_round_trip() {
-    let state = AppState::new(None).await.expect("boot AppState");
-    let Some(slug) = state.org_slugs().into_iter().next() else {
-        eprintln!("no org hosted in the data root — skipping local-transport test");
-        return;
-    };
+    // Over the example studio (see `support`) rather than whatever data
+    // root the environment resolves — "the first hosted org" on a
+    // developer machine used to be a real one.
+    let (state, _tmp) = support::boot_app_state().await.expect("boot AppState");
+    let slug = support::ORG.to_string();
+    assert!(
+        state.org_slugs().contains(&slug),
+        "the example org is hosted"
+    );
 
     let scope = Scope::new();
     let local = state

@@ -36,11 +36,16 @@ struct RawOrg {
     /// client treats as "show it".
     #[serde(default)]
     member: Option<bool>,
+    /// The org's iroh endpoint id — how a native client dials it
+    /// without a URL. Absent on older servers and before the first
+    /// bind.
+    #[serde(default)]
+    iroh: Option<String>,
 }
 
 fn parse_orgs(body: &str) -> Result<Vec<OrgMeta>, String> {
     let wk: WellKnown = serde_json::from_str(body).map_err(|e| format!("parse well-known: {e}"))?;
-    Ok(wk
+    let list: Vec<OrgMeta> = wk
         .orgs
         .into_iter()
         .map(|o| OrgMeta {
@@ -50,8 +55,17 @@ fn parse_orgs(body: &str) -> Result<Vec<OrgMeta>, String> {
             id: o.id,
             disabled_plugins: o.disabled_plugins,
             member: o.member,
+            iroh: o.iroh,
         })
-        .collect())
+        .collect();
+    // Discovery is where a native client learns each org's iroh
+    // endpoint id; the transport keeps its own registry because
+    // `caller_for` is a free fn with no reach into the org-list signal.
+    #[cfg(not(target_arch = "wasm32"))]
+    task_ui_core::iroh_transport::note_org_endpoints(
+        list.iter().map(|o| (o.slug.as_str(), o.iroh.as_deref())),
+    );
+    Ok(list)
 }
 
 /// Fetch the hosted org list from `/.well-known/task-server.json`.

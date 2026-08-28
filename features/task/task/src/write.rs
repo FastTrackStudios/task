@@ -76,9 +76,6 @@ pub fn write_task(
     if !overwrite && abs.exists() {
         return Err(WriteError::Exists(abs.display().to_string()));
     }
-    if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| WriteError::Io(e.to_string()))?;
-    }
     let now = Utc::now();
     if task.date_created.is_none() {
         task.date_created = Some(now);
@@ -86,7 +83,11 @@ pub fn write_task(
     task.date_modified = Some(now);
 
     let body = serialize_task(task)?;
-    std::fs::write(&abs, body).map_err(|e| WriteError::Io(e.to_string()))?;
+    // Through the vault's write path rather than `std::fs::write`: atomic
+    // on disk, and routed through the Files API once the vault is a File
+    // Root (`project.vault.write-path`).
+    vault::save_page_at(vault_root, &task.path, &body)
+        .map_err(|e| WriteError::Io(e.to_string()))?;
     Ok(abs)
 }
 

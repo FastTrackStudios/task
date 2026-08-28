@@ -1,8 +1,8 @@
 #![allow(clippy::large_futures)]
 //! End-to-end check for the `VaultSync` architect-rpc service
 //! against a live `task-server`. Boots `AppState` on an
-//! ephemeral TCP port (with `TASK_SERVER_VAULT_ROOT` pointed at
-//! a temp dir), connects a `VaultSyncClient`, and exercises
+//! ephemeral TCP port over the repo's example studio (see
+//! `support`), connects a `VaultSyncClient`, and exercises
 //! PUT → manifest → GET, the `#[subscribe] changes` stream
 //! observing PUT + DELETE, and a conflict round-trip.
 //!
@@ -16,36 +16,17 @@
 
 use std::time::Duration;
 
-use task_server::{AppState, router};
 use vault_proto::{IfMatch, VaultChange, VaultEvent, VaultSyncClient, VaultSyncError};
 use vox::VoxError;
 
-/// Serializes env-var twiddling. `cargo test` runs tests on a
-/// shared thread pool; without this, two `boot_server` calls
-/// would race on `TASK_SERVER_VAULT_ROOT` and one could read
-/// the other test's path. The mutex is held only across
-/// `AppState::new` — once the value is captured into
-/// `state.vault_sync`, subsequent env mutations are irrelevant.
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+mod support;
 
+/// Boot over the example studio — see `support`. The vault the tests
+/// write into already holds [`support::EXAMPLE_PAGE`], which is the
+/// point: an e2e that only ever meets pages it wrote itself proves less
+/// than one that shares the vault with existing content.
 async fn boot_server() -> eyre::Result<(String, tempfile::TempDir)> {
-    let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
-    // SAFETY: held under `ENV_LOCK` for the duration of
-    // `AppState::new`, which reads the var exactly once.
-    unsafe {
-        std::env::set_var("TASK_SERVER_VAULT_ROOT", tmp.path());
-    }
-    let state = AppState::new(None).await?;
-    drop(guard);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-    let app = router(state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    let url = format!("ws://127.0.0.1:{port}/vox");
-    Ok((url, tmp))
+    support::boot_ws().await
 }
 
 async fn connect(url: &str) -> eyre::Result<VaultSyncClient> {
@@ -73,9 +54,17 @@ async fn put_manifest_get_round_trip() {
 
     let manifest = client.manifest("default".to_string()).await.unwrap();
     assert_eq!(manifest.vault_id, "default");
-    assert_eq!(manifest.files.len(), 1);
-    assert_eq!(manifest.files[0].path, "notes/a.md");
-    assert_eq!(manifest.files[0].size, 5);
+    // The example vault's own page plus the one we put — and nothing
+    // else, which is what proves the boot was sandboxed.
+    let mut paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(paths, vec![support::EXAMPLE_PAGE, "notes/a.md"]);
+    let put = manifest
+        .files
+        .iter()
+        .find(|f| f.path == "notes/a.md")
+        .expect("the put page is in the manifest");
+    assert_eq!(put.size, 5);
 
     let bytes = client
         .get_file("default".to_string(), "notes/a.md".to_string())

@@ -1,40 +1,25 @@
 #![allow(clippy::large_futures)]
 //! End-to-end check for the `VaultGraph` architect-rpc service
 //! against a live `task-server`: boots `AppState` on an
-//! ephemeral TCP port (with `TASK_SERVER_VAULT_ROOT` pointed at
-//! a temp dir), seeds linked pages through `VaultSync::put_file`,
+//! ephemeral TCP port over the repo's example studio (see
+//! `support`), seeds linked pages through `VaultSync::put_file`,
 //! and exercises backlinks / links / orphans / unresolved /
 //! deadends / tags over the same socket.
+//!
+//! The example vault seeds one page of its own — link-less, tag-less —
+//! so it appears in `orphans` and `deadends` beside the page this test
+//! plants for the purpose, and nowhere else.
 //!
 //! Uses `vault_id = "default"` throughout — the server mounts
 //! one vault per org under that id (`Backend::single`), and the
 //! graph backend is constructed over the same root.
 
-use task_server::{AppState, router};
 use vault_proto::{IfMatch, VaultGraphClient, VaultSyncClient};
 
-/// Serializes env-var twiddling across tests in this binary —
-/// same contract as `vault_sync_e2e.rs`.
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+mod support;
 
 async fn boot_server() -> eyre::Result<(String, tempfile::TempDir)> {
-    let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
-    // SAFETY: held under `ENV_LOCK` for the duration of
-    // `AppState::new`, which reads the var exactly once.
-    unsafe {
-        std::env::set_var("TASK_SERVER_VAULT_ROOT", tmp.path());
-    }
-    let state = AppState::new(None).await?;
-    drop(guard);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-    let app = router(state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    let url = format!("ws://127.0.0.1:{port}/vox");
-    Ok((url, tmp))
+    support::boot_ws().await
 }
 
 async fn put(sync: &VaultSyncClient, path: &str, body: &str) {
@@ -91,15 +76,11 @@ async fn graph_queries_over_seeded_vault() {
     assert_eq!(links[0].resolved.as_deref(), Some("Plans.md"));
     assert_eq!(links[1].resolved, None);
 
-    // Orphans + deadends: the unlinked, link-less page.
-    assert_eq!(
-        graph.orphans("default".to_string()).await.unwrap(),
-        vec!["Loose.md".to_string()]
-    );
-    assert_eq!(
-        graph.deadends("default".to_string()).await.unwrap(),
-        vec!["Loose.md".to_string()]
-    );
+    // Orphans + deadends: the unlinked, link-less pages — the one this
+    // test planted and the one the example vault ships with.
+    let unlinked = vec!["Loose.md".to_string(), support::EXAMPLE_PAGE.to_string()];
+    assert_eq!(graph.orphans("default".to_string()).await.unwrap(), unlinked);
+    assert_eq!(graph.deadends("default".to_string()).await.unwrap(), unlinked);
 
     // Unresolved carries (source, linkpath).
     let unresolved = graph.unresolved("default".to_string()).await.unwrap();

@@ -12,6 +12,26 @@ use uuid::Uuid;
 
 use crate::model::DaemonStatus;
 
+/// The Files fault, as this surface reports it.
+///
+/// Lives here rather than in `files-daemon` because [`DaemonError`]
+/// does: an orphan impl cannot be written on the far side of a crate
+/// boundary, and the alternative — every `?` in the agent replaced by a
+/// mapping call — pays for the split in noise at hundreds of call sites.
+/// `files-proto` is a wire contract like this one, so the dependency
+/// costs a client nothing.
+impl From<files_proto::FilesError> for DaemonError {
+    fn from(e: files_proto::FilesError) -> Self {
+        match e {
+            files_proto::FilesError::NotFound(m) => DaemonError::NotFound(m),
+            files_proto::FilesError::AlreadyExists(m) | files_proto::FilesError::BadRequest(m) => {
+                DaemonError::BadRequest(m)
+            }
+            files_proto::FilesError::Io(m) => DaemonError::Io(m),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
 #[repr(u8)]
 pub enum DaemonError {
@@ -104,6 +124,16 @@ pub trait DaemonControlService {
         endpoint_id: String,
         under: String,
     ) -> Result<Vec<Pulled>, DaemonError>;
+
+    /// Point the running agent at the org it syncs with.
+    ///
+    /// The alternative — and what pairing did first — is to re-run
+    /// `install --coordinator`, which rewrites the service unit and
+    /// restarts the agent. That is the right move on a machine with no
+    /// service yet and much too heavy on one that is running: it
+    /// interrupts transfers in flight to deliver a string the agent
+    /// could simply have been told.
+    async fn set_coordinator(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError>;
 
     /// Remember to sync with `endpoint_id` once it can be reached.
     ///

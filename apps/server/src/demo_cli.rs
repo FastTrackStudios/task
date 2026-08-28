@@ -21,12 +21,14 @@
 //!
 //! # What it does not do
 //!
-//! Adopt anything, offer anything, or accept anything. Those are calls a
-//! signed-in person makes over the wire, and making them here would bake
-//! the interesting half of the demo into a seeder — the same mistake as
-//! a scenario that asserts against a world it built with the backend
-//! rather than through the router. The projects are on disk; adopting
-//! one is the first thing you do in the app.
+//! Offer anything or accept anything. Federation — sharing the Shared
+//! Project across the org boundary — stays a call a signed-in person
+//! makes over the wire; baking it here would bake the interesting half
+//! of the demo into a seeder. The org's OWN project directories, by
+//! contrast, are adopted as File Roots at plant time: that is the first
+//! thing a person would do in the app anyway, and the review surface
+//! cannot exist without it (originals never stream — renditions do, and
+//! renditions belong to a root).
 //!
 //! DEV ONLY, like `seed`: it plants known-password accounts, so it is
 //! compiled out of release builds entirely.
@@ -109,6 +111,284 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         .await?;
     }
 
+    // The projects, DECLARED — pages in the org vault, which is what
+    // the app's Projects view lists. Idempotent the same way the tree
+    // planting is: a page already at the path is left alone.
+    let projects = project::ProjectBackend::new(org.vault_dir());
+    for declared in example_org::declared_of(&slug) {
+        use project::ProjectService as _;
+        let info = project::ProjectInfo {
+            title: declared.title.to_owned(),
+            capabilities: project::Capabilities::from_names(
+                declared.capabilities.iter().copied(),
+            ),
+            form: declared.form,
+            // Only what a person would write. Where the sessions live
+            // on disk is the Files page's job to show, not prose.
+            details: if declared.clients.is_empty() {
+                String::new()
+            } else {
+                format!("For {}.", declared.clients)
+            },
+            ..Default::default()
+        };
+        let made = match projects.create(info) {
+            Ok(made) => made,
+            Err(project::ProjectError::AlreadyExists(_)) => {
+                println!("  project: {} already declared", declared.title);
+                continue;
+            }
+            Err(e) => return Err(eyre::eyre!("declare {}: {e}", declared.title)),
+        };
+        let mut parts = 0;
+        for name in declared.parts {
+            projects
+                .add_part(made.id, name)
+                .map_err(|e| eyre::eyre!("part {name} of {}: {e}", declared.title))?;
+            parts += 1;
+        }
+        match parts {
+            0 => println!("  project: {} declared", declared.title),
+            n => println!("  project: {} declared with {n} part(s)", declared.title),
+        }
+    }
+
+    // Deliverables + a believable task board, for every declared
+    // project — including ones whose page already existed (a replant
+    // is how upgrades reach an old root). Both idempotent by name.
+    let tasks_backend = task::TaskBackend::new(org.vault_dir());
+    for declared in example_org::declared_of(&slug) {
+        use project::ProjectService as _;
+        use task::TaskService as _;
+        let Some(info) = projects
+            .list()
+            .ok()
+            .and_then(|all| all.into_iter().find(|p| p.title == declared.title))
+        else {
+            continue;
+        };
+        // Parts, reconciled on every plant: missing ones are added, and
+        // the ORDER is enforced to the declaration's — which is the
+        // album's playing order, something an earlier seeder (sorted
+        // directory names) got wrong on roots planted before this. The
+        // ids are untouched, so nothing referencing a part notices.
+        if !declared.parts.is_empty() {
+            let mut np = info.clone();
+            for name in declared.parts {
+                if !np.parts.0.iter().any(|x| x.name == *name) {
+                    np.parts.0.push(project::Part {
+                        id: uuid::Uuid::new_v4(),
+                        name: (*name).to_owned(),
+                        references: None,
+                        components: Vec::new(),
+                    });
+                }
+            }
+            let rank = |n: &str| {
+                declared
+                    .parts
+                    .iter()
+                    .position(|x| *x == n)
+                    .unwrap_or(usize::MAX)
+            };
+            np.parts.0.sort_by_key(|x| rank(&x.name));
+            if np.parts != info.parts {
+                projects
+                    .update(np)
+                    .map_err(|e| eyre::eyre!("order parts of {}: {e}", declared.title))?;
+                println!("  parts: {} reconciled to playing order", declared.title);
+            }
+        }
+        for (name, medium, scope, audience) in declared.deliverables {
+            let d = project::Deliverable {
+                id: uuid::Uuid::new_v4(),
+                name: (*name).to_owned(),
+                medium: *medium,
+                scope: *scope,
+                audience: *audience,
+            };
+            match projects.declare_deliverable(info.id, d) {
+                Ok(_) => println!("  deliverable: {} owes \"{name}\"", declared.title),
+                Err(project::ProjectError::AlreadyExists(_)) => {}
+                Err(e) => return Err(eyre::eyre!("declare \"{name}\": {e}")),
+            }
+        }
+        let existing: Vec<String> = tasks_backend
+            .list()
+            .map(|ts| ts.into_iter().map(|t| t.title).collect())
+            .unwrap_or_default();
+        let mut seeded = 0;
+        for (title, status, due_days) in declared.tasks {
+            if existing.iter().any(|t| t == title) {
+                continue;
+            }
+            let due = due_days
+                .map(|d| (chrono::Utc::now() + chrono::Duration::days(d)).date_naive().to_string());
+            let mut t = task::TaskInfo::new(*title);
+            t.status = (*status).to_owned();
+            t.due = due;
+            t.project_id = Some(info.id);
+            tasks_backend
+                .create(t)
+                .map_err(|e| eyre::eyre!("seed task \"{title}\": {e}"))?;
+            seeded += 1;
+        }
+        if seeded > 0 {
+            println!("  tasks: {seeded} seeded for {}", declared.title);
+        }
+    }
+
+    // Video deliverables: generated rather than committed — even a tiny
+    // mp4 is binary weight git keeps forever, and ffmpeg synthesises a
+    // perfectly good one in a second (the dev shell carries ffmpeg).
+    // They land INSIDE the project's own directory (`Deliverables/`),
+    // not in `resources/`: video plays in the review surface, which
+    // streams *renditions* from a File Root — so the original has to
+    // live where the root (adopted below) can hold it. Machines without
+    // ffmpeg get the audio deliverables (committed WAVs) and a note;
+    // the items stay honestly outstanding.
+    //
+    // The ROUGH CUT is what lands here — the final is rendered after
+    // adoption, with a checkpoint on each side, so every fresh video
+    // arrives with a real two-version history and the review screen's
+    // version switcher and compare have something true to show.
+    let mut fresh_videos: Vec<(&'static str, std::path::PathBuf, &'static str)> = Vec::new();
+    for declared in example_org::declared_of(&slug) {
+        for (name, medium, _, _) in declared.deliverables {
+            if *medium != project::Medium::Video {
+                continue;
+            }
+            let dest = org
+                .path()
+                .join("files")
+                .join("Projects")
+                .join(declared.dir)
+                .join("Deliverables")
+                .join(format!("{name}.mp4"));
+            if dest.exists() {
+                println!("  video: \"{name}\" already generated");
+                continue;
+            }
+            if !which_ffmpeg() {
+                println!("  video: no ffmpeg on PATH — \"{name}\" stays outstanding");
+                continue;
+            }
+            std::fs::create_dir_all(dest.parent().expect("parent"))?;
+            if synth_video(&dest, VideoCut::Rough) {
+                println!("  video: \"{name}\" rough cut for {}", declared.title);
+                fresh_videos.push((declared.title, dest, name));
+            } else {
+                println!("  video: ffmpeg failed — \"{name}\" stays outstanding");
+            }
+        }
+    }
+
+    // Audio masters live twice, deliberately: as *songs* under
+    // `resources/` (the global player's colocated-song convention) and
+    // as the delivered file in the project's `Deliverables/` — which is
+    // what the review surface (waveform stage, timecoded comments)
+    // mounts on. Same bytes, two conventions, one copy at plant time.
+    for declared in example_org::declared_of(&slug) {
+        for (name, medium, scope, _) in declared.deliverables {
+            if *medium != project::Medium::Audio || *scope != project::Scope::WholeProject {
+                continue;
+            }
+            let src = org
+                .resources_dir()
+                .join("songs")
+                .join(example_org::song_slug(name))
+                .join(format!("{name}.wav"));
+            let dest = org
+                .path()
+                .join("files")
+                .join("Projects")
+                .join(declared.dir)
+                .join("Deliverables")
+                .join(format!("{name}.wav"));
+            if dest.exists() || !src.is_file() {
+                continue;
+            }
+            std::fs::create_dir_all(dest.parent().expect("parent"))?;
+            std::fs::copy(&src, &dest)?;
+            println!("  audio: \"{name}\" delivered into {}", declared.title);
+        }
+    }
+
+    // Each declared project's directory becomes a File Root named after
+    // the project — what a person would do first in the app, seeded so
+    // the review surface works out of the box (its player streams
+    // renditions, and renditions belong to a root). Idempotent by name;
+    // `settled` waits out the catalogue walk so the videos generated
+    // above are browsable the moment the server boots.
+    {
+        use files::service::roots::{AdoptRequest, RootsService};
+        let backend = files::FilesBackend::new(org.path().join("files"), org.vault_dir())
+            .map_err(|e| eyre::eyre!("files backend: {e}"))?;
+        let existing = RootsService::list(&backend)
+            .await
+            .map_err(|e| eyre::eyre!("list roots: {e}"))?;
+        for declared in example_org::declared_of(&slug) {
+            if existing.iter().any(|r| r.name == declared.title) {
+                continue;
+            }
+            let dir = org.path().join("files").join("Projects").join(declared.dir);
+            if !dir.is_dir() {
+                continue;
+            }
+            let root = backend
+                .adopt(AdoptRequest {
+                    path: dir.to_string_lossy().into_owned(),
+                    name: declared.title.to_owned(),
+                    flavor: files::model::RootFlavor::Media,
+                    hash_content: true,
+                })
+                .await
+                .map_err(|e| eyre::eyre!("adopt {}: {e}", declared.title))?;
+            backend.settled(files::RootId::new(root.id)).await;
+            println!("  root: {} adopted in place", declared.title);
+        }
+
+        // The final cut, as HISTORY: checkpoint the rough cut the
+        // catalogue just took in, render the final over it, checkpoint
+        // again. Every fresh video arrives with two honest versions —
+        // which is what makes the review screen's version switcher and
+        // side-by-side compare demoable rather than decorative.
+        if !fresh_videos.is_empty() {
+            let roots = RootsService::list(&backend)
+                .await
+                .map_err(|e| eyre::eyre!("list roots: {e}"))?;
+            for (title, dest, name) in &fresh_videos {
+                let Some(root) = roots.iter().find(|r| r.name == *title) else {
+                    continue;
+                };
+                if let Err(e) = files::FilesService::checkpoint_now(
+                    &backend,
+                    root.id,
+                    Some(format!("{name} — rough cut")),
+                )
+                .await
+                {
+                    println!("  video: couldn't checkpoint rough cut of \"{name}\" ({e})");
+                    continue;
+                }
+                if !synth_video(dest, VideoCut::Final) {
+                    println!("  video: final render of \"{name}\" failed — rough cut stands");
+                    continue;
+                }
+                match files::FilesService::checkpoint_now(
+                    &backend,
+                    root.id,
+                    Some(format!("{name} — final")),
+                )
+                .await
+                {
+                    Ok(_) => println!("  video: \"{name}\" finalled — two versions on record"),
+                    Err(e) => println!("  video: final of \"{name}\" not checkpointed ({e})"),
+                }
+            }
+        }
+    }
+
     println!("\nplanted. sign in with any of:");
     for member in example_org::cast_of(&slug) {
         println!(
@@ -122,7 +402,7 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
             }
         );
     }
-    println!("\nprojects on disk, waiting to be adopted:");
+    println!("\nprojects on disk, adopted as File Roots:");
     let projects = org.path().join("files").join("Projects");
     if let Ok(entries) = std::fs::read_dir(&projects) {
         let mut names: Vec<_> = entries
@@ -136,4 +416,61 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Which pass of a deliverable synth this is — the two must LOOK
+/// different, or the review screen's compare demonstrates nothing.
+enum VideoCut {
+    /// Classic bars, shorter, a low tone: obviously the draft.
+    Rough,
+    /// The moving testsrc2 pattern, full length, brighter tone.
+    Final,
+}
+
+/// Synthesize a small deliverable mp4 at `dest` (overwrites — the
+/// final pass renders over the rough cut on purpose; the version store
+/// holds the history).
+///
+/// Slow animated gradients, not test patterns: every surface that
+/// shows a frame of this file — home card art, the review stage, the
+/// filmstrip scrub — inherits its look, so the synth has to read as a
+/// deliverable, not as a broadcast calibration chart. The rough cut is
+/// desaturated and short; the final runs the product's indigo.
+fn synth_video(dest: &std::path::Path, cut: VideoCut) -> bool {
+    let (video, audio) = match cut {
+        VideoCut::Rough => (
+            "gradients=s=640x360:c0=0x27272a:c1=0x3f3f46:c2=0x18181b:n=3:speed=0.02:duration=6:rate=24",
+            "sine=frequency=220:duration=6",
+        ),
+        VideoCut::Final => (
+            "gradients=s=640x360:c0=0x1e1b4b:c1=0x312e81:c2=0x0f172a:c3=0x6366f1:n=4:speed=0.015:duration=8:rate=24",
+            "sine=frequency=330:duration=8",
+        ),
+    };
+    std::process::Command::new("ffmpeg")
+        .args([
+            "-y", "-f", "lavfi", "-i", video, "-f", "lavfi", "-i", audio,
+            "-filter_complex", "[1:a]volume=0.35[a]", "-map", "0:v", "-map", "[a]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+            "-c:a", "aac", "-b:a", "48k", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+        ])
+        .arg(dest)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Is an `ffmpeg` on PATH? A probe, not a version check — the seeder's
+/// synth args have worked on every ffmpeg this decade.
+fn which_ffmpeg() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }

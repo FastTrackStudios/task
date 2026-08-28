@@ -98,9 +98,12 @@
       ++ lib.optionals pkgs.stdenv.isLinux [
         # cargo-sweep — reclaims stale target/ artifacts; cargo never GCs.
         cargo-sweep
-        # sccache — compiler cache, wired as RUSTC_WRAPPER in
-        # nix/modules/shells/default.nix.
-        sccache
+        # ffmpeg — the server's rendition pipeline probes for it at boot
+        # (media transcoding is disabled without it), and `admin demo`
+        # synthesises the example video deliverables with it. In the
+        # shell rather than vendored: it is a runtime tool, not a build
+        # dependency.
+        ffmpeg
       ];
 
       # Env every dev/CI shell needs — build-script and bindgen paths,

@@ -58,12 +58,24 @@ web-sys = { workspace = true, features = [
 # unify TLS into the SHARED tokio-tungstenite instance and keep `wss://`
 # working.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "sync"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = [
     "connect",
     "handshake",
     "rustls-tls-webpki-roots",
 ] }
+# The iroh transport (`iroh_transport`): a native client dials the org's
+# server by bare endpoint id — the registration model — instead of the
+# WebSocket URL, whenever discovery has told it the id. `architect`
+# carries `iroh_link` (the vox-over-iroh link, VOX_ALPN, key persistence)
+# and re-exports `iroh` itself; the workspace pin already enables its
+# `iroh` feature. Native only: a browser cannot hold a QUIC socket.
+architect = { workspace = true }
+serde_json = { workspace = true }
+# `ClientMiddleware` for the per-call bearer the iroh transport rides —
+# the trait lives in vox-types, which vox-core deliberately does not
+# re-export wholesale.
+vox-types = { workspace = true }
 
 [lints]
 workspace = true

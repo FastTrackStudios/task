@@ -425,28 +425,27 @@ it runs, and the number that means anything here is the verified one.
 Exercised by some stage above: every rule in `files.*`, `project.*` and
 `storage.*` except those listed below.
 
-**The one stage not verified.** `scenario.album.ingest` — a device
-uploading what it originates with no per-item action. `files.device.ingest`
-has no implementation: nothing in the repository does unattended
-origination upload, so the stage is blocked on a feature rather than on a
-test.
+**Every stage is verified.** `scenario.album.ingest` was the last, blocked on
+`files.device.ingest` having no implementation; `lane::ingest` is it.
 
 **Not reached by this scenario, and why:**
 
 - `project.definition.single` and `project.capability.closed` — properties of the
   codebase, not of a run. No scenario can exercise either; a second definition,
   or a free-form capability string, is what violates them.
-- `project.vault.write-path` — **not met, and this line used to claim it was.**
-  It said every write goes through the Files API by construction; project pages
-  are written with `std::fs::write` from `project::write`, and deleted with
-  `std::fs::remove_file` from the backend. "By construction" was an assumption
-  about code nobody had checked, which is the one kind of coverage claim worth
-  less than none. It needs a stage of its own once the write path exists.
+- `project.vault.write-path` — met, and verified by a chapter of its own
+  (`tests/integration/tests/vault_root.rs`) rather than by a stage here: the
+  claim is about *how* a page reaches disk, which no narrative stage observes.
+  This line once said every write went through the Files API "by construction",
+  which was an assumption about code nobody had checked; it is now a binding
+  (`vault_live::PageSink`) and a test that deletes the claim if it stops being
+  true.
 - `storage.query.reach` — a platform constraint. The scenario should be run once
   with a browser client to exercise it.
 - `vault.index.parse-once`, `vault.index.tolerant`, `vault.write.granular`,
   `vault.write.atomic` — read- and write-path properties measured under load and
-  fault injection, not observed in a narrative run.
+  fault injection (`vault-entity/tests/index.rs`, `storage.rs`), not observed in
+  a narrative run.
 - `files.scale.small-files` is exercised at 14,671 files, which is the album's
   real size and an order of magnitude below the 100k target. Running the scenario
   against the full 6.1 TB tree is a separate exercise.

@@ -35,8 +35,14 @@ use crate::task_sort::{belongs, is_active, is_open_task, priority_rank};
 /// data changes only, not every render.
 #[derive(Clone, PartialEq)]
 struct Card {
+    /// Owning org — the card's art resolves through its Files service.
+    slug: String,
     project: ProjectInfo,
-    next: DbTask,
+    /// The single next open task — `None` for a project with no open
+    /// tasks yet, which is still a card: a freshly declared project
+    /// disappearing from Home *because* nothing has been filed under it
+    /// is exactly backwards.
+    next: Option<DbTask>,
     done: usize,
     total: usize,
 }
@@ -65,7 +71,10 @@ pub fn HomeView() -> Element {
     let cards = use_memo(move || {
         let projects = project_store.list();
         let tasks = task_store.list();
-        let project_refs: Vec<&ProjectInfo> = projects.iter().map(|r| &r.project).collect();
+        let project_refs: Vec<(&str, &ProjectInfo)> = projects
+            .iter()
+            .map(|r| (r.slug.as_str(), &r.project))
+            .collect();
         let task_refs: Vec<&DbTask> = tasks.iter().map(|r| &r.task).collect();
         build_cards(&project_refs, &task_refs)
     });
@@ -149,6 +158,11 @@ pub fn HomeView() -> Element {
             let today_list: Vec<DbTask> =
                 today_tasks.read().iter().take(MAX_TODAY).cloned().collect();
             let today_overflow = today_tasks.read().len().saturating_sub(today_list.len());
+            // No rail when there is nothing due: an empty "Today" card
+            // holding a congratulation is dead furniture — the projects
+            // take the full width instead, and the header's "0 due
+            // today" chip already tells the story.
+            let has_today = !today_list.is_empty() || today_overflow > 0;
 
             rsx! {
                 // ── Header: greeting + the day's numbers ──────────
@@ -167,7 +181,7 @@ pub fn HomeView() -> Element {
                 }
 
                 // ── Quick actions ─────────────────────────────────
-                div { class: "grid grid-cols-2 gap-2 sm:grid-cols-4",
+                div { class: "flex flex-wrap items-center gap-2",
                     ActionTile {
                         label: "New note",
                         hint: "Space n",
@@ -196,37 +210,34 @@ pub fn HomeView() -> Element {
 
                 // ── Today + Projects ──────────────────────────────
                 div { class: "grid grid-cols-1 items-start gap-4 lg:grid-cols-3",
-                    // Today rail — first on mobile, right rail on desktop.
-                    div { class: "order-first flex flex-col gap-1.5 rounded-xl border border-border/70 bg-card/50 p-3.5 lg:order-last",
-                        div { class: "flex items-center justify-between",
-                            span { class: "text-xs font-semibold uppercase tracking-wider text-muted-foreground",
-                                "Today"
-                            }
-                            if due_today > 0 {
-                                span { class: "rounded-full bg-muted/50 px-1.5 text-[10px] tabular-nums text-muted-foreground",
-                                    "{due_today}"
+                    // Today rail — first on mobile, right rail on
+                    // desktop, and only when something is actually due.
+                    if has_today {
+                        div { class: "order-first flex flex-col gap-1.5 rounded-xl border border-border/70 bg-card/50 p-3.5 lg:order-last",
+                            div { class: "flex items-center justify-between",
+                                span { class: "text-xs font-semibold uppercase tracking-wider text-muted-foreground",
+                                    "Today"
+                                }
+                                if due_today > 0 {
+                                    span { class: "rounded-full bg-muted/50 px-1.5 text-[10px] tabular-nums text-muted-foreground",
+                                        "{due_today}"
+                                    }
                                 }
                             }
-                        }
-                        if today_list.is_empty() {
-                            div { class: "flex items-center gap-2 py-3 text-sm text-muted-foreground",
-                                CircleCheck { size: 15 }
-                                "Nothing due — clear runway."
+                            for t in today_list.into_iter() {
+                                TodayRow { key: "{t.id}", task: t, on_status }
                             }
-                        }
-                        for t in today_list.into_iter() {
-                            TodayRow { key: "{t.id}", task: t, on_status }
-                        }
-                        if today_overflow > 0 {
-                            Link {
-                                to: Route::TasksRoute {},
-                                class: "mt-1 text-xs text-muted-foreground hover:text-foreground",
-                                "{today_overflow} more on the board →"
+                            if today_overflow > 0 {
+                                Link {
+                                    to: Route::TasksRoute {},
+                                    class: "mt-1 text-xs text-muted-foreground hover:text-foreground",
+                                    "{today_overflow} more on the board →"
+                                }
                             }
                         }
                     }
                     // Projects — the pulse grid.
-                    div { class: "flex flex-col gap-2.5 lg:col-span-2",
+                    div { class: if has_today { "flex flex-col gap-2.5 lg:col-span-2" } else { "flex flex-col gap-2.5 lg:col-span-3" },
                         div { class: "flex items-center justify-between gap-3",
                             span { class: "text-xs font-semibold uppercase tracking-wider text-muted-foreground",
                                 "Active work"
@@ -247,10 +258,11 @@ pub fn HomeView() -> Element {
                                 Text { variant: TextVariant::Muted, "No active projects have open tasks right now." }
                             }
                         }
-                        div { class: "grid grid-cols-1 gap-2.5 md:grid-cols-2",
+                        div { class: if has_today { "grid grid-cols-1 gap-2.5 md:grid-cols-2" } else { "grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3" },
                             for card in shown.into_iter() {
                                 ProjectCard {
                                     key: "{card.project.id}",
+                                    slug: card.slug,
                                     project: card.project,
                                     next: card.next,
                                     done: card.done,
@@ -312,15 +324,17 @@ fn ActionTile(
     onclick: EventHandler<MouseEvent>,
     children: Element,
 ) -> Element {
+    // Compact pills, not four equal panels: these are shortcuts, and
+    // shortcuts don't get to out-weigh the work below them.
     rsx! {
         button {
             r#type: "button",
-            class: "group flex items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/40",
+            class: "group flex items-center gap-2 rounded-full border border-border/70 bg-card/60 py-1.5 pl-3 pr-2 text-left transition-colors hover:border-border hover:bg-accent/40",
             onclick: move |e| onclick.call(e),
-            span { class: "flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground transition-colors group-hover:text-foreground",
+            span { class: "text-muted-foreground transition-colors group-hover:text-foreground",
                 {children}
             }
-            span { class: "min-w-0 flex-1 truncate text-sm font-medium text-foreground", "{label}" }
+            span { class: "text-sm text-foreground", "{label}" }
             kbd { class: "hidden shrink-0 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline",
                 "{hint}"
             }
@@ -387,29 +401,33 @@ fn render_loading() -> Element {
 /// Each active project with its task tally + single next action;
 /// projects with nothing open drop out — the dashboard is only
 /// "what's next".
-fn build_cards(projects: &[&ProjectInfo], tasks: &[&DbTask]) -> Vec<Card> {
+fn build_cards(projects: &[(&str, &ProjectInfo)], tasks: &[&DbTask]) -> Vec<Card> {
     let mut cards: Vec<Card> = projects
         .iter()
-        .filter(|p| !p.archived && is_active(&p.status))
-        .filter_map(|p| {
+        .filter(|(_, p)| !p.archived && is_active(&p.status))
+        .map(|(slug, p)| {
             let mine: Vec<&&DbTask> = tasks.iter().filter(|t| belongs(t, p)).collect();
             let total = mine.len();
             let done = mine.iter().filter(|t| !is_open_task(t)).count();
-            next_task(p, tasks).map(|t| Card {
+            Card {
+                slug: (*slug).to_owned(),
                 project: (*p).clone(),
-                next: t.clone(),
+                next: next_task(p, tasks).cloned(),
                 done,
                 total,
-            })
+            }
         })
         .collect();
-    // Soonest due first (undated last), then project title.
+    // Soonest due first, then dated-next before undated, then title —
+    // a project whose next action has a deadline outranks one that has
+    // only a backlog, which outranks one with nothing filed yet.
     cards.sort_by(|a, b| {
-        match (a.next.due.as_deref(), b.next.due.as_deref()) {
-            (Some(x), Some(y)) => x.cmp(y),
+        let due = |c: &Card| c.next.as_ref().and_then(|t| t.due.clone());
+        match (due(a), due(b)) {
+            (Some(x), Some(y)) => x.cmp(&y),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
+            (None, None) => a.next.is_none().cmp(&b.next.is_none()),
         }
         .then_with(|| {
             a.project
@@ -425,23 +443,67 @@ fn build_cards(projects: &[&ProjectInfo], tasks: &[&DbTask]) -> Vec<Card> {
 /// bar, and the first action behind a live checkbox.
 #[component]
 fn ProjectCard(
+    slug: String,
     project: ProjectInfo,
-    next: DbTask,
+    next: Option<DbTask>,
     done: usize,
     total: usize,
     on_status: EventHandler<(uuid::Uuid, String)>,
 ) -> Element {
     let pid = project.id.to_string();
+    let detail = Route::ProjectDetailRoute { id: pid.clone() };
     let pct = if total == 0 { 0 } else { done * 100 / total };
-    let due = next.due.as_deref().and_then(parse_due);
-    let next_id = next.id;
-    let next_status = next.status.clone();
-    let ui_status = task_ui::Status::from_str(&next.status).unwrap_or(task_ui::Status::Open);
-    let ui_priority =
-        task_ui::Priority::from_str(&next.priority).unwrap_or(task_ui::Priority::Normal);
+
+    // Card art: the deliverable itself. `image:` frontmatter wins when
+    // someone set one; otherwise the first frame of the project's video
+    // deliverable (via its root's filmstrip rendition); otherwise the
+    // card stays textual — never a broken image box.
+    let cover = Some(project.image.trim().to_owned()).filter(|u| !u.is_empty());
+    let has_cover = cover.is_some();
+    let title_for_art = project.title.clone();
+    let art = use_resource(use_reactive!(|(slug, has_cover, title_for_art)| async move {
+        if has_cover {
+            return None;
+        }
+        files_ui::review::deliverable_poster(&slug, &title_for_art).await
+    }));
+    let art_url: Option<String> = art.read_unchecked().as_ref().cloned().flatten();
 
     rsx! {
         div { class: "group flex flex-col gap-2.5 rounded-xl border border-border/70 bg-card/70 p-3.5 transition-colors hover:border-border",
+            // Every card opens with a banner, so a row of cards shares
+            // one anatomy: cover image if set, else the deliverable's
+            // own first frame, else a deterministic gradient monogram —
+            // never a card that starts two lines higher than its
+            // neighbour.
+            Link {
+                to: detail.clone(),
+                class: "-mx-3.5 -mt-3.5 mb-0.5 block h-24 overflow-hidden rounded-t-xl border-b border-border/50",
+                if let Some(u) = cover {
+                    div {
+                        class: "h-full w-full transition-transform duration-300 group-hover:scale-[1.02]",
+                        style: "background-image:url('{u}');background-size:cover;background-position:center;",
+                    }
+                } else if let Some(u) = art_url {
+                    // The deliverable itself: a muted, metadata-only
+                    // stream — the first frame paints, nothing plays.
+                    video {
+                        src: "{u}",
+                        preload: "metadata",
+                        muted: true,
+                        playsinline: true,
+                        class: "h-full w-full object-cover pointer-events-none transition-transform duration-300 group-hover:scale-[1.02]",
+                    }
+                } else {
+                    div {
+                        class: "flex h-full w-full items-center justify-center transition-transform duration-300 group-hover:scale-[1.02]",
+                        style: "background:{monogram_bg(&project.title)}",
+                        span { class: "text-2xl font-bold tracking-tight text-white/25",
+                            {project.title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()}
+                        }
+                    }
+                }
+            }
             div { class: "flex items-center justify-between gap-2",
                 Link {
                     to: Route::ProjectDetailRoute { id: pid },
@@ -467,29 +529,62 @@ fn ProjectCard(
                 }
             }
             // The first action — live checkbox, same click cycle as
-            // the board (start the clock, complete, reopen).
-            div { class: "flex items-center gap-2.5 rounded-lg bg-muted/30 px-2.5 py-2",
-                task_ui::CheckboxButton {
-                    status: ui_status,
-                    priority: ui_priority,
-                    on_click: move |()| {
-                        let s = task_proto::click_transition(&next_status, None);
-                        on_status.call((next_id, s.to_string()));
-                    },
-                }
-                span { class: "min-w-0 flex-1 truncate text-sm text-foreground", "{next.title}" }
-                if let Some((label, cls)) = due {
-                    span { class: "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] {cls}",
-                        CalendarDays { size: 11 }
-                        "{label}"
+            // the board (start the clock, complete, reopen). A project
+            // with nothing open gets an invitation instead of vanishing.
+            match next {
+                Some(next) => {
+                    let due = next.due.as_deref().and_then(parse_due);
+                    let next_id = next.id;
+                    let next_status = next.status.clone();
+                    let ui_status = task_ui::Status::from_str(&next.status)
+                        .unwrap_or(task_ui::Status::Open);
+                    let ui_priority = task_ui::Priority::from_str(&next.priority)
+                        .unwrap_or(task_ui::Priority::Normal);
+                    rsx! {
+                        div { class: "flex items-center gap-2.5 rounded-lg bg-muted/30 px-2.5 py-2",
+                            task_ui::CheckboxButton {
+                                status: ui_status,
+                                priority: ui_priority,
+                                on_click: move |()| {
+                                    let s = task_proto::click_transition(&next_status, None);
+                                    on_status.call((next_id, s.to_string()));
+                                },
+                            }
+                            span { class: "min-w-0 flex-1 truncate text-sm text-foreground", "{next.title}" }
+                            if let Some((label, cls)) = due {
+                                span { class: "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] {cls}",
+                                    CalendarDays { size: 11 }
+                                    "{label}"
+                                }
+                            }
+                        }
                     }
                 }
+                None => rsx! {
+                    Link {
+                        to: detail.clone(),
+                        class: "flex items-center gap-2.5 rounded-lg bg-muted/30 px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground",
+                        span { class: "min-w-0 flex-1 truncate", "No open tasks — plan the first one" }
+                    }
+                },
             }
         }
     }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
+
+/// A deterministic banner gradient for a project with no art yet —
+/// hashed off the title so the same project always wears the same
+/// color, muted so real art always outshines it.
+fn monogram_bg(title: &str) -> String {
+    const HUES: [u16; 6] = [243, 199, 158, 291, 21, 340];
+    let h = HUES[title.bytes().map(usize::from).sum::<usize>() % HUES.len()];
+    format!(
+        "linear-gradient(135deg, hsl({h} 45% 22%) 0%, hsl({h} 55% 12%) 60%, hsl({} 45% 16%) 100%)",
+        (h + 40) % 360
+    )
+}
 
 /// The single next task for a project: open, soonest due (None last),
 /// then highest priority, then title.

@@ -63,6 +63,13 @@ pub struct TasksAppProps {
     /// picker (empty = no picker).
     #[props(default)]
     pub projects: Vec<(uuid::Uuid, String)>,
+    /// Hosted inside another page (a project's board) rather than being
+    /// the page: no own H1 — the host already named the context — and
+    /// no `max-w` centering, the host owns the layout. The counts and
+    /// the list/kanban toggle stay: they are the board's, not the
+    /// page's.
+    #[props(default = false)]
+    pub embedded: bool,
 }
 
 #[component]
@@ -107,10 +114,17 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
         })
         .sum();
 
+    let shell = if props.embedded {
+        "relative flex flex-col gap-3 h-full"
+    } else {
+        "relative mx-auto flex max-w-6xl flex-col gap-3 p-3 sm:p-5 lg:px-8 lg:py-6 h-full"
+    };
     rsx! {
-        div { class: "relative mx-auto flex max-w-6xl flex-col gap-3 p-3 sm:p-5 lg:px-8 lg:py-6 h-full",
+        div { class: "{shell}",
             div { class: "flex flex-wrap items-center gap-x-3 gap-y-2",
-                Heading { level: HeadingLevel::H1, "Tasks" }
+                if !props.embedded {
+                    Heading { level: HeadingLevel::H1, "Tasks" }
+                }
                 span { class: "text-xs tabular-nums text-muted-foreground",
                     "{open_count} open · {done} done"
                     if tracked_today > 0 {
@@ -120,7 +134,10 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                 if let Some(extra) = props.header_extra.clone() {
                     {extra}
                 }
-                div { class: "ml-auto inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 text-xs",
+                // No view switch when embedded: a kanban board in a
+                // 384px sidebar is columns nobody can read — the panel
+                // is a list, the full Tasks page is where boards live.
+                div { class: if props.embedded { "hidden" } else { "ml-auto inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 text-xs" },
                     for v in [ViewMode::List, ViewMode::Kanban] {
                         {
                             let active = v == view();

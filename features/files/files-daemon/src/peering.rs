@@ -75,7 +75,9 @@ pub async fn serve(backend: FilesBackend, whose: String, endpoint: iroh::Endpoin
 /// during the handshake, so what authorises the pull is `peer` having
 /// admitted this machine.
 pub async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<SyncServiceClient> {
-    Ok(files_sync::dial_peer(endpoint, peer).await?)
+    files_sync::dial_peer(endpoint, peer)
+        .await
+        .map_err(crate::error::from_sync)
 }
 
 /// Where a device may keep live trees, beyond its own store directory.

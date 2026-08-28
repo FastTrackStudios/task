@@ -9,6 +9,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Only for the names of a File Root's own internals (`.fts-root.json`,
+# `.fts-files/`): once the vault is a root (`project.vault.write-path`)
+# those live inside it, and replication must not treat the server's own
+# version store as vault content.
+files-proto = { workspace = true, default-features = false }
 # Vault is native-only (file IO + watching). The `#![cfg(not(wasm))]`
 # at the crate root keeps wasm builds happy.
 walkdir = { workspace = true }

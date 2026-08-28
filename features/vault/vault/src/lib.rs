@@ -66,9 +66,10 @@ pub use vault_live::sync;
 pub use vault_live::watcher;
 #[cfg(feature = "live")]
 pub use vault_live::{
-    Backend, BlockIndex, BlockLocation, LoadError, MutateError, PropertyTypes, SaveError, Vault,
-    VaultBase, VaultEntry, VaultEntryKind, VaultEvent, VaultLookupView, VaultPage, WatchError,
-    append_to_page, create_page, delete_page, save_page, walk_vault, watch,
+    Backend, BlockIndex, BlockLocation, LoadError, MutateError, PageSink, PropertyTypes, SaveError,
+    Vault, VaultBase, VaultEntry, VaultEntryKind, VaultEvent, VaultLookupView, VaultPage,
+    WatchError, append_to_page, bind_sink, create_page, delete_page, delete_page_at, move_page_at,
+    save_page, save_page_at, sink_for, unbind_sink, walk_vault, watch, write_atomic,
 };
 
 // ── Obsidian translation layer ────────────────────────────────────

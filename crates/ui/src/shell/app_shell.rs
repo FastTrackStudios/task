@@ -73,7 +73,7 @@ pub fn AppShell() -> Element {
             if !chromeless() {
                 TopBar {}
             }
-            div { class: "md:flex md:min-h-0 md:flex-1",
+            div { class: "md:flex md:min-h-0 md:min-w-0 md:flex-1",
             if !chromeless() {
                 div { class: "hidden md:block",
                     crate::shell::rail::IconRail { current: current.clone() }
@@ -83,21 +83,27 @@ pub fn AppShell() -> Element {
             // open view] row, with the IDE status line spanning BENEATH
             // it. The rail runs full-height beside the status bar, but the
             // vault explorer stops just above it (VS Code-style).
-            div { class: "flex flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
-                div { class: "flex flex-col md:min-h-0 md:flex-1 md:flex-row",
+            div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
+                div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:flex-row",
                     if explorer.read().0 && !chromeless() {
                         div { class: "hidden w-[17rem] shrink-0 border-r border-border/60 md:flex md:min-h-0 md:flex-col md:overflow-hidden",
                             // On the Files page the sidebar column IS
                             // the file sidebar — the whole screen is
-                            // the file manager.
+                            // the file manager. On a project page it is
+                            // the PROJECT's own map (parts, neighbours)
+                            // — inside one piece of work, the whole
+                            // vault is the wrong companion, and its own
+                            // page is one click away.
                             if matches!(current, Route::FilesRoute {}) {
                                 files_ui::FilesSidebar {}
+                            } else if let Route::ProjectDetailRoute { id } = &current {
+                                crate::shell::project_sidebar::ProjectSidebar { id: id.clone() }
                             } else {
                                 crate::shell::explorer::VaultExplorer {}
                             }
                         }
                     }
-                    div { class: "flex min-h-screen flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
+                    div { class: "flex min-h-screen min-w-0 flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
                         if !share {
                             MobileHeader {}
                         }
@@ -174,6 +180,11 @@ pub fn AppShell() -> Element {
         task_player_ui::GlobalNowPlayer {}
         // Marks the playing setlist row + feeds its artwork waveform.
         task_player_ui::NowPlayingStripHighlighter {}
+        // The unified media host: the persistent review player (dock
+        // strip ⇄ zoomed review screen, one element) and the
+        // one-audible-source rule. Outside the Outlet for the same
+        // reason as the engine above — playback survives navigation.
+        crate::media_session::MediaHost {}
         // Mobile: no desktop status bar, so float the same tab above the
         // bottom tab bar. Renders nothing until something plays.
         if !share {

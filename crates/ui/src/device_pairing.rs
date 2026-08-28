@@ -127,6 +127,21 @@ mod native {
         id.get(..8).unwrap_or(id)
     }
 
+    /// The agent running on this machine, over its local control socket.
+    ///
+    /// The same surface the `fts-files-daemon` CLI drives — the app is
+    /// not a special client, which is the property that keeps the two
+    /// from drifting.
+    async fn local_agent()
+    -> Result<files_daemon_proto::DaemonControlServiceClient, String> {
+        let bind = std::env::var("FTS_FILES_DAEMON_BIND")
+            .unwrap_or_else(|_| "127.0.0.1:4055".into());
+        vox::connect_lane(&format!("ws://{bind}/vox"))
+            .establish()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Pair this machine with `slug`. Returns the log line.
     pub async fn pair(slug: &str) -> String {
         let Some(agent) = agent() else {
@@ -150,12 +165,29 @@ mod native {
             Err(e) => return format!("sync: not paired — asking {slug} for its endpoint id: {e}"),
         };
 
-        // Already pointed here? Then the unit is right, and rewriting it
-        // would restart a healthy agent mid-transfer for nothing.
+        // Already pointed here? Then there is nothing to do, and doing
+        // it anyway would interrupt whatever is in flight.
         if ask(&agent, &["status"]).is_ok_and(|s| s.contains(&coordinator)) {
             return format!("sync: already paired with {slug}");
         }
 
+        // A running agent is *told* its coordinator. Re-running the
+        // installer would rewrite the service unit and restart it, which
+        // interrupts transfers to deliver a string it could simply have
+        // been handed — and on a machine syncing with other machines,
+        // that restart is felt by all of them.
+        if let Ok(client) = local_agent().await {
+            if client.set_coordinator(coordinator.clone()).await.is_ok() {
+                return format!(
+                    "sync: this machine ({}) is paired with {slug} ({})",
+                    short(&endpoint),
+                    short(&coordinator)
+                );
+            }
+        }
+
+        // No agent answering: this machine has the binary but no
+        // service, so install one.
         match Command::new(&agent)
             .args(["install", "--coordinator", &coordinator])
             .output()

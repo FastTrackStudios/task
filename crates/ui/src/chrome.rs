@@ -106,6 +106,9 @@ pub fn provide_chrome_contexts() {
     use_context_provider(|| NoteViewMode(Signal::new(ViewMode::Edit)));
     // Player contexts (SongPlayRequest / NowPlaying / NowPlayingCtl).
     task_player_ui::provide_player_contexts();
+    // The unified media session (dock ⇄ zoomed review) — needs the
+    // player contexts above (it tells the song engine to yield).
+    crate::media_session::provide_media_session();
     // How an extracted feature page links to a vault note. The router
     // is the shell's, so the shell renders the typed route to a URL and
     // hands the builder down (see `task_ui_core::nav`).
@@ -480,6 +483,80 @@ pub fn TopBar() -> Element {
                 },
                 architect_ui::lucide_dioxus::PanelRight { size: 15 }
             }
+
+            // Frameless desktop: this bar IS the title bar, so the
+            // window controls sit at its right end. Renders nothing on
+            // web/mobile (no WindowChrome context).
+            WindowControls {}
+        }
+    }
+}
+
+// ── window controls (frameless desktop) ─────────────────────────────
+
+/// Minimize / maximize / close, when the platform main provided
+/// [`task_ui_core::window_chrome::WindowChrome`] — the desktop shell
+/// runs the window without native decorations, and this is where those
+/// buttons went. Empty everywhere else.
+///
+/// `onmousedown` stops propagation so a press on a button never starts
+/// a window drag from an enclosing drag surface.
+#[component]
+pub fn WindowControls() -> Element {
+    let Some(chrome) = task_ui_core::window_chrome::window_chrome() else {
+        return rsx! {};
+    };
+    rsx! {
+        div {
+            class: "ml-1 flex items-center gap-1",
+            onmousedown: move |e| e.stop_propagation(),
+            ondoubleclick: move |e| e.stop_propagation(),
+            button {
+                r#type: "button",
+                title: "Minimize",
+                class: "flex h-7 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                onclick: move |_| chrome.minimize.call(()),
+                architect_ui::lucide_dioxus::Minus { size: 14 }
+            }
+            button {
+                r#type: "button",
+                title: "Maximize",
+                class: "flex h-7 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                onclick: move |_| chrome.toggle_maximize.call(()),
+                architect_ui::lucide_dioxus::Square { size: 12 }
+            }
+            button {
+                r#type: "button",
+                title: "Close",
+                class: "flex h-7 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive hover:text-destructive-foreground",
+                onclick: move |_| chrome.close.call(()),
+                architect_ui::lucide_dioxus::X { size: 14 }
+            }
+        }
+    }
+}
+
+/// A stretch of title bar that drags the window and double-clicks to
+/// maximize — the slack in a bar becomes this instead of dead space.
+/// Renders a plain spacer when no [`WindowChrome`] is in scope.
+///
+/// [`WindowChrome`]: task_ui_core::window_chrome::WindowChrome
+#[component]
+pub fn DragRegion(#[props(default = String::new())] class: String) -> Element {
+    let chrome = task_ui_core::window_chrome::window_chrome();
+    rsx! {
+        div {
+            class: "min-w-0 flex-1 self-stretch {class}",
+            onmousedown: move |_| {
+                if let Some(chrome) = chrome {
+                    chrome.drag.call(());
+                }
+            },
+            ondoubleclick: move |_| {
+                if let Some(chrome) = chrome {
+                    chrome.toggle_maximize.call(());
+                }
+            },
         }
     }
 }

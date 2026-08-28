@@ -1,0 +1,13 @@
+{
+  "slug": "single-master",
+  "title": "Single master",
+  "artist": "ACME Audio",
+  "bpm": 188,
+  "duration_sec": 11.74,
+  "stems": [
+    {
+      "name": "Reference Mix",
+      "file": "Single master.wav"
+    }
+  ]
+}

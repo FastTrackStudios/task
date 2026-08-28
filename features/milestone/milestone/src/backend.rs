@@ -197,16 +197,13 @@ impl MilestoneService for MilestoneBackend {
             .into_iter()
             .find(|m| m.id == id)
             .ok_or_else(|| MilestoneError::NotFound(id.to_string()))?;
-        let from = self.vault_root.join(&m.path);
-        let to = self.vault_root.join(new_path);
-        if to.exists() {
+        if self.vault_root.join(new_path).exists() {
             return Err(MilestoneError::AlreadyExists(new_path.to_owned()));
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| MilestoneError::Io(format!("mkdir: {e}")))?;
-        }
-        std::fs::rename(&from, &to).map_err(|e| MilestoneError::Io(format!("rename: {e}")))?;
+        // Through the vault's write path, like every other page mutation
+        // here (`project.vault.write-path`).
+        vault::move_page_at(&self.vault_root, &m.path, new_path)
+            .map_err(|e| MilestoneError::Io(format!("rename: {e}")))?;
         m.path = new_path.to_owned();
         m.date_modified = Some(Utc::now());
         write_milestone(&self.vault_root, &mut m, true)
@@ -243,9 +240,8 @@ impl MilestoneService for MilestoneBackend {
                 )));
             }
         }
-        let abs = self.vault_root.join(&m.path);
-        std::fs::remove_file(&abs)
-            .map_err(|e| MilestoneError::Io(format!("remove {}: {e}", abs.display())))?;
+        vault::delete_page_at(&self.vault_root, &m.path)
+            .map_err(|e| MilestoneError::Io(format!("remove {}: {e}", m.path)))?;
         self.publish(milestone_proto::MilestoneEvent::Deleted(id));
         Ok(())
     }

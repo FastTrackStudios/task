@@ -97,6 +97,88 @@ pub const DEV_ACCOUNTS: [DevAccount; 4] = [
 /// identity ("Guest is the account we use for stuff like that").
 pub const GUEST_EMAIL: &str = "guest@fasttrackstudios.com";
 
+// ── the demo cast (DEBUG BUILDS ONLY) ───────────────────────────────
+//
+// `just demo` serves the example studio, whose people are Alice, Sam
+// and Casey — not the dev-seed roster above. Rather than compile a
+// second roster in, the demo script hands the cast to the app through
+// `TASK_DEMO_CAST` (`email:password:Name:username`, comma-separated):
+// read at runtime on native, baked at build for wasm (the same split as
+// `TASK_VOX_URL` / `TASK_VOX_URL_WEB`). When it is set, it *replaces*
+// the dev roster — boot lands on its first member, the switcher lists
+// it, and signing out stays signed out so the login form's cast picker
+// gets its turn.
+//
+// Debug builds only, same argument as `DEV_ACCOUNTS`: release keeps the
+// property that no build shipped to anyone can be talked into a
+// password sign-in nobody typed.
+
+/// The roster every picker, switcher and auto-sign-in draws from: the
+/// demo cast when `TASK_DEMO_CAST` is set (debug builds), the compiled
+/// dev roster otherwise (empty in release).
+pub fn dev_accounts() -> &'static [DevAccount] {
+    #[cfg(debug_assertions)]
+    {
+        static CAST: std::sync::OnceLock<Option<Vec<DevAccount>>> = std::sync::OnceLock::new();
+        if let Some(cast) = CAST.get_or_init(|| {
+            #[cfg(target_arch = "wasm32")]
+            let raw: Option<String> = option_env!("TASK_DEMO_CAST").map(str::to_owned);
+            #[cfg(not(target_arch = "wasm32"))]
+            let raw: Option<String> = std::env::var("TASK_DEMO_CAST").ok();
+            let cast = parse_cast(&raw?);
+            (!cast.is_empty()).then_some(cast)
+        }) {
+            return cast;
+        }
+    }
+    &DEV_ACCOUNTS
+}
+
+/// `email:password:Name:username`, comma-separated. Malformed entries
+/// are skipped rather than failing the roster — a demo that half-works
+/// beats a login screen with no explanation.
+#[cfg(debug_assertions)]
+fn parse_cast(raw: &str) -> Vec<DevAccount> {
+    fn hold(s: &str) -> &'static str {
+        Box::leak(s.trim().to_owned().into_boxed_str())
+    }
+    raw.split(',')
+        .filter_map(|entry| {
+            let mut parts = entry.splitn(4, ':');
+            let (email, password) = (parts.next()?.trim(), parts.next()?.trim());
+            if email.is_empty() || password.is_empty() {
+                return None;
+            }
+            let name = parts.next().map(str::trim).filter(|s| !s.is_empty());
+            let username = parts.next().map(str::trim).filter(|s| !s.is_empty());
+            Some(DevAccount {
+                email: hold(email),
+                password: hold(password),
+                name: hold(name.unwrap_or(email)),
+                username: hold(username.unwrap_or_default()),
+            })
+        })
+        .collect()
+}
+
+/// Whether the roster came from `TASK_DEMO_CAST` rather than the
+/// compiled dev list. The two differ in what signing out means: the dev
+/// roster re-lands on Guest, the demo cast lands on the login form so
+/// the cast picker gets used.
+fn demo_cast_active() -> bool {
+    !dev_accounts().is_empty() && !std::ptr::eq(dev_accounts().as_ptr(), DEV_ACCOUNTS.as_ptr())
+}
+
+/// Where boot lands with nothing stored: the demo cast's first member
+/// (Alice, for the example studio), else Guest.
+fn auto_land_email() -> &'static str {
+    if demo_cast_active() {
+        dev_accounts()[0].email
+    } else {
+        GUEST_EMAIL
+    }
+}
+
 // ── active account context ──────────────────────────────────────────
 
 /// The signed-in identity, derived from the server's session bundle.
@@ -536,8 +618,10 @@ async fn run_sign_out(mut st: AuthState) {
     }
     // Debug lands back on Guest; release has no password to do that
     // with, so signing out leaves no active account and `LoginForm`
-    // takes over — which is what signing out should mean.
-    if cfg!(debug_assertions) {
+    // takes over — which is what signing out should mean. The demo cast
+    // takes the release path on purpose: its login form offers the cast
+    // one click each, and "log out, come back as Casey" is the demo.
+    if cfg!(debug_assertions) && !demo_cast_active() {
         run_switch(st, GUEST_EMAIL).await;
     }
 }
@@ -606,6 +690,21 @@ pub fn provide_auth() -> AuthCtx {
     };
     use_context_provider(|| active);
     use_context_provider(|| ctx);
+    // The cross-crate identity mirror: feature UIs (the review
+    // composer, presence chips) read who is signed in through
+    // `task_ui_core::identity` without depending on this crate's auth
+    // machinery. Kept in step with `active` by the effect below.
+    let mut identity = use_signal(|| Option::<task_ui_core::identity::IdentityInfo>::None);
+    use_context_provider(|| task_ui_core::identity::CurrentIdentity(identity));
+    use_effect(move || {
+        identity.set(active.read().as_ref().map(|a| {
+            task_ui_core::identity::IdentityInfo {
+                user_id: a.user_id,
+                email: a.email.clone(),
+                name: a.name.clone(),
+            }
+        }));
+    });
 
     // Boot restore: wait for org discovery (home slug resolves), then
     // validate the persisted account — or auto sign-in as Guest when
@@ -635,7 +734,7 @@ pub fn provide_auth() -> AuthCtx {
             }
             None if cfg!(debug_assertions) => {
                 busy.set(true);
-                ctx.switch_account(GUEST_EMAIL.to_owned());
+                ctx.switch_account(auto_land_email().to_owned());
             }
             // Nothing stored and no compiled-in password: genuinely
             // signed out, and the gate should say so immediately.
@@ -661,6 +760,24 @@ pub fn provide_auth() -> AuthCtx {
 ///   neutral placeholder, NOT the login form, so a returning user with a
 ///   valid cached token never sees a sign-in screen flash;
 /// - resolved with no session → sign in.
+/// The gate screens' slice of window chrome: a floating drag strip
+/// with the window controls, pinned across the top. Renders nothing
+/// unless a frameless desktop shell provided
+/// [`task_ui_core::window_chrome::WindowChrome`] — a browser tab needs
+/// no help being moved or closed.
+#[component]
+fn GateChrome() -> Element {
+    if task_ui_core::window_chrome::window_chrome().is_none() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "fixed inset-x-0 top-0 z-40 flex h-10 items-center px-2",
+            crate::chrome::DragRegion {}
+            crate::chrome::WindowControls {}
+        }
+    }
+}
+
 #[component]
 pub fn SignInGate(children: Element) -> Element {
     let ctx = use_context::<AuthCtx>();
@@ -682,6 +799,10 @@ pub fn SignInGate(children: Element) -> Element {
         let discovery = use_context::<crate::orgs::DiscoveryError>();
         let err = discovery.0.read().clone();
         return rsx! {
+            // The gate sits ABOVE the router, so the frameless desktop
+            // window has no top bar here — without this strip a signed-out
+            // window could not be moved or closed.
+            GateChrome {}
             div { class: "flex min-h-screen items-center justify-center p-6",
                 div { class: "flex w-full max-w-sm flex-col items-center gap-3",
                     p { class: "text-sm text-muted-foreground", "Restoring your session…" }
@@ -702,6 +823,7 @@ pub fn SignInGate(children: Element) -> Element {
         };
     }
     rsx! {
+        GateChrome {}
         div { class: "flex min-h-screen items-center justify-center p-6",
             div { class: "flex w-full max-w-sm flex-col gap-4",
                 div { class: "flex flex-col gap-1",
@@ -745,7 +867,7 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
     //    release the roster is empty, there is nothing to sign in with,
     //    and the user goes through `LoginForm` — which is already on
     //    screen — hence the message rather than a failed sign-in.
-    let Some(dev) = DEV_ACCOUNTS.iter().find(|a| a.email == email) else {
+    let Some(dev) = dev_accounts().iter().find(|a| a.email == email) else {
         return Err(format!("sign in as {email} to continue"));
     };
     let bundle = client
@@ -764,7 +886,7 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
 /// Build the context value from an `AuthUser`, with dev-roster
 /// fallbacks for the optional fields.
 fn account_from(user: AuthUser, email: &str, token: String) -> ActiveAccount {
-    let dev_name = DEV_ACCOUNTS
+    let dev_name = dev_accounts()
         .iter()
         .find(|a| a.email == email)
         .map(|a| a.name.to_owned());
@@ -890,6 +1012,35 @@ pub fn LoginForm() -> Element {
             }
             if let Some(msg) = error.read().as_ref() {
                 div { class: "px-1 text-xs text-destructive", "{msg}" }
+            }
+            // One-click sign-in for the compiled dev roster or the demo
+            // cast (debug builds; `dev_accounts` is empty in release).
+            // This is the "choose who to sign in as" half of the demo:
+            // boot lands on the cast's first member, signing out lands
+            // here, and each of these is the real credential flow with
+            // the password pre-filled.
+            if !dev_accounts().is_empty() {
+                div { class: "flex flex-col gap-1 pt-3",
+                    div { class: "px-1 pb-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
+                        "Sign in as"
+                    }
+                    for dev in dev_accounts().iter().copied() {
+                        button {
+                            key: "{dev.email}",
+                            r#type: "button",
+                            class: "flex min-h-[40px] w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-accent",
+                            onclick: move |_| {
+                                error.set(None);
+                                ctx.switch_account(dev.email);
+                            },
+                            Avatar { name: dev.name.to_string(), email: dev.email.to_string(), size: 24 }
+                            span { class: "flex min-w-0 flex-col",
+                                span { class: "truncate text-sm", "{dev.name}" }
+                                span { class: "truncate text-xs text-muted-foreground", "{dev.email}" }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1142,7 +1293,7 @@ pub fn AccountSheetBody(on_done: EventHandler<()>) -> Element {
                         "Dev accounts"
                     }
                     div { class: "flex flex-col",
-                        for dev in DEV_ACCOUNTS {
+                        for dev in dev_accounts().iter().copied() {
                             button {
                                 key: "{dev.email}",
                                 r#type: "button",
@@ -1293,7 +1444,7 @@ pub fn AccountSwitcher(#[props(default = false)] rail: bool) -> Element {
                         DropdownSeparator {}
                     }
                     DropdownLabel { "Account" }
-                    for (idx, dev) in DEV_ACCOUNTS.into_iter().enumerate() {
+                    for (idx, dev) in dev_accounts().iter().copied().enumerate() {
                         DropdownItem {
                             key: "{dev.email}",
                             value: dev.email.to_string(),
@@ -1316,7 +1467,7 @@ pub fn AccountSwitcher(#[props(default = false)] rail: bool) -> Element {
                     DropdownSeparator {}
                     DropdownItem {
                         value: "__servers".to_string(),
-                        index: DEV_ACCOUNTS.len(),
+                        index: dev_accounts().len(),
                         on_select: move |_| {
                             open.set(false);
                             servers_open.set(true);
@@ -1329,7 +1480,7 @@ pub fn AccountSwitcher(#[props(default = false)] rail: bool) -> Element {
                         DropdownItem {
                             key: "{label}",
                             value: label.to_string(),
-                            index: DEV_ACCOUNTS.len() + 1 + idx,
+                            index: dev_accounts().len() + 1 + idx,
                             on_select: move |_| {
                                 manual.set(value);
                                 open.set(false);
@@ -1348,7 +1499,7 @@ pub fn AccountSwitcher(#[props(default = false)] rail: bool) -> Element {
                     DropdownSeparator {}
                     DropdownItem {
                         value: "__sign_out".to_string(),
-                        index: DEV_ACCOUNTS.len() + status_options.len() + 1,
+                        index: dev_accounts().len() + status_options.len() + 1,
                         destructive: true,
                         on_select: move |_| {
                             open.set(false);
@@ -1578,6 +1729,25 @@ fn clear_active_email() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cast_parses_and_skips_malformed_entries() {
+        let cast = parse_cast(
+            "alice@acme.test:pw:Alice:alice, sam@acme.test:pw , \
+             casey@client.test:pw:Casey, nonsense, :nopass",
+        );
+        let brief: Vec<(&str, &str, &str)> =
+            cast.iter().map(|a| (a.email, a.name, a.username)).collect();
+        assert_eq!(
+            brief,
+            vec![
+                ("alice@acme.test", "Alice", "alice"),
+                // name falls back to the email, username to empty
+                ("sam@acme.test", "sam@acme.test", ""),
+                ("casey@client.test", "Casey", ""),
+            ]
+        );
+    }
 
     #[test]
     fn gradient_index_is_deterministic_and_in_range() {

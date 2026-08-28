@@ -67,6 +67,7 @@ members = [
     "features/email/examples/email-client",
     "features/files/files",
     "features/files/files-daemon",
+    "features/files/files-daemon-proto",
     "features/files/files-domain",
     "features/files/files-proto",
     "features/files/files-storage",
@@ -216,6 +217,7 @@ agent-worktree = { path = "features/agent/agent-worktree" }
 # RPC surface, placement, sync, transcode, WebDAV bridge)
 files = { path = "features/files/files" }
 files-daemon = { path = "features/files/files-daemon" }
+files-daemon-proto = { path = "features/files/files-daemon-proto" }
 files-domain = { path = "features/files/files-domain" }
 files-proto = { path = "features/files/files-proto", default-features = false }
 files-storage = { path = "features/files/files-storage" }

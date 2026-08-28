@@ -1,0 +1,13 @@
+{
+  "slug": "track-one",
+  "title": "Track One",
+  "artist": "ACME Audio",
+  "bpm": 188,
+  "duration_sec": 11.74,
+  "stems": [
+    {
+      "name": "Reference Mix",
+      "file": "Track One.wav"
+    }
+  ]
+}

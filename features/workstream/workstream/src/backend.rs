@@ -245,9 +245,8 @@ impl WorkstreamService for WorkstreamBackend {
                 w.title, t.path
             )));
         }
-        let abs = self.vault_root.join(&w.path);
-        std::fs::remove_file(&abs)
-            .map_err(|e| WorkstreamError::Io(format!("remove {}: {e}", abs.display())))?;
+        vault::delete_page_at(&self.vault_root, &w.path)
+            .map_err(|e| WorkstreamError::Io(format!("remove {}: {e}", w.path)))?;
         self.publish(WorkstreamEvent::Deleted(id));
         Ok(())
     }

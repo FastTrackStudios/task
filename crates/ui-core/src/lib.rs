@@ -34,9 +34,13 @@ pub mod avatar;
 pub mod feeds;
 pub mod format;
 pub mod frontmatter;
+pub mod identity;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod iroh_transport;
 pub mod media_grant;
 pub mod nav;
 pub mod orgs;
 pub mod states;
 pub mod vox_clients;
 pub mod vox_session;
+pub mod window_chrome;

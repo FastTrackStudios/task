@@ -82,10 +82,11 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     let vault = org_root.vault_dir();
     let wiki = org_root.wiki_knowledge_dir();
     let files = org_root.path().join("files");
+    let resources = org_root.resources_dir();
 
     // `Dir::files` is one level deep, so walk the whole subtree.
     let mut planted = Planted::default();
-    plant(dir, slug, &vault, &wiki, &files, &mut planted)?;
+    plant(dir, slug, &vault, &wiki, &files, &resources, &mut planted)?;
     Ok(planted)
 }
 
@@ -104,6 +105,7 @@ fn plant(
     vault: &Path,
     wiki: &Path,
     files: &Path,
+    resources: &Path,
     planted: &mut Planted,
 ) -> std::io::Result<()> {
     for file in dir.files() {
@@ -118,6 +120,10 @@ fn plant(
             // files.
             Some("Vault") => vault.join(rel.strip_prefix("Vault").unwrap_or(rel)),
             Some("Wiki") => wiki.join(rel.strip_prefix("Wiki").unwrap_or(rel)),
+            // Deliverable media (and anything else the org serves over
+            // `GET /org/{slug}/media/…`): the route reads the org's
+            // `resources/` tree, so that is where these belong.
+            Some("Resources") => resources.join(rel.strip_prefix("Resources").unwrap_or(rel)),
             _ => files.join(rel),
         };
         if dest.exists() {
@@ -131,7 +137,7 @@ fn plant(
         planted.written += 1;
     }
     for child in dir.dirs() {
-        plant(child, slug, vault, wiki, files, planted)?;
+        plant(child, slug, vault, wiki, files, resources, planted)?;
     }
     Ok(())
 }
@@ -245,4 +251,292 @@ pub fn cast_of(slug: &str) -> Vec<Member> {
 #[must_use]
 pub fn project_path(org_root: &org_proto::OrgRoot, name: &str) -> std::path::PathBuf {
     org_root.path().join("files").join("Projects").join(name)
+}
+
+/// A project the seeder DECLARES — a `ProjectInfo` page in the org
+/// vault, which is what the app's Projects view lists.
+///
+/// Planting the trees alone left the app's Projects page empty, which
+/// read as broken rather than as "adoption is your first move". The
+/// declaration and the adoption are different acts on purpose — a
+/// project *is* its page (`project.identity.declaration`); its session
+/// trees become File Roots when someone adopts them — so the seeder
+/// declaring these takes nothing away from the adoption half of the
+/// demo. The trees under `files/Projects/` are still sitting there
+/// unadopted.
+pub struct DeclaredProject {
+    pub org: &'static str,
+    /// Directory name under `files/Projects/` — what `project_path`
+    /// resolves, and where the parts (if any) are read from.
+    pub dir: &'static str,
+    pub title: &'static str,
+    /// Rendered into the page body — clients are people in the story,
+    /// not yet a field on the model.
+    pub clients: &'static str,
+    pub form: Option<project::Form>,
+    pub capabilities: &'static [&'static str],
+    /// The parts, in PLAYING order — "its songs are declared as parts"
+    /// (`scenario.album.declare`), and the declaration's order is the
+    /// album's running order, which a directory listing (alphabetical:
+    /// One, Three, Two) cannot express. Each name should match a
+    /// subdirectory of `dir` (its session tree) and, for audio
+    /// deliverables, a committed song folder
+    /// (`Resources/songs/<slug>/`) — `example_org` tests pin both.
+    pub parts: &'static [&'static str],
+    /// What the project owes: `(name, medium, scope, audience)`,
+    /// declared through the real `declare_deliverable`. The media
+    /// behind them lives under `Resources/deliverables/<project-slug>/`
+    /// — the convention the app resolves an item's playback URL by.
+    pub deliverables: &'static [(
+        &'static str,
+        project::Medium,
+        project::Scope,
+        project::Audience,
+    )],
+    /// A believable board: `(title, status, due in N days from plant)`.
+    /// Statuses are the task model's slugs (`open`, `in-progress`,
+    /// `done`).
+    pub tasks: &'static [(&'static str, &'static str, Option<i64>)],
+}
+
+/// What the example studio's orgs have committed to. `Z - Duplicates`
+/// and `tasks/` are deliberately NOT here: they are edge-case material
+/// for other features, not projects anyone declared.
+pub const DECLARED: &[DeclaredProject] = &[
+    DeclaredProject {
+        org: "acme-audio",
+        dir: "Example Album",
+        title: "Example Album",
+        clients: "",
+        form: Some(project::Form::Album),
+        capabilities: &["music-production"],
+        parts: &["Track One", "Track Two", "Track Three"],
+        deliverables: &[(
+            "Album master",
+            project::Medium::Audio,
+            project::Scope::PerPart,
+            project::Audience::Client,
+        )],
+        tasks: &[
+            ("Comp lead vocals — Track One", "in-progress", None),
+            ("Mix revisions — Track Two", "open", Some(2)),
+            ("Re-track drums — Track Three", "done", None),
+            ("Master review with the label", "open", Some(7)),
+            ("Sequence the album", "open", Some(10)),
+        ],
+    },
+    DeclaredProject {
+        org: "acme-audio",
+        dir: "First Single - Example Client",
+        title: "First Single",
+        clients: "Example Client",
+        form: Some(project::Form::Single),
+        capabilities: &["music-production"],
+        parts: &[],
+        deliverables: &[
+            (
+                "Single master",
+                project::Medium::Audio,
+                project::Scope::WholeProject,
+                project::Audience::Client,
+            ),
+            // Both media on one project: the master streams through the
+            // global player, the lyric video opens in the page's player
+            // — the pair every deliverable surface is exercised by.
+            (
+                "Lyric video",
+                project::Medium::Video,
+                project::Scope::WholeProject,
+                project::Audience::Client,
+            ),
+        ],
+        tasks: &[
+            ("Deliver final master to Example Client", "done", None),
+            ("Collect streaming metadata", "open", Some(1)),
+            ("Cut the lyric video to the final master", "in-progress", None),
+        ],
+    },
+    DeclaredProject {
+        org: "vnt-video",
+        dir: "Example Documentary - First Client, Second Client",
+        title: "Example Documentary",
+        clients: "First Client, Second Client",
+        form: None,
+        capabilities: &["video-production"],
+        parts: &[],
+        deliverables: &[(
+            "Final cut",
+            project::Medium::Video,
+            project::Scope::WholeProject,
+            project::Audience::Client,
+        )],
+        tasks: &[
+            ("Rough cut review", "in-progress", None),
+            ("Color grade — interview scenes", "open", Some(5)),
+        ],
+    },
+    // The collaboration piece — the project the demo's federation story
+    // shares across the ACME/VNT boundary — and deliberately the one
+    // carrying BOTH media: an audio master (streams through the global
+    // player) and a video cut (opens in the page's player), so one
+    // project exercises every deliverable surface at once.
+    DeclaredProject {
+        org: "vnt-video",
+        dir: "Shared Project",
+        title: "Shared Project",
+        clients: "",
+        form: None,
+        capabilities: &["music-production", "video-production"],
+        parts: &[],
+        deliverables: &[
+            (
+                "Live session recording",
+                project::Medium::Audio,
+                project::Scope::WholeProject,
+                project::Audience::Client,
+            ),
+            (
+                "Recap cut",
+                project::Medium::Video,
+                project::Scope::WholeProject,
+                project::Audience::Client,
+            ),
+        ],
+        tasks: &[
+            ("Kickoff with ACME", "open", Some(3)),
+            ("Sync the recap cut to the live recording", "in-progress", None),
+        ],
+    },
+];
+
+/// The declared projects of one org.
+pub fn declared_of(slug: &str) -> impl Iterator<Item = &'static DeclaredProject> {
+    DECLARED.iter().filter(move |p| p.org == slug)
+}
+
+/// An audio deliverable's song-folder slug — the same spelling the app
+/// derives a playback queue entry from (`song_slug` in the project
+/// detail page) and `examples/studio/tools/gen_audio.py` names its
+/// folders with: lowercase, every non-alphanumeric run one dash.
+#[must_use]
+pub fn song_slug(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut dash = false;
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+// The seed is a contract, and these tests are what keep it one: every
+// declaration must be backed by the committed tree, or a demo plants a
+// world where clicking the thing the seed promised does nothing. The
+// failure mode is silent (an outstanding chip, an empty queue), so the
+// suite fails instead.
+#[cfg(test)]
+mod declared_tests {
+    use super::*;
+
+    #[test]
+    fn every_declared_project_has_its_tree() {
+        for d in DECLARED {
+            assert!(
+                ORGS.iter().any(|(s, _)| *s == d.org),
+                "{}: org `{}` is not in the example",
+                d.title,
+                d.org
+            );
+            assert!(
+                STUDIO
+                    .get_dir(format!("{}/Projects/{}", d.org, d.dir))
+                    .is_some(),
+                "{}: no committed tree at {}/Projects/{}",
+                d.title,
+                d.org,
+                d.dir
+            );
+        }
+    }
+
+    #[test]
+    fn every_part_is_a_directory_in_its_project_tree() {
+        for d in DECLARED {
+            for part in d.parts {
+                assert!(
+                    STUDIO
+                        .get_dir(format!("{}/Projects/{}/{}", d.org, d.dir, part))
+                        .is_some(),
+                    "{}: part `{part}` has no session directory in the tree",
+                    d.title
+                );
+            }
+        }
+    }
+
+    /// Every audio deliverable resolves to a committed song folder —
+    /// per part for a `PerPart` declaration, by the declaration's own
+    /// name for a `WholeProject` one. This is the click-to-play
+    /// contract: the app queues `songs/<slug>/` and the player reads
+    /// its manifest. Video is exempt on purpose (generated at plant,
+    /// never committed).
+    #[test]
+    fn every_audio_deliverable_has_a_committed_song() {
+        let song = |org: &str, title: &str| {
+            let slug = song_slug(title);
+            STUDIO
+                .get_file(format!("{org}/Resources/songs/{slug}/manifest.json"))
+                .is_some()
+        };
+        for d in DECLARED {
+            for (name, medium, scope, _) in d.deliverables {
+                if *medium != project::Medium::Audio {
+                    continue;
+                }
+                match scope {
+                    project::Scope::PerPart => {
+                        for part in d.parts {
+                            assert!(
+                                song(d.org, part),
+                                "{}: no committed song for part `{part}` \
+                                 (expected {}/Resources/songs/{}/manifest.json)",
+                                d.title,
+                                d.org,
+                                song_slug(part)
+                            );
+                        }
+                    }
+                    project::Scope::WholeProject => {
+                        assert!(
+                            song(d.org, name),
+                            "{}: no committed song for `{name}` \
+                             (expected {}/Resources/songs/{}/manifest.json)",
+                            d.title,
+                            d.org,
+                            song_slug(name)
+                        );
+                    }
+                    project::Scope::Excerpt => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_declared_capability_is_in_the_vocabulary() {
+        for d in DECLARED {
+            let caps = project::Capabilities::from_names(d.capabilities.iter().copied());
+            assert!(
+                caps.unrecognised.is_empty(),
+                "{}: capabilities outside the vocabulary: {:?}",
+                d.title,
+                caps.unrecognised
+            );
+        }
+    }
 }

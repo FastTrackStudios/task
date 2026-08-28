@@ -404,7 +404,7 @@ pub fn tabs_match(current: &Route, tab: &NavTab) -> bool {
 
 pub fn route_title(route: &Route) -> &'static str {
     match route {
-        Route::HomeRoute {} => "Tasks",
+        Route::HomeRoute {} => "Home",
         Route::DashboardRoute {} => "Home",
         Route::InboxRoute {} => "Inbox",
         Route::RecallRoute {} => "Recall",

@@ -320,6 +320,10 @@ pub fn TabStrip() -> Element {
                 },
                 architect_ui::lucide_dioxus::Plus { size: 14 }
             }
+            // The strip's slack doubles as the frameless window's drag
+            // surface (a spacer everywhere else) — the top bar IS the
+            // title bar on desktop.
+            crate::chrome::DragRegion {}
         }
     }
 }

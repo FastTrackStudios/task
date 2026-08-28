@@ -137,13 +137,19 @@ pub fn TaskList(props: TaskListProps) -> Element {
         }
     };
 
+    // Container query, not a viewport breakpoint: this list renders in
+    // the full Tasks page AND in a 384px project sidebar, and only the
+    // list's own width says whether two lanes fit. `@3xl` = the
+    // container is ≥48rem — the page qualifies, the sidebar never does.
     rsx! {
-        if later_lane.is_empty() || now_lane.is_empty() {
-            {lane(if now_lane.is_empty() { later_lane } else { now_lane })}
-        } else {
-            div { class: "grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-x-10",
-                {lane(now_lane)}
-                {lane(later_lane)}
+        div { class: "@container",
+            if later_lane.is_empty() || now_lane.is_empty() {
+                {lane(if now_lane.is_empty() { later_lane } else { now_lane })}
+            } else {
+                div { class: "grid grid-cols-1 gap-3 @3xl:grid-cols-2 @3xl:gap-x-10",
+                    {lane(now_lane)}
+                    {lane(later_lane)}
+                }
             }
         }
     }

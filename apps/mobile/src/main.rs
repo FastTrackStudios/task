@@ -11,7 +11,16 @@ fn main() {
     // The tracing subscriber carries the Sentry layer so `warn!`/
     // `error!` events are captured; `.try_init()` (inside init_tracing)
     // makes a later dioxus subscriber-init a no-op rather than a panic.
-    let _sentry = architect_telemetry::init_tracing("task-mobile", "info");
+    let (_sentry, otel) = architect_telemetry::init_tracing_full("task-mobile", "info");
+    // LEAK the OTLP guard, deliberately. Its Drop shuts the exporters
+    // down, and `init_tracing` (which is `init_tracing_full(..).0`)
+    // dropped it on the spot — so with a collector configured, every
+    // event after startup hit "BatchLogProcessor.Emit.AfterShutdown"
+    // and nothing exported. This main hands control to the UI event
+    // loop and never returns, so there is no shutdown point to flush
+    // at anyway; the OS reclaims everything at exit. (The telemetry
+    // crate's own docs prescribe exactly this for client apps.)
+    std::mem::forget(otel);
 
     // Apple Watch config bridge: activate the WCSession host and
     // register the sink `ui::watch_sync` publishes into (no-op off iOS).

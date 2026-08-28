@@ -32,9 +32,14 @@ mod error;
 mod hub;
 pub mod identity;
 pub mod install;
-pub mod model;
 pub mod peering;
-pub mod service;
+
+// The wire contract lives in `files-daemon-proto` so a client — the
+// desktop app, the CLI — can speak it without depending on the agent
+// (jj-lib, a CAS store, an iroh endpoint) to hold the conversation.
+// Re-exported under their old paths: one definition, and every caller
+// here is unchanged.
+pub use files_daemon_proto::{model, service};
 
 /// Re-exported so the headless binary (and embedders) can name the
 /// coordinator client type without a direct dependency.

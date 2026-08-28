@@ -408,7 +408,12 @@ async fn assemble(standalone: Standalone, key: String) -> eyre::Result<SessionEn
     // 3. The setlist service over the standalone backend, hosted in-process
     //    behind a LocalServer (RPC + its `#[subscribe]` stream sibling).
     let setlist = SetlistServiceImpl::with_daw(standalone.clone());
-    let router = daw::LayerRouter::new()
+    // `architect::LayerRouter`, NOT `daw::LayerRouter`: `daw` pins an
+    // older architect (v0.1.1) and re-exports ITS router type, which
+    // this crate's architect (v0.5.0) `LocalServer::serve` rejects as a
+    // different type. The vox descriptors and handlers unify fine — the
+    // router just has to come from the same architect as the server.
+    let router = architect::LayerRouter::new()
         .with(
             setlist_service_service_descriptor(),
             serve_setlist_service(setlist.clone()),

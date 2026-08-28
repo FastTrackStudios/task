@@ -606,7 +606,68 @@ pub async fn caller_for(slug: &str) -> Result<vox_core::Caller, String> {
     // is only valid for the org that issued it. `bearer_for` falls back
     // to the ambient one when the locker has no link for this slug.
     let bearer = crate::vox_session::bearer_for(slug);
+
+    // Native prefers iroh whenever discovery has produced the org's
+    // endpoint id (`iroh_transport`): dial by bare id, identity as
+    // per-call bearer metadata — the registration model, not the dev
+    // URL. Same cache, same single-flight, keyed by an `iroh://` pseudo
+    // URL so an iroh root and a ws root to the same org can never be
+    // mistaken for each other. A failed iroh dial falls back to the
+    // WebSocket rather than failing the caller: a laptop that lost UDP
+    // still has the URL it discovered the org through.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(id) = crate::iroh_transport::org_endpoint_id(slug) {
+        // Share-guest sessions stay on ws: the guest lane is a
+        // token-scoped HTTP route with no iroh counterpart.
+        let guest = crate::vox_session::guest_share().is_some_and(|g| g.org == slug);
+        if !guest {
+            match shared_caller_iroh(&id, bearer.clone()).await {
+                Ok(caller) => return Ok(caller),
+                Err(err) => {
+                    tracing::warn!(%slug, %err, "iroh dial failed; falling back to WebSocket");
+                }
+            }
+        }
+    }
+
     shared_caller_with(&org_ws_url(slug)?, bearer).await
+}
+
+/// The shared root over iroh — [`shared_caller_with`]'s twin, riding
+/// the same cache and single-flight maps under an `iroh://<id>` key.
+/// The bearer is part of the key for the same reason as on ws (an
+/// anonymous root must never be handed to a signed-in caller), but it
+/// travels differently: not on an upgrade — iroh has none — but as a
+/// global middleware on the root caller, presented on every call by
+/// every typed client built from it.
+#[cfg(not(target_arch = "wasm32"))]
+async fn shared_caller_iroh(id: &str, bearer: Option<String>) -> Result<vox_core::Caller, String> {
+    let key = (format!("iroh://{id}"), bearer.clone());
+    if let Some(caller) = cached_live_caller(&key) {
+        return Ok(caller);
+    }
+    let dial = with_inflight(|inflight| {
+        if let Some(dial) = inflight.get(&key) {
+            return dial.clone();
+        }
+        let owned = key.clone();
+        let id = id.to_owned();
+        let fut = async move {
+            let (caller, connection) =
+                crate::iroh_transport::dial(&id, owned.1.as_deref()).await?;
+            let root = RootLane {
+                caller,
+                _connection: connection,
+            };
+            let caller = insert_root(&owned, root);
+            with_inflight(|inflight| inflight.remove(&owned));
+            Ok(caller)
+        };
+        let dial: SharedDial = futures_util::FutureExt::shared(Box::pin(fut) as DialFuture);
+        inflight.insert(key.clone(), dial.clone());
+        dial
+    });
+    dial.await
 }
 
 /// Establish *any* service client against a specific org's vox endpoint:

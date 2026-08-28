@@ -710,10 +710,25 @@ fn frontmatter_json(raw: &str) -> String {
     }
 }
 
+/// A File Root's own bookkeeping at the vault's top level — the marker
+/// and the version store. Present once the vault has been adopted as a
+/// root (`project.vault.write-path`), and the server's, not the vault's:
+/// a client replicating the vault must never receive them, and the
+/// manifest must not change because the server started versioning.
+fn is_root_internal(root: &Path, path: &Path) -> bool {
+    path.parent() == Some(root)
+        && path.file_name().is_some_and(|name| {
+            name == files_proto::consts::MARKER_FILE || name == files_proto::consts::STORE_DIR
+        })
+}
+
 fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), VaultSyncError> {
     for entry in std::fs::read_dir(dir).map_err(io_err)? {
         let entry = entry.map_err(io_err)?;
         let path = entry.path();
+        if is_root_internal(root, &path) {
+            continue;
+        }
         if path.is_dir() {
             collect(root, &path, out)?;
             continue;

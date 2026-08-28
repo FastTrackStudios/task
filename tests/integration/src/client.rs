@@ -199,12 +199,32 @@ impl Session {
 /// anything the connection carries. Servers dial from their *own*
 /// endpoints ([`crate::server::Server::dial_replica`]), which is where
 /// endpoint identity actually means something.
+///
+/// "Once" is once per *runtime*, not once per process. An iroh endpoint
+/// is a handle onto tasks that live on the runtime that bound it; under
+/// `#[tokio::test]` every test is its own runtime, so an endpoint bound
+/// by the first test in a binary is a dead handle by the second — every
+/// dial from it fails with an internal consistency error. nextest never
+/// saw this because it runs one test per process; `cargo test` saw
+/// nothing else.
+///
+/// So the cache is thread-local. A `#[tokio::test]` runtime is
+/// current-thread and lives on the test's own thread, which makes
+/// "per thread" exactly "per runtime" — and it is also what rules out
+/// the race a process-wide slot with a liveness check still had: one
+/// test handing out an endpoint in the instant before the test that
+/// bound it returns. A multi-thread runtime would bind one per worker
+/// that happens to poll here, which costs a socket and nothing else.
 async fn device_endpoint() -> iroh::Endpoint {
-    static DEVICE: tokio::sync::OnceCell<iroh::Endpoint> = tokio::sync::OnceCell::const_new();
-    DEVICE
-        .get_or_init(|| async { crate::net::bind(iroh::SecretKey::generate()).await })
-        .await
-        .clone()
+    thread_local! {
+        static DEVICE: std::cell::RefCell<Option<iroh::Endpoint>> = const { std::cell::RefCell::new(None) };
+    }
+    if let Some(endpoint) = DEVICE.with(|slot| slot.borrow().clone()) {
+        return endpoint;
+    }
+    let endpoint = crate::net::bind(iroh::SecretKey::generate()).await;
+    DEVICE.with(|slot| *slot.borrow_mut() = Some(endpoint.clone()));
+    endpoint
 }
 
 /// The one thing every generated client has in common that this file

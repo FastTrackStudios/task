@@ -68,7 +68,10 @@ pub mod watcher;
 
 pub use blocks::{BlockIndex, BlockLocation};
 pub use lookup::VaultLookupView;
-pub use mutate::{MutateError, append_to_page, create_page, delete_page, save_page};
+pub use mutate::{
+    MutateError, PageSink, append_to_page, bind_sink, create_page, delete_page, delete_page_at,
+    move_page_at, save_page, save_page_at, sink_for, unbind_sink, write_atomic,
+};
 pub use sync::Backend;
 pub use vault::{LoadError, SaveError, Vault, VaultPage};
 pub use vault::{PropertyTypes, VaultBase};

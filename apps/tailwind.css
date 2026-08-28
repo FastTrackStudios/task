@@ -9,7 +9,7 @@
  * outside it.
  *
  * @source / @import paths below are relative to THIS file
- * (apps/task/), not to the app directories.
+ * (apps/), not to the app directories.
  */
 
 /* `source(none)` disables Tailwind v4's automatic content detection,
@@ -31,20 +31,28 @@
  * classes only reached the sheet via Tailwind's automatic (cwd-rooted)
  * scan. That scan is off — see `source(none)` above — so every source
  * has to be named. */
-@source "../../crates/*/src/**/*.rs";
-@source "../../features/*/*-ui/src/**/*.rs";
+/* NOTE the depth: this file is `apps/tailwind.css` and Tailwind resolves
+ * `@source` relative to the CSS file, so the repo root is ONE level up.
+ * These were `../../…` — correct at the monorepo path this file was
+ * extracted from (`apps/task/tailwind.css`), and silently matching
+ * nothing here. A @source that matches nothing does not error; the
+ * classes simply never reach the sheet, which presented as every app
+ * unstyled with a 15 KB sheet holding the preamble and not one utility.
+ * `../../crates` from `apps/` is outside the repository. */
+@source "../crates/*/src/**/*.rs";
+@source "../features/*/*-ui/src/**/*.rs";
 /* features/editor/ is gone — the editor stack moved to its own repo in
    August 2026 and its keyflow half to the keyflow repo. Their classes are
    in the same position as architect-ui's: a git dep has no path to glob.
    See the block below. */
-@source "../../features/view/view-*/src/**/*.rs";
+@source "../features/view/view-*/src/**/*.rs";
 
 /* GONE WITH THE AUGUST 2026 SPLIT, and a real (if cosmetic) regression.
  *
  * These used to scan crates that now live in other repos:
- *   ../../libs/architect-ui/architect-ui/src   -> architect repo
- *   ../../crates/session/ui/src                -> fasttrackstudio repo
- *   ../../libs/dock/                           -> fasttrackstudio repo
+ *   ../libs/architect-ui/architect-ui/src   -> architect repo
+ *   ../crates/session/ui/src                -> fasttrackstudio repo
+ *   ../libs/dock/                           -> fasttrackstudio repo
  *
  * A git dependency has no stable path on disk, so there is nothing to
  * glob. Utility classes used ONLY inside those crates' rsx! — architect-ui

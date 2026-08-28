@@ -1,0 +1,13 @@
+{
+  "slug": "track-three",
+  "title": "Track Three",
+  "artist": "ACME Audio",
+  "bpm": 234,
+  "duration_sec": 9.69,
+  "stems": [
+    {
+      "name": "Reference Mix",
+      "file": "Track Three.wav"
+    }
+  ]
+}

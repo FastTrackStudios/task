@@ -170,10 +170,12 @@ pub enum Route {
 
 #[component]
 fn HomeRoute() -> Element {
-    // Default landing = the todo list (Active + Relevant) — the
-    // product's center of gravity.
-    // The dashboard moved to /home.
-    rsx! { pages::tasks::TasksView {} }
+    // Default landing = the Home dashboard (project cards + Today) —
+    // the day's overview first, the todo list one click away at
+    // /tasks. `/home` renders the same view, so both spellings land in
+    // one place; a different start page is a preference
+    // (`StartPageRedirect`).
+    rsx! { pages::home::HomeView {} }
 }
 
 #[component]

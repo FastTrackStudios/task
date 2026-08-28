@@ -36,6 +36,7 @@ files = { workspace = true }
 # The peering vocabulary (`HostId`, `Hosting`): who this device admits
 # to its own replica lane. The decision types are domain, not backend.
 files-domain = { workspace = true }
+files-daemon-proto = { workspace = true }
 files-proto = { workspace = true }
 files-sync = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

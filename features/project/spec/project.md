@@ -408,18 +408,22 @@ Files API, markdown included. Its live tree stays ordinary files on disk —
 greppable, `cp -r`-able, editable by any other tool — so migration changes the
 write path and not the on-disk result.
 
-**Not met.** It is a migration rather than a feature, and the thing that makes
-it tractable is that there is one choke point: every vault page in the system is
-written by `vault_live::mutate::write_atomic`, reached through `save_page` and
-`create_page`, and every entity — project, task, goal, milestone, workstream,
-pantry, and Files' own version pages — goes through `VaultEntityStore` to get
-there. So the migration is one function's implementation, plus a port for the
-Files backend to be bound to and a vault that has been adopted as a root.
+**Met.** It was a migration rather than a feature, and what made it tractable
+was that there is one choke point: every vault page in the system is written by
+`vault_live::mutate` — `save_page`, `create_page`, `delete_page`, and the
+`*_at` helpers the entity backends use for one-page writes — so the write path
+is a *port* (`vault_live::PageSink`) bound per vault root. `FilesBackend::
+adopt_vault` makes the org vault a File Root in place at server boot and binds
+a sink for it; from then on a page save is a Files write — atomic in the tree,
+a catalogue delta, a cadence hint — and a vault with no sink bound writes to
+the filesystem as before. The on-disk result is unchanged: the same markdown at
+the same path, which `tests/integration/tests/vault_root.rs` checks byte for
+byte.
 
-What it is not is eighty call sites. `project::write` was the last caller
-bypassing the choke point — writing project pages with a bare `std::fs::write`,
-which also meant they were the one vault entity a power cut could tear in half —
-and it now goes through `save_page` like everything else.
+The "one choke point" claim had been optimistic. `project::write` was not the
+last bypass: `task`, `goal`, `milestone` and `workstream` each wrote with a bare
+`std::fs::write`, and every backend deleted and moved pages with `remove_file`
+and `rename`. All of them now go through the port.
 
 ---
 

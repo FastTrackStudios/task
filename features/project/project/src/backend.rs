@@ -194,15 +194,13 @@ impl ProjectService for ProjectBackend {
             .into_iter()
             .find(|p| p.id == id)
             .ok_or_else(|| ProjectError::NotFound(id.to_string()))?;
-        let from = self.vault_root.join(&p.path);
-        let to = self.vault_root.join(new_path);
-        if to.exists() {
+        if self.vault_root.join(new_path).exists() {
             return Err(ProjectError::AlreadyExists(new_path.to_owned()));
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ProjectError::Io(format!("mkdir: {e}")))?;
-        }
-        std::fs::rename(&from, &to).map_err(|e| ProjectError::Io(format!("rename: {e}")))?;
+        // Through the vault's write path, like every other page mutation
+        // here (`project.vault.write-path`).
+        vault::move_page_at(&self.vault_root, &p.path, new_path)
+            .map_err(|e| ProjectError::Io(format!("rename: {e}")))?;
         p.path = new_path.to_owned();
         p.date_modified = Some(Utc::now());
         // Re-serialize so frontmatter mtime tracks the move.
@@ -408,9 +406,8 @@ impl ProjectService for ProjectBackend {
             self.save(parent)?;
         }
 
-        let abs = self.vault_root.join(&subproject.path);
-        std::fs::remove_file(&abs)
-            .map_err(|e| ProjectError::Io(format!("remove {}: {e}", abs.display())))?;
+        vault::delete_page_at(&self.vault_root, &subproject.path)
+            .map_err(|e| ProjectError::Io(format!("remove {}: {e}", subproject.path)))?;
         self.publish(crate::service::ProjectEvent::Deleted(project));
         Ok(part)
     }
@@ -811,9 +808,10 @@ impl ProjectService for ProjectBackend {
                 p.title, child.title
             )));
         }
-        let abs = self.vault_root.join(&p.path);
-        std::fs::remove_file(&abs)
-            .map_err(|e| ProjectError::Io(format!("remove {}: {e}", abs.display())))?;
+        // Through the vault's write path, like `write_project` — a bare
+        // `remove_file` here was the last delete that bypassed it.
+        crate::write::delete_project(&self.vault_root, &p.path)
+            .map_err(|e| ProjectError::Io(format!("remove {}: {e}", p.path)))?;
         self.publish(crate::service::ProjectEvent::Deleted(id));
         Ok(())
     }

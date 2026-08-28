@@ -1,0 +1,26 @@
+[package]
+name = "files-daemon-proto"
+description = "Wire contract for the sync agent's control surface (issue #265): DaemonStatus / RootStatus / FileProgress and the `#[architect::rpc] trait DaemonControlService` the desktop app and the `fts-files-daemon` CLI both drive. Wasm-clean; the sibling `files-daemon` crate owns the agent itself."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+facet = { workspace = true }
+files-proto = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+vox = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "architect/vox"]
+
+[lints]
+workspace = true

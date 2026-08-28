@@ -45,10 +45,10 @@ pub fn serialize_project(project: &ProjectInfo) -> Result<String, WriteError> {
 /// `std::fs::write`, which meant project pages were the one vault entity
 /// that could be torn in half by a power cut, and nothing said so.
 ///
-/// It is also the direction `project.vault.write-path` points. That rule
-/// wants every vault write to go through the Files API; what makes that
-/// reachable is there being *one* place a page is written, and this is
-/// the last caller that was not it.
+/// It is also what `project.vault.write-path` binds: the vault's page sink
+/// (`vault_live::PageSink`) is reached from `save_page_at`, so once the
+/// org vault is a File Root this write is a Files write without this
+/// function knowing.
 pub fn write_project(
     vault_root: &Path,
     project: &mut ProjectInfo,
@@ -66,30 +66,24 @@ pub fn write_project(
     }
     let serialized = serialize_project(project)?;
 
-    // A one-page vault over the target's own directory: `save_page`
-    // needs the page in memory to write it, and opening the whole org
-    // vault to save one file would make every write O(vault).
-    let mut page = vault::Vault {
-        root: vault_root.to_path_buf(),
-        pages: vec![vault::VaultPage {
-            rel_path: project.path.clone(),
-            basename: std::path::Path::new(&project.path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            folder: std::path::Path::new(&project.path)
-                .parent()
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default(),
-            raw: serialized,
-            mtime: std::time::SystemTime::now(),
-        }],
-        bases: Vec::new(),
-        property_types: vault::PropertyTypes::default(),
-    };
-    vault::save_page(&mut page, &project.path).map_err(|e| WriteError::Io(e.to_string()))?;
+    vault::save_page_at(vault_root, &project.path, &serialized)
+        .map_err(|e| WriteError::Io(e.to_string()))?;
     Ok(abs)
+}
+
+/// Remove a project page, through the same choke point the write uses.
+///
+/// `delete_page` rather than `std::fs::remove_file`, for the same reason
+/// [`write_project`] is `save_page` rather than `std::fs::write`: the
+/// vault's page sink is what `project.vault.write-path` binds, and a
+/// delete that bypassed it would leave the catalogue listing a page that
+/// is gone. Absent is not an error — the page was never there, or the
+/// sink already removed it.
+pub fn delete_project(vault_root: &Path, rel_path: &str) -> Result<(), WriteError> {
+    if rel_path.is_empty() {
+        return Err(WriteError::BadPath("project.path is empty".into()));
+    }
+    vault::delete_page_at(vault_root, rel_path).map_err(|e| WriteError::Io(e.to_string()))
 }
 
 /// Conventional path for a freshly captured project — slug

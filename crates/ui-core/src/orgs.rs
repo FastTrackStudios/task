@@ -51,6 +51,14 @@ pub struct OrgMeta {
     /// table lookup. Drives [`OrgSelection::All`] meaning "all MY orgs"
     /// (issue #109 criterion 6).
     pub member: Option<bool>,
+    /// The org's iroh endpoint id, when its server has bound one — the
+    /// whole of the org's non-HTTP address (no host, no port, no
+    /// certificate). A native client that knows it dials the org over
+    /// iroh (`vox_clients::caller_for`) instead of the WebSocket URL.
+    /// `None` on older servers, before the first bind, or with iroh
+    /// disabled server-side.
+    #[serde(default)]
+    pub iroh: Option<String>,
 }
 
 /// The orgs an `All` selection should actually span.
@@ -242,6 +250,7 @@ mod my_orgs_tests {
             id: None,
             disabled_plugins: Vec::new(),
             member,
+            iroh: None,
         }
     }
 
