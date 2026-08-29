@@ -33,6 +33,10 @@
  * has to be named. */
 @source "../../crates/*/src/**/*.rs";
 @source "../../features/*/*-ui/src/**/*.rs";
+/* features/editor/ is gone — the editor stack moved to its own repo in
+   August 2026 and its keyflow half to the keyflow repo. Their classes are
+   in the same position as architect-ui's: a git dep has no path to glob.
+   See the block below. */
 @source "../../features/view/view-*/src/**/*.rs";
 
 /* GONE WITH THE AUGUST 2026 SPLIT, and a real (if cosmetic) regression.

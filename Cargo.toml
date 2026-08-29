@@ -171,8 +171,6 @@ members = [
     "features/workstream/workstream",
     "features/workstream/workstream-proto",
     # ── features/editor — the text/markdown/keyflow editor stack ──────
-    "features/editor/editor-keyflow",
-    "features/editor/editor-keyflow-lang",
     # Editor's vendored mermaid fork (see [patch.crates-io] below).
     "features/spaced-repetition/spaced-repetition",
 ]
@@ -365,8 +363,11 @@ editor-syntax = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.
 editor-typst = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
 editor-view = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
 editor-vim = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-keyflow = { path = "features/editor/editor-keyflow" }
-editor-keyflow-lang = { path = "features/editor/editor-keyflow-lang" }
+# The editor's keyflow half moved to the keyflow repo with v0.2.0: both
+# crates need `editor-state` from below AND `keyflow-text`/`engraver` from
+# above, so that is the only repo where they can live.
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.0" }
+editor-keyflow-lang = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.0" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
