@@ -276,6 +276,49 @@ Running the same binary from a terminal works without this, which is
 what makes it confusing: an SSH session and a launchd agent do not get
 the same answer from the same `mkdir`.
 
+## The cloud folder: mounting a root (Linux)
+
+Selective sync gives a machine the whole tree with only some of the
+content resident — the rest sits there as a pointer stub, a few hundred
+bytes recording what the file is and how big it really is. That is
+honest, and until now it was also where the story stopped: a DAW that
+opened a dehydrated take read the stub.
+
+A mount closes it. The tree appears as a filesystem, everything lists at
+its real size, and **opening a file this machine does not hold fetches
+it first** — the caller waits as it would for a slow disk, and gets the
+file. That is the Dropbox/iCloud behaviour, over Files' own stubs.
+
+```bash
+fts-files-daemon mount Ghosts ~/Task/Ghosts   # show it as a folder
+fts-files-daemon mounts                        # what is mounted, and where
+fts-files-daemon evict Ghosts Takes/vox.wav    # give its bytes back to the disk
+fts-files-daemon fetch Ghosts Takes/vox.wav    # or bring them back by hand
+fts-files-daemon unmount Ghosts                # the files stay exactly where they are
+```
+
+`evict` is the half that makes the rest worth having: a 500 GB laptop
+can hold a 4 TB project as long as releasing what it is not working on
+is one call and getting it back is opening the file. Nothing is lost —
+the content is in the version store and on the peers.
+
+Mounts are remembered. A machine that reboots comes back with the same
+folders mounted, for the same reason it comes back syncing the same
+roots: it was a decision somebody made. An agent that was killed rather
+than stopped leaves the kernel holding a mount with no server behind it;
+the next mount clears that itself rather than reporting a permission
+error on your own directory.
+
+Writes, renames and mkdir through the mount are ordinary writes to the
+tree underneath, so the watcher, the cadence engine and checkpointing
+see them exactly as they see any other edit.
+
+**macOS gets this through a File Provider extension**, not FUSE: the
+system loads it from the app bundle and asks *it* for material, where
+here the kernel asks us. The seam is the same one the CLI uses — the
+agent's control socket — so the Swift side is a client of
+`DaemonControlService` and nothing in the engine changes.
+
 ## Known gaps
 
 - **A device's new root is adopted only if asked.** `TASK_DEVICE_SYNC_ADOPT=1`
@@ -283,6 +326,9 @@ the same answer from the same `mkdir`.
   org's files directory. Off by default: where a tree lands is a
   placement decision, and a sweep answering it silently would let any
   admitted machine create directories in the org.
+- **The macOS File Provider extension is not written yet.** `mount` on a
+  Mac refuses with a message saying so rather than pretending. Linux has
+  the mount today.
 - **Windows has no service integration.** The agent runs; nothing
   registers it to start at login.
 - **The DMG script has not been run.** It is written against the same

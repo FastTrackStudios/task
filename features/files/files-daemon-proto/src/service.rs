@@ -186,6 +186,11 @@ pub trait DaemonControlService {
     /// not yet local — a pull brings it first.
     async fn hydrate(&self, root_id: Uuid, path: String) -> Result<(), DaemonError>;
 
+    /// The reverse: release one path's resident bytes, leaving the file
+    /// listed at its real size as a pointer stub. Opening it — through a
+    /// mount, or through `hydrate` — brings it back.
+    async fn dehydrate(&self, root_id: Uuid, path: String) -> Result<(), DaemonError>;
+
     /// Settle one path two machines changed independently, by keeping
     /// every side: the first keeps the name, the others land beside it
     /// as `<stem> (divergent n).<ext>`.
@@ -202,6 +207,22 @@ pub trait DaemonControlService {
     /// Session checkpoint the RPC surface exposes, driven locally so a
     /// user can force a save point before unplugging.
     async fn checkpoint_now(&self, root_id: Uuid) -> Result<(), DaemonError>;
+
+    /// Mount a root's live tree at `mountpoint`, so the whole tree is
+    /// browsable and anything this machine does not hold is fetched by
+    /// the act of opening it — the cloud-folder behaviour.
+    ///
+    /// Linux only from the agent: macOS reaches the same place through a
+    /// File Provider extension, which the system loads from the app
+    /// bundle and which is itself a client of this surface.
+    async fn mount(&self, root_id: Uuid, mountpoint: String) -> Result<(), DaemonError>;
+
+    /// Take the mount down. The tree stays where it is on disk — the
+    /// mount was a window onto it, not the thing itself.
+    async fn unmount(&self, root_id: Uuid) -> Result<(), DaemonError>;
+
+    /// Every root mounted right now, and where.
+    async fn mounts(&self) -> Result<Vec<(Uuid, String)>, DaemonError>;
 
     /// Live status changes as they happen.
     #[subscribe]

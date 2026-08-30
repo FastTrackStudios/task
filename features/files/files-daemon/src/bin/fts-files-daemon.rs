@@ -137,6 +137,11 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
     fts-files-daemon forget <endpoint-id>     stop admitting a machine, and stop pulling it
     fts-files-daemon resolve <root> <path>    two machines changed it — keep both sides
+    fts-files-daemon mount <root> <dir>       show it as a folder; opening fetches (Linux)
+    fts-files-daemon unmount <root>           take the folder down (the files stay)
+    fts-files-daemon mounts                   what is mounted, and where
+    fts-files-daemon evict <root> <path>      give its bytes back to the disk
+    fts-files-daemon fetch <root> <path>      bring one file's bytes back now
 
 install options:
     --coordinator <endpoint-id>   the org endpoint to sync with
@@ -160,7 +165,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         // runtime rather than avoiding it.
         Some(
             "status" | "checkpoint" | "share" | "shares" | "unshare" | "peer" | "forget"
-            | "resolve",
+            | "resolve" | "mount" | "unmount" | "mounts" | "evict" | "fetch",
         ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -580,6 +585,82 @@ async fn resolve(root: &str, path: &str) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
+/// A root id, from either an id or the name a person actually uses.
+async fn root_id(
+    client: &files_daemon::DaemonControlServiceClient,
+    root: &str,
+) -> Result<uuid::Uuid, Box<dyn std::error::Error>> {
+    if let Ok(id) = root.parse::<uuid::Uuid>() {
+        return Ok(id);
+    }
+    Ok(client
+        .shares()
+        .await?
+        .into_iter()
+        .find(|(_, name, _)| name == root)
+        .ok_or_else(|| format!("this machine holds no root called {root}"))?
+        .0)
+}
+
+/// Show a root as a folder whose files fetch when something opens them.
+async fn mount(root: &str, dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let id = root_id(&client, root).await?;
+    client.mount(id, dir.to_string()).await?;
+    println!("mounted {root} at {dir}");
+    println!("everything is listed at its real size; opening what this machine");
+    println!("does not hold fetches it first, so a program sees a slow disk, not a stub.");
+    Ok(())
+}
+
+/// Take a mount down. The tree on disk is untouched.
+async fn unmount(root: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let id = root_id(&client, root).await?;
+    client.unmount(id).await?;
+    println!("unmounted {root} — the files are still on disk, in the root's own tree");
+    Ok(())
+}
+
+/// Release one file's bytes, keeping the file.
+async fn evict(root: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let id = root_id(&client, root).await?;
+    client.dehydrate(id, path.to_string()).await?;
+    println!("evicted {path} — it still lists at its real size");
+    println!("opening it through a mount fetches it back; so does `fetch`.");
+    Ok(())
+}
+
+/// Bring one file's bytes back now, without waiting for an open.
+async fn fetch(root: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let id = root_id(&client, root).await?;
+    client.hydrate(id, path.to_string()).await?;
+    println!("{path} is resident");
+    Ok(())
+}
+
+/// What is mounted right now.
+async fn mounts() -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let at = client.mounts().await?;
+    if at.is_empty() {
+        println!("nothing is mounted");
+        println!("  mount one:  fts-files-daemon mount <root> <dir>");
+        return Ok(());
+    }
+    let names = client.shares().await?;
+    for (id, dir) in at {
+        let name = names
+            .iter()
+            .find(|(rid, _, _)| *rid == id)
+            .map_or_else(|| id.to_string(), |(_, name, _)| name.clone());
+        println!("{name}  →  {dir}");
+    }
+    Ok(())
+}
+
 /// Stop admitting a machine, and stop pulling from it.
 ///
 /// The counterpart of `peer`, and its absence was a hole with a shape:
@@ -720,6 +801,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .clone();
             return resolve(&root, &path).await;
         }
+        Some("mount") => {
+            let root = args.get(1).ok_or("mount needs a root id or name")?.clone();
+            let dir = args
+                .get(2)
+                .ok_or("mount needs a directory to mount it at")?
+                .clone();
+            return mount(&root, &dir).await;
+        }
+        Some("unmount") => {
+            let root = args.get(1).ok_or("unmount needs a root id or name")?.clone();
+            return unmount(&root).await;
+        }
+        Some("mounts") => return mounts().await,
+        Some("evict") => {
+            let root = args.get(1).ok_or("evict needs a root id or name")?.clone();
+            let path = args.get(2).ok_or("evict needs a path in that root")?.clone();
+            return evict(&root, &path).await;
+        }
+        Some("fetch") => {
+            let root = args.get(1).ok_or("fetch needs a root id or name")?.clone();
+            let path = args.get(2).ok_or("fetch needs a path in that root")?.clone();
+            return fetch(&root, &path).await;
+        }
         _ => {}
     }
 
@@ -854,6 +958,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // shut right now is skipped and retried on the next start — its
     // choice is still the person's.
     daemon.restore_choices().await;
+
+    // And what it was showing as a folder. A mount that vanished on
+    // reboot would leave somebody looking at an empty directory where
+    // their project was — the same reason the choices are persisted.
+    match daemon.restore_mounts().await {
+        0 => {}
+        n => tracing::info!(mounts = n, "re-mounted the roots that were mounted"),
+    }
 
     // The coordinator: the peer this daemon syncs with by default.
     // Optional, because a daemon with none is still useful — it serves

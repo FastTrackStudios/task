@@ -32,6 +32,7 @@ mod error;
 mod hub;
 pub mod identity;
 pub mod install;
+pub mod mount;
 pub mod peering;
 
 // The wire contract lives in `files-daemon-proto` so a client — the

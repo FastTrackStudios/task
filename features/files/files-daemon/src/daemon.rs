@@ -186,6 +186,9 @@ struct DaemonInner {
     endpoint: Mutex<Option<architect::iroh_link::iroh::Endpoint>>,
     /// Where adopted roots land, reported in the status.
     roots_dir: Mutex<std::path::PathBuf>,
+    /// Roots mounted as filesystems, and the session keeping each
+    /// alive — dropping one unmounts it.
+    mounts: Mutex<BTreeMap<Uuid, (std::path::PathBuf, crate::mount::fuser_session::Session)>>,
     /// The boundary this machine's shared folders are recorded in —
     /// see `SyncDaemon::share`.
     shared: Mutex<Option<Arc<crate::peering::DeviceRoots>>>,
@@ -218,6 +221,7 @@ impl SyncDaemon {
                 data_dir,
                 endpoint: Mutex::new(None),
                 roots_dir: Mutex::new(data_dir_for_roots.clone()),
+                mounts: Mutex::new(BTreeMap::new()),
                 shared: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
                 coordinator: Mutex::new(None),
@@ -443,6 +447,138 @@ impl SyncDaemon {
                 tracing::debug!(%root_id, peer = %endpoint, error = %e, "files-daemon: peer still unreachable");
             }
         }
+    }
+
+    // ── The cloud folder ───────────────────────────────────────────
+
+    /// Mount a root's live tree so dehydrated files fetch on open.
+    ///
+    /// This is what makes the tree behave the way people expect a cloud
+    /// folder to: everything is listed at its real size, and opening
+    /// something this machine does not hold gets it rather than getting
+    /// a placeholder. Selective sync decides what is resident; the
+    /// mount decides what happens when that turns out to be wrong.
+    pub async fn mount(&self, root_id: Uuid, mountpoint: &std::path::Path) -> Result<()> {
+        // Mounting the same root twice is not two windows onto it, it is
+        // one window and a leaked session: the map holds one entry per
+        // root, so the second insert would drop the first handle and
+        // unmount what somebody is looking at. Say so instead.
+        if let Some((at, _)) = self.inner.mounts.lock().expect("mount lock").get(&root_id) {
+            return Err(DaemonError::BadRequest(format!(
+                "that root is already mounted at {}",
+                at.display()
+            )));
+        }
+
+        let tree = self
+            .inner
+            .backend
+            .get_root(root_id)
+            .await?
+            .path
+            .ok_or_else(|| {
+                DaemonError::BadRequest(
+                    "that root has no tree on this machine to mount".to_string(),
+                )
+            })?;
+
+        let session = crate::mount::mount(self, root_id, std::path::Path::new(&tree), mountpoint)?;
+        self.inner
+            .mounts
+            .lock()
+            .expect("mount lock")
+            .insert(root_id, (mountpoint.to_path_buf(), session));
+        self.save_mounts();
+        Ok(())
+    }
+
+    /// Unmount a root. The tree stays exactly where it is on disk — a
+    /// mount is a window onto it, not the thing itself.
+    pub fn unmount(&self, root_id: Uuid) -> Result<()> {
+        let gone = self
+            .inner
+            .mounts
+            .lock()
+            .expect("mount lock")
+            .remove(&root_id);
+        match gone {
+            // Dropping the session unmounts.
+            Some((at, session)) => {
+                drop(session);
+                tracing::info!(%root_id, mountpoint = %at.display(), "unmounted");
+                self.save_mounts();
+                Ok(())
+            }
+            None => Err(DaemonError::NotFound("that root is not mounted".into())),
+        }
+    }
+
+    /// Where each mounted root is mounted.
+    #[must_use]
+    pub fn mounts(&self) -> Vec<(Uuid, std::path::PathBuf)> {
+        self.inner
+            .mounts
+            .lock()
+            .expect("mount lock")
+            .iter()
+            .map(|(id, (at, _))| (*id, at.clone()))
+            .collect()
+    }
+
+    fn mounts_path(&self) -> std::path::PathBuf {
+        self.inner.data_dir.join("mounts.json")
+    }
+
+    fn save_mounts(&self) {
+        let mounts = crate::mount::Mounts {
+            at: self
+                .mounts()
+                .into_iter()
+                .map(|(root_id, mountpoint)| crate::mount::Mounted {
+                    root_id,
+                    mountpoint,
+                })
+                .collect(),
+        };
+        match serde_json::to_vec_pretty(&mounts) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(self.mounts_path(), bytes) {
+                    tracing::warn!(error = %e, "could not record the mounts");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not serialize the mounts"),
+        }
+    }
+
+    /// Re-mount what was mounted before the machine restarted.
+    ///
+    /// A mount is a decision somebody made, and a service that forgot it
+    /// on reboot would leave them looking at an empty directory where
+    /// their project used to be.
+    pub async fn restore_mounts(&self) -> usize {
+        let Ok(raw) = std::fs::read_to_string(self.mounts_path()) else {
+            return 0;
+        };
+        let mounts: crate::mount::Mounts = match serde_json::from_str(&raw) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(error = %e, "the recorded mounts are unreadable");
+                return 0;
+            }
+        };
+        let mut back = 0;
+        for m in mounts.at {
+            match self.mount(m.root_id, &m.mountpoint).await {
+                Ok(()) => back += 1,
+                Err(e) => tracing::warn!(
+                    root = %m.root_id,
+                    at = %m.mountpoint.display(),
+                    error = %e,
+                    "could not re-mount this root"
+                ),
+            }
+        }
+        back
     }
 
     /// Every root this machine holds, shared or synced.
@@ -1133,6 +1269,19 @@ impl SyncDaemon {
     /// Hydrate one path on demand (issue #263).
     pub async fn hydrate(&self, root_id: Uuid, path: String) -> Result<()> {
         self.inner.backend.hydrate(root_id, path).await?;
+        Ok(())
+    }
+
+    /// Give a file's bytes back to the disk, leaving the file itself.
+    ///
+    /// The other half of the cloud folder, and the half that makes it
+    /// worth having: a machine with a 500 GB disk can hold a 4 TB
+    /// project as long as evicting what it is not working on is one
+    /// call, and getting it back is opening the file. Nothing is lost —
+    /// the content is in the version store and on the peers; what is
+    /// released is the resident copy.
+    pub async fn dehydrate(&self, root_id: Uuid, path: String) -> Result<()> {
+        self.inner.backend.dehydrate(root_id, path).await?;
         Ok(())
     }
 

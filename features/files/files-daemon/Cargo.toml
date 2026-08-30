@@ -36,6 +36,9 @@ files = { workspace = true }
 # The peering vocabulary (`HostId`, `Hosting`): who this device admits
 # to its own replica lane. The decision types are domain, not backend.
 files-domain = { workspace = true }
+# The FUSE mount (Linux): the agent owns the store, so it is the process
+# that can safely hydrate on a kernel request — see `mount.rs`.
+files-fuse = { workspace = true }
 files-daemon-proto = { workspace = true }
 files-proto = { workspace = true }
 files-sync = { workspace = true }

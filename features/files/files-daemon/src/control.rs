@@ -156,12 +156,35 @@ impl DaemonControlService for DaemonControl {
         self.daemon.hydrate(root_id, path).await
     }
 
+    async fn dehydrate(&self, root_id: Uuid, path: String) -> Result<(), DaemonError> {
+        self.daemon.dehydrate(root_id, path).await
+    }
+
     async fn keep_both(&self, root_id: Uuid, path: String) -> Result<(), DaemonError> {
         self.daemon.keep_both(root_id, path).await
     }
 
     async fn checkpoint_now(&self, root_id: Uuid) -> Result<(), DaemonError> {
         self.daemon.checkpoint_now(root_id).await
+    }
+
+    async fn mount(&self, root_id: Uuid, mountpoint: String) -> Result<(), DaemonError> {
+        self.daemon
+            .mount(root_id, std::path::Path::new(&mountpoint))
+            .await
+    }
+
+    async fn unmount(&self, root_id: Uuid) -> Result<(), DaemonError> {
+        self.daemon.unmount(root_id)
+    }
+
+    async fn mounts(&self) -> Result<Vec<(Uuid, String)>, DaemonError> {
+        Ok(self
+            .daemon
+            .mounts()
+            .into_iter()
+            .map(|(id, at)| (id, at.to_string_lossy().into_owned()))
+            .collect())
     }
 }
 

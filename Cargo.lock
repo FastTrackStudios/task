@@ -7274,6 +7274,7 @@ dependencies = [
  "files",
  "files-daemon-proto",
  "files-domain",
+ "files-fuse",
  "files-proto",
  "files-sync",
  "serde",
@@ -7317,6 +7318,16 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "files-fuse"
+version = "0.1.0"
+dependencies = [
+ "files",
+ "fuser",
+ "libc",
+ "tracing",
 ]
 
 [[package]]
@@ -7864,6 +7875,26 @@ name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
+
+[[package]]
+name = "fuser"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b82b6597d216503555ead6b358f341ef748869bf5c6fbae6a0cb9dd231baecfd"
+dependencies = [
+ "bitflags 2.13.1",
+ "libc",
+ "log",
+ "memchr",
+ "nix 0.31.3",
+ "num_enum 0.7.6",
+ "page_size",
+ "parking_lot",
+ "pkg-config",
+ "ref-cast",
+ "smallvec 1.15.2",
+ "zerocopy",
+]
 
 [[package]]
 name = "futf"
@@ -14344,6 +14375,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]

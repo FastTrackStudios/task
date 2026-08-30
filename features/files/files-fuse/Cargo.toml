@@ -1,0 +1,26 @@
+[package]
+name = "files-fuse"
+description = "The live tree as a filesystem (Linux): a FUSE mount over a File Root that reports dehydrated files at their real size and fetches their content when something opens them — the Dropbox/iCloud behaviour, over Files' own pointer stubs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Linux only. macOS gets the same behaviour through a File Provider
+# extension, which is an app-bundle concern rather than a crate: the
+# system asks *it* for material, where here the kernel asks us.
+[target.'cfg(target_os = "linux")'.dependencies]
+# `default-features = false` drops the libfuse C dependency: mounting
+# then goes through the `fusermount3` setuid helper, which is what a
+# desktop already has (and what lets an ordinary user mount at all).
+fuser = { version = "0.18", default-features = false }
+libc = "0.2"
+
+[dependencies]
+files = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
