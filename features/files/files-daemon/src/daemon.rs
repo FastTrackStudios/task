@@ -672,6 +672,12 @@ impl SyncDaemon {
             .await?;
         if capture {
             self.inner.backend.checkpoint_now(root.id, None).await?;
+        } else {
+            // Remembered, because `capture` has no other way to know: a
+            // root's repo exists the moment it is registered, so there
+            // is nothing on disk that distinguishes "not captured yet"
+            // from "captured and unchanged".
+            self.remember_pending_capture(root.id);
         }
         // Watched from here on, so later edits are captured without
         // anyone asking — the same thing `start_capture` does for the
@@ -847,14 +853,20 @@ impl SyncDaemon {
             Err(e) => return vec![("(the roots)".into(), Some(e.to_string()))],
         };
 
-        // Uncaptured means "no history yet". A root with a checkpoint
-        // has a version; one that has never been captured has none.
+        // What was deferred, as the daemon recorded it when it deferred.
+        //
+        // Not "has no `.fts-files`", which was the first guess and is
+        // wrong: registering a root creates its repo immediately, so
+        // that test said every root had been captured and `capture`
+        // did nothing at all. The agent is the one that chose to skip
+        // the capture, so the agent is what should remember.
+        let waiting = self.awaiting_capture();
         let mut pending = Vec::new();
         for root in roots {
             let Some(path) = root.path.clone() else {
                 continue;
             };
-            if std::path::Path::new(&path).join(".fts-files").is_dir() {
+            if !waiting.contains(&root.id) {
                 continue;
             }
             let bytes = directory_bytes(std::path::Path::new(&path));
@@ -872,10 +884,53 @@ impl SyncDaemon {
                 .err()
                 .map(|e| e.to_string());
             tracing::info!(root = %name, ok = error.is_none(), "captured a root");
+            // Cleared one at a time, as each finishes. An archive takes
+            // hours and a machine can be shut down in the middle of it;
+            // clearing the whole list at the end would mean a reboot at
+            // hour four starts again from nothing.
+            if error.is_none() {
+                self.forget_pending_capture(id);
+            }
             done.push((name, error));
             self.inner.events.publish(self.status());
         }
         done
+    }
+
+    /// The roots registered without a first capture, still waiting for
+    /// one. Empty on a machine that has never deferred.
+    fn awaiting_capture(&self) -> std::collections::BTreeSet<Uuid> {
+        std::fs::read_to_string(self.pending_capture_path())
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn pending_capture_path(&self) -> std::path::PathBuf {
+        self.inner.data_dir.join("awaiting-capture.json")
+    }
+
+    fn remember_pending_capture(&self, root_id: Uuid) {
+        let mut waiting = self.awaiting_capture();
+        waiting.insert(root_id);
+        self.write_pending_capture(&waiting);
+    }
+
+    fn forget_pending_capture(&self, root_id: Uuid) {
+        let mut waiting = self.awaiting_capture();
+        waiting.remove(&root_id);
+        self.write_pending_capture(&waiting);
+    }
+
+    fn write_pending_capture(&self, waiting: &std::collections::BTreeSet<Uuid>) {
+        match serde_json::to_vec_pretty(waiting) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(self.pending_capture_path(), bytes) {
+                    tracing::warn!(error = %e, "could not record what is awaiting capture");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not serialize the capture backlog"),
+        }
     }
 
     /// Stop holding a root: no longer served to peers, no longer
