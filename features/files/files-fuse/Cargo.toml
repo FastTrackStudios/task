@@ -17,6 +17,9 @@ repository.workspace = true
 # desktop already has (and what lets an ordinary user mount at all).
 fuser = { version = "0.18", default-features = false }
 libc = "0.2"
+# Reading and writing extended attributes on the tree underneath, so a
+# tag set in a file manager lands on the disk every machine shares.
+xattr = "1"
 
 [dependencies]
 files = { workspace = true }

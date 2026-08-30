@@ -60,6 +60,95 @@ impl files_fuse::Hydrator for Fetch {
     }
 }
 
+/// What a path in this root is tagged with.
+///
+/// Two sources, neither of them a stored xattr:
+///
+/// - **the org**, from the root's place. Every file in a studio's
+///   project belongs to whoever the project belongs to, and that is
+///   already recorded — so a file manager can filter by client without
+///   anybody tagging thirty thousand files.
+/// - **a note's frontmatter**, for markdown. The vault is the authority
+///   on a note's tags; writing them into xattrs as well would be two
+///   records of one fact, and the second would be wrong the moment
+///   somebody edited the note.
+#[cfg(target_os = "linux")]
+struct RootTags {
+    /// The org segment of the root's place, when it has one.
+    org: Option<String>,
+    tree: std::path::PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl files_fuse::Tags for RootTags {
+    fn tags(&self, rel: &Path) -> Vec<String> {
+        let mut tags = Vec::new();
+        if let Some(org) = &self.org {
+            tags.push(org.clone());
+        }
+        // Only markdown carries frontmatter, and checking is a cheap
+        // extension test rather than a read — this is called for every
+        // file a listing touches.
+        if rel.extension().is_some_and(|e| e == "md") {
+            tags.extend(frontmatter_tags(&self.tree.join(rel)));
+        }
+        tags
+    }
+}
+
+/// The `tags:` a note declares, or nothing.
+///
+/// Reads only the frontmatter block, so the cost is the head of the
+/// file rather than the file. Deliberately forgiving: a note with
+/// malformed frontmatter is a note, not an error, and answering "no
+/// tags" is the right answer for one this cannot parse.
+#[cfg(target_os = "linux")]
+fn frontmatter_tags(path: &Path) -> Vec<String> {
+    use std::io::BufRead as _;
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut lines = std::io::BufReader::new(file).lines();
+    if !lines.next().is_some_and(|l| l.is_ok_and(|l| l.trim() == "---")) {
+        return Vec::new();
+    }
+
+    let mut tags = Vec::new();
+    let mut in_block = false;
+    for line in lines.map_while(std::result::Result::ok) {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            break;
+        }
+        // `tags: [a, b]` or `tags:` followed by `- a` lines; `tag:` is
+        // the singular the vault also accepts.
+        if let Some(rest) = trimmed
+            .strip_prefix("tags:")
+            .or_else(|| trimmed.strip_prefix("tag:"))
+        {
+            in_block = rest.trim().is_empty();
+            tags.extend(
+                rest.trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(|t| t.trim().trim_matches('"').trim_start_matches('#'))
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string),
+            );
+        } else if in_block {
+            match trimmed.strip_prefix("- ") {
+                Some(tag) => tags.push(tag.trim_matches('"').trim_start_matches('#').to_string()),
+                // The block ended at the next key.
+                None if !trimmed.is_empty() => in_block = false,
+                None => {}
+            }
+        }
+    }
+    tags
+}
+
 /// Mount `root_id`'s live tree at `mountpoint`.
 ///
 /// The mount lives until [`SyncDaemon::unmount`] or the process exits;
@@ -71,6 +160,7 @@ pub(crate) fn mount(
     root_id: Uuid,
     tree: &Path,
     mountpoint: &Path,
+    place: &str,
 ) -> Result<fuser_session::Session> {
     clear_stale(mountpoint);
     std::fs::create_dir_all(mountpoint)
@@ -81,7 +171,15 @@ pub(crate) fn mount(
         root_id,
         runtime: tokio::runtime::Handle::current(),
     };
-    let fs = files_fuse::LiveTree::new(tree, std::sync::Arc::new(fetch));
+    let tags = RootTags {
+        org: place.split_once('/').map(|(org, _)| org.to_string()),
+        tree: tree.to_path_buf(),
+    };
+    let fs = files_fuse::LiveTree::tagged(
+        tree,
+        std::sync::Arc::new(fetch),
+        std::sync::Arc::new(tags),
+    );
     let session = fs
         .mount(mountpoint)
         .map_err(|e| DaemonError::Io(format!("mounting at {}: {e}", mountpoint.display())))?;
@@ -146,6 +244,7 @@ pub(crate) fn mount(
     _root_id: Uuid,
     _tree: &Path,
     _mountpoint: &Path,
+    _place: &str,
 ) -> Result<fuser_session::Session> {
     Err(DaemonError::BadRequest(format!(
         "mounting a root as a filesystem is Linux-only here; on {} it is the \

@@ -7286,6 +7286,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "vox",
+ "xattr",
 ]
 
 [[package]]
@@ -7344,6 +7345,7 @@ dependencies = [
  "fuser",
  "libc",
  "tracing",
+ "xattr",
 ]
 
 [[package]]

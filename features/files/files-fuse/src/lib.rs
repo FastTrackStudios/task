@@ -64,7 +64,8 @@ pub use fuser::BackgroundSession;
 use fuser::{
     BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, INodeNo,
     LockOwner, MountOption, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow,
+    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
+    Request, TimeOrNow,
     WriteFlags,
 };
 
@@ -96,6 +97,38 @@ where
         self(rel)
     }
 }
+
+/// Where a path's tags come from.
+///
+/// The filesystem does not know what a tag *is* — same reason it does
+/// not know what sync is. It knows that a file manager asks for
+/// `user.xdg.tags`, and it knows who to ask.
+///
+/// The answer is derived, not stored: a note's tags live in its
+/// frontmatter, a project's org lives in the place it was given. Writing
+/// them into xattrs as well would be two records of one fact, drifting
+/// the moment somebody edits the note. So they are computed per query
+/// and the vault stays the authority — the same trade as reporting a
+/// stub at its content's size rather than at its own.
+pub trait Tags: Send + Sync + 'static {
+    /// Tags for `rel` within this root, most significant first. Empty
+    /// when the path has none, which is the ordinary case.
+    fn tags(&self, rel: &Path) -> Vec<String>;
+}
+
+/// Nothing has tags — the default, so a mount that has no use for them
+/// costs nothing and says so honestly rather than inventing any.
+pub struct Untagged;
+
+impl Tags for Untagged {
+    fn tags(&self, _rel: &Path) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+/// The attribute a Linux file manager reads tags from. Dolphin and
+/// Nautilus both use it; it is a comma-separated list.
+const TAGS_XATTR: &str = "user.xdg.tags";
 
 /// Inode ↔ path.
 ///
@@ -150,6 +183,8 @@ pub struct LiveTree {
     /// The directory this mirrors — the root's live tree.
     backing: PathBuf,
     hydrator: Arc<dyn Hydrator>,
+    /// Who to ask what a path is tagged with — see [`Tags`].
+    tags: Arc<dyn Tags>,
     inodes: Mutex<Inodes>,
     handles: Mutex<HashMap<u64, Arc<File>>>,
     next_fh: Mutex<u64>,
@@ -159,11 +194,22 @@ impl LiveTree {
     /// A filesystem mirroring `backing`, fetching through `hydrator`.
     #[must_use]
     pub fn new(backing: impl Into<PathBuf>, hydrator: Arc<dyn Hydrator>) -> Self {
+        Self::tagged(backing, hydrator, Arc::new(Untagged))
+    }
+
+    /// The same, with something to answer tag queries — see [`Tags`].
+    #[must_use]
+    pub fn tagged(
+        backing: impl Into<PathBuf>,
+        hydrator: Arc<dyn Hydrator>,
+        tags: Arc<dyn Tags>,
+    ) -> Self {
         let backing = backing.into();
         Self {
             inodes: Mutex::new(Inodes::rooted(&backing)),
             backing,
             hydrator,
+            tags,
             handles: Mutex::new(HashMap::new()),
             next_fh: Mutex::new(1),
         }
@@ -605,6 +651,123 @@ impl Filesystem for LiveTree {
             Some(Ok(())) => reply.ok(),
             Some(Err(e)) => reply.error(errno(&e)),
             None => reply.error(Errno::EBADF),
+        }
+    }
+
+    /// Read one extended attribute.
+    ///
+    /// `user.xdg.tags` is answered from the [`Tags`] provider when it
+    /// has something to say, so a note's frontmatter and a project's org
+    /// reach the file manager as tags without being written to disk
+    /// twice. Everything else — and a path the provider has no tags for
+    /// — passes through to the real file, so tags somebody set by hand
+    /// still work.
+    fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+            reply.error(Errno::ENOENT);
+            return;
+        };
+
+        let derived = (name == OsStr::new(TAGS_XATTR))
+            .then(|| self.tags.tags(&self.relative(&path)))
+            .filter(|tags| !tags.is_empty())
+            .map(|tags| tags.join(",").into_bytes());
+
+        let value = match derived {
+            Some(bytes) => bytes,
+            None => match xattr::get(&path, name) {
+                Ok(Some(bytes)) => bytes,
+                // ENODATA is the answer for "no such attribute", and it
+                // is not an error a caller should see as a failure.
+                Ok(None) => {
+                    reply.error(Errno::ENODATA);
+                    return;
+                }
+                Err(e) => {
+                    reply.error(errno(&e));
+                    return;
+                }
+            },
+        };
+
+        // The two-call protocol: size 0 asks how big, anything else
+        // asks for the bytes and must be told ERANGE if it guessed low.
+        if size == 0 {
+            reply.size(value.len() as u32);
+        } else if (size as usize) < value.len() {
+            reply.error(Errno::ERANGE);
+        } else {
+            reply.data(&value);
+        }
+    }
+
+    /// Which attributes a path has — the real ones, plus `user.xdg.tags`
+    /// when the provider has tags for it and the file does not already
+    /// carry its own.
+    fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+            reply.error(Errno::ENOENT);
+            return;
+        };
+
+        // NUL-terminated names, back to back — the kernel's format.
+        let mut names: Vec<u8> = Vec::new();
+        let mut has_tags = false;
+        if let Ok(existing) = xattr::list(&path) {
+            for name in existing {
+                has_tags |= name == OsStr::new(TAGS_XATTR);
+                names.extend_from_slice(name.as_encoded_bytes());
+                names.push(0);
+            }
+        }
+        if !has_tags && !self.tags.tags(&self.relative(&path)).is_empty() {
+            names.extend_from_slice(TAGS_XATTR.as_bytes());
+            names.push(0);
+        }
+
+        if size == 0 {
+            reply.size(names.len() as u32);
+        } else if (size as usize) < names.len() {
+            reply.error(Errno::ERANGE);
+        } else {
+            reply.data(&names);
+        }
+    }
+
+    /// Set one, straight through to the file.
+    ///
+    /// Tagging through the mount is an ordinary write to the tree
+    /// underneath, exactly like every other write here — so a tag
+    /// somebody adds in their file manager lands on the NAS and is
+    /// there for every other machine that mounts it.
+    fn setxattr(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        name: &OsStr,
+        value: &[u8],
+        _flags: i32,
+        _position: u32,
+        reply: ReplyEmpty,
+    ) {
+        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+            reply.error(Errno::ENOENT);
+            return;
+        };
+        match xattr::set(&path, name, value) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+            reply.error(Errno::ENOENT);
+            return;
+        };
+        match xattr::remove(&path, name) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(errno(&e)),
         }
     }
 

@@ -57,6 +57,9 @@ tracing-subscriber = { workspace = true, optional = true }
 architect = { workspace = true, features = ["local"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Reading the tags the mount derives, in the test that asserts they are
+# derived rather than stored.
+xattr = "1"
 
 [lints]
 workspace = true

@@ -257,3 +257,55 @@ async fn unmounting_what_is_not_mounted_says_so() {
     let rig = rig().await;
     assert!(rig.control.unmount(rig.root_id).await.is_err());
 }
+
+/// Tags reach the filesystem, and they are **derived** rather than
+/// stored: the org comes from the root's place, a note's own tags come
+/// from its frontmatter. Neither is written to disk as an xattr, so
+/// nothing can drift from the note that is the authority.
+#[tokio::test(flavor = "multi_thread")]
+async fn tags_reach_the_filesystem_without_being_stored_there() {
+    if !fuse_is_available() {
+        return;
+    }
+    let rig = rig().await;
+    std::fs::write(
+        rig.tree.join("note.md"),
+        "---\ntitle: A note\ntags: [mixing, urgent]\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    rig.control
+        .set_place(rig.root_id, "acme/Projects/Session".into())
+        .await
+        .unwrap();
+    rig.control
+        .mount(rig.root_id, rig.mountpoint.to_string_lossy().into_owned())
+        .await
+        .unwrap();
+
+    // The org, on anything in the root.
+    let on_audio = xattr::get(rig.mountpoint.join("mix.wav"), "user.xdg.tags")
+        .unwrap()
+        .expect("a file in a placed root carries its org");
+    assert_eq!(String::from_utf8(on_audio).unwrap(), "acme");
+
+    // The org *and* the note's own tags, on the note.
+    let on_note = xattr::get(rig.mountpoint.join("note.md"), "user.xdg.tags")
+        .unwrap()
+        .expect("a note carries its frontmatter tags");
+    assert_eq!(
+        String::from_utf8(on_note).unwrap(),
+        "acme,mixing,urgent",
+        "the org first, then what the note declares"
+    );
+
+    // Derived, not stored: nothing wrote an xattr onto the real file.
+    assert!(
+        xattr::get(rig.tree.join("note.md"), "user.xdg.tags")
+            .unwrap()
+            .is_none(),
+        "the tags must not have been written to disk — the note is the authority"
+    );
+
+    rig.control.unmount(rig.root_id).await.unwrap();
+}

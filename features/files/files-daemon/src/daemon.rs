@@ -487,7 +487,14 @@ impl SyncDaemon {
                 )
             })?;
 
-        let session = crate::mount::mount(self, root_id, std::path::Path::new(&tree), mountpoint)?;
+        let place = self.place_of(root_id, "");
+        let session = crate::mount::mount(
+            self,
+            root_id,
+            std::path::Path::new(&tree),
+            mountpoint,
+            &place,
+        )?;
         self.inner
             .mounts
             .lock()
