@@ -121,6 +121,26 @@ fn frontmatter_tags(path: &Path) -> Vec<String> {
         if trimmed == "---" {
             break;
         }
+        // A few keys that are tags in everything but name. A studio
+        // filtering its tree wants "show me what is Active" far more
+        // often than it wants a key nobody declared as a tag, and the
+        // vault's own tag dialect already uses `/` for hierarchy — so
+        // `status/Active` sorts and filters beside every other tag
+        // instead of needing a surface of its own.
+        for key in ["status", "type", "project_type", "organization"] {
+            if let Some(value) = trimmed
+                .strip_prefix(key)
+                .and_then(|rest| rest.strip_prefix(':'))
+            {
+                let value = value.trim().trim_matches('"');
+                if !value.is_empty() && !value.starts_with('[') {
+                    // `project_type` and `type` are the same question
+                    // asked by two vaults; one name for it in the tree.
+                    let key = if key == "project_type" { "type" } else { key };
+                    tags.push(format!("{key}/{value}"));
+                }
+            }
+        }
         // `tags: [a, b]` or `tags:` followed by `- a` lines; `tag:` is
         // the singular the vault also accepts.
         if let Some(rest) = trimmed

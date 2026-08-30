@@ -1026,6 +1026,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // after the bind is the part that dials peers, where being slow is
     // the network's fault and a caller can see it in the status.
     daemon.restore_places();
+
+    // And bring back the mounts, for the same reason and before the
+    // same line. Mounting is local work — it needs the disk, not the
+    // network — and a socket that answered "nothing is mounted" while
+    // this was still to come told a caller the opposite of the truth
+    // about its own machine.
+    match daemon.restore_mounts().await {
+        0 => {}
+        n => tracing::info!(mounts = n, "re-mounted the roots that were mounted"),
+    }
     daemon.with_shared_dirs(shared);
     daemon.set_roots_dir(&roots_under);
 
@@ -1082,14 +1092,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // shut right now is skipped and retried on the next start — its
     // choice is still the person's.
     daemon.restore_choices().await;
-
-    // What it was showing as a folder. A mount that vanished on
-    // reboot would leave somebody looking at an empty directory where
-    // their project was — the same reason the choices are persisted.
-    match daemon.restore_mounts().await {
-        0 => {}
-        n => tracing::info!(mounts = n, "re-mounted the roots that were mounted"),
-    }
 
     // The coordinator: the peer this daemon syncs with by default.
     // Optional, because a daemon with none is still useful — it serves
