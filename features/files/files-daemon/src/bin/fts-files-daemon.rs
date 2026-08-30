@@ -136,6 +136,7 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon capture                  capture what has not been captured yet
     fts-files-daemon shares                   every root this machine holds
     fts-files-daemon unshare <root>           stop holding one (the files stay)
+    fts-files-daemon coordinator <endpoint-id> sync with this org from now on
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
     fts-files-daemon forget <endpoint-id>     stop admitting a machine, and stop pulling it
     fts-files-daemon resolve <root> <path>    two machines changed it — keep both sides
@@ -170,7 +171,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some(
             "status" | "checkpoint" | "share" | "shares" | "unshare" | "peer" | "forget"
             | "resolve" | "mount" | "unmount" | "mounts" | "evict" | "fetch" | "place"
-            | "mount-all" | "capture",
+            | "mount-all" | "capture" | "coordinator",
         ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -643,6 +644,21 @@ async fn unmount(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Point the running agent at the org it syncs with.
+///
+/// The alternative is `install --coordinator`, which rewrites the
+/// service unit and restarts the agent — the right move on a machine
+/// with no service yet, and much too heavy on one that is running: it
+/// interrupts every transfer in flight to deliver a string the agent
+/// could simply have been told.
+async fn coordinator(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    client.set_coordinator(endpoint_id.to_string()).await?;
+    println!("syncing with {}", &endpoint_id[..endpoint_id.len().min(8)]);
+    println!("admitted it in return — sync is two pulls, so being pullable is half of it.");
+    Ok(())
+}
+
 /// Capture every root that has never been captured.
 ///
 /// The drain for `share --later`: an archive is browsable the moment it
@@ -873,6 +889,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return share(&dir, name, later).await;
         }
         Some("capture") => return capture().await,
+        Some("coordinator") => {
+            let id = args
+                .get(1)
+                .ok_or("coordinator needs the org's endpoint id")?
+                .clone();
+            return coordinator(&id).await;
+        }
         Some("peer") => {
             let id = args.get(1).ok_or("peer needs an endpoint id")?.clone();
             return peer(&id).await;
