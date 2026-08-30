@@ -83,7 +83,19 @@ echo "── telling the system the extension exists ─────────
 # job, and re-registering after every rebuild is required: the record
 # points at a signature that no longer exists.
 pluginkit -a "$APP/Contents/PlugIns/TaskFileProvider.appex"
-sleep 2
+
+# And launch the bundle, which is the step that actually counts.
+#
+# `pluginkit -a` gets the extension listed, and listed is not the same
+# as usable: the system only takes an app's extensions into account once
+# the app has been **launched through LaunchServices**. Running the
+# executable straight from a shell is not that, which is why a harness
+# hits `ApplicationExtensionNotFound` for two minutes on a machine where
+# `pluginkit -m` has been reporting the extension as present and enabled
+# the whole time. The real app never has this problem — somebody opens
+# it.
+open -a "$APP" --args list || true
+sleep 3
 
 echo "── registering a domain ────────────────────────────────────────"
 # The moment of truth. An extension the system declines to load, or a

@@ -371,22 +371,22 @@ Three things bite in this order, and all three are silent:
    restricted entitlement; an Apple Development identity signs the
    bundle without one, but the system will not load the result.
 
-### Switch it on
+### Turning it on
 
 macOS ships a third-party File Provider **disabled**, and nothing says
-so where you would look. The folder appears in Finder; every operation
-inside it fails with `NSFileProviderErrorDomainDisabled` (-2011, "Sync
-is not enabled"), which reaches you as a directory listing that *hangs*
-rather than as anything mentioning a switch.
+so where you would look: the folder appears, and every operation inside
+it fails with `NSFileProviderErrorDomainDisabled` (-2011), which reaches
+you as a directory listing that hangs. Dropbox and Google Drive walk
+people through the switch in System Settings › General › Login Items &
+Extensions › File Providers; `pluginkit -e use -i
+app.fasttrackstudio.task.fileprovider` sets it directly, with no GUI,
+which is what the install path does.
 
-> System Settings › General › Login Items & Extensions › File Providers
-
-Dropbox and Google Drive need the same flip; they just have an onboarding
-screen that asks for it. `TaskFileProviderDomains list` reports the state
-per domain, so this is diagnosable from a terminal:
+`TaskFileProviderDomains list` reports the state per domain, so this is
+diagnosable from a terminal rather than by guessing:
 
 ```
-sharetest  6baee5f2-…  OFF — switch it on in System Settings › …
+sharetest  6baee5f2-…  on
 ```
 
 ### Where it actually stands
@@ -400,49 +400,64 @@ as it goes today:
 | Developer-ID signature, hardened runtime | ✅ `--verify --deep --strict` passes |
 | the Rust half against a live agent | ✅ stub reports 200 MB where stat says 128 B |
 | a domain registers | ✅ macOS creates `~/Library/CloudStorage/<app>-<root>` |
-| the system loads the extension | ✅ it spawns the process |
-| **enumerating the folder** | ⏸ blocked on the System Settings switch — the domain reports `userEnabled = false`, and every call fails `-2011` |
+| the system loads the extension | ✅ |
+| enumerating the folder in Finder | ✅ lists the project at real sizes |
+| opening a dehydrated file through it | ✅ 128-byte stub → 200 MB, hash matches Linux |
 
 `try-fileprovider.sh` is the harness that got this far — the smallest
 signed app that can register a domain, so the question can be asked
 without building the whole app.
 
-Three things learned that are not obvious and cost a while:
+Five things learned that are not obvious, each of which presents as the
+same nothing:
 
-- **A registered domain is off until the user turns it on**, and the
-  symptom is a hang rather than a refusal — see above. Read the state
-  with `TaskFileProviderDomains list` rather than guessing at it.
-
-- **A bundle outside `/Applications` is not discovered.**
-  `NSFileProviderManager.add` refuses with "The application cannot be
-  used right now" (`NSFileProviderErrorDomain -2001 / -2014`), naming
-  neither the extension nor the reason. `pluginkit -a <appex>` registers
-  it by hand, and must be re-run after every rebuild — the record points
-  at a signature that no longer exists.
+- **The containing app must be *launched*, not merely installed.** Until
+  LaunchServices has opened it once, its extensions do not count, and
+  `NSFileProviderManager` answers `-2014`
+  (`ApplicationExtensionNotFound`) — for at least two minutes, across
+  fresh processes, while `pluginkit -m` reports the extension present
+  and enabled the whole time. `open -a` fixes it instantly. For the app
+  this is free; it is harnesses and scripts that get bitten.
+- **A registered domain is off until it is turned on.** `pluginkit -e
+  use -i <extension id>` is the switch, and does not need the GUI.
+  Without it every call fails `-2011` (`DomainDisabled`) and the folder
+  hangs.
+- **`pluginkit -a` must be re-run after every rebuild** — its record
+  points at a signature that no longer exists.
 - **Nothing may block in `init(domain:)`.** Asking the agent there cost
   the launch: the system killed the process and started another, every
   fifteen seconds, with no log line from us because we never reached
   one. The lookup is lazy now, and every bridge call has a deadline — a
   filesystem extension that can hang forever is a hung Finder.
-
-What is left is one switch, in a GUI, on a machine with a display. The
-harness is installed and its domain registered on airlock, so enabling
-the File Provider there is the whole remaining step:
-
-```bash
-# after flipping the switch
-ls -l ~/Library/CloudStorage/TaskFileProviderHarness-sharetest/
-
-# or take the harness back off the machine
-/Applications/TaskFileProviderHarness.app/Contents/MacOS/TaskFileProviderHarness clear
-rm -rf /Applications/TaskFileProviderHarness.app
-```
+- **A sync anchor has to mean something.** Failing `enumerateChanges`
+  with `syncAnchorExpired` unconditionally makes the system re-enumerate
+  forever; `ls` then *times out* rather than failing, because the
+  enumeration never finished, it restarted.
 
 Ruled out along the way, so nobody re-checks them: the app-group
-entitlement (removed, same failure), a crash (no diagnostic report), and
-the binary's shape — it imports `_NSExtensionMain` from Foundation and
+entitlement, a crash (no diagnostic report ever appeared), and the
+binary's shape — it imports `_NSExtensionMain` from Foundation and
 exports its principal class exactly as iCloud Drive's own extension
 does, and both exit silently when run directly.
+
+### The debt this leaves
+
+The extension reads the live tree directly, which the sandbox forbids
+(`NSCocoaErrorDomain 257`, "you don't have permission to view it"), so
+it carries `com.apple.security.temporary-exception.files.absolute-path.read-write`
+scoped to `/` — a root is wherever its owner keeps it, including an
+external drive, so nothing narrower is honest.
+
+Apple grants that for Developer-ID distribution, which is what the DMG
+is, and reviews it out of App Store submissions. **So this is the reason
+a Mac App Store build cannot ship**, and the way out is to stop touching
+files here at all: the agent already owns the store, and an extension
+that asked it to enumerate and to stage content would need no file
+access whatsoever. That is the design to converge on.
+
+Second, smaller: `fetchContents` copies the file into a staging path for
+the system to take, so a 200 MB fetch moves 200 MB twice. Fine for a
+first cut, worth removing when the above is done.
 
 The app registers the domains itself, on pairing: only the containing
 app may, and it is idempotent, so it runs on every pairing.

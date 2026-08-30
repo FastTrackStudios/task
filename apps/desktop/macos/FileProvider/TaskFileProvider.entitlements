@@ -28,5 +28,29 @@
          what lets the extension follow them there. -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
+
+    <!-- The extension reads and writes the live tree directly, and the
+         sandbox otherwise forbids it: a root at ~/Task/<project> came
+         back as NSCocoaErrorDomain 257, "you don't have permission to
+         view it", and the folder listed empty with no other sign of
+         why. `user-selected.read-write` does not help — it grants what
+         a person picked in an open panel, and nobody picks anything
+         here.
+
+         Scoped to `/` because a root is wherever its owner keeps it.
+         The agent takes a `roots` directory precisely so a machine with
+         a small disk can put projects on an external drive, so any
+         narrower path would be a limit disguised as a permission.
+
+         **This is a debt, and it is the reason a Mac App Store build
+         cannot ship.** Apple grants temporary exceptions for
+         Developer-ID distribution, which is what the DMG is, and
+         reviews them out of App Store submissions. The way out is to
+         stop touching files here at all: the agent already owns the
+         store, and an extension that asked it to enumerate and to
+         stage content would need no file access whatsoever. That is
+         the design this should converge on — see docs/sync.md. -->
+    <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+    <array><string>/</string></array>
 </dict>
 </plist>
