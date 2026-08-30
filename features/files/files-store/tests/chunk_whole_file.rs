@@ -447,3 +447,49 @@ async fn replacing_the_live_file_versions_it_and_keeps_the_old_one() {
     );
     assert_eq!(store.read_to_vec(v2).await.unwrap(), edited);
 }
+
+/// The stored blob must be **the same inode** as the file it came from.
+///
+/// `linking_content_in_consumes_no_space` measures free space, which is
+/// the property that matters and the one a filesystem can lie about. NFS
+/// 4.2 does: `reflink` there is a server-side COPY that returns `Ok`,
+/// leaves a second independent inode holding a second copy of every
+/// byte, and reports nothing. On a real NAS that took a 120 MB file to
+/// 280 MB, and would have asked a 5 TB archive for another 5 TB — while
+/// every test here passed, because on tmpfs and ext4 reflink simply
+/// fails and the hard-link fallback ran.
+///
+/// Inode identity cannot be faked by a filesystem that copies. This is
+/// the assertion that would have caught it.
+#[tokio::test]
+async fn a_placed_blob_shares_the_original_inode() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+    let path = dir.path().join("take.wav");
+    tokio::fs::write(&path, content(4 * 1024 * 1024)).await.unwrap();
+
+    let file_id = store.write_path(&path).await.unwrap();
+    store.shutdown().await.unwrap();
+
+    let source = std::fs::metadata(&path).unwrap();
+    let placed = std::fs::read_dir(dir.path().join("whole"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .flat_map(|shard| std::fs::read_dir(shard.path()).into_iter().flatten())
+        .filter_map(|e| e.ok())
+        .flat_map(|shard| std::fs::read_dir(shard.path()).into_iter().flatten())
+        .filter_map(|e| e.ok())
+        .map(|e| std::fs::metadata(e.path()).unwrap())
+        .find(|m| m.len() == source.len())
+        .expect("the whole tier should hold this file");
+
+    assert_eq!(
+        placed.ino(),
+        source.ino(),
+        "the store's blob is a different inode — it was copied, not linked"
+    );
+    assert!(source.nlink() >= 2, "the source should now be linked from the store");
+    let _ = file_id;
+}
