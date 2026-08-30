@@ -608,6 +608,33 @@ impl SyncDaemon {
         path: &std::path::Path,
         name: Option<String>,
     ) -> Result<files_proto::model::FileRootInfo> {
+        self.share_capturing(path, name, true).await
+    }
+
+    /// [`Self::share`], with a say over whether the first capture
+    /// happens now.
+    ///
+    /// Registering a root is instant — it records a directory. Capturing
+    /// it reads every byte to hash them, which on a 210 GB project over
+    /// NFS is an hour during which nothing at all appears. Adopting an
+    /// archive one project at a time that way means the last project
+    /// shows up a day after the first.
+    ///
+    /// So the two are separable. `capture: false` registers the root and
+    /// returns: it is listed, browsable, and mountable immediately, and
+    /// its version history fills in when something checkpoints it.
+    ///
+    /// The default stays `true`, because the alternative is a root that
+    /// looks shared and syncs as an empty tree — content reaches a peer
+    /// from the store, so a root that has never been captured has
+    /// nothing to send. A caller that defers is taking that on
+    /// deliberately.
+    pub async fn share_capturing(
+        &self,
+        path: &std::path::Path,
+        name: Option<String>,
+        capture: bool,
+    ) -> Result<files_proto::model::FileRootInfo> {
         let path = path
             .canonicalize()
             .map_err(|e| DaemonError::Io(format!("{}: {e}", path.display())))?;
@@ -636,7 +663,9 @@ impl SyncDaemon {
                 files_proto::model::RootFlavor::Media,
             )
             .await?;
-        self.inner.backend.checkpoint_now(root.id, None).await?;
+        if capture {
+            self.inner.backend.checkpoint_now(root.id, None).await?;
+        }
         // Watched from here on, so later edits are captured without
         // anyone asking — the same thing `start_capture` does for the
         // roots that already existed.
@@ -756,6 +785,58 @@ impl SyncDaemon {
             outcomes.push((place, error));
         }
         outcomes
+    }
+
+    /// Capture every root that has never been captured, smallest first.
+    ///
+    /// The drain for [`Self::share_capturing`] with `capture: false`. An
+    /// archive adopted that way is browsable at once and syncable as
+    /// this works through it, which is the difference between a studio
+    /// seeing its projects now and seeing them tomorrow.
+    ///
+    /// **Smallest first, deliberately.** Largest-first finishes the same
+    /// total in the same time while showing nothing for the first hour;
+    /// smallest-first has most of the projects ready early and leaves
+    /// the one 210 GB session for last. Same work, and somebody can use
+    /// it while it runs.
+    ///
+    /// Returns what it captured. Errors are per-root: a project that
+    /// cannot be read should not stop the other thirty.
+    pub async fn capture_pending(&self) -> Vec<(String, Option<String>)> {
+        let roots = match self.shares().await {
+            Ok(roots) => roots,
+            Err(e) => return vec![("(the roots)".into(), Some(e.to_string()))],
+        };
+
+        // Uncaptured means "no history yet". A root with a checkpoint
+        // has a version; one that has never been captured has none.
+        let mut pending = Vec::new();
+        for root in roots {
+            let Some(path) = root.path.clone() else {
+                continue;
+            };
+            if std::path::Path::new(&path).join(".fts-files").is_dir() {
+                continue;
+            }
+            let bytes = directory_bytes(std::path::Path::new(&path));
+            pending.push((bytes, root.id, root.name));
+        }
+        pending.sort_by_key(|(bytes, _, _)| *bytes);
+
+        let mut done = Vec::new();
+        for (_, id, name) in pending {
+            let error = self
+                .inner
+                .backend
+                .checkpoint_now(id, None)
+                .await
+                .err()
+                .map(|e| e.to_string());
+            tracing::info!(root = %name, ok = error.is_none(), "captured a root");
+            done.push((name, error));
+            self.inner.events.publish(self.status());
+        }
+        done
     }
 
     /// Stop holding a root: no longer served to peers, no longer
@@ -1489,3 +1570,29 @@ impl SyncDaemon {
 /// Re-export the event hub type from the crate's `hub` shim so the
 /// service layer and the daemon share one publisher.
 pub use crate::hub::EventHub;
+
+/// Rough size of a directory tree, for ordering work by it.
+///
+/// Deliberately cheap and deliberately approximate: it is deciding what
+/// to hash first, and a `stat` walk that is wrong by a few percent picks
+/// the same order as an exact one. Unreadable entries are skipped rather
+/// than failing — a size used for sorting must never be the thing that
+/// stops the work.
+fn directory_bytes(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
+}

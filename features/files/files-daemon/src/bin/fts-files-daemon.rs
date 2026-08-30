@@ -132,6 +132,8 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon status                   what the running agent is doing
     fts-files-daemon checkpoint <root-id>     force a save point now (before unplugging)
     fts-files-daemon share <dir> [--name N]   share a folder from this machine
+    fts-files-daemon share <dir> --later      register it now, read its bytes later
+    fts-files-daemon capture                  capture what has not been captured yet
     fts-files-daemon shares                   every root this machine holds
     fts-files-daemon unshare <root>           stop holding one (the files stay)
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
@@ -168,7 +170,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some(
             "status" | "checkpoint" | "share" | "shares" | "unshare" | "peer" | "forget"
             | "resolve" | "mount" | "unmount" | "mounts" | "evict" | "fetch" | "place"
-            | "mount-all",
+            | "mount-all" | "capture",
         ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -460,17 +462,30 @@ async fn checkpoint(root: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Share a folder from this machine, through the running agent.
-async fn share(dir: &str, name: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+async fn share(
+    dir: &str,
+    name: Option<String>,
+    later: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let path = std::fs::canonicalize(dir).map_err(|e| format!("{dir}: {e}"))?;
-    let (id, name) = control()
-        .await?
-        .share(path.to_string_lossy().into_owned(), name)
-        .await?;
-    println!("sharing {name}  ({id})");
+    let client = control().await?;
+    let here = path.to_string_lossy().into_owned();
+    let root = if later {
+        client.share_deferred(here, name).await?
+    } else {
+        let (id, name) = client.share(here, name).await?;
+        println!("sharing {name}  ({id})");
+        println!("{}", path.display());
+        println!();
+        println!("on the other machine:");
+        println!("    fts-files-daemon peer {}", endpoint_id()?);
+        return Ok(());
+    };
+    println!("registered {}  ({})", root.name, root.id);
     println!("{}", path.display());
     println!();
-    println!("on the other machine:");
-    println!("    fts-files-daemon peer {}", endpoint_id()?);
+    println!("it is browsable now; nothing has read its bytes yet, so it would");
+    println!("sync as an empty tree. `fts-files-daemon capture` fills that in.");
     Ok(())
 }
 
@@ -625,6 +640,35 @@ async fn unmount(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     let id = root_id(&client, root).await?;
     client.unmount(id).await?;
     println!("unmounted {root} — the files are still on disk, in the root's own tree");
+    Ok(())
+}
+
+/// Capture every root that has never been captured.
+///
+/// The drain for `share --later`: an archive is browsable the moment it
+/// is registered, and this fills in the history behind it, smallest
+/// project first so most of it is syncable early.
+async fn capture() -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let done = client.capture_pending().await?;
+    if done.is_empty() {
+        println!("every root has been captured");
+        return Ok(());
+    }
+    let mut failed = 0;
+    for (name, error) in &done {
+        match error {
+            None => println!("  captured  {name}"),
+            Some(why) => {
+                failed += 1;
+                println!("  {name} — {why}");
+            }
+        }
+    }
+    println!("\n{} captured", done.len() - failed);
+    if failed > 0 {
+        println!("{failed} could not be");
+    }
     Ok(())
 }
 
@@ -821,8 +865,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .position(|a| a == "--name")
                 .and_then(|i| args.get(i + 1))
                 .cloned();
-            return share(&dir, name).await;
+            // `--later` registers the root and returns. On an archive
+            // that matters: capturing a 210 GB project reads every byte,
+            // so adopting thirty of them one after another shows the
+            // last one a day after the first.
+            let later = args.iter().any(|a| a == "--later");
+            return share(&dir, name, later).await;
         }
+        Some("capture") => return capture().await,
         Some("peer") => {
             let id = args.get(1).ok_or("peer needs an endpoint id")?.clone();
             return peer(&id).await;

@@ -108,6 +108,23 @@ pub trait DaemonControlService {
     /// Without this the agent could only ever hold what somebody else
     /// already held — fine for a laptop taking an org's projects, and
     /// useless for two machines that just want the same folder.
+    /// Share a folder without capturing it yet.
+    ///
+    /// Registering a root is instant; capturing reads every byte. An
+    /// archive adopted with `capture: false` is listed and browsable at
+    /// once, and [`Self::capture_pending`] fills the history in.
+    async fn share_deferred(
+        &self,
+        path: String,
+        name: Option<String>,
+    ) -> Result<files_proto::model::FileRootInfo, DaemonError>;
+
+    /// Capture every root that has never been captured, smallest first,
+    /// so most of an archive is syncable early rather than all of it at
+    /// the end. Returns each root and what went wrong with it, if
+    /// anything.
+    async fn capture_pending(&self) -> Result<Vec<(String, Option<String>)>, DaemonError>;
+
     async fn share(&self, path: String, name: Option<String>)
     -> Result<(Uuid, String), DaemonError>;
 

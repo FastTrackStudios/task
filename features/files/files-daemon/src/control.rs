@@ -66,6 +66,20 @@ impl DaemonControlService for DaemonControl {
             .collect())
     }
 
+    async fn share_deferred(
+        &self,
+        path: String,
+        name: Option<String>,
+    ) -> Result<files_proto::model::FileRootInfo, DaemonError> {
+        self.daemon
+            .share_capturing(std::path::Path::new(&path), name, false)
+            .await
+    }
+
+    async fn capture_pending(&self) -> Result<Vec<(String, Option<String>)>, DaemonError> {
+        Ok(self.daemon.capture_pending().await)
+    }
+
     async fn share(
         &self,
         path: String,
