@@ -1,0 +1,35 @@
+[package]
+name = "files-fileprovider"
+description = "The C ABI a macOS File Provider extension is built on: read a pointer stub's real size, and ask the running sync agent to hydrate a path. The Swift appex owns the NSFileProvider callbacks; everything that knows what a stub is, or how to reach the agent, is here."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# A static library, because that is what an appex links: the extension
+# is loaded into a system-provided host process, and a dylib alongside
+# it would be one more thing to sign, embed and find at runtime.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# The stub format. Reporting a dehydrated file at its real size is the
+# whole reason the extension exists, and the authority on that size is
+# the stub file itself — no sidecar, so no drift.
+files = { workspace = true }
+files-daemon-proto = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+vox = { workspace = true, features = ["transport-websocket"] }
+architect = { workspace = true, features = ["vox"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }

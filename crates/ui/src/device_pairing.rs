@@ -90,6 +90,49 @@ pub(crate) mod native {
         candidate.exists().then_some(candidate)
     }
 
+    /// Make Finder show one folder per synced root (macOS).
+    ///
+    /// A File Provider domain may only be registered by the app that
+    /// contains the extension — not by the extension, and not by the
+    /// agent, which is a launchd service with no bundle at all. So the
+    /// app runs the small tool shipped beside it, which reads the roots
+    /// off the agent and makes the registered domains match.
+    ///
+    /// Best-effort by design: it is idempotent, so running it on every
+    /// pairing is the intended use, and a machine where it fails still
+    /// syncs — it just does not show the folders. Failing the pairing
+    /// over that would be trading the working half for the missing one.
+    ///
+    /// Linux needs none of this: there the agent mounts the tree itself
+    /// (`fts-files-daemon mount`), because FUSE lets it.
+    #[cfg(target_os = "macos")]
+    fn show_in_finder() {
+        let Some(tool) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.join("TaskFileProviderDomains")))
+            .filter(|p| p.exists())
+        else {
+            tracing::debug!("no file provider tool beside the app — nothing to register");
+            return;
+        };
+        match Command::new(&tool).arg("sync").output() {
+            Ok(out) if out.status.success() => {
+                tracing::info!(
+                    "sync: {}",
+                    String::from_utf8_lossy(&out.stdout).trim()
+                );
+            }
+            Ok(out) => tracing::warn!(
+                "sync: could not register the Finder folders — {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+            Err(e) => tracing::warn!("sync: could not run the file provider tool: {e}"),
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn show_in_finder() {}
+
     /// Ask the agent a one-line question.
     fn ask(agent: &PathBuf, args: &[&str]) -> Result<String, String> {
         let out = Command::new(agent)
@@ -198,6 +241,7 @@ pub(crate) mod native {
         match local_agent().await {
             Ok(client) => match client.set_coordinator(coordinator.clone()).await {
                 Ok(_) => {
+                    show_in_finder();
                     return format!(
                         "sync: this machine ({}) is paired with {slug} ({}) — told the running agent",
                         short(&endpoint),
@@ -219,11 +263,14 @@ pub(crate) mod native {
             .args(["install", "--coordinator", &coordinator])
             .output()
         {
-            Ok(out) if out.status.success() => format!(
-                "sync: this machine ({}) is paired with {slug} ({}) — installed the agent as a service",
-                short(&endpoint),
-                short(&coordinator)
-            ),
+            Ok(out) if out.status.success() => {
+                show_in_finder();
+                format!(
+                    "sync: this machine ({}) is paired with {slug} ({}) — installed the agent as a service",
+                    short(&endpoint),
+                    short(&coordinator)
+                )
+            }
             Ok(out) => format!(
                 "sync: not paired — {}",
                 String::from_utf8_lossy(&out.stderr).trim()

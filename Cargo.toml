@@ -69,6 +69,7 @@ members = [
     "features/files/files-daemon",
     "features/files/files-daemon-proto",
     "features/files/files-domain",
+    "features/files/files-fileprovider",
     "features/files/files-fuse",
     "features/files/files-proto",
     "features/files/files-storage",
@@ -220,6 +221,7 @@ files = { path = "features/files/files" }
 files-daemon = { path = "features/files/files-daemon" }
 files-daemon-proto = { path = "features/files/files-daemon-proto" }
 files-domain = { path = "features/files/files-domain" }
+files-fileprovider = { path = "features/files/files-fileprovider" }
 files-fuse = { path = "features/files/files-fuse" }
 files-proto = { path = "features/files/files-proto", default-features = false }
 files-storage = { path = "features/files/files-storage" }

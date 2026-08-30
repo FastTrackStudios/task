@@ -109,6 +109,31 @@ echo "=== building the sync agent ==="
 "
 cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
 
+# ── The cloud folder ────────────────────────────────────────────────────────
+# The File Provider extension is what makes a synced root show up in Finder
+# with everything listed and only some of it held — Linux gets the same
+# behaviour from a FUSE mount the agent serves, which macOS has no equivalent
+# of. An appex must live in Contents/PlugIns to be found, and the small tool
+# that registers one domain per root goes beside the agent, because only the
+# containing app may register a domain at all.
+#
+# Skippable: SKIP_FILEPROVIDER=1 builds a DMG whose app syncs but shows
+# nothing in Finder. Worth having as a knob, not as a default.
+if [ -z "${SKIP_FILEPROVIDER:-}" ]; then
+    echo "=== building the file provider extension ==="
+    "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
+        set -euo pipefail
+        TEAM_ID='${TEAM_ID:-}' SIGN_ID='$SIGN_ID' \
+            bash '$SCRIPT_DIR/build-fileprovider.sh'
+    "
+    mkdir -p "$APP/Contents/PlugIns"
+    rm -rf "$APP/Contents/PlugIns/TaskFileProvider.appex"
+    cp -R "$ROOT/target/fileprovider/TaskFileProvider.appex" \
+        "$APP/Contents/PlugIns/TaskFileProvider.appex"
+    cp "$ROOT/target/fileprovider/TaskFileProviderDomains" \
+        "$APP/Contents/MacOS/TaskFileProviderDomains"
+fi
+
 # ── Info.plist ──────────────────────────────────────────────────────────────
 pb() { /usr/libexec/PlistBuddy -c "Set :$1 $2" "$PLIST" 2>/dev/null \
       || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$PLIST"; }
@@ -152,6 +177,18 @@ find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0
 # not through the app, so it is verified on its own terms.
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
     --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP/Contents/MacOS/fts-files-daemon"
+# The extension carries its own entitlements, not the app's: it must be
+# sandboxed (the system will not load one that is not) where the app must not
+# be, since an App-Sandboxed app cannot register the agent as a LaunchAgent.
+# Two programs, two sets of rules, signed separately for that reason.
+if [ -d "$APP/Contents/PlugIns/TaskFileProvider.appex" ]; then
+    codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
+        --entitlements "$SCRIPT_DIR/FileProvider/TaskFileProvider.entitlements" \
+        --sign "$SIGN_ID" "$APP/Contents/PlugIns/TaskFileProvider.appex"
+    codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$SIGN_ID" "$APP/Contents/MacOS/TaskFileProviderDomains"
+fi
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
     --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"

@@ -313,11 +313,48 @@ Writes, renames and mkdir through the mount are ordinary writes to the
 tree underneath, so the watcher, the cadence engine and checkpointing
 see them exactly as they see any other edit.
 
-**macOS gets this through a File Provider extension**, not FUSE: the
-system loads it from the app bundle and asks *it* for material, where
-here the kernel asks us. The seam is the same one the CLI uses — the
-agent's control socket — so the Swift side is a client of
-`DaemonControlService` and nothing in the engine changes.
+## The cloud folder on macOS
+
+macOS has no FUSE, and does not need one: the system loads a **File
+Provider extension** out of the app bundle and asks *it* for material,
+where on Linux the kernel asks us. Same behaviour, opposite direction.
+
+Three pieces, in `apps/desktop/macos/FileProvider/`:
+
+| piece | what it is |
+|---|---|
+| `TaskFileProvider.appex` | the extension the system loads — enumerate, fetch, write |
+| `TaskFileProviderDomains` | registers one Finder folder per synced root |
+| `files-fileprovider` (Rust) | the C ABI underneath: stub sizes, and the agent |
+
+The split is deliberate. Swift owns the `NSFileProvider` callbacks
+because nothing else can, and the two questions it must not answer for
+itself — how big a dehydrated file really is, and how to get its bytes
+— go to Rust: the first because the authority on that size is the
+pointer stub, the second because **hydration writes into the store, and
+the agent owns the store.** Two processes holding one jj repo is the bug
+this avoids by construction. So `fetchContents` asks the agent over the
+same control socket the CLI uses, and the agent materializes into the
+live tree — which is on disk, so enumerating and writing are ordinary
+`FileManager` work against it.
+
+```bash
+bash apps/desktop/macos/build-fileprovider.sh       # the extension alone
+bash apps/desktop/macos/build-dmg.sh                # the app, with it inside
+Task.app/Contents/MacOS/TaskFileProviderDomains roots   # can this Mac see the agent?
+```
+
+`roots` is the diagnostic worth knowing: registering a domain needs a
+signed bundle and an entitlement, reaching the agent needs neither, and
+from Finder the two failures look identical. It answers with the roots
+the agent holds, or says the agent is not there.
+
+macOS will not load an unsigned File Provider extension, so a build with
+no `TEAM_ID` is for inspection only — the script says so rather than
+producing something that silently does nothing.
+
+The app registers the domains itself, on pairing: only the containing
+app may, and it is idempotent, so it runs on every pairing.
 
 ## Known gaps
 
@@ -326,9 +363,20 @@ agent's control socket — so the Swift side is a client of
   org's files directory. Off by default: where a tree lands is a
   placement decision, and a sweep answering it silently would let any
   admitted machine create directories in the org.
-- **The macOS File Provider extension is not written yet.** `mount` on a
-  Mac refuses with a message saying so rather than pretending. Linux has
-  the mount today.
+- **The File Provider extension has not been seen in Finder.** It builds
+  and links on a Mac, and its Rust half is verified there against a
+  running agent — `stat` reports a stub's 128 bytes where the bridge
+  reports the content's 200 MB, and a fetch brings the file back. What
+  is untested is the last step: a signed build, installed, showing the
+  folder. That needs a Developer-ID certificate this repo's development
+  machine cannot hold, so the first run on a Mac is the first real test.
+  `fts-files-daemon mount` on a Mac refuses with a message saying the
+  extension's job is the extension's, rather than pretending.
+- **The extension re-enumerates rather than watching.**
+  `enumerateChanges` reports its anchor expired, which is correct and
+  merely wasteful: the system re-lists instead of being told what
+  changed. Answering "nothing changed" would be the cheap lie — the
+  system takes it at face value and would show a stale tree forever.
 - **Windows has no service integration.** The agent runs; nothing
   registers it to start at login.
 - **The DMG script has not been run.** It is written against the same

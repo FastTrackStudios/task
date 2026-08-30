@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Task Files</string>
+    <key>CFBundleExecutable</key>
+    <string>TaskFileProvider</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.fasttrackstudio.task.fileprovider</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>TaskFileProvider</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.2</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionFileProviderDocumentGroup</key>
+        <string>group.app.fasttrackstudio.task</string>
+        <!-- The replicated (macOS 11+) API: the system keeps the
+             materialized copies and asks us for content, which is what
+             lets a file be listed without being held. The older
+             non-replicated API cannot express that. -->
+        <key>NSExtensionFileProviderSupportsEnumeration</key>
+        <true/>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.fileprovider-nonui</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>TaskFileProvider.FileProviderExtension</string>
+    </dict>
+</dict>
+</plist>
