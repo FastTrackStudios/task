@@ -12,8 +12,8 @@
        closes — the whole reason this build exists. Sandboxing it would
        produce an app that installs nothing and reports success.
 
-       Hardened runtime IS on (codesign --options runtime), because
-       notarization requires it. The keys below are the holes that
+       Hardened runtime IS on (the codesign "options runtime" flag),
+       because notarization requires it. The keys below are the holes that
        runtime needs left open, and nothing else. -->
 
   <!-- The vox client: WebSockets and HTTP out to task-server, plus

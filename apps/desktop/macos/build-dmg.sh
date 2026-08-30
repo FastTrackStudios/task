@@ -167,6 +167,14 @@ echo "=== app: $PRODUCT_NAME ($DX_BUNDLE_ID) $MARKETING_VER build $BUILD_NO ==="
 # invalidates the outer signature.
 echo "=== signing (Developer ID + hardened runtime) ==="
 ENTITLEMENTS="$SCRIPT_DIR/Task-devid.entitlements"
+# Checked, not assumed. codesign hands entitlements to AMFI, which
+# answers a malformed plist with "AMFIUnserializeXML: syntax error near
+# line N" — no filename — and signs anyway, so the entitlements are
+# simply absent and the first symptom is a feature that does nothing.
+# This file *was* malformed (XML forbids a double hyphen inside a
+# comment, and a comment here quoted a command-line flag), which nothing
+# noticed because the script had never been run.
+plutil -lint "$ENTITLEMENTS" >/dev/null
 find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0 \
     | while IFS= read -r -d '' f; do
         codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \

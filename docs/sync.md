@@ -353,6 +353,29 @@ macOS will not load an unsigned File Provider extension, so a build with
 no `TEAM_ID` is for inspection only — the script says so rather than
 producing something that silently does nothing.
 
+### When you sign it
+
+Three things bite in this order, and all three are silent:
+
+1. **The entitlements plist must parse.** codesign hands it to AMFI,
+   which reports `AMFIUnserializeXML: syntax error near line N` — no
+   filename — and then signs anyway, so the entitlements are simply
+   absent and the extension never loads. Both scripts now `plutil -lint`
+   first. (Both files were malformed: XML forbids a double hyphen inside
+   a comment, and each had a comment quoting a command-line flag.)
+2. **The keychain must be unlocked.** Signing from an SSH session fails
+   with `errSecInternalComponent`, which mentions neither keychains nor
+   sessions. Pass `KEYCHAIN_PW`, or sign from a terminal on the machine.
+3. **The app group and the extension point need a provisioning profile**
+   matching the App ID. `com.apple.security.application-groups` is a
+   restricted entitlement; an Apple Development identity signs the
+   bundle without one, but the system will not load the result.
+
+Ad-hoc signing is verified to produce a well-formed bundle
+(`codesign --verify --deep --strict` passes, and all four entitlements
+are embedded). What is untested is anything past that: a Developer-ID
+signature, a notarized DMG, and the extension appearing in Finder.
+
 The app registers the domains itself, on pairing: only the containing
 app may, and it is idempotent, so it runs on every pairing.
 

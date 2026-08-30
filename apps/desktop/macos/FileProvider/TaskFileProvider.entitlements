@@ -24,7 +24,7 @@
 
     <!-- Roots can live anywhere a person keeps their projects —
          including an external drive, which is the whole reason the
-         agent takes a --roots flag. A user-selected read-write scope is
+         agent takes a "roots" flag. A user-selected read-write scope is
          what lets the extension follow them there. -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>

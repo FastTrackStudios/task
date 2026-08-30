@@ -15,6 +15,10 @@
 #   SIGN_ID      codesign identity        (default: "Apple Development")
 #   TARGETS      rust targets to build    (default: both arches)
 #   PROFILE      cargo profile            (default: release)
+#   KEYCHAIN_PW  unlock the keychain first — needed when signing from an
+#                SSH session, where codesign otherwise fails with the
+#                unhelpful `errSecInternalComponent`
+#   KEYCHAIN     which keychain to unlock (default: login.keychain-db)
 #
 # Deliberately not an Xcode project. The rest of this app is built by
 # `dx` and shell, an .xcodeproj is a generated file nobody can review in
@@ -69,7 +73,12 @@ echo "   $(lipo -archs "$LIB")"
 echo "── the extension ───────────────────────────────────────────────"
 APPEX="$OUT_DIR/TaskFileProvider.appex"
 rm -rf "$APPEX"
-mkdir -p "$APPEX/Contents/MacOS"
+# Resources is empty and still required: codesign signs a bundle with a
+# resource seal, and `codesign --verify --strict` on one with nowhere to
+# put it fails with "code has no resources but signature indicates they
+# must be present" — a sentence that names neither the bundle nor the
+# missing directory.
+mkdir -p "$APPEX/Contents/MacOS" "$APPEX/Contents/Resources"
 cp "$SRC/Info.plist" "$APPEX/Contents/Info.plist"
 
 HEADER="$ROOT/features/files/files-fileprovider/include/fts_fileprovider.h"
@@ -114,9 +123,27 @@ swiftc "${SWIFT_FLAGS[@]}" \
     "$SRC/Bridge.swift" "$SRC/Domains.swift"
 
 echo "── signing ─────────────────────────────────────────────────────"
+# An entitlements file is a plist, and codesign hands it to AMFI, whose
+# parser answers a malformed one with "AMFIUnserializeXML: syntax error
+# near line N" — no filename, and it does not stop the signature being
+# written, so the first symptom is an extension the system silently
+# refuses to load. XML forbids a double hyphen inside a comment, which
+# is easy to write and impossible to see; `plutil -lint` says which file
+# and which line, here, before any of that.
+ENTITLEMENTS="$SRC/TaskFileProvider.entitlements"
+plutil -lint "$ENTITLEMENTS" >/dev/null
+
+# Signing needs the private key, and the login keychain is locked in a
+# session with no window server — an SSH shell, a CI runner. codesign
+# answers that with `errSecInternalComponent`, which says nothing about
+# keychains at all. Same knob as build-dmg.sh, for the same reason.
+if [ -n "${KEYCHAIN_PW:-}" ]; then
+    security unlock-keychain -p "$KEYCHAIN_PW" "${KEYCHAIN:-login.keychain-db}"
+fi
+
 if [ -n "${TEAM_ID:-}" ]; then
     codesign --force --timestamp --options runtime \
-        --entitlements "$SRC/TaskFileProvider.entitlements" \
+        --entitlements "$ENTITLEMENTS" \
         --sign "$SIGN_ID" "$APPEX"
     codesign --force --timestamp --options runtime \
         --sign "$SIGN_ID" "$OUT_DIR/TaskFileProviderDomains"
@@ -127,7 +154,7 @@ else
     # system will not load an unsigned File Provider extension, and
     # saying so here is better than a silent no-op in Finder.
     codesign --force --sign - \
-        --entitlements "$SRC/TaskFileProvider.entitlements" "$APPEX" 2>/dev/null || true
+        --entitlements "$ENTITLEMENTS" "$APPEX" 2>/dev/null || true
     codesign --force --sign - "$OUT_DIR/TaskFileProviderDomains" 2>/dev/null || true
     echo "   ad-hoc only (no TEAM_ID) — macOS will not load this extension"
     echo "   set TEAM_ID and SIGN_ID to produce a loadable build"
