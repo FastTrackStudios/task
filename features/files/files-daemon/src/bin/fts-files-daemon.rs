@@ -413,6 +413,9 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|e| format!("  ({e})"))
                 .unwrap_or_default()
         );
+        if let Some(at) = &root.mounted_at {
+            println!("    showing as a folder at  {at}");
+        }
         // The one thing here that needs a person. Named, not counted:
         // "2 divergent paths" tells somebody there is a problem and
         // nothing about which file, and the next thing they would have

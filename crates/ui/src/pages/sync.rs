@@ -176,11 +176,80 @@ fn RootRow(root: files_daemon_proto::RootStatus) -> Element {
             if let Some(why) = root.last_error.clone() {
                 Text { variant: TextVariant::Muted, class: "text-xs", "{why}" }
             }
+            MountRow { root_id: root.root_id, name: root.name.clone(), mounted_at: root.mounted_at.clone() }
             // The one thing here that needs a decision. Named, with the
             // action beside it — a person told "2 conflicts" still has
             // to go and find out which files.
             for path in root.divergent.iter().cloned() {
                 DivergentPath { root_id: root.root_id, path }
+            }
+        }
+    }
+}
+
+/// Showing a folder, or the button that starts.
+///
+/// The cloud-folder half: a mounted root lists everything at its real
+/// size and fetches what this machine does not hold when something
+/// opens it. Where it mounts is not asked — `~/Task/<name>` is the
+/// answer for almost everybody, and a path picker in front of a feature
+/// whose whole point is "it is just a folder" is a question nobody
+/// wants. The CLI takes an explicit directory for the case this does
+/// not fit.
+#[cfg(not(target_arch = "wasm32"))]
+#[component]
+fn MountRow(root_id: uuid::Uuid, name: String, mounted_at: Option<String>) -> Element {
+    let mut working = use_signal(|| false);
+    let mut failed = use_signal(|| None::<String>);
+    let at = mounted_at.clone();
+    let for_click = name.clone();
+
+    rsx! {
+        div { class: "flex items-center justify-between gap-3",
+            div { class: "flex flex-col",
+                match at.clone() {
+                    Some(where_) => rsx! {
+                        Text { variant: TextVariant::Muted, class: "text-xs", "showing at {where_}" }
+                    },
+                    None => rsx! {
+                        Text {
+                            variant: TextVariant::Muted,
+                            class: "text-xs",
+                            "not showing as a folder — mount it to browse the whole project and open what this machine does not hold"
+                        }
+                    },
+                }
+                if let Some(why) = failed.read().clone() {
+                    Text { variant: TextVariant::Muted, class: "text-xs", "{why}" }
+                }
+            }
+            Button {
+                disabled: *working.read(),
+                on_click: move |_| {
+                    let name = for_click.clone();
+                    let mounted = at.is_some();
+                    working.set(true);
+                    failed.set(None);
+                    spawn(async move {
+                        let outcome = match agent().await {
+                            Ok(client) => {
+                                if mounted {
+                                    client.unmount(root_id).await.map_err(|e| e.to_string())
+                                } else {
+                                    let home = std::env::var("HOME").unwrap_or_default();
+                                    let at = format!("{home}/Task/{name}");
+                                    client.mount(root_id, at).await.map_err(|e| e.to_string())
+                                }
+                            }
+                            Err(e) => Err(e),
+                        };
+                        if let Err(e) = outcome {
+                            failed.set(Some(e));
+                        }
+                        working.set(false);
+                    });
+                },
+                if mounted_at.is_some() { "Stop showing" } else { "Show as a folder" }
             }
         }
     }

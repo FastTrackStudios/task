@@ -1297,6 +1297,7 @@ impl SyncDaemon {
         let identity = self.inner.identity.lock().expect("identity lock");
         let roots_cfg = self.inner.roots.lock().expect("roots lock");
         let live = self.inner.live.roots.lock().expect("status lock");
+        let mounts = self.inner.mounts.lock().expect("mount lock");
         let roots = roots_cfg
             .iter()
             .map(|(id, cfg)| {
@@ -1326,6 +1327,9 @@ impl SyncDaemon {
                     chunks_skipped: rs.map_or(0, |s| s.chunks_skipped),
                     last_synced_at: rs.and_then(|s| s.last_synced_at),
                     last_error: rs.and_then(|s| s.last_error.clone()),
+                    mounted_at: mounts
+                        .get(id)
+                        .map(|(at, _)| at.to_string_lossy().into_owned()),
                 }
             })
             .collect();

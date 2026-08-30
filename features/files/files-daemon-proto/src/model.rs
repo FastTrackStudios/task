@@ -102,6 +102,13 @@ pub struct RootStatus {
     pub last_synced_at: Option<DateTime<Utc>>,
     /// The last pull's error, if it failed.
     pub last_error: Option<String>,
+    /// Where this root is showing as a folder, if it is.
+    ///
+    /// Carried in the status rather than fetched separately so a
+    /// surface that already polls this — the app's sync page — can show
+    /// "mounted at …" without a second round trip that could disagree
+    /// with the first.
+    pub mounted_at: Option<String>,
 }
 
 impl RootStatus {
