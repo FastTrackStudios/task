@@ -371,6 +371,24 @@ Three things bite in this order, and all three are silent:
    restricted entitlement; an Apple Development identity signs the
    bundle without one, but the system will not load the result.
 
+### Switch it on
+
+macOS ships a third-party File Provider **disabled**, and nothing says
+so where you would look. The folder appears in Finder; every operation
+inside it fails with `NSFileProviderErrorDomainDisabled` (-2011, "Sync
+is not enabled"), which reaches you as a directory listing that *hangs*
+rather than as anything mentioning a switch.
+
+> System Settings › General › Login Items & Extensions › File Providers
+
+Dropbox and Google Drive need the same flip; they just have an onboarding
+screen that asks for it. `TaskFileProviderDomains list` reports the state
+per domain, so this is diagnosable from a terminal:
+
+```
+sharetest  6baee5f2-…  OFF — switch it on in System Settings › …
+```
+
 ### Where it actually stands
 
 Signed with a real Developer ID certificate on airlock, and taken as far
@@ -383,13 +401,17 @@ as it goes today:
 | the Rust half against a live agent | ✅ stub reports 200 MB where stat says 128 B |
 | a domain registers | ✅ macOS creates `~/Library/CloudStorage/<app>-<root>` |
 | the system loads the extension | ✅ it spawns the process |
-| **enumerating the folder** | ❌ `ls` times out; the extension never answers |
+| **enumerating the folder** | ⏸ blocked on the System Settings switch — the domain reports `userEnabled = false`, and every call fails `-2011` |
 
 `try-fileprovider.sh` is the harness that got this far — the smallest
 signed app that can register a domain, so the question can be asked
 without building the whole app.
 
-Two things learned that are not obvious and cost a while:
+Three things learned that are not obvious and cost a while:
+
+- **A registered domain is off until the user turns it on**, and the
+  symptom is a hang rather than a refusal — see above. Read the state
+  with `TaskFileProviderDomains list` rather than guessing at it.
 
 - **A bundle outside `/Applications` is not discovered.**
   `NSFileProviderManager.add` refuses with "The application cannot be
@@ -403,11 +425,24 @@ Two things learned that are not obvious and cost a while:
   one. The lookup is lazy now, and every bridge call has a deadline — a
   filesystem extension that can hang forever is a hung Finder.
 
-What is left is the enumeration silence: the extension is launched and
-never answers, and never logs, so the next thing to find out is whether
-`NSExtensionMain` is reaching the principal class at all. Not yet
-attempted: building it as a proper Xcode extension target, which is the
-configuration Apple actually tests.
+What is left is one switch, in a GUI, on a machine with a display. The
+harness is installed and its domain registered on airlock, so enabling
+the File Provider there is the whole remaining step:
+
+```bash
+# after flipping the switch
+ls -l ~/Library/CloudStorage/TaskFileProviderHarness-sharetest/
+
+# or take the harness back off the machine
+/Applications/TaskFileProviderHarness.app/Contents/MacOS/TaskFileProviderHarness clear
+rm -rf /Applications/TaskFileProviderHarness.app
+```
+
+Ruled out along the way, so nobody re-checks them: the app-group
+entitlement (removed, same failure), a crash (no diagnostic report), and
+the binary's shape — it imports `_NSExtensionMain` from Foundation and
+exports its principal class exactly as iCloud Drive's own extension
+does, and both exit silently when run directly.
 
 The app registers the domains itself, on pairing: only the containing
 app may, and it is idempotent, so it runs on every pairing.

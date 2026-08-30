@@ -32,6 +32,15 @@
              non-replicated API cannot express that. -->
         <key>NSExtensionFileProviderSupportsEnumeration</key>
         <true/>
+        <!-- On by default, the way iCloud Drive's own extension asks to
+             be. A registered domain that the user has not enabled is
+             not an error anywhere a person would look: the folder
+             appears, and every operation on it fails with
+             `NSFileProviderErrorDomainDisabled` (-2011, "Sync is not
+             enabled"), which surfaces as a directory listing that times
+             out rather than as anything saying "turn this on". -->
+        <key>NSExtensionFileProviderEnabledByDefault</key>
+        <true/>
         <key>NSExtensionPointIdentifier</key>
         <string>com.apple.fileprovider-nonui</string>
         <key>NSExtensionPrincipalClass</key>

@@ -113,7 +113,16 @@ enum Domains {
             return
         }
         for domain in domains {
-            print("\(domain.displayName)  \(domain.identifier.rawValue)")
+            // Whether the user has it switched on, because a domain
+            // that is registered and disabled looks exactly like one
+            // that is working until you touch it: the folder is there,
+            // and everything inside it fails with "Sync is not enabled"
+            // — which reaches Finder as a listing that hangs, and says
+            // nothing about a switch in System Settings.
+            let state = domain.userEnabled
+                ? "on"
+                : "OFF — switch it on in System Settings › General › Login Items & Extensions › File Providers"
+            print("\(domain.displayName)  \(domain.identifier.rawValue)  \(state)")
         }
     }
 

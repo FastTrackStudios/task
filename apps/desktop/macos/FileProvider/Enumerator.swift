@@ -71,19 +71,55 @@ final class Enumerator: NSObject, NSFileProviderEnumerator {
 
     /// Changes since an anchor.
     ///
-    /// Not implemented yet, and saying so is better than answering
-    /// "nothing changed": the system takes an empty change set at face
-    /// value and would show a stale tree indefinitely. Reporting the
-    /// anchor as expired makes it re-enumerate, which is correct and
-    /// merely less efficient — the honest trade until this watches the
-    /// tree the way the Linux agent's watcher does.
+    /// This provider does not keep a change journal, so it cannot say
+    /// *what* changed — only whether anything did. The framework has a
+    /// way to say exactly that: fail with `syncAnchorExpired`, and the
+    /// system drops its cache and enumerates the container again.
+    ///
+    /// The trap is that it is only an answer when something *has*
+    /// changed. Returning it unconditionally — which is what this did —
+    /// makes every re-enumeration end by asking for another one. The
+    /// system obliges, forever: the extension is relaunched every few
+    /// seconds, the folder never settles, and `ls` on it times out
+    /// rather than failing, because from the outside the enumeration
+    /// has not finished, it has restarted.
+    ///
+    /// So the anchor has to mean something, and [`anchor`] is what it
+    /// means here: the directory's own modification time, which the
+    /// filesystem updates on every add, remove and rename in it. Same
+    /// anchor, nothing to report; different anchor, re-enumerate once
+    /// and settle on the new one.
     func enumerateChanges(for observer: NSFileProviderChangeObserver,
-                          from _: NSFileProviderSyncAnchor) {
-        observer.finishEnumeratingWithError(
-            NSFileProviderError(.syncAnchorExpired))
+                          from syncAnchor: NSFileProviderSyncAnchor) {
+        let now = anchor()
+        if syncAnchor == now {
+            observer.finishEnumeratingChanges(upTo: now, moreComing: false)
+        } else {
+            observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired))
+        }
     }
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
-        completionHandler(nil)
+        completionHandler(anchor())
+    }
+
+    /// What "nothing has changed in here" is spelled as.
+    ///
+    /// The enumerated directory's modification time. It catches what
+    /// enumeration reports — entries appearing, disappearing, being
+    /// renamed — and not edits to a file's contents, which do not touch
+    /// the directory. That is the right granularity for this method:
+    /// content changes are the item version's job, and an edit through
+    /// the folder is the system's own write, which it already knows
+    /// about.
+    ///
+    /// Cheap on purpose. It is one `stat`, called on a path the system
+    /// asks about often, and a deep scan here would make every idle
+    /// refresh walk the whole project.
+    private func anchor() -> NSFileProviderSyncAnchor {
+        let relative = container == .rootContainer ? "" : container.rawValue
+        let directory = relative.isEmpty ? treeRoot : treeRoot.appendingPathComponent(relative)
+        let stamp = Disk.modified(of: directory.path).timeIntervalSince1970
+        return NSFileProviderSyncAnchor(Data(String(stamp).utf8))
     }
 }
