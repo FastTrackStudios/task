@@ -102,12 +102,6 @@ pub trait DaemonControlService {
     /// it, and `checkpoint <name>` could not resolve the name.
     async fn shares(&self) -> Result<Vec<(Uuid, String, String)>, DaemonError>;
 
-    /// Share a folder from this machine: version it, checkpoint it, and
-    /// serve it to admitted peers. Returns the root's id and name.
-    ///
-    /// Without this the agent could only ever hold what somebody else
-    /// already held — fine for a laptop taking an org's projects, and
-    /// useless for two machines that just want the same folder.
     /// Share a folder without capturing it yet.
     ///
     /// Registering a root is instant; capturing reads every byte. An
@@ -125,6 +119,12 @@ pub trait DaemonControlService {
     /// anything.
     async fn capture_pending(&self) -> Result<Vec<(String, Option<String>)>, DaemonError>;
 
+    /// Share a folder from this machine: version it, checkpoint it, and
+    /// serve it to admitted peers. Returns the root's id and name.
+    ///
+    /// Without this the agent could only ever hold what somebody else
+    /// already held — fine for a laptop taking an org's projects, and
+    /// useless for two machines that just want the same folder.
     async fn share(&self, path: String, name: Option<String>)
     -> Result<(Uuid, String), DaemonError>;
 
@@ -253,7 +253,16 @@ pub trait DaemonControlService {
     /// Mount every root this machine holds, composed into one tree
     /// under `under` by their places. Returns each place and what went
     /// wrong with it, if anything.
-    async fn mount_all(&self, under: String) -> Result<Vec<(String, Option<String>)>, DaemonError>;
+    /// `flat` drops the org from each place, so every project lands in
+    /// one `Projects/` and every asset in one `Assets/`. The org is how
+    /// the work is stored — whose it is, who is billed — not how anybody
+    /// looks for it, and grouping by it turns "find that March session"
+    /// into a search across six folders instead of a glance at one.
+    async fn mount_all(
+        &self,
+        under: String,
+        flat: bool,
+    ) -> Result<Vec<(String, Option<String>)>, DaemonError>;
 
     /// Live status changes as they happen.
     #[subscribe]

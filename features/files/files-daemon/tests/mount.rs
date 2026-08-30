@@ -207,7 +207,7 @@ async fn a_root_appears_where_it_is_placed_not_where_it_lives() {
     let under = rig.mountpoint.join("Task");
     let outcomes = rig
         .control
-        .mount_all(under.to_string_lossy().into_owned())
+        .mount_all(under.to_string_lossy().into_owned(), false)
         .await
         .unwrap();
     assert_eq!(outcomes.len(), 1);

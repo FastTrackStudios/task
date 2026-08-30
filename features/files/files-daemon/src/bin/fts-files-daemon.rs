@@ -143,7 +143,7 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon unmount <root>           take the folder down (the files stay)
     fts-files-daemon mounts                   what is mounted, and where
     fts-files-daemon place <root> <path>      where it appears, e.g. org/Projects/Name
-    fts-files-daemon mount-all <dir>          compose every root into one tree there
+    fts-files-daemon mount-all <dir> [--flat] compose every root into one tree there
     fts-files-daemon evict <root> <path>      give its bytes back to the disk
     fts-files-daemon fetch <root> <path>      bring one file's bytes back now
 
@@ -683,9 +683,9 @@ async fn place(root: &str, at: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Compose every root into one tree.
-async fn mount_all(under: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn mount_all(under: &str, flat: bool) -> Result<(), Box<dyn std::error::Error>> {
     let client = control().await?;
-    let outcomes = client.mount_all(under.to_string()).await?;
+    let outcomes = client.mount_all(under.to_string(), flat).await?;
     if outcomes.is_empty() {
         println!("every root this machine holds is already mounted");
         return Ok(());
@@ -919,7 +919,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .get(1)
                 .ok_or("mount-all needs a directory to compose the tree under")?
                 .clone();
-            return mount_all(&under).await;
+            // `--flat` drops the org from every place, so the whole
+            // studio is one Projects/ and one Assets/ instead of six
+            // folders to look through.
+            let flat = args.iter().any(|a| a == "--flat");
+            return mount_all(&under, flat).await;
         }
         Some("evict") => {
             let root = args.get(1).ok_or("evict needs a root id or name")?.clone();
@@ -1009,6 +1013,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?
     .with_location_boundaries(shared.clone());
     let daemon = SyncDaemon::open(backend, data_dir.join("daemon"))?;
+
+    // Before the control socket opens, because it is state the socket
+    // hands out and acts on. The socket is bound early on purpose — an
+    // agent that answers `status` in 75 seconds is an agent nobody
+    // believes is running — but "answers early" must not mean "answers
+    // wrong": a `mount-all` that arrived while this was still to come
+    // read every root as having no place and mounted thirty-eight
+    // projects flat, in the wrong tree, reporting success.
+    //
+    // This is a file read, so it costs nothing to do first. What stays
+    // after the bind is the part that dials peers, where being slow is
+    // the network's fault and a caller can see it in the status.
+    daemon.restore_places();
     daemon.with_shared_dirs(shared);
     daemon.set_roots_dir(&roots_under);
 
@@ -1066,10 +1083,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // choice is still the person's.
     daemon.restore_choices().await;
 
-    // Where each root appears in the tree people are shown.
-    daemon.restore_places();
-
-    // And what it was showing as a folder. A mount that vanished on
+    // What it was showing as a folder. A mount that vanished on
     // reboot would leave somebody looking at an empty directory where
     // their project was — the same reason the choices are persisted.
     match daemon.restore_mounts().await {

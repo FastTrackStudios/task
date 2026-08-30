@@ -766,7 +766,11 @@ impl SyncDaemon {
     /// Returns what it mounted and what it could not, rather than the
     /// first error: one root with a bad path should not stop the other
     /// nine from appearing.
-    pub async fn mount_all(&self, under: &std::path::Path) -> Vec<(String, Option<String>)> {
+    pub async fn mount_all(
+        &self,
+        under: &std::path::Path,
+        flat: bool,
+    ) -> Vec<(String, Option<String>)> {
         let mut outcomes = Vec::new();
         let roots = match self.shares().await {
             Ok(roots) => roots,
@@ -775,14 +779,42 @@ impl SyncDaemon {
         let mounted: std::collections::BTreeSet<Uuid> =
             self.mounts().into_iter().map(|(id, _)| id).collect();
 
+        // Flattening can collide — two orgs with a project of the same
+        // name land on one path, and the second would silently mount
+        // over the first. Taken once, up front, so the *pair* can be
+        // disambiguated rather than whichever happened to be second.
+        let mut taken: std::collections::BTreeMap<String, usize> = BTreeMap::new();
+        if flat {
+            for root in &roots {
+                *taken
+                    .entry(flatten(&self.place_of(root.id, &root.name)))
+                    .or_insert(0) += 1;
+            }
+        }
+
         for root in roots {
             if mounted.contains(&root.id) {
                 continue;
             }
             let place = self.place_of(root.id, &root.name);
-            let at = under.join(&place);
+            let shown = if flat {
+                let flattened = flatten(&place);
+                if taken.get(&flattened).copied().unwrap_or(0) > 1 {
+                    // Keep both, and say which is which. A name plus its
+                    // org is what somebody would have written anyway.
+                    match place.split_once('/') {
+                        Some((org, _)) => format!("{flattened} ({org})"),
+                        None => flattened,
+                    }
+                } else {
+                    flattened
+                }
+            } else {
+                place
+            };
+            let at = under.join(&shown);
             let error = self.mount(root.id, &at).await.err().map(|e| e.to_string());
-            outcomes.push((place, error));
+            outcomes.push((shown, error));
         }
         outcomes
     }
@@ -1595,4 +1627,25 @@ fn directory_bytes(path: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+/// A place with its org dropped: `tombrooks/Projects/X` → `Projects/X`.
+///
+/// The org is how the work is *stored* — whose it is, who is billed for
+/// it, who may see it. It is not how somebody looks for it. Asked to
+/// find a session from March, nobody first remembers which client it was
+/// under; they remember the name. Grouping by org makes that a search
+/// across six folders instead of a glance at one.
+///
+/// So the same roots compose two ways from the same places, and neither
+/// is a copy: by org when the question is "whose is this", flat when the
+/// question is "where is that session".
+///
+/// A place with no org — `Assets`, shared across all of them — is
+/// already flat and is left alone.
+fn flatten(place: &str) -> String {
+    match place.split_once('/') {
+        Some((_org, rest)) => rest.to_string(),
+        None => place.to_string(),
+    }
 }
