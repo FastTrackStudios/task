@@ -25,25 +25,52 @@ import os
 
 private let log = Logger(subsystem: "app.fasttrackstudio.task", category: "fileprovider")
 
+@objc(FileProviderExtension)
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     /// The domain's identifier is the root's id — see `domains.swift`
     /// in the app, which creates one domain per synced root.
     private let rootID: String
-    /// The directory the root's live tree lives in, as the agent
-    /// reports it.
-    private let treeRoot: URL
+    /// Where the root's live tree is, once somebody has asked.
+    ///
+    /// **Nothing may block in `init`.** The system constructs the
+    /// extension as part of launching it and gives that a short leash;
+    /// asking the agent there cost the launch, and the system answered
+    /// by killing the process and starting another — a respawn every
+    /// fifteen seconds, no log line from us because we never got far
+    /// enough to write one, and a folder that timed out in Finder
+    /// rather than saying anything. So the lookup happens on the first
+    /// call that needs it, where being slow is merely slow.
+    private var cachedTree: URL?
+    private let treeLock = NSLock()
 
     required init(domain: NSFileProviderDomain) {
         self.rootID = domain.identifier.rawValue
-        // The agent is the authority on where a root's tree is; the
-        // domain only carries its id. An agent that is not running
-        // leaves this empty, and every call then fails with a reason
-        // rather than silently enumerating the wrong directory.
-        let path = (try? Bridge.roots().first { $0.id == domain.identifier.rawValue }?.path) ?? nil
-        self.treeRoot = URL(fileURLWithPath: path ?? "/nonexistent")
         super.init()
-        if path == nil {
-            log.error("no root \(domain.identifier.rawValue, privacy: .public) — is the sync agent running?")
+    }
+
+    /// The agent is the authority on where a root's tree is; the domain
+    /// only carries its id. Cached after the first success — the answer
+    /// does not change while a domain exists, and every enumeration
+    /// would otherwise pay for a fresh connection.
+    private var treeRoot: URL {
+        treeLock.lock()
+        defer { treeLock.unlock() }
+        if let cachedTree { return cachedTree }
+        do {
+            guard let path = try Bridge.roots().first(where: { $0.id == rootID })?.path else {
+                log.error("the agent holds no root \(self.rootID, privacy: .public)")
+                return URL(fileURLWithPath: "/nonexistent")
+            }
+            let url = URL(fileURLWithPath: path)
+            cachedTree = url
+            log.info("root \(self.rootID, privacy: .public) lives at \(path, privacy: .public)")
+            return url
+        } catch {
+            // Not cached: the agent may simply have been starting, and
+            // the next call should ask again rather than being wrong
+            // for the life of the domain.
+            log.error("cannot reach the sync agent: \(error.localizedDescription, privacy: .public)")
+            return URL(fileURLWithPath: "/nonexistent")
         }
     }
 

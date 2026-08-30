@@ -312,13 +312,50 @@ where
         .map_err(|e| format!("starting a runtime: {e}"))?;
 
     runtime.block_on(async move {
-        let client: DaemonControlServiceClient = vox::connect_lane(&url)
-            .establish()
-            .await
-            .map_err(|e| format!("no sync agent answering on {url} ({e}) — is Task installed?"))?;
-        call(client).await
+        // Connecting gets a deadline of its own. The agent is a local
+        // socket, so it either answers immediately or is not there —
+        // and the caller is a filesystem extension the system kills for
+        // being slow, having first made every app looking at the folder
+        // wait on it. A hang here is a hung Finder, so there must not
+        // be a path through this function that does not return.
+        let client: DaemonControlServiceClient =
+            match tokio::time::timeout(CONNECT_DEADLINE, vox::connect_lane(&url).establish()).await
+            {
+                Ok(Ok(client)) => client,
+                Ok(Err(e)) => {
+                    return Err(format!(
+                        "no sync agent answering on {url} ({e}) — is Task installed?"
+                    ));
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "the sync agent on {url} did not answer within {}s",
+                        CONNECT_DEADLINE.as_secs()
+                    ));
+                }
+            };
+
+        // The call itself gets a longer one: hydrating a take is meant
+        // to take a while, and the system shows progress for it. Long
+        // is not the same as unbounded.
+        match tokio::time::timeout(CALL_DEADLINE, call(client)).await {
+            Ok(outcome) => outcome,
+            Err(_) => Err(format!(
+                "the sync agent did not finish within {}s",
+                CALL_DEADLINE.as_secs()
+            )),
+        }
     })
 }
+
+/// How long to wait for a socket on this machine. Generous for a local
+/// connect, short enough that a missing agent is reported rather than
+/// waited on.
+const CONNECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long to wait for the work. Fetching a multi-gigabyte take from a
+/// peer over a slow link is the case this must not cut short.
+const CALL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 #[cfg(test)]
 mod tests {

@@ -371,10 +371,43 @@ Three things bite in this order, and all three are silent:
    restricted entitlement; an Apple Development identity signs the
    bundle without one, but the system will not load the result.
 
-Ad-hoc signing is verified to produce a well-formed bundle
-(`codesign --verify --deep --strict` passes, and all four entitlements
-are embedded). What is untested is anything past that: a Developer-ID
-signature, a notarized DMG, and the extension appearing in Finder.
+### Where it actually stands
+
+Signed with a real Developer ID certificate on airlock, and taken as far
+as it goes today:
+
+| step | state |
+|---|---|
+| builds, links, universal static lib | ✅ |
+| Developer-ID signature, hardened runtime | ✅ `--verify --deep --strict` passes |
+| the Rust half against a live agent | ✅ stub reports 200 MB where stat says 128 B |
+| a domain registers | ✅ macOS creates `~/Library/CloudStorage/<app>-<root>` |
+| the system loads the extension | ✅ it spawns the process |
+| **enumerating the folder** | ❌ `ls` times out; the extension never answers |
+
+`try-fileprovider.sh` is the harness that got this far — the smallest
+signed app that can register a domain, so the question can be asked
+without building the whole app.
+
+Two things learned that are not obvious and cost a while:
+
+- **A bundle outside `/Applications` is not discovered.**
+  `NSFileProviderManager.add` refuses with "The application cannot be
+  used right now" (`NSFileProviderErrorDomain -2001 / -2014`), naming
+  neither the extension nor the reason. `pluginkit -a <appex>` registers
+  it by hand, and must be re-run after every rebuild — the record points
+  at a signature that no longer exists.
+- **Nothing may block in `init(domain:)`.** Asking the agent there cost
+  the launch: the system killed the process and started another, every
+  fifteen seconds, with no log line from us because we never reached
+  one. The lookup is lazy now, and every bridge call has a deadline — a
+  filesystem extension that can hang forever is a hung Finder.
+
+What is left is the enumeration silence: the extension is launched and
+never answers, and never logs, so the next thing to find out is whether
+`NSExtensionMain` is reaching the principal class at all. Not yet
+attempted: building it as a proper Xcode extension target, which is the
+configuration Apple actually tests.
 
 The app registers the domains itself, on pairing: only the containing
 app may, and it is idempotent, so it runs on every pairing.

@@ -41,7 +41,18 @@ enum Domains {
                 exit(2)
             }
         } catch {
-            FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+            // The domain and code, not just the sentence. macOS answers
+            // most refusals here with "The application cannot be used
+            // right now", which is the same string for an unregistered
+            // extension, a missing entitlement and a bundle the system
+            // will not trust — three different problems with three
+            // different fixes, and the code is what tells them apart.
+            let ns = error as NSError
+            FileHandle.standardError.write(Data(
+                "\(ns.localizedDescription) [\(ns.domain) \(ns.code)]\n".utf8))
+            for (key, value) in ns.userInfo {
+                FileHandle.standardError.write(Data("    \(key): \(value)\n".utf8))
+            }
             exit(1)
         }
     }
