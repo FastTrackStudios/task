@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 use ui::App;
 
 mod sync_service;
+mod tray;
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
@@ -104,6 +105,10 @@ fn window_placement() -> (Option<(f64, f64)>, Option<(f64, f64)>, bool) {
 // here; the tab strip's slack is the drag surface.
 #[component]
 fn Root() -> Element {
+    // Task in the taskbar, for the hours the window is closed and the
+    // agent is still working.
+    tray::use_tray();
+
     use_context_provider(|| task_ui_core::window_chrome::WindowChrome {
         drag: Callback::new(|()| dioxus::desktop::window().drag()),
         toggle_maximize: Callback::new(|()| dioxus::desktop::window().toggle_maximized()),

@@ -17,6 +17,14 @@ architect-telemetry = { workspace = true, features = ["otel"] }
 # One line at startup saying what happened to the sync agent — it runs
 # before any window exists, so the log is the only place to say it.
 tracing = { workspace = true }
+# The tray menu drives the sync agent over its control socket — the same
+# surface the CLI and the app's /sync page use, so the menu cannot come
+# to believe something the agent does not.
+# The *proto*, not the agent: the tray is a client, and depending on
+# files-daemon itself would pull jj, iroh and a chunk store into a
+# window that only needs to ask questions.
+files-daemon-proto = { workspace = true }
+vox = { workspace = true, features = ["transport-websocket"] }
 
 [features]
 default = ["desktop"]

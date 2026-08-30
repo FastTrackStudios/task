@@ -35,6 +35,10 @@
           gdk-pixbuf pango cairo atk
           libx11 libxcb libxkbcommon wayland
           webkitgtk_4_1 libsoup_3 xdotool
+          # The tray icon is dlopen'd at *runtime*, not linked, so it has
+          # to be here rather than only in the build inputs — without it
+          # the app starts and has no taskbar presence.
+          libayatana-appindicator
         ]
       );
     in
@@ -73,6 +77,8 @@
         # lock, and each is a pkg-config lookup at build time.
         glib gtk3 gdk-pixbuf pango cairo atk harfbuzz
         libsoup_3 webkitgtk_4_1 xdotool
+        # The system tray (tray-icon → libappindicator-sys).
+        libayatana-appindicator
         # tao/winit windowing + wgpu/vello rendering (ash, khronos-egl,
         # wayland-sys, xkbcommon-dl in the lock).
         libx11 libxcursor libxrandr libxi libxcb

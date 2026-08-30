@@ -20641,9 +20641,11 @@ version = "0.1.0"
 dependencies = [
  "architect-telemetry",
  "dioxus",
+ "files-daemon-proto",
  "task-ui-core",
  "tracing",
  "ui",
+ "vox",
 ]
 
 [[package]]
