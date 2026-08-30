@@ -140,6 +140,8 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon mount <root> <dir>       show it as a folder; opening fetches (Linux)
     fts-files-daemon unmount <root>           take the folder down (the files stay)
     fts-files-daemon mounts                   what is mounted, and where
+    fts-files-daemon place <root> <path>      where it appears, e.g. org/Projects/Name
+    fts-files-daemon mount-all <dir>          compose every root into one tree there
     fts-files-daemon evict <root> <path>      give its bytes back to the disk
     fts-files-daemon fetch <root> <path>      bring one file's bytes back now
 
@@ -165,7 +167,8 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         // runtime rather than avoiding it.
         Some(
             "status" | "checkpoint" | "share" | "shares" | "unshare" | "peer" | "forget"
-            | "resolve" | "mount" | "unmount" | "mounts" | "evict" | "fetch",
+            | "resolve" | "mount" | "unmount" | "mounts" | "evict" | "fetch" | "place"
+            | "mount-all",
         ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -625,6 +628,42 @@ async fn unmount(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Say where a root appears in the tree people are shown.
+async fn place(root: &str, at: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let id = root_id(&client, root).await?;
+    client.set_place(id, at.to_string()).await?;
+    println!("{root} appears at {at}");
+    println!("nothing moved — that is where it shows up, not where it lives.");
+    Ok(())
+}
+
+/// Compose every root into one tree.
+async fn mount_all(under: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let outcomes = client.mount_all(under.to_string()).await?;
+    if outcomes.is_empty() {
+        println!("every root this machine holds is already mounted");
+        return Ok(());
+    }
+    let mut failed = 0;
+    for (place, error) in &outcomes {
+        match error {
+            None => println!("  {under}/{place}"),
+            Some(why) => {
+                failed += 1;
+                println!("  {place} — {why}");
+            }
+        }
+    }
+    let mounted = outcomes.len() - failed;
+    println!("\n{mounted} mounted under {under}");
+    if failed > 0 {
+        println!("{failed} could not be — the rest are up regardless");
+    }
+    Ok(())
+}
+
 /// Release one file's bytes, keeping the file.
 async fn evict(root: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let client = control().await?;
@@ -817,6 +856,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return unmount(&root).await;
         }
         Some("mounts") => return mounts().await,
+        Some("place") => {
+            let root = args.get(1).ok_or("place needs a root id or name")?.clone();
+            let at = args
+                .get(2)
+                .ok_or("place needs where it appears, e.g. org/Projects/Name")?
+                .clone();
+            return place(&root, &at).await;
+        }
+        Some("mount-all") => {
+            let under = args
+                .get(1)
+                .ok_or("mount-all needs a directory to compose the tree under")?
+                .clone();
+            return mount_all(&under).await;
+        }
         Some("evict") => {
             let root = args.get(1).ok_or("evict needs a root id or name")?.clone();
             let path = args.get(2).ok_or("evict needs a path in that root")?.clone();
@@ -961,6 +1015,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // shut right now is skipped and retried on the next start — its
     // choice is still the person's.
     daemon.restore_choices().await;
+
+    // Where each root appears in the tree people are shown.
+    daemon.restore_places();
 
     // And what it was showing as a folder. A mount that vanished on
     // reboot would leave somebody looking at an empty directory where

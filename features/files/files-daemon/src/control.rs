@@ -178,6 +178,14 @@ impl DaemonControlService for DaemonControl {
         self.daemon.unmount(root_id)
     }
 
+    async fn set_place(&self, root_id: Uuid, place: String) -> Result<(), DaemonError> {
+        self.daemon.set_place(root_id, &place)
+    }
+
+    async fn mount_all(&self, under: String) -> Result<Vec<(String, Option<String>)>, DaemonError> {
+        Ok(self.daemon.mount_all(std::path::Path::new(&under)).await)
+    }
+
     async fn mounts(&self) -> Result<Vec<(Uuid, String)>, DaemonError> {
         Ok(self
             .daemon

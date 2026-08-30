@@ -182,6 +182,73 @@ async fn a_root_cannot_be_mounted_twice() {
     rig.control.unmount(rig.root_id).await.unwrap();
 }
 
+/// The claim the whole layout rests on: **where a root appears has
+/// nothing to do with where its bytes are.**
+///
+/// A studio's disk is laid out by fifteen years of accidents — an old
+/// export here, a rescued drive there, one client's work on a NAS
+/// because that is where the space was. The tree a person should see is
+/// not that, and reshaping terabytes to make the two agree would be an
+/// expensive answer to a question about presentation.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_root_appears_where_it_is_placed_not_where_it_lives() {
+    if !fuse_is_available() {
+        return;
+    }
+    let rig = rig().await;
+
+    // The tree is at <tmp>/session. It will appear somewhere with no
+    // resemblance to that.
+    rig.control
+        .set_place(rig.root_id, "codywright/Projects/Some Record".into())
+        .await
+        .unwrap();
+
+    let under = rig.mountpoint.join("Task");
+    let outcomes = rig
+        .control
+        .mount_all(under.to_string_lossy().into_owned())
+        .await
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].0, "codywright/Projects/Some Record");
+    assert!(outcomes[0].1.is_none(), "{:?}", outcomes[0].1);
+
+    // The composed tree exists, with the project's own files under it.
+    let shown = under.join("codywright/Projects/Some Record");
+    assert_eq!(
+        std::fs::read(shown.join("notes.txt")).unwrap(),
+        b"session notes"
+    );
+    // And the tree it came from is exactly where it always was.
+    assert!(rig.tree.join("notes.txt").exists());
+    assert!(!rig.tree.to_string_lossy().contains("codywright"));
+
+    rig.control.unmount(rig.root_id).await.unwrap();
+}
+
+/// A place that climbs out of the tree would mount a root anywhere on
+/// the disk, from a string that looks like a folder name.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_place_cannot_escape_the_tree() {
+    let rig = rig().await;
+    for bad in ["../../etc", "org/../../..", "", "/"] {
+        assert!(
+            rig.control
+                .set_place(rig.root_id, bad.into())
+                .await
+                .is_err(),
+            "`{bad}` should not be a place"
+        );
+    }
+    assert!(
+        rig.control
+            .set_place(rig.root_id, "org/Projects/Fine".into())
+            .await
+            .is_ok()
+    );
+}
+
 /// Unmounting something that is not mounted is an error a person can
 /// act on, not a silent success that leaves them believing they undid
 /// something.

@@ -224,6 +224,20 @@ pub trait DaemonControlService {
     /// Every root mounted right now, and where.
     async fn mounts(&self) -> Result<Vec<(Uuid, String)>, DaemonError>;
 
+    /// Say where a root appears in the tree people are shown — a
+    /// relative path like `codywright/Projects/Some Record`.
+    ///
+    /// Unrelated to where the bytes are, on purpose. A disk is laid out
+    /// by fifteen years of accidents; the tree somebody should see is
+    /// not that, and reshaping terabytes to make the two agree would be
+    /// an expensive answer to a question about presentation.
+    async fn set_place(&self, root_id: Uuid, place: String) -> Result<(), DaemonError>;
+
+    /// Mount every root this machine holds, composed into one tree
+    /// under `under` by their places. Returns each place and what went
+    /// wrong with it, if anything.
+    async fn mount_all(&self, under: String) -> Result<Vec<(String, Option<String>)>, DaemonError>;
+
     /// Live status changes as they happen.
     #[subscribe]
     fn status_events(&self) -> DaemonEvent;

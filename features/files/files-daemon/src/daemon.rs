@@ -186,6 +186,10 @@ struct DaemonInner {
     endpoint: Mutex<Option<architect::iroh_link::iroh::Endpoint>>,
     /// Where adopted roots land, reported in the status.
     roots_dir: Mutex<std::path::PathBuf>,
+    /// Where each root appears in the tree people are shown — see
+    /// `set_place`. Keyed by root, and deliberately not the same thing
+    /// as where its bytes are.
+    places: Mutex<BTreeMap<Uuid, String>>,
     /// Roots mounted as filesystems, and the session keeping each
     /// alive — dropping one unmounts it.
     mounts: Mutex<BTreeMap<Uuid, (std::path::PathBuf, crate::mount::fuser_session::Session)>>,
@@ -221,6 +225,7 @@ impl SyncDaemon {
                 data_dir,
                 endpoint: Mutex::new(None),
                 roots_dir: Mutex::new(data_dir_for_roots.clone()),
+                places: Mutex::new(BTreeMap::new()),
                 mounts: Mutex::new(BTreeMap::new()),
                 shared: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
@@ -638,6 +643,119 @@ impl SyncDaemon {
         self.inner.backend.watch_root(root.id)?;
         self.inner.events.publish(self.status());
         Ok(root)
+    }
+
+    // ── Where a root appears ───────────────────────────────────────
+
+    /// Where `root_id` sits in the tree people are shown, as a relative
+    /// path like `codywright/Projects/Some Record`.
+    ///
+    /// **Deliberately unrelated to where its bytes are.** A studio's
+    /// disk is laid out by the accidents of fifteen years — an old
+    /// server's export here, a rescued drive there, one client's work on
+    /// a NAS because that is where the space was. The tree a person
+    /// should see is not that, and reshaping six terabytes to make the
+    /// two agree would be an expensive way to answer a question about
+    /// presentation.
+    ///
+    /// So a root has a name, a path, and — separately — a place. Mounts
+    /// compose the places into one tree; nothing moves.
+    pub fn set_place(&self, root_id: Uuid, place: &str) -> Result<()> {
+        let place = place.trim_matches('/').to_string();
+        if place.is_empty() {
+            return Err(DaemonError::BadRequest(
+                "a place is a path in the tree, like `org/Projects/Name`".into(),
+            ));
+        }
+        // A place that climbs out of the tree it is a place in would
+        // mount a root anywhere on the disk, from a string that looks
+        // like a folder name.
+        if place.split('/').any(|part| part == ".." || part.is_empty()) {
+            return Err(DaemonError::BadRequest(format!(
+                "`{place}` is not a place inside the tree"
+            )));
+        }
+        self.inner
+            .places
+            .lock()
+            .expect("places lock")
+            .insert(root_id, place);
+        self.save_places();
+        self.inner.events.publish(self.status());
+        Ok(())
+    }
+
+    /// Where a root appears, or its name when nobody has said.
+    #[must_use]
+    pub fn place_of(&self, root_id: Uuid, name: &str) -> String {
+        self.inner
+            .places
+            .lock()
+            .expect("places lock")
+            .get(&root_id)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    fn places_path(&self) -> std::path::PathBuf {
+        self.inner.data_dir.join("places.json")
+    }
+
+    fn save_places(&self) {
+        let places = self.inner.places.lock().expect("places lock").clone();
+        match serde_json::to_vec_pretty(&places) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(self.places_path(), bytes) {
+                    tracing::warn!(error = %e, "could not record where the roots appear");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not serialize the places"),
+        }
+    }
+
+    /// Read back where roots appear. Called at startup, beside the sync
+    /// choices and the mounts, for the same reason: it is a decision
+    /// somebody made.
+    pub fn restore_places(&self) {
+        let Ok(raw) = std::fs::read_to_string(self.places_path()) else {
+            return;
+        };
+        match serde_json::from_str::<BTreeMap<Uuid, String>>(&raw) {
+            Ok(places) => *self.inner.places.lock().expect("places lock") = places,
+            Err(e) => tracing::warn!(error = %e, "the recorded places are unreadable"),
+        }
+    }
+
+    /// Mount every root this machine holds, composed into one tree
+    /// under `under`.
+    ///
+    /// This is the cloud folder as a person expects it: not one folder
+    /// per project scattered wherever each was adopted, but a single
+    /// tree — `<under>/<org>/Projects/<name>` — that looks the same on
+    /// every machine regardless of which disk holds what.
+    ///
+    /// Returns what it mounted and what it could not, rather than the
+    /// first error: one root with a bad path should not stop the other
+    /// nine from appearing.
+    pub async fn mount_all(&self, under: &std::path::Path) -> Vec<(String, Option<String>)> {
+        let mut outcomes = Vec::new();
+        let roots = match self.shares().await {
+            Ok(roots) => roots,
+            Err(e) => return vec![("(the roots)".into(), Some(e.to_string()))],
+        };
+        let mounted: std::collections::BTreeSet<Uuid> =
+            self.mounts().into_iter().map(|(id, _)| id).collect();
+
+        for root in roots {
+            if mounted.contains(&root.id) {
+                continue;
+            }
+            let place = self.place_of(root.id, &root.name);
+            let at = under.join(&place);
+            let error = self.mount(root.id, &at).await.err().map(|e| e.to_string());
+            outcomes.push((place, error));
+        }
+        outcomes
     }
 
     /// Stop holding a root: no longer served to peers, no longer
