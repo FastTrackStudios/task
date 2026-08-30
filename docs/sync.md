@@ -389,56 +389,52 @@ diagnosable from a terminal rather than by guessing:
 sharetest  6baee5f2-…  on
 ```
 
-### Where it actually stands
+### Where it stands
 
-Signed with a real Developer ID certificate on airlock, and taken as far
-as it goes today:
+Working on two Macs, signed with a real Developer ID certificate:
 
 | step | state |
 |---|---|
 | builds, links, universal static lib | ✅ |
 | Developer-ID signature, hardened runtime | ✅ `--verify --deep --strict` passes |
-| the Rust half against a live agent | ✅ stub reports 200 MB where stat says 128 B |
-| a domain registers | ✅ macOS creates `~/Library/CloudStorage/<app>-<root>` |
-| the system loads the extension | ✅ |
-| enumerating the folder in Finder | ✅ lists the project at real sizes |
-| opening a dehydrated file through it | ✅ 128-byte stub → 200 MB, hash matches Linux |
+| one domain for the whole composed tree | ✅ `Task` in Finder, not a folder per root |
+| the synthetic hierarchy | ✅ `acme` → `Projects`, `Vault` → the real files |
+| a dehydrated file through Finder | ✅ 128-byte stub → 200 MB, hash matches Linux |
 
-`try-fileprovider.sh` is the harness that got this far — the smallest
+`try-fileprovider.sh` is the harness this was built on — the smallest
 signed app that can register a domain, so the question can be asked
-without building the whole app.
+without building the whole app first.
 
 Five things learned that are not obvious, each of which presents as the
 same nothing:
 
+- **A panic must never cross the C ABI.** `panic_cannot_unwind` is an
+  immediate abort, and in an appex that reaches macOS as "the connection
+  to service was invalidated" — naming neither the panic nor the call.
+  Every entry point in `files-fileprovider` is guarded, which is what
+  turned the next problem from a mystery into one line.
+- **The hardened runtime blocks `MAP_JIT`.** Something in the Rust
+  dependency tree allocates executable memory, and without
+  `com.apple.security.cs.allow-jit` the first call panics with
+  "mmap(MAP_JIT) failed". macOS 26 allowed it and macOS 27 does not, so
+  the same signed binary worked on one Mac and died on the next.
 - **The containing app must be *launched*, not merely installed.** Until
-  LaunchServices has opened it once, its extensions do not count, and
-  `NSFileProviderManager` answers `-2014`
-  (`ApplicationExtensionNotFound`) — for at least two minutes, across
-  fresh processes, while `pluginkit -m` reports the extension present
-  and enabled the whole time. `open -a` fixes it instantly. For the app
-  this is free; it is harnesses and scripts that get bitten.
+  LaunchServices has opened it once, its extensions do not count and
+  `NSFileProviderManager` answers `-2014` — for minutes, across fresh
+  processes, while `pluginkit -m` reports the extension present and
+  enabled throughout. `open -a` fixes it instantly.
 - **A registered domain is off until it is turned on.** `pluginkit -e
-  use -i <extension id>` is the switch, and does not need the GUI.
-  Without it every call fails `-2011` (`DomainDisabled`) and the folder
-  hangs.
-- **`pluginkit -a` must be re-run after every rebuild** — its record
-  points at a signature that no longer exists.
-- **Nothing may block in `init(domain:)`.** Asking the agent there cost
-  the launch: the system killed the process and started another, every
-  fifteen seconds, with no log line from us because we never reached
-  one. The lookup is lazy now, and every bridge call has a deadline — a
-  filesystem extension that can hang forever is a hung Finder.
+  use -i <id>` is the switch, no GUI needed. Without it every call fails
+  `-2011` and the folder hangs.
+- **`pluginkit` pins the path it was given.** A stale copy in
+  `/Applications` kept being loaded while a fresh build on another
+  volume was rebuilt and rebuilt — the crash reports named a property
+  that no longer existed in the source. Re-register after every rebuild,
+  and keep one copy.
+
 - **A sync anchor has to mean something.** Failing `enumerateChanges`
   with `syncAnchorExpired` unconditionally makes the system re-enumerate
-  forever; `ls` then *times out* rather than failing, because the
-  enumeration never finished, it restarted.
-
-Ruled out along the way, so nobody re-checks them: the app-group
-entitlement, a crash (no diagnostic report ever appeared), and the
-binary's shape — it imports `_NSExtensionMain` from Foundation and
-exports its principal class exactly as iCloud Drive's own extension
-does, and both exit silently when run directly.
+  forever; `ls` then *times out* rather than failing.
 
 ### The debt this leaves
 

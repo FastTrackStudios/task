@@ -14,6 +14,21 @@
     <key>com.apple.security.network.client</key>
     <true/>
 
+    <!-- Something down the Rust side's dependency tree allocates
+         executable memory, and the hardened runtime refuses `MAP_JIT`
+         without this. The failure is a Rust panic — "mmap(MAP_JIT)
+         failed" — inside the very first call the extension makes, which
+         before the FFI guard was an abort and reached macOS as "the
+         connection to service was invalidated": no mention of JIT,
+         entitlements, or the call.
+
+         macOS 26 allowed it and macOS 27 does not, so the same signed
+         binary worked on one Mac and died on the next. The containing
+         app already carries this for WKWebView's JavaScript JIT; the
+         extension is a separate program and needs its own. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
     <!-- The live tree is on disk outside the container: the agent
          materializes into it, and the extension reads and writes it.
          The app group is the shared boundary both halves agree on. -->
