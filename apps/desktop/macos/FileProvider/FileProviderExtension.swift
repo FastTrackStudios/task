@@ -7,6 +7,16 @@
 // that lists at real sizes, and a file whose bytes come back because
 // somebody opened it.
 //
+// # One domain, many roots
+//
+// This machine holds forty-six roots. A domain each would put
+// forty-six unrelated folders in Finder's sidebar, which is the layout
+// the `place` mechanism exists to replace. So there is one domain and
+// the hierarchy above each root is synthesised from the places — see
+// `Tree`. The Linux mount does the same thing by mounting each root at
+// its place and letting the kernel invent the parents; there is no
+// kernel to hand that to here, so the extension invents them itself.
+//
 // # What this does and does not own
 //
 // It does not own the store. The sync agent does, because hydration
@@ -14,10 +24,6 @@
 // processes holding it is the bug avoided here by construction. So
 // `fetchContents` asks the agent, over the same control socket the CLI
 // and the app use, and the agent materializes into the live tree.
-//
-// The live tree is on disk, so enumerating and writing are ordinary
-// FileManager work against it. That is what keeps this extension small
-// enough to trust: it is a translation layer, not a second engine.
 
 import FileProvider
 import Foundation
@@ -27,54 +33,32 @@ private let log = Logger(subsystem: "app.fasttrackstudio.task", category: "filep
 
 @objc(FileProviderExtension)
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
-    /// The domain's identifier is the root's id — see `domains.swift`
-    /// in the app, which creates one domain per synced root.
-    private let rootID: String
-    /// Where the root's live tree is, once somebody has asked.
-    ///
-    /// **Nothing may block in `init`.** The system constructs the
-    /// extension as part of launching it and gives that a short leash;
-    /// asking the agent there cost the launch, and the system answered
-    /// by killing the process and starting another — a respawn every
-    /// fifteen seconds, no log line from us because we never got far
-    /// enough to write one, and a folder that timed out in Finder
-    /// rather than saying anything. So the lookup happens on the first
-    /// call that needs it, where being slow is merely slow.
-    private var cachedTree: URL?
-    private let treeLock = NSLock()
-
     required init(domain: NSFileProviderDomain) {
-        self.rootID = domain.identifier.rawValue
         super.init()
     }
 
-    /// The agent is the authority on where a root's tree is; the domain
-    /// only carries its id. Cached after the first success — the answer
-    /// does not change while a domain exists, and every enumeration
-    /// would otherwise pay for a fresh connection.
-    private var treeRoot: URL {
-        treeLock.lock()
-        defer { treeLock.unlock() }
-        if let cachedTree { return cachedTree }
+    func invalidate() {}
+
+    /// The roots, freshly asked for.
+    ///
+    /// **Nothing may block in `init`** — the system constructs the
+    /// extension while launching it and kills a launch that takes too
+    /// long, which cost this a respawn every fifteen seconds with no log
+    /// line to show for it. So the agent is asked here, on a call that
+    /// is allowed to be slow, and not before.
+    private func tree() -> Tree {
         do {
-            guard let path = try Bridge.roots().first(where: { $0.id == rootID })?.path else {
-                log.error("the agent holds no root \(self.rootID, privacy: .public)")
-                return URL(fileURLWithPath: "/nonexistent")
-            }
-            let url = URL(fileURLWithPath: path)
-            cachedTree = url
-            log.info("root \(self.rootID, privacy: .public) lives at \(path, privacy: .public)")
-            return url
+            return Tree(roots: try Bridge.roots())
         } catch {
-            // Not cached: the agent may simply have been starting, and
-            // the next call should ask again rather than being wrong
-            // for the life of the domain.
             log.error("cannot reach the sync agent: \(error.localizedDescription, privacy: .public)")
-            return URL(fileURLWithPath: "/nonexistent")
+            return Tree(roots: [])
         }
     }
 
-    func invalidate() {}
+    /// A path in the composed tree, from an identifier.
+    private func path(of identifier: NSFileProviderItemIdentifier) -> String {
+        identifier == .rootContainer ? "" : identifier.rawValue
+    }
 
     // ── Reading ────────────────────────────────────────────────────
 
@@ -83,32 +67,43 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
               completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void)
         -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        let relative = identifier == .rootContainer ? "" : identifier.rawValue
-        let path = relative.isEmpty ? treeRoot : treeRoot.appendingPathComponent(relative)
+        defer { progress.completedUnitCount = 1 }
 
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir) else {
+        let shown = path(of: identifier)
+        guard let resolved = tree().resolve(shown) else {
             completionHandler(nil, NSFileProviderError(.noSuchItem))
             return progress
         }
-        let modified = Disk.modified(of: path.path)
 
-        if isDir.boolValue {
-            completionHandler(Item(relativePath: relative, isDirectory: true, size: 0,
-                                   modified: modified, resident: true), nil)
-        } else {
-            let facts = try? Bridge.facts(of: path.path)
-            completionHandler(Item(relativePath: relative, isDirectory: false,
-                                   size: facts?.size ?? 0, modified: modified,
-                                   resident: !(facts?.dehydrated ?? false)), nil)
+        switch resolved {
+        case .synthetic:
+            // A directory that exists only in the layout. It has no
+            // mtime of its own to report, so it reports now — which is
+            // honest for something that is a view rather than a file.
+            completionHandler(
+                Item(relativePath: shown, isDirectory: true, size: 0,
+                     modified: Date(), resident: true), nil)
+        case let .inRoot(root, relative):
+            let disk = relative.isEmpty
+                ? root.path
+                : root.path + "/" + relative
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: disk, isDirectory: &isDir) else {
+                completionHandler(nil, NSFileProviderError(.noSuchItem))
+                return progress
+            }
+            let facts = isDir.boolValue ? nil : try? Bridge.facts(of: disk)
+            completionHandler(
+                Item(relativePath: shown, isDirectory: isDir.boolValue,
+                     size: facts?.size ?? 0, modified: Disk.modified(of: disk),
+                     resident: !(facts?.dehydrated ?? false)), nil)
         }
-        progress.completedUnitCount = 1
         return progress
     }
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request _: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
-        Enumerator(treeRoot: treeRoot, container: containerItemIdentifier)
+        Enumerator(tree: tree(), container: path(of: containerItemIdentifier))
     }
 
     /// The call this whole extension exists for: something wants the
@@ -124,14 +119,20 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                        completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void)
         -> Progress {
         let progress = Progress(totalUnitCount: 100)
-        let relative = itemIdentifier.rawValue
-        let source = treeRoot.appendingPathComponent(relative)
+        let shown = path(of: itemIdentifier)
 
-        DispatchQueue.global(qos: .userInitiated).async { [rootID, treeRoot] in
+        guard case let .inRoot(root, relative)? = tree().resolve(shown) else {
+            // A synthetic directory has no contents to fetch.
+            completionHandler(nil, nil, NSFileProviderError(.noSuchItem))
+            return progress
+        }
+        let source = root.path + "/" + relative
+
+        DispatchQueue.global(qos: .userInitiated).async {
             do {
-                if (try? Bridge.facts(of: source.path))?.dehydrated == true {
-                    log.info("fetching \(relative, privacy: .public)")
-                    try Bridge.hydrate(root: rootID, path: relative)
+                if (try? Bridge.facts(of: source))?.dehydrated == true {
+                    log.info("fetching \(shown, privacy: .public)")
+                    try Bridge.hydrate(root: root.id, path: relative)
                 }
                 progress.completedUnitCount = 90
 
@@ -141,17 +142,16 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // content out from under the sync engine.
                 let staged = FileManager.default.temporaryDirectory
                     .appendingPathComponent(UUID().uuidString)
-                try FileManager.default.copyItem(at: source, to: staged)
+                try FileManager.default.copyItem(
+                    at: URL(fileURLWithPath: source), to: staged)
 
-                let modified = Disk.modified(of: source.path)
-                let size = (try? Bridge.facts(of: source.path).size) ?? 0
-                let item = Item(relativePath: relative, isDirectory: false, size: size,
-                                modified: modified, resident: true)
+                let size = (try? Bridge.facts(of: source).size) ?? 0
+                let item = Item(relativePath: shown, isDirectory: false, size: size,
+                                modified: Disk.modified(of: source), resident: true)
                 progress.completedUnitCount = 100
                 completionHandler(staged, item, nil)
-                _ = treeRoot
             } catch {
-                log.error("fetching \(relative, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                log.error("fetching \(shown, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 completionHandler(nil, nil, error)
             }
         }
@@ -164,6 +164,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     // mount does too: an edit through the cloud folder is an ordinary
     // edit, so the agent's watcher and the checkpoint path see it the
     // way they see any other.
+    //
+    // A synthetic directory is not a place anything can be written: it
+    // is a segment of a layout, not a folder on a disk, so creating
+    // there is refused rather than silently landing somewhere.
 
     func createItem(basedOn itemTemplate: NSFileProviderItem,
                     fields _: NSFileProviderItemFields,
@@ -173,31 +177,37 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void)
         -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        let parent = itemTemplate.parentItemIdentifier == .rootContainer
-            ? "" : itemTemplate.parentItemIdentifier.rawValue
-        let relative = parent.isEmpty
+        defer { progress.completedUnitCount = 1 }
+
+        let parent = path(of: itemTemplate.parentItemIdentifier)
+        let shown = parent.isEmpty
             ? itemTemplate.filename : "\(parent)/\(itemTemplate.filename)"
-        let destination = treeRoot.appendingPathComponent(relative)
+
+        guard case let .inRoot(root, relative)? = tree().resolve(shown) else {
+            completionHandler(nil, [], false, NSFileProviderError(.noSuchItem))
+            return progress
+        }
+        let destination = URL(fileURLWithPath: root.path + "/" + relative)
 
         do {
             if itemTemplate.contentType == .folder {
-                try FileManager.default.createDirectory(at: destination,
-                                                        withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(
+                    at: destination, withIntermediateDirectories: true)
             } else if let url {
                 try? FileManager.default.removeItem(at: destination)
                 try FileManager.default.copyItem(at: url, to: destination)
             } else {
                 FileManager.default.createFile(atPath: destination.path, contents: nil)
             }
-            let size = Disk.size(of: destination.path)
-            let item = Item(relativePath: relative,
-                            isDirectory: itemTemplate.contentType == .folder,
-                            size: size, modified: Date(), resident: true)
-            completionHandler(item, [], false, nil)
+            completionHandler(
+                Item(relativePath: shown,
+                     isDirectory: itemTemplate.contentType == .folder,
+                     size: Disk.size(of: destination.path),
+                     modified: Date(), resident: true),
+                [], false, nil)
         } catch {
             completionHandler(nil, [], false, error)
         }
-        progress.completedUnitCount = 1
         return progress
     }
 
@@ -210,8 +220,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void)
         -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        var relative = item.itemIdentifier.rawValue
-        let path = treeRoot.appendingPathComponent(relative)
+        defer { progress.completedUnitCount = 1 }
+
+        let tree = tree()
+        var shown = path(of: item.itemIdentifier)
+        guard case let .inRoot(root, relative)? = tree.resolve(shown) else {
+            completionHandler(nil, [], false, NSFileProviderError(.noSuchItem))
+            return progress
+        }
+        let path = URL(fileURLWithPath: root.path + "/" + relative)
 
         do {
             if changedFields.contains(.contents), let url {
@@ -219,22 +236,28 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 try FileManager.default.copyItem(at: url, to: path)
             }
             if changedFields.contains(.filename) || changedFields.contains(.parentItemIdentifier) {
-                let parent = item.parentItemIdentifier == .rootContainer
-                    ? "" : item.parentItemIdentifier.rawValue
+                let parent = self.path(of: item.parentItemIdentifier)
                 let moved = parent.isEmpty ? item.filename : "\(parent)/\(item.filename)"
-                let destination = treeRoot.appendingPathComponent(moved)
-                try FileManager.default.moveItem(at: path, to: destination)
-                relative = moved
+                // A move must land inside a root — across roots it would
+                // be a different tree with a different history, which is
+                // a sync decision and not a rename.
+                guard case let .inRoot(destRoot, destRelative)? = tree.resolve(moved),
+                      destRoot.id == root.id
+                else {
+                    completionHandler(nil, [], false, NSFileProviderError(.noSuchItem))
+                    return progress
+                }
+                try FileManager.default.moveItem(
+                    at: path, to: URL(fileURLWithPath: destRoot.path + "/" + destRelative))
+                shown = moved
             }
-            let size = Disk.size(of: treeRoot.appendingPathComponent(relative).path)
-            completionHandler(Item(relativePath: relative,
-                                   isDirectory: item.contentType == .folder,
-                                   size: size, modified: Date(), resident: true),
-                              [], false, nil)
+            completionHandler(
+                Item(relativePath: shown, isDirectory: item.contentType == .folder,
+                     size: Disk.size(of: path.path), modified: Date(), resident: true),
+                [], false, nil)
         } catch {
             completionHandler(nil, [], false, error)
         }
-        progress.completedUnitCount = 1
         return progress
     }
 
@@ -244,14 +267,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     request _: NSFileProviderRequest,
                     completionHandler: @escaping (Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        let path = treeRoot.appendingPathComponent(identifier.rawValue)
+        defer { progress.completedUnitCount = 1 }
+
+        guard case let .inRoot(root, relative)? = tree().resolve(path(of: identifier)),
+              !relative.isEmpty
+        else {
+            // Refusing to delete a root through Finder is deliberate:
+            // that is "stop holding this project", a decision with sync
+            // consequences, and it belongs to `unshare`.
+            completionHandler(NSFileProviderError(.noSuchItem))
+            return progress
+        }
         do {
-            try FileManager.default.removeItem(at: path)
+            try FileManager.default.removeItem(atPath: root.path + "/" + relative)
             completionHandler(nil)
         } catch {
             completionHandler(error)
         }
-        progress.completedUnitCount = 1
         return progress
     }
 }

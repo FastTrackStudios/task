@@ -45,6 +45,20 @@ pub enum DaemonError {
     Io(String),
 }
 
+/// A root, and where it appears in the tree people are shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct PlacedRoot {
+    pub id: Uuid,
+    pub name: String,
+    /// Its live tree on this machine, empty when it holds structure
+    /// without content.
+    pub path: String,
+    /// Where it appears — `codywright/Projects/Some Record`. Falls back
+    /// to the name for a root nobody has placed.
+    pub place: String,
+}
+
 /// What became of one root a peer offered.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(C)]
@@ -101,6 +115,15 @@ pub trait DaemonControlService {
     /// the agent would serve it perfectly and be unable to say it had
     /// it, and `checkpoint <name>` could not resolve the name.
     async fn shares(&self) -> Result<Vec<(Uuid, String, String)>, DaemonError>;
+
+    /// Every root and where it appears in the composed tree — id, name,
+    /// live tree on disk, place.
+    ///
+    /// [`Self::shares`] without the place, which is the one thing a
+    /// client needs to build the tree a person sees rather than a flat
+    /// list of forty-six folders. Separate from `shares` so an older
+    /// client's decode plan is untouched.
+    async fn placed_roots(&self) -> Result<Vec<PlacedRoot>, DaemonError>;
 
     /// Share a folder without capturing it yet.
     ///

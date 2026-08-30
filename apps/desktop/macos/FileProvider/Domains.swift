@@ -1,18 +1,18 @@
-// Registering one File Provider domain per synced root.
+// Registering the File Provider domain — one, for the composed tree.
 //
 // Only the containing app may do this — an extension cannot add its own
 // domain — so this is built as a small tool inside the bundle that the
 // app runs, rather than as part of the extension. It is idempotent by
-// design: it adds domains for roots that have none, removes domains for
-// roots the agent no longer holds, and leaves the rest alone, so
+// design: it adds the domain when the agent holds roots, removes it when
+// it holds none, and otherwise leaves it alone, so
 // running it on every launch is the intended use.
 //
 //   TaskFileProviderDomains sync     make the domains match the agent
 //   TaskFileProviderDomains list     what is registered right now
 //   TaskFileProviderDomains clear    remove them all
 //
-// A domain's identifier is the root's id, which is what the extension
-// reads back in `init(domain:)` to find the tree.
+// The domain is a window onto the tree the agent composes from every
+// root's place, so Finder shows one "Task" rather than a folder per root.
 
 import FileProvider
 import Foundation
@@ -57,27 +57,31 @@ enum Domains {
         }
     }
 
-    /// Make the registered domains match what the agent holds.
+    /// Register the one domain, if the agent has anything to show.
+    ///
+    /// **One**, not one per root. A domain is a window onto a tree, and
+    /// the tree is the composed one — every root at its place under a
+    /// single "Task" in Finder's sidebar. A domain per root would put
+    /// forty-six unrelated folders there, which is the layout the place
+    /// mechanism exists to replace.
     static func sync() async throws {
         enableTheExtension()
         let roots = try Bridge.roots()
         let existing = try await settled()
 
-        let wanted = Set(roots.map(\.id))
+        let wanted = roots.isEmpty ? [] : [taskDomain]
         let have = Set(existing.map(\.identifier.rawValue))
 
-        for root in roots where !have.contains(root.id) {
-            let domain = NSFileProviderDomain(
-                identifier: NSFileProviderDomainIdentifier(root.id),
-                displayName: root.name)
+        for domain in wanted where !have.contains(domain.identifier.rawValue) {
             try await NSFileProviderManager.add(domain)
-            print("added \(root.name)")
+            print("added \(domain.displayName) — \(roots.count) roots")
         }
 
-        // A root the agent stopped holding leaves a domain behind that
-        // enumerates nothing — worse than absent, because it looks like
-        // an empty project rather than a missing one.
-        for domain in existing where !wanted.contains(domain.identifier.rawValue) {
+        // An agent holding nothing leaves a domain that enumerates an
+        // empty tree, which reads as "your projects are gone" rather
+        // than "this machine is not holding any".
+        let keep = Set(wanted.map(\.identifier.rawValue))
+        for domain in existing where !keep.contains(domain.identifier.rawValue) {
             try await NSFileProviderManager.remove(domain)
             print("removed \(domain.displayName)")
         }
@@ -85,6 +89,15 @@ enum Domains {
         if roots.isEmpty {
             print("the agent holds no roots — nothing to show in Finder yet")
         }
+    }
+
+    /// The single domain. Its identifier is stable across restarts, so
+    /// re-running this adopts the existing one rather than making a
+    /// second.
+    private static var taskDomain: NSFileProviderDomain {
+        NSFileProviderDomain(
+            identifier: NSFileProviderDomainIdentifier("task"),
+            displayName: "Task")
     }
 
     /// The registered domains.

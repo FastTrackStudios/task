@@ -66,6 +66,24 @@ impl DaemonControlService for DaemonControl {
             .collect())
     }
 
+    async fn placed_roots(&self) -> Result<Vec<crate::service::PlacedRoot>, DaemonError> {
+        Ok(self
+            .daemon
+            .shares()
+            .await?
+            .into_iter()
+            .map(|r| {
+                let place = self.daemon.place_of(r.id, &r.name);
+                crate::service::PlacedRoot {
+                    id: r.id,
+                    name: r.name,
+                    path: r.path.unwrap_or_default(),
+                    place,
+                }
+            })
+            .collect())
+    }
+
     async fn share_deferred(
         &self,
         path: String,

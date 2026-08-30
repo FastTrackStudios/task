@@ -54,6 +54,30 @@ fn fail(msg: impl Into<String>) -> c_int {
     -1
 }
 
+/// Run a call so that a panic never crosses back into C.
+///
+/// A panic through an `extern "C"` frame is not an error a caller can
+/// handle — it is `panic_cannot_unwind`, an immediate abort of the
+/// process. In an appex that means the File Provider extension
+/// disappears mid-answer and the system reports "the connection to
+/// service ... was invalidated", which names neither the panic nor the
+/// call. Every entry point here goes through this, so the worst a bug
+/// inside can do is fail the one call that hit it.
+fn guard<T>(what: &str, absent: T, call: impl FnOnce() -> T + std::panic::UnwindSafe) -> T {
+    match std::panic::catch_unwind(call) {
+        Ok(value) => value,
+        Err(panic) => {
+            let why = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic with no message".to_string());
+            fail(format!("{what} panicked: {why}"));
+            absent
+        }
+    }
+}
+
 fn succeed() -> c_int {
     LAST_ERROR.with(|slot| *slot.borrow_mut() = None);
     0
@@ -128,14 +152,19 @@ struct Facts {
 /// `path` must be a NUL-terminated string valid for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fts_fp_facts(path: *const c_char) -> *mut c_char {
-    let path = match unsafe { borrow(path, "path") } {
+    let borrowed = unsafe { borrow(path, "path") }.map(str::to_string);
+    guard("fts_fp_facts", std::ptr::null_mut(), move || facts_json(borrowed))
+}
+
+fn facts_json(path: Result<String, String>) -> *mut c_char {
+    let path = match path {
         Ok(p) => p,
         Err(e) => {
             fail(e);
             return std::ptr::null_mut();
         }
     };
-    let path = Path::new(path);
+    let path = Path::new(&path);
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
@@ -190,14 +219,24 @@ pub unsafe extern "C" fn fts_fp_facts(path: *const c_char) -> *mut c_char {
 /// Returns null on failure, with the reason in [`fts_fp_last_error`].
 #[unsafe(no_mangle)]
 pub extern "C" fn fts_fp_roots() -> *mut c_char {
+    guard("fts_fp_roots", std::ptr::null_mut(), roots_json)
+}
+
+fn roots_json() -> *mut c_char {
     #[derive(serde::Serialize)]
     struct Root {
         id: String,
         name: String,
         path: String,
+        /// Where it appears in the composed tree — the whole reason the
+        /// extension can show one `Projects/` instead of forty-six
+        /// folders at the top level.
+        place: String,
     }
 
-    let roots = match on_the_agent(async |client| client.shares().await.map_err(|e| e.to_string())) {
+    let roots = match on_the_agent(async |client| {
+        client.placed_roots().await.map_err(|e| e.to_string())
+    }) {
         Ok(r) => r,
         Err(e) => {
             fail(e);
@@ -206,10 +245,11 @@ pub extern "C" fn fts_fp_roots() -> *mut c_char {
     };
     let roots: Vec<Root> = roots
         .into_iter()
-        .map(|(id, name, path)| Root {
-            id: id.to_string(),
-            name,
-            path,
+        .map(|r| Root {
+            id: r.id.to_string(),
+            name: r.name,
+            path: r.path,
+            place: r.place,
         })
         .collect();
 
@@ -235,11 +275,18 @@ pub extern "C" fn fts_fp_roots() -> *mut c_char {
 /// this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fts_fp_hydrate(root_id: *const c_char, rel_path: *const c_char) -> c_int {
+    let args = (
+        unsafe { borrow(root_id, "root_id") }.map(str::to_string),
+        unsafe { borrow(rel_path, "rel_path") }.map(str::to_string),
+    );
+    guard("fts_fp_hydrate", -1, move || hydrate_now(args))
+}
+
+fn hydrate_now(args: (Result<String, String>, Result<String, String>)) -> c_int {
     let (root_id, rel_path) = match (
-        unsafe { borrow(root_id, "root_id") },
-        unsafe { borrow(rel_path, "rel_path") },
+        args.0, args.1,
     ) {
-        (Ok(a), Ok(b)) => (a, b.to_string()),
+        (Ok(a), Ok(b)) => (a, b),
         (Err(e), _) | (_, Err(e)) => return fail(e),
     };
     let Ok(id) = root_id.parse::<uuid::Uuid>() else {
@@ -268,11 +315,18 @@ pub unsafe extern "C" fn fts_fp_hydrate(root_id: *const c_char, rel_path: *const
 /// this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fts_fp_evict(root_id: *const c_char, rel_path: *const c_char) -> c_int {
+    let args = (
+        unsafe { borrow(root_id, "root_id") }.map(str::to_string),
+        unsafe { borrow(rel_path, "rel_path") }.map(str::to_string),
+    );
+    guard("fts_fp_evict", -1, move || evict_now(args))
+}
+
+fn evict_now(args: (Result<String, String>, Result<String, String>)) -> c_int {
     let (root_id, rel_path) = match (
-        unsafe { borrow(root_id, "root_id") },
-        unsafe { borrow(rel_path, "rel_path") },
+        args.0, args.1,
     ) {
-        (Ok(a), Ok(b)) => (a, b.to_string()),
+        (Ok(a), Ok(b)) => (a, b),
         (Err(e), _) | (_, Err(e)) => return fail(e),
     };
     let Ok(id) = root_id.parse::<uuid::Uuid>() else {
@@ -401,6 +455,27 @@ mod tests {
 
         assert_eq!(facts["size"], 13);
         assert_eq!(facts["dehydrated"], false);
+    }
+
+    /// A panic inside must never reach the caller.
+    ///
+    /// Through an `extern "C"` frame a panic is `panic_cannot_unwind` —
+    /// an immediate abort, which in an appex means the extension
+    /// vanishes mid-answer and the system reports a connection
+    /// invalidated, naming neither the panic nor the call. This is the
+    /// assertion that the boundary holds.
+    #[test]
+    fn a_panic_inside_becomes_a_failed_call_not_a_dead_process() {
+        let answer = guard("deliberate", std::ptr::null_mut::<c_char>(), || {
+            panic!("something went wrong deep inside");
+        });
+        assert!(answer.is_null(), "a panic must answer with the absent value");
+
+        let err = fts_fp_last_error();
+        assert!(!err.is_null(), "and must leave a reason behind");
+        let err = unsafe { CStr::from_ptr(err) }.to_str().unwrap();
+        assert!(err.contains("deliberate"), "unhelpful: {err}");
+        assert!(err.contains("something went wrong"), "unhelpful: {err}");
     }
 
     /// A failure the caller can act on, in the one protocol a C caller

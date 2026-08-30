@@ -42,6 +42,9 @@ struct Root: Decodable {
     let id: String
     let name: String
     let path: String
+    /// Where it appears in the composed tree — `org/Projects/Name`.
+    /// What `Tree` builds the hierarchy from.
+    let place: String
 }
 
 /// The two stat questions this extension asks over and over, with the

@@ -110,8 +110,8 @@ swiftc "${SWIFT_FLAGS[@]}" \
     -emit-executable \
     -Xlinker -e -Xlinker _NSExtensionMain \
     -o "$APPEX/Contents/MacOS/TaskFileProvider" \
-    "$SRC/Bridge.swift" "$SRC/Item.swift" "$SRC/Enumerator.swift" \
-    "$SRC/FileProviderExtension.swift"
+    "$SRC/Bridge.swift" "$SRC/Item.swift" "$SRC/Tree.swift" \
+    "$SRC/Enumerator.swift" "$SRC/FileProviderExtension.swift"
 
 echo "── the domain registrar ────────────────────────────────────────"
 # Only the containing app may register a domain, so this is a tool the
@@ -120,7 +120,7 @@ swiftc "${SWIFT_FLAGS[@]}" \
     -module-name TaskFileProviderDomains \
     -emit-executable \
     -o "$OUT_DIR/TaskFileProviderDomains" \
-    "$SRC/Bridge.swift" "$SRC/Domains.swift"
+    "$SRC/Bridge.swift" "$SRC/Tree.swift" "$SRC/Domains.swift"
 
 echo "── signing ─────────────────────────────────────────────────────"
 # An entitlements file is a plist, and codesign hands it to AMFI, whose
