@@ -221,6 +221,26 @@ impl files_fuse::Composer for MakeProject {
 
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
+        // Declared here, not later and not elsewhere.
+        //
+        // Everything needed is already known at this instant — the name
+        // is the folder, the org is the first segment of the place, and
+        // the kernel just said who asked — so a project is a project the
+        // moment it exists. Deferring the declaration to the app made a
+        // critical step depend on an optional component: a folder made
+        // on a machine nobody signs into would sit undeclared until
+        // somebody happened to open a window.
+        //
+        // What the app can still add is the *account*, which a service
+        // has no session to know. That is enrichment, and enrichment is
+        // allowed to be late.
+        let page = dir.join("project.md");
+        if let Err(e) = std::fs::write(&page, declaration(&name, &parent, &by)) {
+            // The project is real either way; a missing page is worth a
+            // line, not a refusal.
+            tracing::warn!(at = %page.display(), error = %e, "could not declare the project");
+        }
+
         let daemon = self.daemon.clone();
         let place_for_tags = place.clone();
         let (adopting, placing) = (dir.clone(), place.clone());
@@ -273,6 +293,31 @@ impl files_fuse::Composer for MakeProject {
             }),
         })
     }
+}
+
+/// The `project.md` a new project declares itself with.
+///
+/// The keys are the ones the project parser already reads — `title`,
+/// `status` — plus `organization`, which is what this studio's existing
+/// pages carry. `lead` is deliberately absent rather than guessed: a
+/// service has no session, and an empty field the app can fill is
+/// better than a wrong one it would have to correct.
+#[cfg(target_os = "linux")]
+fn declaration(name: &str, place_parent: &str, by: &files_fuse::By) -> String {
+    let org = place_parent.split('/').next().unwrap_or_default();
+    format!(
+        "---\n\
+         title: {name}\n\
+         status: active\n\
+         organization: {org}\n\
+         created: {created}\n\
+         createdBy: {user}\n\
+         ---\n\
+         \n\
+         # {name}\n",
+        created = chrono::Utc::now().to_rfc3339(),
+        user = user_name(by.uid),
+    )
 }
 
 /// A uid as a person reads it.

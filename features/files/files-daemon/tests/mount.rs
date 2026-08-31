@@ -386,6 +386,22 @@ async fn a_folder_made_beside_projects_becomes_one() {
     // And it is browsable at once, through the same mount.
     assert!(made.is_dir());
 
+    // It declares itself the moment it exists — no app, no session, no
+    // window open anywhere. Everything here is derivable at the instant
+    // the folder appears.
+    let page = std::fs::read_to_string(made.join("project.md"))
+        .expect("a new project declares itself when it is made");
+    assert!(page.starts_with("---\n"), "frontmatter first: {page}");
+    assert!(page.contains("title: Second"), "{page}");
+    assert!(page.contains("organization: acme"), "{page}");
+    assert!(page.contains("createdBy: "), "{page}");
+    // `lead` is the one thing a service cannot know, so it is left for
+    // the app rather than guessed.
+    assert!(
+        !page.contains("lead:"),
+        "a service has no session and must not invent an owner: {page}"
+    );
+
     // Inside a project, a folder is just a folder.
     let ordinary = under.join("acme/Projects/First/Stems");
     std::fs::create_dir(&ordinary).unwrap();

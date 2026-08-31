@@ -1,34 +1,21 @@
-//! Declaring the projects somebody made by making a folder.
+//! Naming the account that owns a project made by making a folder.
 //!
-//! The agent turns a new folder at a place into a File Root, and
-//! records who made it — the OS user and the machine, which is all a
-//! background service can honestly know. It deliberately stops there: a
-//! service has no session, and a project's *owner* is an account.
+//! **This is enrichment, never the critical path.** A folder made at a
+//! place *is* a project the moment it exists: the sync service creates
+//! the root, places it, and writes its `project.md` there and then,
+//! deriving everything it can — the title from the folder, the org from
+//! the place, who asked from the kernel. None of that waits for a
+//! window to be open.
 //!
-//! This is the other half. The app is signed in, so it can take "made
-//! by `cody` on THEBATTLESHIP at 14:20" and write the declaration that
-//! makes it a project: a `project.md` in the root's own tree, carrying
-//! the title, the org it belongs to, and the account that owns it.
+//! The one thing a service cannot know is the **account**, because it
+//! has no session. So `lead` is left blank rather than guessed, and
+//! this fills it in the next time somebody is signed in on a machine
+//! that holds the project. A studio that never opens the app still has
+//! its projects, correctly declared, minus one field.
 //!
-//! # Why a file in the tree, and not a vault page
-//!
-//! `ProjectBackend::adopt` writes exactly this page, and resolves its
-//! directory *relative to the vault root*. These projects are File
-//! Roots on a NAS, outside any vault, so that path cannot reach them —
-//! and their siblings, the projects a studio already had, carry their
-//! `project.md` in the tree beside the sessions. Writing it where the
-//! rest of them are keeps one convention rather than two.
-//!
-//! The write is an ordinary write into the root's live tree, so the
-//! agent's watcher captures it like any other edit and it syncs to
-//! every machine that holds the project.
-//!
-//! # Once, quietly, and never overwriting
-//!
-//! A project that already declares itself is left alone — this only
-//! ever fills in a blank. Failure is a log line: a machine where it
-//! does not run still has the project, it just has not said whose it
-//! is yet, and the next launch tries again.
+//! That ordering is the point. Anything that must happen for a project
+//! to be a project belongs in the code that makes it; anything that
+//! needs a person's identity can be late.
 
 use dioxus::prelude::*;
 
@@ -93,64 +80,67 @@ mod native {
                 continue;
             }
             let page = std::path::Path::new(&root.path).join("project.md");
-            if page.exists() {
+            let Ok(existing) = std::fs::read_to_string(&page) else {
+                // No page at all means the service could not write one.
+                // Not this module's job to paper over that — it would
+                // hide a real failure behind a partial fix.
+                continue;
+            };
+            // Only ever a blank `lead`. A project that already names an
+            // owner keeps it, whoever happens to be signed in here.
+            if !needs_lead(&existing) {
                 continue;
             }
 
-            match std::fs::write(&page, declaration(&root, email, made_by)) {
+            match std::fs::write(&page, with_lead(&existing, email)) {
                 Ok(()) => {
                     declared += 1;
-                    tracing::info!(place = %root.place, "declared a project made here");
+                    tracing::info!(place = %root.place, "named the owner of a project made here");
                 }
                 Err(e) => {
                     failed += 1;
-                    tracing::warn!(place = %root.place, error = %e, "could not declare it");
+                    tracing::warn!(place = %root.place, error = %e, "could not name its owner");
                 }
             }
         }
 
         match (declared, failed) {
-            (0, 0) => "every project made here already declares itself".to_string(),
-            (n, 0) => format!("declared {n} project(s) made on this machine"),
-            (n, f) => format!("declared {n}, could not declare {f}"),
+            (0, 0) => "every project made here already names its owner".to_string(),
+            (n, 0) => format!("named the owner of {n} project(s) made here"),
+            (n, f) => format!("named {n}, could not name {f}"),
         }
     }
 
-    /// The page itself.
+    /// Does this page still have no `lead`?
     ///
-    /// The keys are the ones the project parser already reads — `title`,
-    /// `status`, `lead` — rather than a second vocabulary meaning the
-    /// same things. `organization` matches what the studio's existing
-    /// pages carry.
-    fn declaration(
-        root: &files_daemon_proto::service::PlacedRoot,
-        email: &str,
-        made_by: &files_daemon_proto::model::MadeBy,
-    ) -> String {
-        let org = root
-            .place
-            .split_once('/')
-            .map(|(org, _)| org)
-            .unwrap_or_default();
-        format!(
-            "---\n\
-             title: {title}\n\
-             status: active\n\
-             organization: {org}\n\
-             lead: {email}\n\
-             created: {created}\n\
-             ---\n\
-             \n\
-             # {title}\n\
-             \n\
-             Made on {machine} by {user}.\n",
-            title = root.name,
-            created = made_by.at.to_rfc3339(),
-            machine = made_by
-                .device
-                .map_or_else(|| "this machine".into(), |d| d.to_string()),
-            user = made_by.user,
-        )
+    /// Frontmatter only: a `lead:` in the body is prose about somebody,
+    /// not a declaration.
+    fn needs_lead(page: &str) -> bool {
+        let mut lines = page.lines();
+        if lines.next().map(str::trim) != Some("---") {
+            return false;
+        }
+        !lines
+            .take_while(|l| l.trim() != "---")
+            .any(|l| l.trim_start().starts_with("lead:"))
+    }
+
+    /// The same page with `lead` filled in, as the last frontmatter key.
+    fn with_lead(page: &str, email: &str) -> String {
+        let mut out = String::with_capacity(page.len() + email.len() + 8);
+        let mut seen_open = false;
+        for line in page.lines() {
+            if line.trim() == "---" {
+                if seen_open {
+                    out.push_str(&format!("lead: {email}\n"));
+                } else {
+                    seen_open = true;
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
     }
 
     async fn agent()
