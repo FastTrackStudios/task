@@ -21,10 +21,17 @@
       # published alpha crate. Bump together with the dioxus git rev.
       fts.dx.cli = pkgsDx.dioxus-cli.overrideAttrs (old: rec {
         version = "0.8.0-alpha.0";
-        src = pkgsDx.fetchCrate {
-          pname = "dioxus-cli";
-          inherit version;
+        # static.crates.io, NOT fetchCrate: nixpkgs' fetchCrate builds the
+        # legacy `crates.io/api/v1/crates/<c>/<v>/download` URL, which now
+        # answers 403 to the fetcher. The crate is fine and unyanked — only
+        # that endpoint is gone. static.crates.io serves the identical
+        # tarball, so the hash below is unchanged. This 403 is what broke
+        # EVERY iOS build (the devshell can't even evaluate without dx).
+        src = pkgsDx.fetchzip {
+          name = "dioxus-cli-${version}";
+          url = "https://static.crates.io/crates/dioxus-cli/dioxus-cli-${version}.crate";
           hash = "sha256-gEC5MtvkTBAhv2ChvWPQIx4u/OJ5Qx2sN2+epdcXwSA=";
+          extension = "tar.gz";
         };
         cargoDeps = pkgsDx.rustPlatform.fetchCargoVendor {
           inherit src;
