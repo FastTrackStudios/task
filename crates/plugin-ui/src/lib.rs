@@ -53,11 +53,11 @@
 
 use dioxus::prelude::*;
 
+/// The component library, re-exported for the same reason.
+pub use architect_ui;
 /// Dioxus, for plugins to use instead of their own dependency — see the
 /// module docs on why that matters.
 pub use dioxus;
-/// The component library, re-exported for the same reason.
-pub use architect_ui;
 /// The note-widget vocabulary, re-exported for the same reason — a
 /// `WidgetSpec` built against a different version is a different type.
 pub use task_widgets;
@@ -127,6 +127,61 @@ impl LinkTarget {
     pub fn param(key: &str, value: &str) -> Self {
         Self::query(format!("{key}={}", encode(value)))
     }
+}
+
+/// A link to one of an app's **own** screens.
+///
+/// Apps with more than one screen navigate between them, and until
+/// this existed they could not: [`LinkTarget`] describes where a
+/// *claimed link* goes and is handed back to the shell to route, which
+/// is no help to an app that just wants an `href` for a button. The
+/// shape is the shell's (`/app/<id>/<path>`), so the shell should be
+/// the one that knows it — but the app is the one that needs to write
+/// it, so it lives here, in the crate they both depend on.
+///
+/// `path` is the app's own, exactly as [`PluginApp::view`] will
+/// receive it. `query` is the app's own query string — already in
+/// `k=v&k=v` form, with **each value** [`encode`]d by the app if it
+/// could contain a `&` or an `=`. This function encodes the query as a
+/// whole so the shell's URL survives it, but it cannot tell an app's
+/// separator from a `&` inside one of its values; for the common
+/// single-parameter case use [`href_param`], which cannot get that
+/// wrong.
+///
+/// ```
+/// # use task_plugin_ui::href;
+/// assert_eq!(href("mealplan", "shopping", ""), "/app/mealplan/shopping");
+/// ```
+#[must_use]
+pub fn href(app: &str, path: &str, query: &str) -> String {
+    let mut out = format!("/app/{app}");
+    if !path.is_empty() {
+        out.push('/');
+        out.push_str(path);
+    }
+    if !query.is_empty() {
+        out.push_str("?q=");
+        out.push_str(&encode(query));
+    }
+    out
+}
+
+/// A link to one of an app's own screens carrying one parameter.
+///
+/// The common case, and the one that cannot be got wrong: the value is
+/// encoded before it becomes part of a query, so a `&` or an `=` in it
+/// — a recipe called `Ragu & Chips`, a path with a query-ish name — is
+/// a character rather than a separator.
+///
+/// ```
+/// # use task_plugin_ui::{href_param, query_param, decode};
+/// let url = href_param("mealplan", "recipe/read", "path", "Ragu & Chips.cook");
+/// let q = decode(url.split_once("?q=").unwrap().1);
+/// assert_eq!(query_param(&q, "path").as_deref(), Some("Ragu & Chips.cook"));
+/// ```
+#[must_use]
+pub fn href_param(app: &str, path: &str, key: &str, value: &str) -> String {
+    href(app, path, &format!("{key}={}", encode(value)))
 }
 
 /// Percent-encode everything that is not unreserved.
@@ -401,10 +456,7 @@ pub const CONTRACT: u32 = 1;
 /// Every registered app, in registration order.
 #[must_use]
 pub fn registered() -> Vec<PluginApp> {
-    REGISTRY
-        .read()
-        .expect("plugin registry poisoned")
-        .clone()
+    REGISTRY.read().expect("plugin registry poisoned").clone()
 }
 
 /// What is installed, for a settings surface or a support question.
@@ -430,10 +482,7 @@ pub fn installed() -> Vec<(&'static str, &'static str)> {
 /// is a wiring decision the composition root already made by ordering
 /// them; resolving it here would hide that.
 #[must_use]
-pub fn claim_link(
-    text: &str,
-    enabled: impl Fn(&str) -> bool,
-) -> Option<(&'static str, Claim)> {
+pub fn claim_link(text: &str, enabled: impl Fn(&str) -> bool) -> Option<(&'static str, Claim)> {
     let registry = REGISTRY.read().expect("plugin registry poisoned");
     let claims = || registry.iter().filter(|a| enabled(a.id));
     // An `Always` claim wins over an `IfUnknown` one regardless of
@@ -660,8 +709,42 @@ mod tests {
         assert_eq!(decode("a%zz"), "a%zz");
     }
 
+    /// An app linking to its own screens — the same URL the shell
+    /// builds for a claimed link, so a button and a wikilink land in
+    /// exactly the same place.
+    #[test]
+    fn an_app_links_to_its_own_screens() {
+        assert_eq!(href("mealplan", "", ""), "/app/mealplan");
+        assert_eq!(href("mealplan", "shopping", ""), "/app/mealplan/shopping");
+        assert_eq!(
+            href("mealplan", "recipe/read", "path=Cookbook/Ragu.cook"),
+            "/app/mealplan/recipe/read?q=path%3DCookbook%2FRagu.cook"
+        );
+    }
+
+    /// The round trip that matters: what the app wrote is what the
+    /// app gets back — including the ampersand that would otherwise
+    /// read as the end of the parameter.
+    #[test]
+    fn a_self_link_survives_the_shell() {
+        let url = href_param(
+            "mealplan",
+            "recipe/read",
+            "path",
+            "Cookbook/Ragu & Chips.cook",
+        );
+        let q = url.split_once("?q=").expect("has a query").1;
+        assert_eq!(
+            query_param(&decode(q), "path").as_deref(),
+            Some("Cookbook/Ragu & Chips.cook")
+        );
+    }
+
     #[test]
     fn a_form_sends_a_space_as_a_plus() {
-        assert_eq!(query_param("reference=John+3:16", "reference").as_deref(), Some("John 3:16"));
+        assert_eq!(
+            query_param("reference=John+3:16", "reference").as_deref(),
+            Some("John 3:16")
+        );
     }
 }
