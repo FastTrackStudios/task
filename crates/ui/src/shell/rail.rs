@@ -23,7 +23,6 @@ use crate::routes::Route;
 const RAIL_TABS: &[&str] = &[
     "Home",
     "Inbox",
-    "Email",
     "Recall",
     "Contacts",
     "Projects",
@@ -38,6 +37,21 @@ const RAIL_TABS: &[&str] = &[
     "Runners",
     "Connections",
 ];
+
+/// Does this tab belong in the rail?
+///
+/// Two sources, because there are two kinds of tab. The shell's own
+/// destinations are the list above. A registered app's are whatever
+/// that app asked for — an allow-list of labels in this file could
+/// never name them, since the shell does not know what apps exist, and
+/// that would have made the rail a place no plugin could ever reach.
+fn wants_rail(label: &str) -> bool {
+    RAIL_TABS.contains(&label)
+        || task_plugin_ui::registered()
+            .iter()
+            .flat_map(|app| app.nav.iter())
+            .any(|nav| nav.rail && nav.label == label)
+}
 
 #[component]
 pub fn IconRail(current: Route) -> Element {
@@ -86,7 +100,7 @@ pub fn IconRail(current: Route) -> Element {
                 Feather { size: 15 }
             }
             div { class: "flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto",
-                for tab in tabs.iter().skip(1).filter(|t| RAIL_TABS.contains(&t.label)) {
+                for tab in tabs.iter().skip(1).filter(|t| wants_rail(t.label)) {
                     {tab_button(tab)}
                 }
             }

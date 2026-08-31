@@ -31,6 +31,7 @@ pub const APP: PluginApp = PluginApp {
         label: "Email",
         icon: icon,
         path: "",
+        rail: true,
     }],
     view: view,
     widgets: None,

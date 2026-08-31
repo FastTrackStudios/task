@@ -42,6 +42,7 @@ pub const APP: PluginApp = PluginApp {
         label: "Scripture",
         icon: icon,
         path: "",
+        rail: true,
     }],
     view: view,
     widgets: None,

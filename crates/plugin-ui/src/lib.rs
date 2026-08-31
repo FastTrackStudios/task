@@ -74,6 +74,18 @@ pub struct PluginNav {
     /// `"setlists"` a section within it. Never a Task route: the shell
     /// turns this into `/app/<id>/<path>`.
     pub path: &'static str,
+    /// Ask for a slot in the icon rail — the narrow always-visible
+    /// strip, not the full sidebar.
+    ///
+    /// The rail is deliberately short: a dozen destinations somebody
+    /// reaches constantly, not everything they have. So this is opt-in
+    /// and most screens should leave it `false` — an app with three
+    /// nav entries that asks for three rail slots has made the rail
+    /// worse for everybody, including itself.
+    ///
+    /// It is a request, not a guarantee: the shell owns the rail and
+    /// may still not have room.
+    pub rail: bool,
 }
 
 /// Where a claimed link goes — a screen inside the claiming app.

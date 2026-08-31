@@ -46,11 +46,13 @@ pub const APP: PluginApp = PluginApp {
             label: "Cooking",
             icon: icon,
             path: "",
+            rail: false,
         },
         PluginNav {
             label: "Recipes",
             icon: icon,
             path: "recipes",
+            rail: false,
         },
     ],
     view: view,
