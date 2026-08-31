@@ -361,20 +361,20 @@ view-table = { path = "features/view/view-table" }
 # `keyflow-text` and `engraver`, so they belong above the editor. The
 # chart renderer registers itself through `editor_state::fence_renderer`
 # rather than editor-state depending on it. See docs/SPLIT.md in that repo.
-editor = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-lsp = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-mermaid = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-syntax = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-typst = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-view = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
-editor-vim = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.0" }
+editor = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-lsp = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-mermaid = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-syntax = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-typst = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-view = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor-vim = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
 # The editor's keyflow half moved to the keyflow repo with v0.2.0: both
 # crates need `editor-state` from below AND `keyflow-text`/`engraver` from
 # above, so that is the only repo where they can live.
-editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.0" }
-editor-keyflow-lang = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.0" }
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
+editor-keyflow-lang = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
