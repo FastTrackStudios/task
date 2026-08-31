@@ -34,6 +34,7 @@ pub const APP: PluginApp = PluginApp {
         rail: true,
     }],
     view: view,
+    claim_file: None,
     provide: None,
     widgets: None,
     fences: None,

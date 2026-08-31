@@ -12,8 +12,8 @@
 //! running timers pinned under the header so they stay visible while
 //! you scroll the steps.
 
-use crate::format::duration_hms;
 use std::collections::HashSet;
+use task_ui_core::format::duration_hms;
 
 use architect_ui::lucide_dioxus::{
     Check, CircleCheck, Clock, Flame, Play, Receipt, ShoppingCart, TriangleAlert, Users,
@@ -24,7 +24,7 @@ use cookbook_proto::{Recipe, RecipeTimer};
 use dioxus::prelude::*;
 use mealplan_proto::{CookReceipt, Fulfillment, SkipReason};
 
-use crate::orgs::{OrgMeta, OrgSelection};
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 
 /// A countdown started from a step's timer. `remaining` ticks down once
 /// a second; at zero it's `done` and stays pinned until dismissed.
@@ -110,7 +110,7 @@ pub fn CookMode(recipe: Recipe, on_close: EventHandler<()>) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -131,7 +131,7 @@ pub fn CookMode(recipe: Recipe, on_close: EventHandler<()>) -> Element {
         let servings = target_servings();
         deducting.set(true);
         spawn(async move {
-            match crate::feeds::cook_recipe(&s, path, servings).await {
+            match crate::cook_recipe(&s, path, servings).await {
                 Ok(r) if r.deducted.is_empty() && r.skipped.is_empty() => {
                     notices.info("Nothing to deduct — no matching pantry stock.");
                 }
@@ -166,7 +166,7 @@ pub fn CookMode(recipe: Recipe, on_close: EventHandler<()>) -> Element {
         let servings = target_servings();
         checking.set(true);
         spawn(async move {
-            match crate::feeds::can_cook(&s, path, servings).await {
+            match crate::can_cook(&s, path, servings).await {
                 Ok(f) => {
                     precheck.set(Some(f));
                 }
@@ -191,10 +191,10 @@ pub fn CookMode(recipe: Recipe, on_close: EventHandler<()>) -> Element {
         let servings = target_servings();
         listing.set(true);
         spawn(async move {
-            match crate::pages::shopping::add_recipe_shortages(&s, path, servings).await {
+            match crate::shopping::add_recipe_shortages(&s, path, servings).await {
                 Ok(l) => {
                     notices.info(format!("Added to “{}”.", l.name));
-                    nav_to_shopping.push(crate::routes::Route::ShoppingRoute {});
+                    nav_to_shopping.push(task_plugin_ui::href(crate::APP_ID, "shopping", ""));
                 }
                 Err(e) => {
                     notices.error(format!("Couldn't build the shopping list: {e}"));
@@ -216,10 +216,10 @@ pub fn CookMode(recipe: Recipe, on_close: EventHandler<()>) -> Element {
         let servings = target_servings();
         listing.set(true);
         spawn(async move {
-            match crate::pages::shopping::add_recipe_gather_list(&s, path, servings).await {
+            match crate::shopping::add_recipe_gather_list(&s, path, servings).await {
                 Ok(l) => {
                     notices.info(format!("Added to \u{201c}{}\u{201d}.", l.name));
-                    nav_to_shopping.push(crate::routes::Route::ShoppingRoute {});
+                    nav_to_shopping.push(task_plugin_ui::href(crate::APP_ID, "shopping", ""));
                 }
                 Err(e) => {
                     notices.error(format!("Couldn't build the shopping list: {e}"));
@@ -800,8 +800,8 @@ pub(crate) fn fmt_num(v: f64) -> String {
 #[component]
 pub fn RecipeCookView(path: String) -> Element {
     let nav = use_navigator();
-    let recipes = crate::stores::use_recipe_list();
-    let store = crate::stores::use_recipe_store();
+    let recipes = crate::use_recipe_list();
+    let store = crate::use_recipe_store();
     let target = path.clone();
     let found = recipes.value().and_then(|rows| {
         rows.iter()
@@ -810,7 +810,7 @@ pub fn RecipeCookView(path: String) -> Element {
     });
 
     let to_mealplan = move |()| {
-        nav.push(crate::routes::Route::MealplanRoute {});
+        nav.push(task_plugin_ui::href(crate::APP_ID, "", ""));
     };
 
     match found {
@@ -819,19 +819,19 @@ pub fn RecipeCookView(path: String) -> Element {
         },
         None if recipes.is_waiting() => rsx! {
             div { class: "flex h-full items-center justify-center p-8",
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             }
         },
         None => rsx! {
             div { class: "mx-auto flex max-w-md flex-col gap-3 p-8 text-center",
                 if let Some(err) = recipes.error() {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load the recipe",
                         message: err.clone(),
                         on_retry: move |()| store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "Recipe not found",
                         hint: "It may have been moved or renamed.",
                     }

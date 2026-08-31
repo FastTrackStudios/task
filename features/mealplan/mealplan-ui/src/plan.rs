@@ -27,8 +27,7 @@ use cookbook_proto::Recipe;
 use mealplan_proto::Meal;
 use pantry_proto::PantryItem;
 
-use crate::orgs::{OrgMeta, OrgSelection};
-use crate::stores;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 
 const INPUT_CLS: &str = "rounded-lg border border-input bg-input/30 px-3 py-2 text-sm transition-colors \
      focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] \
@@ -41,7 +40,7 @@ pub fn MealplanView() -> Element {
 
     // The org we list / create into (first selected, or home).
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -58,14 +57,14 @@ pub fn MealplanView() -> Element {
                     }
                 }
                 Link {
-                    to: crate::routes::Route::ShoppingRoute {},
+                    to: task_plugin_ui::href(crate::APP_ID, "shopping", ""),
                     class: "inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted",
                     ShoppingCart { size: 14 }
                     "Shopping"
                 }
             }
 
-            super::mealplan_week::MealWeek { slug }
+            crate::week::MealWeek { slug }
             RecipesSection { slug }
             PantrySection { slug }
             MealPlanSection { slug }
@@ -113,8 +112,8 @@ fn RecipesSection(slug: Memo<Option<String>>) -> Element {
     // The shared store: one AtomResult for the list, optimistic create.
     // The store keys in-flight drafts by a typed `Id::Temp` — no magic
     // `__pending__` path sentinel.
-    let result = stores::use_recipe_list();
-    let muts = stores::use_recipe_mutations();
+    let result = crate::use_recipe_list();
+    let muts = crate::use_recipe_mutations();
 
     let mut create = move || {
         let n = name.read().trim().to_string();
@@ -123,7 +122,7 @@ fn RecipesSection(slug: Memo<Option<String>>) -> Element {
         }
         let Some(s) = slug() else { return };
         name.set(String::new());
-        muts.create(s, stores::draft_recipe(n));
+        muts.create(s, crate::draft_recipe(n));
     };
 
     // Web import: the server fetches + extracts + synthesizes a `.cook`
@@ -139,7 +138,7 @@ fn RecipesSection(slug: Memo<Option<String>>) -> Element {
         let Some(s) = slug() else { return };
         importing.set(true);
         spawn(async move {
-            match crate::feeds::import_recipe(&s, u).await {
+            match crate::import_recipe(&s, u).await {
                 Ok(draft) => {
                     let name = draft.name.clone();
                     import_url.set(String::new());
@@ -251,7 +250,7 @@ fn RecipeRow(recipe: Recipe, pending: bool) -> Element {
                         size: ButtonSize::Small,
                         on_click: {
                             let path = path.clone();
-                            move |_| { nav.push(crate::routes::Route::RecipeEditRoute { path: path.clone() }); }
+                            move |_| { nav.push(task_plugin_ui::href_param(crate::APP_ID, "recipe/edit", "path", &path)); }
                         },
                         "Edit"
                     }
@@ -262,7 +261,7 @@ fn RecipeRow(recipe: Recipe, pending: bool) -> Element {
                             variant: ButtonVariant::Secondary,
                             size: ButtonSize::Small,
                             on_click: move |_| {
-                                nav.push(crate::routes::Route::RecipeReadRoute { path: path.clone() });
+                                nav.push(task_plugin_ui::href_param(crate::APP_ID, "recipe/read", "path", &path));
                             },
                             "Cook"
                         }
@@ -282,8 +281,8 @@ fn PantrySection(slug: Memo<Option<String>>) -> Element {
     let mut unit = use_signal(|| "g".to_string());
 
     // The shared store: one AtomResult for the list, optimistic create.
-    let result = stores::use_pantry_list();
-    let muts = stores::use_pantry_mutations();
+    let result = crate::use_pantry_list();
+    let muts = crate::use_pantry_mutations();
 
     let mut create = move || {
         let n = name.read().trim().to_string();
@@ -295,7 +294,7 @@ fn PantrySection(slug: Memo<Option<String>>) -> Element {
         let u = unit.read().trim().to_string();
         name.set(String::new());
         qty.set(String::new());
-        muts.create(s, stores::draft_pantry_item(n, q, u));
+        muts.create(s, crate::draft_pantry_item(n, q, u));
     };
 
     let rows: Vec<(Id<Uuid>, PantryItem)> = result.value().cloned().unwrap_or_default();
@@ -398,7 +397,7 @@ fn PantryRow(item: PantryItem, pending: bool) -> Element {
 fn MealPlanSection(slug: Memo<Option<String>>) -> Element {
     let meals = use_resource(move || async move {
         match slug() {
-            Some(s) => crate::feeds::fetch_meal_plans(&s).await,
+            Some(s) => crate::fetch_meal_plans(&s).await,
             None => Ok(Vec::new()),
         }
     });

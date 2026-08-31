@@ -71,7 +71,7 @@ members = [
     "features/files/files-domain",
     "crates/plugin-ui",
     "crates/stores",
-    "apps/plugins/cooking",
+    "apps/plugins/mealplan",
     "apps/plugins/scripture",
     "apps/plugins/email",
     "apps/plugins/fitness",
@@ -124,6 +124,7 @@ members = [
     "features/mealplan/cookbook/cookbook-proto",
     "features/mealplan/mealplan",
     "features/mealplan/mealplan/mealplan-proto",
+    "features/mealplan/mealplan-ui",
     "features/mealplan/pantry",
     "features/mealplan/pantry/pantry-proto",
     "features/mealplan/recipe-import",
@@ -235,7 +236,7 @@ files-daemon = { path = "features/files/files-daemon" }
 files-daemon-proto = { path = "features/files/files-daemon-proto" }
 files-domain = { path = "features/files/files-domain" }
 files-fileprovider = { path = "features/files/files-fileprovider" }
-task-plugin-cooking = { path = "apps/plugins/cooking" }
+task-plugin-mealplan = { path = "apps/plugins/mealplan" }
 task-plugin-scripture = { path = "apps/plugins/scripture" }
 task-plugin-email = { path = "apps/plugins/email" }
 task-plugin-fitness = { path = "apps/plugins/fitness" }
@@ -321,6 +322,7 @@ locations = { path = "features/locations/locations" }
 locations-ui = { path = "features/locations/locations-ui" }
 locations-proto = { path = "features/locations/locations-proto", default-features = false }
 mealplan = { path = "features/mealplan/mealplan" }
+mealplan-ui = { path = "features/mealplan/mealplan-ui" }
 mealplan-proto = { path = "features/mealplan/mealplan/mealplan-proto", default-features = false }
 media-proto = { path = "features/media/media-proto" }
 milestone = { path = "features/milestone/milestone" }

@@ -13802,6 +13802,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mealplan-ui"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "base64 0.22.1",
+ "chrono",
+ "cookbook-proto",
+ "dioxus",
+ "mealplan-proto",
+ "pantry-proto",
+ "task-plugin-ui",
+ "task-stores",
+ "task-ui-core",
+ "uuid",
+ "view-calendar",
+]
+
+[[package]]
 name = "media-proto"
 version = "0.1.0"
 dependencies = [
@@ -20910,13 +20929,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "task-plugin-cooking"
-version = "0.1.0"
-dependencies = [
- "task-plugin-ui",
-]
-
-[[package]]
 name = "task-plugin-email"
 version = "0.1.0"
 dependencies = [
@@ -20950,6 +20962,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-plugin-mealplan"
+version = "0.1.0"
+dependencies = [
+ "mealplan-ui",
+ "task-plugin-ui",
+]
+
+[[package]]
 name = "task-plugin-scripture"
 version = "0.1.0"
 dependencies = [
@@ -20971,11 +20991,11 @@ dependencies = [
 name = "task-plugins"
 version = "0.1.0"
 dependencies = [
- "task-plugin-cooking",
  "task-plugin-email",
  "task-plugin-finance",
  "task-plugin-fitness",
  "task-plugin-home",
+ "task-plugin-mealplan",
  "task-plugin-scripture",
  "task-plugin-ui",
 ]
@@ -22420,10 +22440,8 @@ dependencies = [
  "architect-auth",
  "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "auth-proto",
- "base64 0.22.1",
  "chrono",
  "contacts-proto",
- "cookbook-proto",
  "crdt",
  "dioxus",
  "dioxus-icons",
@@ -22453,7 +22471,6 @@ dependencies = [
  "neo_frizbee",
  "notify-proto",
  "nucleo-matcher",
- "pantry-proto",
  "prefs-proto",
  "project-proto",
  "recall-proto",

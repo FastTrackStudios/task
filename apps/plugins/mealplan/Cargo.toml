@@ -1,0 +1,19 @@
+[package]
+name = "task-plugin-mealplan"
+description = "Mealplan as a Task app: the cookbook, the pantry, cook mode and the shopping run."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The SDK and this app.s own feature crate — and nothing else in Task.
+# No task-ui, no shell, no route. If a third Task crate appears here,
+# the extension point has stopped being one.
+task-plugin-ui = { workspace = true }
+mealplan-ui = { workspace = true }
+
+[lints]
+workspace = true

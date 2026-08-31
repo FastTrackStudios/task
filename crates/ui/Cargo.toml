@@ -102,13 +102,10 @@ milestone-proto = { workspace = true, features = ["vox", "atom"] }
 # arrangement finance-ui has with contacts and projects, in the other
 # direction.
 finance-proto = { workspace = true, features = ["vox"] }
-# Mealplan suite wire surface — cookbook (recipes) / pantry
-# (ingredient stock) / mealplan (planned meals) service clients
-# for the `/mealplan` route. Wasm-clean (serde-only client side),
-# `vox` feature only (no `native` → never pulls `inventory`).
-base64 = { workspace = true }
-cookbook-proto = { workspace = true, features = ["vox", "atom"] }
-pantry-proto = { workspace = true, features = ["vox", "atom"] }
+# The mealplan *service*, for one thing only: the schedule overlay
+# shows the week's planned meals beside everything else on the day.
+# Same arrangement as `finance-proto` above — the shell asking a server
+# capability a question, not depending on the mealplan app.
 mealplan-proto = { workspace = true, features = ["vox"] }
 scheduling-ui.workspace = true
 # Extracted feature pages — the shell routes to them, they own their

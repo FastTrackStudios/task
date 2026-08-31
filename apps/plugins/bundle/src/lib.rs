@@ -25,7 +25,7 @@
 /// Registering the same id twice keeps the last, so a binary may call
 /// this and then override one app with its own build.
 pub fn register_all() {
-    task_plugin_ui::register(task_plugin_cooking::APP);
+    task_plugin_ui::register(task_plugin_mealplan::APP);
     task_plugin_ui::register(task_plugin_scripture::APP);
     task_plugin_ui::register(task_plugin_email::APP);
     task_plugin_ui::register(task_plugin_fitness::APP);

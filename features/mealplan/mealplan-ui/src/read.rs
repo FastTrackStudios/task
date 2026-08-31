@@ -48,8 +48,8 @@ use architect_ui::prelude::*;
 use cookbook_proto::{CookStep, Ingredient, Recipe, StepCookware, StepIngredient, StepLink};
 use dioxus::prelude::*;
 
-use super::cook_mode::scaled_qty;
-use crate::format::duration_hms;
+use crate::cook::scaled_qty;
+use task_ui_core::format::duration_hms;
 
 /// A run of consecutive steps sharing a `= Section` heading.
 struct Phase {
@@ -277,7 +277,7 @@ fn use_recipe_image(slug: Memo<Option<String>>, path: Option<String>) -> Option<
         let path = path.clone();
         async move {
             let (s, p) = (slug()?, path?);
-            let bytes = crate::feeds::fetch_recipe_image(&s, p.clone()).await.ok()?;
+            let bytes = crate::fetch_recipe_image(&s, p.clone()).await.ok()?;
             let mime = match p.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()) {
                 Some(e) if e == "png" => "image/png",
                 Some(e) if e == "webp" => "image/webp",
@@ -307,8 +307,8 @@ fn hands_off(recipe: &Recipe) -> u32 {
 #[component]
 pub fn RecipeReadView(path: String) -> Element {
     let nav = use_navigator();
-    let recipes = crate::stores::use_recipe_list();
-    let store = crate::stores::use_recipe_store();
+    let recipes = crate::use_recipe_list();
+    let store = crate::use_recipe_store();
     let target = path.clone();
     let found = recipes.value().and_then(|rows| {
         rows.iter()
@@ -319,25 +319,25 @@ pub fn RecipeReadView(path: String) -> Element {
     match found {
         Some(recipe) => rsx! { Reader { recipe } },
         None if recipes.is_waiting() => rsx! {
-            div { class: "flex h-full items-center justify-center p-8", crate::states::LoadingState {} }
+            div { class: "flex h-full items-center justify-center p-8", task_ui_core::states::LoadingState {} }
         },
         None => rsx! {
             div { class: "mx-auto flex max-w-md flex-col gap-3 p-8 text-center",
                 if let Some(err) = recipes.error() {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load the recipe",
                         message: err.clone(),
                         on_retry: move |()| store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "Recipe not found",
                         hint: "It may have been moved or renamed.",
                     }
                 }
                 Button {
                     variant: ButtonVariant::Secondary,
-                    on_click: move |_| { nav.push(crate::routes::Route::MealplanRoute {}); },
+                    on_click: move |_| { nav.push(task_plugin_ui::href(crate::APP_ID, "", "")); },
                     "Back to mealplan"
                 }
             }
@@ -348,10 +348,10 @@ pub fn RecipeReadView(path: String) -> Element {
 #[component]
 fn Reader(recipe: Recipe) -> Element {
     let nav = use_navigator();
-    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
-    let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
+    let selection = use_context::<Signal<task_ui_core::orgs::OrgSelection>>();
+    let org_list = use_context::<Signal<Vec<task_ui_core::orgs::OrgMeta>>>();
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -364,7 +364,7 @@ fn Reader(recipe: Recipe) -> Element {
     // link points at.
     let cookbook = use_resource(move || async move {
         let s = slug()?;
-        crate::feeds::fetch_recipes(&s).await.ok()
+        crate::fetch_recipes(&s).await.ok()
     });
     let link_targets: HashMap<String, String> = cookbook
         .read()
@@ -446,7 +446,7 @@ fn Reader(recipe: Recipe) -> Element {
                 button {
                     class: "flex size-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
                     aria_label: "Back to mealplan",
-                    onclick: move |_| { nav.push(crate::routes::Route::MealplanRoute {}); },
+                    onclick: move |_| { nav.push(task_plugin_ui::href(crate::APP_ID, "", "")); },
                     ChevronLeft { size: 20 }
                 }
                 span { class: "min-w-0 flex-1 truncate text-sm text-muted-foreground", "{recipe.name}" }
@@ -458,13 +458,13 @@ fn Reader(recipe: Recipe) -> Element {
                 Button {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::Small,
-                    on_click: move |_| { nav.push(crate::routes::Route::RecipeEditRoute { path: edit_path.clone() }); },
+                    on_click: move |_| { nav.push(task_plugin_ui::href_param(crate::APP_ID, "recipe/edit", "path", &edit_path)); },
                     Pencil { size: 14 }
                     span { class: "hidden sm:inline", "Edit" }
                 }
                 Button {
                     size: ButtonSize::Small,
-                    on_click: move |_| { nav.push(crate::routes::Route::RecipeCookRoute { path: cook_path.clone() }); },
+                    on_click: move |_| { nav.push(task_plugin_ui::href_param(crate::APP_ID, "recipe/cook", "path", &cook_path)); },
                     CookingPot { size: 14 }
                     "Cook"
                 }
@@ -905,9 +905,7 @@ fn StepRow(
                                                         class: "cursor-pointer font-medium text-primary underline decoration-primary/40 underline-offset-[5px] transition-colors hover:decoration-primary",
                                                         title: "Open {l.display}",
                                                         onclick: move |_| {
-                                                            nav.push(crate::routes::Route::RecipeReadRoute {
-                                                                path: path.clone(),
-                                                            });
+                                                            nav.push(task_plugin_ui::href_param(crate::APP_ID, "recipe/read", "path", &path));
                                                         },
                                                         "{l.display}"
                                                     }

@@ -6,7 +6,7 @@
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag,
     FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, RefreshCw,
-    Settings as SettingsIcon, Target, Timer, Users, Utensils, Waypoints, Youtube,
+    Settings as SettingsIcon, Target, Timer, Users, Waypoints, Youtube,
 };
 use dioxus::prelude::*;
 
@@ -47,9 +47,6 @@ fn icon_vault() -> Element {
 }
 fn icon_milestones() -> Element {
     rsx! { Flag { size: 16 } }
-}
-fn icon_mealplan() -> Element {
-    rsx! { Utensils { size: 16 } }
 }
 fn icon_schedule() -> Element {
     rsx! { CalendarDays { size: 16 } }
@@ -160,12 +157,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "core",
             icon: icon_milestones,
             route: Route::MilestonesRoute {},
-        },
-        NavTab {
-            label: "Mealplan",
-            plugin: "mealplan",
-            icon: icon_mealplan,
-            route: Route::MealplanRoute {},
         },
         NavTab {
             label: "Schedule",
@@ -421,11 +412,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::TaskDetailRoute { .. } => "Task",
         Route::VaultRoute { .. } => "Vault",
         Route::MilestonesRoute {} => "Milestones",
-        Route::MealplanRoute {} => "Mealplan",
-        Route::ShoppingRoute {} => "Shopping",
-        Route::RecipeCookRoute { .. } => "Cook",
-        Route::RecipeReadRoute { .. } => "Recipe",
-        Route::RecipeEditRoute { .. } => "Edit recipe",
         Route::ScheduleRoute {} => "Schedule",
         Route::BookingsRoute {} => "Bookings",
         Route::GanttRoute {} => "Gantt",

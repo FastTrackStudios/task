@@ -339,6 +339,19 @@ pub struct PluginApp {
     /// Returning `None` means "not one of mine" and the shell shows its
     /// own not-found rather than the app pretending to have a page.
     pub view: fn(path: &str, query: &str) -> Option<Element>,
+    /// Which **files** this app opens.
+    ///
+    /// Task's vault is files, and not all of them are notes. A `.cook`
+    /// recipe shown in the note editor is raw cooklang; it wants the
+    /// recipe reader. The shell knew that, by extension, in three
+    /// different places — a base row, a file list, the schedule
+    /// overlay — and each was the shell holding a fact about an app.
+    ///
+    /// Now the app says so. Given a vault-relative path, return where
+    /// it opens, or `None` to leave it to the vault. Keep it to files
+    /// this app genuinely owns the reading of: claiming `.md` would
+    /// take the vault away from everybody.
+    pub claim_file: Option<fn(path: &str) -> Option<LinkTarget>>,
     /// Install this app's contexts at the app root — its
     /// `task_stores::stores!` `provide_stores()` in nearly every case.
     ///
@@ -513,6 +526,23 @@ pub fn claim_href(
         .find_map(|a| a.claim_href.and_then(|c| c(href)).map(|t| (a.id, t)))
 }
 
+/// Which app opens this file, if any.
+///
+/// Ask before falling back to the vault: a file nobody claims is a
+/// note, which is the right default and the common case.
+#[must_use]
+pub fn claim_file(
+    path: &str,
+    enabled: impl Fn(&str) -> bool,
+) -> Option<(&'static str, LinkTarget)> {
+    REGISTRY
+        .read()
+        .expect("plugin registry poisoned")
+        .iter()
+        .filter(|a| enabled(a.id))
+        .find_map(|a| a.claim_file.and_then(|c| c(path)).map(|t| (a.id, t)))
+}
+
 /// The app with this id, if one registered.
 #[must_use]
 pub fn find(id: &str) -> Option<PluginApp> {
@@ -541,6 +571,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            claim_file: None,
             provide: None,
             widgets: None,
             fences: None,
@@ -552,6 +583,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            claim_file: None,
             provide: None,
             widgets: None,
             fences: None,
@@ -587,6 +619,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            claim_file: None,
             provide: None,
             widgets: None,
             fences: None,
@@ -615,6 +648,7 @@ mod tests {
             version: "1.2.3",
             nav: &[],
             view: nowhere,
+            claim_file: None,
             provide: None,
             widgets: None,
             fences: None,
@@ -648,6 +682,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            claim_file: None,
             provide: None,
             widgets: None,
             fences: None,
@@ -659,6 +694,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            claim_file: None,
             provide: None,
             widgets: None,
             fences: None,

@@ -435,135 +435,6 @@ feeds! {
     }
 }
 
-// ── Mealplan ────────────────────────────────────────────────────────
-
-feeds! {
-    cookbook_proto::CookbookServiceClient {
-        /// Every recipe in the org's cookbook (`<wiki>/Cookbook/*.cook`),
-        /// in the order the backend lists them.
-        fetch_recipes() -> Vec<cookbook_proto::Recipe>
-            = list() as "list recipes";
-
-        /// Create one recipe from a caller-built draft (see
-        /// `stores::draft_recipe` — identity is the vault-relative `path`; the
-        /// backend parses the cooklang `source`). Returns the persisted recipe.
-        create_recipe(recipe: cookbook_proto::Recipe) -> cookbook_proto::Recipe
-            = create(recipe) as "create recipe";
-
-        /// Import a recipe from a web URL — the server fetches the page,
-        /// extracts the recipe, and synthesizes a cooklang `.cook` draft (not
-        /// yet saved). Returns the parsed draft for review.
-        import_recipe(url: String) -> cookbook_proto::Recipe
-            = import(url) as "import recipe";
-
-        /// Raw bytes of one recipe image, addressed by the wiki-relative
-        /// path carried on `Recipe::images`. Served over the org's RPC
-        /// rather than a public HTTP route, so it inherits the same
-        /// permit gate as the recipes themselves.
-        fetch_recipe_image(path: String) -> Vec<u8>
-            = image(path) as "recipe image";
-
-        /// Save edits to a recipe's `.cook` source. The server writes the
-        /// source verbatim then re-parses, so the returned recipe carries fresh
-        /// structured steps / ingredients / timers.
-        update_recipe(recipe: cookbook_proto::Recipe) -> cookbook_proto::Recipe
-            = update(recipe) as "update recipe";
-    }
-
-    pantry_proto::PantryServiceClient {
-        /// Every pantry item in the org's vault (food-on-hand pages), in
-        /// the order the backend lists them.
-        fetch_pantry() -> Vec<pantry_proto::PantryItem>
-            = list() as "list pantry";
-
-        /// Create one pantry item from a caller-built draft (see
-        /// `stores::draft_pantry_item` — the backend assigns the real `id` and
-        /// vault `path`). Returns the persisted item.
-        create_pantry_item(item: pantry_proto::PantryItem) -> pantry_proto::PantryItem
-            = create(item) as "create pantry item";
-    }
-
-    mealplan_proto::MealplanServiceClient {
-        /// Cook a recipe directly: the server computes the pantry deductions
-        /// for `servings` and consumes them from stock, returning a receipt of
-        /// what was deducted (matched + convertible + in-stock ingredients) and
-        /// what was skipped (with the reason).
-        cook_recipe(recipe_path: String, servings: u32) -> mealplan_proto::CookReceipt
-            = cook_recipe(recipe_path, servings) as "cook recipe";
-
-        /// "Can I cook this right now?" — the server checks the recipe (and any
-        /// nested recipes) against current pantry stock for `servings` and
-        /// returns the full `Fulfillment`: whether it's cookable, the
-        /// have/need partition, and the per-shortage substitution suggestions.
-        /// All derivation is server-side — this is a thin client call.
-        can_cook(recipe_path: String, servings: u32) -> mealplan_proto::Fulfillment
-            = can_cook(recipe_path, servings) as "can cook";
-
-        /// Every planned meal in the org's vault, in the order the
-        /// backend lists them.
-        fetch_meal_plans() -> Vec<mealplan_proto::Meal>
-            = list() as "list meal plans";
-    }
-
-    mealplan_proto::ShoppingServiceClient {
-        /// Every shopping list in the org's vault — live runs and the
-        /// reusable templates alongside them (tell them apart by
-        /// `is_template`).
-        fetch_shopping_lists() -> Vec<mealplan_proto::ShoppingList>
-            = list() as "list shopping lists";
-
-        /// Create a list from a caller-built draft; the backend assigns
-        /// the vault `path` and stamps the dates.
-        create_shopping_list(list: mealplan_proto::ShoppingList) -> mealplan_proto::ShoppingList
-            = create(list) as "create shopping list";
-
-        /// Save edits (renames, hand-added rows) verbatim.
-        update_shopping_list(list: mealplan_proto::ShoppingList) -> mealplan_proto::ShoppingList
-            = update(list) as "update shopping list";
-
-        /// First pass: tick a row off because it's already in the
-        /// kitchen. Deliberately no pantry write — pass `have = false`
-        /// to put it back on the list.
-        mark_have(list_id: String, entry_id: String, have: bool) -> mealplan_proto::ShoppingList
-            = mark_have(list_id, entry_id, have) as "mark have";
-
-        /// Second pass: bought it. Restocks the pantry when the row is
-        /// linked to a pantry item and carries a quantity.
-        mark_purchased(list_id: String, entry_id: String) -> mealplan_proto::ShoppingList
-            = mark_purchased(list_id, entry_id) as "mark purchased";
-
-        /// Put every row back to `needed` — re-run the same list next
-        /// week without retyping it. Keeps the rows (unlike `clear`).
-        reset_shopping_list(id: String) -> mealplan_proto::ShoppingList
-            = reset(id) as "reset shopping list";
-
-        /// Start a fresh run from a template; the template is untouched.
-        start_from_template(template_id: String, name: String) -> mealplan_proto::ShoppingList
-            = start_from_template(template_id, name) as "start from template";
-
-        /// Keep this list's rows as a reusable template.
-        save_as_template(list_id: String, name: String) -> mealplan_proto::ShoppingList
-            = save_as_template(list_id, name) as "save as template";
-
-        /// Add everything a recipe needs that the pantry can't cover at
-        /// `servings` — the "what do I need to buy for this meal" button.
-        add_missing_for_recipe(list_id: String, recipe_path: String, servings: u32)
-            -> mealplan_proto::ShoppingList
-            = add_missing_for_recipe(list_id, recipe_path, servings) as "add missing for recipe";
-
-        /// Add everything a recipe calls for at `servings`, whatever the
-        /// pantry says — the gather checklist, where the kitchen pass is
-        /// an actual look at an actual shelf rather than a stock guess.
-        add_recipe_ingredients(list_id: String, recipe_path: String, servings: u32)
-            -> mealplan_proto::ShoppingList
-            = add_recipe_ingredients(list_id, recipe_path, servings) as "add recipe ingredients";
-
-        /// Add every pantry item at or below its reorder minimum.
-        add_low_stock(list_id: String) -> mealplan_proto::ShoppingList
-            = add_low_stock(list_id) as "add low stock";
-    }
-}
-
 // ── Timer ─────────────────────────────────────────────────────────
 
 feeds! {
@@ -702,6 +573,22 @@ feeds! {
         /// org. Requires a valid session `token` — the org is derived from it.
         fetch_org_members(token: String) -> Vec<auth_proto::OrgMember>
             = list_org_members(token) as "list members";
+    }
+}
+
+// ── the mealplan service, for the schedule overlay ──────────────────
+//
+// One read, for the same reason as the invoicing pair below: the
+// schedule shows the week's planned meals beside everything else on
+// the day. The mealplan *app* owns cooking; this is the schedule
+// asking a server capability what is planned.
+
+feeds! {
+    mealplan_proto::MealplanServiceClient {
+        /// Every planned meal in the org's vault, in the order the
+        /// backend lists them.
+        fetch_meal_plans() -> Vec<mealplan_proto::Meal>
+            = list() as "list meal plans";
     }
 }
 
@@ -1017,10 +904,6 @@ pub async fn find_project(id: &str, slugs: &[String]) -> Result<(ProjectInfo, St
     }
     Err(last_err.unwrap_or_else(|| "project not found in any hosted org".to_owned()))
 }
-
-// ── Fitness (native stubs) ──────────────────────────────────────────
-
-// ── Mealplan (native stubs) ─────────────────────────────────────────
 
 // ── Agents ────────────────────────────────────────────────────────
 

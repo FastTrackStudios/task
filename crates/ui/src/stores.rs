@@ -94,20 +94,6 @@ task_stores::stores! {
         mutations: MilestoneMutations via use_milestone_mutations,
     }
 
-    RecipeStore: cookbook_proto::Recipe {
-        provide: provide_recipe_store,
-        handle: use_recipe_store,
-        list: use_recipe_list -> String = crate::feeds::fetch_recipes,
-        mutations: RecipeMutations via use_recipe_mutations,
-    }
-
-    PantryStore: pantry_proto::PantryItem {
-        provide: provide_pantry_store,
-        handle: use_pantry_store,
-        list: use_pantry_list -> Uuid = crate::feeds::fetch_pantry,
-        mutations: PantryMutations via use_pantry_mutations,
-    }
-
     InboxStore: inbox_proto::InboxItem {
         provide: provide_inbox_store,
         handle: use_inbox_store,
@@ -678,104 +664,6 @@ impl MilestoneMutations {
     pub fn create(&self, slug: String, draft: milestone_proto::Milestone) {
         run_create(self.write, self.store, draft, move |ms| async move {
             crate::feeds::create_milestone(&slug, ms).await
-        });
-    }
-}
-
-// ── mealplan: recipes + pantry ──────────────────────────────────────
-
-/// Unsaved placeholder row for an optimistic recipe insert. Identity is
-/// the vault-relative `path`; the store keys the draft by a typed
-/// `Id::Temp` until the server's row reconciles in, so no magic
-/// `__pending__` path sentinel is needed.
-pub fn draft_recipe(name: String) -> cookbook_proto::Recipe {
-    cookbook_proto::Recipe {
-        path: format!("Cookbook/{name}.cook"),
-        source: format!(">> title: {name}\n"),
-        name,
-        description: None,
-        course: None,
-        cuisine: None,
-        prep_minutes: None,
-        cook_minutes: None,
-        servings: None,
-        ingredients: cookbook_proto::Ingredients::default(),
-        steps: cookbook_proto::StringList::default(),
-        cook_steps: cookbook_proto::CookSteps::default(),
-        cookware: cookbook_proto::StringList::default(),
-        nested_recipes: cookbook_proto::StringList::default(),
-        tags: cookbook_proto::StringList::default(),
-        source_url: None,
-        date_modified: None,
-        // Found on disk by the server; a new draft has none yet.
-        images: cookbook_proto::RecipeImages::default(),
-    }
-}
-
-impl RecipeMutations {
-    pub fn create(&self, slug: String, draft: cookbook_proto::Recipe) {
-        run_create(self.write, self.store, draft, move |recipe| async move {
-            crate::feeds::create_recipe(&slug, recipe).await
-        });
-    }
-
-    /// Save an edited recipe (keyed by vault `path`): patch the store
-    /// optimistically, write through, and reconcile the server's
-    /// re-parsed row (fresh steps / timers) back in — or roll back +
-    /// notify on failure.
-    pub fn update(&self, slug: String, recipe: cookbook_proto::Recipe) {
-        let key = recipe.path.clone();
-        let row = recipe.clone();
-        self.write.run(
-            self.store,
-            move |s| s.update_optimistic(Id::Real(key), move |r| *r = row),
-            move || async move { crate::feeds::update_recipe(&slug, recipe).await.map(Some) },
-        );
-    }
-}
-
-/// Unsaved placeholder row for an optimistic pantry insert.
-pub fn draft_pantry_item(name: String, qty: Option<f64>, unit: String) -> pantry_proto::PantryItem {
-    pantry_proto::PantryItem {
-        path: String::new(),
-        id: Uuid::nil(),
-        name,
-        category: "food".to_owned(),
-        location_id: None,
-        condition: "good".to_owned(),
-        status: "stored".to_owned(),
-        tags: pantry_proto::StringList(vec!["item".into(), "pantry".into()]),
-        date_created: None,
-        date_modified: None,
-        food_category: String::new(),
-        qty,
-        unit,
-        purchase_unit: None,
-        purchase_to_stock_factor: None,
-        expiry: None,
-        opened: false,
-        opened_date: None,
-        brand: None,
-        nutrition_per_unit: None,
-        nutrition_unit: None,
-        minimum: None,
-        default_best_before_days: None,
-        default_best_before_days_after_open: None,
-        default_best_before_days_after_freezing: None,
-        default_best_before_days_after_thawing: None,
-        due_type: "best-before".to_owned(),
-        stock_entries: pantry_proto::StockEntries::default(),
-        substitutes: pantry_proto::Substitutions::default(),
-        barcodes: pantry_proto::StringList::default(),
-        image_url: None,
-        details: String::new(),
-    }
-}
-
-impl PantryMutations {
-    pub fn create(&self, slug: String, draft: pantry_proto::PantryItem) {
-        run_create(self.write, self.store, draft, move |item| async move {
-            crate::feeds::create_pantry_item(&slug, item).await
         });
     }
 }

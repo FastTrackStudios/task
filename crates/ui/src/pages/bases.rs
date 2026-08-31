@@ -13,18 +13,10 @@ use vault_proto::BaseView;
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 
-/// Where a base row opens. Recipes are `.cook` files, not notes — the
-/// vault viewer would show raw cooklang, so they open in the recipe
-/// reader instead. Everything else is a note.
-fn open_route(path: String) -> crate::routes::Route {
-    if path.ends_with(".cook") {
-        crate::routes::Route::RecipeReadRoute { path }
-    } else {
-        crate::routes::Route::VaultRoute {
-            path,
-            org: String::new(),
-        }
-    }
+/// Where a base row opens — the apps get asked first, and anything
+/// nobody claims is a note. See [`crate::routes::file_route`].
+fn open_route(path: String, enabled: &task_plugin::PluginSet) -> crate::routes::Route {
+    crate::routes::file_route(path, enabled)
 }
 
 /// Display label for a base path (`Scripture/Songs.base` → `Songs`).
@@ -39,6 +31,8 @@ fn base_label(path: &str) -> String {
 #[component]
 pub fn BasesView() -> Element {
     let nav = use_navigator();
+    // Which apps may claim a file — the org's enabled set.
+    let plugins = crate::nav::use_active_plugins();
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
     let mut selected = use_signal(|| None::<String>);
@@ -103,8 +97,14 @@ pub fn BasesView() -> Element {
             rsx! {
                 div { class: "flex flex-col gap-6",
                     for view in views.clone() {
-                        BaseViewRender { key: "{view.name}", view, on_open: move |path: String| {
-                            nav.push(open_route(path));
+                        BaseViewRender { key: "{view.name}", view, on_open: {
+                            // One handle per rendered view: the closure
+                            // outlives this iteration and is called
+                            // many times, so it cannot borrow the set.
+                            let plugins = plugins.clone();
+                            move |path: String| {
+                                nav.push(open_route(path, &plugins));
+                            }
                         } }
                     }
                 }

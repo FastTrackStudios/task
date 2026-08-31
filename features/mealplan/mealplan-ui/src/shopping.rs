@@ -23,7 +23,7 @@ use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use mealplan_proto::{EntryStatus, ShoppingEntry, ShoppingList};
 
-use crate::orgs::{OrgMeta, OrgSelection};
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 
 /// Which pass the cook is on.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub fn ShoppingView() -> Element {
     let nav = use_navigator();
 
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -60,7 +60,7 @@ pub fn ShoppingView() -> Element {
     // client-side by `is_template`.
     let mut lists = use_resource(move || async move {
         let s = slug()?;
-        crate::feeds::fetch_shopping_lists(&s).await.ok()
+        crate::fetch_shopping_lists(&s).await.ok()
     });
 
     let mut selected = use_signal(|| None::<uuid::Uuid>);
@@ -111,7 +111,7 @@ pub fn ShoppingView() -> Element {
                 button {
                     class: "flex size-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground",
                     aria_label: "Back to mealplan",
-                    onclick: move |_| { nav.push(crate::routes::Route::MealplanRoute {}); },
+                    onclick: move |_| { nav.push(task_plugin_ui::href(crate::APP_ID, "", "")); },
                     ChevronLeft { size: 20 }
                 }
                 div { class: "flex min-w-0 flex-1 flex-col",
@@ -142,7 +142,7 @@ pub fn ShoppingView() -> Element {
                                     let (s, id, name) = (slug(), id.clone(), name.clone());
                                     run_action(Box::pin(async move {
                                         let s = s.ok_or_else(|| "no org selected".to_string())?;
-                                        crate::feeds::save_as_template(&s, id, name).await.map_err(|e| e.to_string())
+                                        crate::save_as_template(&s, id, name).await.map_err(|e| e.to_string())
                                     }));
                                 },
                                 ListChecks { size: 14 }
@@ -184,7 +184,7 @@ pub fn ShoppingView() -> Element {
                 div { class: "mx-auto flex w-full max-w-2xl flex-col gap-5",
                     match &active {
                         None => rsx! {
-                            crate::states::EmptyState {
+                            task_ui_core::states::EmptyState {
                                 title: "No shopping list yet",
                                 hint: "Start one from a template below, or add a recipe's missing ingredients from its cook page.",
                             }
@@ -236,9 +236,9 @@ pub fn ShoppingView() -> Element {
                                                                 run_action(Box::pin(async move {
                                                                     let s = s.ok_or_else(|| "no org selected".to_string())?;
                                                                     if kitchen {
-                                                                        crate::feeds::mark_have(&s, lid, entry_id, true).await
+                                                                        crate::mark_have(&s, lid, entry_id, true).await
                                                                     } else {
-                                                                        crate::feeds::mark_purchased(&s, lid, entry_id).await
+                                                                        crate::mark_purchased(&s, lid, entry_id).await
                                                                     }
                                                                     .map_err(|e| e.to_string())
                                                                 }));
@@ -301,7 +301,7 @@ pub fn ShoppingView() -> Element {
                                                                             let (s, lid, entry_id) = (slug(), lid.clone(), entry_id.clone());
                                                                             run_action(Box::pin(async move {
                                                                                 let s = s.ok_or_else(|| "no org selected".to_string())?;
-                                                                                crate::feeds::mark_have(&s, lid, entry_id, false).await.map_err(|e| e.to_string())
+                                                                                crate::mark_have(&s, lid, entry_id, false).await.map_err(|e| e.to_string())
                                                                             }));
                                                                         },
                                                                         X { size: 13 }
@@ -353,7 +353,7 @@ pub fn ShoppingView() -> Element {
                                                         let (s, tid, run_name) = (slug(), tid.clone(), run_name.clone());
                                                         run_action(Box::pin(async move {
                                                             let s = s.ok_or_else(|| "no org selected".to_string())?;
-                                                            let started = crate::feeds::start_from_template(&s, tid, run_name)
+                                                            let started = crate::start_from_template(&s, tid, run_name)
                                                                 .await
                                                                 .map_err(|e| e.to_string())?;
                                                             selected.set(Some(started.id));
@@ -425,7 +425,7 @@ pub fn ShoppingView() -> Element {
                                         let (s, id) = (slug(), reset_id.clone());
                                         run_action(Box::pin(async move {
                                             let s = s.ok_or_else(|| "no org selected".to_string())?;
-                                            crate::feeds::reset_shopping_list(&s, id).await.map_err(|e| e.to_string())
+                                            crate::reset_shopping_list(&s, id).await.map_err(|e| e.to_string())
                                         }));
                                     },
                                     RotateCcw { size: 14 }
@@ -440,7 +440,7 @@ pub fn ShoppingView() -> Element {
                                         let (s, id) = (slug(), id.clone());
                                         run_action(Box::pin(async move {
                                             let s = s.ok_or_else(|| "no org selected".to_string())?;
-                                            crate::feeds::add_low_stock(&s, id).await.map_err(|e| e.to_string())
+                                            crate::add_low_stock(&s, id).await.map_err(|e| e.to_string())
                                         }));
                                     },
                                     CirclePlus { size: 14 }
@@ -476,7 +476,7 @@ pub async fn add_recipe_shortages(
     servings: u32,
 ) -> Result<ShoppingList, String> {
     let target = working_list(slug).await?;
-    crate::feeds::add_missing_for_recipe(slug, target.id.to_string(), recipe_path, servings)
+    crate::add_missing_for_recipe(slug, target.id.to_string(), recipe_path, servings)
         .await
         .map_err(|e| e.to_string())
 }
@@ -491,7 +491,7 @@ pub async fn add_recipe_gather_list(
     servings: u32,
 ) -> Result<ShoppingList, String> {
     let target = working_list(slug).await?;
-    crate::feeds::add_recipe_ingredients(slug, target.id.to_string(), recipe_path, servings)
+    crate::add_recipe_ingredients(slug, target.id.to_string(), recipe_path, servings)
         .await
         .map_err(|e| e.to_string())
 }
@@ -499,12 +499,12 @@ pub async fn add_recipe_gather_list(
 /// The org's working run — the first non-template list, which is what
 /// [`ShoppingView`] opens by default. Created on first use.
 async fn working_list(slug: &str) -> Result<ShoppingList, String> {
-    let existing = crate::feeds::fetch_shopping_lists(slug)
+    let existing = crate::fetch_shopping_lists(slug)
         .await
         .map_err(|e| e.to_string())?;
     match existing.into_iter().find(|l| !l.is_template) {
         Some(l) => Ok(l),
-        None => crate::feeds::create_shopping_list(slug, new_list_draft("Shopping"))
+        None => crate::create_shopping_list(slug, new_list_draft("Shopping"))
             .await
             .map_err(|e| e.to_string()),
     }

@@ -11,9 +11,7 @@ use architect_ui::lucide_dioxus::{Save, X};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
-use crate::orgs::{OrgMeta, OrgSelection};
-use crate::routes::Route;
-use crate::stores;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 
 const COOK_HINT: &str = "@ingredient{200%g} · #cookware · ~timer{10%min} · >> key: value (metadata) · blank line = new step";
 
@@ -23,14 +21,14 @@ pub fn EditRecipeView(path: String) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
 
-    let recipes = stores::use_recipe_list();
-    let store = stores::use_recipe_store();
-    let muts = stores::use_recipe_mutations();
+    let recipes = crate::use_recipe_list();
+    let store = crate::use_recipe_store();
+    let muts = crate::use_recipe_mutations();
 
     let target = path.clone();
     let recipe = recipes.value().and_then(|rows| {
@@ -53,15 +51,15 @@ pub fn EditRecipeView(path: String) -> Element {
         return rsx! {
             div { class: "mx-auto flex max-w-md flex-col gap-3 p-8 text-center",
                 if recipes.is_waiting() {
-                    crate::states::LoadingState {}
+                    task_ui_core::states::LoadingState {}
                 } else if let Some(err) = recipes.error() {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load the recipe",
                         message: err.clone(),
                         on_retry: move |()| store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState { title: "Recipe not found", hint: "It may have been moved or renamed." }
+                    task_ui_core::states::EmptyState { title: "Recipe not found", hint: "It may have been moved or renamed." }
                 }
             }
         };
@@ -69,9 +67,12 @@ pub fn EditRecipeView(path: String) -> Element {
 
     let cook_path = path.clone();
     let to_cook = use_callback(move |()| {
-        nav.push(Route::RecipeCookRoute {
-            path: cook_path.clone(),
-        });
+        nav.push(task_plugin_ui::href_param(
+            crate::APP_ID,
+            "recipe/cook",
+            "path",
+            &cook_path,
+        ));
     });
 
     let save = {

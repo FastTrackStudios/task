@@ -339,9 +339,11 @@ pub(crate) fn NoteView(
     // registry at CLICK time, so a widget's queue reflects the live
     // doc), then the shell's own schemes, then wikilink navigation
     // (resolved through the vault index when possible).
-    // Which apps may claim a link here — an org's enabled set, read
-    // once for this handler.
+    // Which apps may claim a link or a file here — the org's enabled
+    // set, read once. Two closures below need it, so each takes its own
+    // handle rather than the second one finding it moved.
     let plugins = crate::nav::use_active_plugins();
+    let plugins_for_files = plugins.clone();
     let lookup_for_links = lookup;
     let registry_for_links = registry.clone();
     let link_ctx = widget_ctx.clone();
@@ -353,7 +355,7 @@ pub(crate) fn NoteView(
         // the vault, because a scheme is unambiguous: only the app that
         // emitted it can mean anything by it.
         if let Some((app, target)) = task_plugin_ui::claim_href(&href, |id| plugins.contains(id)) {
-            nav_links.push(plugin_route(app, &target));
+            nav_links.push(crate::routes::plugin_route(app, &target));
             return;
         }
         if href.starts_with("http://") || href.starts_with("https://") {
@@ -375,7 +377,7 @@ pub(crate) fn NoteView(
         if let Some((app, claim)) = &claim
             && (claim.beats_a_page() || known.is_none())
         {
-            nav_links.push(plugin_route(app, claim.target()));
+            nav_links.push(crate::routes::plugin_route(app, claim.target()));
             return;
         }
         let path = known.unwrap_or_else(|| format!("{page}.md"));
@@ -536,13 +538,19 @@ pub(crate) fn NoteView(
                 if is_base && !edit_base_source() {
                     crate::pages::bases::BaseDoc {
                         base_path: current.clone(),
-                        // Recipes aren't notes — a `.cook` row opens the
-                        // cook-along rather than raw cooklang in the pane.
+                        // Not every vault file is a note. A `.cook` row
+                        // wants the recipe reader, not raw cooklang in
+                        // the pane — but which files those are is the
+                        // apps' to say, not this file's.
                         on_open: move |p: String| {
-                            if p.ends_with(".cook") {
-                                nav_links.push(crate::routes::Route::RecipeReadRoute { path: p });
-                            } else {
-                                on_open.call(FileMeta { path: p, sha256: String::new() });
+                            match task_plugin_ui::claim_file(&p, |id| plugins_for_files.contains(id)) {
+                                Some((app, target)) => {
+                                    nav_links.push(crate::routes::plugin_route(app, &target));
+                                }
+                                None => on_open.call(FileMeta {
+                                    path: p,
+                                    sha256: String::new(),
+                                }),
                             }
                         },
                     }
@@ -681,7 +689,7 @@ mod note_body_tests {
 /// `Route` is the shell's, and an app speaks in its own paths.
 #[cfg(test)]
 mod plugin_link_tests {
-    use super::plugin_route;
+    use crate::routes::plugin_route;
     use task_plugin_ui::LinkTarget;
 
     /// The shell's half of a claim: an app names a path and a query,
@@ -754,25 +762,5 @@ mod plugin_link_tests {
     fn a_nested_screen_stays_nested() {
         let (url, _) = round_trip("mealplan", &LinkTarget::path("recipes/weeknight"));
         assert!(url.starts_with("/app/mealplan/recipes/weeknight"), "{url}");
-    }
-}
-
-fn plugin_route(app: &str, target: &task_plugin_ui::LinkTarget) -> crate::routes::Route {
-    // The app's whole query goes into the single `q` parameter,
-    // encoded. Spliced in raw, an app's own `&` would end `q` and it
-    // would receive only its first parameter — and would have no way to
-    // tell that from a link that genuinely only had one.
-    let q = task_plugin_ui::encode(&target.query);
-    if target.path.is_empty() {
-        crate::routes::Route::PluginRoute {
-            app: app.to_string(),
-            q,
-        }
-    } else {
-        crate::routes::Route::PluginPathRoute {
-            app: app.to_string(),
-            path: target.path.split('/').map(str::to_string).collect(),
-            q,
-        }
     }
 }

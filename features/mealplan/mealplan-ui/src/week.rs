@@ -59,7 +59,7 @@ pub fn MealWeek(slug: Memo<Option<String>>) -> Element {
 
     let meals = use_resource(move || async move {
         let s = slug()?;
-        crate::feeds::fetch_meal_plans(&s).await.ok()
+        crate::fetch_meal_plans(&s).await.ok()
     });
 
     let days: Vec<NaiveDate> = view_calendar::time::week_days(anchor()).to_vec();
@@ -168,7 +168,7 @@ pub fn MealWeek(slug: Memo<Option<String>>) -> Element {
                     // with no recipe falls back to its uuid, which isn't
                     // a route.
                     if id.ends_with(".cook") {
-                        nav.push(crate::routes::Route::RecipeReadRoute { path: id });
+                        nav.push(task_plugin_ui::href_param(crate::APP_ID, "recipe/read", "path", &id));
                     }
                 },
             }

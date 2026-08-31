@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 task-plugin-ui = { workspace = true }
-task-plugin-cooking = { workspace = true }
+task-plugin-mealplan = { workspace = true }
 task-plugin-scripture = { workspace = true }
 task-plugin-email = { workspace = true }
 task-plugin-fitness = { workspace = true }

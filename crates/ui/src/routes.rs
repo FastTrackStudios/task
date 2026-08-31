@@ -58,26 +58,6 @@ pub enum Route {
         #[route("/milestones")]
         MilestonesRoute {},
 
-        #[route("/mealplan")]
-        MealplanRoute {},
-
-        // Deep-link straight into cook mode for one recipe (vault-relative
-        // `.cook` path as a query value, like `VaultRoute`).
-        #[route("/mealplan/recipe?:path")]
-        RecipeCookRoute { path: String },
-
-        // Edit a recipe's cooklang source.
-        #[route("/mealplan/recipe/edit?:path")]
-        RecipeEditRoute { path: String },
-
-        // The whole recipe on one page — steps as a timeline.
-        #[route("/mealplan/recipe/read?:path")]
-        RecipeReadRoute { path: String },
-
-        // The two-pass shopping run (kitchen, then store).
-        #[route("/mealplan/shopping")]
-        ShoppingRoute {},
-
         #[route("/schedule")]
         ScheduleRoute {},
 
@@ -168,6 +148,51 @@ pub enum Route {
 
         #[route("/app/:app/:..path?:q")]
         PluginPathRoute { app: String, path: Vec<String>, q: String },
+}
+
+/// The URL for a target an app handed back.
+///
+/// Lives here rather than at any one call site because the shape is
+/// this file's: four different places turn a claim into a route now (a
+/// wikilink, a URL scheme, a file, a keyboard shortcut), and each one
+/// spelling `/app/<id>/…` for itself is how they drift apart.
+pub fn plugin_route(app: &str, target: &task_plugin_ui::LinkTarget) -> Route {
+    // The app's whole query goes into the single `q` parameter,
+    // encoded. Spliced in raw, an app's own `&` would end `q` and it
+    // would receive only its first parameter — and would have no way to
+    // tell that from a link that genuinely only had one.
+    let q = task_plugin_ui::encode(&target.query);
+    if target.path.is_empty() {
+        Route::PluginRoute {
+            app: app.to_string(),
+            q,
+        }
+    } else {
+        Route::PluginPathRoute {
+            app: app.to_string(),
+            path: target.path.split('/').map(str::to_string).collect(),
+            q,
+        }
+    }
+}
+
+/// Where a vault file opens.
+///
+/// Ask the apps first, fall back to the note viewer. The shell used to
+/// answer this itself — `if path.ends_with(".cook")`, in three separate
+/// places — which was the shell holding a fact about an app, and would
+/// have needed a fourth line for every app that ever added a file type.
+///
+/// A file nobody claims is a note, which is the right default and the
+/// overwhelming case.
+pub fn file_route(path: String, enabled: &task_plugin::PluginSet) -> Route {
+    if let Some((app, target)) = task_plugin_ui::claim_file(&path, |id| enabled.contains(id)) {
+        return plugin_route(app, &target);
+    }
+    Route::VaultRoute {
+        path,
+        org: String::new(),
+    }
 }
 
 #[component]
@@ -315,41 +340,6 @@ fn WatchRoute(v: String, node: String) -> Element {
 #[component]
 fn MilestonesRoute() -> Element {
     rsx! { pages::milestones::MilestonesView {} }
-}
-
-#[component]
-fn MealplanRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "mealplan", pages::mealplan::MealplanView {} }
-    }
-}
-
-#[component]
-fn RecipeCookRoute(path: String) -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "mealplan", pages::cook_mode::RecipeCookView { path } }
-    }
-}
-
-#[component]
-fn RecipeReadRoute(path: String) -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "mealplan", pages::recipe_read::RecipeReadView { path } }
-    }
-}
-
-#[component]
-fn ShoppingRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "mealplan", pages::shopping::ShoppingView {} }
-    }
-}
-
-#[component]
-fn RecipeEditRoute(path: String) -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "mealplan", pages::recipe_edit::EditRecipeView { path } }
-    }
 }
 
 #[component]

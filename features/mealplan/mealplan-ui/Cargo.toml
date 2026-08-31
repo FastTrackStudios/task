@@ -1,0 +1,30 @@
+[package]
+name = "mealplan-ui"
+description = "The cookbook and pantry screens: the plan, cook mode, the recipe pages, and the two-pass shopping run."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+architect-ui.workspace = true
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+cookbook-proto = { workspace = true, features = ["vox", "atom"] }
+dioxus = { workspace = true, features = ["router"] }
+mealplan-proto = { workspace = true, features = ["vox"] }
+pantry-proto = { workspace = true, features = ["vox", "atom"] }
+# For `href`/`href_param` only — this crate writes links to its own
+# screens, and the URL shape is the shell's to define.
+task-plugin-ui = { workspace = true }
+task-stores = { workspace = true }
+task-ui-core = { workspace = true }
+uuid = { workspace = true }
+# The week grid, and inline recipe images as data URIs.
+view-calendar = { workspace = true }
+base64 = { workspace = true }
+
+[lints]
+workspace = true

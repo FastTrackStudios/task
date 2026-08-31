@@ -163,6 +163,8 @@ pub fn ScheduleView() -> Element {
     let plans_err = plans_result.error().cloned();
     let template_blocks = build_blocks(&plan_rows, &meal_lookup);
     let nav = use_navigator();
+    // Which apps may claim a file the overlay links to.
+    let plugins = crate::nav::use_active_plugins();
 
     // The same meals, on the block axis. The time grid can only show a
     // meal where a day-plan block happens to sit; this shows every
@@ -283,9 +285,14 @@ pub fn ScheduleView() -> Element {
                 summary,
                 slot_rows,
                 slot_items,
+                // A meal in the overlay is a recipe file. Which app
+                // opens it is the apps' to say — this page knows only
+                // that a slot item is a file somebody may want to read.
                 on_slot_item: move |id: String| {
-                    if id.ends_with(".cook") {
-                        nav.push(crate::routes::Route::RecipeReadRoute { path: id });
+                    if let Some((app, target)) =
+                        task_plugin_ui::claim_file(&id, |p| plugins.contains(p))
+                    {
+                        nav.push(crate::routes::plugin_route(app, &target));
                     }
                 },
                 on_range: move |(s, e)| range.set(Some((s, e))),
