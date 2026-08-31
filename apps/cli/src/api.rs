@@ -14,7 +14,7 @@
 //!   alias (`task`, `vault-sync`), the descriptor name
 //!   (`TaskServiceRpc`), or a unique substring of either.
 //! - `task api --markdown` — the whole reference as markdown; commit it
-//!   as `apps/task/docs/api-reference.md`.
+//!   as `docs/api-reference.md`.
 //! - `task api --json` — the exact JSON body `GET /org/{slug}/api`
 //!   serves (minus the `org` field the handler stamps in).
 
@@ -28,7 +28,7 @@ pub(crate) struct ApiArgs {
     service: Option<String>,
 
     /// Emit the whole reference as markdown
-    /// (`task api --markdown > apps/task/docs/api-reference.md`).
+    /// (`task api --markdown > docs/api-reference.md`).
     #[arg(long, conflicts_with = "json")]
     markdown: bool,
 
@@ -214,8 +214,8 @@ fn render_markdown(services: &[ApiService]) -> String {
     let _ = writeln!(
         out,
         "<!-- GENERATED — do not edit by hand. Regenerate with:\n\
-         \x20    cargo run -p task-cli -- api --markdown > apps/task/docs/api-reference.md\n\
-         \x20    Source: `task_server::permits::mounts()` (apps/task/server/src/permits.rs),\n\
+         \x20    cargo run -p task-cli -- api --markdown > docs/api-reference.md\n\
+         \x20    Source: `task_server::permits::mounts()` (apps/server/src/permits.rs),\n\
          \x20    the single registry the router, permit gate, and schema stamps derive from.\n\
          \x20    Served live at `GET /org/{{slug}}/api`. -->"
     );
@@ -224,7 +224,7 @@ fn render_markdown(services: &[ApiService]) -> String {
         out,
         "{} services mounted: {} plain RPC, {} `#[subscribe]` streams. Every method \
          lists its permit — the `<action>` on `<resource>` the permissions gate \
-         checks (see `apps/task/server/src/permits.rs`). `audited` methods emit an \
+         checks (see `apps/server/src/permits.rs`). `audited` methods emit an \
          audit line even when allowed. A `stream` method takes a `Tx` sink and \
          pushes to the caller instead of returning once.",
         services.len(),

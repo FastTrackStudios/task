@@ -228,7 +228,7 @@ default = [
     "plugin-wiki",
     "plugin-scripture",
     "plugin-email",
-    "plugin-forge",
+    "plugin-git",
     "plugin-agent",
     "plugin-scheduling",
     "plugin-finance",
@@ -276,7 +276,7 @@ plugin-email = [
     "dep:email-imap",
     "dep:email-proto",
 ]
-plugin-forge = ["task-server/plugin-forge"]
+plugin-git = ["task-server/plugin-git"]
 plugin-agent = ["task-server/plugin-agent"]
 plugin-scheduling = ["task-server/plugin-scheduling"]
 plugin-finance = [

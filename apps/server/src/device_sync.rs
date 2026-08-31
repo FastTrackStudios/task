@@ -390,7 +390,11 @@ mod tests {
 
         std::fs::write(admitted_path(dir.path()), "imac\n").unwrap();
         apply_admissions(&files, dir.path());
-        assert_eq!(files.admits(&HostId("laptop".into())), None, "not dismissed");
+        assert_eq!(
+            files.admits(&HostId("laptop".into())),
+            None,
+            "not dismissed"
+        );
         assert!(files.admits(&HostId("imac".into())).is_some(), "collateral");
     }
 
@@ -447,7 +451,10 @@ mod tests {
     /// "First Single - Example Client" must keep its name on the server.
     #[test]
     fn an_ordinary_name_survives_sanitizing() {
-        assert_eq!(sanitize("First Single - Example Client"), "First Single - Example Client");
+        assert_eq!(
+            sanitize("First Single - Example Client"),
+            "First Single - Example Client"
+        );
         assert_eq!(sanitize("Album #2 (2026)"), "Album #2 (2026)");
     }
 
@@ -466,7 +473,12 @@ mod tests {
         // No `TASK_DEVICE_SYNC_ADOPT` in this process's environment —
         // asserted rather than assumed, since the default is the point.
         assert!(!adopts_offered_roots());
-        assert!(!adopt_offered(&files, dir.path(), &HostId("laptop".into()), &root));
+        assert!(!adopt_offered(
+            &files,
+            dir.path(),
+            &HostId("laptop".into()),
+            &root
+        ));
         assert!(
             !dir.path().join("files").join("Laptop Project").exists(),
             "a refused adoption still made room for itself"

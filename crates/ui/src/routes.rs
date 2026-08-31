@@ -321,7 +321,7 @@ fn VaultRoute(path: String, org: String) -> Element {
 #[component]
 fn ConnectionsRoute() -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "forge", links_ui::ConnectionsView {} }
+        crate::plugin_gate::PluginGate { plugin: "git", links_ui::ConnectionsView {} }
     }
 }
 
@@ -374,7 +374,7 @@ fn MembersRoute() -> Element {
 #[component]
 fn ReposRoute() -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "forge", pages::repos::ReposView {} }
+        crate::plugin_gate::PluginGate { plugin: "git", pages::repos::ReposView {} }
     }
 }
 

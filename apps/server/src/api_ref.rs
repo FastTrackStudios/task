@@ -11,7 +11,7 @@
 //!   `task doctor`.
 //! - `task api` (the CLI links this crate) renders [`reference`] as
 //!   text / markdown; `task api --markdown` regenerates
-//!   `apps/task/docs/api-reference.md`.
+//!   `docs/api-reference.md`.
 //!
 //! Everything here is **build-static metadata**: service + method names,
 //! argument names, the permit action/resource per method, and the

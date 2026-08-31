@@ -203,7 +203,7 @@ fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
 
     // Forge rules — only when the forge plugin is mounted. Two hubs,
     // one rule fn: both streams carry `GitEvent`.
-    if org.plugins.contains("forge") {
+    if org.plugins.contains("git") {
         for (what, issues) in [("forge-issues", true), ("forge-reviews", false)] {
             let subscribe = {
                 let local = Arc::clone(&local);

@@ -353,7 +353,11 @@ pub const DECLARED: &[DeclaredProject] = &[
         tasks: &[
             ("Deliver final master to Example Client", "done", None),
             ("Collect streaming metadata", "open", Some(1)),
-            ("Cut the lyric video to the final master", "in-progress", None),
+            (
+                "Cut the lyric video to the final master",
+                "in-progress",
+                None,
+            ),
         ],
     },
     DeclaredProject {
@@ -404,7 +408,11 @@ pub const DECLARED: &[DeclaredProject] = &[
         ],
         tasks: &[
             ("Kickoff with ACME", "open", Some(3)),
-            ("Sync the recap cut to the live recording", "in-progress", None),
+            (
+                "Sync the recap cut to the live recording",
+                "in-progress",
+                None,
+            ),
         ],
     },
 ];

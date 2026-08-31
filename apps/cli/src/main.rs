@@ -178,7 +178,7 @@ enum Commands {
     /// its methods + arg names, the permit action/resource per
     /// method, stream vs rpc, and the schema stamp. `task api
     /// <service>` for one service; `--markdown` regenerates
-    /// `apps/task/docs/api-reference.md`; `--json` mirrors
+    /// `docs/api-reference.md`; `--json` mirrors
     /// `GET /org/{slug}/api`.
     Api(ApiArgs),
     /// Vault queries + edits. An existing local `<path>` (or

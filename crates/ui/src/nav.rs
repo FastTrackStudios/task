@@ -196,7 +196,7 @@ pub fn nav_tabs() -> Vec<NavTab> {
         },
         NavTab {
             label: "Connections",
-            plugin: "forge",
+            plugin: "git",
             icon: icon_connections,
             route: Route::ConnectionsRoute {},
         },
@@ -227,7 +227,7 @@ pub fn nav_tabs() -> Vec<NavTab> {
         },
         NavTab {
             label: "Repos",
-            plugin: "forge",
+            plugin: "git",
             icon: icon_repos,
             route: Route::ReposRoute {},
         },

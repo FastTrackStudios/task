@@ -215,7 +215,7 @@ default = [
     "plugin-wiki",
     "plugin-scripture",
     "plugin-email",
-    "plugin-forge",
+    "plugin-git",
     "plugin-agent",
     "plugin-scheduling",
     "plugin-finance",
@@ -238,7 +238,7 @@ plugin-email = [
     "dep:email-smtp",
     "dep:email-product",
 ]
-plugin-forge = ["dep:git-proto", "dep:git-forgejo", "dep:git-config"]
+plugin-git = ["dep:git-proto", "dep:git-forgejo", "dep:git-config"]
 plugin-agent = [
     "dep:agent-proto",
     "dep:agent-tasks",

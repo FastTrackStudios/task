@@ -87,11 +87,10 @@ async fn a_laptops_offline_work_reaches_the_server() {
     // The laptop: its own store, its own persisted identity, serving
     // its own replica lane.
     let laptop_dir = tempfile::tempdir().expect("laptop dir");
-    let laptop_store =
-        files::FilesBackend::new(laptop_dir.path(), laptop_dir.path().join("vault"))
-            .expect("laptop backend");
-    let laptop = SyncDaemon::open(laptop_store, laptop_dir.path().join("daemon"))
-        .expect("laptop daemon");
+    let laptop_store = files::FilesBackend::new(laptop_dir.path(), laptop_dir.path().join("vault"))
+        .expect("laptop backend");
+    let laptop =
+        SyncDaemon::open(laptop_store, laptop_dir.path().join("daemon")).expect("laptop daemon");
     let laptop_endpoint = bind(&book).await;
     let laptop_id = laptop.attach_endpoint(laptop_endpoint);
 

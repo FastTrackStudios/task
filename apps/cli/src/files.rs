@@ -358,11 +358,7 @@ fn agent_says(args: &[&str]) -> eyre::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-async fn run_files_device(
-    cmd: FilesDeviceCmd,
-    slug: &str,
-    vox_url: &str,
-) -> eyre::Result<()> {
+async fn run_files_device(cmd: FilesDeviceCmd, slug: &str, vox_url: &str) -> eyre::Result<()> {
     use files_proto::service::sync::SyncServiceClient;
 
     let sync: SyncServiceClient = establish_for_url(vox_url).await?;
@@ -438,7 +434,9 @@ async fn run_files_device(
             }
         }
         FilesDeviceCmd::Revoke { device_id } => {
-            let device = sync.revoke_device(files_proto::id::DeviceId::new(device_id)).await?;
+            let device = sync
+                .revoke_device(files_proto::id::DeviceId::new(device_id))
+                .await?;
             println!("revoked {} ({})", device.name, device.id);
             println!("it is refused further sync and wipes its copy on next contact.");
         }

@@ -23,7 +23,7 @@ pub mod agent_router;
 pub mod api_ref;
 pub mod attachments;
 pub mod capability;
-#[cfg(feature = "plugin-forge")]
+#[cfg(feature = "plugin-git")]
 pub mod connections;
 #[cfg(debug_assertions)]
 pub mod demo_cli;
@@ -46,7 +46,7 @@ pub mod snapshot;
 pub mod storage;
 pub mod watch_bridge;
 pub mod webdav;
-#[cfg(feature = "plugin-forge")]
+#[cfg(feature = "plugin-git")]
 pub mod webhooks;
 
 use std::path::PathBuf;
@@ -344,14 +344,14 @@ pub struct OrgAppState {
     /// is absent it's constructed with empty credentials and the
     /// forge calls degrade to auth/forge errors the UI tolerates
     /// (empty list) rather than blocking server startup.
-    #[cfg(feature = "plugin-forge")]
+    #[cfg(feature = "plugin-git")]
     pub forge: git_forgejo::Backend,
     /// Forge backend authenticated as the agent/bot identity
     /// (`TASK_FORGEJO_BOT_TOKEN`). The forge-sync path routes
     /// agent-owned tasks through this so their issues are
     /// attributed to the bot account, distinct from human work.
     /// Falls back to [`Self::forge`] when no bot token is set.
-    #[cfg(feature = "plugin-forge")]
+    #[cfg(feature = "plugin-git")]
     pub forge_agent: git_forgejo::Backend,
     /// Path to this org's `issue-links.json` (the `git_config`
     /// `FileStore` shared with the CLI). Held so the forge-sync
@@ -1249,15 +1249,15 @@ pub(crate) async fn build_org_state(
         // auth/forge `GitError` the /repos UI renders as an empty
         // list. `from_token` only errors when called outside a tokio
         // runtime, which `build_org_state` always is.
-        #[cfg(feature = "plugin-forge")]
+        #[cfg(feature = "plugin-git")]
         let forgejo_base = std::env::var("TASK_FORGEJO_BASE_URL").unwrap_or_default();
-        #[cfg(feature = "plugin-forge")]
+        #[cfg(feature = "plugin-git")]
         let forgejo_token = std::env::var("TASK_FORGEJO_TOKEN")
             .ok()
             .filter(|t| !t.is_empty())
             .or_else(|| std::env::var("FORGEJO_TOKEN").ok())
             .unwrap_or_default();
-        #[cfg(feature = "plugin-forge")]
+        #[cfg(feature = "plugin-git")]
         let forge = git_forgejo::Backend::from_token(forgejo_base.clone(), forgejo_token)
             .map_err(|e| eyre::eyre!("forge backend: {e}"))?;
         // Agent/bot identity for forge-sync attribution. Token from
@@ -1267,7 +1267,7 @@ pub(crate) async fn build_org_state(
         // When neither is set we reuse the human backend, so
         // agent-owned tasks still sync — just under the human
         // identity until the bot token is configured.
-        #[cfg(feature = "plugin-forge")]
+        #[cfg(feature = "plugin-git")]
         let forge_agent = match std::env::var("TASK_FORGEJO_BOT_TOKEN")
             .ok()
             .or_else(|| std::env::var("FTS_CODEBERG_ACCESS_TOKEN").ok())
@@ -1676,9 +1676,9 @@ pub(crate) async fn build_org_state(
             email_product,
             #[cfg(feature = "plugin-email")]
             email_links,
-            #[cfg(feature = "plugin-forge")]
+            #[cfg(feature = "plugin-git")]
             forge,
-            #[cfg(feature = "plugin-forge")]
+            #[cfg(feature = "plugin-git")]
             forge_agent,
             issue_links_path: org_root.path().join("issue-links.json"),
             presence: crdt::sync::PresenceHost::new(
@@ -2342,7 +2342,7 @@ pub fn router(state: AppState) -> Router {
         .with_state(state.clone());
     // Forge webhook receiver — only a forge-carrying build has the
     // handler; without the plugin the route 404s like any unknown path.
-    #[cfg(feature = "plugin-forge")]
+    #[cfg(feature = "plugin-git")]
     let webhook_routes = Router::new()
         .route(
             "/org/{slug}/webhooks/forge",
@@ -2439,7 +2439,7 @@ pub fn router(state: AppState) -> Router {
         Some(r) => router.merge(r),
         None => router,
     };
-    #[cfg(feature = "plugin-forge")]
+    #[cfg(feature = "plugin-git")]
     let router = router.merge(webhook_routes);
 
     // Files WebDAV bridge (issue #274) — mount an org's File Roots from
@@ -3646,8 +3646,8 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
     // binds RepoCatalog (list repos) + IssueTracker (list issues
     // per repo); ReviewSurface rounds out the surface so PR views
     // can bind without another mount pass.
-    #[cfg(feature = "plugin-forge")]
-    if on("forge") {
+    #[cfg(feature = "plugin-git")]
+    if on("git") {
         router = router
             .with(
                 git_proto::repo::repo_catalog_rpc_service_descriptor(),

@@ -895,21 +895,21 @@ table!(EMAIL_PRODUCT, "email-product", "email/outbox/**", [
     rd "list_outbox", wr "submit_draft", wa "approve", wr "cancel",
     rd "derivations", rd "unnotified", wr "mark_notified",
 ]);
-#[cfg(feature = "plugin-forge")]
-table!(FORGE_REPOS, "forge-repos", "forge/repos/**", [rd "list_repos", rd "get_repo"]);
-#[cfg(feature = "plugin-forge")]
-table!(FORGE_ISSUES, "forge-issues", "forge/issues/**", [
+#[cfg(feature = "plugin-git")]
+table!(GIT_REPOS, "git-repos", "git/repos/**", [rd "list_repos", rd "get_repo"]);
+#[cfg(feature = "plugin-git")]
+table!(GIT_ISSUES, "git-issues", "git/issues/**", [
     rd "list_issues", rd "get_issue", wr "create_issue", wr "update_issue",
     rd "list_comments", cm "add_comment",
 ]);
-#[cfg(feature = "plugin-forge")]
-table!(FORGE_REVIEWS, "forge-reviews", "forge/reviews/**", [
+#[cfg(feature = "plugin-git")]
+table!(GIT_REVIEWS, "git-reviews", "git/reviews/**", [
     rd "list_pull_requests", rd "get_pull_request", wr "create_pull_request",
     wr "update_pull_request", rd "list_reviews", wr "request_reviewers",
     wa "merge_pull_request",
 ]);
-#[cfg(feature = "plugin-forge")]
-table!(FORGE_CONNECTIONS, "forge-connections", "forge/connections/**", [
+#[cfg(feature = "plugin-git")]
+table!(GIT_CONNECTIONS, "git-connections", "git/connections/**", [
     rd "list_connected_repos", rd "repos_for_project",
 ]);
 
@@ -931,10 +931,10 @@ table!(EMAIL_STREAM, "email-stream", "email/**", [rd "changes"]);
 table!(EMAIL_LINKS, "email-links", "email/links/**", [
     wr "link", wa "unlink", rd "links_for_message", rd "links_for_target",
 ]);
-#[cfg(feature = "plugin-forge")]
-table!(FORGE_ISSUES_STREAM, "forge-issues-stream", "forge/issues/**", [rd "issue_events"]);
-#[cfg(feature = "plugin-forge")]
-table!(FORGE_REVIEWS_STREAM, "forge-reviews-stream", "forge/reviews/**", [rd "review_events"]);
+#[cfg(feature = "plugin-git")]
+table!(GIT_ISSUES_STREAM, "git-issues-stream", "git/issues/**", [rd "issue_events"]);
+#[cfg(feature = "plugin-git")]
+table!(GIT_REVIEWS_STREAM, "git-reviews-stream", "git/reviews/**", [rd "review_events"]);
 
 // ── The mount list ───────────────────────────────────────────────────────
 
@@ -1399,37 +1399,37 @@ pub fn mounts() -> Vec<Mount> {
         m("email", email_proto::stream_descriptor(), EMAIL_STREAM),
         m("email", email_proto::links_descriptor(), EMAIL_LINKS),
     ]);
-    #[cfg(feature = "plugin-forge")]
+    #[cfg(feature = "plugin-git")]
     v.extend([
         m(
-            "forge",
+            "git",
             git_proto::repo::repo_catalog_rpc_service_descriptor(),
-            FORGE_REPOS,
+            GIT_REPOS,
         ),
         m(
-            "forge",
+            "git",
             git_proto::issues::issue_tracker_rpc_service_descriptor(),
-            FORGE_ISSUES,
+            GIT_ISSUES,
         ),
         m(
-            "forge",
+            "git",
             git_proto::reviews::review_surface_rpc_service_descriptor(),
-            FORGE_REVIEWS,
+            GIT_REVIEWS,
         ),
         m(
-            "forge",
+            "git",
             git_proto::issues::issue_tracker_stream_service_descriptor(),
-            FORGE_ISSUES_STREAM,
+            GIT_ISSUES_STREAM,
         ),
         m(
-            "forge",
+            "git",
             git_proto::reviews::review_surface_stream_service_descriptor(),
-            FORGE_REVIEWS_STREAM,
+            GIT_REVIEWS_STREAM,
         ),
         m(
-            "forge",
+            "git",
             git_proto::connections::repo_connections_rpc_service_descriptor(),
-            FORGE_CONNECTIONS,
+            GIT_CONNECTIONS,
         ),
     ]);
     v

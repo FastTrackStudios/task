@@ -79,8 +79,14 @@ async fn graph_queries_over_seeded_vault() {
     // Orphans + deadends: the unlinked, link-less pages — the one this
     // test planted and the one the example vault ships with.
     let unlinked = vec!["Loose.md".to_string(), support::EXAMPLE_PAGE.to_string()];
-    assert_eq!(graph.orphans("default".to_string()).await.unwrap(), unlinked);
-    assert_eq!(graph.deadends("default".to_string()).await.unwrap(), unlinked);
+    assert_eq!(
+        graph.orphans("default".to_string()).await.unwrap(),
+        unlinked
+    );
+    assert_eq!(
+        graph.deadends("default".to_string()).await.unwrap(),
+        unlinked
+    );
 
     // Unresolved carries (source, linkpath).
     let unresolved = graph.unresolved("default".to_string()).await.unwrap();

@@ -24,7 +24,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PluginInfo {
     /// Stable machine id — what `org.toml` stores and surfaces key on.
-    /// Lowercase ASCII + `-`, never renamed once shipped.
+    /// Lowercase ASCII + `-`.
+    ///
+    /// Renaming one is a data change, not a text change: the old
+    /// spelling is on disk in orgs configured before the rename. If it
+    /// has to happen, add the old id to [`RENAMED`] in the same commit
+    /// so those orgs keep the plugin they chose.
     pub id: &'static str,
     /// Human name for settings surfaces.
     pub name: &'static str,
@@ -97,8 +102,8 @@ pub const CATALOG: &[PluginInfo] = &[
         core: false,
     },
     PluginInfo {
-        id: "forge",
-        name: "Forges",
+        id: "git",
+        name: "Git",
         description: "GitHub / Forgejo issues, pull requests and repo links",
         core: false,
     },
@@ -149,7 +154,33 @@ pub const CATALOG: &[PluginInfo] = &[
 /// Look a plugin up by id.
 #[must_use]
 pub fn find(id: &str) -> Option<&'static PluginInfo> {
+    let id = canonical(id);
     CATALOG.iter().find(|p| p.id == id)
+}
+
+/// Ids this catalog used to use, and what they are now.
+///
+/// A plugin id is not just a constant in this file — it is written in
+/// people's `org.toml`, on disk, in orgs that were configured before
+/// the rename. Dropping the old spelling would not error; [`resolve`]
+/// would log "unknown plugin" and quietly return a set without it, and
+/// the symptom would be tabs that stopped appearing for no visible
+/// reason. So old names keep working.
+///
+/// [`resolve`]: PluginSet::resolve
+const RENAMED: &[(&str, &str)] = &[
+    // Was "Forges" (GitHub / Forgejo). The proto crate behind it was
+    // always `git-proto`; the id now says the same thing.
+    ("forge", "git"),
+];
+
+/// The current id for a possibly-old one.
+#[must_use]
+pub fn canonical(id: &str) -> &str {
+    RENAMED
+        .iter()
+        .find_map(|(was, now)| (*was == id).then_some(*now))
+        .unwrap_or(id)
 }
 
 /// How an org's manifest expresses its plugin choices.
@@ -196,7 +227,7 @@ impl PluginSet {
                 warn_unknown(ids);
                 CATALOG
                     .iter()
-                    .filter(|p| p.core || ids.iter().any(|i| i == p.id))
+                    .filter(|p| p.core || ids.iter().any(|i| canonical(i) == p.id))
                     .map(|p| p.id)
                     .collect()
             }
@@ -204,7 +235,7 @@ impl PluginSet {
                 warn_unknown(ids);
                 CATALOG
                     .iter()
-                    .filter(|p| p.core || !ids.iter().any(|i| i == p.id))
+                    .filter(|p| p.core || !ids.iter().any(|i| canonical(i) == p.id))
                     .map(|p| p.id)
                     .collect()
             }
@@ -287,5 +318,47 @@ mod tests {
         let c = PluginChoice::Disabled(vec!["email".into()]);
         let s = serde_json::to_string(&c).unwrap();
         assert_eq!(serde_json::from_str::<PluginChoice>(&s).unwrap(), c);
+    }
+
+    /// An org configured before the rename still gets what it chose.
+    /// The failure this guards is silent: an unknown id is warned about
+    /// and dropped, so the symptom would be tabs quietly missing.
+    #[test]
+    fn an_org_that_asked_for_forge_gets_git() {
+        let set = PluginSet::resolve(Some(&PluginChoice::Enabled(vec!["forge".into()])));
+        assert!(set.contains("git"), "the old spelling still turns it on");
+    }
+
+    #[test]
+    fn an_org_that_turned_forge_off_still_has_it_off() {
+        let set = PluginSet::resolve(Some(&PluginChoice::Disabled(vec!["forge".into()])));
+        assert!(!set.contains("git"), "the old spelling still turns it off");
+        assert!(set.contains("email"), "and takes nothing else with it");
+    }
+
+    /// A renamed id is not "unknown" — it resolves, so it must not be
+    /// warned about as a typo.
+    #[test]
+    fn an_old_name_is_found_not_unknown() {
+        assert_eq!(find("forge").map(|p| p.id), Some("git"));
+        assert_eq!(canonical("forge"), "git");
+        assert_eq!(canonical("git"), "git", "a current id is left alone");
+        assert_eq!(canonical("nonsense"), "nonsense");
+    }
+
+    /// Every rename must land somewhere real, or it silently does
+    /// nothing — and the old id starts reading as a typo again.
+    #[test]
+    fn every_rename_points_at_a_plugin_that_exists() {
+        for (was, now) in RENAMED {
+            assert!(
+                CATALOG.iter().any(|p| p.id == *now),
+                "{was} renames to {now}, which is not in the catalog"
+            );
+            assert!(
+                !CATALOG.iter().any(|p| p.id == *was),
+                "{was} is both a live id and a renamed one"
+            );
+        }
     }
 }

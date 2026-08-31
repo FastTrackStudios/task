@@ -119,9 +119,7 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         use project::ProjectService as _;
         let info = project::ProjectInfo {
             title: declared.title.to_owned(),
-            capabilities: project::Capabilities::from_names(
-                declared.capabilities.iter().copied(),
-            ),
+            capabilities: project::Capabilities::from_names(declared.capabilities.iter().copied()),
             form: declared.form,
             // Only what a person would write. Where the sessions live
             // on disk is the Files page's job to show, not prose.
@@ -222,8 +220,11 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
             if existing.iter().any(|t| t == title) {
                 continue;
             }
-            let due = due_days
-                .map(|d| (chrono::Utc::now() + chrono::Duration::days(d)).date_naive().to_string());
+            let due = due_days.map(|d| {
+                (chrono::Utc::now() + chrono::Duration::days(d))
+                    .date_naive()
+                    .to_string()
+            });
             let mut t = task::TaskInfo::new(*title);
             t.status = (*status).to_owned();
             t.due = due;
@@ -449,11 +450,35 @@ fn synth_video(dest: &std::path::Path, cut: VideoCut) -> bool {
     };
     std::process::Command::new("ffmpeg")
         .args([
-            "-y", "-f", "lavfi", "-i", video, "-f", "lavfi", "-i", audio,
-            "-filter_complex", "[1:a]volume=0.35[a]", "-map", "0:v", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "48k", "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            video,
+            "-f",
+            "lavfi",
+            "-i",
+            audio,
+            "-filter_complex",
+            "[1:a]volume=0.35[a]",
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "28",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "48k",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
         ])
         .arg(dest)
         .stdout(std::process::Stdio::null())
