@@ -70,6 +70,7 @@ members = [
     "features/files/files-daemon-proto",
     "features/files/files-domain",
     "crates/plugin-ui",
+    "crates/stores",
     "apps/plugins/cooking",
     "apps/plugins/scripture",
     "apps/plugins/email",
@@ -232,6 +233,7 @@ task-plugin-scripture = { path = "apps/plugins/scripture" }
 task-plugin-email = { path = "apps/plugins/email" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
+task-stores = { path = "crates/stores" }
 files-fuse = { path = "features/files/files-fuse" }
 files-proto = { path = "features/files/files-proto", default-features = false }
 files-storage = { path = "features/files/files-storage" }

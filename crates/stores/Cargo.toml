@@ -1,0 +1,22 @@
+[package]
+name = "task-stores"
+description = "The optimistic-store pattern, with no domain in it — the `stores!` table, the multi-org fan-out, and the live-subscription driver."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Deliberately short, and worth keeping that way: this crate names no
+# proto crate and no entity. If a domain type appears in this list, the
+# split that made the crate has started to come undone.
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+dioxus = { workspace = true }
+task-ui-core = { workspace = true }
+vox = { workspace = true }
+futures-util = { workspace = true }
+
+[lints]
+workspace = true

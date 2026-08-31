@@ -725,7 +725,10 @@ mod plugin_link_tests {
             task_plugin_ui::query_param(&q, "reference").as_deref(),
             Some("John 3:16")
         );
-        assert_eq!(task_plugin_ui::query_param(&q, "tx").as_deref(), Some("ESV"));
+        assert_eq!(
+            task_plugin_ui::query_param(&q, "tx").as_deref(),
+            Some("ESV")
+        );
     }
 
     /// A claim that names a screen has to keep it — dropping the path

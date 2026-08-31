@@ -697,13 +697,16 @@ pub fn provide_auth() -> AuthCtx {
     let mut identity = use_signal(|| Option::<task_ui_core::identity::IdentityInfo>::None);
     use_context_provider(|| task_ui_core::identity::CurrentIdentity(identity));
     use_effect(move || {
-        identity.set(active.read().as_ref().map(|a| {
-            task_ui_core::identity::IdentityInfo {
-                user_id: a.user_id,
-                email: a.email.clone(),
-                name: a.name.clone(),
-            }
-        }));
+        identity.set(
+            active
+                .read()
+                .as_ref()
+                .map(|a| task_ui_core::identity::IdentityInfo {
+                    user_id: a.user_id,
+                    email: a.email.clone(),
+                    name: a.name.clone(),
+                }),
+        );
     });
 
     // Boot restore: wait for org discovery (home slug resolves), then

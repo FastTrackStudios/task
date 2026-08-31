@@ -143,8 +143,7 @@ mod native {
         out
     }
 
-    async fn agent()
-    -> Result<files_daemon_proto::service::DaemonControlServiceClient, String> {
+    async fn agent() -> Result<files_daemon_proto::service::DaemonControlServiceClient, String> {
         let bind =
             std::env::var("FTS_FILES_DAEMON_BIND").unwrap_or_else(|_| "127.0.0.1:4055".into());
         vox::connect_lane(&format!("ws://{bind}/vox"))

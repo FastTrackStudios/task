@@ -7,8 +7,7 @@ use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Dumbbell,
     Flag, FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, MapPin, Notebook,
     Package, ReceiptText, RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users,
-    Utensils, Wallet,
-    Waypoints, Youtube,
+    Utensils, Wallet, Waypoints, Youtube,
 };
 use dioxus::prelude::*;
 

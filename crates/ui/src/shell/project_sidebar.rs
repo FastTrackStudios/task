@@ -28,9 +28,7 @@ pub fn ProjectSidebar(id: String) -> Element {
         .list()
         .iter()
         .filter(|r| {
-            !r.project.archived
-                && is_active(&r.project.status)
-                && r.project.id.to_string() != id
+            !r.project.archived && is_active(&r.project.status) && r.project.id.to_string() != id
         })
         .map(|r| (r.project.id.to_string(), r.project.title.clone()))
         .collect();

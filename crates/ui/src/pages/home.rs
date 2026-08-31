@@ -461,12 +461,14 @@ fn ProjectCard(
     let cover = Some(project.image.trim().to_owned()).filter(|u| !u.is_empty());
     let has_cover = cover.is_some();
     let title_for_art = project.title.clone();
-    let art = use_resource(use_reactive!(|(slug, has_cover, title_for_art)| async move {
-        if has_cover {
-            return None;
+    let art = use_resource(use_reactive!(
+        |(slug, has_cover, title_for_art)| async move {
+            if has_cover {
+                return None;
+            }
+            files_ui::review::deliverable_poster(&slug, &title_for_art).await
         }
-        files_ui::review::deliverable_poster(&slug, &title_for_art).await
-    }));
+    ));
     let art_url: Option<String> = art.read_unchecked().as_ref().cloned().flatten();
 
     rsx! {

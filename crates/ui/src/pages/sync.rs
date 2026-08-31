@@ -259,7 +259,6 @@ fn MountRow(root_id: uuid::Uuid, name: String, mounted_at: Option<String>) -> El
 #[cfg(not(target_arch = "wasm32"))]
 #[component]
 fn DivergentPath(root_id: uuid::Uuid, path: String) -> Element {
-
     let mut settling = use_signal(|| false);
     let mut failed = use_signal(|| None::<String>);
     let for_click = path.clone();
@@ -306,8 +305,7 @@ fn DivergentPath(root_id: uuid::Uuid, path: String) -> Element {
 /// agent is doing.
 #[cfg(not(target_arch = "wasm32"))]
 async fn agent() -> Result<files_daemon_proto::DaemonControlServiceClient, String> {
-    let bind =
-        std::env::var("FTS_FILES_DAEMON_BIND").unwrap_or_else(|_| "127.0.0.1:4055".into());
+    let bind = std::env::var("FTS_FILES_DAEMON_BIND").unwrap_or_else(|_| "127.0.0.1:4055".into());
     vox::connect_lane(&format!("ws://{bind}/vox"))
         .establish()
         .await

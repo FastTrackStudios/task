@@ -21039,6 +21039,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-stores"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "dioxus",
+ "futures-util",
+ "task-ui-core",
+ "vox",
+]
+
+[[package]]
 name = "task-ui"
 version = "0.1.0"
 dependencies = [
@@ -22380,6 +22391,7 @@ dependencies = [
  "task-plugin",
  "task-plugin-ui",
  "task-proto",
+ "task-stores",
  "task-ui",
  "task-ui-core",
  "task-widgets",

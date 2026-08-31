@@ -39,6 +39,7 @@ task-ui.workspace = true
 # as `crate::format` / `crate::vox_session`.
 task-ui-core.workspace = true
 task-plugin-ui.workspace = true
+task-stores.workspace = true
 # Plugin vocabulary — nav/route gating on the active org's enabled set.
 task-plugin.workspace = true
 # `type: song` / `type: setlist` vault views — the browser multitrack

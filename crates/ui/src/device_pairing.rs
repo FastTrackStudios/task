@@ -117,10 +117,7 @@ pub(crate) mod native {
         };
         match Command::new(&tool).arg("sync").output() {
             Ok(out) if out.status.success() => {
-                tracing::info!(
-                    "sync: {}",
-                    String::from_utf8_lossy(&out.stdout).trim()
-                );
+                tracing::info!("sync: {}", String::from_utf8_lossy(&out.stdout).trim());
             }
             Ok(out) => tracing::warn!(
                 "sync: could not register the Finder folders — {}",
@@ -194,10 +191,9 @@ pub(crate) mod native {
     /// The same surface the `fts-files-daemon` CLI drives — the app is
     /// not a special client, which is the property that keeps the two
     /// from drifting.
-    async fn local_agent()
-    -> Result<files_daemon_proto::DaemonControlServiceClient, String> {
-        let bind = std::env::var("FTS_FILES_DAEMON_BIND")
-            .unwrap_or_else(|_| "127.0.0.1:4055".into());
+    async fn local_agent() -> Result<files_daemon_proto::DaemonControlServiceClient, String> {
+        let bind =
+            std::env::var("FTS_FILES_DAEMON_BIND").unwrap_or_else(|_| "127.0.0.1:4055".into());
         vox::connect_lane(&format!("ws://{bind}/vox"))
             .establish()
             .await
