@@ -81,6 +81,7 @@ members = [
     "apps/plugins/recall",
     "apps/plugins/agent",
     "apps/plugins/studio",
+    "apps/plugins/git",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -107,6 +108,7 @@ members = [
     "features/git/git-forgejo",
     "features/git/git-github",
     "features/git/git-proto",
+    "features/git/git-ui",
     "features/goal/goal",
     "features/goal/goal-proto",
     "features/goal/goal-ui",
@@ -252,6 +254,7 @@ task-plugin-finance = { path = "apps/plugins/finance" }
 task-plugin-recall = { path = "apps/plugins/recall" }
 task-plugin-agent = { path = "apps/plugins/agent" }
 task-plugin-studio = { path = "apps/plugins/studio" }
+task-plugin-git = { path = "apps/plugins/git" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
@@ -312,6 +315,7 @@ fitness-ui = { path = "features/fitness/fitness-ui" }
 git-config = { path = "features/git/git-config" }
 git-forgejo = { path = "features/git/git-forgejo" }
 git-github = { path = "features/git/git-github" }
+git-ui = { path = "features/git/git-ui" }
 git-proto = { path = "features/git/git-proto" }
 goal = { path = "features/goal/goal" }
 goal-proto = { path = "features/goal/goal-proto", default-features = false }

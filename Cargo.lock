@@ -8457,6 +8457,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-ui"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "dioxus",
+ "git-proto",
+ "task-ui-core",
+]
+
+[[package]]
 name = "gix"
 version = "0.85.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21010,6 +21021,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-plugin-git"
+version = "0.1.0"
+dependencies = [
+ "git-ui",
+ "task-plugin-ui",
+]
+
+[[package]]
 name = "task-plugin-home"
 version = "0.1.0"
 dependencies = [
@@ -21069,6 +21088,7 @@ dependencies = [
  "task-plugin-email",
  "task-plugin-finance",
  "task-plugin-fitness",
+ "task-plugin-git",
  "task-plugin-home",
  "task-plugin-mealplan",
  "task-plugin-recall",

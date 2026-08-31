@@ -1,0 +1,19 @@
+[package]
+name = "git-ui"
+description = "The repos screen: the org's forge repositories, their issues and PR conversations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+architect-ui.workspace = true
+dioxus = { workspace = true }
+git-proto = { workspace = true, features = ["vox"] }
+task-ui-core = { workspace = true }
+
+[lints]
+workspace = true

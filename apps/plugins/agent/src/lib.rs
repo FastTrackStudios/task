@@ -45,7 +45,7 @@ pub const APP: PluginApp = PluginApp {
     panel: Some(panel),
     claim_file: None,
     // No optimistic store — the agent screens drive their own
-    // resources. What this installs is the docked panel.s selection,
+    // resources. What this installs is the docked panel's selection,
     // which has to outlive both the panel closing and the route
     // changing under it.
     provide: Some(provide_stores),

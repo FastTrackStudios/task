@@ -1,26 +1,57 @@
-//! `/repos` — the forge view.
+//! Repos — the org's forge repositories, their issues and PRs.
 //!
-//! Lists the repos the selected org's forge backend can address
-//! (`RepoCatalog::list_repos`) and, under each, that repo's issues
-//! (`IssueTracker::list_issues`). It's the read slice over the git
-//! feature's two core services — the same surface the CLI's
-//! `task issue pull/sync` drives, rendered in the app.
+//! Backed by whichever forge the org's server is configured against
+//! (Forgejo or GitHub); this crate only ever talks to Task's own
+//! `RepoCatalog` / `IssueTracker` / `RepoConnections` services, never
+//! to a forge directly. The token lives on the server, which is the
+//! point — a browser tab never holds one.
 //!
-//! When the org's forge is unconfigured (no `TASK_FORGEJO_TOKEN`)
-//! the backend returns an auth/forge error; the page tolerates that
-//! and shows an empty state rather than blanking.
-//!
-//! The proto DTOs (`git_proto::Repo` / `issues::Issue`) don't derive
-//! `PartialEq`, so child components take the primitive fields they
-//! render rather than the whole struct (Dioxus props must be
-//! `PartialEq`). `RepoId` itself does derive `PartialEq`/`Hash`, so
-//! it's fine to thread through for the per-repo issue fetch.
+//! Mounted by `task-plugin-git`.
 
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use git_proto::RepoId;
+use task_ui_core::feeds;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 
-use crate::orgs::{OrgMeta, OrgSelection};
+/// This app's id in Task's catalog, and the first segment of every
+/// link it writes to itself.
+pub const APP_ID: &str = "git";
+
+feeds! {
+    git_proto::repo::RepoCatalogClient {
+        /// Every repo the org's forge backend can address, in the order the
+        /// catalog lists them. Backed by `RepoCatalog::list_repos`; when the
+        /// forge is unconfigured (no token) the backend returns an
+        /// auth/forge error the caller renders as an empty list.
+        fetch_repos() -> Vec<git_proto::Repo>
+            = list_repos() as "list repos";
+    }
+
+    git_proto::connections::RepoConnectionsClient {
+        /// Repos *connected* (project-bound) in this org — the "connected"
+        /// view, distinct from the raw forge catalog.
+        fetch_connected_repos() -> Vec<git_proto::RepoId>
+            = list_connected_repos() as "list connected repos";
+    }
+
+    git_proto::issues::IssueTrackerClient {
+        /// Issues for one repo (all states), via `IssueTracker::list_issues`
+        /// with a default (unfiltered) filter — each repo's open work inline.
+        fetch_issues(repo: git_proto::RepoId) -> Vec<git_proto::issues::Issue>
+            = list_issues(repo, git_proto::issues::IssueFilter::default()) as "list issues";
+
+        /// Comments on an issue — its conversation, rendered under it. Works
+        /// for PRs too (Gitea shares the index).
+        fetch_issue_comments(repo: git_proto::RepoId, number: u64) -> Vec<git_proto::Comment>
+            = list_comments(repo, git_proto::IssueId(number)) as format!("list comments #{number}");
+
+        /// Post a comment to an issue or PR conversation. Authored as the
+        /// server's configured forge identity.
+        post_issue_comment(repo: git_proto::RepoId, number: u64, body: String) -> git_proto::Comment
+            = add_comment(repo, git_proto::IssueId(number), body) as format!("add comment #{number}");
+    }
+}
 
 /// Map a forge issue state onto a status-badge variant.
 fn issue_variant(state: git_proto::IssueState) -> StatusBadgeVariant {
@@ -37,7 +68,8 @@ pub fn ReposView() -> Element {
 
     // Every selected org (All mode fans out over all of them, so a
     // repo connected in any org shows up — not just the home org).
-    let slugs = use_memo(move || crate::orgs::selected_slugs(&selection.read(), &org_list.read()));
+    let slugs =
+        use_memo(move || task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read()));
 
     // Connected repos across the selected orgs, each tagged with its
     // org slug (needed to fetch that repo's issues from the right org).
@@ -48,7 +80,7 @@ pub fn ReposView() -> Element {
             for s in slugs {
                 // Per-org failures are tolerated — a down/empty org
                 // doesn't blank the whole view.
-                if let Ok(rids) = crate::feeds::fetch_connected_repos(&s).await {
+                if let Ok(rids) = self::fetch_connected_repos(&s).await {
                     for rid in rids {
                         if !out.iter().any(|(os, orid)| os == &s && orid == &rid) {
                             out.push((s.clone(), rid));
@@ -79,7 +111,7 @@ pub fn ReposView() -> Element {
             }
 
             if let Some(err) = load_err {
-                crate::states::InlineError {
+                task_ui_core::states::InlineError {
                     message: err,
                     label: "Repos".to_string(),
                 }
@@ -144,7 +176,7 @@ fn RepoCard(
                 if s.is_empty() {
                     Ok(Vec::new())
                 } else {
-                    crate::feeds::fetch_issues(&s, rid).await.map(|issues| {
+                    self::fetch_issues(&s, rid).await.map(|issues| {
                         issues
                             .into_iter()
                             .map(|i| (i.id.0, i.title, i.state))
@@ -176,7 +208,7 @@ fn RepoCard(
                     if slug.is_empty() {
                         return false;
                     }
-                    let Ok(client) = crate::vox_clients::establish_for::<
+                    let Ok(client) = task_ui_core::vox_clients::establish_for::<
                         git_proto::issues::IssueTrackerStreamClient,
                     >(&slug)
                     .await
@@ -270,13 +302,11 @@ fn IssueRow(
             if s.is_empty() {
                 Ok(Vec::new())
             } else {
-                crate::feeds::fetch_issue_comments(&s, rid, number)
-                    .await
-                    .map(|cs| {
-                        cs.into_iter()
-                            .map(|c| (c.author.login, c.body))
-                            .collect::<Vec<(String, String)>>()
-                    })
+                self::fetch_issue_comments(&s, rid, number).await.map(|cs| {
+                    cs.into_iter()
+                        .map(|c| (c.author.login, c.body))
+                        .collect::<Vec<(String, String)>>()
+                })
             }
         }
     });

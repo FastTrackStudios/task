@@ -5,8 +5,8 @@
 
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag, FolderKanban,
-    FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, RefreshCw,
-    Settings as SettingsIcon, Target, Timer, Users, Waypoints,
+    FolderOpen, House, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Target,
+    Timer, Users, Waypoints,
 };
 use dioxus::prelude::*;
 
@@ -62,9 +62,6 @@ fn icon_members() -> Element {
 }
 fn icon_files() -> Element {
     rsx! { FolderOpen { size: 16 } }
-}
-fn icon_repos() -> Element {
-    rsx! { GitBranch { size: 16 } }
 }
 fn icon_wiki() -> Element {
     rsx! { BookOpen { size: 16 } }
@@ -178,20 +175,17 @@ pub fn nav_tabs() -> Vec<NavTab> {
             icon: icon_wiki,
             route: Route::WikiRoute {},
         },
+        // The typed-link graph, beside the wikilink one. Tagged `git`
+        // until the rename made it obvious that a knowledge web has
+        // nothing to do with a code forge.
         NavTab {
             label: "Connections",
-            plugin: "git",
+            plugin: "wiki",
             icon: icon_connections,
             route: Route::ConnectionsRoute {},
         },
         // Bases now open inside the vault (selecting a `.base` file
         // renders its tables), so no dedicated tab — Obsidian-style.
-        NavTab {
-            label: "Repos",
-            plugin: "git",
-            icon: icon_repos,
-            route: Route::ReposRoute {},
-        },
         NavTab {
             label: "Files",
             plugin: "files",
@@ -383,7 +377,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::WikiPageRoute { .. } => "Wiki page",
         Route::WikiSourcesRoute {} => "Archived sources",
         Route::WikiSourceRoute { .. } => "Source",
-        Route::ReposRoute {} => "Repos",
         Route::FilesRoute {} => "Files",
         Route::SettingsRoute {} => "Settings",
         Route::SyncRoute {} => "Sync",

@@ -68,9 +68,6 @@ pub enum Route {
         #[route("/members")]
         MembersRoute {},
 
-        #[route("/repos")]
-        ReposRoute {},
-
         // Files — the explorer over File Roots, their live trees, and
         // the Drive surface (issue #266).
         #[route("/files")]
@@ -293,7 +290,7 @@ fn VaultRoute(path: String, org: String) -> Element {
 #[component]
 fn ConnectionsRoute() -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "git", links_ui::ConnectionsView {} }
+        crate::plugin_gate::PluginGate { plugin: "wiki", links_ui::ConnectionsView {} }
     }
 }
 
@@ -334,13 +331,6 @@ fn TimerRoute() -> Element {
 #[component]
 fn MembersRoute() -> Element {
     rsx! { pages::members::MembersView {} }
-}
-
-#[component]
-fn ReposRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "git", pages::repos::ReposView {} }
-    }
 }
 
 #[component]

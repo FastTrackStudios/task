@@ -1,0 +1,16 @@
+[package]
+name = "task-plugin-git"
+description = "Git as a Task app: the org's forge repositories, issues and PRs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-plugin-ui = { workspace = true }
+git-ui = { workspace = true }
+
+[lints]
+workspace = true

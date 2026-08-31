@@ -505,7 +505,7 @@ fn UrlPrompt() -> Element {
     let go = use_callback(move |()| {
         if let Some(id) = youtube_id(&url()) {
             // Two parameters, so each value is encoded on its own —
-            // `href` cannot tell this app.s `&` from the URL.s.
+            // `href` cannot tell this app's `&` from the URL's.
             nav.push(task_plugin_ui::href(
                 APP_ID,
                 "",

@@ -257,11 +257,6 @@ feeds! {
     }
 
     git_proto::connections::RepoConnectionsClient {
-        /// Repos *connected* (project-bound) in this org — the `/repos`
-        /// "connected" view, distinct from the raw forge catalog.
-        fetch_connected_repos() -> Vec<git_proto::RepoId>
-            = list_connected_repos() as "list connected repos";
-
         /// Repos bound to a specific project (its connected repos).
         fetch_repos_for_project(project_id: uuid::Uuid) -> Vec<git_proto::RepoId>
             = repos_for_project(project_id.to_string()) as "repos for project";
@@ -884,19 +879,10 @@ pub async fn fetch_project_agent_sessions(
 // ── Git ─────────────────────────────────────────────────────────────
 
 feeds! {
-    git_proto::repo::RepoCatalogClient {
-        /// Every repo the org's forge backend can address, in the order the
-        /// catalog lists them. Backed by `RepoCatalog::list_repos`; when the
-        /// forge is unconfigured (no token) the backend returns an
-        /// auth/forge error the caller renders as an empty list.
-        fetch_repos() -> Vec<git_proto::Repo>
-            = list_repos() as "list repos";
-    }
-
     git_proto::issues::IssueTrackerClient {
         /// Issues for one repo (all states), via `IssueTracker::list_issues`
-        /// with a default (unfiltered) filter. The `/repos` page calls this
-        /// per repo to show each repo's open work inline.
+        /// with a default (unfiltered) filter — the project page's forge
+        /// panel shows that project's repo work inline.
         fetch_issues(repo: git_proto::RepoId) -> Vec<git_proto::issues::Issue>
             = list_issues(repo, git_proto::issues::IssueFilter::default()) as "list issues";
     }

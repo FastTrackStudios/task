@@ -4,8 +4,8 @@
 //! first, status dots, `+` for a fresh chat) above an embedded
 //! [`crate::sessions::ChatPane`] for the selected one.
 //!
-//! Selection lives in this app.s own context ([`AgentPanelSelected`])
-//! rather than the shell.s chrome, so it survives panel toggles and
+//! Selection lives in this app's own context ([`AgentPanelSelected`])
+//! rather than the shell's chrome, so it survives panel toggles and
 //! route changes without the shell having to hold a fact about
 //! agents. The full page (with the inspector) stays for deep work —
 //! the expand button jumps there with the same session.
@@ -15,7 +15,7 @@ use architect_ui::lucide_dioxus::{Bot, Maximize2, Plus};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
-/// The panel.s open conversation (session id; empty = list only).
+/// The panel's open conversation (session id; empty = list only).
 ///
 /// This app.s state, provided at the app root by its `provide`, which
 /// is what lets it outlive both the panel being toggled shut and the
