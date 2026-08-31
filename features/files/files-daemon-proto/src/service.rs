@@ -152,11 +152,15 @@ pub trait DaemonControlService {
         name: Option<String>,
     ) -> Result<files_proto::model::FileRootInfo, DaemonError>;
 
-    /// Capture every root that has never been captured, smallest first,
-    /// so most of an archive is syncable early rather than all of it at
-    /// the end. Returns each root and what went wrong with it, if
-    /// anything.
-    async fn capture_pending(&self) -> Result<Vec<(String, Option<String>)>, DaemonError>;
+    /// Start reading the backlog, and return the number of roots it
+    /// will work through.
+    ///
+    /// The work runs *in the agent*, smallest root first, because it is
+    /// measured in hours on an archive: a caller that waited for it
+    /// could not be interrupted without killing it, and a disconnect
+    /// should not stop a machine reading its own disk.
+    /// [`crate::model::DaemonStatus::capturing`] is how anybody watches.
+    async fn start_capture(&self) -> Result<u32, DaemonError>;
 
     /// Share a folder from this machine: version it, checkpoint it, and
     /// serve it to admitted peers. Returns the root's id and name.

@@ -93,7 +93,26 @@ fn preflight(dirs: &[&std::path::Path]) -> Result<(), Box<dyn std::error::Error>
         });
         match rx.recv_timeout(PATIENCE) {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("{}: {e}", dir.display()).into()),
+            // A directory this agent *mounts* is also a directory it
+            // checks here, and a previous process that died left the
+            // kernel holding a mount with no server behind it. Every
+            // call against that fails, so the agent could not start —
+            // and only the agent clears it, which is a deadlock: the
+            // service restarts forever on a mountpoint nothing will
+            // take down. Clearing it first breaks the loop, and costs
+            // nothing when there is no stale mount to clear.
+            Ok(Err(e)) => {
+                if !clear_stale_mount(&dir) {
+                    return Err(format!("{}: {e}", dir.display()).into());
+                }
+                match std::fs::create_dir_all(&dir) {
+                    Ok(()) => tracing::warn!(
+                        dir = %dir.display(),
+                        "cleared a mount left behind by a previous run"
+                    ),
+                    Err(e) => return Err(format!("{}: {e}", dir.display()).into()),
+                }
+            }
             Err(_) => {
                 let secs = PATIENCE.as_secs();
                 return Err(format!(
@@ -121,6 +140,25 @@ fn preflight(dirs: &[&std::path::Path]) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+/// Take down a FUSE mount whose server is gone, if that is what is in
+/// the way. Answers whether it did anything.
+fn clear_stale_mount(dir: &std::path::Path) -> bool {
+    // Only ever a mount this agent made: the subtype is its own.
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    let target = dir.to_string_lossy().replace(' ', "\\040");
+    let ours = mounts
+        .lines()
+        .any(|l| l.split(' ').nth(1) == Some(target.as_str()) && l.contains("taskfiles"));
+    if !ours {
+        return false;
+    }
+    std::process::Command::new("fusermount3")
+        .arg("-uz")
+        .arg(dir)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 const USAGE: &str = "\
 fts-files-daemon — the Task file sync agent
 
@@ -133,7 +171,7 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon checkpoint <root-id>     force a save point now (before unplugging)
     fts-files-daemon share <dir> [--name N]   share a folder from this machine
     fts-files-daemon share <dir> --later      register it now, read its bytes later
-    fts-files-daemon capture                  capture what has not been captured yet
+    fts-files-daemon capture [--detach]       read what has not been read yet
     fts-files-daemon shares                   every root this machine holds
     fts-files-daemon unshare <root>           stop holding one (the files stay)
     fts-files-daemon coordinator <endpoint-id> sync with this org from now on
@@ -374,6 +412,24 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
     );
     if status.paused {
         println!("paused     everything");
+    }
+    // The one piece of state that otherwise looks exactly like nothing
+    // happening — for hours, on an archive.
+    if let Some(p) = &status.capturing {
+        let mins = (chrono::Utc::now() - p.since).num_minutes();
+        println!(
+            "reading    {} of {}  {}  ({}, {mins}m so far)",
+            p.done,
+            p.total,
+            p.root,
+            human(p.bytes)
+        );
+    } else if status.awaiting_capture > 0 {
+        println!(
+            "unread     {} roots — browsable, but they would sync as empty trees",
+            status.awaiting_capture
+        );
+        println!("           read them with:  fts-files-daemon capture");
     }
     for peer in &status.peers {
         println!("admits     {peer}");
@@ -661,33 +717,71 @@ async fn coordinator(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-/// Capture every root that has never been captured.
+/// Read the backlog, and watch it happen.
 ///
-/// The drain for `share --later`: an archive is browsable the moment it
-/// is registered, and this fills in the history behind it, smallest
-/// project first so most of it is syncable early.
-async fn capture() -> Result<(), Box<dyn std::error::Error>> {
+/// The work runs in the agent, so this can be interrupted — the read
+/// carries on, and running it again re-attaches to the same run rather
+/// than starting a second.
+async fn capture(watch: bool) -> Result<(), Box<dyn std::error::Error>> {
     let client = control().await?;
-    let done = client.capture_pending().await?;
-    if done.is_empty() {
-        println!("every root has been captured");
+    let waiting = match client.start_capture().await {
+        Ok(0) => {
+            println!("every root has been read");
+            return Ok(());
+        }
+        Ok(n) => n,
+        // Already running is not a failure: the caller wanted it read,
+        // and it is being read. Fall through to watching it.
+        Err(e) if e.to_string().contains("already running") => {
+            println!("a capture is already running — watching it");
+            0
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if waiting > 0 {
+        println!("reading {waiting} roots, smallest first");
+    }
+    if !watch {
+        println!("it runs in the agent; `fts-files-daemon status` shows where it is.");
         return Ok(());
     }
-    let mut failed = 0;
-    for (name, error) in &done {
-        match error {
-            None => println!("  captured  {name}"),
-            Some(why) => {
-                failed += 1;
-                println!("  {name} — {why}");
+
+    println!("(interrupting this leaves it running)");
+    println!();
+    let mut last = String::new();
+    loop {
+        let status = client.status().await?;
+        match status.capturing {
+            Some(p) => {
+                let line = format!("{} of {}  {}", p.done, p.total, p.root);
+                if line != last {
+                    println!("  {line}  ({})", human(p.bytes));
+                    last = line;
+                }
             }
+            None => break,
         }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    println!("\n{} captured", done.len() - failed);
-    if failed > 0 {
-        println!("{failed} could not be");
-    }
+    println!();
+    println!("done — {} still awaiting", client.status().await?.awaiting_capture);
     Ok(())
+}
+
+/// Bytes, as somebody reads them.
+fn human(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
 }
 
 /// Say where a root appears in the tree people are shown.
@@ -935,7 +1029,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let later = args.iter().any(|a| a == "--later");
             return share(&dir, name, later).await;
         }
-        Some("capture") => return capture().await,
+        Some("capture") => {
+            // `--detach` starts it and returns; the default watches.
+            let watch = !args.iter().any(|a| a == "--detach");
+            return capture(watch).await;
+        }
         Some("keep") => {
             let root = args.get(1).ok_or("keep needs a root id or name")?.clone();
             let patterns: Vec<String> = args[2..].to_vec();

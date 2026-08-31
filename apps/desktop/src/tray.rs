@@ -200,9 +200,12 @@ async fn act(id: String) {
             }
         }
         item::CAPTURE => client
-            .capture_pending()
+            .start_capture()
             .await
-            .map(|done| format!("read {} roots", done.len()))
+            .map(|waiting| match waiting {
+                0 => "every root has been read".to_string(),
+                n => format!("reading {n} roots — the sync page shows where it is"),
+            })
             .map_err(|e| e.to_string()),
         other => Err(format!("no such menu item: {other}")),
     };

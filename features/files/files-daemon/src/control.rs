@@ -94,8 +94,8 @@ impl DaemonControlService for DaemonControl {
             .await
     }
 
-    async fn capture_pending(&self) -> Result<Vec<(String, Option<String>)>, DaemonError> {
-        Ok(self.daemon.capture_pending().await)
+    async fn start_capture(&self) -> Result<u32, DaemonError> {
+        self.daemon.start_capture_backlog()
     }
 
     async fn share(

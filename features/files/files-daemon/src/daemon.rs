@@ -190,6 +190,9 @@ struct DaemonInner {
     /// `set_place`. Keyed by root, and deliberately not the same thing
     /// as where its bytes are.
     places: Mutex<BTreeMap<Uuid, String>>,
+    /// The capture running right now, if one is — what `status`
+    /// reports so an hours-long read is legible while it happens.
+    capturing: Mutex<Option<crate::model::CaptureProgress>>,
     /// Roots mounted as filesystems, and the session keeping each
     /// alive — dropping one unmounts it.
     mounts: Mutex<BTreeMap<Uuid, (std::path::PathBuf, crate::mount::fuser_session::Session)>>,
@@ -226,6 +229,7 @@ impl SyncDaemon {
                 endpoint: Mutex::new(None),
                 roots_dir: Mutex::new(data_dir_for_roots.clone()),
                 places: Mutex::new(BTreeMap::new()),
+                capturing: Mutex::new(None),
                 mounts: Mutex::new(BTreeMap::new()),
                 shared: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
@@ -580,6 +584,23 @@ impl SyncDaemon {
         };
         let mut back = 0;
         for m in mounts.at {
+            // The composed tree is not any one root, so it comes back
+            // the way it went up — by composing every root again, which
+            // also picks up anything shared since.
+            if m.root_id == COMPOSED {
+                let outcomes = self.mount_all(&m.mountpoint, false).await;
+                let failed = outcomes.iter().filter(|(_, e)| e.is_some()).count();
+                if failed == 0 {
+                    back += 1;
+                } else {
+                    tracing::warn!(
+                        at = %m.mountpoint.display(),
+                        failed,
+                        "could not bring the tree back"
+                    );
+                }
+                continue;
+            }
             match self.mount(m.root_id, &m.mountpoint).await {
                 Ok(()) => back += 1,
                 Err(e) => tracing::warn!(
@@ -901,8 +922,19 @@ impl SyncDaemon {
         }
         pending.sort_by_key(|(bytes, _, _)| *bytes);
 
+        let total = pending.len() as u32;
         let mut done = Vec::new();
-        for (_, id, name) in pending {
+        for (index, (bytes, id, name)) in pending.into_iter().enumerate() {
+            *self.inner.capturing.lock().expect("capture lock") =
+                Some(crate::model::CaptureProgress {
+                    root: name.clone(),
+                    done: index as u32 + 1,
+                    total,
+                    bytes,
+                    since: Utc::now(),
+                });
+            self.inner.events.publish(self.status());
+
             let error = self
                 .inner
                 .backend
@@ -921,7 +953,42 @@ impl SyncDaemon {
             done.push((name, error));
             self.inner.events.publish(self.status());
         }
+        *self.inner.capturing.lock().expect("capture lock") = None;
+        self.inner.events.publish(self.status());
         done
+    }
+
+    /// Start the backlog running in the agent, and return.
+    ///
+    /// Capture is measured in hours on an archive, so it does not belong
+    /// on the far side of a request: a CLI that waits for it cannot be
+    /// interrupted without killing it, and a caller that disconnects
+    /// should not stop a machine reading its own disk. The work lives in
+    /// the agent, and `status` is how anybody watches it.
+    ///
+    /// Refuses a second run rather than interleaving two passes over the
+    /// same roots.
+    pub fn start_capture_backlog(&self) -> Result<u32> {
+        if self.inner.capturing.lock().expect("capture lock").is_some() {
+            return Err(DaemonError::BadRequest(
+                "a capture is already running — `status` shows where it is".into(),
+            ));
+        }
+        let waiting = self.awaiting_capture().len() as u32;
+        if waiting == 0 {
+            return Ok(0);
+        }
+        let daemon = self.clone();
+        tokio::spawn(async move {
+            let done = daemon.capture_pending().await;
+            let failed = done.iter().filter(|(_, e)| e.is_some()).count();
+            tracing::info!(
+                captured = done.len() - failed,
+                failed,
+                "capture backlog finished"
+            );
+        });
+        Ok(waiting)
     }
 
     /// The roots registered without a first capture, still waiting for
@@ -1712,6 +1779,8 @@ impl SyncDaemon {
                 .map(|(h, _)| h.0)
                 .collect(),
             roots_dir: self.inner.roots_dir.lock().expect("roots dir lock").to_string_lossy().into_owned(),
+            capturing: self.inner.capturing.lock().expect("capture lock").clone(),
+            awaiting_capture: self.awaiting_capture().len() as u32,
             coordinator: self
                 .inner
                 .coordinator

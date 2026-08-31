@@ -134,6 +134,28 @@ impl RootStatus {
     }
 }
 
+/// A capture running in the agent, as somebody watching wants it.
+///
+/// An archive's first capture reads every byte, and on a five-terabyte
+/// tree that is hours. Reporting nothing for hours is indistinguishable
+/// from being hung — so the agent says which root it is on, how far
+/// through the backlog it is, and how big the thing in front of it is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct CaptureProgress {
+    /// The root being read right now.
+    pub root: String,
+    /// Its position in the backlog, 1-based, and the backlog's size when
+    /// the run began.
+    pub done: u32,
+    pub total: u32,
+    /// What this root weighs, so "no output for twenty minutes" can be
+    /// read as "it is a 210 GB session" rather than "it has died".
+    pub bytes: u64,
+    /// When this root's read began.
+    pub since: DateTime<Utc>,
+}
+
 /// The daemon's whole state — the reply to
 /// [`crate::service::DaemonControlService::status`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
@@ -164,6 +186,15 @@ pub struct DaemonStatus {
     /// list, so the CLI cheerfully reported that the other machine was
     /// sharing nothing.
     pub roots_dir: String,
+    /// The capture running right now, if one is. Cleared when the
+    /// backlog empties.
+    #[facet(default)]
+    pub capturing: Option<CaptureProgress>,
+    /// Roots registered but never read — they are browsable and would
+    /// sync as empty trees. Worth surfacing: it is the one state where
+    /// a root looks fine and cannot serve its content.
+    #[facet(default)]
+    pub awaiting_capture: u32,
     /// Global pause — no root syncs while set.
     pub paused: bool,
     /// Every root the daemon is set to sync.
