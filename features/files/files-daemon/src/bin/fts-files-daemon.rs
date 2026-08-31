@@ -1199,6 +1199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // after the bind is the part that dials peers, where being slow is
     // the network's fault and a caller can see it in the status.
     daemon.restore_places();
+    daemon.restore_made_by();
 
     // And bring back the mounts, for the same reason and before the
     // same line. Mounting is local work — it needs the disk, not the

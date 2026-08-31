@@ -3179,11 +3179,7 @@ impl FilesBackend {
             attempts: self.cadence.config().certify_attempts,
             hook: None,
             // A restart re-reads the tree too, and takes as long.
-            progress: self
-                .capture_progress
-                .lock()
-                .expect("capture progress lock poisoned")
-                .clone(),
+            progress,
         })?;
         let at = self.cadence.now();
         let commit_hex = result.commit_id.hex();

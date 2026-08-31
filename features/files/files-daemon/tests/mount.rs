@@ -352,6 +352,27 @@ async fn a_folder_made_beside_projects_becomes_one() {
         .find(|r| r.place == "acme/Projects/Second")
         .expect("the new folder should have become a root");
     assert_eq!(second.name, "Second");
+
+    // Whoever made the folder made the project. The kernel says who
+    // asked, and this is the only moment that answer is free — a week
+    // later nothing on disk knows.
+    let maker = second
+        .made_by
+        .as_ref()
+        .expect("a project made here should know who made it");
+    assert_eq!(
+        maker.uid,
+        // SAFETY: getuid is always safe; it reads this process's own id.
+        unsafe { libc::getuid() },
+        "the maker is whoever asked, not whoever the agent runs as"
+    );
+    assert!(!maker.user.is_empty());
+    assert!(maker.device.is_some(), "and which machine it happened on");
+
+    // A root that simply exists claims no maker rather than inventing
+    // one — the honest answer for anything that arrived from a peer.
+    let first = placed.iter().find(|r| r.place == "acme/Projects/First").unwrap();
+    assert!(first.made_by.is_none());
     // Its bytes sit beside its sibling's, wherever that turned out to
     // be — not anywhere derived from the place string.
     let sibling = std::path::Path::new(&rig.tree).parent().unwrap();

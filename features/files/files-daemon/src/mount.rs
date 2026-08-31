@@ -188,7 +188,11 @@ struct MakeProject {
 
 #[cfg(target_os = "linux")]
 impl files_fuse::Composer for MakeProject {
-    fn create_root(&self, place: &Path) -> std::result::Result<files_fuse::Placed, String> {
+    fn create_root(
+        &self,
+        place: &Path,
+        by: files_fuse::By,
+    ) -> std::result::Result<files_fuse::Placed, String> {
         let place = place.to_string_lossy().into_owned();
         let parent = Path::new(&place)
             .parent()
@@ -234,7 +238,25 @@ impl files_fuse::Composer for MakeProject {
             Ok::<_, String>(root)
         })?;
 
-        tracing::info!(place = %place, at = %dir.display(), "made a project from a new folder");
+        // Recorded now, because now is the only moment it is free: a
+        // week later nothing on disk says who created a directory half
+        // a studio has since written to.
+        self.daemon.made_by(
+            root.id,
+            crate::model::MadeBy {
+                user: user_name(by.uid),
+                uid: by.uid,
+                device: Some(self.daemon.device_id()),
+                at: chrono::Utc::now(),
+            },
+        );
+        tracing::info!(
+            place = %place,
+            at = %dir.display(),
+            uid = by.uid,
+            pid = by.pid,
+            "made a project from a new folder"
+        );
         Ok(files_fuse::Placed {
             place,
             backing: dir.clone(),
@@ -251,6 +273,28 @@ impl files_fuse::Composer for MakeProject {
             }),
         })
     }
+}
+
+/// A uid as a person reads it.
+///
+/// Straight from the passwd database, falling back to the number: a
+/// name is what somebody recognises, and a number is still an answer.
+#[cfg(target_os = "linux")]
+fn user_name(uid: u32) -> String {
+    std::fs::read_to_string("/etc/passwd")
+        .ok()
+        .and_then(|passwd| {
+            passwd
+                .lines()
+                .filter_map(|line| {
+                    let mut fields = line.split(':');
+                    let name = fields.next()?;
+                    let found: u32 = fields.nth(1)?.parse().ok()?;
+                    (found == uid).then(|| name.to_string())
+                })
+                .next()
+        })
+        .unwrap_or_else(|| uid.to_string())
 }
 
 /// Mount every placed root as one tree at `mountpoint`.

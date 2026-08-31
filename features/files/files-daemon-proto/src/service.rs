@@ -57,6 +57,11 @@ pub struct PlacedRoot {
     /// Where it appears — `codywright/Projects/Some Record`. Falls back
     /// to the name for a root nobody has placed.
     pub place: String,
+    /// Who made it, when this machine watched it being made. `None` for
+    /// a root that arrived from a peer, or one that predates the
+    /// record — which is honest: nothing on disk knows.
+    #[facet(default)]
+    pub made_by: Option<crate::model::MadeBy>,
 }
 
 /// What a `keep_only` pass did.

@@ -193,14 +193,34 @@ impl Inodes {
 pub trait Composer: Send + Sync + 'static {
     /// A directory was asked for at `place`, which no root owns. Make it
     /// a root, or say why not.
-    fn create_root(&self, place: &Path) -> Result<Placed, String>;
+    ///
+    /// `by` is whoever asked, as the kernel reports them. A project made
+    /// by making a folder should still know who made it — that is what
+    /// the app needs to say whose it is and who may share it, and the
+    /// only moment the answer is available for free.
+    fn create_root(&self, place: &Path, by: By) -> Result<Placed, String>;
+}
+
+/// Who asked, as the kernel reports them on the request.
+///
+/// The OS user, not a Task account: this layer has no session and no
+/// business inventing one. It is enough to attribute the folder, and
+/// what turns it into an account is the app's job, which has the
+/// sign-in this does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct By {
+    pub uid: u32,
+    pub gid: u32,
+    /// The process that made the folder — Finder, a shell, a DAW.
+    /// Useful in a log line when somebody asks how a project appeared.
+    pub pid: u32,
 }
 
 /// Nothing may be created — the default.
 pub struct Fixed;
 
 impl Composer for Fixed {
-    fn create_root(&self, _place: &Path) -> Result<Placed, String> {
+    fn create_root(&self, _place: &Path, _by: By) -> Result<Placed, String> {
         Err("this mount does not create roots".into())
     }
 }
@@ -750,7 +770,12 @@ impl Filesystem for LiveTree {
         // created in the skeleton — visible, and gone at the next mount,
         // which is a worse answer than refusing.
         if self.owner(&child).is_none() && self.is_root_position(&child) {
-            match self.composer.create_root(&child) {
+            let by = By {
+                uid: _req.uid(),
+                gid: _req.gid(),
+                pid: _req.pid(),
+            };
+            match self.composer.create_root(&child, by) {
                 Ok(placed) => {
                     {
                         let mut roots = self.roots.lock().expect("roots lock");

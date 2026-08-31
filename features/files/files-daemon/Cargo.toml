@@ -60,6 +60,8 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # Reading the tags the mount derives, in the test that asserts they are
 # derived rather than stored.
 xattr = "1"
+# Reading this process's own uid, to assert the maker is the caller.
+libc = "0.2"
 
 [lints]
 workspace = true

@@ -134,6 +134,25 @@ impl RootStatus {
     }
 }
 
+/// Who made a project, recorded when the folder appeared.
+///
+/// The OS user rather than a Task account: the agent has no session and
+/// no business inventing one. It is enough to attribute the folder and
+/// to let the app — which *is* signed in — claim it for the right
+/// account the first time somebody looks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct MadeBy {
+    /// The OS user, resolved to a name where the machine can, and the
+    /// numeric id otherwise.
+    pub user: String,
+    pub uid: u32,
+    /// The machine it was made on — a studio has several, and "who made
+    /// this" is half answered by "where".
+    pub device: Option<Uuid>,
+    pub at: DateTime<Utc>,
+}
+
 /// A capture running in the agent, as somebody watching wants it.
 ///
 /// An archive's first capture reads every byte, and on a five-terabyte

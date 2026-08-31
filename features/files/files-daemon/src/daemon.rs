@@ -193,6 +193,10 @@ struct DaemonInner {
     /// The capture running right now, if one is — what `status`
     /// reports so an hours-long read is legible while it happens.
     capturing: Mutex<Option<crate::model::CaptureProgress>>,
+    /// Who made each root, for the roots this machine watched being
+    /// made. Keyed by root; absent for one that arrived from a peer or
+    /// predates the record.
+    made_by: Mutex<BTreeMap<Uuid, crate::model::MadeBy>>,
     /// Roots mounted as filesystems, and the session keeping each
     /// alive — dropping one unmounts it.
     mounts: Mutex<BTreeMap<Uuid, (std::path::PathBuf, crate::mount::fuser_session::Session)>>,
@@ -230,6 +234,7 @@ impl SyncDaemon {
                 roots_dir: Mutex::new(data_dir_for_roots.clone()),
                 places: Mutex::new(BTreeMap::new()),
                 capturing: Mutex::new(None),
+                made_by: Mutex::new(BTreeMap::new()),
                 mounts: Mutex::new(BTreeMap::new()),
                 shared: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
@@ -1711,6 +1716,61 @@ impl SyncDaemon {
             skipped_dirty: report.skipped_dirty.len() as u32,
             failed: report.failed.len() as u32,
         })
+    }
+
+    /// Record who made a root, and when.
+    ///
+    /// Written the moment a folder becomes a project, because that is
+    /// the only moment the answer is free: afterwards nothing on disk
+    /// says who created a directory that has since been written to by
+    /// half a studio.
+    pub fn made_by(&self, root_id: Uuid, who: crate::model::MadeBy) {
+        self.inner
+            .made_by
+            .lock()
+            .expect("made-by lock")
+            .insert(root_id, who);
+        self.save_made_by();
+        self.inner.events.publish(self.status());
+    }
+
+    /// Who made a root, if this machine saw it happen.
+    #[must_use]
+    pub fn maker_of(&self, root_id: Uuid) -> Option<crate::model::MadeBy> {
+        self.inner
+            .made_by
+            .lock()
+            .expect("made-by lock")
+            .get(&root_id)
+            .cloned()
+    }
+
+    fn made_by_path(&self) -> std::path::PathBuf {
+        self.inner.data_dir.join("made-by.json")
+    }
+
+    fn save_made_by(&self) {
+        let all = self.inner.made_by.lock().expect("made-by lock").clone();
+        match serde_json::to_vec_pretty(&all) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(self.made_by_path(), bytes) {
+                    tracing::warn!(error = %e, "could not record who made a root");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not serialize the makers"),
+        }
+    }
+
+    /// Read back who made what. Beside the places, and for the same
+    /// reason: it is a fact about the project, not about this process.
+    pub fn restore_made_by(&self) {
+        let Ok(raw) = std::fs::read_to_string(self.made_by_path()) else {
+            return;
+        };
+        match serde_json::from_str::<BTreeMap<Uuid, crate::model::MadeBy>>(&raw) {
+            Ok(all) => *self.inner.made_by.lock().expect("made-by lock") = all,
+            Err(e) => tracing::warn!(error = %e, "the recorded makers are unreadable"),
+        }
     }
 
     /// The patterns this root keeps resident, empty for "everything".

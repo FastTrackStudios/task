@@ -75,6 +75,7 @@ impl DaemonControlService for DaemonControl {
             .map(|r| {
                 let place = self.daemon.place_of(r.id, &r.name);
                 crate::service::PlacedRoot {
+                    made_by: self.daemon.maker_of(r.id),
                     id: r.id,
                     name: r.name,
                     path: r.path.unwrap_or_default(),
