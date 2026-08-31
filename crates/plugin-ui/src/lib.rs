@@ -76,6 +76,36 @@ pub struct PluginNav {
     pub path: &'static str,
 }
 
+/// Where a claimed link goes — a screen inside the claiming app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkTarget {
+    /// The app's own path, as [`PluginApp::view`] will receive it.
+    pub path: String,
+    /// Its query, empty when there is none.
+    pub query: String,
+}
+
+impl LinkTarget {
+    /// The app's front page, with a deep link in the query — the common
+    /// case: a reference, a song, a passage.
+    #[must_use]
+    pub fn query(query: impl Into<String>) -> Self {
+        Self {
+            path: String::new(),
+            query: query.into(),
+        }
+    }
+
+    /// A specific screen with no parameters.
+    #[must_use]
+    pub fn path(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            query: String::new(),
+        }
+    }
+}
+
 /// An app registered into Task.
 #[derive(Clone, Copy)]
 pub struct PluginApp {
@@ -116,6 +146,27 @@ pub struct PluginApp {
     /// A function rather than a list because a `WidgetSpec` holds
     /// closures and cannot be a `const`.
     pub widgets: Option<fn() -> Vec<task_widgets::WidgetSpec>>,
+    /// Claim a wikilink that matches no vault page.
+    ///
+    /// A note writes `[[John 3:16]]` or `[[Washed]]`, and if the vault
+    /// has no such page, whichever app recognises the text takes it: the
+    /// scripture reader opens the passage, the player opens the song.
+    /// That is how one app links into another's material without either
+    /// knowing the other exists — the note says what it means and the
+    /// registry finds who understands it.
+    ///
+    /// **Real pages always win.** This is asked only after the vault has
+    /// said it has nothing, which keeps a person's own note about
+    /// `[[Washed]]` from being hijacked by an app that would like to own
+    /// the word.
+    pub claim_link: Option<fn(text: &str) -> Option<LinkTarget>>,
+    /// Claim a link scheme this app's own widgets emit —
+    /// `scripture-open:`, `song-play:`.
+    ///
+    /// Separate from [`Self::claim_link`] because the resolution order
+    /// is different: a scheme is unambiguous and is claimed *before* the
+    /// vault is consulted, where a wikilink is claimed only after.
+    pub claim_href: Option<fn(href: &str) -> Option<LinkTarget>>,
     /// Code fences this app renders — ```` ```kf ```` and the like.
     ///
     /// Separate from [`Self::widgets`] because the editor's fence
@@ -156,6 +207,42 @@ pub fn registered() -> Vec<PluginApp> {
         .clone()
 }
 
+/// Which app claims this wikilink, if any.
+///
+/// `enabled` decides which apps may answer, so an app an org turned off
+/// does not silently capture links — the note falls back to being a
+/// missing page, which is the truth for that org.
+///
+/// First claim wins, in registration order. Two apps claiming one text
+/// is a wiring decision the composition root already made by ordering
+/// them; resolving it here would hide that.
+#[must_use]
+pub fn claim_link(
+    text: &str,
+    enabled: impl Fn(&str) -> bool,
+) -> Option<(&'static str, LinkTarget)> {
+    REGISTRY
+        .read()
+        .expect("plugin registry poisoned")
+        .iter()
+        .filter(|a| enabled(a.id))
+        .find_map(|a| a.claim_link.and_then(|c| c(text)).map(|t| (a.id, t)))
+}
+
+/// Which app claims this href scheme, if any. See [`claim_link`].
+#[must_use]
+pub fn claim_href(
+    href: &str,
+    enabled: impl Fn(&str) -> bool,
+) -> Option<(&'static str, LinkTarget)> {
+    REGISTRY
+        .read()
+        .expect("plugin registry poisoned")
+        .iter()
+        .filter(|a| enabled(a.id))
+        .find_map(|a| a.claim_href.and_then(|c| c(href)).map(|t| (a.id, t)))
+}
+
 /// The app with this id, if one registered.
 #[must_use]
 pub fn find(id: &str) -> Option<PluginApp> {
@@ -185,6 +272,8 @@ mod tests {
             view: nowhere,
             widgets: None,
             fences: None,
+            claim_link: None,
+            claim_href: None,
         });
         register(PluginApp {
             id: "test-dup",
@@ -192,6 +281,8 @@ mod tests {
             view: nowhere,
             widgets: None,
             fences: None,
+            claim_link: None,
+            claim_href: None,
         });
         assert_eq!(
             registered().iter().filter(|a| a.id == "test-dup").count(),
@@ -205,5 +296,43 @@ mod tests {
     #[test]
     fn an_unregistered_id_is_absent() {
         assert!(find("test-never-registered").is_none());
+    }
+
+    fn claims_verses(text: &str) -> Option<LinkTarget> {
+        text.starts_with("John ").then(|| LinkTarget::query(text))
+    }
+
+    /// An app an org turned off must not capture links. The note then
+    /// reads as a missing page, which is the truth for that org — an
+    /// app nobody enabled has no business deciding where a link goes.
+    #[test]
+    fn a_disabled_app_claims_nothing() {
+        register(PluginApp {
+            id: "test-verses",
+            nav: &[],
+            view: nowhere,
+            widgets: None,
+            fences: None,
+            claim_link: Some(claims_verses),
+            claim_href: None,
+        });
+
+        let on = claim_link("John 3:16", |_| true);
+        assert_eq!(
+            on.map(|(id, t)| (id, t.query)),
+            Some(("test-verses", "John 3:16".to_string()))
+        );
+
+        assert!(
+            claim_link("John 3:16", |id| id != "test-verses").is_none(),
+            "an app that is off must not take the link"
+        );
+    }
+
+    /// Text no app recognises is nobody's. The shell falls back to the
+    /// vault, which is what a wikilink means by default.
+    #[test]
+    fn unclaimed_text_belongs_to_the_vault() {
+        assert!(claim_link("Groceries for Tuesday", |_| true).is_none());
     }
 }

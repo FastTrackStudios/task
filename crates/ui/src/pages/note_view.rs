@@ -339,11 +339,21 @@ pub(crate) fn NoteView(
     // registry at CLICK time, so a widget's queue reflects the live
     // doc), then the shell's own schemes, then wikilink navigation
     // (resolved through the vault index when possible).
+    // Which apps may claim a link here — an org's enabled set, read
+    // once for this handler.
+    let plugins = crate::nav::use_active_plugins();
     let lookup_for_links = lookup;
     let registry_for_links = registry.clone();
     let link_ctx = widget_ctx.clone();
     let on_link_click = use_callback(move |href: String| {
         if registry_for_links.handle_href(&href, &link_ctx) {
+            return;
+        }
+        // An app's own scheme — `scripture-open:`, `song-play:`. Before
+        // the vault, because a scheme is unambiguous: only the app that
+        // emitted it can mean anything by it.
+        if let Some((app, target)) = task_plugin_ui::claim_href(&href, |id| plugins.contains(id)) {
+            nav_links.push(plugin_route(app, &target));
             return;
         }
         if let Some(target) = href.strip_prefix("scripture-open:") {
@@ -361,6 +371,17 @@ pub(crate) fn NoteView(
             .peek()
             .as_ref()
             .and_then(|ix| ix.meta(page).map(|m| m.path.clone()));
+        // A wikilink the vault has no page for, offered to the apps:
+        // `[[John 3:16]]` to the reader, `[[Washed]]` to the player.
+        // *After* the lookup, never before — a person's own note about
+        // a word beats any app that would like to own it.
+        if known.is_none()
+            && let Some((app, target)) =
+                task_plugin_ui::claim_link(page, |id| plugins.contains(id))
+        {
+            nav_links.push(plugin_route(app, &target));
+            return;
+        }
         // A wikilink that matches no page but parses as a scripture
         // reference opens the reader (same resolution order as the
         // decoration pass: real pages win).
@@ -663,5 +684,25 @@ mod note_body_tests {
             note_body_visible(false, false),
             "a plain note edits normally"
         );
+    }
+}
+
+/// The route a claimed link resolves to.
+///
+/// The one place a plugin's own path and query become a Task route —
+/// the same translation `nav` does for tabs, and for the same reason:
+/// `Route` is the shell's, and an app speaks in its own paths.
+fn plugin_route(app: &str, target: &task_plugin_ui::LinkTarget) -> crate::routes::Route {
+    if target.path.is_empty() {
+        crate::routes::Route::PluginRoute {
+            app: app.to_string(),
+            q: target.query.clone(),
+        }
+    } else {
+        crate::routes::Route::PluginPathRoute {
+            app: app.to_string(),
+            path: target.path.split('/').map(str::to_string).collect(),
+            q: target.query.clone(),
+        }
     }
 }

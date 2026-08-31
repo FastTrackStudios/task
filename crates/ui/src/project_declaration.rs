@@ -73,7 +73,7 @@ mod native {
             // arrived from a peer was declared wherever it was created,
             // and writing a second declaration here would invent an
             // owner for somebody else's project.
-            let Some(made_by) = &root.made_by else {
+            let Some(_made_by) = &root.made_by else {
                 continue;
             };
             if root.path.is_empty() {
