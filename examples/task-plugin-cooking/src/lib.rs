@@ -23,13 +23,13 @@
 //! that knows both this and Task:
 //!
 //! ```ignore
-//! task_ui_core::plugin::register(task_plugin_cooking::APP);
+//! task_plugin_ui::register(task_plugin_cooking::APP);
 //! ```
 
-use task_ui_core::plugin::architect_ui::lucide_dioxus::Utensils;
-use task_ui_core::plugin::architect_ui::prelude::*;
-use task_ui_core::plugin::dioxus::prelude::*;
-use task_ui_core::plugin::{PluginApp, PluginNav};
+use task_plugin_ui::architect_ui::lucide_dioxus::Utensils;
+use task_plugin_ui::architect_ui::prelude::*;
+use task_plugin_ui::dioxus::prelude::*;
+use task_plugin_ui::{PluginApp, PluginNav};
 
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
@@ -50,6 +50,10 @@ pub const APP: PluginApp = PluginApp {
         },
     ],
     view: view,
+    // A recipe note could render as a method with its own timers here —
+    // the same seam the player uses to turn a song note into a player.
+    widgets: None,
+    fences: None,
 };
 
 fn icon() -> Element {
@@ -62,7 +66,7 @@ fn icon() -> Element {
 /// itself, rather than this pretending to have a page. That is the
 /// difference between a bad link and a broken app, and only this crate
 /// knows which one a path is.
-fn view(path: &str) -> Option<Element> {
+fn view(path: &str, _query: &str) -> Option<Element> {
     match path {
         "" => Some(kitchen()),
         "recipes" => Some(recipes()),

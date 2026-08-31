@@ -180,21 +180,24 @@ pub enum Route {
         // Stringly-typed exactly here, and nowhere else: the shell's
         // own routes stay typed, and an app's internal paths are its
         // own business.
-        #[route("/app/:app")]
-        PluginRoute { app: String },
+        // `q` carries a deep link the app parses itself — a scripture
+        // reference, a note path. The shell does not know what any
+        // app's parameters mean and must not pretend to.
+        #[route("/app/:app?:q")]
+        PluginRoute { app: String, q: String },
 
-        #[route("/app/:app/:..path")]
-        PluginPathRoute { app: String, path: Vec<String> },
+        #[route("/app/:app/:..path?:q")]
+        PluginPathRoute { app: String, path: Vec<String>, q: String },
 }
 
 #[component]
-fn PluginRoute(app: String) -> Element {
-    rsx! { PluginScreen { app, path: String::new() } }
+fn PluginRoute(app: String, q: String) -> Element {
+    rsx! { PluginScreen { app, path: String::new(), query: q } }
 }
 
 #[component]
-fn PluginPathRoute(app: String, path: Vec<String>) -> Element {
-    rsx! { PluginScreen { app, path: path.join("/") } }
+fn PluginPathRoute(app: String, path: Vec<String>, q: String) -> Element {
+    rsx! { PluginScreen { app, path: path.join("/"), query: q } }
 }
 
 /// One registered app's screen, or an honest account of why there is
@@ -207,10 +210,10 @@ fn PluginPathRoute(app: String, path: Vec<String>) -> Element {
 /// into a single "not found" would send a person looking in the wrong
 /// place every time.
 #[component]
-fn PluginScreen(app: String, path: String) -> Element {
+fn PluginScreen(app: String, path: String, query: String) -> Element {
     let enabled = crate::nav::use_active_plugins();
 
-    let Some(registered) = task_ui_core::plugin::find(&app) else {
+    let Some(registered) = task_plugin_ui::find(&app) else {
         return rsx! {
             pages::missing::Missing {
                 title: "That app is not installed",
@@ -226,7 +229,7 @@ fn PluginScreen(app: String, path: String) -> Element {
             }
         };
     }
-    match (registered.view)(&path) {
+    match (registered.view)(&path, &query) {
         Some(view) => view,
         None => rsx! {
             pages::missing::Missing {

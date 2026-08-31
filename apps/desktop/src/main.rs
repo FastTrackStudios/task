@@ -36,7 +36,7 @@ fn main() {
     // an extension point rather than more coupling.
     //
     // Before launch, because the nav is built on first render.
-    task_ui_core::plugin::register(task_plugin_cooking::APP);
+    task_plugin_ui::register(task_plugin_cooking::APP);
 
     let (pos, size, fullscreen) = window_placement();
     let mut window = WindowBuilder::new()

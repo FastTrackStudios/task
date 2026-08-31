@@ -58,6 +58,9 @@ use dioxus::prelude::*;
 pub use dioxus;
 /// The component library, re-exported for the same reason.
 pub use architect_ui;
+/// The note-widget vocabulary, re-exported for the same reason — a
+/// `WidgetSpec` built against a different version is a different type.
+pub use task_widgets;
 
 /// One screen an app contributes to Task's navigation.
 #[derive(Clone, Copy)]
@@ -84,12 +87,43 @@ pub struct PluginApp {
     /// The screens it puts in the navigation. May be empty: an app can
     /// be reachable only from another app's link, or from a file.
     pub nav: &'static [PluginNav],
-    /// Render one of its screens. `path` is whatever followed
-    /// `/app/<id>/`, empty for the front page.
+    /// Render one of its screens.
+    ///
+    /// `path` is whatever followed `/app/<id>/`, empty for the front
+    /// page. `query` is the raw query string, empty when there is none —
+    /// a deep link like a scripture reference or a note path arrives
+    /// there, and the app parses it, because only the app knows what
+    /// its own parameters mean.
     ///
     /// Returning `None` means "not one of mine" and the shell shows its
     /// own not-found rather than the app pretending to have a page.
-    pub view: fn(path: &str) -> Option<Element>,
+    pub view: fn(path: &str, query: &str) -> Option<Element>,
+    /// How this app's notes render *inside the editor*.
+    ///
+    /// A screen is the small half of what an app contributes. The
+    /// larger half is what a note of its kind looks like when somebody
+    /// opens it: a song note that is a player, a setlist that is a
+    /// queue, a recipe that is a method with its own timers. A
+    /// [`task_widgets::WidgetSpec`] claims notes by type or frontmatter,
+    /// renders inline, handles its own link clicks, and can take over
+    /// the body in fullscreen.
+    ///
+    /// This is what keeps markdown the substrate rather than a storage
+    /// format nobody reads. The note stays a note — openable in any
+    /// editor, syncable, diffable — and the app supplies the way to
+    /// *look* at it.
+    ///
+    /// A function rather than a list because a `WidgetSpec` holds
+    /// closures and cannot be a `const`.
+    pub widgets: Option<fn() -> Vec<task_widgets::WidgetSpec>>,
+    /// Code fences this app renders — ```` ```kf ```` and the like.
+    ///
+    /// Separate from [`Self::widgets`] because the editor's fence
+    /// registry is its own seam, added so `editor-state` could render a
+    /// chart without depending on a music engraver. Same principle one
+    /// level down: the editor knows there are fences, not what any of
+    /// them mean.
+    pub fences: Option<fn()>,
 }
 
 /// Everything registered so far.
@@ -137,7 +171,7 @@ pub fn find(id: &str) -> Option<PluginApp> {
 mod tests {
     use super::*;
 
-    fn nowhere(_path: &str) -> Option<Element> {
+    fn nowhere(_path: &str, _query: &str) -> Option<Element> {
         None
     }
 
@@ -149,11 +183,15 @@ mod tests {
             id: "test-dup",
             nav: &[],
             view: nowhere,
+            widgets: None,
+            fences: None,
         });
         register(PluginApp {
             id: "test-dup",
             nav: &[],
             view: nowhere,
+            widgets: None,
+            fences: None,
         });
         assert_eq!(
             registered().iter().filter(|a| a.id == "test-dup").count(),

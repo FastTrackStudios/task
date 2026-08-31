@@ -12,7 +12,7 @@ repository.workspace = true
 # The SDK, and *only* the SDK. No task-ui, no task-plugin, no feature
 # crate. If this list ever grows a second Task crate, the example has
 # stopped demonstrating the thing it exists to demonstrate.
-task-ui-core = { workspace = true }
+task-plugin-ui = { workspace = true }
 
 [lints]
 workspace = true

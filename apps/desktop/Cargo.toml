@@ -9,6 +9,7 @@ license.workspace = true
 # The window-chrome context this frameless shell provides (drag /
 # minimize / maximize / close callbacks the shared top bar renders).
 task-ui-core.workspace = true
+task-plugin-ui.workspace = true
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
 # `otel` so shipped clients export traces/logs/metrics through the

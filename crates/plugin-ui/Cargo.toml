@@ -1,0 +1,20 @@
+[package]
+name = "task-plugin-ui"
+description = "The SDK an app plugs into Task through: screens, navigation and editor widgets, registered by the app binary. Depends on no plugin, and re-exports dioxus/architect-ui/task-widgets so every plugin compiles against one version of each."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus.workspace = true
+architect-ui.workspace = true
+# Note widgets: how an app's notes render inside the editor. This is
+# also why the SDK is its own crate — `task-widgets` depends on
+# `task-ui-core`, so the seam cannot live there without a cycle.
+task-widgets.workspace = true
+
+[lints]
+workspace = true

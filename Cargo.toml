@@ -69,6 +69,7 @@ members = [
     "features/files/files-daemon",
     "features/files/files-daemon-proto",
     "features/files/files-domain",
+    "crates/plugin-ui",
     "examples/task-plugin-cooking",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -224,6 +225,7 @@ files-daemon-proto = { path = "features/files/files-daemon-proto" }
 files-domain = { path = "features/files/files-domain" }
 files-fileprovider = { path = "features/files/files-fileprovider" }
 task-plugin-cooking = { path = "examples/task-plugin-cooking" }
+task-plugin-ui = { path = "crates/plugin-ui" }
 files-fuse = { path = "features/files/files-fuse" }
 files-proto = { path = "features/files/files-proto", default-features = false }
 files-storage = { path = "features/files/files-storage" }

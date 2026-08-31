@@ -394,7 +394,7 @@ pub fn nav_tabs_for(set: &task_plugin::PluginSet) -> Vec<NavTab> {
 /// `Route`, and `Route` is the shell's — which is the whole reason the
 /// plugin side speaks in paths. The shell does the one translation.
 fn plugin_tabs() -> Vec<NavTab> {
-    task_ui_core::plugin::registered()
+    task_plugin_ui::registered()
         .into_iter()
         .flat_map(|app| {
             app.nav.iter().map(move |nav| NavTab {
@@ -403,11 +403,13 @@ fn plugin_tabs() -> Vec<NavTab> {
                 route: if nav.path.is_empty() {
                     Route::PluginRoute {
                         app: app.id.to_string(),
+                        q: String::new(),
                     }
                 } else {
                     Route::PluginPathRoute {
                         app: app.id.to_string(),
                         path: nav.path.split('/').map(str::to_string).collect(),
+                        q: String::new(),
                     }
                 },
                 plugin: app.id,
@@ -529,8 +531,8 @@ pub fn route_title(route: &Route) -> &'static str {
         // A registered app names its own screens. The label is
         // `&'static str` on the plugin side too, so this stays a
         // borrow rather than forcing every other arm to allocate.
-        Route::PluginRoute { app } => plugin_title(app, ""),
-        Route::PluginPathRoute { app, path } => plugin_title(app, &path.join("/")),
+        Route::PluginRoute { app, .. } => plugin_title(app, ""),
+        Route::PluginPathRoute { app, path, .. } => plugin_title(app, &path.join("/")),
     }
 }
 
@@ -540,7 +542,7 @@ pub fn route_title(route: &Route) -> &'static str {
 /// and a plain word when nothing is registered — a title bar should
 /// never be the thing that reports a missing plugin.
 fn plugin_title(app: &str, path: &str) -> &'static str {
-    task_ui_core::plugin::find(app)
+    task_plugin_ui::find(app)
         .and_then(|a| {
             a.nav
                 .iter()

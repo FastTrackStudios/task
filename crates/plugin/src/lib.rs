@@ -39,6 +39,20 @@ pub struct PluginInfo {
 /// The authoritative list of plugins this build knows about.
 ///
 /// Grouping rationale lives in the plan doc. Order is display order.
+///
+/// # Core is what apps are built on
+///
+/// The line is not "how big" or "how central to us" — it is whether an
+/// *app* needs it to exist. Scheduling, contacts, the wiki and files
+/// are all reached by apps that are not them: a meal plan schedules, a
+/// finance record names a contact, everything stores markdown, and
+/// every one of them keeps its data in Task's file management. Something
+/// an app depends on cannot be a thing an org turns off, so those are
+/// core.
+///
+/// What is left is genuinely a domain of its own — scripture, email,
+/// finance, fitness, inventory, meal planning. Turning one off removes
+/// its screens and its services and nothing else notices.
 pub const CATALOG: &[PluginInfo] = &[
     PluginInfo {
         id: "core",
@@ -68,7 +82,7 @@ pub const CATALOG: &[PluginInfo] = &[
         id: "wiki",
         name: "Wiki",
         description: "The LLM-maintained knowledge wiki and its graph",
-        core: false,
+        core: true,
     },
     PluginInfo {
         id: "scripture",
@@ -98,7 +112,7 @@ pub const CATALOG: &[PluginInfo] = &[
         id: "scheduling",
         name: "Scheduling",
         description: "Day plans, calendar events and bookable slots",
-        core: false,
+        core: true,
     },
     PluginInfo {
         id: "finance",
@@ -110,7 +124,7 @@ pub const CATALOG: &[PluginInfo] = &[
         id: "contacts",
         name: "Contacts",
         description: "People records and rosters",
-        core: false,
+        core: true,
     },
     PluginInfo {
         id: "recall",
@@ -122,7 +136,7 @@ pub const CATALOG: &[PluginInfo] = &[
         id: "files",
         name: "Files",
         description: "File Roots, versioned project folders, the Drive surface and the file explorer",
-        core: false,
+        core: true,
     },
     PluginInfo {
         id: "home",
