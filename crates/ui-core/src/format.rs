@@ -95,3 +95,38 @@ mod tests {
         assert_eq!(first_line(""), "");
     }
 }
+
+/// Lowercase, hyphenate, strip non-url-safe characters — a title into
+/// something that can sit in a path.
+///
+/// Here rather than with either caller because both want it and
+/// neither owns it: the inbox slugs a captured title into a note name,
+/// and the bookings app slugs an event type into its public URL.
+#[must_use]
+pub fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for ch in s.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_owned()
+}
+
+#[cfg(test)]
+mod slug_tests {
+    use super::slugify;
+
+    #[test]
+    fn a_title_becomes_a_path_segment() {
+        assert_eq!(slugify("30-Minute Consult"), "30-minute-consult");
+        assert_eq!(slugify("  Spaced   Out  "), "spaced-out");
+        assert_eq!(slugify("Ragu & Chips"), "ragu-chips");
+        assert_eq!(slugify("!!!"), "");
+    }
+}

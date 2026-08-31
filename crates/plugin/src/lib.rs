@@ -116,8 +116,14 @@ pub const CATALOG: &[PluginInfo] = &[
     PluginInfo {
         id: "scheduling",
         name: "Scheduling",
-        description: "Day plans, calendar events and bookable slots",
+        description: "Day plans and calendar events",
         core: true,
+    },
+    PluginInfo {
+        id: "bookings",
+        name: "Bookings",
+        description: "Bookable event types and the slots people book against them",
+        core: false,
     },
     PluginInfo {
         id: "finance",

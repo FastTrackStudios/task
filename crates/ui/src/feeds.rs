@@ -111,48 +111,10 @@ feeds! {
     }
 }
 
-// ── Bookings (Cal.com-style booking half) ───────────────────────────
-
-feeds! {
-    scheduling_proto::EventTypesClient {
-        /// All bookable event types for the org (30-min consults, etc.).
-        fetch_event_types() -> Vec<scheduling_proto::EventType>
-            = list_event_types() as "list event types";
-
-        /// Create (upsert) a bookable event type, returning the persisted draft
-        /// so optimistic stores can reconcile against it. The backend derives
-        /// the vault `path` from the slug/id; the caller builds the entity (see
-        /// `stores::draft_event_type`).
-        create_event_type(event_type: scheduling_proto::EventType) -> scheduling_proto::EventType
-            = upsert_event_type(event_type.clone()) map |()| event_type, as "create event type";
-    }
-
-    scheduling_proto::BookingsClient {
-        /// All bookings for the org (every status), oldest start first.
-        fetch_bookings() -> Vec<scheduling_proto::Booking>
-            = list_bookings() as "list bookings";
-
-        /// Cancel a booking by id (sets status to `Cancelled`).
-        cancel_booking(id: &str) -> ()
-            = update_booking_status(scheduling_proto::BookingId(id.to_owned()), scheduling_proto::BookingStatus::Cancelled) as "cancel booking";
-    }
-}
-
-/// Lowercase, hyphenate, strip non-url-safe chars for an event-type slug.
-pub fn slugify(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_dash = false;
-    for ch in s.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            prev_dash = false;
-        } else if !prev_dash && !out.is_empty() {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    out.trim_matches('-').to_owned()
-}
+/// The inbox slugs a captured title into a note name. Lives in
+/// `task-ui-core` because the bookings app wants the same function for
+/// its public URLs, and neither owns it.
+pub use task_ui_core::format::slugify;
 
 feeds! {
     inbox_proto::InboxClient {

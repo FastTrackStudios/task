@@ -1,0 +1,16 @@
+[package]
+name = "task-plugin-bookings"
+description = "Bookings as a Task app: bookable event types and the slots people book against them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-plugin-ui = { workspace = true }
+bookings-ui = { workspace = true }
+
+[lints]
+workspace = true

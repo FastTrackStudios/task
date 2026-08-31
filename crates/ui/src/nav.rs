@@ -4,9 +4,9 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    BookOpen, BookUser, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag, FolderKanban,
-    FolderOpen, House, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Target,
-    Timer, Users, Waypoints,
+    BookOpen, BookUser, CalendarDays, ChartGantt, CircleCheck, Flag, FolderKanban, FolderOpen,
+    House, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Target, Timer, Users,
+    Waypoints,
 };
 use dioxus::prelude::*;
 
@@ -47,9 +47,6 @@ fn icon_milestones() -> Element {
 }
 fn icon_schedule() -> Element {
     rsx! { CalendarDays { size: 16 } }
-}
-fn icon_bookings() -> Element {
-    rsx! { CalendarClock { size: 16 } }
 }
 fn icon_gantt() -> Element {
     rsx! { ChartGantt { size: 16 } }
@@ -144,12 +141,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "scheduling",
             icon: icon_schedule,
             route: Route::ScheduleRoute {},
-        },
-        NavTab {
-            label: "Bookings",
-            plugin: "scheduling",
-            icon: icon_bookings,
-            route: Route::BookingsRoute {},
         },
         NavTab {
             label: "Gantt",
@@ -367,7 +358,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::VaultRoute { .. } => "Vault",
         Route::MilestonesRoute {} => "Milestones",
         Route::ScheduleRoute {} => "Schedule",
-        Route::BookingsRoute {} => "Bookings",
         Route::GanttRoute {} => "Gantt",
         Route::TimerRoute {} => "Timer",
         Route::MembersRoute {} => "Members",

@@ -1,26 +1,151 @@
-//! `/bookings` — the Cal.com-style booking admin.
+//! Bookings — bookable event types, and the slots people book.
 //!
-//! The host's side of the scheduling feature's "booking half":
-//! list the bookable event types (name + duration), list upcoming
-//! bookings (who / when / which event type), and offer a
-//! friction-light "Add event type" form (title + duration).
+//! The public front desk: an org publishes event types ("30-minute
+//! consult") and people book slots against them. Split out of core
+//! `scheduling` because it is a different question. Day plans and
+//! calendar events are how *you* organise your own time, which is
+//! something every org does; this is selling time by the slot, which
+//! most do not. An org with no front desk should be able to not have
+//! one.
 //!
-//! Event types and bookings live as markdown pages in the vault
-//! (`scheduling/event-types/` + `scheduling/bookings/`) and are
-//! served by the same `VaultScheduler` as the day-plan half. State is
-//! the shared optimistic store ([`crate::stores`]) for **both** lists:
-//! a created event type appears instantly as a typed `Id::Temp` row
-//! and reconciles against the persisted entity (no refresh-counter
-//! refetch); a cancelled booking vanishes instantly and rolls back +
-//! notifies on failure.
+//! Both stores are **live** — one `SchedulingEvent` stream feeds them
+//! both, each folding only its own variants — so a booking made on the
+//! public page appears here without a refetch.
+//!
+//! Mounted by `task-plugin-bookings`.
 
 use architect::Id;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use scheduling_proto::{Booking, BookingStatus, EventType};
+use task_stores::{run_create, use_first_org_list};
+use task_ui_core::feeds;
+use task_ui_core::format::slugify;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
+use uuid::Uuid;
 
-use crate::orgs::{OrgMeta, OrgSelection};
-use crate::stores;
+/// This app's id in Task's catalog, and the first segment of every
+/// link it writes to itself.
+pub const APP_ID: &str = "bookings";
+
+feeds! {
+    scheduling_proto::EventTypesClient {
+        /// All bookable event types for the org (30-min consults, etc.).
+        fetch_event_types() -> Vec<scheduling_proto::EventType>
+            = list_event_types() as "list event types";
+
+        /// Create (upsert) a bookable event type, returning the persisted draft
+        /// so the optimistic store can reconcile against it. The backend derives
+        /// the vault `path` from the slug/id; the caller builds the entity (see
+        /// [`draft_event_type`]).
+        create_event_type(event_type: scheduling_proto::EventType) -> scheduling_proto::EventType
+            = upsert_event_type(event_type.clone()) map |()| event_type, as "create event type";
+    }
+
+    scheduling_proto::BookingsClient {
+        /// All bookings for the org (every status), oldest start first.
+        fetch_bookings() -> Vec<scheduling_proto::Booking>
+            = list_bookings() as "list bookings";
+
+        /// Cancel a booking by id (sets status to `Cancelled`).
+        cancel_booking(id: &str) -> ()
+            = update_booking_status(scheduling_proto::BookingId(id.to_owned()), scheduling_proto::BookingStatus::Cancelled) as "cancel booking";
+    }
+}
+
+task_stores::stores! {
+    BookingStore: scheduling_proto::Booking {
+        provide: provide_booking_store,
+        handle: use_booking_store,
+        stream:
+            /// Live bookings off the slice's one `SchedulingEvent`
+            /// stream (ignores the other sub-resource variants).
+            first scheduling_proto::SchedulingEventsStreamClient => fold_booking_event,
+        mutations: BookingMutations via use_booking_mutations,
+    }
+
+    EventTypeStore: scheduling_proto::EventType {
+        provide: provide_event_type_store,
+        handle: use_event_type_store,
+        list: use_event_type_list -> String = fetch_event_types,
+        stream:
+            /// Live event types off the same `SchedulingEvent` stream.
+            first scheduling_proto::SchedulingEventsStreamClient => fold_event_type_event,
+        mutations: EventTypeMutations via use_event_type_mutations,
+    }
+}
+
+/// Bookings off the slice's one `SchedulingEvent` stream (event types
+/// below; day plans stay fetch-shaped and belong to core scheduling).
+fn fold_booking_event(store: &BookingStore, _slug: &str, ev: scheduling_proto::SchedulingEvent) {
+    if let scheduling_proto::SchedulingEvent::BookingUpserted(b) = ev {
+        store.put(b);
+    }
+}
+
+/// Event types off the same stream (see [`fold_booking_event`]).
+fn fold_event_type_event(
+    store: &EventTypeStore,
+    _slug: &str,
+    ev: scheduling_proto::SchedulingEvent,
+) {
+    match ev {
+        scheduling_proto::SchedulingEvent::EventTypeUpserted(et) => store.put(et),
+        scheduling_proto::SchedulingEvent::EventTypeDeleted(id) => store.remove_real(&id),
+        _ => {}
+    }
+}
+
+/// Bookings for the first selected org, soonest start first.
+pub fn use_booking_list()
+-> architect::AtomResult<Vec<(Id<String>, scheduling_proto::Booking)>, String> {
+    use_first_org_list(use_booking_store(), |slug| async move {
+        fetch_bookings(&slug).await.map(|mut rows| {
+            rows.sort_by(|a, b| a.start_utc.cmp(&b.start_utc));
+            rows
+        })
+    })
+}
+
+impl BookingMutations {
+    /// Cancel a booking: the row vanishes instantly; restored (and the
+    /// failure reported) if the server rejects it.
+    pub fn cancel(&self, slug: String, id: String) {
+        let key = id.clone();
+        self.write.run(
+            self.store,
+            move |s| s.remove_optimistic(Id::Real(key)),
+            move || async move { cancel_booking(&slug, &id).await.map(|()| None) },
+        );
+    }
+}
+
+/// Draft a bookable event type (client-minted stable id; the backend
+/// derives the vault `path`).
+#[must_use]
+pub fn draft_event_type(title: String, duration_min: u16) -> scheduling_proto::EventType {
+    let url_slug = slugify(&title);
+    scheduling_proto::EventType {
+        path: String::new(),
+        id: scheduling_proto::EventTypeId(Uuid::new_v4().to_string()),
+        title,
+        slug: url_slug,
+        description: None,
+        duration_min,
+        buffer_min: 0,
+        location: scheduling_proto::EventTypeLocation::Tbd,
+        schedule_id: None,
+        published: true,
+    }
+}
+
+impl EventTypeMutations {
+    pub fn create(&self, slug: String, draft: scheduling_proto::EventType) {
+        run_create(self.write, self.store, draft, move |et| async move {
+            create_event_type(&slug, et).await
+        });
+    }
+}
 
 const INPUT_CLS: &str = "rounded-lg border border-input bg-input/30 px-3 py-2 text-sm transition-colors \
      focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] \
@@ -37,7 +162,7 @@ pub fn BookingsView() -> Element {
 
     // The org we list / create into (first selected, or home).
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -48,11 +173,11 @@ pub fn BookingsView() -> Element {
     let duration_pick = use_signal(|| "30".to_string());
 
     // Shared optimistic stores for both halves of the page.
-    let types_result = stores::use_event_type_list();
-    let type_muts = stores::use_event_type_mutations();
-    let event_type_store = stores::use_event_type_store();
-    let bookings_result = stores::use_booking_list();
-    let booking_store = stores::use_booking_store();
+    let types_result = crate::use_event_type_list();
+    let type_muts = crate::use_event_type_mutations();
+    let event_type_store = crate::use_event_type_store();
+    let bookings_result = crate::use_booking_list();
+    let booking_store = crate::use_booking_store();
 
     // Create the drafted event type: it appears instantly, then
     // reconciles against the persisted entity.
@@ -64,7 +189,7 @@ pub fn BookingsView() -> Element {
         let Some(s) = slug() else { return };
         let d = duration();
         title.set(String::new());
-        type_muts.create(s, stores::draft_event_type(t, d));
+        type_muts.create(s, crate::draft_event_type(t, d));
     };
 
     let types: Vec<(Id<String>, EventType)> = types_result.value().cloned().unwrap_or_default();
@@ -124,16 +249,16 @@ pub fn BookingsView() -> Element {
             // ── Event types ────────────────────────────────────────
             Heading { level: HeadingLevel::H2, class: "text-base", "Event types" }
             if types_first_load {
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             } else if types.is_empty() {
                 if let Some(err) = types_err {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load event types",
                         message: err,
                         on_retry: move |()| event_type_store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "No event types yet",
                         hint: "Add your first event type above.",
                     }
@@ -149,16 +274,16 @@ pub fn BookingsView() -> Element {
             // ── Bookings ───────────────────────────────────────────
             Heading { level: HeadingLevel::H2, class: "text-base mt-2", "Upcoming bookings" }
             if bookings_first_load {
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             } else if rows.is_empty() {
                 if let Some(err) = bookings_err {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load bookings",
                         message: err,
                         on_retry: move |()| booking_store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "No bookings yet",
                         hint: "Bookings people make will appear here.",
                     }
@@ -217,7 +342,7 @@ fn EventTypeRow(event_type: EventType, pending: bool) -> Element {
 /// tray. `pending` dims an in-flight optimistic row.
 #[component]
 fn BookingRow(booking: Booking, pending: bool, slug: String) -> Element {
-    let muts = stores::use_booking_mutations();
+    let muts = crate::use_booking_mutations();
     let who = booking.attendee_name.clone();
     let email = booking.attendee_email.clone();
     let when = booking.start_utc.clone();

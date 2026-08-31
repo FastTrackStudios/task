@@ -20,6 +20,7 @@ task-plugin-recall = { workspace = true }
 task-plugin-agent = { workspace = true }
 task-plugin-studio = { workspace = true }
 task-plugin-git = { workspace = true }
+task-plugin-bookings = { workspace = true }
 
 [lints]
 workspace = true

@@ -82,6 +82,7 @@ members = [
     "apps/plugins/agent",
     "apps/plugins/studio",
     "apps/plugins/git",
+    "apps/plugins/bookings",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -156,6 +157,7 @@ members = [
     "features/scheduling/scheduling",
     "features/scheduling/scheduling-proto",
     "features/scheduling/scheduling-ui",
+    "features/scheduling/bookings-ui",
     "features/scripture/scripture",
     "features/scripture/scripture-proto",
     "features/scripture/scripture-ui",
@@ -255,6 +257,7 @@ task-plugin-recall = { path = "apps/plugins/recall" }
 task-plugin-agent = { path = "apps/plugins/agent" }
 task-plugin-studio = { path = "apps/plugins/studio" }
 task-plugin-git = { path = "apps/plugins/git" }
+task-plugin-bookings = { path = "apps/plugins/bookings" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
@@ -365,6 +368,7 @@ resources-ui = { path = "features/resources/resources-ui" }
 resources-proto = { path = "features/resources/resources-proto", default-features = false }
 scheduling = { path = "features/scheduling/scheduling" }
 scheduling-proto = { path = "features/scheduling/scheduling-proto", default-features = false }
+bookings-ui = { path = "features/scheduling/bookings-ui" }
 scheduling-ui = { path = "features/scheduling/scheduling-ui" }
 scripture = { path = "features/scripture/scripture" }
 scripture-proto = { path = "features/scripture/scripture-proto", default-features = false }

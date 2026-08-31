@@ -56,9 +56,6 @@ pub enum Route {
         #[route("/schedule")]
         ScheduleRoute {},
 
-        #[route("/bookings")]
-        BookingsRoute {},
-
         #[route("/gantt")]
         GanttRoute {},
 
@@ -308,13 +305,6 @@ fn MilestonesRoute() -> Element {
 fn ScheduleRoute() -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "scheduling", pages::schedule::ScheduleView {} }
-    }
-}
-
-#[component]
-fn BookingsRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "scheduling", pages::bookings::BookingsView {} }
     }
 }
 

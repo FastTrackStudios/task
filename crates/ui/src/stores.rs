@@ -52,7 +52,7 @@ use task_ui::TaskMutation;
 use timer_proto::{StartTimerRequest, WorkSession};
 use uuid::Uuid;
 
-use task_stores::{run_create, use_first_org_list, use_multi_org_list, use_org_scope};
+use task_stores::{run_create, use_multi_org_list, use_org_scope};
 
 task_stores::stores! {
     TaskStore: OrgTask {
@@ -132,26 +132,6 @@ task_stores::stores! {
             /// wire, so the row we sent doubles as the reconciled value (the id is
             /// client-minted and stable).
             ContactMutations via use_contact_mutations,
-    }
-
-    BookingStore: scheduling_proto::Booking {
-        provide: provide_booking_store,
-        handle: use_booking_store,
-        stream:
-            /// Live bookings off the slice's one `SchedulingEvent`
-            /// stream (ignores the other sub-resource variants).
-            first scheduling_proto::SchedulingEventsStreamClient => fold_booking_event,
-        mutations: BookingMutations via use_booking_mutations,
-    }
-
-    EventTypeStore: scheduling_proto::EventType {
-        provide: provide_event_type_store,
-        handle: use_event_type_store,
-        list: use_event_type_list -> String = crate::feeds::fetch_event_types,
-        stream:
-            /// Live event types off the same `SchedulingEvent` stream.
-            first scheduling_proto::SchedulingEventsStreamClient => fold_event_type_event,
-        mutations: EventTypeMutations via use_event_type_mutations,
     }
 
     DayPlanStore: DayPlanRow {
@@ -256,29 +236,6 @@ fn fold_timer_event(store: &SessionStore, slug: &str, ev: timer_proto::TimerEven
             session,
         }),
         timer_proto::TimerEvent::Deleted(id) => store.remove_real(&id),
-    }
-}
-
-/// Bookings off the slice-wide [`scheduling_proto::SchedulingEvent`]
-/// stream — the other sub-resource variants are for other stores
-/// (event types below; day plans stay fetch-shaped, see
-/// [`use_dayplan_list`]).
-fn fold_booking_event(store: &BookingStore, _slug: &str, ev: scheduling_proto::SchedulingEvent) {
-    if let scheduling_proto::SchedulingEvent::BookingUpserted(b) = ev {
-        store.put(b);
-    }
-}
-
-/// Event types off the same stream (see [`fold_booking_event`]).
-fn fold_event_type_event(
-    store: &EventTypeStore,
-    _slug: &str,
-    ev: scheduling_proto::SchedulingEvent,
-) {
-    match ev {
-        scheduling_proto::SchedulingEvent::EventTypeUpserted(et) => store.put(et),
-        scheduling_proto::SchedulingEvent::EventTypeDeleted(id) => store.remove_real(&id),
-        _ => {}
     }
 }
 
@@ -784,61 +741,6 @@ impl ContactMutations {
                     .map(|()| None)
             },
         );
-    }
-}
-
-// ── bookings + event types ──────────────────────────────────────────
-
-/// Bookings for the first selected org, soonest start first.
-pub fn use_booking_list() -> AtomResult<Vec<(Id<String>, scheduling_proto::Booking)>, String> {
-    use_first_org_list(use_booking_store(), |slug| async move {
-        crate::feeds::fetch_bookings(&slug).await.map(|mut rows| {
-            rows.sort_by(|a, b| a.start_utc.cmp(&b.start_utc));
-            rows
-        })
-    })
-}
-
-impl BookingMutations {
-    /// Cancel a booking: the row vanishes instantly; restored (and the
-    /// failure reported) if the server rejects it.
-    pub fn cancel(&self, slug: String, id: String) {
-        let key = id.clone();
-        self.write.run(
-            self.store,
-            move |s| s.remove_optimistic(Id::Real(key)),
-            move || async move {
-                crate::feeds::cancel_booking(&slug, &id)
-                    .await
-                    .map(|()| None)
-            },
-        );
-    }
-}
-
-/// Draft a bookable event type (client-minted stable id; the backend
-/// derives the vault `path`).
-pub fn draft_event_type(title: String, duration_min: u16) -> scheduling_proto::EventType {
-    let url_slug = crate::feeds::slugify(&title);
-    scheduling_proto::EventType {
-        path: String::new(),
-        id: scheduling_proto::EventTypeId(Uuid::new_v4().to_string()),
-        title,
-        slug: url_slug,
-        description: None,
-        duration_min,
-        buffer_min: 0,
-        location: scheduling_proto::EventTypeLocation::Tbd,
-        schedule_id: None,
-        published: true,
-    }
-}
-
-impl EventTypeMutations {
-    pub fn create(&self, slug: String, draft: scheduling_proto::EventType) {
-        run_create(self.write, self.store, draft, move |et| async move {
-            crate::feeds::create_event_type(&slug, et).await
-        });
     }
 }
 
