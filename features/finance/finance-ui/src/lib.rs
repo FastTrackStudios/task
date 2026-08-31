@@ -666,8 +666,15 @@ fn status_badge(s: &InvoiceStatus) -> (StatusBadgeVariant, &'static str) {
 const FIELD: &str = "w-full rounded-lg border border-input bg-input/30 px-3 py-2 text-sm outline-none \
      focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 placeholder:text-muted-foreground";
 
+/// The invoices screen.
+///
+/// `sent` is work another app handed over — see `offer_integrations`.
+/// It is a display hint, not a command: the invoice still gets raised
+/// through the normal flow, with a person deciding the terms. An app
+/// that could write into this ledger without anybody looking would be
+/// a worse thing to have built.
 #[component]
-pub fn InvoicesView() -> Element {
+pub fn InvoicesView(#[props(default)] sent: Option<finance_contract::Billable>) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
     let slugs =
@@ -757,6 +764,21 @@ pub fn InvoicesView() -> Element {
                 Heading { level: HeadingLevel::H1, class: "tracking-tight", "Invoices" }
                 Text { variant: TextVariant::Muted,
                     "Everything you're owed, at a glance — generate from billable time, bill a contact, track what's paid."
+                }
+            }
+
+            // Work another app sent here to be billed. A prompt, not a
+            // pending action: this app still asks who, at what rate, on
+            // what terms, and nothing is created until somebody says so.
+            if let Some(work) = sent.clone() {
+                Card { class: "border-primary/30 bg-primary/5 p-3".to_string(),
+                    div { class: "flex flex-col gap-0.5",
+                        span { class: "text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground",
+                            "Sent here to bill"
+                        }
+                        Text { class: "text-sm font-medium", "{work.what}" }
+                        Text { variant: TextVariant::Muted, class: "text-xs", "{sent_detail(&work)}" }
+                    }
                 }
             }
 
@@ -1407,5 +1429,50 @@ fn TransactionRow(txn: Transaction, acct_names: HashMap<Uuid, String>) -> Elemen
                 }
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// What this app offers other apps
+// ─────────────────────────────────────────────────────────────────────
+
+/// This app's id in Task's catalog.
+pub const APP_ID: &str = "finance";
+
+/// Where to go to bill a piece of work another app is holding.
+///
+/// The invoices screen, with the work prefilled. A URL rather than a
+/// call, because raising an invoice is a decision with a form attached
+/// — who exactly, what rate, what terms — and an app that could
+/// silently write into another app's ledger would be a worse thing to
+/// have built. See `finance_contract::Billing`.
+fn bill_href(work: &finance_contract::Billable) -> String {
+    let query = format!(
+        "bill={}&client={}&minutes={}",
+        task_plugin_ui::encode(&work.what),
+        task_plugin_ui::encode(&work.client),
+        work.minutes,
+    );
+    task_plugin_ui::href(APP_ID, "invoices", &query)
+}
+
+/// Offer billing to any app that wants it. Called from this app's
+/// `provide`, so it happens once at the app root.
+pub fn offer_integrations() {
+    task_plugin_ui::offer(APP_ID, finance_contract::Billing { bill_href });
+}
+
+/// The subtitle under work another app sent to be billed: who it was
+/// for, and how long it took when the sending app knew.
+fn sent_detail(work: &finance_contract::Billable) -> String {
+    let who = if work.client.trim().is_empty() {
+        "No client named"
+    } else {
+        work.client.trim()
+    };
+    if work.minutes > 0 {
+        format!("{who} · {} min", work.minutes)
+    } else {
+        who.to_string()
     }
 }

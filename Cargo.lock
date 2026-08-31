@@ -2287,7 +2287,9 @@ dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
  "dioxus",
+ "finance-contract",
  "scheduling-proto",
+ "task-plugin-ui",
  "task-stores",
  "task-ui-core",
  "uuid",
@@ -7565,6 +7567,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "finance-contract"
+version = "0.1.0"
+
+[[package]]
 name = "finance-db"
 version = "0.1.0"
 dependencies = [
@@ -7608,8 +7614,10 @@ dependencies = [
  "chrono",
  "contacts-proto",
  "dioxus",
+ "finance-contract",
  "finance-proto",
  "project-proto",
+ "task-plugin-ui",
  "task-stores",
  "task-ui-core",
  "timer-proto",
@@ -21029,6 +21037,7 @@ dependencies = [
 name = "task-plugin-finance"
 version = "0.1.0"
 dependencies = [
+ "finance-contract",
  "finance-ui",
  "task-plugin-ui",
 ]

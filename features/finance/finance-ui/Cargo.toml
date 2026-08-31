@@ -14,6 +14,8 @@ architect-ui.workspace = true
 chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
 dioxus = { workspace = true }
 finance-proto = { workspace = true, features = ["vox"] }
+finance-contract = { workspace = true }
+task-plugin-ui = { workspace = true }
 task-stores = { workspace = true }
 task-ui-core = { workspace = true }
 uuid = { workspace = true }

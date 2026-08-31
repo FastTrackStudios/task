@@ -462,6 +462,92 @@ impl PluginApp {
 /// and a build with different features registers a different set.
 static REGISTRY: std::sync::RwLock<Vec<PluginApp>> = std::sync::RwLock::new(Vec::new());
 
+// ─────────────────────────────────────────────────────────────────────
+// Apps offering each other things
+// ─────────────────────────────────────────────────────────────────────
+//
+// Everything above is an app talking to the *shell*. This is the other
+// conversation: bookings wanting to raise an invoice, which is
+// finance's business and not something the shell should broker.
+//
+// The rule that shapes it is that neither app may require the other.
+// Bookings has to work with finance turned off, and finance has to
+// build in a version of Task that has no bookings — so a crate
+// dependency between them is out, and so is anything that fails when
+// the other end is missing.
+//
+// What is left is: a **contract crate** holds the type, both apps
+// depend on that and not on each other, the offering app registers a
+// value, and the asking app gets an `Option`. The type is the key —
+// there is no name to spell wrong, no registry of strings to keep in
+// sync, and a contract that changes shape is a compile error in both
+// apps rather than a lookup that silently stops matching.
+
+type Offers = std::collections::HashMap<std::any::TypeId, (&'static str, ArcAny)>;
+type ArcAny = std::sync::Arc<dyn std::any::Any + Send + Sync>;
+
+static OFFERS: std::sync::RwLock<Option<Offers>> = std::sync::RwLock::new(None);
+
+/// Offer something to the other apps.
+///
+/// Call from the offering app's `provide`, or from the composition
+/// root. `T` comes from a contract crate both ends depend on:
+///
+/// ```ignore
+/// // in finance's `provide`
+/// task_plugin_ui::offer("finance", finance_contract::Billing { bill });
+///
+/// // in bookings, wherever the button would go
+/// if let Some(billing) = task_plugin_ui::offered::<Billing>(|id| enabled.contains(id)) {
+///     // render "Invoice this" → (billing.bill)(work)
+/// }
+/// ```
+///
+/// One offer per type wins: offering the same `T` twice replaces the
+/// first, on the same reasoning as registering an app id twice.
+pub fn offer<T: std::any::Any + Send + Sync>(app: &'static str, value: T) {
+    OFFERS
+        .write()
+        .expect("plugin offers poisoned")
+        .get_or_insert_with(Default::default)
+        .insert(
+            std::any::TypeId::of::<T>(),
+            (app, std::sync::Arc::new(value)),
+        );
+}
+
+/// What some app offers of this type, if any app enabled here does.
+///
+/// `None` is the ordinary case, not an error: the other app is not in
+/// this build, or is turned off for this org. A caller that gets `None`
+/// should simply not show that affordance — an integration is a thing
+/// an app *gains*, never a thing it needs.
+///
+/// Filtered by `enabled` for the same reason screens and claims are: an
+/// org that turned finance off should not be offered a way into it.
+#[must_use]
+pub fn offered<T: std::any::Any + Send + Sync>(
+    enabled: impl Fn(&str) -> bool,
+) -> Option<std::sync::Arc<T>> {
+    let guard = OFFERS.read().expect("plugin offers poisoned");
+    let (app, value) = guard.as_ref()?.get(&std::any::TypeId::of::<T>())?;
+    if !enabled(app) {
+        return None;
+    }
+    value.clone().downcast::<T>().ok()
+}
+
+/// Which app offered this type, enabled or not — for a settings screen
+/// explaining why an integration is not showing.
+#[must_use]
+pub fn offered_by<T: std::any::Any + Send + Sync>() -> Option<&'static str> {
+    let guard = OFFERS.read().expect("plugin offers poisoned");
+    guard
+        .as_ref()?
+        .get(&std::any::TypeId::of::<T>())
+        .map(|(a, _)| *a)
+}
+
 /// Register an app. Call from the composition root, before launch.
 ///
 /// Registering the same id twice replaces the first: a build that
@@ -766,6 +852,62 @@ mod tests {
     fn a_malformed_escape_keeps_its_characters() {
         assert_eq!(decode("100%"), "100%");
         assert_eq!(decode("a%zz"), "a%zz");
+    }
+
+    // ── apps offering each other things ─────────────────────────────
+
+    /// The shape of a real contract: finance says where to go to bill
+    /// something, bookings renders a button to there.
+    struct Billing {
+        bill: fn(&str) -> String,
+    }
+
+    /// A second, unrelated contract — proves the type is the key.
+    struct Transcribing;
+
+    #[test]
+    fn an_app_finds_what_another_offers() {
+        offer(
+            "test-finance",
+            Billing {
+                bill: |what| format!("bill:{what}"),
+            },
+        );
+        let billing = offered::<Billing>(|_| true).expect("finance offers it");
+        assert_eq!((billing.bill)("booking-7"), "bill:booking-7");
+    }
+
+    /// The case the whole mechanism exists for. An app must work with
+    /// the other end turned off — and get `None`, not a panic and not
+    /// a stale value.
+    #[test]
+    fn an_offer_from_a_disabled_app_is_not_available() {
+        offer(
+            "test-finance",
+            Billing {
+                bill: |_| String::new(),
+            },
+        );
+        assert!(offered::<Billing>(|id| id != "test-finance").is_none());
+    }
+
+    #[test]
+    fn a_contract_nobody_offers_is_simply_absent() {
+        assert!(offered::<Transcribing>(|_| true).is_none());
+        assert!(offered_by::<Transcribing>().is_none());
+    }
+
+    /// Who offered it is answerable even when it is not available, so
+    /// a settings screen can say *why* an integration is missing.
+    #[test]
+    fn the_offering_app_is_nameable_even_when_off() {
+        offer(
+            "test-finance",
+            Billing {
+                bill: |_| String::new(),
+            },
+        );
+        assert_eq!(offered_by::<Billing>(), Some("test-finance"));
     }
 
     /// An app linking to its own screens — the same URL the shell

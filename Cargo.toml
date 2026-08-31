@@ -96,6 +96,7 @@ members = [
     "features/files/files-webdav",
     "features/finance/finance",
     "features/finance/finance-db",
+    "features/finance/finance-contract",
     "features/finance/finance-proto",
     "features/finance/finance-ui",
     "features/fitness/body",
@@ -311,6 +312,7 @@ cycle = { path = "features/cycle/cycle", default-features = false }
 exercises = { path = "features/fitness/exercises" }
 finance = { path = "features/finance/finance" }
 finance-db = { path = "features/finance/finance-db" }
+finance-contract = { path = "features/finance/finance-contract" }
 finance-proto = { path = "features/finance/finance-proto", default-features = false }
 finance-ui = { path = "features/finance/finance-ui" }
 fitness-proto = { path = "features/fitness/fitness-proto", default-features = false }

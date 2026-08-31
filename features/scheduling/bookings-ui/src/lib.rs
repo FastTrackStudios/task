@@ -366,6 +366,17 @@ fn BookingRow(booking: Booking, pending: bool, slug: String) -> Element {
         muts.cancel(slug.clone(), id.clone());
     };
 
+    // If some enabled app knows how to bill things, a booking that
+    // actually happened can be billed. Nothing here knows that app is
+    // finance, or that an invoice exists — only that somebody offered
+    // `Billing`, and where it says to go.
+    //
+    // `None` is the ordinary case and not a failure: finance is not in
+    // this build, or is off for this org, and the row simply has one
+    // fewer action. That is the whole contract — an integration is
+    // something an app gains, never something it needs.
+    let bill_to = use_billing_href(&booking);
+
     rsx! {
         div { class: "flex items-center gap-3 rounded-lg border px-3 py-2 {state_cls}",
             div { class: "flex min-w-0 flex-1 flex-col gap-1",
@@ -375,6 +386,13 @@ fn BookingRow(booking: Booking, pending: bool, slug: String) -> Element {
             }
             div { class: "flex shrink-0 items-center gap-2",
                 StatusBadge { variant, label: label.to_string() }
+                if let Some(to) = bill_to {
+                    Link {
+                        to,
+                        class: "text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline",
+                        "Invoice…"
+                    }
+                }
                 Button {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::Small,
@@ -384,4 +402,40 @@ fn BookingRow(booking: Booking, pending: bool, slug: String) -> Element {
             }
         }
     }
+}
+
+/// Where to bill this booking, if any enabled app offers billing.
+///
+/// Every hook runs before any decision — a booking's status changes
+/// under this (that is the whole point of a live store), and an early
+/// return above a `use_context` would change how many hooks this
+/// component ran between renders, which Dioxus cannot survive.
+fn use_billing_href(booking: &Booking) -> Option<String> {
+    let selection = use_context::<Signal<OrgSelection>>();
+    let org_list = use_context::<Signal<Vec<OrgMeta>>>();
+    // The event type carries the name and the length; the booking only
+    // points at it.
+    let types = use_event_type_list();
+
+    // Only a booking that happened. Offering to invoice a cancelled
+    // slot, or one that has not occurred yet, is offering a mistake.
+    if !matches!(booking.status, BookingStatus::Completed) {
+        return None;
+    }
+    let enabled = task_ui_core::orgs::active_plugin_set(&selection.read(), &org_list.read());
+    let billing = task_plugin_ui::offered::<finance_contract::Billing>(|id| enabled.contains(id))?;
+
+    let event_type = types.value().and_then(|rows| {
+        rows.iter()
+            .map(|(_, et)| et)
+            .find(|et| et.id == booking.event_type_id)
+            .cloned()
+    });
+    Some((billing.bill_href)(&finance_contract::Billable {
+        what: event_type
+            .as_ref()
+            .map_or_else(|| "Booking".to_string(), |et| et.title.clone()),
+        client: booking.attendee_name.clone(),
+        minutes: event_type.map_or(0, |et| u32::from(et.duration_min)),
+    }))
 }

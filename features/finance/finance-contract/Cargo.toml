@@ -1,0 +1,17 @@
+[package]
+name = "finance-contract"
+description = "What finance offers other apps — the types, and nothing else. Depended on by both ends of an integration, so neither depends on the other."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Deliberately empty. A contract crate that grows a dependency starts
+# forcing that dependency on everyone who wants to integrate, which is
+# the coupling the split exists to avoid.
+[dependencies]
+
+[lints]
+workspace = true
