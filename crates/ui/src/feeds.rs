@@ -705,7 +705,12 @@ feeds! {
     }
 }
 
-// ── finance / invoicing ─────────────────────────────────────────────
+// ── the invoicing service, for the project budget panel ─────────────
+//
+// Two reads, and deliberately only two. Finance is an app now and owns
+// the money screens; these stay because a project page shows what has
+// been billed against that project — the *project* page asking a
+// server capability a question, not the shell reaching into an app.
 
 async fn invoicing(slug: &str) -> Result<finance_proto::InvoicingClient, String> {
     crate::vox_clients::establish_for::<finance_proto::InvoicingClient>(slug).await
@@ -727,163 +732,6 @@ pub async fn fetch_uninvoiced(slug: &str) -> Result<Vec<finance_proto::Uninvoice
         .uninvoiced()
         .await
         .map_err(|e| format!("{slug}: uninvoiced: {e:?}"))
-}
-
-/// Generate + persist a draft invoice from a project's billable time.
-pub async fn generate_invoice(
-    slug: &str,
-    req: finance_proto::GenerateInvoice,
-) -> Result<finance_proto::Invoice, String> {
-    invoicing(slug)
-        .await?
-        .generate_invoice(req)
-        .await
-        .map_err(|e| format!("{slug}: generate invoice: {e:?}"))
-}
-
-/// Issue an invoice (assign number, lock).
-pub async fn invoice_mark_sent(
-    slug: &str,
-    id: uuid::Uuid,
-) -> Result<finance_proto::Invoice, String> {
-    invoicing(slug)
-        .await?
-        .mark_sent(id)
-        .await
-        .map_err(|e| format!("{slug}: mark sent: {e:?}"))
-}
-
-/// Record a payment against an invoice.
-pub async fn invoice_record_payment(
-    slug: &str,
-    id: uuid::Uuid,
-    amount_minor: i64,
-    date: String,
-) -> Result<finance_proto::Invoice, String> {
-    invoicing(slug)
-        .await?
-        .record_invoice_payment(id, amount_minor, date)
-        .await
-        .map_err(|e| format!("{slug}: record payment: {e:?}"))
-}
-
-/// Delete a draft invoice (un-bills its sessions).
-pub async fn invoice_delete(slug: &str, id: uuid::Uuid) -> Result<(), String> {
-    invoicing(slug)
-        .await?
-        .delete_invoice(id)
-        .await
-        .map_err(|e| format!("{slug}: delete invoice: {e:?}"))
-}
-
-// ── finance / ledger ────────────────────────────────────────────────
-
-async fn ledger(slug: &str) -> Result<finance_proto::LedgerClient, String> {
-    crate::vox_clients::establish_for::<finance_proto::LedgerClient>(slug).await
-}
-
-/// Resolve the org's (single) finance book id, if one exists yet.
-async fn ledger_book_id(
-    client: &finance_proto::LedgerClient,
-    slug: &str,
-) -> Result<Option<uuid::Uuid>, String> {
-    let books = client
-        .books()
-        .await
-        .map_err(|e| format!("{slug}: books: {e:?}"))?;
-    Ok(books.first().map(|b| b.id))
-}
-
-/// Every account in an org's (single) book, paired with its current
-/// balance. Returns `(account, balance)` rows. Empty when the org has
-/// no book / accounts yet.
-pub async fn fetch_ledger_accounts(
-    slug: &str,
-) -> Result<Vec<(finance_proto::Account, finance_proto::AccountBalance)>, String> {
-    let client = ledger(slug).await?;
-    let Some(book_id) = ledger_book_id(&client, slug).await? else {
-        return Ok(Vec::new());
-    };
-    let accounts = client
-        .accounts(book_id)
-        .await
-        .map_err(|e| format!("{slug}: accounts: {e:?}"))?;
-    let balances = client
-        .balances(book_id, None)
-        .await
-        .map_err(|e| format!("{slug}: balances: {e:?}"))?;
-    let out = accounts
-        .into_iter()
-        .map(|a| {
-            let bal = balances
-                .iter()
-                .find(|b| b.account_id == a.id)
-                .cloned()
-                .unwrap_or_else(|| finance_proto::AccountBalance {
-                    account_id: a.id,
-                    balance_minor: a.opening_balance_minor,
-                    currency: a.currency.clone(),
-                });
-            (a, bal)
-        })
-        .collect();
-    Ok(out)
-}
-
-/// Recent ledger transactions across every account in an org's book,
-/// newest first. Pulls each account's history and de-dupes by
-/// transaction id (a double-entry txn touches ≥2 accounts).
-pub async fn fetch_ledger_transactions(
-    slug: &str,
-) -> Result<Vec<finance_proto::Transaction>, String> {
-    let client = ledger(slug).await?;
-    let Some(book_id) = ledger_book_id(&client, slug).await? else {
-        return Ok(Vec::new());
-    };
-    let accounts = client
-        .accounts(book_id)
-        .await
-        .map_err(|e| format!("{slug}: accounts: {e:?}"))?;
-    let mut seen = std::collections::HashSet::new();
-    let mut out: Vec<finance_proto::Transaction> = Vec::new();
-    for a in accounts {
-        let txns = client
-            .account_transactions(a.id, None, None, 100)
-            .await
-            .map_err(|e| format!("{slug}: account transactions: {e:?}"))?;
-        for t in txns {
-            if seen.insert(t.id) {
-                out.push(t);
-            }
-        }
-    }
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Ok(out)
-}
-
-/// Invoices across several orgs, slug-tagged, newest first.
-pub async fn fetch_invoices_multi(slugs: &[String]) -> Vec<(String, finance_proto::Invoice)> {
-    let mut out = Vec::new();
-    for slug in slugs {
-        if let Ok(rows) = fetch_invoices(slug).await {
-            out.extend(rows.into_iter().map(|i| (slug.clone(), i)));
-        }
-    }
-    out.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at));
-    out
-}
-
-/// Uninvoiced groups across several orgs, slug-tagged.
-pub async fn fetch_uninvoiced_multi(
-    slugs: &[String],
-) -> Vec<(String, finance_proto::UninvoicedGroup)> {
-    let mut out = Vec::new();
-    for slug in slugs {
-        if let Ok(rows) = fetch_uninvoiced(slug).await {
-            out.extend(rows.into_iter().map(|g| (slug.clone(), g)));
-        }
-    }
-    out
 }
 
 /// Fetch one org's vault markdown as `WikiFile`s for the knowledge

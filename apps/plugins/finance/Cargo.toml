@@ -1,0 +1,16 @@
+[package]
+name = "task-plugin-finance"
+description = "Finance as a Task app: the money screens, invoicing and the ledger."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-plugin-ui = { workspace = true }
+finance-ui = { workspace = true }
+
+[lints]
+workspace = true

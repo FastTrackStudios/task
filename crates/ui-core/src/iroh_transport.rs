@@ -209,9 +209,7 @@ pub async fn dial(
     bearer: Option<&str>,
 ) -> Result<(vox_core::Caller, Option<vox_core::ConnectionHandle>), String> {
     let endpoint = device_endpoint().await?;
-    let remote: iroh::EndpointId = id
-        .parse()
-        .map_err(|e| format!("endpoint id `{id}`: {e}"))?;
+    let remote: iroh::EndpointId = id.parse().map_err(|e| format!("endpoint id `{id}`: {e}"))?;
     let link = iroh_link::connect(&endpoint, remote)
         .await
         .map_err(|e| format!("iroh dial {id}: {e}"))?;

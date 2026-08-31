@@ -73,3 +73,69 @@ mod tests {
         assert_eq!(initials(""), "?");
     }
 }
+
+// ── the components ──────────────────────────────────────────────────
+//
+// Here for the same reason the palette is: a person has to look the
+// same everywhere, and "everywhere" now includes crates that cannot
+// depend on the shell — files-ui's review rail, and every app that
+// shows who something belongs to.
+
+use architect_ui::prelude::*;
+use dioxus::prelude::*;
+
+/// The initials disc: a deterministic gradient from the person's email
+/// (or name, for presence rows that predate account identity) and their
+/// initials over it.
+#[component]
+pub fn Avatar(name: String, email: String, #[props(default = 28)] size: u32) -> Element {
+    let key = if email.is_empty() { &name } else { &email };
+    let (from, to) = AVATAR_GRADIENTS[gradient_index(key)];
+    let letters = initials(&name);
+    // ~0.38em type within the disc, floored so 16px stays legible.
+    let font = (size * 2 / 5).max(7);
+    rsx! {
+        span {
+            class: "flex shrink-0 select-none items-center justify-center rounded-full font-semibold leading-none text-white",
+            style: "width:{size}px;height:{size}px;font-size:{font}px;background:linear-gradient(135deg,{from},{to});",
+            title: "{name}",
+            "{letters}"
+        }
+    }
+}
+
+/// A person, rendered the same way everywhere: [`Avatar`], the display
+/// name, an optional subtitle (email · org), and an optional badge
+/// (source or role).
+#[component]
+pub fn PersonChip(
+    name: String,
+    #[props(default)] email: String,
+    #[props(default)] subtitle: Option<String>,
+    #[props(default)] badge_label: Option<String>,
+    #[props(default)] badge_variant: StatusBadgeVariant,
+    #[props(default = 34)] size: u32,
+) -> Element {
+    rsx! {
+        div { class: "flex min-w-0 items-center gap-3",
+            Avatar { name: name.clone(), email: email.clone(), size }
+            div { class: "flex min-w-0 flex-col",
+                div { class: "flex items-center gap-1.5",
+                    span { class: "truncate text-sm font-medium text-foreground", "{name}" }
+                    if let Some(label) = badge_label.clone() {
+                        StatusBadge {
+                            variant: badge_variant,
+                            label,
+                            class: "px-1.5 py-0 text-[10px]".to_string(),
+                        }
+                    }
+                }
+                if let Some(sub) = subtitle.clone() {
+                    if !sub.is_empty() {
+                        span { class: "truncate text-xs text-muted-foreground", "{sub}" }
+                    }
+                }
+            }
+        }
+    }
+}

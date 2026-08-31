@@ -15,6 +15,7 @@ task-plugin-scripture = { workspace = true }
 task-plugin-email = { workspace = true }
 task-plugin-fitness = { workspace = true }
 task-plugin-home = { workspace = true }
+task-plugin-finance = { workspace = true }
 
 [lints]
 workspace = true

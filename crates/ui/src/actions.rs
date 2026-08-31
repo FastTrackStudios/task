@@ -95,7 +95,16 @@ pub fn intent_for(action_id: &str) -> Option<Intent> {
         NAV_PROJECTS => Intent::Nav(Route::ProjectsRoute {}),
         NAV_GOALS => Intent::Nav(Route::GoalsRoute {}),
         NAV_TIMER => Intent::Nav(Route::TimerRoute {}),
-        NAV_INVOICES => Intent::Nav(Route::InvoicesRoute {}),
+        // Invoices is an app now, so the shortcut names it the way any
+        // link does. The shortcut stays in the shell because a
+        // keybinding is the *person's*, not the app's — it should keep
+        // working, and keep meaning the same thing, whoever ships the
+        // screen behind it.
+        NAV_INVOICES => Intent::Nav(Route::PluginPathRoute {
+            app: "finance".into(),
+            path: vec!["invoices".into()],
+            q: String::new(),
+        }),
         NAV_VAULT => Intent::Nav(Route::VaultRoute {
             path: String::new(),
             org: String::new(),

@@ -44,38 +44,7 @@ pub fn source_badge(source: &str) -> (StatusBadgeVariant, &'static str) {
 /// A person, rendered the same way everywhere: initials avatar (color
 /// derived from the name/email), the display name, an optional subtitle
 /// (email · org), and an optional badge (source or role).
-#[component]
-pub fn PersonChip(
-    name: String,
-    #[props(default)] email: String,
-    #[props(default)] subtitle: Option<String>,
-    #[props(default)] badge_label: Option<String>,
-    #[props(default)] badge_variant: StatusBadgeVariant,
-    #[props(default = 34)] size: u32,
-) -> Element {
-    rsx! {
-        div { class: "flex min-w-0 items-center gap-3",
-            crate::auth::Avatar { name: name.clone(), email: email.clone(), size }
-            div { class: "flex min-w-0 flex-col",
-                div { class: "flex items-center gap-1.5",
-                    span { class: "truncate text-sm font-medium text-foreground", "{name}" }
-                    if let Some(label) = badge_label.clone() {
-                        StatusBadge {
-                            variant: badge_variant,
-                            label,
-                            class: "px-1.5 py-0 text-[10px]".to_string(),
-                        }
-                    }
-                }
-                if let Some(sub) = subtitle.clone() {
-                    if !sub.is_empty() {
-                        span { class: "truncate text-xs text-muted-foreground", "{sub}" }
-                    }
-                }
-            }
-        }
-    }
-}
+pub use task_ui_core::avatar::PersonChip;
 
 /// The name the ledger shows for a contact — `full_name`, falling back
 /// to the organization, then a placeholder.

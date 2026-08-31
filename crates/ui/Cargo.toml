@@ -96,6 +96,11 @@ links-proto = { workspace = true, features = ["vox"] }
 # DTOs for the `/watch` synced transcript. `vox` only.
 resources-proto = { workspace = true, features = ["vox"] }
 milestone-proto = { workspace = true, features = ["vox", "atom"] }
+# The invoicing *service*, for one thing only: a project's budget panel
+# shows what has been billed against it. That is the shell reading a
+# server capability, not depending on the finance app — the same
+# arrangement finance-ui has with contacts and projects, in the other
+# direction.
 finance-proto = { workspace = true, features = ["vox"] }
 # Mealplan suite wire surface — cookbook (recipes) / pantry
 # (ingredient stock) / mealplan (planned meals) service clients

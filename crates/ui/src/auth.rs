@@ -910,28 +910,12 @@ fn account_from(user: AuthUser, email: &str, token: String) -> ActiveAccount {
 // task-ui-core::avatar so surfaces outside this crate (the review
 // rail in files-ui) render the SAME person the same way.
 
-use task_ui_core::avatar::AVATAR_GRADIENTS;
 pub use task_ui_core::avatar::{gradient_index, initials};
 
 /// Round initials avatar with a deterministic per-account gradient.
 /// `email` keys the gradient; when it's empty the name keys it
 /// (presence rows from peers that predate account identity).
-#[component]
-pub fn Avatar(name: String, email: String, #[props(default = 28)] size: u32) -> Element {
-    let key = if email.is_empty() { &name } else { &email };
-    let (from, to) = AVATAR_GRADIENTS[gradient_index(key)];
-    let letters = initials(&name);
-    // ~0.38em type within the disc, floored so 16px stays legible.
-    let font = (size * 2 / 5).max(7);
-    rsx! {
-        span {
-            class: "flex shrink-0 select-none items-center justify-center rounded-full font-semibold leading-none text-white",
-            style: "width:{size}px;height:{size}px;font-size:{font}px;background:linear-gradient(135deg,{from},{to});",
-            title: "{name}",
-            "{letters}"
-        }
-    }
-}
+pub use task_ui_core::avatar::Avatar;
 
 // ── account & status, shared content ────────────────────────────────
 
@@ -1756,7 +1740,7 @@ mod tests {
     fn gradient_index_is_deterministic_and_in_range() {
         for dev in DEV_ACCOUNTS {
             let idx = gradient_index(dev.email);
-            assert!(idx < AVATAR_GRADIENTS.len());
+            assert!(idx < task_ui_core::avatar::AVATAR_GRADIENTS.len());
             assert_eq!(idx, gradient_index(dev.email), "stable across calls");
         }
     }

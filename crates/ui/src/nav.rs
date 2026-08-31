@@ -5,9 +5,8 @@
 
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag,
-    FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, ReceiptText,
-    RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users, Utensils, Wallet, Waypoints,
-    Youtube,
+    FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, RefreshCw,
+    Settings as SettingsIcon, Target, Timer, Users, Utensils, Waypoints, Youtube,
 };
 use dioxus::prelude::*;
 
@@ -64,17 +63,8 @@ fn icon_gantt() -> Element {
 fn icon_timer() -> Element {
     rsx! { Timer { size: 16 } }
 }
-fn icon_finances() -> Element {
-    rsx! { Wallet { size: 16 } }
-}
-fn icon_invoices() -> Element {
-    rsx! { ReceiptText { size: 16 } }
-}
 fn icon_members() -> Element {
     rsx! { Users { size: 16 } }
-}
-fn icon_ledger() -> Element {
-    rsx! { Scale { size: 16 } }
 }
 fn icon_agents() -> Element {
     rsx! { Bot { size: 16 } }
@@ -202,28 +192,10 @@ pub fn nav_tabs() -> Vec<NavTab> {
             route: Route::TimerRoute {},
         },
         NavTab {
-            label: "Finances",
-            plugin: "finance",
-            icon: icon_finances,
-            route: Route::FinancesRoute {},
-        },
-        NavTab {
-            label: "Invoices",
-            plugin: "finance",
-            icon: icon_invoices,
-            route: Route::InvoicesRoute {},
-        },
-        NavTab {
             label: "Members",
             plugin: "core",
             icon: icon_members,
             route: Route::MembersRoute {},
-        },
-        NavTab {
-            label: "Ledger",
-            plugin: "finance",
-            icon: icon_ledger,
-            route: Route::LedgerRoute {},
         },
         NavTab {
             label: "Wiki",
@@ -458,10 +430,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::BookingsRoute {} => "Bookings",
         Route::GanttRoute {} => "Gantt",
         Route::TimerRoute {} => "Timer",
-        Route::FinancesRoute {} => "Finances",
-        Route::InvoicesRoute {} => "Invoices",
         Route::MembersRoute {} => "Members",
-        Route::LedgerRoute {} => "Ledger",
         Route::WikiRoute {} => "Wiki",
         Route::ConnectionsRoute {} => "Connections",
         Route::BasesRoute {} => "Bases",

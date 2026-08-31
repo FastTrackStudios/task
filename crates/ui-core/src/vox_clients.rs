@@ -653,8 +653,7 @@ async fn shared_caller_iroh(id: &str, bearer: Option<String>) -> Result<vox_core
         let owned = key.clone();
         let id = id.to_owned();
         let fut = async move {
-            let (caller, connection) =
-                crate::iroh_transport::dial(&id, owned.1.as_deref()).await?;
+            let (caller, connection) = crate::iroh_transport::dial(&id, owned.1.as_deref()).await?;
             let root = RootLane {
                 caller,
                 _connection: connection,

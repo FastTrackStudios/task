@@ -76,6 +76,7 @@ members = [
     "apps/plugins/email",
     "apps/plugins/fitness",
     "apps/plugins/home",
+    "apps/plugins/finance",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -90,6 +91,7 @@ members = [
     "features/finance/finance",
     "features/finance/finance-db",
     "features/finance/finance-proto",
+    "features/finance/finance-ui",
     "features/fitness/body",
     "features/fitness/exercises",
     "features/fitness/fitness",
@@ -238,6 +240,7 @@ task-plugin-scripture = { path = "apps/plugins/scripture" }
 task-plugin-email = { path = "apps/plugins/email" }
 task-plugin-fitness = { path = "apps/plugins/fitness" }
 task-plugin-home = { path = "apps/plugins/home" }
+task-plugin-finance = { path = "apps/plugins/finance" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
@@ -292,6 +295,7 @@ exercises = { path = "features/fitness/exercises" }
 finance = { path = "features/finance/finance" }
 finance-db = { path = "features/finance/finance-db" }
 finance-proto = { path = "features/finance/finance-proto", default-features = false }
+finance-ui = { path = "features/finance/finance-ui" }
 fitness-proto = { path = "features/fitness/fitness-proto", default-features = false }
 fitness-ui = { path = "features/fitness/fitness-ui" }
 git-config = { path = "features/git/git-config" }

@@ -1,0 +1,28 @@
+[package]
+name = "finance-ui"
+description = "The money screens: finances, invoices and the ledger, with their service calls and invoice store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+architect-ui.workspace = true
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+dioxus = { workspace = true }
+finance-proto = { workspace = true, features = ["vox"] }
+task-stores = { workspace = true }
+task-ui-core = { workspace = true }
+uuid = { workspace = true }
+# Core services these screens read as services, not as crates they are
+# inside of: who an invoice bills, what work is booked against, and the
+# hours that become billable lines.
+contacts-proto = { workspace = true, features = ["vox"] }
+project-proto = { workspace = true, features = ["vox"] }
+timer-proto = { workspace = true, features = ["vox"] }
+
+[lints]
+workspace = true

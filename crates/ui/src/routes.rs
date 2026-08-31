@@ -90,17 +90,8 @@ pub enum Route {
         #[route("/timer")]
         TimerRoute {},
 
-        #[route("/finances")]
-        FinancesRoute {},
-
-        #[route("/invoices")]
-        InvoicesRoute {},
-
         #[route("/members")]
         MembersRoute {},
-
-        #[route("/ledger")]
-        LedgerRoute {},
 
         #[route("/repos")]
         ReposRoute {},
@@ -386,29 +377,8 @@ fn TimerRoute() -> Element {
 }
 
 #[component]
-fn FinancesRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "finance", pages::finances::FinancesView {} }
-    }
-}
-
-#[component]
-fn InvoicesRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "finance", pages::invoices::InvoicesView {} }
-    }
-}
-
-#[component]
 fn MembersRoute() -> Element {
     rsx! { pages::members::MembersView {} }
-}
-
-#[component]
-fn LedgerRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "finance", pages::ledger::LedgerView {} }
-    }
 }
 
 #[component]
