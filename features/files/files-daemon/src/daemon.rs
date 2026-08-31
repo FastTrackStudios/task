@@ -932,9 +932,25 @@ impl SyncDaemon {
                     total,
                     bytes,
                     since: Utc::now(),
+                    file: String::new(),
+                    files_done: 0,
+                    files_total: 0,
                 });
             self.inner.events.publish(self.status());
 
+            // Per-file, from inside the capture: on a root with a
+            // hundred thousand takes, "which one is it on" is the
+            // difference between watching and guessing.
+            let inner = Arc::clone(&self.inner);
+            self.inner.backend.set_capture_progress(Some(Arc::new(
+                move |path: &str, done: u64, total: u64| {
+                    if let Some(p) = inner.capturing.lock().expect("capture lock").as_mut() {
+                        p.file = path.to_string();
+                        p.files_done = done;
+                        p.files_total = total;
+                    }
+                },
+            )));
             let error = self
                 .inner
                 .backend
@@ -942,6 +958,7 @@ impl SyncDaemon {
                 .await
                 .err()
                 .map(|e| e.to_string());
+            self.inner.backend.set_capture_progress(None);
             tracing::info!(root = %name, ok = error.is_none(), "captured a root");
             // Cleared one at a time, as each finishes. An archive takes
             // hours and a machine can be shut down in the middle of it;

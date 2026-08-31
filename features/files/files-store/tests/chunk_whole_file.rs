@@ -448,48 +448,40 @@ async fn replacing_the_live_file_versions_it_and_keeps_the_old_one() {
     assert_eq!(store.read_to_vec(v2).await.unwrap(), edited);
 }
 
-/// The stored blob must be **the same inode** as the file it came from.
+/// A version already stored survives the live file being rewritten
+/// **in place**.
 ///
-/// `linking_content_in_consumes_no_space` measures free space, which is
-/// the property that matters and the one a filesystem can lie about. NFS
-/// 4.2 does: `reflink` there is a server-side COPY that returns `Ok`,
-/// leaves a second independent inode holding a second copy of every
-/// byte, and reports nothing. On a real NAS that took a 120 MB file to
-/// 280 MB, and would have asked a 5 TB archive for another 5 TB — while
-/// every test here passed, because on tmpfs and ext4 reflink simply
-/// fails and the hard-link fallback ran.
+/// The whole tier places a blob by linking rather than copying, and
+/// which kind of link decides whether this holds. A reflink is
+/// copy-on-write and the stored bytes are safe from anything done to
+/// the original; a hard link is the same inode, so an in-place rewrite
+/// — what `std::fs::write` does — changes the bytes under a blob named
+/// by their hash, and the old version is gone.
 ///
-/// Inode identity cannot be faked by a filesystem that copies. This is
-/// the assertion that would have caught it.
+/// That inversion was made deliberately once, to buy back space on a
+/// NAS where `reflink` silently duplicates, and it cost this. The
+/// space is worth less than the promise.
 #[tokio::test]
-async fn a_placed_blob_shares_the_original_inode() {
-    use std::os::unix::fs::MetadataExt as _;
-
+async fn a_stored_version_survives_an_in_place_rewrite() {
     let dir = tempfile::tempdir().unwrap();
     let store = store_at(dir.path()).await;
     let path = dir.path().join("take.wav");
-    tokio::fs::write(&path, content(4 * 1024 * 1024)).await.unwrap();
 
-    let file_id = store.write_path(&path).await.unwrap();
-    store.shutdown().await.unwrap();
+    let first = content(4 * 1024 * 1024);
+    tokio::fs::write(&path, &first).await.unwrap();
+    let v1 = store.write_path(&path).await.unwrap();
 
-    let source = std::fs::metadata(&path).unwrap();
-    let placed = std::fs::read_dir(dir.path().join("whole"))
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .flat_map(|shard| std::fs::read_dir(shard.path()).into_iter().flatten())
-        .filter_map(|e| e.ok())
-        .flat_map(|shard| std::fs::read_dir(shard.path()).into_iter().flatten())
-        .filter_map(|e| e.ok())
-        .map(|e| std::fs::metadata(e.path()).unwrap())
-        .find(|m| m.len() == source.len())
-        .expect("the whole tier should hold this file");
+    // In place: same inode, truncated and rewritten. Not a rename.
+    let second = content(3 * 1024 * 1024);
+    std::fs::write(&path, &second).unwrap();
+    let v2 = store.write_path(&path).await.unwrap();
+    assert_ne!(v1, v2);
 
     assert_eq!(
-        placed.ino(),
-        source.ino(),
-        "the store's blob is a different inode — it was copied, not linked"
+        store.read_to_vec(v1).await.unwrap(),
+        first,
+        "the first version must still read back byte-for-byte after the \
+         live file was rewritten under it"
     );
-    assert!(source.nlink() >= 2, "the source should now be linked from the store");
-    let _ = file_id;
+    assert_eq!(store.read_to_vec(v2).await.unwrap(), second);
 }

@@ -1206,36 +1206,31 @@ fn place_whole(src: &Path, dst: &Path) -> Result<Placement> {
     ));
     let _ = std::fs::remove_file(&tmp);
 
-    // Hard link first, reflink second — the opposite of the obvious
-    // order, and the reason is a filesystem that lies.
+    // Reflink first, and a hard link only where there is no reflink.
     //
-    // Over NFS 4.2 `reflink` *succeeds* and duplicates: the client turns
-    // it into a server-side COPY, which is fast, returns Ok, and leaves
-    // a second independent inode holding a second copy of every byte.
-    // Measured on a real NAS — a 120 MB file placed as a 120 MB "clone"
-    // (`nlink=1`, a different inode), taking the directory from 120 MB
-    // to 280 MB, with nothing anywhere reporting that a copy had
-    // happened. Adopting a 5 TB archive that way asks for 5 TB nobody
-    // has, to hold bytes already sitting on the same disk.
+    // The order matters for correctness, not speed. A reflink is
+    // copy-on-write: the store's blob is unaffected by anything done to
+    // the user's file afterwards. A hard link is the same inode, so a
+    // rewrite **in place** — which `std::fs::write` performs, and which
+    // any number of programs do — changes the bytes under a blob that
+    // is named by their hash. The old version is then gone, and a
+    // version store that loses old versions has lost the argument.
     //
-    // A hard link cannot lie: it is the same inode or it is an error.
-    // So it is tried first, and reflink stays as the fallback for the
-    // cases a link cannot serve.
+    // This was inverted once, to buy back space on a NAS: over NFS 4.2
+    // `reflink` *succeeds* and duplicates — the client turns it into a
+    // server-side COPY, so a 2.5 GB project became 5.0 GB with nothing
+    // reporting a copy. Hard-linking fixed the space and broke the
+    // promise; `read_at_serves_the_version_asked_for` catches exactly
+    // that, by rewriting a file in place and asking for the first
+    // version back.
     //
-    // What the order costs: a reflink is copy-on-write, so the store's
-    // blob is unaffected by *anything* done to the user's file, while a
-    // hard link shares the inode and so follows an edit written **in
-    // place** — a rename-over (what almost everything does, including
-    // every DAW save this has been tested against) breaks the link
-    // harmlessly and leaves the stored version intact. The exposure is
-    // narrow, it is detectable rather than silent — the blob is named by
-    // its hash and carries a BLAKE3 outboard, so altered content fails
-    // verification instead of being served as good — and the storage it
-    // buys back is the difference between adopting an archive and not.
-    let placement = if std::fs::hard_link(src, &tmp).is_ok() {
-        Placement::Hardlinked
-    } else if reflink_copy::reflink(src, &tmp).is_ok() {
+    // So the space problem on a filesystem with no real reflink is not
+    // solved here, and is not solved by linking. It is a genuine cost of
+    // keeping history where the filesystem cannot share blocks.
+    let placement = if reflink_copy::reflink(src, &tmp).is_ok() {
         Placement::Reflinked
+    } else if std::fs::hard_link(src, &tmp).is_ok() {
+        Placement::Hardlinked
     } else {
         std::fs::copy(src, &tmp)?;
         Placement::Copied

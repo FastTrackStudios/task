@@ -322,6 +322,11 @@ pub struct FilesBackend {
     driver: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Test seam — see [`FilesBackend::set_mid_hash_hook`].
     hook: Arc<Mutex<Option<MidHashHook>>>,
+    /// Told which file each capture is reading — see
+    /// [`FilesBackend::set_capture_progress`]. Not a test seam: an
+    /// archive's first capture runs for hours, and this is how anything
+    /// above can say so.
+    capture_progress: Arc<Mutex<Option<crate::checkpoint::Progress>>>,
     /// Test seam — see [`FilesBackend::set_mid_flip_hook`]: invoked
     /// between a restart's terminal checkpoint and its clear phase,
     /// which is the window a mid-flip save lands in (issue #268).
@@ -500,6 +505,7 @@ impl FilesBackend {
             watch_new_roots: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             driver: Arc::new(Mutex::new(None)),
             hook: Arc::new(Mutex::new(None)),
+            capture_progress: Arc::new(Mutex::new(None)),
             flip_hook: Arc::new(Mutex::new(None)),
             transcoder: Arc::new(Mutex::new(None)),
             rendition_stores: Arc::new(Mutex::new(HashMap::new())),
@@ -531,6 +537,19 @@ impl FilesBackend {
     #[doc(hidden)]
     pub fn set_mid_hash_hook(&self, hook: Option<MidHashHook>) {
         *self.hook.lock().expect("hook lock poisoned") = hook;
+    }
+
+    /// Be told which file each capture is reading, and how far through.
+    ///
+    /// Not a test seam. An archive's first capture reads every byte of
+    /// it, which on a multi-terabyte tree is hours; without this the
+    /// only observable difference between working and hung is that one
+    /// of them eventually stops.
+    pub fn set_capture_progress(&self, progress: Option<crate::checkpoint::Progress>) {
+        *self
+            .capture_progress
+            .lock()
+            .expect("capture progress lock poisoned") = progress;
     }
 
     /// Test seam only: runs between a restart's terminal checkpoint
@@ -2125,6 +2144,11 @@ impl FilesBackend {
         let ignores = self.ignore_of(&root)?;
         let disk_files = scan::walk_live_tree(tree_of(&root)?, root.flavor, &ignores, &base_paths)?;
         let hook = self.hook.lock().expect("hook lock poisoned").clone();
+        let progress = self
+            .capture_progress
+            .lock()
+            .expect("capture progress lock poisoned")
+            .clone();
         let result = crate::checkpoint::write_checkpoint(Capture {
             repo: &repo,
             backend,
@@ -2136,6 +2160,7 @@ impl FilesBackend {
             description: description.clone(),
             attempts: self.cadence.config().certify_attempts,
             hook,
+            progress,
         })?;
 
         let at = self.cadence.now();
@@ -3137,6 +3162,11 @@ impl FilesBackend {
         let ignores = self.ignore_of(&root)?;
         let disk_files = scan::walk_live_tree(&root_path, root.flavor, &ignores, &head_paths)?;
         let next_number = self.versions.next_project_version_number(root_id)?;
+        let progress = self
+            .capture_progress
+            .lock()
+            .expect("capture progress lock poisoned")
+            .clone();
         let result = crate::checkpoint::write_checkpoint(Capture {
             repo: &flip_repo,
             backend,
@@ -3148,6 +3178,12 @@ impl FilesBackend {
             description: format!("restart: Project Version v{next_number}"),
             attempts: self.cadence.config().certify_attempts,
             hook: None,
+            // A restart re-reads the tree too, and takes as long.
+            progress: self
+                .capture_progress
+                .lock()
+                .expect("capture progress lock poisoned")
+                .clone(),
         })?;
         let at = self.cadence.now();
         let commit_hex = result.commit_id.hex();

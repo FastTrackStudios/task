@@ -52,6 +52,10 @@ use crate::scan::LiveFile;
 /// Everything one capture commit needs. A struct rather than a dozen
 /// positional arguments because issues #260 and #273 both added to this
 /// call and the next one will too.
+/// Told which file a capture is reading, and how far through it is:
+/// `(root-relative path, files done, files in total)`.
+pub type Progress = Arc<dyn Fn(&str, u64, u64) + Send + Sync>;
+
 pub struct Capture<'a> {
     pub repo: &'a Arc<ReadonlyRepo>,
     pub backend: &'a dyn Backend,
@@ -69,6 +73,10 @@ pub struct Capture<'a> {
     pub attempts: u32,
     /// Test seam only — see [`crate::certify::MidHashHook`].
     pub hook: Option<MidHashHook>,
+    /// Told which file is being read, and how far through. A capture of
+    /// an archive is measured in hours, and a caller with nothing to
+    /// report for that long is indistinguishable from a hung one.
+    pub progress: Option<Progress>,
 }
 
 pub struct CheckpointResult {
@@ -129,6 +137,7 @@ async fn write_checkpoint_async(capture: Capture<'_>) -> Result<CheckpointResult
         description,
         attempts,
         hook,
+        progress,
     } = capture;
     let store = repo.store().clone();
     let content = ContentStore::for_repo(repo, backend)?;
@@ -137,7 +146,15 @@ async fn write_checkpoint_async(capture: Capture<'_>) -> Result<CheckpointResult
     let mut requeued_paths = Vec::new();
     let mut present: BTreeSet<RepoPathBuf> = BTreeSet::new();
 
-    for file in disk_files {
+    let total = disk_files.len() as u64;
+    for (index, file) in disk_files.iter().enumerate() {
+        if let Some(progress) = &progress {
+            progress(
+                &file.repo_path.as_internal_file_string().to_string(),
+                index as u64,
+                total,
+            );
+        }
         let repo_path = &file.repo_path;
         if file.ignored && !head_paths.contains(repo_path) {
             // Ignored and untracked: never enters the store. (Ignored but

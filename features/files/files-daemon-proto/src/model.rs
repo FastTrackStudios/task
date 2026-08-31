@@ -154,6 +154,16 @@ pub struct CaptureProgress {
     pub bytes: u64,
     /// When this root's read began.
     pub since: DateTime<Utc>,
+    /// The file being read right now, root-relative. Empty before the
+    /// first one — a scan enumerates the tree before it reads anything,
+    /// and on a large root that pause is itself worth seeing.
+    #[facet(default)]
+    pub file: String,
+    /// Files read so far, and how many the scan found.
+    #[facet(default)]
+    pub files_done: u64,
+    #[facet(default)]
+    pub files_total: u64,
 }
 
 /// The daemon's whole state — the reply to
