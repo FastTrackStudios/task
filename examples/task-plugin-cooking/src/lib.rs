@@ -29,7 +29,7 @@
 use task_plugin_ui::architect_ui::lucide_dioxus::Utensils;
 use task_plugin_ui::architect_ui::prelude::*;
 use task_plugin_ui::dioxus::prelude::*;
-use task_plugin_ui::{LinkTarget, PluginApp, PluginNav};
+use task_plugin_ui::{Claim, LinkTarget, PluginApp, PluginNav};
 
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
@@ -63,18 +63,39 @@ pub const APP: PluginApp = PluginApp {
     claim_href: Some(claim_href),
 };
 
-/// A wikilink the vault could not resolve.
+/// What this app makes of a wikilink.
 ///
-/// Deliberately narrow. This claims what it can actually show and
-/// nothing else — an app that grabbed every unresolved link would make
-/// every typo somebody's recipe, and the person who wrote the note
-/// would have no way to mean anything else by it.
-fn claim_link(text: &str) -> Option<LinkTarget> {
-    let dish = text.strip_prefix("Recipe/")?;
-    Some(LinkTarget {
+/// Both kinds, because the difference is the interesting part:
+///
+/// - `[[Recipe/Bolognese]]` is a reference and nothing else. The prefix
+///   says so, and a note of that exact name would be somebody writing
+///   *about* the recipe. So it is claimed [`Claim::Always`], and beats a
+///   page — the same reason a scripture reference should.
+/// - `[[Bolognese]]` might be the recipe and might be a person's note
+///   about a dinner. Claimed [`Claim::IfUnknown`], so the vault gets
+///   first refusal and the writer keeps the word.
+///
+/// Deliberately narrow either way. An app that claimed every unresolved
+/// link would make every typo somebody's recipe.
+fn claim_link(text: &str) -> Option<Claim> {
+    if let Some(dish) = text.strip_prefix("Recipe/") {
+        return Some(Claim::Always(dish_target(dish)));
+    }
+    // A bare dish name only when nothing else answers to it.
+    KNOWN_DISHES
+        .contains(&text)
+        .then(|| Claim::IfUnknown(dish_target(text)))
+}
+
+/// The dishes this app would recognise by bare name. A real one would
+/// ask its own index; the point here is that the set is *narrow*.
+const KNOWN_DISHES: &[&str] = &["Bolognese", "Cassoulet"];
+
+fn dish_target(dish: &str) -> LinkTarget {
+    LinkTarget {
         path: "recipes".into(),
         query: format!("dish={dish}"),
-    })
+    }
 }
 
 /// This app's own scheme, emitted by its widgets.

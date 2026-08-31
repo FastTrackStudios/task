@@ -371,15 +371,18 @@ pub(crate) fn NoteView(
             .peek()
             .as_ref()
             .and_then(|ix| ix.meta(page).map(|m| m.path.clone()));
-        // A wikilink the vault has no page for, offered to the apps:
-        // `[[John 3:16]]` to the reader, `[[Washed]]` to the player.
-        // *After* the lookup, never before — a person's own note about
-        // a word beats any app that would like to own it.
-        if known.is_none()
-            && let Some((app, target)) =
-                task_plugin_ui::claim_link(page, |id| plugins.contains(id))
+        // What the apps make of this text, and how strongly.
+        //
+        // An `Always` claim beats a page: `[[John 3:16]]` is a
+        // reference, and a note of that name is somebody writing *about*
+        // the verse rather than replacing it. An `IfUnknown` claim waits
+        // for the vault to come up empty, because `[[Washed]]` is a song
+        // and also a perfectly ordinary thing to call a note.
+        let claim = task_plugin_ui::claim_link(page, |id| plugins.contains(id));
+        if let Some((app, claim)) = &claim
+            && (claim.beats_a_page() || known.is_none())
         {
-            nav_links.push(plugin_route(app, &target));
+            nav_links.push(plugin_route(app, claim.target()));
             return;
         }
         // A wikilink that matches no page but parses as a scripture

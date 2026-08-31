@@ -106,6 +106,47 @@ impl LinkTarget {
     }
 }
 
+/// How strongly an app claims a link.
+///
+/// The distinction is about the *text*, not the app, and only the app
+/// can judge it. `John 3:16` is a scripture reference and nothing else —
+/// a note of that name would be somebody trying to write about the
+/// verse, not to replace it. `Washed` is a song and also a perfectly
+/// ordinary thing to call a note.
+///
+/// So an app says which it is, per text, and the shell orders
+/// accordingly. Making this a property of the whole app would force
+/// scripture to choose between shadowing every note and never resolving
+/// a reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Claim {
+    /// Only when the vault has no page of that name. The safe kind, and
+    /// the right one whenever a person could reasonably mean something
+    /// else by the words.
+    IfUnknown(LinkTarget),
+    /// Always, even over a vault page. For text that has exactly one
+    /// meaning — a chapter-and-verse reference, an ISBN, a timestamp —
+    /// where a page of the same name is a note *about* the thing rather
+    /// than a replacement for it.
+    Always(LinkTarget),
+}
+
+impl Claim {
+    /// Where it goes, whichever kind it is.
+    #[must_use]
+    pub fn target(&self) -> &LinkTarget {
+        match self {
+            Self::IfUnknown(t) | Self::Always(t) => t,
+        }
+    }
+
+    /// Does this beat a vault page of the same name?
+    #[must_use]
+    pub fn beats_a_page(&self) -> bool {
+        matches!(self, Self::Always(_))
+    }
+}
+
 /// An app registered into Task.
 #[derive(Clone, Copy)]
 pub struct PluginApp {
@@ -155,11 +196,10 @@ pub struct PluginApp {
     /// knowing the other exists — the note says what it means and the
     /// registry finds who understands it.
     ///
-    /// **Real pages always win.** This is asked only after the vault has
-    /// said it has nothing, which keeps a person's own note about
-    /// `[[Washed]]` from being hijacked by an app that would like to own
-    /// the word.
-    pub claim_link: Option<fn(text: &str) -> Option<LinkTarget>>,
+    /// The app returns a [`Claim`] saying how strongly it means it —
+    /// see there for why that judgement belongs to the app and not to
+    /// the shell.
+    pub claim_link: Option<fn(text: &str) -> Option<Claim>>,
     /// Claim a link scheme this app's own widgets emit —
     /// `scripture-open:`, `song-play:`.
     ///
@@ -220,13 +260,21 @@ pub fn registered() -> Vec<PluginApp> {
 pub fn claim_link(
     text: &str,
     enabled: impl Fn(&str) -> bool,
-) -> Option<(&'static str, LinkTarget)> {
-    REGISTRY
-        .read()
-        .expect("plugin registry poisoned")
-        .iter()
-        .filter(|a| enabled(a.id))
-        .find_map(|a| a.claim_link.and_then(|c| c(text)).map(|t| (a.id, t)))
+) -> Option<(&'static str, Claim)> {
+    let registry = REGISTRY.read().expect("plugin registry poisoned");
+    let claims = || registry.iter().filter(|a| enabled(a.id));
+    // An `Always` claim wins over an `IfUnknown` one regardless of
+    // registration order: it is a statement that the text has one
+    // meaning, and the order two apps happened to be registered in is
+    // no reason to hand it to the weaker claim.
+    claims()
+        .find_map(|a| {
+            a.claim_link
+                .and_then(|c| c(text))
+                .filter(Claim::beats_a_page)
+                .map(|c| (a.id, c))
+        })
+        .or_else(|| claims().find_map(|a| a.claim_link.and_then(|c| c(text)).map(|c| (a.id, c))))
 }
 
 /// Which app claims this href scheme, if any. See [`claim_link`].
@@ -298,8 +346,9 @@ mod tests {
         assert!(find("test-never-registered").is_none());
     }
 
-    fn claims_verses(text: &str) -> Option<LinkTarget> {
-        text.starts_with("John ").then(|| LinkTarget::query(text))
+    fn claims_verses(text: &str) -> Option<Claim> {
+        text.starts_with("John ")
+            .then(|| Claim::Always(LinkTarget::query(text)))
     }
 
     /// An app an org turned off must not capture links. The note then
@@ -319,7 +368,7 @@ mod tests {
 
         let on = claim_link("John 3:16", |_| true);
         assert_eq!(
-            on.map(|(id, t)| (id, t.query)),
+            on.map(|(id, c)| (id, c.target().query.clone())),
             Some(("test-verses", "John 3:16".to_string()))
         );
 
@@ -334,5 +383,43 @@ mod tests {
     #[test]
     fn unclaimed_text_belongs_to_the_vault() {
         assert!(claim_link("Groceries for Tuesday", |_| true).is_none());
+    }
+
+    fn claims_songs(text: &str) -> Option<Claim> {
+        (text == "Washed").then(|| Claim::IfUnknown(LinkTarget::query("song=Washed")))
+    }
+
+    /// A claim that says it means it beats one that defers, whatever
+    /// order the two apps were registered in. The order two apps
+    /// happened to be listed in is no reason to hand a reference to the
+    /// weaker claim.
+    #[test]
+    fn a_certain_claim_beats_a_deferring_one() {
+        // The deferring app registers FIRST, so first-wins would give
+        // it the link.
+        register(PluginApp {
+            id: "test-songs",
+            nav: &[],
+            view: nowhere,
+            widgets: None,
+            fences: None,
+            claim_link: Some(claims_songs),
+            claim_href: None,
+        });
+        register(PluginApp {
+            id: "test-both",
+            nav: &[],
+            view: nowhere,
+            widgets: None,
+            fences: None,
+            claim_link: Some(|text| {
+                (text == "Washed").then(|| Claim::Always(LinkTarget::query("verse=Washed")))
+            }),
+            claim_href: None,
+        });
+
+        let (id, claim) = claim_link("Washed", |_| true).expect("somebody claims it");
+        assert_eq!(id, "test-both");
+        assert!(claim.beats_a_page());
     }
 }
