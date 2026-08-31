@@ -77,20 +77,6 @@ task_stores::stores! {
             ProjectMutations via use_project_mutations,
     }
 
-    LocationStore: locations_proto::Location {
-        provide: provide_location_store,
-        handle: use_location_store,
-        list: use_location_list -> Uuid = crate::feeds::fetch_locations,
-        mutations: LocationMutations via use_location_mutations,
-    }
-
-    ItemStore: inventory_proto::Item {
-        provide: provide_item_store,
-        handle: use_item_store,
-        list: use_item_list -> Uuid = crate::feeds::fetch_inventory,
-        mutations: ItemMutations via use_item_mutations,
-    }
-
     GoalStore: OrgGoal {
         provide: provide_goal_store,
         handle: use_goal_store,
@@ -667,71 +653,6 @@ pub fn use_goal_list() -> AtomResult<Vec<(Id<Uuid>, OrgGoal)>, String> {
                 .collect()
         })
     })
-}
-
-// ── locations ───────────────────────────────────────────────────────
-
-/// Unsaved placeholder row for an optimistic location insert. The
-/// backend assigns the real `id` and vault `path` on create.
-pub fn draft_location(
-    name: String,
-    kind: String,
-    address: Option<String>,
-) -> locations_proto::Location {
-    locations_proto::Location {
-        path: String::new(),
-        id: Uuid::nil(),
-        name,
-        kind,
-        parent_id: None,
-        address,
-        tags: locations_proto::model::Tags::default(),
-        same_as: None,
-        date_created: None,
-        date_modified: None,
-        details: String::new(),
-    }
-}
-
-impl LocationMutations {
-    pub fn create(&self, slug: String, draft: locations_proto::Location) {
-        run_create(self.write, self.store, draft, move |loc| async move {
-            crate::feeds::create_location(&slug, loc).await
-        });
-    }
-}
-
-// ── inventory ───────────────────────────────────────────────────────
-
-/// Unsaved placeholder row for an optimistic inventory insert.
-pub fn draft_item(name: String, category: String) -> inventory_proto::Item {
-    inventory_proto::Item {
-        path: String::new(),
-        id: Uuid::nil(),
-        name,
-        category,
-        location_id: None,
-        condition: inventory_proto::Condition::Good.as_str().to_owned(),
-        status: inventory_proto::Status::Stored.as_str().to_owned(),
-        manufacturer: None,
-        model: None,
-        serial: None,
-        purchase_date: None,
-        value: None,
-        tasks: inventory_proto::StringList::default(),
-        tags: inventory_proto::StringList::default(),
-        date_created: None,
-        date_modified: None,
-        details: String::new(),
-    }
-}
-
-impl ItemMutations {
-    pub fn create(&self, slug: String, draft: inventory_proto::Item) {
-        run_create(self.write, self.store, draft, move |item| async move {
-            crate::feeds::create_item(&slug, item).await
-        });
-    }
 }
 
 // ── milestones ──────────────────────────────────────────────────────

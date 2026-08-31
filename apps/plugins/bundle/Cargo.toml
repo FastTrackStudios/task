@@ -14,6 +14,7 @@ task-plugin-cooking = { workspace = true }
 task-plugin-scripture = { workspace = true }
 task-plugin-email = { workspace = true }
 task-plugin-fitness = { workspace = true }
+task-plugin-home = { workspace = true }
 
 [lints]
 workspace = true

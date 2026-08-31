@@ -1,25 +1,80 @@
-//! `/locations` — the place register.
+//! Locations — the place register, its wire calls and its store.
 //!
-//! Locations are the studios, rooms, storage units, venues, and
-//! homes the org works out of. They live as markdown pages in the
-//! vault (`type: location`) and carry a stable `id` so other
-//! features (notably inventory) reference them through renames.
+//! Locations are the studios, rooms, storage units, venues and homes
+//! an org works out of. They live as markdown pages in the vault
+//! (`type: location`) and carry a stable `id`, so other features —
+//! inventory above all — reference them through renames.
 //!
-//! This page lists the org's locations and offers a friction-light
-//! "Add location" form (name + kind + optional address). State is the
-//! shared optimistic store ([`crate::stores`]): the list renders one
-//! `AtomResult` (stale-while-revalidate across org switches), creates
-//! appear instantly as typed `Id::Temp` rows, and failures roll back
-//! and surface in the notification tray.
+//! The page lists them and offers a friction-light add form. State is
+//! the optimistic store below: the list renders one `AtomResult`
+//! (stale-while-revalidate across org switches), creates appear
+//! instantly as typed `Id::Temp` rows, and failures roll back and
+//! surface in the notification tray.
+//!
+//! Mounted by `task-plugin-home`, which also mounts inventory.
 
 use architect::Id;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use locations_proto::Location;
+use task_stores::run_create;
+use task_ui_core::feeds;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 use uuid::Uuid;
 
-use crate::orgs::{OrgMeta, OrgSelection};
-use crate::stores;
+feeds! {
+    locations_proto::LocationsServiceClient {
+        /// Every location in the org's vault (studios / rooms / storage /
+        /// venues / homes), in the order the backend lists them.
+        fetch_locations() -> Vec<locations_proto::Location>
+            = list() as "list locations";
+
+        /// Create one location from a caller-built draft (see
+        /// [`draft_location`] — the backend assigns the real `id` and
+        /// vault `path`). Returns the persisted location.
+        create_location(loc: locations_proto::Location) -> locations_proto::Location
+            = create(loc) as "create location";
+    }
+}
+
+task_stores::stores! {
+    LocationStore: locations_proto::Location {
+        provide: provide_location_store,
+        handle: use_location_store,
+        list: use_location_list -> Uuid = fetch_locations,
+        mutations: LocationMutations via use_location_mutations,
+    }
+}
+
+/// Unsaved placeholder row for an optimistic location insert. The
+/// backend assigns the real `id` and vault `path` on create.
+pub fn draft_location(
+    name: String,
+    kind: String,
+    address: Option<String>,
+) -> locations_proto::Location {
+    locations_proto::Location {
+        path: String::new(),
+        id: Uuid::nil(),
+        name,
+        kind,
+        parent_id: None,
+        address,
+        tags: locations_proto::model::Tags::default(),
+        same_as: None,
+        date_created: None,
+        date_modified: None,
+        details: String::new(),
+    }
+}
+
+impl LocationMutations {
+    pub fn create(&self, slug: String, draft: locations_proto::Location) {
+        run_create(self.write, self.store, draft, move |loc| async move {
+            self::create_location(&slug, loc).await
+        });
+    }
+}
 
 const INPUT_CLS: &str = "rounded-lg border border-input bg-input/30 px-3 py-2 text-sm transition-colors \
      focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] \
@@ -36,7 +91,7 @@ pub fn LocationsView() -> Element {
 
     // The org we create into (first selected, or home).
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -46,8 +101,8 @@ pub fn LocationsView() -> Element {
     let mut address = use_signal(String::new);
 
     // The shared store: one AtomResult for the list, optimistic create.
-    let result = stores::use_location_list();
-    let muts = stores::use_location_mutations();
+    let result = self::use_location_list();
+    let muts = self::use_location_mutations();
 
     let mut create = move || {
         let n = name.read().trim().to_string();
@@ -62,10 +117,10 @@ pub fn LocationsView() -> Element {
         };
         name.set(String::new());
         address.set(String::new());
-        muts.create(s, stores::draft_location(n, k, addr));
+        muts.create(s, self::draft_location(n, k, addr));
     };
 
-    let store = stores::use_location_store();
+    let store = self::use_location_store();
     let rows: Vec<(Id<Uuid>, Location)> = result.value().cloned().unwrap_or_default();
     let load_err = result.error().cloned();
     let first_load = result.is_waiting() && result.value().is_none();
@@ -124,16 +179,16 @@ pub fn LocationsView() -> Element {
 
             // ── The register ───────────────────────────────────────
             if first_load {
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             } else if rows.is_empty() {
                 if let Some(err) = load_err {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load locations",
                         message: err,
                         on_retry: move |()| store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "No locations yet",
                         hint: "Add your first place above.",
                     }

@@ -1,24 +1,85 @@
-//! `/inventory` — the gear register.
+//! Inventory — the gear register, its wire calls and its store.
 //!
-//! Inventory items are the instruments, amps, mics, cables,
-//! outboard, and computers the org owns. They live as markdown
-//! pages in the vault (`type: item`) and reference their physical
-//! [`location`](crate::pages::locations) by id so location renames
-//! don't break the link.
+//! Inventory items are the instruments, amps, mics, cables, outboard
+//! and computers an org owns. They live as markdown pages in the vault
+//! (`type: item`) and reference their physical location by id, so a
+//! location rename does not break the link — see [`locations_ui`].
 //!
-//! This page lists the org's items and offers a friction-light "Add
-//! item" form (name + category). State is the shared optimistic store
-//! ([`crate::stores`]): one `AtomResult` list, typed `Id::Temp` rows
-//! for in-flight creates, rollback + tray notification on failure.
+//! The page lists them and offers a friction-light add form. State is
+//! the optimistic store below: one `AtomResult` list, typed `Id::Temp`
+//! rows for in-flight creates, rollback and a tray notification on
+//! failure.
+//!
+//! Mounted by `task-plugin-home`, which also mounts locations.
 
 use architect::Id;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use inventory_proto::{Item, Status};
+use task_stores::run_create;
+use task_ui_core::feeds;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 use uuid::Uuid;
 
-use crate::orgs::{OrgMeta, OrgSelection};
-use crate::stores;
+feeds! {
+    inventory_proto::InventoryServiceClient {
+        /// Every inventory item in the org's vault (`type: item` gear /
+        /// equipment pages), in the order the backend lists them.
+        fetch_inventory() -> Vec<inventory_proto::Item>
+            = list() as "list inventory";
+
+        /// Create one inventory item from a caller-built draft (see
+        /// [`draft_item`] — the backend assigns the real `id` and vault
+        /// `path`). Returns the persisted item.
+        create_item(item: inventory_proto::Item) -> inventory_proto::Item
+            = create(item) as "create item";
+
+        /// Move an item along its lifecycle (in-use / stored / loaned /
+        /// in-repair / missing / retired). Returns the updated item.
+        set_item_status(id: &str, status: &str) -> inventory_proto::Item
+            = set_status(id.to_owned(), status.to_owned()) as "set item status";
+    }
+}
+
+task_stores::stores! {
+    ItemStore: inventory_proto::Item {
+        provide: provide_item_store,
+        handle: use_item_store,
+        list: use_item_list -> Uuid = fetch_inventory,
+        mutations: ItemMutations via use_item_mutations,
+    }
+}
+
+/// Unsaved placeholder row for an optimistic inventory insert.
+pub fn draft_item(name: String, category: String) -> inventory_proto::Item {
+    inventory_proto::Item {
+        path: String::new(),
+        id: Uuid::nil(),
+        name,
+        category,
+        location_id: None,
+        condition: inventory_proto::Condition::Good.as_str().to_owned(),
+        status: inventory_proto::Status::Stored.as_str().to_owned(),
+        manufacturer: None,
+        model: None,
+        serial: None,
+        purchase_date: None,
+        value: None,
+        tasks: inventory_proto::StringList::default(),
+        tags: inventory_proto::StringList::default(),
+        date_created: None,
+        date_modified: None,
+        details: String::new(),
+    }
+}
+
+impl ItemMutations {
+    pub fn create(&self, slug: String, draft: inventory_proto::Item) {
+        run_create(self.write, self.store, draft, move |item| async move {
+            self::create_item(&slug, item).await
+        });
+    }
+}
 
 const INPUT_CLS: &str = "rounded-lg border border-input bg-input/30 px-3 py-2 text-sm transition-colors \
      focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] \
@@ -49,7 +110,7 @@ pub fn InventoryView() -> Element {
 
     // The org we create into (first selected, or home).
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -58,8 +119,8 @@ pub fn InventoryView() -> Element {
     let category = use_signal(|| "other".to_string());
 
     // The shared store: one AtomResult for the list, optimistic create.
-    let result = stores::use_item_list();
-    let muts = stores::use_item_mutations();
+    let result = self::use_item_list();
+    let muts = self::use_item_mutations();
 
     let mut create = move || {
         let n = name.read().trim().to_string();
@@ -69,10 +130,10 @@ pub fn InventoryView() -> Element {
         let Some(s) = slug() else { return };
         let c = category.read().clone();
         name.set(String::new());
-        muts.create(s, stores::draft_item(n, c));
+        muts.create(s, self::draft_item(n, c));
     };
 
-    let store = stores::use_item_store();
+    let store = self::use_item_store();
     let rows: Vec<(Id<Uuid>, Item)> = result.value().cloned().unwrap_or_default();
     let load_err = result.error().cloned();
     let first_load = result.is_waiting() && result.value().is_none();
@@ -120,16 +181,16 @@ pub fn InventoryView() -> Element {
 
             // ── The register ───────────────────────────────────────
             if first_load {
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             } else if rows.is_empty() {
                 if let Some(err) = load_err {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load inventory",
                         message: err,
                         on_retry: move |()| store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "No items yet",
                         hint: "Add your first piece of gear above.",
                     }

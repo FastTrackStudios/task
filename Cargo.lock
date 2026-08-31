@@ -10920,6 +10920,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory-ui"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "dioxus",
+ "inventory-proto",
+ "locations-ui",
+ "task-stores",
+ "task-ui-core",
+ "uuid",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13020,6 +13034,19 @@ dependencies = [
  "uuid",
  "vox",
  "vox-types",
+]
+
+[[package]]
+name = "locations-ui"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "dioxus",
+ "locations-proto",
+ "task-stores",
+ "task-ui-core",
+ "uuid",
 ]
 
 [[package]]
@@ -20889,6 +20916,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-plugin-home"
+version = "0.1.0"
+dependencies = [
+ "inventory-ui",
+ "locations-ui",
+ "task-plugin-ui",
+]
+
+[[package]]
 name = "task-plugin-scripture"
 version = "0.1.0"
 dependencies = [
@@ -20913,6 +20949,7 @@ dependencies = [
  "task-plugin-cooking",
  "task-plugin-email",
  "task-plugin-fitness",
+ "task-plugin-home",
  "task-plugin-scripture",
  "task-plugin-ui",
 ]
@@ -22382,11 +22419,9 @@ dependencies = [
  "identity-proto",
  "inbox-proto",
  "input",
- "inventory-proto",
  "js-sys",
  "links-proto",
  "links-ui",
- "locations-proto",
  "mealplan-proto",
  "milestone-proto",
  "neo_frizbee",

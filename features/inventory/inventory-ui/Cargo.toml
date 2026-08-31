@@ -1,0 +1,23 @@
+[package]
+name = "inventory-ui"
+description = "The gear register: its screen, its service calls, and its optimistic store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+architect-ui.workspace = true
+dioxus = { workspace = true }
+inventory-proto = { workspace = true, features = ["vox", "atom"] }
+# Items name their location, and the doc link points at that crate.
+locations-ui = { workspace = true }
+task-stores = { workspace = true }
+task-ui-core = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

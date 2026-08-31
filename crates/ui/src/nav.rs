@@ -5,9 +5,9 @@
 
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag,
-    FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, MapPin, Notebook, Package,
-    ReceiptText, RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users, Utensils,
-    Wallet, Waypoints, Youtube,
+    FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, ReceiptText,
+    RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users, Utensils, Wallet, Waypoints,
+    Youtube,
 };
 use dioxus::prelude::*;
 
@@ -45,12 +45,6 @@ fn icon_tasks() -> Element {
 }
 fn icon_vault() -> Element {
     rsx! { Notebook { size: 16 } }
-}
-fn icon_locations() -> Element {
-    rsx! { MapPin { size: 16 } }
-}
-fn icon_inventory() -> Element {
-    rsx! { Package { size: 16 } }
 }
 fn icon_milestones() -> Element {
     rsx! { Flag { size: 16 } }
@@ -170,18 +164,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
                 path: String::new(),
                 org: String::new(),
             },
-        },
-        NavTab {
-            label: "Locations",
-            plugin: "home",
-            icon: icon_locations,
-            route: Route::LocationsRoute {},
-        },
-        NavTab {
-            label: "Inventory",
-            plugin: "home",
-            icon: icon_inventory,
-            route: Route::InventoryRoute {},
         },
         NavTab {
             label: "Milestones",
@@ -466,8 +448,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::TasksRoute {} => "Tasks",
         Route::TaskDetailRoute { .. } => "Task",
         Route::VaultRoute { .. } => "Vault",
-        Route::LocationsRoute {} => "Locations",
-        Route::InventoryRoute {} => "Inventory",
         Route::MilestonesRoute {} => "Milestones",
         Route::MealplanRoute {} => "Mealplan",
         Route::ShoppingRoute {} => "Shopping",

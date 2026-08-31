@@ -1,0 +1,17 @@
+[package]
+name = "task-plugin-home"
+description = "Home as a Task app: the place register and the gear register that points at it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-plugin-ui = { workspace = true }
+inventory-ui = { workspace = true }
+locations-ui = { workspace = true }
+
+[lints]
+workspace = true

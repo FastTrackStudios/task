@@ -417,47 +417,6 @@ feeds! {
     }
 }
 
-// ── Locations ───────────────────────────────────────────────────────
-
-feeds! {
-    locations_proto::LocationsServiceClient {
-        /// Every location in the org's vault (studios / rooms / storage /
-        /// venues / homes), in the order the backend lists them.
-        fetch_locations() -> Vec<locations_proto::Location>
-            = list() as "list locations";
-
-        /// Create one location from a caller-built draft (see
-        /// `stores::draft_location` — the backend assigns the real `id` and
-        /// vault `path`). Returns the persisted location.
-        create_location(loc: locations_proto::Location) -> locations_proto::Location
-            = create(loc) as "create location";
-    }
-}
-
-// ── Scripture ───────────────────────────────────────────────────────
-
-// ── Inventory ───────────────────────────────────────────────────────
-
-feeds! {
-    inventory_proto::InventoryServiceClient {
-        /// Every inventory item in the org's vault (`type: item` gear /
-        /// equipment pages), in the order the backend lists them.
-        fetch_inventory() -> Vec<inventory_proto::Item>
-            = list() as "list inventory";
-
-        /// Create one inventory item from a caller-built draft (see
-        /// `stores::draft_item` — the backend assigns the real `id` and vault
-        /// `path`). Returns the persisted item.
-        create_item(item: inventory_proto::Item) -> inventory_proto::Item
-            = create(item) as "create item";
-
-        /// Move an item along its lifecycle (in-use / stored / loaned /
-        /// in-repair / missing / retired). Returns the updated item.
-        set_item_status(id: &str, status: &str) -> inventory_proto::Item
-            = set_status(id.to_owned(), status.to_owned()) as "set item status";
-    }
-}
-
 // ── Milestones ──────────────────────────────────────────────────────
 
 feeds! {
@@ -978,6 +937,8 @@ pub async fn fetch_links_for(
         .await
         .map_err(|e| format!("{slug}: links_for: {e:?}"))
 }
+
+// ── Scripture ───────────────────────────────────────────────────────
 
 feeds! {
     scripture_proto::ScriptureServiceClient {

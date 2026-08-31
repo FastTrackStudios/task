@@ -86,11 +86,6 @@ contacts-proto = { workspace = true, features = ["vox", "atom"] }
 # The FSRS scheduler the review flow drives client-side.
 spaced-repetition = { workspace = true }
 threads = { workspace = true, features = ["vox", "ui", "atom"] }
-locations-proto = { workspace = true, features = ["vox", "atom"] }
-# Inventory wire surface — `Item` model + `InventoryService`
-# client for the `/inventory` route. Wasm-clean (serde-only
-# client side), `vox` feature only.
-inventory-proto = { workspace = true, features = ["vox", "atom"] }
 # Scripture wire surface — `ScriptureService` client + verse DTOs
 # for the `/scripture` reader. Read-only, `vox` feature only.
 scripture-proto = { workspace = true, features = ["vox"] }

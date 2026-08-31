@@ -75,6 +75,7 @@ members = [
     "apps/plugins/scripture",
     "apps/plugins/email",
     "apps/plugins/fitness",
+    "apps/plugins/home",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -109,12 +110,14 @@ members = [
     "features/inbox/inbox-proto",
     "features/inventory/inventory",
     "features/inventory/inventory-proto",
+    "features/inventory/inventory-ui",
     "features/label/label-proto",
     "features/links/links",
     "features/links/links-proto",
     "features/links/links-ui",
     "features/locations/locations",
     "features/locations/locations-proto",
+    "features/locations/locations-ui",
     "features/mealplan/cookbook",
     "features/mealplan/cookbook/cookbook-proto",
     "features/mealplan/mealplan",
@@ -234,6 +237,7 @@ task-plugin-cooking = { path = "apps/plugins/cooking" }
 task-plugin-scripture = { path = "apps/plugins/scripture" }
 task-plugin-email = { path = "apps/plugins/email" }
 task-plugin-fitness = { path = "apps/plugins/fitness" }
+task-plugin-home = { path = "apps/plugins/home" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
@@ -303,12 +307,14 @@ inbox = { path = "features/inbox/inbox" }
 inbox-proto = { path = "features/inbox/inbox-proto", default-features = false }
 intake = { path = "features/fitness/intake" }
 inventory = { path = "features/inventory/inventory" }
+inventory-ui = { path = "features/inventory/inventory-ui" }
 inventory-proto = { path = "features/inventory/inventory-proto", default-features = false }
 label-proto = { path = "features/label/label-proto" }
 links = { path = "features/links/links" }
 links-proto = { path = "features/links/links-proto", default-features = false }
 links-ui = { path = "features/links/links-ui" }
 locations = { path = "features/locations/locations" }
+locations-ui = { path = "features/locations/locations-ui" }
 locations-proto = { path = "features/locations/locations-proto", default-features = false }
 mealplan = { path = "features/mealplan/mealplan" }
 mealplan-proto = { path = "features/mealplan/mealplan/mealplan-proto", default-features = false }

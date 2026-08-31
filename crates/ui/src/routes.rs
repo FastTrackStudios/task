@@ -55,12 +55,6 @@ pub enum Route {
         #[route("/vault?:path&:org")]
         VaultRoute { path: String, org: String },
 
-        #[route("/locations")]
-        LocationsRoute {},
-
-        #[route("/inventory")]
-        InventoryRoute {},
-
         #[route("/milestones")]
         MilestonesRoute {},
 
@@ -306,20 +300,6 @@ fn TaskDetailRoute(id: uuid::Uuid) -> Element {
 #[component]
 fn VaultRoute(path: String, org: String) -> Element {
     rsx! { pages::vault::VaultView { initial_path: path, initial_org: org } }
-}
-
-#[component]
-fn LocationsRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "home", pages::locations::LocationsView {} }
-    }
-}
-
-#[component]
-fn InventoryRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "home", pages::inventory::InventoryView {} }
-    }
 }
 
 #[component]
