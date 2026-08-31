@@ -145,6 +145,8 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon mounts                   what is mounted, and where
     fts-files-daemon place <root> <path>      where it appears, e.g. org/Projects/Name
     fts-files-daemon mount-all <dir> [--flat] compose every root into one tree there
+    fts-files-daemon keep <root> <pattern>... stream only these; stub the rest
+    fts-files-daemon keep <root>              what it keeps resident now
     fts-files-daemon evict <root> <path>      give its bytes back to the disk
     fts-files-daemon fetch <root> <path>      bring one file's bytes back now
 
@@ -171,7 +173,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some(
             "status" | "checkpoint" | "share" | "shares" | "unshare" | "peer" | "forget"
             | "resolve" | "mount" | "unmount" | "mounts" | "evict" | "fetch" | "place"
-            | "mount-all" | "capture" | "coordinator",
+            | "mount-all" | "capture" | "coordinator" | "keep",
         ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -724,6 +726,51 @@ async fn mount_all(under: &str, flat: bool) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// Keep only what matches resident, and stub the rest.
+///
+/// With no patterns it reports rather than changes anything — "what is
+/// this machine actually holding" is the question somebody asks first,
+/// and answering it should not be a side effect of setting a policy.
+async fn keep(root: &str, patterns: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let client = control().await?;
+    let id = root_id(&client, root).await?;
+
+    if patterns.is_empty() {
+        let kept = client.kept(id).await?;
+        if kept.is_empty() {
+            println!("{root} keeps everything resident");
+        } else {
+            println!("{root} keeps only:");
+            for pattern in kept {
+                println!("    {pattern}");
+            }
+        }
+        return Ok(());
+    }
+
+    let report = client.keep_only(id, patterns.clone()).await?;
+    println!("{root} now keeps only:");
+    for pattern in &patterns {
+        println!("    {pattern}");
+    }
+    println!();
+    println!("  {} fetched, {} given back to the disk", report.hydrated, report.dehydrated);
+    if report.skipped_dirty > 0 {
+        // Not a failure, and the most important line when it appears:
+        // the pass will not trade unsaved work for disk space.
+        println!(
+            "  {} left alone — changed since the last save point",
+            report.skipped_dirty
+        );
+    }
+    if report.failed > 0 {
+        println!("  {} could not be changed", report.failed);
+    }
+    println!();
+    println!("what is stubbed still lists at full size; opening it fetches it.");
+    Ok(())
+}
+
 /// Release one file's bytes, keeping the file.
 async fn evict(root: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let client = control().await?;
@@ -889,6 +936,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return share(&dir, name, later).await;
         }
         Some("capture") => return capture().await,
+        Some("keep") => {
+            let root = args.get(1).ok_or("keep needs a root id or name")?.clone();
+            let patterns: Vec<String> = args[2..].to_vec();
+            return keep(&root, patterns).await;
+        }
         Some("coordinator") => {
             let id = args
                 .get(1)

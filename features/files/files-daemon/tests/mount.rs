@@ -224,7 +224,15 @@ async fn a_root_appears_where_it_is_placed_not_where_it_lives() {
     assert!(rig.tree.join("notes.txt").exists());
     assert!(!rig.tree.to_string_lossy().contains("codywright"));
 
-    rig.control.unmount(rig.root_id).await.unwrap();
+    // One mount covers every root, so it is not registered under any
+    // root's id — taking it down means taking down what is mounted.
+    let mounted = rig.control.mounts().await.unwrap();
+    assert_eq!(mounted.len(), 1, "the whole tree is one mount");
+    assert_ne!(
+        mounted[0].0, rig.root_id,
+        "the composed tree is not any one root"
+    );
+    rig.control.unmount(mounted[0].0).await.unwrap();
 }
 
 /// A place that climbs out of the tree would mount a root anywhere on

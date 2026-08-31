@@ -169,6 +169,80 @@ fn frontmatter_tags(path: &Path) -> Vec<String> {
     tags
 }
 
+/// Mount every placed root as one tree at `mountpoint`.
+///
+/// One mount, not one per root. A mount per root is what this did
+/// first, and a machine holding forty-six of them showed forty-six
+/// separate devices in the file manager — which is exactly the flat,
+/// unrelated layout the whole `place` mechanism exists to replace.
+///
+/// The parents (`codywright`, `Projects`) exist only as segments of
+/// places, so they are given somewhere to be: a skeleton of empty
+/// directories under the agent's own data dir, one per place. Nothing
+/// of the user's is in it, and it is rebuilt from the places on every
+/// mount, so a root that moved or went away leaves nothing behind.
+#[cfg(target_os = "linux")]
+pub(crate) fn mount_composed(
+    daemon: &SyncDaemon,
+    skeleton: &Path,
+    roots: Vec<(Uuid, PathBuf, String)>,
+    mountpoint: &Path,
+) -> Result<fuser_session::Session> {
+    clear_stale(mountpoint);
+    std::fs::create_dir_all(mountpoint)
+        .map_err(|e| DaemonError::Io(format!("creating {}: {e}", mountpoint.display())))?;
+
+    // Fresh each time: the skeleton is derived from the places, and a
+    // stale directory in it would show a project this machine no longer
+    // holds.
+    let _ = std::fs::remove_dir_all(skeleton);
+    let runtime = tokio::runtime::Handle::current();
+    let mut placed = Vec::new();
+    for (root_id, tree, place) in roots {
+        std::fs::create_dir_all(skeleton.join(&place))
+            .map_err(|e| DaemonError::Io(format!("laying out {place}: {e}")))?;
+        placed.push(files_fuse::Placed {
+            place: place.clone(),
+            backing: tree.clone(),
+            hydrator: std::sync::Arc::new(Fetch {
+                daemon: daemon.clone(),
+                root_id,
+                runtime: runtime.clone(),
+            }),
+            tags: std::sync::Arc::new(RootTags {
+                org: place.split_once('/').map(|(org, _)| org.to_string()),
+                tree,
+            }),
+        });
+    }
+
+    let count = placed.len();
+    let session = files_fuse::LiveTree::composed(skeleton, placed)
+        .mount(mountpoint)
+        .map_err(|e| DaemonError::Io(format!("mounting at {}: {e}", mountpoint.display())))?;
+    tracing::info!(
+        roots = count,
+        mountpoint = %mountpoint.display(),
+        "mounted the tree — one folder, every root at its place"
+    );
+    Ok(session)
+}
+
+/// The same call on a platform with no FUSE.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn mount_composed(
+    _daemon: &SyncDaemon,
+    _skeleton: &Path,
+    _roots: Vec<(Uuid, PathBuf, String)>,
+    _mountpoint: &Path,
+) -> Result<fuser_session::Session> {
+    Err(DaemonError::BadRequest(format!(
+        "mounting is Linux-only here; on {} it is the File Provider \
+         extension's job, which the app installs rather than the agent",
+        std::env::consts::OS
+    )))
+}
+
 /// Mount `root_id`'s live tree at `mountpoint`.
 ///
 /// The mount lives until [`SyncDaemon::unmount`] or the process exits;

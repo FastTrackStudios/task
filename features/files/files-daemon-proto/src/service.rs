@@ -59,6 +59,22 @@ pub struct PlacedRoot {
     pub place: String,
 }
 
+/// What a `keep_only` pass did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct KeptReport {
+    /// Files brought resident because they match and were stubs.
+    pub hydrated: u32,
+    /// Files turned into stubs because they do not match.
+    pub dehydrated: u32,
+    /// Files left alone because their bytes differ from the last
+    /// checkpoint. Work in progress is never traded for disk space, and
+    /// a count here is worth seeing rather than assuming.
+    pub skipped_dirty: u32,
+    /// Files the pass could not act on.
+    pub failed: u32,
+}
+
 /// What became of one root a peer offered.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(C)]
@@ -225,6 +241,20 @@ pub trait DaemonControlService {
     /// pull its content resident on demand). Fails if its content is
     /// not yet local — a pull brings it first.
     async fn hydrate(&self, root_id: Uuid, path: String) -> Result<(), DaemonError>;
+
+    /// Keep only paths matching `patterns` resident; stub the rest.
+    ///
+    /// Stored, so it governs later materializes too — content arriving
+    /// from a peer lands resident or as a stub according to it. Empty
+    /// patterns clear the policy, which means "keep everything".
+    async fn keep_only(
+        &self,
+        root_id: Uuid,
+        patterns: Vec<String>,
+    ) -> Result<KeptReport, DaemonError>;
+
+    /// What this root keeps resident. Empty means everything.
+    async fn kept(&self, root_id: Uuid) -> Result<Vec<String>, DaemonError>;
 
     /// The reverse: release one path's resident bytes, leaving the file
     /// listed at its real size as a pointer stub. Opening it — through a

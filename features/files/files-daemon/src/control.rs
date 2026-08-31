@@ -188,6 +188,18 @@ impl DaemonControlService for DaemonControl {
         self.daemon.hydrate(root_id, path).await
     }
 
+    async fn keep_only(
+        &self,
+        root_id: Uuid,
+        patterns: Vec<String>,
+    ) -> Result<crate::service::KeptReport, DaemonError> {
+        self.daemon.keep_only(root_id, patterns).await
+    }
+
+    async fn kept(&self, root_id: Uuid) -> Result<Vec<String>, DaemonError> {
+        self.daemon.kept(root_id).await
+    }
+
     async fn dehydrate(&self, root_id: Uuid, path: String) -> Result<(), DaemonError> {
         self.daemon.dehydrate(root_id, path).await
     }

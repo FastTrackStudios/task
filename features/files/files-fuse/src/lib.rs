@@ -178,13 +178,43 @@ impl Inodes {
     }
 }
 
+/// One root, and where it appears in the composed tree.
+pub struct Placed {
+    /// Its path in the tree people are shown — `org/Projects/Name`.
+    /// Empty for a mount of a single root at the mountpoint itself.
+    pub place: String,
+    /// Its live tree on disk. Nothing about this resembles `place`, and
+    /// that is the point.
+    pub backing: PathBuf,
+    pub hydrator: Arc<dyn Hydrator>,
+    pub tags: Arc<dyn Tags>,
+}
+
 /// The mounted tree.
+///
+/// **One mount, however many roots.** A mount per root is what this did
+/// first, and on a machine holding forty-six of them a file manager
+/// showed forty-six unrelated devices — the shape `place` exists to
+/// replace, and the same one the macOS extension composes.
+///
+/// The directories *above* each root — `codywright`, `Projects` — are
+/// not on anybody's disk. They are segments of the places, and the
+/// skeleton is where they are given somewhere to be: an empty directory
+/// tree the caller creates, one directory per place, holding nothing.
+/// Everything at or below a place resolves into that root's backing
+/// instead; everything above it resolves into the skeleton.
+///
+/// That keeps this a passthrough — no synthetic-node cases threaded
+/// through twenty filesystem methods, one function that decides which
+/// real directory a shown path means.
 pub struct LiveTree {
-    /// The directory this mirrors — the root's live tree.
-    backing: PathBuf,
-    hydrator: Arc<dyn Hydrator>,
-    /// Who to ask what a path is tagged with — see [`Tags`].
-    tags: Arc<dyn Tags>,
+    /// Where the shape of the tree lives: empty directories mirroring
+    /// the places, so the parents are real to `readdir` and `stat`.
+    skeleton: PathBuf,
+    /// The roots, longest place first so the deepest owner of a path
+    /// wins — a root placed inside another root's place answers for its
+    /// own files.
+    roots: Vec<Placed>,
     inodes: Mutex<Inodes>,
     handles: Mutex<HashMap<u64, Arc<File>>>,
     next_fh: Mutex<u64>,
@@ -205,13 +235,63 @@ impl LiveTree {
         tags: Arc<dyn Tags>,
     ) -> Self {
         let backing = backing.into();
+        Self::composed(
+            backing.clone(),
+            vec![Placed {
+                place: String::new(),
+                backing,
+                hydrator,
+                tags,
+            }],
+        )
+    }
+
+    /// Every root at its place, under one mount.
+    ///
+    /// `skeleton` must already hold an empty directory for each place —
+    /// the caller knows the places and can make them; this crate is not
+    /// in the business of creating directories outside the tree it
+    /// serves.
+    #[must_use]
+    pub fn composed(skeleton: impl Into<PathBuf>, mut roots: Vec<Placed>) -> Self {
+        // Longest place first: `resolve` takes the first match, and for
+        // `a/b/c/take.wav` both a root at `a/b` and one at `a/b/c` are
+        // prefixes. The deeper one owns it.
+        roots.sort_by(|a, b| b.place.len().cmp(&a.place.len()));
         Self {
-            inodes: Mutex::new(Inodes::rooted(&backing)),
-            backing,
-            hydrator,
-            tags,
+            skeleton: skeleton.into(),
+            roots,
+            inodes: Mutex::new(Inodes::rooted(Path::new(""))),
             handles: Mutex::new(HashMap::new()),
             next_fh: Mutex::new(1),
+        }
+    }
+
+    /// The root a shown path belongs to, if any.
+    fn owner(&self, shown: &Path) -> Option<&Placed> {
+        let shown = shown.to_string_lossy();
+        self.roots.iter().find(|r| {
+            r.place.is_empty()
+                || shown == r.place.as_str()
+                || shown.starts_with(&format!("{}/", r.place))
+        })
+    }
+
+    /// Where a shown path actually is on disk.
+    ///
+    /// Inside a root, its backing; above every root, the skeleton. This
+    /// is the only place the composition exists — every filesystem
+    /// method below works on what this returns and needs to know
+    /// nothing about places.
+    fn real(&self, shown: &Path) -> PathBuf {
+        match self.owner(shown) {
+            Some(root) => {
+                let rest = shown
+                    .strip_prefix(&root.place)
+                    .unwrap_or_else(|_| Path::new(""));
+                root.backing.join(rest)
+            }
+            None => self.skeleton.join(shown),
         }
     }
 
@@ -236,11 +316,16 @@ impl LiveTree {
         fuser::spawn_mount(self, mountpoint, &config)
     }
 
-    /// This path relative to the mount root — how `hydrate` names it.
-    fn relative(&self, path: &Path) -> PathBuf {
-        path.strip_prefix(&self.backing)
-            .unwrap_or(path)
-            .to_path_buf()
+    /// A shown path as its own root names it — what `hydrate` and the
+    /// tag provider expect, since both speak in paths within a root.
+    fn within_root(&self, shown: &Path) -> PathBuf {
+        match self.owner(shown) {
+            Some(root) => shown
+                .strip_prefix(&root.place)
+                .unwrap_or(shown)
+                .to_path_buf(),
+            None => shown.to_path_buf(),
+        }
     }
 
     /// What the kernel is told about `path`.
@@ -249,11 +334,12 @@ impl LiveTree {
     /// so towards the truth: a stub's `size` is the content's size, not
     /// the placeholder's, because every caller asking is asking about
     /// the file they think they have.
-    fn attr(&self, path: &Path) -> std::io::Result<FileAttr> {
+    fn attr(&self, shown: &Path) -> std::io::Result<FileAttr> {
         use std::os::unix::fs::PermissionsExt as _;
 
+        let path = &self.real(shown);
         let meta = std::fs::symlink_metadata(path)?;
-        let ino = self.inodes.lock().expect("inode lock").for_path(path);
+        let ino = self.inodes.lock().expect("inode lock").for_path(shown);
         let kind = if meta.is_dir() {
             FileType::Directory
         } else if meta.file_type().is_symlink() {
@@ -325,22 +411,22 @@ fn errno(e: &std::io::Error) -> Errno {
 
 impl Filesystem for LiveTree {
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
-        let Some(dir) = self.inodes.lock().expect("inode lock").path(parent) else {
+        let Some(parent_shown) = self.inodes.lock().expect("inode lock").path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
-        match self.attr(&dir.join(name)) {
+        match self.attr(&parent_shown.join(name)) {
             Ok(attr) => reply.entry(&TTL, &attr, fuser::Generation(0)),
             Err(e) => reply.error(errno(&e)),
         }
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
-        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
-        match self.attr(&path) {
+        match self.attr(&shown) {
             Ok(attr) => reply.attr(&TTL, &attr),
             Err(e) => reply.error(errno(&e)),
         }
@@ -354,10 +440,11 @@ impl Filesystem for LiveTree {
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let Some(dir) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
+        let dir = self.real(&shown);
         let listing = match std::fs::read_dir(&dir) {
             Ok(listing) => listing,
             Err(e) => {
@@ -372,6 +459,7 @@ impl Filesystem for LiveTree {
         ];
         for entry in listing.flatten() {
             let path = entry.path();
+            let child_shown = shown.join(entry.file_name());
             // The root's own machinery is not part of the tree somebody
             // mounted — the same hiding the WebDAV bridge does.
             if matches!(
@@ -386,7 +474,11 @@ impl Filesystem for LiveTree {
                 Ok(_) => FileType::RegularFile,
                 Err(_) => continue,
             };
-            let child = self.inodes.lock().expect("inode lock").for_path(&path);
+            let child = self
+                .inodes
+                .lock()
+                .expect("inode lock")
+                .for_path(&child_shown);
             entries.push((child, kind, entry.file_name().to_string_lossy().into_owned()));
         }
 
@@ -404,15 +496,22 @@ impl Filesystem for LiveTree {
     /// the read that follows finds content, and a caller that cannot be
     /// told "wait" simply waits.
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
+        let path = self.real(&shown);
 
         if files::stub::probe(&path).is_some() {
-            let rel = self.relative(&path);
+            let rel = self.within_root(&shown);
+            let Some(root) = self.owner(&shown) else {
+                // Above every root there are only directories, and a
+                // directory is never a stub.
+                reply.error(Errno::EIO);
+                return;
+            };
             tracing::info!(path = %rel.display(), "fuse: fetching content for an open");
-            if let Err(e) = self.hydrator.hydrate(&rel) {
+            if let Err(e) = root.hydrator.hydrate(&rel) {
                 tracing::warn!(path = %rel.display(), error = %e, "fuse: could not fetch it");
                 // EIO rather than ENOENT: the file exists and is named
                 // in the tree; what failed is getting its bytes, which
@@ -498,18 +597,19 @@ impl Filesystem for LiveTree {
         flags: i32,
         reply: ReplyCreate,
     ) {
-        let Some(dir) = self.inodes.lock().expect("inode lock").path(parent) else {
+        let Some(parent_shown) = self.inodes.lock().expect("inode lock").path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
-        let path = dir.join(name);
+        let child = parent_shown.join(name);
+        let path = self.real(&child);
         let mut opts = std::fs::OpenOptions::new();
         opts.create(true).read(true).write(true);
         if flags & libc::O_TRUNC != 0 {
             opts.truncate(true);
         }
         match opts.open(&path) {
-            Ok(file) => match self.attr(&path) {
+            Ok(file) => match self.attr(&child) {
                 Ok(attr) => reply.created(&TTL, &attr, fuser::Generation(0), self.keep(file), FopenFlags::empty()),
                 Err(e) => reply.error(errno(&e)),
             },
@@ -535,10 +635,11 @@ impl Filesystem for LiveTree {
         _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
-        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
+        let path = self.real(&shown);
         // Truncation is the one a DAW actually issues (open with
         // O_TRUNC, or ftruncate before a rewrite); the rest are accepted
         // and reported back, which is what a passthrough over one
@@ -553,7 +654,7 @@ impl Filesystem for LiveTree {
                 return;
             }
         }
-        match self.attr(&path) {
+        match self.attr(&shown) {
             Ok(attr) => reply.attr(&TTL, &attr),
             Err(e) => reply.error(errno(&e)),
         }
@@ -568,34 +669,34 @@ impl Filesystem for LiveTree {
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        let Some(dir) = self.inodes.lock().expect("inode lock").path(parent) else {
+        let Some(parent_shown) = self.inodes.lock().expect("inode lock").path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
-        let path = dir.join(name);
-        match std::fs::create_dir(&path).and_then(|()| self.attr(&path)) {
+        let child = parent_shown.join(name);
+        match std::fs::create_dir(self.real(&child)).and_then(|()| self.attr(&child)) {
             Ok(attr) => reply.entry(&TTL, &attr, fuser::Generation(0)),
             Err(e) => reply.error(errno(&e)),
         }
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        let Some(dir) = self.inodes.lock().expect("inode lock").path(parent) else {
+        let Some(parent_shown) = self.inodes.lock().expect("inode lock").path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
-        match std::fs::remove_file(dir.join(name)) {
+        match std::fs::remove_file(self.real(&parent_shown.join(name))) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(errno(&e)),
         }
     }
 
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        let Some(dir) = self.inodes.lock().expect("inode lock").path(parent) else {
+        let Some(parent_shown) = self.inodes.lock().expect("inode lock").path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
-        match std::fs::remove_dir(dir.join(name)) {
+        match std::fs::remove_dir(self.real(&parent_shown.join(name))) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(errno(&e)),
         }
@@ -620,7 +721,15 @@ impl Filesystem for LiveTree {
             return;
         };
         let (from, to) = (from_dir.join(name), to_dir.join(newname));
-        match std::fs::rename(&from, &to) {
+        // A rename across roots would move a file into a different tree
+        // with a different history — a sync decision, not a rename, and
+        // `std::fs::rename` across filesystems fails anyway. Refusing
+        // here says so with EXDEV instead of a confusing errno.
+        if self.owner(&from).map(|r| &r.place) != self.owner(&to).map(|r| &r.place) {
+            reply.error(Errno::EXDEV);
+            return;
+        }
+        match std::fs::rename(self.real(&from), self.real(&to)) {
             Ok(()) => {
                 self.inodes.lock().expect("inode lock").renamed(&from, &to);
                 reply.ok();
@@ -663,13 +772,18 @@ impl Filesystem for LiveTree {
     /// — passes through to the real file, so tags somebody set by hand
     /// still work.
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
-        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
+        let path = self.real(&shown);
 
         let derived = (name == OsStr::new(TAGS_XATTR))
-            .then(|| self.tags.tags(&self.relative(&path)))
+            .then(|| {
+                self.owner(&shown)
+                    .map(|r| r.tags.tags(&self.within_root(&shown)))
+                    .unwrap_or_default()
+            })
             .filter(|tags| !tags.is_empty())
             .map(|tags| tags.join(",").into_bytes());
 
@@ -705,10 +819,11 @@ impl Filesystem for LiveTree {
     /// when the provider has tags for it and the file does not already
     /// carry its own.
     fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
-        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
+        let path = self.real(&shown);
 
         // NUL-terminated names, back to back — the kernel's format.
         let mut names: Vec<u8> = Vec::new();
@@ -720,7 +835,11 @@ impl Filesystem for LiveTree {
                 names.push(0);
             }
         }
-        if !has_tags && !self.tags.tags(&self.relative(&path)).is_empty() {
+        let derived_tags = self
+            .owner(&shown)
+            .map(|r| r.tags.tags(&self.within_root(&shown)))
+            .unwrap_or_default();
+        if !has_tags && !derived_tags.is_empty() {
             names.extend_from_slice(TAGS_XATTR.as_bytes());
             names.push(0);
         }
@@ -750,10 +869,11 @@ impl Filesystem for LiveTree {
         _position: u32,
         reply: ReplyEmpty,
     ) {
-        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
+        let path = self.real(&shown);
         match xattr::set(&path, name, value) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(errno(&e)),
@@ -761,10 +881,11 @@ impl Filesystem for LiveTree {
     }
 
     fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        let Some(path) = self.inodes.lock().expect("inode lock").path(ino) else {
+        let Some(shown) = self.inodes.lock().expect("inode lock").path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
+        let path = self.real(&shown);
         match xattr::remove(&path, name) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(errno(&e)),

@@ -784,19 +784,15 @@ impl SyncDaemon {
         under: &std::path::Path,
         flat: bool,
     ) -> Vec<(String, Option<String>)> {
-        let mut outcomes = Vec::new();
         let roots = match self.shares().await {
             Ok(roots) => roots,
             Err(e) => return vec![("(the roots)".into(), Some(e.to_string()))],
         };
-        let mounted: std::collections::BTreeSet<Uuid> =
-            self.mounts().into_iter().map(|(id, _)| id).collect();
 
         // Flattening can collide — two orgs with a project of the same
-        // name land on one path, and the second would silently mount
-        // over the first. Taken once, up front, so the *pair* can be
+        // name land on one path. Counted first so the *pair* can be
         // disambiguated rather than whichever happened to be second.
-        let mut taken: std::collections::BTreeMap<String, usize> = BTreeMap::new();
+        let mut taken: BTreeMap<String, usize> = BTreeMap::new();
         if flat {
             for root in &roots {
                 *taken
@@ -805,16 +801,18 @@ impl SyncDaemon {
             }
         }
 
+        let mut placed = Vec::new();
+        let mut outcomes = Vec::new();
         for root in roots {
-            if mounted.contains(&root.id) {
+            let Some(tree) = root.path.clone() else {
+                // Structure without content on this machine: real, and
+                // nothing to show as a folder.
                 continue;
-            }
+            };
             let place = self.place_of(root.id, &root.name);
             let shown = if flat {
                 let flattened = flatten(&place);
                 if taken.get(&flattened).copied().unwrap_or(0) > 1 {
-                    // Keep both, and say which is which. A name plus its
-                    // org is what somebody would have written anyway.
                     match place.split_once('/') {
                         Some((org, _)) => format!("{flattened} ({org})"),
                         None => flattened,
@@ -825,9 +823,38 @@ impl SyncDaemon {
             } else {
                 place
             };
-            let at = under.join(&shown);
-            let error = self.mount(root.id, &at).await.err().map(|e| e.to_string());
-            outcomes.push((shown, error));
+            outcomes.push((shown.clone(), None));
+            placed.push((root.id, std::path::PathBuf::from(tree), shown));
+        }
+
+        if placed.is_empty() {
+            return outcomes;
+        }
+
+        // Everything the old per-root mounts left behind. One tree
+        // replaces all of them, so anything still mounted is stale.
+        for (id, at) in self.mounts() {
+            if let Err(e) = self.unmount(id) {
+                tracing::warn!(at = %at.display(), error = %e, "could not take down an old mount");
+            }
+        }
+
+        let skeleton = self.inner.data_dir.join("tree");
+        match crate::mount::mount_composed(self, &skeleton, placed, under) {
+            Ok(session) => {
+                self.inner
+                    .mounts
+                    .lock()
+                    .expect("mount lock")
+                    .insert(COMPOSED, (under.to_path_buf(), session));
+                self.save_mounts();
+            }
+            Err(e) => {
+                let why = e.to_string();
+                for outcome in &mut outcomes {
+                    outcome.1 = Some(why.clone());
+                }
+            }
         }
         outcomes
     }
@@ -1565,6 +1592,48 @@ impl SyncDaemon {
         Ok(())
     }
 
+    /// Keep only what matches resident; everything else becomes a stub.
+    ///
+    /// The shape a studio actually wants from a machine that is not the
+    /// one holding the masters: a record's Ogg stems are seven hundred
+    /// megabytes and its WAVs are eight gigabytes, so a laptop carries
+    /// `**/ogg/**` and lets the rest sit as stubs — listed at full size,
+    /// one open away, fetched when something actually needs them.
+    ///
+    /// Two steps, because they are two different questions. The policy
+    /// is *stored*, so it survives and governs every later materialize:
+    /// content arriving from a peer lands resident or as a stub
+    /// according to it, without a second pass. Applying it is what acts
+    /// on the files already here.
+    ///
+    /// Nothing is lost either way. A dehydrated file's content is in the
+    /// store and on the peers, and the pass refuses to dehydrate
+    /// anything whose bytes differ from the last checkpoint — work in
+    /// progress is never traded for disk.
+    pub async fn keep_only(
+        &self,
+        root_id: Uuid,
+        patterns: Vec<String>,
+    ) -> Result<crate::service::KeptReport> {
+        self.inner
+            .backend
+            .set_hydration_policy(root_id, patterns)
+            .await?;
+        let report = self.inner.backend.apply_hydration_policy(root_id).await?;
+        self.inner.events.publish(self.status());
+        Ok(crate::service::KeptReport {
+            hydrated: report.hydrated.len() as u32,
+            dehydrated: report.dehydrated.len() as u32,
+            skipped_dirty: report.skipped_dirty.len() as u32,
+            failed: report.failed.len() as u32,
+        })
+    }
+
+    /// The patterns this root keeps resident, empty for "everything".
+    pub async fn kept(&self, root_id: Uuid) -> Result<Vec<String>> {
+        Ok(self.inner.backend.hydration_policy(root_id).await?)
+    }
+
     /// Give a file's bytes back to the disk, leaving the file itself.
     ///
     /// The other half of the cloud folder, and the half that makes it
@@ -1664,6 +1733,13 @@ impl SyncDaemon {
 /// Re-export the event hub type from the crate's `hub` shim so the
 /// service layer and the daemon share one publisher.
 pub use crate::hub::EventHub;
+
+/// The composed tree's id in the mount map.
+///
+/// One mount covers every root, so it is not any root's id — a fixed
+/// one, so a restart re-mounts the tree rather than treating it as a
+/// root that has gone away.
+const COMPOSED: Uuid = Uuid::from_u128(0x7a5c_0000_0000_0000_0000_0000_0000_0001);
 
 /// Rough size of a directory tree, for ordering work by it.
 ///
