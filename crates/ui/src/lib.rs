@@ -24,6 +24,7 @@ pub mod auth;
 pub mod chrome;
 pub mod collab;
 pub mod device_pairing;
+pub mod project_declaration;
 pub mod document_session;
 pub mod feeds;
 pub mod forge_views;

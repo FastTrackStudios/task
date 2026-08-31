@@ -326,6 +326,10 @@ pub fn App() -> Element {
     // authority of the sign-in this app already holds. Once per launch,
     // native only, and it prompts nobody — see the module docs.
     crate::device_pairing::use_device_pairing();
+    // The other half of a folder becoming a project: the agent records
+    // who made it, and the app — which is signed in — writes the
+    // declaration that says whose it is.
+    crate::project_declaration::use_project_declaration();
     // Per-user prefs (server-backed) — after auth, which it watches.
     crate::prefs::provide_prefs();
     // Theme persistence: seed the org-theme overrides above from prefs
