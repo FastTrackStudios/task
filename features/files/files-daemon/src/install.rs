@@ -210,9 +210,8 @@ impl Plan {
                             DaemonError::Io(format!("creating {}: {e}", parent.display()))
                         })?;
                     }
-                    std::fs::write(path, body).map_err(|e| {
-                        DaemonError::Io(format!("writing {}: {e}", path.display()))
-                    })?;
+                    std::fs::write(path, body)
+                        .map_err(|e| DaemonError::Io(format!("writing {}: {e}", path.display())))?;
                 }
                 Action::Remove(path) => match std::fs::remove_file(path) {
                     // Absent is the goal state, so a missing file is
@@ -220,10 +219,7 @@ impl Plan {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => {
-                        return Err(DaemonError::Io(format!(
-                            "removing {}: {e}",
-                            path.display()
-                        )));
+                        return Err(DaemonError::Io(format!("removing {}: {e}", path.display())));
                     }
                 },
                 Action::Run(step) => run(step)?,
@@ -245,7 +241,11 @@ impl Plan {
                     out.push_str(&format!("remove  {}\n", path.display()));
                 }
                 Action::Run(step) => {
-                    let tail = if step.best_effort { "   (ok to fail)" } else { "" };
+                    let tail = if step.best_effort {
+                        "   (ok to fail)"
+                    } else {
+                        ""
+                    };
                     out.push_str(&format!("run     {}{tail}\n", step.argv.join(" ")));
                 }
             }

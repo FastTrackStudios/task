@@ -17,6 +17,7 @@ task-plugin-fitness = { workspace = true }
 task-plugin-home = { workspace = true }
 task-plugin-finance = { workspace = true }
 task-plugin-recall = { workspace = true }
+task-plugin-agent = { workspace = true }
 
 [lints]
 workspace = true

@@ -32,6 +32,7 @@ pub const APP: PluginApp = PluginApp {
     }],
     view: view,
     // Body metrics and exercises, installed at the app root.
+    panel: None,
     claim_file: None,
     provide: Some(provide_stores),
     widgets: None,

@@ -59,10 +59,9 @@ async fn the_app_client_reaches_an_org_over_iroh_as_a_signed_in_person() {
     task_ui_core::vox_session::set_session_token(Some(s.people.alice.token.clone()));
 
     // The app's own establish path, end to end.
-    let projects: ProjectServiceClient =
-        task_ui_core::vox_clients::establish_for("acme-audio")
-            .await
-            .expect("establish over iroh");
+    let projects: ProjectServiceClient = task_ui_core::vox_clients::establish_for("acme-audio")
+        .await
+        .expect("establish over iroh");
     let listed = projects.list().await.expect("list projects as Alice");
     // The example studio plants no project pages — empty is the seeded
     // truth. The claim is the call round-tripped through the gate.

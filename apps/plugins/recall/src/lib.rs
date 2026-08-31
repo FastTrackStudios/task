@@ -27,6 +27,7 @@ pub const APP: PluginApp = PluginApp {
         rail: true,
     }],
     view: view,
+    panel: None,
     claim_file: None,
     provide: Some(provide_stores),
     widgets: None,

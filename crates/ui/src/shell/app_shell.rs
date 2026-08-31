@@ -27,7 +27,16 @@ pub fn AppShell() -> Element {
     use_context_provider(|| Signal::new(files_ui::Selection::default()));
     let _ = use_context_provider(|| Signal::new(crate::chrome::RightPanelOpen(true)));
     let agent_panel = use_context_provider(|| Signal::new(crate::chrome::AgentPanelOpen(false)));
-    let _ = use_context_provider(|| Signal::new(crate::chrome::AgentPanelSelected(String::new())));
+    // What the enabled apps put in the right dock. Read here rather
+    // than at the mount site because the dock's chrome — the border,
+    // the drag handle, the whole column — should not render at all
+    // when nothing is going to fill it.
+    let enabled = crate::nav::use_active_plugins();
+    let docked: Vec<fn() -> Element> = task_plugin_ui::registered()
+        .iter()
+        .filter(|a| enabled.contains(a.id))
+        .filter_map(|a| a.panel)
+        .collect();
     let mut agent_width =
         use_context_provider(|| Signal::new(crate::chrome::AgentPanelWidth(416.0)));
     // Restore the persisted panel width once per shell mount.
@@ -121,10 +130,13 @@ pub fn AppShell() -> Element {
                             FleetingFab {}
                         }
                     }
-                    // The right agent sidebar: conversations + chat,
-                    // alongside whatever the center view shows. Left
-                    // edge is a drag handle (width persisted).
-                    if agent_panel.read().0 && !chromeless() {
+                    // The right dock: whatever an app puts beside the
+                    // center view. Left edge is a drag handle (width
+                    // persisted). The shell owns the dock — the toggle,
+                    // the width, the resize — and the apps fill it, so
+                    // an org with every panel-contributing app turned
+                    // off gets no dock rather than an empty one.
+                    if agent_panel.read().0 && !chromeless() && !docked.is_empty() {
                         div {
                             class: "relative hidden shrink-0 border-l border-border/60 md:flex md:min-h-0 md:flex-col md:overflow-hidden",
                             style: "width: {agent_width.read().0}px;",
@@ -137,7 +149,9 @@ pub fn AppShell() -> Element {
                                     )));
                                 },
                             }
-                            crate::shell::agent_panel::AgentPanel {}
+                            for render in docked.clone() {
+                                {render()}
+                            }
                         }
                     }
                 }

@@ -110,7 +110,10 @@ fn frontmatter_tags(path: &Path) -> Vec<String> {
         return Vec::new();
     };
     let mut lines = std::io::BufReader::new(file).lines();
-    if !lines.next().is_some_and(|l| l.is_ok_and(|l| l.trim() == "---")) {
+    if !lines
+        .next()
+        .is_some_and(|l| l.is_ok_and(|l| l.trim() == "---"))
+    {
         return Vec::new();
     }
 
@@ -209,7 +212,9 @@ impl files_fuse::Composer for MakeProject {
             .siblings
             .iter()
             .find(|(p, _)| {
-                Path::new(p).parent().map(|p| p.to_string_lossy().into_owned())
+                Path::new(p)
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned())
                     == Some(parent.clone())
             })
             .map(|(_, backing)| backing.clone())
@@ -288,7 +293,9 @@ impl files_fuse::Composer for MakeProject {
             tags: std::sync::Arc::new(RootTags {
                 // The org is the first segment of the *place*, the same
                 // as every other root — not anything about the name.
-                org: place_for_tags.split_once('/').map(|(org, _)| org.to_string()),
+                org: place_for_tags
+                    .split_once('/')
+                    .map(|(org, _)| org.to_string()),
                 tree: dir,
             }),
         })
@@ -450,11 +457,8 @@ pub(crate) fn mount(
         org: place.split_once('/').map(|(org, _)| org.to_string()),
         tree: tree.to_path_buf(),
     };
-    let fs = files_fuse::LiveTree::tagged(
-        tree,
-        std::sync::Arc::new(fetch),
-        std::sync::Arc::new(tags),
-    );
+    let fs =
+        files_fuse::LiveTree::tagged(tree, std::sync::Arc::new(fetch), std::sync::Arc::new(tags));
     let session = fs
         .mount(mountpoint)
         .map_err(|e| DaemonError::Io(format!("mounting at {}: {e}", mountpoint.display())))?;

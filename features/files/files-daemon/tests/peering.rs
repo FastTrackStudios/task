@@ -331,7 +331,11 @@ async fn a_root_pulls_from_every_machine_it_was_told_about() {
 
     // Work on the machine the hub was told about FIRST — the one a
     // last-writer-wins choice would have dropped.
-    std::fs::write(one.album_tree().join("mix.wav"), b"work from the first machine").unwrap();
+    std::fs::write(
+        one.album_tree().join("mix.wav"),
+        b"work from the first machine",
+    )
+    .unwrap();
     one.daemon
         .checkpoint_now(album)
         .await

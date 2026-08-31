@@ -232,7 +232,10 @@ impl DaemonControlService for DaemonControl {
         under: String,
         flat: bool,
     ) -> Result<Vec<(String, Option<String>)>, DaemonError> {
-        Ok(self.daemon.mount_all(std::path::Path::new(&under), flat).await)
+        Ok(self
+            .daemon
+            .mount_all(std::path::Path::new(&under), flat)
+            .await)
     }
 
     async fn mounts(&self) -> Result<Vec<(Uuid, String)>, DaemonError> {

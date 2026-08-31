@@ -94,20 +94,20 @@ const AGENTS_CSS: &str = r#"
 
 #[component]
 pub fn AgentsView(session: String) -> Element {
-    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
-    let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
+    let selection = use_context::<Signal<task_ui_core::orgs::OrgSelection>>();
+    let org_list = use_context::<Signal<Vec<task_ui_core::orgs::OrgMeta>>>();
     let nav = use_navigator();
 
     let mut sessions = use_resource(move || async move {
-        let slugs = crate::orgs::selected_slugs(&selection.read(), &org_list.read());
+        let slugs = task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read());
         if slugs.is_empty() {
             return Ok(Vec::new());
         }
-        crate::feeds::fetch_agent_sessions(&slugs).await
+        crate::fetch_agent_sessions(&slugs).await
     });
 
     let active = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -115,23 +115,19 @@ pub fn AgentsView(session: String) -> Element {
     // Discovery — live models / skills / capabilities for the active org.
     let models = use_resource(move || async move {
         match active() {
-            Some(s) => crate::feeds::fetch_agent_models(&s)
-                .await
-                .unwrap_or_default(),
+            Some(s) => crate::fetch_agent_models(&s).await.unwrap_or_default(),
             None => Vec::new(),
         }
     });
     let skills = use_resource(move || async move {
         match active() {
-            Some(s) => crate::feeds::fetch_agent_skills(&s)
-                .await
-                .unwrap_or_default(),
+            Some(s) => crate::fetch_agent_skills(&s).await.unwrap_or_default(),
             None => Vec::new(),
         }
     });
     let capabilities = use_resource(move || async move {
         match active() {
-            Some(s) => crate::feeds::fetch_agent_capabilities(&s)
+            Some(s) => crate::fetch_agent_capabilities(&s)
                 .await
                 .unwrap_or_default(),
             None => Vec::new(),
@@ -166,12 +162,15 @@ pub fn AgentsView(session: String) -> Element {
     let on_new_chat = move |_| {
         let Some(slug) = active() else { return };
         spawn(async move {
-            match crate::feeds::create_agent_session(&slug, "", "").await {
+            match crate::create_agent_session(&slug, "", "").await {
                 Ok(s) => {
                     create_error.set(String::new());
-                    nav.push(crate::routes::Route::AgentsRoute {
-                        session: s.id.clone(),
-                    });
+                    nav.push(task_plugin_ui::href_param(
+                        crate::APP_ID,
+                        "",
+                        "session",
+                        &s.id,
+                    ));
                     selected.set(Some((slug, s)));
                     sessions.restart();
                 }
@@ -197,16 +196,14 @@ pub fn AgentsView(session: String) -> Element {
     let mutate = use_callback(move |(slug, id, action): (String, String, SessionAction)| {
         spawn(async move {
             let res: Result<(), String> = match action {
-                SessionAction::Pin(v) => crate::feeds::pin_agent_session(&slug, &id, v)
+                SessionAction::Pin(v) => crate::pin_agent_session(&slug, &id, v).await.map(|_| ()),
+                SessionAction::Archive(v) => crate::archive_agent_session(&slug, &id, v)
                     .await
                     .map(|_| ()),
-                SessionAction::Archive(v) => crate::feeds::archive_agent_session(&slug, &id, v)
+                SessionAction::Rename(t) => crate::rename_agent_session(&slug, &id, &t)
                     .await
                     .map(|_| ()),
-                SessionAction::Rename(t) => crate::feeds::rename_agent_session(&slug, &id, &t)
-                    .await
-                    .map(|_| ()),
-                SessionAction::Delete => crate::feeds::delete_agent_session(&slug, &id).await,
+                SessionAction::Delete => crate::delete_agent_session(&slug, &id).await,
             };
             if let Err(e) = res {
                 create_error.set(e);
@@ -216,16 +213,12 @@ pub fn AgentsView(session: String) -> Element {
                     Some((_, s)) if s.id == id
                 );
                 if touched_open {
-                    if let Ok(s) =
-                        crate::feeds::fetch_agent_sessions(std::slice::from_ref(&slug)).await
-                    {
+                    if let Ok(s) = crate::fetch_agent_sessions(std::slice::from_ref(&slug)).await {
                         match s.into_iter().find(|(_, s)| s.id == id) {
                             Some(row) => selected.set(Some(row)),
                             None => {
                                 selected.set(None);
-                                nav.push(crate::routes::Route::AgentsRoute {
-                                    session: String::new(),
-                                });
+                                nav.push(task_plugin_ui::href(crate::APP_ID, "", ""));
                             }
                         }
                     }
@@ -275,9 +268,7 @@ pub fn AgentsView(session: String) -> Element {
                                     class: "flex min-h-11 w-full items-center gap-2 rounded-lg border border-border/60 bg-card/30 px-3 py-2 text-left active:bg-accent/40",
                                     onclick: move |_| {
                                         selected.set(Some(row.clone()));
-                                        nav.push(crate::routes::Route::AgentsRoute {
-                                            session: target.clone(),
-                                        });
+                                        nav.push(task_plugin_ui::href_param(crate::APP_ID, "", "session", &target));
                                     },
                                     span { class: "min-w-0 flex-1 truncate text-sm text-foreground", "{title}" }
                                     if let Some(p) = &pill {
@@ -341,7 +332,7 @@ pub fn AgentsView(session: String) -> Element {
                             mutate,
                         }
                     }
-                    crate::shell::mobile::BottomSheet {
+                    task_ui_core::sheet::BottomSheet {
                         open: true,
                         title: "Session".to_string(),
                         on_close: move |()| show_inspector.set(false),
@@ -646,7 +637,7 @@ pub(crate) fn GatewayChip(slug: String, backend_id: String) -> Element {
     // Poll rather than subscribe: health is cheap, changes slowly,
     // and a dead gateway can't push us an event saying so.
     let mut health = use_resource(use_reactive!(|(slug,)| async move {
-        crate::feeds::fetch_agent_health(&slug).await
+        crate::fetch_agent_health(&slug).await
     }));
     let mut tick = use_signal(|| 0u32);
     use_future(move || async move {
@@ -814,7 +805,7 @@ pub(crate) fn ChatPane(
         let sid = send_sid.clone();
         let model_override = model.peek().trim().to_string();
         spawn(async move {
-            match crate::feeds::dispatch_agent_turn(&slug, &sid, &text, &model_override).await {
+            match crate::dispatch_agent_turn(&slug, &sid, &text, &model_override).await {
                 Ok(ack) => {
                     let with = if ack.effective_model.is_empty() {
                         format!("{} · default model", ack.effective_backend_id)
@@ -854,14 +845,14 @@ pub(crate) fn ChatPane(
                 (messages, error, stream_state, reconnects);
             let (mut busy, mut stopping, mut streaming) = (busy, stopping, streaming);
             async move {
-                match crate::feeds::fetch_agent_messages(&slug, &sid).await {
+                match crate::fetch_agent_messages(&slug, &sid).await {
                     Ok(mut msgs) => {
                         msgs.reverse();
                         messages.set(msgs);
                     }
                     Err(e) => error.set(format!("Couldn't load the transcript: {e}")),
                 }
-                let client = match crate::vox_clients::establish_for::<
+                let client = match task_ui_core::vox_clients::establish_for::<
                     agent_proto::service::subscriptions::SubscriptionsStreamClient,
                 >(&slug)
                 .await
@@ -1078,8 +1069,7 @@ pub(crate) fn ChatPane(
                 // rides its own task.
                 AgentEvent::Resync => {
                     spawn(async move {
-                        if let Ok(mut msgs) = crate::feeds::fetch_agent_messages(&slug, &sid).await
-                        {
+                        if let Ok(mut msgs) = crate::fetch_agent_messages(&slug, &sid).await {
                             msgs.reverse();
                             messages.set(msgs);
                         }
@@ -1129,7 +1119,7 @@ pub(crate) fn ChatPane(
         let slug = stop_slug.clone();
         let sid = stop_sid.clone();
         spawn(async move {
-            if let Err(e) = crate::feeds::cancel_agent_turn(&slug, &sid).await {
+            if let Err(e) = crate::cancel_agent_turn(&slug, &sid).await {
                 stopping.set(false);
                 error.set(format!("Couldn't stop the turn: {e}"));
             }
@@ -1264,7 +1254,7 @@ pub(crate) fn ChatPane(
             div { class: "flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-2 md:h-11 md:px-4",
                 div { class: "flex min-w-0 items-center gap-2",
                     Link {
-                        to: crate::routes::Route::AgentsRoute { session: String::new() },
+                        to: task_plugin_ui::href(crate::APP_ID, "", ""),
                         class: "-ml-1 flex h-11 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground active:bg-accent/40 md:hidden",
                         aria_label: "Back to conversations",
                         ChevronLeft { size: 18 }
@@ -1950,7 +1940,7 @@ fn Inspector(
 #[component]
 fn BackendHealthPanel(slug: String, backend_id: String) -> Element {
     let mut health = use_resource(use_reactive!(|(slug,)| async move {
-        crate::feeds::fetch_agent_health(&slug).await
+        crate::fetch_agent_health(&slug).await
     }));
     let mut tick = use_signal(|| 0u32);
     use_future(move || async move {
@@ -2078,10 +2068,10 @@ fn copy_text(text: &str) {
 fn note_chip(path: &str) -> Element {
     let name = path.rsplit('/').next().unwrap_or(path);
     let name = name.strip_suffix(".md").unwrap_or(name);
-    let to = crate::routes::Route::VaultRoute {
-        path: path.to_string(),
-        org: String::new(),
-    };
+    // Out of this app and into the vault — through the shell.s own
+    // href builder, which is how a crate that cannot name `Route`
+    // links to a note. See `task_ui_core::nav`.
+    let to = task_ui_core::nav::use_note_href()(path.to_string());
     rsx! {
         Link {
             key: "{path}",

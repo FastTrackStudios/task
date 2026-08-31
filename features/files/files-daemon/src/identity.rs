@@ -79,9 +79,7 @@ impl DeviceIdentity {
     /// key is losing this machine's address, which costs it its
     /// admissions and nothing else.
     #[cfg(feature = "vox")]
-    pub fn endpoint_key(
-        data_dir: &Path,
-    ) -> Result<architect::iroh_link::iroh::SecretKey> {
+    pub fn endpoint_key(data_dir: &Path) -> Result<architect::iroh_link::iroh::SecretKey> {
         std::fs::create_dir_all(data_dir).map_err(|e| DaemonError::Io(e.to_string()))?;
         architect::iroh_link::load_or_create_secret_key(&data_dir.join("device-key.ed25519"))
             .map_err(|e| DaemonError::Io(format!("device endpoint key: {e}")))

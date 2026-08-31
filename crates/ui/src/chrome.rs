@@ -344,12 +344,6 @@ pub struct RightPanelOpen(pub bool);
 #[derive(Clone, Copy, PartialEq)]
 pub struct AgentPanelOpen(pub bool);
 
-/// The agent panel's open conversation (session id; empty = list
-/// only). Lives in chrome state so the selection survives panel
-/// toggles and route changes.
-#[derive(Clone, PartialEq)]
-pub struct AgentPanelSelected(pub String);
-
 /// Agent panel width in px (drag-resizable, persisted to
 /// localStorage — CodexMonitor persists its panel sizes too).
 #[derive(Clone, Copy, PartialEq)]

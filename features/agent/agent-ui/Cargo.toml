@@ -1,0 +1,30 @@
+[package]
+name = "agent-ui"
+description = "The agent screens: sessions and the fleet surface, with the service calls behind them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-proto = { workspace = true, features = ["vox"] }
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+architect-ui = { workspace = true, features = ["router"] }
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+dioxus = { workspace = true, features = ["router"] }
+# For `href`/`href_param` — this crate writes links to its own screens.
+task-plugin-ui = { workspace = true }
+task-proto = { workspace = true, features = ["vox"] }
+futures-util = { workspace = true }
+# `coarse_pointer` — the same touch check the note editor uses.
+editor = { workspace = true }
+task-ui-core = { workspace = true }
+# `Markdown` — the shared renderer agent replies are shown through.
+task-ui = { workspace = true }
+uuid = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

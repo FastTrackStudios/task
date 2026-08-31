@@ -302,9 +302,7 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::fs::remove_file(remembered);
         println!("clear   coordinator");
     }
-    for (key, slot) in [
-        ("FTS_FILES_DAEMON_COORDINATOR", &mut config.coordinator),
-    ] {
+    for (key, slot) in [("FTS_FILES_DAEMON_COORDINATOR", &mut config.coordinator)] {
         if slot.is_none() && !cleared {
             *slot = files_daemon::install::configured(&home, key);
         }
@@ -315,7 +313,11 @@ fn install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let plan = files_daemon::install::install_plan(&home, &config)?;
     if copy_binary {
-        println!("copy    {} → {}", std::env::current_exe()?.display(), installed.display());
+        println!(
+            "copy    {} → {}",
+            std::env::current_exe()?.display(),
+            installed.display()
+        );
     }
     print!("{}", plan.describe());
     if dry_run {
@@ -393,7 +395,6 @@ async fn control() -> Result<files_daemon::DaemonControlServiceClient, Box<dyn s
 
 /// What the running agent is doing, as a person would ask it.
 async fn status() -> Result<(), Box<dyn std::error::Error>> {
-
     let status = control().await?.status().await?;
     println!(
         "device     {}",
@@ -401,7 +402,10 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
             .device_id
             .map_or_else(|| "—".into(), |id| id.to_string())
     );
-    println!("endpoint   {}", status.endpoint_id.as_deref().unwrap_or("—"));
+    println!(
+        "endpoint   {}",
+        status.endpoint_id.as_deref().unwrap_or("—")
+    );
     println!(
         "syncing    {}",
         if status.coordinator {
@@ -486,7 +490,10 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
         // to do is go looking.
         for path in &root.divergent {
             println!("    ⚠ two machines changed  {path}");
-            println!("      settle it:  fts-files-daemon resolve {} {path}", root.name);
+            println!(
+                "      settle it:  fts-files-daemon resolve {} {path}",
+                root.name
+            );
         }
     }
     Ok(())
@@ -494,7 +501,6 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Force a save point on a root, which is what "before I unplug" means.
 async fn checkpoint(root: &str) -> Result<(), Box<dyn std::error::Error>> {
-
     let client = control().await?;
     // By id, or by the name the status surface shows — a person reads
     // the name and should be able to type what they read.
@@ -572,7 +578,10 @@ async fn peer(endpoint_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     // that machine has admitted this one it refuses to be read. Saying
     // "permission denied" there would report the *successful* half as an
     // error and leave a person with no idea what to do next.
-    match client.pull_all(endpoint_id.to_string(), roots.clone()).await {
+    match client
+        .pull_all(endpoint_id.to_string(), roots.clone())
+        .await
+    {
         Ok(taken) if taken.is_empty() => {
             println!("it is sharing nothing yet — nothing to take.");
         }
@@ -764,7 +773,10 @@ async fn capture(watch: bool) -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
     println!();
-    println!("done — {} still awaiting", client.status().await?.awaiting_capture);
+    println!(
+        "done — {} still awaiting",
+        client.status().await?.awaiting_capture
+    );
     Ok(())
 }
 
@@ -848,7 +860,10 @@ async fn keep(root: &str, patterns: Vec<String>) -> Result<(), Box<dyn std::erro
         println!("    {pattern}");
     }
     println!();
-    println!("  {} fetched, {} given back to the disk", report.hydrated, report.dehydrated);
+    println!(
+        "  {} fetched, {} given back to the disk",
+        report.hydrated, report.dehydrated
+    );
     if report.skipped_dirty > 0 {
         // Not a failure, and the most important line when it appears:
         // the pass will not trade unsaved work for disk space.
@@ -1055,11 +1070,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return forget(&id).await;
         }
         Some("unshare") => {
-            let root = args.get(1).ok_or("unshare needs a root id or name")?.clone();
+            let root = args
+                .get(1)
+                .ok_or("unshare needs a root id or name")?
+                .clone();
             return unshare(&root).await;
         }
         Some("resolve") => {
-            let root = args.get(1).ok_or("resolve needs a root id or name")?.clone();
+            let root = args
+                .get(1)
+                .ok_or("resolve needs a root id or name")?
+                .clone();
             let path = args
                 .get(2)
                 .ok_or("resolve needs the path both machines changed")?
@@ -1075,7 +1096,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return mount(&root, &dir).await;
         }
         Some("unmount") => {
-            let root = args.get(1).ok_or("unmount needs a root id or name")?.clone();
+            let root = args
+                .get(1)
+                .ok_or("unmount needs a root id or name")?
+                .clone();
             return unmount(&root).await;
         }
         Some("mounts") => return mounts().await,
@@ -1100,12 +1124,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some("evict") => {
             let root = args.get(1).ok_or("evict needs a root id or name")?.clone();
-            let path = args.get(2).ok_or("evict needs a path in that root")?.clone();
+            let path = args
+                .get(2)
+                .ok_or("evict needs a path in that root")?
+                .clone();
             return evict(&root, &path).await;
         }
         Some("fetch") => {
             let root = args.get(1).ok_or("fetch needs a root id or name")?.clone();
-            let path = args.get(2).ok_or("fetch needs a path in that root")?.clone();
+            let path = args
+                .get(2)
+                .ok_or("fetch needs a path in that root")?
+                .clone();
             return fetch(&root, &path).await;
         }
         _ => {}
@@ -1137,8 +1167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30),
     );
-    let roots_under = env("FTS_FILES_DAEMON_ROOTS")
-        .map_or_else(|| data_dir.join("roots"), PathBuf::from);
+    let roots_under =
+        env("FTS_FILES_DAEMON_ROOTS").map_or_else(|| data_dir.join("roots"), PathBuf::from);
 
     // The daemon's own replica store lives under the data dir; the vault
     // is a sibling (curated version entities ride the vault, not the
@@ -1273,10 +1303,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The unit's environment first, then what the agent was told over
     // its socket the last time somebody paired it from the app.
     match env("FTS_FILES_DAEMON_COORDINATOR").or_else(|| daemon.remembered_coordinator()) {
-        None => tracing::warn!(
-            "no coordinator — this daemon serves its content but pulls nothing"
-        ),
-        Some(coordinator) if coordinator.starts_with("ws://") || coordinator.starts_with("wss://") => {
+        None => tracing::warn!("no coordinator — this daemon serves its content but pulls nothing"),
+        Some(coordinator)
+            if coordinator.starts_with("ws://") || coordinator.starts_with("wss://") =>
+        {
             // The dev path: a local server over a WebSocket, where the
             // transport proves nothing and nothing is being protected.
             let client: files_daemon::files_sync::SyncServiceClient =

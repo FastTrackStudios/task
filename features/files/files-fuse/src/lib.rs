@@ -65,8 +65,7 @@ use fuser::{
     BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, INodeNo,
     LockOwner, MountOption, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData,
     ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
-    Request, TimeOrNow,
-    WriteFlags,
+    Request, TimeOrNow, WriteFlags,
 };
 
 /// How long the kernel may trust what we told it.
@@ -359,12 +358,12 @@ impl LiveTree {
         let Some(parent) = shown.parent().map(|p| p.to_string_lossy().into_owned()) else {
             return false;
         };
-        self.roots
-            .lock()
-            .expect("roots lock")
-            .iter()
-            .any(|r| Path::new(&r.place).parent().map(|p| p.to_string_lossy().into_owned())
-                == Some(parent.clone()))
+        self.roots.lock().expect("roots lock").iter().any(|r| {
+            Path::new(&r.place)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                == Some(parent.clone())
+        })
     }
 
     /// Where a shown path actually is on disk.
@@ -569,7 +568,11 @@ impl Filesystem for LiveTree {
                 .lock()
                 .expect("inode lock")
                 .for_path(&child_shown);
-            entries.push((child, kind, entry.file_name().to_string_lossy().into_owned()));
+            entries.push((
+                child,
+                kind,
+                entry.file_name().to_string_lossy().into_owned(),
+            ));
         }
 
         for (i, (child, kind, name)) in entries.into_iter().enumerate().skip(offset as usize) {
@@ -700,7 +703,13 @@ impl Filesystem for LiveTree {
         }
         match opts.open(&path) {
             Ok(file) => match self.attr(&child) {
-                Ok(attr) => reply.created(&TTL, &attr, fuser::Generation(0), self.keep(file), FopenFlags::empty()),
+                Ok(attr) => reply.created(
+                    &TTL,
+                    &attr,
+                    fuser::Generation(0),
+                    self.keep(file),
+                    FopenFlags::empty(),
+                ),
                 Err(e) => reply.error(errno(&e)),
             },
             Err(e) => reply.error(errno(&e)),
@@ -879,7 +888,14 @@ impl Filesystem for LiveTree {
         reply.ok();
     }
 
-    fn fsync(&self, _req: &Request, _ino: INodeNo, fh: FileHandle, _datasync: bool, reply: ReplyEmpty) {
+    fn fsync(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
         match self.handle(fh).map(|f| f.sync_all()) {
             Some(Ok(())) => reply.ok(),
             Some(Err(e)) => reply.error(errno(&e)),

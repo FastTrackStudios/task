@@ -371,7 +371,10 @@ async fn a_folder_made_beside_projects_becomes_one() {
 
     // A root that simply exists claims no maker rather than inventing
     // one — the honest answer for anything that arrived from a peer.
-    let first = placed.iter().find(|r| r.place == "acme/Projects/First").unwrap();
+    let first = placed
+        .iter()
+        .find(|r| r.place == "acme/Projects/First")
+        .unwrap();
     assert!(first.made_by.is_none());
     // Its bytes sit beside its sibling's, wherever that turned out to
     // be — not anywhere derived from the place string.

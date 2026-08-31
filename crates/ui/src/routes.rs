@@ -101,17 +101,6 @@ pub enum Route {
         #[route("/wiki/source/:name")]
         WikiSourceRoute { name: String },
 
-        // `session` deep-links straight to one agent conversation
-        // (the explorer's Agents section drives this).
-        #[route("/agents?:session")]
-        AgentsRoute { session: String },
-
-        // The runner surface — everything blocking a human across
-        // every project. `/agents` is the conversation UI, so this
-        // gets its own path rather than displacing it.
-        #[route("/runners")]
-        RunnersRoute {},
-
         #[route("/settings")]
         SettingsRoute {},
 
@@ -398,40 +387,6 @@ fn WikiSourcesRoute() -> Element {
 fn WikiSourceRoute(name: String) -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_source::WikiSourceView { name } }
-    }
-}
-
-#[component]
-fn RunnersRoute() -> Element {
-    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
-    let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
-    // The fleet view is still per-org on the wire — one runner
-    // registry per org — so it reads the first selected org, the same
-    // way the agents page picks its active one.
-    let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
-            .into_iter()
-            .next()
-            .unwrap_or_default()
-    });
-    rsx! {
-        crate::plugin_gate::PluginGate {
-            plugin: "agent",
-            div { class: "p-4",
-                pages::agent_surface::AgentSurfaceView {
-                    slug: slug(),
-                    project: None,
-                    heading: false,
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn AgentsRoute(session: String) -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "agent", pages::agents::AgentsView { session } }
     }
 }
 

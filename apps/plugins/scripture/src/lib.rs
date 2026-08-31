@@ -45,6 +45,7 @@ pub const APP: PluginApp = PluginApp {
         rail: true,
     }],
     view: view,
+    panel: None,
     claim_file: None,
     provide: None,
     widgets: None,
@@ -76,7 +77,9 @@ fn claim_link(text: &str) -> Option<Claim> {
 /// This app's own scheme, for widgets and generated notes.
 fn claim_href(href: &str) -> Option<LinkTarget> {
     let reference = href.strip_prefix("scripture-open:")?.trim();
-    ScriptureRef::parse(reference).ok().map(|_| passage(reference))
+    ScriptureRef::parse(reference)
+        .ok()
+        .map(|_| passage(reference))
 }
 
 /// The reader, positioned at a reference.

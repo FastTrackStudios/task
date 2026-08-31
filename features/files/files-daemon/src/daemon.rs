@@ -1257,14 +1257,8 @@ impl SyncDaemon {
         };
         // With the endpoint, so a restart dials this peer again rather
         // than coming back having quietly stopped syncing this root.
-        self.set_sync_choice_from(
-            root_id,
-            &name,
-            slice,
-            peer,
-            Some(endpoint_id.to_string()),
-        )
-        .await?;
+        self.set_sync_choice_from(root_id, &name, slice, peer, Some(endpoint_id.to_string()))
+            .await?;
         Ok(self.status())
     }
 
@@ -1669,7 +1663,11 @@ impl SyncDaemon {
     pub async fn keep_both(&self, root_id: Uuid, path: String) -> Result<()> {
         self.inner
             .backend
-            .resolve_divergence(root_id, path, files_proto::model::DivergenceChoice::KeepBoth)
+            .resolve_divergence(
+                root_id,
+                path,
+                files_proto::model::DivergenceChoice::KeepBoth,
+            )
             .await?;
         self.inner.events.publish(self.status());
         Ok(())
@@ -1855,7 +1853,13 @@ impl SyncDaemon {
                 .into_iter()
                 .map(|(h, _)| h.0)
                 .collect(),
-            roots_dir: self.inner.roots_dir.lock().expect("roots dir lock").to_string_lossy().into_owned(),
+            roots_dir: self
+                .inner
+                .roots_dir
+                .lock()
+                .expect("roots dir lock")
+                .to_string_lossy()
+                .into_owned(),
             capturing: self.inner.capturing.lock().expect("capture lock").clone(),
             awaiting_capture: self.awaiting_capture().len() as u32,
             coordinator: self

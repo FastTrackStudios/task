@@ -13,7 +13,7 @@
 use dioxus::prelude::*;
 use uuid::Uuid;
 
-use crate::feeds::AgentSurface;
+use crate::AgentSurface;
 
 /// Poll interval. The stream carries per-run output; this is the
 /// coarse "has the shape of things changed" refresh, so it can be
@@ -25,7 +25,7 @@ pub fn AgentSurfaceView(slug: String, project: Option<Uuid>, heading: bool) -> E
     let mut tick = use_signal(|| 0_u32);
     use_future(move || async move {
         loop {
-            crate::pages::agent_surface::sleep(REFRESH_SECS).await;
+            crate::surface::sleep(REFRESH_SECS).await;
             tick += 1;
         }
     });
@@ -34,7 +34,7 @@ pub fn AgentSurfaceView(slug: String, project: Option<Uuid>, heading: bool) -> E
     let data = use_resource(move || {
         let _ = tick.read();
         let slug = fetch_slug.clone();
-        async move { crate::feeds::fetch_agent_surface(&slug, project).await }
+        async move { crate::fetch_agent_surface(&slug, project).await }
     });
 
     let snapshot = data.read_unchecked().as_ref().cloned();

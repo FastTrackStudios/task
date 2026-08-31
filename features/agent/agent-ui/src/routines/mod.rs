@@ -53,7 +53,7 @@ pub fn RoutinesPanel(slug: String) -> Element {
     // every mutation closure below.
     let key = slug.clone();
     let mut routines = use_resource(use_reactive!(|(key,)| async move {
-        crate::feeds::fetch_agent_routines(&key).await
+        crate::fetch_agent_routines(&key).await
     }));
     let mut error = use_signal(String::new);
     let mut composing = use_signal(|| false);
@@ -79,13 +79,11 @@ pub fn RoutinesPanel(slug: String) -> Element {
             busy_id.set(id.clone());
             spawn(async move {
                 let res: Result<(), String> = match action {
-                    RowAction::Pause(v) => crate::feeds::set_agent_routine_paused(&slug, &id, v)
+                    RowAction::Pause(v) => crate::set_agent_routine_paused(&slug, &id, v)
                         .await
                         .map(|_| ()),
-                    RowAction::RunNow => crate::feeds::run_agent_routine(&slug, &id)
-                        .await
-                        .map(|_| ()),
-                    RowAction::Delete => crate::feeds::delete_agent_routine(&slug, &id).await,
+                    RowAction::RunNow => crate::run_agent_routine(&slug, &id).await.map(|_| ()),
+                    RowAction::Delete => crate::delete_agent_routine(&slug, &id).await,
                 };
                 busy_id.set(String::new());
                 match res {
@@ -120,7 +118,7 @@ pub fn RoutinesPanel(slug: String) -> Element {
                     skills: Vec::new(),
                     repeat: 0,
                 };
-                match crate::feeds::create_agent_routine(&slug, new).await {
+                match crate::create_agent_routine(&slug, new).await {
                     Ok(_) => {
                         error.set(String::new());
                         draft_name.set(String::new());
@@ -165,7 +163,7 @@ pub fn RoutinesPanel(slug: String) -> Element {
                 }
             }
             if !fetch_err.is_empty() {
-                crate::states::InlineError {
+                task_ui_core::states::InlineError {
                     message: fetch_err.clone(),
                     label: "Routines".to_string(),
                 }

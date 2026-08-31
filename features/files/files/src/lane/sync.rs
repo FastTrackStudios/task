@@ -724,7 +724,9 @@ impl SyncService for FilesBackend {
         name: String,
     ) -> Result<DeviceInfo, FilesFault> {
         if endpoint.trim().is_empty() {
-            return Err(FilesFault::Io("a device must present an endpoint id".into()));
+            return Err(FilesFault::Io(
+                "a device must present an endpoint id".into(),
+            ));
         }
         let info = with_state(self, |s| {
             // Keyed by endpoint, not by row id: a laptop that reinstalls

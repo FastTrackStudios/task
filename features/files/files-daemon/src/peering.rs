@@ -132,7 +132,9 @@ impl DeviceRoots {
                 match std::path::PathBuf::from(&saved).canonicalize() {
                     Ok(dir) if !dirs.contains(&dir) => dirs.push(dir),
                     Ok(_) => {}
-                    Err(e) => tracing::warn!(dir = %saved, error = %e, "shared directory is not reachable"),
+                    Err(e) => {
+                        tracing::warn!(dir = %saved, error = %e, "shared directory is not reachable")
+                    }
                 }
             }
         }
@@ -166,7 +168,10 @@ impl DeviceRoots {
             dirs.push(dir.clone());
         }
         if !self.file.as_os_str().is_empty() {
-            let saved: Vec<String> = dirs.iter().map(|d| d.to_string_lossy().into_owned()).collect();
+            let saved: Vec<String> = dirs
+                .iter()
+                .map(|d| d.to_string_lossy().into_owned())
+                .collect();
             let bytes = serde_json::to_vec_pretty(&saved)
                 .map_err(|e| DaemonError::Io(format!("shared dirs: {e}")))?;
             std::fs::write(&self.file, bytes)

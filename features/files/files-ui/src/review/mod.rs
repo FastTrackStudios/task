@@ -98,11 +98,9 @@ pub async fn deliverable_poster(org: &str, root_name: &str) -> Option<String> {
         .rendition(root.id, path, RenditionKind::Proxy720)
         .await
         .ok()?;
-    let tok = task_ui_core::media_grant::suffix_for_prefix(
-        org,
-        &format!("files/renditions/{}", root.id),
-    )
-    .await;
+    let tok =
+        task_ui_core::media_grant::suffix_for_prefix(org, &format!("files/renditions/{}", root.id))
+            .await;
     Some(rendition_url(
         org,
         root.id,
@@ -276,8 +274,7 @@ pub(crate) async fn resolve_sources(
         proxy: rendition_url(org, root_id, kind, &main.file_id, &tok),
         filmstrip: filmstrip
             .map(|f| rendition_url(org, root_id, RenditionKind::Filmstrip, &f.file_id, &tok)),
-        peaks: peaks
-            .map(|p| rendition_url(org, root_id, RenditionKind::Peaks, &p.file_id, &tok)),
+        peaks: peaks.map(|p| rendition_url(org, root_id, RenditionKind::Peaks, &p.file_id, &tok)),
     })
 }
 

@@ -108,9 +108,9 @@ fn hand_over(s: String) -> *mut c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn fts_fp_last_error() -> *mut c_char {
     LAST_ERROR.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map_or(std::ptr::null_mut(), |e| hand_over(e.to_string_lossy().into_owned()))
+        slot.borrow().as_ref().map_or(std::ptr::null_mut(), |e| {
+            hand_over(e.to_string_lossy().into_owned())
+        })
     })
 }
 
@@ -153,7 +153,9 @@ struct Facts {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fts_fp_facts(path: *const c_char) -> *mut c_char {
     let borrowed = unsafe { borrow(path, "path") }.map(str::to_string);
-    guard("fts_fp_facts", std::ptr::null_mut(), move || facts_json(borrowed))
+    guard("fts_fp_facts", std::ptr::null_mut(), move || {
+        facts_json(borrowed)
+    })
 }
 
 fn facts_json(path: Result<String, String>) -> *mut c_char {
@@ -234,15 +236,14 @@ fn roots_json() -> *mut c_char {
         place: String,
     }
 
-    let roots = match on_the_agent(async |client| {
-        client.placed_roots().await.map_err(|e| e.to_string())
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            fail(e);
-            return std::ptr::null_mut();
-        }
-    };
+    let roots =
+        match on_the_agent(async |client| client.placed_roots().await.map_err(|e| e.to_string())) {
+            Ok(r) => r,
+            Err(e) => {
+                fail(e);
+                return std::ptr::null_mut();
+            }
+        };
     let roots: Vec<Root> = roots
         .into_iter()
         .map(|r| Root {
@@ -283,9 +284,7 @@ pub unsafe extern "C" fn fts_fp_hydrate(root_id: *const c_char, rel_path: *const
 }
 
 fn hydrate_now(args: (Result<String, String>, Result<String, String>)) -> c_int {
-    let (root_id, rel_path) = match (
-        args.0, args.1,
-    ) {
+    let (root_id, rel_path) = match (args.0, args.1) {
         (Ok(a), Ok(b)) => (a, b),
         (Err(e), _) | (_, Err(e)) => return fail(e),
     };
@@ -323,9 +322,7 @@ pub unsafe extern "C" fn fts_fp_evict(root_id: *const c_char, rel_path: *const c
 }
 
 fn evict_now(args: (Result<String, String>, Result<String, String>)) -> c_int {
-    let (root_id, rel_path) = match (
-        args.0, args.1,
-    ) {
+    let (root_id, rel_path) = match (args.0, args.1) {
         (Ok(a), Ok(b)) => (a, b),
         (Err(e), _) | (_, Err(e)) => return fail(e),
     };
@@ -432,7 +429,10 @@ mod tests {
         let c = CString::new(path.to_str().unwrap()).unwrap();
         let json = unsafe { fts_fp_facts(c.as_ptr()) };
         assert!(!json.is_null());
-        let json = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_string();
+        let json = unsafe { CStr::from_ptr(json) }
+            .to_str()
+            .unwrap()
+            .to_string();
         let facts: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(facts["size"], 2_000_000_000u64);
@@ -450,7 +450,10 @@ mod tests {
 
         let c = CString::new(path.to_str().unwrap()).unwrap();
         let json = unsafe { fts_fp_facts(c.as_ptr()) };
-        let json = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_string();
+        let json = unsafe { CStr::from_ptr(json) }
+            .to_str()
+            .unwrap()
+            .to_string();
         let facts: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(facts["size"], 13);
@@ -469,7 +472,10 @@ mod tests {
         let answer = guard("deliberate", std::ptr::null_mut::<c_char>(), || {
             panic!("something went wrong deep inside");
         });
-        assert!(answer.is_null(), "a panic must answer with the absent value");
+        assert!(
+            answer.is_null(),
+            "a panic must answer with the absent value"
+        );
 
         let err = fts_fp_last_error();
         assert!(!err.is_null(), "and must leave a reason behind");

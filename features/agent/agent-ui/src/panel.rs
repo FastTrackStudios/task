@@ -2,20 +2,26 @@
 //! on the right. Toggled from the top bar (Bot icon), it carries a
 //! CONVERSATIONS segment (the handful of live sessions: pinned
 //! first, status dots, `+` for a fresh chat) above an embedded
-//! [`crate::pages::agents::ChatPane`] for the selected one.
+//! [`crate::sessions::ChatPane`] for the selected one.
 //!
-//! Selection lives in chrome state ([`crate::chrome::AgentPanelSelected`])
-//! so it survives panel toggles and route changes. The `/agents`
-//! full page (with the inspector) stays for deep work — the expand
-//! button jumps there with the same session.
+//! Selection lives in this app.s own context ([`AgentPanelSelected`])
+//! rather than the shell.s chrome, so it survives panel toggles and
+//! route changes without the shell having to hold a fact about
+//! agents. The full page (with the inspector) stays for deep work —
+//! the expand button jumps there with the same session.
 
 use agent_proto::session::Session;
 use architect_ui::lucide_dioxus::{Bot, Maximize2, Plus};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
-use crate::chrome::AgentPanelSelected;
-use crate::routes::Route;
+/// The panel.s open conversation (session id; empty = list only).
+///
+/// This app.s state, provided at the app root by its `provide`, which
+/// is what lets it outlive both the panel being toggled shut and the
+/// route changing under it.
+#[derive(Clone, PartialEq)]
+pub struct AgentPanelSelected(pub String);
 
 /// Which half of the agent sidebar is showing: the conversations
 /// you're having now, or the ones the agent runs on its own.
@@ -58,33 +64,26 @@ fn tab_switch(mut tab: Signal<AgentTab>) -> Element {
 #[component]
 pub fn AgentPanel() -> Element {
     let tab = use_signal(|| AgentTab::Chats);
-    let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
-    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
-    let active = use_memo(move || crate::orgs::active_slug(&selection.read(), &org_list.read()));
+    let org_list = use_context::<Signal<Vec<task_ui_core::orgs::OrgMeta>>>();
+    let selection = use_context::<Signal<task_ui_core::orgs::OrgSelection>>();
+    let active =
+        use_memo(move || task_ui_core::orgs::active_slug(&selection.read(), &org_list.read()));
     let mut chosen = use_context::<Signal<AgentPanelSelected>>();
     let nav = use_navigator();
 
     let mut sessions = use_resource(move || {
         let slug = active();
-        async move { crate::feeds::fetch_agent_sessions(&[slug]).await }
+        async move { crate::fetch_agent_sessions(&[slug]).await }
     });
     // Discovery for the embedded chat's model picker + skills
     // autocomplete.
     let models = use_resource(move || {
         let slug = active();
-        async move {
-            crate::feeds::fetch_agent_models(&slug)
-                .await
-                .unwrap_or_default()
-        }
+        async move { crate::fetch_agent_models(&slug).await.unwrap_or_default() }
     });
     let skills = use_resource(move || {
         let slug = active();
-        async move {
-            crate::feeds::fetch_agent_skills(&slug)
-                .await
-                .unwrap_or_default()
-        }
+        async move { crate::fetch_agent_skills(&slug).await.unwrap_or_default() }
     });
     let model_list = models.read().clone().unwrap_or_default();
     let skill_list = skills.read().clone().unwrap_or_default();
@@ -122,7 +121,7 @@ pub fn AgentPanel() -> Element {
     let new_chat = move |_| {
         let slug = active();
         spawn(async move {
-            if let Ok(s) = crate::feeds::create_agent_session(&slug, "", "").await {
+            if let Ok(s) = crate::create_agent_session(&slug, "", "").await {
                 chosen.set(AgentPanelSelected(s.id.clone()));
                 sessions.restart();
             }
@@ -132,7 +131,7 @@ pub fn AgentPanel() -> Element {
     if matches!(*tab.read(), AgentTab::Routines) {
         return rsx! {
             {tab_switch(tab)}
-            crate::shell::agent_routines::RoutinesPanel { slug: active() }
+            crate::routines::RoutinesPanel { slug: active() }
         };
     }
 
@@ -151,7 +150,7 @@ pub fn AgentPanel() -> Element {
                 // Gateway reachability, so a dead backend is visible
                 // before you type into a chat that can't answer.
                 div { class: "tracking-normal",
-                    crate::pages::agents::GatewayChip {
+                    crate::sessions::GatewayChip {
                         slug: active(),
                         backend_id: "hermes".to_string(),
                     }
@@ -167,7 +166,7 @@ pub fn AgentPanel() -> Element {
                                 class: "flex h-9 w-9 items-center justify-center rounded text-muted-foreground hover:bg-accent/40 hover:text-foreground md:h-7 md:w-7",
                                 title: "Open full agent view",
                                 onclick: move |_| {
-                                    nav.push(Route::AgentsRoute { session: sid.clone() });
+                                    nav.push(task_plugin_ui::href_param(crate::APP_ID, "", "session", &sid));
                                 },
                                 Maximize2 { size: 12 }
                             }
@@ -186,7 +185,7 @@ pub fn AgentPanel() -> Element {
         div { class: "max-h-44 shrink-0 overflow-y-auto px-1.5 pb-2",
             if !fetch_err.is_empty() {
                 div { class: "mx-1.5 mb-1",
-                    crate::states::InlineError {
+                    task_ui_core::states::InlineError {
                         message: fetch_err.clone(),
                         label: "Agents".to_string(),
                     }
@@ -206,7 +205,7 @@ pub fn AgentPanel() -> Element {
                     } else {
                         s.title.clone()
                     };
-                    let pill = crate::pages::agents::logic::status_pill(s.status);
+                    let pill = crate::sessions::logic::status_pill(s.status);
                     let hermes = s.backend_id == "hermes";
                     let cls = if is_sel {
                         "flex w-full items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 text-left text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
@@ -244,7 +243,7 @@ pub fn AgentPanel() -> Element {
         // ── Embedded chat ──
         div { class: "flex min-h-0 flex-1 flex-col border-t border-border/60",
             if let Some((slug, session)) = open {
-                crate::pages::agents::ChatPane {
+                crate::sessions::ChatPane {
                     key: "panel-{session.id}",
                     slug,
                     session,

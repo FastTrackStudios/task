@@ -34,6 +34,7 @@ pub const APP: PluginApp = PluginApp {
         rail: true,
     }],
     view: view,
+    panel: None,
     claim_file: None,
     provide: None,
     widgets: None,
@@ -85,8 +86,7 @@ mod tests {
     /// subject would look like the link working.
     #[test]
     fn the_subject_and_body_survive() {
-        let target =
-            claim_href("mailto:sam@example.com?subject=Mix notes").expect("claimed");
+        let target = claim_href("mailto:sam@example.com?subject=Mix notes").expect("claimed");
         assert_eq!(
             task_plugin_ui::query_param(&target.query, "compose").as_deref(),
             Some("sam@example.com?subject=Mix notes")
@@ -97,6 +97,9 @@ mod tests {
     fn other_schemes_are_left_alone() {
         assert!(claim_href("https://example.com").is_none());
         assert!(claim_href("scripture-open:John 3:16").is_none());
-        assert!(claim_href("mailto:").is_none(), "an empty address is not a link");
+        assert!(
+            claim_href("mailto:").is_none(),
+            "an empty address is not a link"
+        );
     }
 }

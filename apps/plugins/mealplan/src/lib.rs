@@ -55,6 +55,7 @@ pub const APP: PluginApp = PluginApp {
     provide: Some(provide_stores),
     // A recipe is a `.cook` file, and a `.cook` file in the note editor
     // is raw cooklang. Claimed so it opens where it reads.
+    panel: None,
     claim_file: Some(claim_file),
     // A recipe note could render as a method with its own timers right
     // in the editor — the same seam the player uses to turn a song note

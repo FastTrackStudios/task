@@ -530,7 +530,10 @@ async fn re_enrolling_the_same_machine_keeps_one_row() {
     let (_dir, backend, _root) = album("Album").await;
     let endpoint = "1111111111111111111111111111111111111111111111111111111111111111";
 
-    let first = backend.enroll_device(endpoint.into(), "laptop".into()).await.unwrap();
+    let first = backend
+        .enroll_device(endpoint.into(), "laptop".into())
+        .await
+        .unwrap();
     let again = backend
         .enroll_device(endpoint.into(), "cody's laptop".into())
         .await
@@ -559,7 +562,10 @@ async fn re_enrolling_the_same_machine_keeps_one_row() {
 async fn revoking_a_device_stops_admitting_its_endpoint() {
     let (_dir, backend, _root) = album("Album").await;
     let endpoint = "2222222222222222222222222222222222222222222222222222222222222222";
-    let device = backend.enroll_device(endpoint.into(), "laptop".into()).await.unwrap();
+    let device = backend
+        .enroll_device(endpoint.into(), "laptop".into())
+        .await
+        .unwrap();
 
     backend.revoke_device(device.id).await.expect("revoke");
 
@@ -570,7 +576,10 @@ async fn revoking_a_device_stops_admitting_its_endpoint() {
     );
     // And letting it back in is the same call that let it in first —
     // by the same authority, which is a person signed into the org.
-    backend.enroll_device(endpoint.into(), "laptop".into()).await.unwrap();
+    backend
+        .enroll_device(endpoint.into(), "laptop".into())
+        .await
+        .unwrap();
     assert!(
         backend
             .admits(&files_domain::HostId(endpoint.into()))

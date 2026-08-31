@@ -4,8 +4,8 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    BookOpen, BookUser, Bot, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag,
-    FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, RefreshCw,
+    BookOpen, BookUser, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag, FolderKanban,
+    FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, RefreshCw,
     Settings as SettingsIcon, Target, Timer, Users, Waypoints, Youtube,
 };
 use dioxus::prelude::*;
@@ -59,9 +59,6 @@ fn icon_timer() -> Element {
 }
 fn icon_members() -> Element {
     rsx! { Users { size: 16 } }
-}
-fn icon_agents() -> Element {
-    rsx! { Bot { size: 16 } }
 }
 fn icon_files() -> Element {
     rsx! { FolderOpen { size: 16 } }
@@ -199,20 +196,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             route: Route::WatchRoute {
                 v: String::new(),
                 node: String::new(),
-            },
-        },
-        NavTab {
-            label: "Runners",
-            plugin: "agent",
-            icon: icon_agents,
-            route: Route::RunnersRoute {},
-        },
-        NavTab {
-            label: "Agents",
-            plugin: "agent",
-            icon: icon_agents,
-            route: Route::AgentsRoute {
-                session: String::new(),
             },
         },
         NavTab {
@@ -413,8 +396,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::WikiPageRoute { .. } => "Wiki page",
         Route::WikiSourcesRoute {} => "Archived sources",
         Route::WikiSourceRoute { .. } => "Source",
-        Route::AgentsRoute { .. } => "Agents",
-        Route::RunnersRoute {} => "Runners",
         Route::ReposRoute {} => "Repos",
         Route::FilesRoute {} => "Files",
         Route::SettingsRoute {} => "Settings",

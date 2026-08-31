@@ -191,11 +191,8 @@ pub trait SyncService {
     /// Idempotent on `endpoint`: re-enrolling the same machine updates
     /// its name and leaves one row, because a laptop that reinstalls the
     /// app is the same laptop.
-    async fn enroll_device(
-        &self,
-        endpoint: String,
-        name: String,
-    ) -> Result<DeviceInfo, FilesFault>;
+    async fn enroll_device(&self, endpoint: String, name: String)
+    -> Result<DeviceInfo, FilesFault>;
 
     /// This org's own endpoint id — what a device sets as the peer it
     /// syncs with.

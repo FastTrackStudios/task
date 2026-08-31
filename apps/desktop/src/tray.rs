@@ -14,9 +14,7 @@
 //! CLI drives and the `/sync` page drives. Nothing is implemented twice,
 //! so the menu cannot come to believe something the agent does not.
 
-use dioxus::desktop::trayicon::{
-    DioxusTrayIcon, DioxusTrayMenu, init_tray_icon,
-};
+use dioxus::desktop::trayicon::{DioxusTrayIcon, DioxusTrayMenu, init_tray_icon};
 use dioxus::desktop::use_tray_menu_event_handler;
 use dioxus::prelude::*;
 // Through dioxus rather than a direct `tray-icon` dependency: the two

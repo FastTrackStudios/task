@@ -1,0 +1,17 @@
+[package]
+name = "task-plugin-agent"
+description = "Agents as a Task app: the conversation UI and the fleet surface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-plugin-ui = { workspace = true }
+agent-ui = { workspace = true }
+task-ui-core = { workspace = true }
+
+[lints]
+workspace = true

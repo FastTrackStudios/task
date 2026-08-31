@@ -339,6 +339,23 @@ pub struct PluginApp {
     /// Returning `None` means "not one of mine" and the shell shows its
     /// own not-found rather than the app pretending to have a page.
     pub view: fn(path: &str, query: &str) -> Option<Element>,
+    /// What this app puts in the docked side panel.
+    ///
+    /// The panel is the strip that stays open beside whatever page you
+    /// are on — the place for something you refer to *while* doing
+    /// something else. The shell owns the dock itself (the toggle, the
+    /// width, the drag handle, remembering both); an app fills it.
+    ///
+    /// This exists because a panel is the one surface where "the app is
+    /// off" was not previously expressible. A screen that does not
+    /// resolve is obvious, and a nav tab that is not there is obvious.
+    /// A dock rendered by the shell has no such state — an org with the
+    /// app disabled got the panel anyway, empty, with no way to tell
+    /// that from it being broken.
+    ///
+    /// Rendered only for enabled apps, so turning the app off empties
+    /// the dock, which is the honest answer.
+    pub panel: Option<fn() -> Element>,
     /// Which **files** this app opens.
     ///
     /// Task's vault is files, and not all of them are notes. A `.cook`
@@ -571,6 +588,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            panel: None,
             claim_file: None,
             provide: None,
             widgets: None,
@@ -583,6 +601,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            panel: None,
             claim_file: None,
             provide: None,
             widgets: None,
@@ -619,6 +638,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            panel: None,
             claim_file: None,
             provide: None,
             widgets: None,
@@ -648,6 +668,7 @@ mod tests {
             version: "1.2.3",
             nav: &[],
             view: nowhere,
+            panel: None,
             claim_file: None,
             provide: None,
             widgets: None,
@@ -682,6 +703,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            panel: None,
             claim_file: None,
             provide: None,
             widgets: None,
@@ -694,6 +716,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            panel: None,
             claim_file: None,
             provide: None,
             widgets: None,

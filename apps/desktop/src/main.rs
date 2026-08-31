@@ -147,14 +147,38 @@ fn Root() -> Element {
 fn ResizeHandles() -> Element {
     use tao::window::ResizeDirection as Dir;
     let handles: &[(&str, Dir)] = &[
-        ("top: 0; left: 12px; right: 12px; height: 5px; cursor: ns-resize;", Dir::North),
-        ("bottom: 0; left: 12px; right: 12px; height: 5px; cursor: ns-resize;", Dir::South),
-        ("left: 0; top: 12px; bottom: 12px; width: 5px; cursor: ew-resize;", Dir::West),
-        ("right: 0; top: 12px; bottom: 12px; width: 5px; cursor: ew-resize;", Dir::East),
-        ("top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize;", Dir::NorthWest),
-        ("top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize;", Dir::NorthEast),
-        ("bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize;", Dir::SouthWest),
-        ("bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize;", Dir::SouthEast),
+        (
+            "top: 0; left: 12px; right: 12px; height: 5px; cursor: ns-resize;",
+            Dir::North,
+        ),
+        (
+            "bottom: 0; left: 12px; right: 12px; height: 5px; cursor: ns-resize;",
+            Dir::South,
+        ),
+        (
+            "left: 0; top: 12px; bottom: 12px; width: 5px; cursor: ew-resize;",
+            Dir::West,
+        ),
+        (
+            "right: 0; top: 12px; bottom: 12px; width: 5px; cursor: ew-resize;",
+            Dir::East,
+        ),
+        (
+            "top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize;",
+            Dir::NorthWest,
+        ),
+        (
+            "top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize;",
+            Dir::NorthEast,
+        ),
+        (
+            "bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize;",
+            Dir::SouthWest,
+        ),
+        (
+            "bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize;",
+            Dir::SouthEast,
+        ),
     ];
     rsx! {
         for (pos, dir) in handles.iter().copied() {

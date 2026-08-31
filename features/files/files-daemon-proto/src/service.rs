@@ -173,8 +173,11 @@ pub trait DaemonControlService {
     /// Without this the agent could only ever hold what somebody else
     /// already held — fine for a laptop taking an org's projects, and
     /// useless for two machines that just want the same folder.
-    async fn share(&self, path: String, name: Option<String>)
-    -> Result<(Uuid, String), DaemonError>;
+    async fn share(
+        &self,
+        path: String,
+        name: Option<String>,
+    ) -> Result<(Uuid, String), DaemonError>;
 
     /// Stop holding a root: no longer served, no longer pulled, and
     /// left on disk exactly as it is. "Stop tracking this", never
@@ -225,8 +228,7 @@ pub trait DaemonControlService {
 
     /// What `endpoint_id` holds, as `(root id, name)` — "what have you
     /// got", which is where a machine that holds nothing has to start.
-    async fn peer_roots(&self, endpoint_id: String)
-    -> Result<Vec<(Uuid, String)>, DaemonError>;
+    async fn peer_roots(&self, endpoint_id: String) -> Result<Vec<(Uuid, String)>, DaemonError>;
 
     /// Sync `root_id` from `endpoint_id`, adopting it under `under` if
     /// this machine has never seen it. `slice` is the selective-sync

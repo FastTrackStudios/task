@@ -40,6 +40,7 @@ pub mod iroh_transport;
 pub mod media_grant;
 pub mod nav;
 pub mod orgs;
+pub mod sheet;
 pub mod states;
 pub mod vox_clients;
 pub mod vox_session;

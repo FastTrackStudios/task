@@ -37,6 +37,7 @@ members = [
     "features/agent/agent-hermes",
     "features/agent/agent-inbox",
     "features/agent/agent-proto",
+    "features/agent/agent-ui",
     "features/agent/agent-runners",
     "features/agent/agent-tasks",
     "features/agent/agent-wiki",
@@ -78,6 +79,7 @@ members = [
     "apps/plugins/home",
     "apps/plugins/finance",
     "apps/plugins/recall",
+    "apps/plugins/agent",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -226,6 +228,7 @@ agent-codex = { path = "features/agent/agent-codex" }
 agent-dispatch = { path = "features/agent/agent-dispatch" }
 agent-hermes = { path = "features/agent/agent-hermes" }
 agent-inbox = { path = "features/agent/agent-inbox" }
+agent-ui = { path = "features/agent/agent-ui" }
 agent-proto = { path = "features/agent/agent-proto" }
 agent-runners = { path = "features/agent/agent-runners" }
 agent-tasks = { path = "features/agent/agent-tasks" }
@@ -245,6 +248,7 @@ task-plugin-fitness = { path = "apps/plugins/fitness" }
 task-plugin-home = { path = "apps/plugins/home" }
 task-plugin-finance = { path = "apps/plugins/finance" }
 task-plugin-recall = { path = "apps/plugins/recall" }
+task-plugin-agent = { path = "apps/plugins/agent" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
