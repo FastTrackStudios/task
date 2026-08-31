@@ -700,7 +700,7 @@ mod plugin_link_tests {
         let url = plugin_route(app, target).to_string();
         let q = url
             .split_once("?q=")
-            .map(|(_, q)| task_plugin_ui::decode(q))
+            .map(|(_, q)| task_plugin_ui::unpack(q))
             .unwrap_or_default();
         (url, q)
     }

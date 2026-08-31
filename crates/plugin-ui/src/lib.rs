@@ -142,11 +142,13 @@ impl LinkTarget {
 /// `path` is the app's own, exactly as [`PluginApp::view`] will
 /// receive it. `query` is the app's own query string — already in
 /// `k=v&k=v` form, with **each value** [`encode`]d by the app if it
-/// could contain a `&` or an `=`. This function encodes the query as a
-/// whole so the shell's URL survives it, but it cannot tell an app's
-/// separator from a `&` inside one of its values; for the common
-/// single-parameter case use [`href_param`], which cannot get that
-/// wrong.
+/// could contain a `&` or an `=`.
+///
+/// [`pack`] carries the whole thing to the app unchanged, so the URL
+/// is not what needs the escaping — [`query_param`] is. It splits on
+/// `&`, and cannot tell the app's separator from one inside a value.
+/// For the common single-parameter case use [`href_param`], which
+/// cannot get that wrong.
 ///
 /// ```
 /// # use task_plugin_ui::href;
@@ -161,9 +163,42 @@ pub fn href(app: &str, path: &str, query: &str) -> String {
     }
     if !query.is_empty() {
         out.push_str("?q=");
-        out.push_str(&encode(query));
+        out.push_str(&pack(query));
     }
     out
+}
+
+/// An app's query, as the single opaque `q` the shell's route carries.
+///
+/// Base64url, and **not** percent-encoding, for a reason worth writing
+/// down because the obvious choice is wrong. The router decodes `q`
+/// when it parses a URL and re-serialises the route without encoding it
+/// again, so one round trip through the address bar turns a
+/// percent-escaped `%26` into a literal `&` — which then ends the
+/// parameter, and every value after the first silently disappears. It
+/// looks like the app was handed a one-parameter link.
+///
+/// Base64url has no `%`, no `&` and no `=` (padding is omitted), so
+/// there is nothing left for a decode to reinterpret and the round trip
+/// is lossless however many times it happens.
+#[must_use]
+pub fn pack(query: &str) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(query.as_bytes())
+}
+
+/// Undo [`pack`]. A `q` that is not valid base64url comes back as
+/// itself, so a hand-typed `/app/mealplan?q=dish=Bolognese` still
+/// works — a debugging convenience that costs nothing, since a packed
+/// query never looks like a readable one.
+#[must_use]
+pub fn unpack(q: &str) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(q.as_bytes())
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .unwrap_or_else(|| decode(q))
 }
 
 /// A link to one of an app's own screens carrying one parameter.
@@ -174,9 +209,9 @@ pub fn href(app: &str, path: &str, query: &str) -> String {
 /// a character rather than a separator.
 ///
 /// ```
-/// # use task_plugin_ui::{href_param, query_param, decode};
+/// # use task_plugin_ui::{href_param, query_param, unpack};
 /// let url = href_param("mealplan", "recipe/read", "path", "Ragu & Chips.cook");
-/// let q = decode(url.split_once("?q=").unwrap().1);
+/// let q = unpack(url.split_once("?q=").unwrap().1);
 /// assert_eq!(query_param(&q, "path").as_deref(), Some("Ragu & Chips.cook"));
 /// ```
 #[must_use]
@@ -854,6 +889,44 @@ mod tests {
         assert_eq!(decode("a%zz"), "a%zz");
     }
 
+    /// The bug this packing exists for, caught in a browser and not by
+    /// a type: the router decodes `q` when it parses a URL and
+    /// re-serialises the route without encoding it again. One trip
+    /// through the address bar turned a percent-escaped `%26` into a
+    /// literal `&`, which ended the parameter — and every value after
+    /// the first vanished, looking exactly like a one-parameter link.
+    #[test]
+    fn a_packed_query_survives_being_decoded_again() {
+        let q = "bill=30-minute consult&client=Sam Reeve&minutes=30";
+        let packed = pack(q);
+        assert!(
+            !packed.contains('&'),
+            "an ampersand would end the parameter"
+        );
+        assert!(
+            !packed.contains('%'),
+            "a percent is something to reinterpret"
+        );
+        assert!(!packed.contains('='), "padding would need escaping too");
+
+        // However many times something decodes it, it is still itself.
+        assert_eq!(unpack(&packed), q);
+        assert_eq!(unpack(&decode(&packed)), q);
+        assert_eq!(unpack(&decode(&decode(&packed))), q);
+
+        let out = unpack(&packed);
+        assert_eq!(query_param(&out, "client").as_deref(), Some("Sam Reeve"));
+        assert_eq!(query_param(&out, "minutes").as_deref(), Some("30"));
+    }
+
+    /// A hand-typed URL still works, which is worth the fallback: a
+    /// packed query never looks like a readable one, so there is
+    /// nothing to confuse.
+    #[test]
+    fn an_unpacked_query_is_read_as_written() {
+        assert_eq!(unpack("dish=Bolognese"), "dish=Bolognese");
+    }
+
     // ── apps offering each other things ─────────────────────────────
 
     /// The shape of a real contract: finance says where to go to bill
@@ -917,10 +990,12 @@ mod tests {
     fn an_app_links_to_its_own_screens() {
         assert_eq!(href("mealplan", "", ""), "/app/mealplan");
         assert_eq!(href("mealplan", "shopping", ""), "/app/mealplan/shopping");
-        assert_eq!(
-            href("mealplan", "recipe/read", "path=Cookbook/Ragu.cook"),
-            "/app/mealplan/recipe/read?q=path%3DCookbook%2FRagu.cook"
-        );
+        // The query is packed, so the URL says nothing about its
+        // shape — only that it round-trips.
+        let url = href("mealplan", "recipe/read", "path=Cookbook/Ragu.cook");
+        assert!(url.starts_with("/app/mealplan/recipe/read?q="), "{url}");
+        let q = url.split_once("?q=").expect("has a query").1;
+        assert_eq!(unpack(q), "path=Cookbook/Ragu.cook");
     }
 
     /// The round trip that matters: what the app wrote is what the
@@ -936,7 +1011,7 @@ mod tests {
         );
         let q = url.split_once("?q=").expect("has a query").1;
         assert_eq!(
-            query_param(&decode(q), "path").as_deref(),
+            query_param(&unpack(q), "path").as_deref(),
             Some("Cookbook/Ragu & Chips.cook")
         );
     }

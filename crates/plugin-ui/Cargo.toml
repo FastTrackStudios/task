@@ -15,6 +15,8 @@ architect-ui.workspace = true
 # also why the SDK is its own crate — `task-widgets` depends on
 # `task-ui-core`, so the seam cannot live there without a cycle.
 task-widgets.workspace = true
+# The `q` packing — see `pack`.
+base64 = { workspace = true }
 
 [lints]
 workspace = true

@@ -134,7 +134,7 @@ pub fn plugin_route(app: &str, target: &task_plugin_ui::LinkTarget) -> Route {
     // encoded. Spliced in raw, an app's own `&` would end `q` and it
     // would receive only its first parameter — and would have no way to
     // tell that from a link that genuinely only had one.
-    let q = task_plugin_ui::encode(&target.query);
+    let q = task_plugin_ui::pack(&target.query);
     if target.path.is_empty() {
         Route::PluginRoute {
             app: app.to_string(),
@@ -170,12 +170,12 @@ pub fn file_route(path: String, enabled: &task_plugin::PluginSet) -> Route {
 
 #[component]
 fn PluginRoute(app: String, q: String) -> Element {
-    rsx! { PluginScreen { app, path: String::new(), query: task_plugin_ui::decode(&q) } }
+    rsx! { PluginScreen { app, path: String::new(), query: task_plugin_ui::unpack(&q) } }
 }
 
 #[component]
 fn PluginPathRoute(app: String, path: Vec<String>, q: String) -> Element {
-    rsx! { PluginScreen { app, path: path.join("/"), query: task_plugin_ui::decode(&q) } }
+    rsx! { PluginScreen { app, path: path.join("/"), query: task_plugin_ui::unpack(&q) } }
 }
 
 /// One registered app's screen, or an honest account of why there is
