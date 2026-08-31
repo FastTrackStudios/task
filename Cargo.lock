@@ -7621,6 +7621,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fitness-ui"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "chrono",
+ "dioxus",
+ "fitness-proto",
+ "task-stores",
+ "task-ui-core",
+ "uuid",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -20867,6 +20881,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-plugin-fitness"
+version = "0.1.0"
+dependencies = [
+ "fitness-ui",
+ "task-plugin-ui",
+]
+
+[[package]]
 name = "task-plugin-scripture"
 version = "0.1.0"
 dependencies = [
@@ -20890,6 +20912,7 @@ version = "0.1.0"
 dependencies = [
  "task-plugin-cooking",
  "task-plugin-email",
+ "task-plugin-fitness",
  "task-plugin-scripture",
  "task-plugin-ui",
 ]
@@ -22350,7 +22373,6 @@ dependencies = [
  "files-proto",
  "files-ui",
  "finance-proto",
- "fitness-proto",
  "futures-channel",
  "futures-util",
  "git-proto",

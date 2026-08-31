@@ -64,9 +64,6 @@ pub enum Route {
         #[route("/milestones")]
         MilestonesRoute {},
 
-        #[route("/fitness")]
-        FitnessRoute {},
-
         #[route("/mealplan")]
         MealplanRoute {},
 
@@ -347,13 +344,6 @@ fn WatchRoute(v: String, node: String) -> Element {
 #[component]
 fn MilestonesRoute() -> Element {
     rsx! { pages::milestones::MilestonesView {} }
-}
-
-#[component]
-fn FitnessRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "fitness", pages::fitness::FitnessView {} }
-    }
 }
 
 #[component]

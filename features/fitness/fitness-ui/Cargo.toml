@@ -1,0 +1,22 @@
+[package]
+name = "fitness-ui"
+description = "The fitness dashboard: its screen, its service calls, and its optimistic stores."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+architect-ui.workspace = true
+chrono = { workspace = true, features = ["clock", "std", "wasmbind"] }
+dioxus = { workspace = true }
+fitness-proto = { workspace = true, features = ["vox", "atom"] }
+task-stores = { workspace = true }
+task-ui-core = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

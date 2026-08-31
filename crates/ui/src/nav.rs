@@ -4,10 +4,10 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Dumbbell,
-    Flag, FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, MapPin, Notebook,
-    Package, ReceiptText, RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users,
-    Utensils, Wallet, Waypoints, Youtube,
+    BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag,
+    FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, MapPin, Notebook, Package,
+    ReceiptText, RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users, Utensils,
+    Wallet, Waypoints, Youtube,
 };
 use dioxus::prelude::*;
 
@@ -54,9 +54,6 @@ fn icon_inventory() -> Element {
 }
 fn icon_milestones() -> Element {
     rsx! { Flag { size: 16 } }
-}
-fn icon_fitness() -> Element {
-    rsx! { Dumbbell { size: 16 } }
 }
 fn icon_mealplan() -> Element {
     rsx! { Utensils { size: 16 } }
@@ -191,12 +188,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "core",
             icon: icon_milestones,
             route: Route::MilestonesRoute {},
-        },
-        NavTab {
-            label: "Fitness",
-            plugin: "fitness",
-            icon: icon_fitness,
-            route: Route::FitnessRoute {},
         },
         NavTab {
             label: "Mealplan",
@@ -478,7 +469,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::LocationsRoute {} => "Locations",
         Route::InventoryRoute {} => "Inventory",
         Route::MilestonesRoute {} => "Milestones",
-        Route::FitnessRoute {} => "Fitness",
         Route::MealplanRoute {} => "Mealplan",
         Route::ShoppingRoute {} => "Shopping",
         Route::RecipeCookRoute { .. } => "Cook",

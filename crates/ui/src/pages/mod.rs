@@ -12,7 +12,6 @@ pub mod contacts;
 pub mod cook_mode;
 pub mod files;
 pub mod finances;
-pub mod fitness;
 pub mod gantt;
 pub mod home;
 pub mod inbox;

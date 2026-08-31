@@ -284,6 +284,23 @@ pub struct PluginApp {
     /// Returning `None` means "not one of mine" and the shell shows its
     /// own not-found rather than the app pretending to have a page.
     pub view: fn(path: &str, query: &str) -> Option<Element>,
+    /// Install this app's contexts at the app root — its
+    /// `task_stores::stores!` `provide_stores()` in nearly every case.
+    ///
+    /// It has to happen at the *root*, not on the app's own screen,
+    /// and that is the whole reason this is a contribution rather than
+    /// something the app does for itself. A store provided when a page
+    /// mounts is thrown away when that page unmounts, taking the cache
+    /// and any in-flight optimistic write with it; and an app's rows
+    /// are wanted in places its screens are not — a note widget, a
+    /// search result, another app's page.
+    ///
+    /// Called once per launch, for every registered app, whether or not
+    /// anybody visits it. Keep it to providing context: it runs during
+    /// the root render, so work here is on the path to first paint for
+    /// people who do not use this app at all. Subscriptions are fine —
+    /// the store driver starts them lazily and heals them itself.
+    pub provide: Option<fn()>,
     /// How this app's notes render *inside the editor*.
     ///
     /// A screen is the small half of what an app contributes. The
@@ -475,6 +492,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            provide: None,
             widgets: None,
             fences: None,
             claim_link: None,
@@ -485,6 +503,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            provide: None,
             widgets: None,
             fences: None,
             claim_link: None,
@@ -519,6 +538,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            provide: None,
             widgets: None,
             fences: None,
             claim_link: Some(claims_verses),
@@ -546,6 +566,7 @@ mod tests {
             version: "1.2.3",
             nav: &[],
             view: nowhere,
+            provide: None,
             widgets: None,
             fences: None,
             claim_link: None,
@@ -578,6 +599,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            provide: None,
             widgets: None,
             fences: None,
             claim_link: Some(claims_songs),
@@ -588,6 +610,7 @@ mod tests {
             version: "0.0.0-test",
             nav: &[],
             view: nowhere,
+            provide: None,
             widgets: None,
             fences: None,
             claim_link: Some(|text| {

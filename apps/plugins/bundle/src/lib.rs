@@ -28,6 +28,7 @@ pub fn register_all() {
     task_plugin_ui::register(task_plugin_cooking::APP);
     task_plugin_ui::register(task_plugin_scripture::APP);
     task_plugin_ui::register(task_plugin_email::APP);
+    task_plugin_ui::register(task_plugin_fitness::APP);
 }
 
 /// What [`register_all`] just installed, as `id@version` — for the log
@@ -57,13 +58,13 @@ mod tests {
             .map(|(id, _version)| id)
             .collect();
         ids.sort_unstable();
-        assert_eq!(ids, ["email", "mealplan", "scripture"]);
+        assert_eq!(ids, ["email", "fitness", "mealplan", "scripture"]);
     }
 
     #[test]
     fn registering_twice_is_not_two_copies() {
         super::register_all();
         super::register_all();
-        assert_eq!(task_plugin_ui::installed().len(), 3);
+        assert_eq!(task_plugin_ui::installed().len(), 4);
     }
 }

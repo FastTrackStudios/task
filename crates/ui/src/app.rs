@@ -310,6 +310,23 @@ pub fn App() -> Element {
     // read. Provided after `use_app_supervised` so mutations find the
     // notifications + reactivity registries it installed above.
     crate::stores::provide_stores();
+    // The same, for every registered app — an app's rows are its own,
+    // and it declares `provide` to install them here rather than on its
+    // screen. A store provided when a page mounts dies with that page,
+    // taking the cache and any in-flight write; and an app's rows are
+    // wanted where its screens are not (a note widget, a search hit).
+    //
+    // Not filtered by the org's enabled set, deliberately. Providing
+    // context is cheap and idempotent, and hooks cannot be called
+    // conditionally — a set that changes when somebody switches org
+    // would change the number of hooks this component runs, which is
+    // the one thing Dioxus cannot survive. Enablement is enforced where
+    // it shows: nav, screens, and link claims.
+    for app in task_plugin_ui::registered() {
+        if let Some(provide) = app.provide {
+            provide();
+        }
+    }
 
     // Web auth: the active-account context + boot restore (validate
     // the persisted session, or auto sign-in as Guest). Needs the

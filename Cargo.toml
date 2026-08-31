@@ -74,6 +74,7 @@ members = [
     "apps/plugins/cooking",
     "apps/plugins/scripture",
     "apps/plugins/email",
+    "apps/plugins/fitness",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -91,6 +92,7 @@ members = [
     "features/fitness/body",
     "features/fitness/exercises",
     "features/fitness/fitness",
+    "features/fitness/fitness-ui",
     "features/fitness/fitness-proto",
     "features/fitness/intake",
     "features/fitness/workouts",
@@ -231,6 +233,7 @@ files-fileprovider = { path = "features/files/files-fileprovider" }
 task-plugin-cooking = { path = "apps/plugins/cooking" }
 task-plugin-scripture = { path = "apps/plugins/scripture" }
 task-plugin-email = { path = "apps/plugins/email" }
+task-plugin-fitness = { path = "apps/plugins/fitness" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
@@ -286,6 +289,7 @@ finance = { path = "features/finance/finance" }
 finance-db = { path = "features/finance/finance-db" }
 finance-proto = { path = "features/finance/finance-proto", default-features = false }
 fitness-proto = { path = "features/fitness/fitness-proto", default-features = false }
+fitness-ui = { path = "features/fitness/fitness-ui" }
 git-config = { path = "features/git/git-config" }
 git-forgejo = { path = "features/git/git-forgejo" }
 git-github = { path = "features/git/git-github" }

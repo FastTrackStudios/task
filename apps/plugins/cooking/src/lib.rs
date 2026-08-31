@@ -56,6 +56,7 @@ pub const APP: PluginApp = PluginApp {
         },
     ],
     view: view,
+    provide: None,
     // A recipe note could render as a method with its own timers here —
     // the same seam the player uses to turn a song note into a player.
     widgets: None,

@@ -108,20 +108,6 @@ task_stores::stores! {
         mutations: MilestoneMutations via use_milestone_mutations,
     }
 
-    BodyMetricStore: fitness_proto::body::BodyMetric {
-        provide: provide_body_metric_store,
-        handle: use_body_metric_store,
-        list: use_body_metric_list -> Uuid = crate::feeds::fetch_body_metrics,
-        mutations: BodyMetricMutations via use_body_metric_mutations,
-    }
-
-    ExerciseStore: fitness_proto::exercises::Exercise {
-        provide: provide_exercise_store,
-        handle: use_exercise_store,
-        list: use_exercise_list -> Uuid = crate::feeds::fetch_exercises,
-        mutations: ExerciseMutations via use_exercise_mutations,
-    }
-
     RecipeStore: cookbook_proto::Recipe {
         provide: provide_recipe_store,
         handle: use_recipe_store,
@@ -776,69 +762,6 @@ impl MilestoneMutations {
     pub fn create(&self, slug: String, draft: milestone_proto::Milestone) {
         run_create(self.write, self.store, draft, move |ms| async move {
             crate::feeds::create_milestone(&slug, ms).await
-        });
-    }
-}
-
-// ── fitness: body metrics + exercises ───────────────────────────────
-
-/// Unsaved placeholder row for an optimistic body-metric insert.
-pub fn draft_body_metric(
-    name: String,
-    kind: String,
-    unit: String,
-) -> fitness_proto::body::BodyMetric {
-    fitness_proto::body::BodyMetric {
-        path: String::new(),
-        id: Uuid::nil(),
-        name,
-        kind,
-        unit,
-        goal: None,
-        tags: fitness_proto::body::Tags::default(),
-        entries: fitness_proto::body::Entries::default(),
-        date_created: None,
-        date_modified: None,
-        details: String::new(),
-    }
-}
-
-impl BodyMetricMutations {
-    pub fn create(&self, slug: String, draft: fitness_proto::body::BodyMetric) {
-        run_create(self.write, self.store, draft, move |metric| async move {
-            crate::feeds::create_body_metric(&slug, metric).await
-        });
-    }
-}
-
-/// Unsaved placeholder row for an optimistic exercise insert.
-pub fn draft_exercise(name: String, category: String) -> fitness_proto::exercises::Exercise {
-    fitness_proto::exercises::Exercise {
-        path: String::new(),
-        id: Uuid::nil(),
-        name,
-        aliases: fitness_proto::exercises::StringList::default(),
-        description: None,
-        category,
-        primary_muscles: fitness_proto::exercises::StringList::default(),
-        secondary_muscles: fitness_proto::exercises::StringList::default(),
-        equipment: fitness_proto::exercises::StringList::default(),
-        mechanics: None,
-        force: None,
-        instructions: fitness_proto::exercises::StringList::default(),
-        video_url: None,
-        image_url: None,
-        tags: fitness_proto::exercises::StringList::default(),
-        date_created: None,
-        date_modified: None,
-        details: String::new(),
-    }
-}
-
-impl ExerciseMutations {
-    pub fn create(&self, slug: String, draft: fitness_proto::exercises::Exercise) {
-        run_create(self.write, self.store, draft, move |exercise| async move {
-            crate::feeds::create_exercise(&slug, exercise).await
         });
     }
 }

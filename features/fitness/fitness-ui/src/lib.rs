@@ -1,25 +1,22 @@
-//! `/fitness` — the training dashboard.
+//! Fitness — the training dashboard, its wire calls and its stores.
 //!
-//! Pulls the four fitness sub-domains for the selected org into a
-//! single sectioned page:
+//! Everything the app needs, in the app's own crate: the four
+//! sub-domains' service calls, the two optimistic stores behind the
+//! create forms, and the page that renders them. Before the split
+//! these were three files in the shell — `pages/fitness.rs`, a block
+//! of `feeds.rs`, and a block of `stores.rs` — and none of them could
+//! be reached from a plugin crate, which is what kept fitness a
+//! built-in.
 //!
-//! - **Body** — tracked metrics (weight / body-fat / measurements),
-//!   each a time series. Minimal create form (name + kind + unit).
-//! - **Exercises** — the movement catalog. Minimal create form
-//!   (name + category).
-//! - **Workouts** — logged sessions (date + volume).
-//! - **Intake** — daily food logs (date + calorie/macro totals).
-//!
-//! Editing, entry logging, routines, and nutrition resolution live
-//! in the CLI for now; this is the read + light-create slice,
-//! mirroring the `/locations` page. Body + Exercises state is the
-//! shared optimistic store ([`crate::stores`]): one `AtomResult` per
-//! section, typed `Id::Temp` rows for in-flight creates, rollback +
-//! tray notification on failure.
+//! The page mounts through `task-plugin-fitness`; the store is
+//! installed at the app root by that plugin's `provide`.
 
 use architect::Id;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
+use task_stores::run_create;
+use task_ui_core::feeds;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
 use uuid::Uuid;
 
 use fitness_proto::body::BodyMetric;
@@ -27,8 +24,162 @@ use fitness_proto::exercises::Exercise;
 use fitness_proto::intake::IntakeLog;
 use fitness_proto::workouts::WorkoutSession;
 
-use crate::orgs::{OrgMeta, OrgSelection};
-use crate::stores;
+// ── Fitness ─────────────────────────────────────────────────────────
+
+feeds! {
+    fitness_proto::body::BodyServiceClient {
+        /// Every tracked body metric (weight / body-fat / measurements)
+        /// in the org's vault, in the order the backend lists them. Each
+        /// carries its full entry time series inline.
+        fetch_body_metrics() -> Vec<fitness_proto::body::BodyMetric>
+            = list() as "list body metrics";
+
+        /// Create one body metric from a caller-built draft (see
+        /// `self::draft_body_metric` — the backend assigns the real `id` and
+        /// vault `path`). Returns the persisted metric.
+        create_body_metric(metric: fitness_proto::body::BodyMetric) -> fitness_proto::body::BodyMetric
+            = create(metric) as "create body metric";
+    }
+}
+
+/// Log a single reading against an existing metric. `value` is
+/// in the metric's default unit; `date` is the calendar day of
+/// the reading. Returns the updated metric.
+pub async fn log_body_entry(
+    slug: &str,
+    metric_id: uuid::Uuid,
+    value: f64,
+    date: chrono::NaiveDate,
+) -> Result<fitness_proto::body::BodyMetric, String> {
+    let client =
+        task_ui_core::vox_clients::establish_for::<fitness_proto::body::BodyServiceClient>(slug)
+            .await?;
+    let entry = fitness_proto::body::BodyEntry {
+        id: uuid::Uuid::nil(),
+        date,
+        value,
+        unit: None,
+        note: None,
+    };
+    client
+        .log_entry(metric_id.to_string(), entry)
+        .await
+        .map_err(|e| format!("{slug}: log body entry: {e:?}"))
+}
+
+feeds! {
+    fitness_proto::exercises::ExercisesServiceClient {
+        /// Every exercise in the org's catalog, in the order the
+        /// backend lists them.
+        fetch_exercises() -> Vec<fitness_proto::exercises::Exercise>
+            = list() as "list exercises";
+
+        /// Add one exercise to the catalog from a caller-built draft (see
+        /// `self::draft_exercise` — the backend assigns the real `id` and
+        /// vault `path`). Returns the persisted exercise.
+        create_exercise(exercise: fitness_proto::exercises::Exercise) -> fitness_proto::exercises::Exercise
+            = create(exercise) as "create exercise";
+    }
+
+    fitness_proto::workouts::WorkoutsServiceClient {
+        /// Every logged workout session in the org's vault, in the order
+        /// the backend lists them.
+        fetch_workouts() -> Vec<fitness_proto::workouts::WorkoutSession>
+            = list_sessions() as "list workout sessions";
+    }
+
+    fitness_proto::intake::IntakeServiceClient {
+        /// Every daily intake log in the org's vault, in the order the
+        /// backend lists them. Each carries its consumed entries inline.
+        fetch_intake() -> Vec<fitness_proto::intake::IntakeLog>
+            = list() as "list intake logs";
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Stores
+// ─────────────────────────────────────────────────────────────────────
+
+task_stores::stores! {
+    BodyMetricStore: fitness_proto::body::BodyMetric {
+        provide: provide_body_metric_store,
+        handle: use_body_metric_store,
+        list: use_body_metric_list -> Uuid = fetch_body_metrics,
+        mutations: BodyMetricMutations via use_body_metric_mutations,
+    }
+
+    ExerciseStore: fitness_proto::exercises::Exercise {
+        provide: provide_exercise_store,
+        handle: use_exercise_store,
+        list: use_exercise_list -> Uuid = fetch_exercises,
+        mutations: ExerciseMutations via use_exercise_mutations,
+    }
+}
+
+/// Unsaved placeholder row for an optimistic body-metric insert.
+pub fn draft_body_metric(
+    name: String,
+    kind: String,
+    unit: String,
+) -> fitness_proto::body::BodyMetric {
+    fitness_proto::body::BodyMetric {
+        path: String::new(),
+        id: Uuid::nil(),
+        name,
+        kind,
+        unit,
+        goal: None,
+        tags: fitness_proto::body::Tags::default(),
+        entries: fitness_proto::body::Entries::default(),
+        date_created: None,
+        date_modified: None,
+        details: String::new(),
+    }
+}
+
+impl BodyMetricMutations {
+    pub fn create(&self, slug: String, draft: fitness_proto::body::BodyMetric) {
+        run_create(self.write, self.store, draft, move |metric| async move {
+            self::create_body_metric(&slug, metric).await
+        });
+    }
+}
+
+/// Unsaved placeholder row for an optimistic exercise insert.
+pub fn draft_exercise(name: String, category: String) -> fitness_proto::exercises::Exercise {
+    fitness_proto::exercises::Exercise {
+        path: String::new(),
+        id: Uuid::nil(),
+        name,
+        aliases: fitness_proto::exercises::StringList::default(),
+        description: None,
+        category,
+        primary_muscles: fitness_proto::exercises::StringList::default(),
+        secondary_muscles: fitness_proto::exercises::StringList::default(),
+        equipment: fitness_proto::exercises::StringList::default(),
+        mechanics: None,
+        force: None,
+        instructions: fitness_proto::exercises::StringList::default(),
+        video_url: None,
+        image_url: None,
+        tags: fitness_proto::exercises::StringList::default(),
+        date_created: None,
+        date_modified: None,
+        details: String::new(),
+    }
+}
+
+impl ExerciseMutations {
+    pub fn create(&self, slug: String, draft: fitness_proto::exercises::Exercise) {
+        run_create(self.write, self.store, draft, move |exercise| async move {
+            self::create_exercise(&slug, exercise).await
+        });
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// The page
+// ─────────────────────────────────────────────────────────────────────
 
 const INPUT_CLS: &str = "rounded-lg border border-input bg-input/30 px-3 py-2 text-sm transition-colors \
      focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] \
@@ -68,7 +219,7 @@ pub fn FitnessView() -> Element {
 
     // The org we list / create into (first selected, or home).
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -132,9 +283,9 @@ fn BodySection(slug: Memo<Option<String>>) -> Element {
     let mut unit = use_signal(|| "kg".to_string());
 
     // The shared store: one AtomResult for the list, optimistic create.
-    let result = stores::use_body_metric_list();
-    let muts = stores::use_body_metric_mutations();
-    let metric_store = stores::use_body_metric_store();
+    let result = self::use_body_metric_list();
+    let muts = self::use_body_metric_mutations();
+    let metric_store = self::use_body_metric_store();
 
     let mut create = move || {
         let n = name.read().trim().to_string();
@@ -145,7 +296,7 @@ fn BodySection(slug: Memo<Option<String>>) -> Element {
         let k = kind.read().clone();
         let u = unit.read().trim().to_string();
         name.set(String::new());
-        muts.create(s, stores::draft_body_metric(n, k, u));
+        muts.create(s, self::draft_body_metric(n, k, u));
     };
 
     let rows: Vec<(Id<Uuid>, BodyMetric)> = result.value().cloned().unwrap_or_default();
@@ -192,16 +343,16 @@ fn BodySection(slug: Memo<Option<String>>) -> Element {
             }
 
             if first_load {
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             } else if rows.is_empty() {
                 if let Some(err) = load_err {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load body metrics",
                         message: err,
                         on_retry: move |()| metric_store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "No body metrics yet",
                         hint: "Add your first metric above.",
                     }
@@ -256,9 +407,9 @@ fn ExercisesSection(slug: Memo<Option<String>>) -> Element {
     let category = use_signal(|| "chest".to_string());
 
     // The shared store: one AtomResult for the list, optimistic create.
-    let result = stores::use_exercise_list();
-    let muts = stores::use_exercise_mutations();
-    let exercise_store = stores::use_exercise_store();
+    let result = self::use_exercise_list();
+    let muts = self::use_exercise_mutations();
+    let exercise_store = self::use_exercise_store();
 
     let mut create = move || {
         let n = name.read().trim().to_string();
@@ -268,7 +419,7 @@ fn ExercisesSection(slug: Memo<Option<String>>) -> Element {
         let Some(s) = slug() else { return };
         let c = category.read().clone();
         name.set(String::new());
-        muts.create(s, stores::draft_exercise(n, c));
+        muts.create(s, self::draft_exercise(n, c));
     };
 
     let rows: Vec<(Id<Uuid>, Exercise)> = result.value().cloned().unwrap_or_default();
@@ -304,16 +455,16 @@ fn ExercisesSection(slug: Memo<Option<String>>) -> Element {
             }
 
             if first_load {
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             } else if rows.is_empty() {
                 if let Some(err) = load_err {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load exercises",
                         message: err,
                         on_retry: move |()| exercise_store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "No exercises yet",
                         hint: "Add your first exercise above.",
                     }
@@ -363,7 +514,7 @@ fn ExerciseRow(exercise: Exercise, pending: bool) -> Element {
 fn WorkoutsSection(slug: Memo<Option<String>>) -> Element {
     let sessions = use_resource(move || async move {
         match slug() {
-            Some(s) => crate::feeds::fetch_workouts(&s).await,
+            Some(s) => self::fetch_workouts(&s).await,
             None => Ok(Vec::new()),
         }
     });
@@ -421,7 +572,7 @@ fn WorkoutRow(session: WorkoutSession) -> Element {
 fn IntakeSection(slug: Memo<Option<String>>) -> Element {
     let logs = use_resource(move || async move {
         match slug() {
-            Some(s) => crate::feeds::fetch_intake(&s).await,
+            Some(s) => self::fetch_intake(&s).await,
             None => Ok(Vec::new()),
         }
     });
