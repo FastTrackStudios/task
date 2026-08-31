@@ -37,6 +37,10 @@ pub const APP: PluginApp = PluginApp {
     // exists in Task's catalog and is what cooking belongs under; a new
     // app would add its id there.
     id: "mealplan",
+    // From the crate's own manifest, so the number a person is told is
+    // the one that was released. Writing it by hand here is how it goes
+    // stale.
+    version: env!("CARGO_PKG_VERSION"),
     nav: &[
         PluginNav {
             label: "Cooking",

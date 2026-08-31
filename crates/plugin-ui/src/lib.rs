@@ -155,6 +155,22 @@ pub struct PluginApp {
     /// the active org contributes nothing — it is not merely hidden,
     /// its screens do not resolve.
     pub id: &'static str,
+    /// What this build of the app calls itself — `env!("CARGO_PKG_VERSION")`
+    /// in nearly every case.
+    ///
+    /// Apps release on their own schedules, from their own repositories,
+    /// so "which Session is this?" is a real question with no other way
+    /// to answer it: two machines can be running the same Task and
+    /// different apps, and the difference is invisible without this.
+    ///
+    /// It is **not** a compatibility gate, and there is deliberately no
+    /// runtime check against it. A plugin is linked into the binary, so
+    /// a version of the SDK it cannot work with is a compile error, not
+    /// a thing to discover at startup — a check here could only ever
+    /// re-report what the compiler already refused. What the version is
+    /// for is being *told*: in the settings list, in a log line, and in
+    /// whatever an app stamps on the data it writes.
+    pub version: &'static str,
     /// The screens it puts in the navigation. May be empty: an app can
     /// be reachable only from another app's link, or from a file.
     pub nav: &'static [PluginNav],
@@ -217,6 +233,26 @@ pub struct PluginApp {
     pub fences: Option<fn()>,
 }
 
+impl PluginApp {
+    /// What this app should stamp on anything it writes —
+    /// `mealplan@0.4.1`.
+    ///
+    /// The convention is an `app:` key in a note's frontmatter, and it
+    /// is what makes a version worth having. A note is markdown that
+    /// outlives every build that touched it: a recipe written by
+    /// `mealplan@0.2` will be opened by `mealplan@1.0` years later, and
+    /// the only way that version can know what shape to expect — or
+    /// whether to migrate it — is if the note says who wrote it.
+    ///
+    /// The same reason a project records who made it. Provenance is
+    /// cheap at the moment of writing and impossible to reconstruct
+    /// afterwards.
+    #[must_use]
+    pub fn stamp(&self) -> String {
+        format!("{}@{}", self.id, self.version)
+    }
+}
+
 /// Everything registered so far.
 ///
 /// A `RwLock` rather than a `OnceLock<Vec<_>>` because registration
@@ -238,6 +274,14 @@ pub fn register(app: PluginApp) {
     }
 }
 
+/// The contribution contract this SDK speaks.
+///
+/// Bumped when a contribution *kind* is added or changes shape, so a
+/// log line can say what a build was capable of. Not enforced at
+/// runtime, for the reason in [`PluginApp::version`]: plugins link in,
+/// and the compiler settles compatibility before anything runs.
+pub const CONTRACT: u32 = 1;
+
 /// Every registered app, in registration order.
 #[must_use]
 pub fn registered() -> Vec<PluginApp> {
@@ -245,6 +289,19 @@ pub fn registered() -> Vec<PluginApp> {
         .read()
         .expect("plugin registry poisoned")
         .clone()
+}
+
+/// What is installed, for a settings surface or a support question.
+///
+/// `(id, version)` per registered app, in registration order.
+#[must_use]
+pub fn installed() -> Vec<(&'static str, &'static str)> {
+    REGISTRY
+        .read()
+        .expect("plugin registry poisoned")
+        .iter()
+        .map(|a| (a.id, a.version))
+        .collect()
 }
 
 /// Which app claims this wikilink, if any.
@@ -316,6 +373,7 @@ mod tests {
     fn registering_an_id_twice_keeps_the_last() {
         register(PluginApp {
             id: "test-dup",
+            version: "0.0.0-test",
             nav: &[],
             view: nowhere,
             widgets: None,
@@ -325,6 +383,7 @@ mod tests {
         });
         register(PluginApp {
             id: "test-dup",
+            version: "0.0.0-test",
             nav: &[],
             view: nowhere,
             widgets: None,
@@ -358,6 +417,7 @@ mod tests {
     fn a_disabled_app_claims_nothing() {
         register(PluginApp {
             id: "test-verses",
+            version: "0.0.0-test",
             nav: &[],
             view: nowhere,
             widgets: None,
@@ -376,6 +436,23 @@ mod tests {
             claim_link("John 3:16", |id| id != "test-verses").is_none(),
             "an app that is off must not take the link"
         );
+    }
+
+    /// The stamp is what a note carries so a later build knows what
+    /// wrote it.
+    #[test]
+    fn an_app_stamps_its_id_and_version() {
+        let app = PluginApp {
+            id: "test-stamp",
+            version: "1.2.3",
+            nav: &[],
+            view: nowhere,
+            widgets: None,
+            fences: None,
+            claim_link: None,
+            claim_href: None,
+        };
+        assert_eq!(app.stamp(), "test-stamp@1.2.3");
     }
 
     /// Text no app recognises is nobody's. The shell falls back to the
@@ -399,6 +476,7 @@ mod tests {
         // it the link.
         register(PluginApp {
             id: "test-songs",
+            version: "0.0.0-test",
             nav: &[],
             view: nowhere,
             widgets: None,
@@ -408,6 +486,7 @@ mod tests {
         });
         register(PluginApp {
             id: "test-both",
+            version: "0.0.0-test",
             nav: &[],
             view: nowhere,
             widgets: None,

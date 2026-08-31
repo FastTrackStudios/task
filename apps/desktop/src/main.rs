@@ -37,6 +37,15 @@ fn main() {
     //
     // Before launch, because the nav is built on first render.
     task_plugin_ui::register(task_plugin_cooking::APP);
+    // Said once at startup, because "which version of Session is this
+    // machine running?" is otherwise unanswerable: apps release from
+    // their own repositories, and two machines on the same Task can
+    // hold different ones with nothing to show for it.
+    tracing::info!(
+        contract = task_plugin_ui::CONTRACT,
+        apps = ?task_plugin_ui::installed(),
+        "plugin apps registered"
+    );
 
     let (pos, size, fullscreen) = window_placement();
     let mut window = WindowBuilder::new()
