@@ -8,8 +8,15 @@
  * `asset!()` resolves relative to the crate root and cannot reach
  * outside it.
  *
- * @source / @import paths below are relative to THIS file
- * (apps/task/), not to the app directories.
+ * @source / @import paths below are relative to THIS file (apps/),
+ * not to the app directories.
+ *
+ * These were `../../` until the repo refactored to one workspace at the
+ * root, which moved apps/task/* -> apps/* and left every glob one level
+ * too high. Tailwind does not error on a @source that matches nothing
+ * (see the note further down), so the sheet kept building — with ZERO
+ * utility classes in it. Both the iOS and desktop apps rendered
+ * completely unstyled.
  */
 
 /* `source(none)` disables Tailwind v4's automatic content detection,
@@ -31,13 +38,13 @@
  * classes only reached the sheet via Tailwind's automatic (cwd-rooted)
  * scan. That scan is off — see `source(none)` above — so every source
  * has to be named. */
-@source "../../crates/*/src/**/*.rs";
-@source "../../features/*/*-ui/src/**/*.rs";
+@source "../crates/*/src/**/*.rs";
+@source "../features/*/*-ui/src/**/*.rs";
 /* features/editor/ is gone — the editor stack moved to its own repo in
    August 2026 and its keyflow half to the keyflow repo. Their classes are
    in the same position as architect-ui's: a git dep has no path to glob.
    See the block below. */
-@source "../../features/view/view-*/src/**/*.rs";
+@source "../features/view/view-*/src/**/*.rs";
 
 /* GONE WITH THE AUGUST 2026 SPLIT, and a real (if cosmetic) regression.
  *
