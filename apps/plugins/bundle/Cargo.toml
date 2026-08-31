@@ -12,6 +12,7 @@ repository.workspace = true
 task-plugin-ui = { workspace = true }
 task-plugin-cooking = { workspace = true }
 task-plugin-scripture = { workspace = true }
+task-plugin-email = { workspace = true }
 
 [lints]
 workspace = true

@@ -34,9 +34,6 @@ pub enum Route {
         #[route("/contacts")]
         ContactsRoute {},
 
-        #[route("/email")]
-        EmailRoute {},
-
         #[route("/projects")]
         ProjectsRoute {},
 
@@ -272,13 +269,6 @@ fn RecallRoute() -> Element {
 fn ContactsRoute() -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "contacts", pages::contacts::ContactsView {} }
-    }
-}
-
-#[component]
-fn EmailRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "email", email_ui::EmailView {} }
     }
 }
 

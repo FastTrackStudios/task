@@ -20859,6 +20859,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-plugin-email"
+version = "0.1.0"
+dependencies = [
+ "email-ui",
+ "task-plugin-ui",
+]
+
+[[package]]
 name = "task-plugin-scripture"
 version = "0.1.0"
 dependencies = [
@@ -20881,6 +20889,7 @@ name = "task-plugins"
 version = "0.1.0"
 dependencies = [
  "task-plugin-cooking",
+ "task-plugin-email",
  "task-plugin-scripture",
  "task-plugin-ui",
 ]
@@ -22325,7 +22334,6 @@ dependencies = [
  "dirs 5.0.1",
  "editor",
  "editor-crdt",
- "email-ui",
  "fake",
  "files-daemon-proto",
  "files-proto",

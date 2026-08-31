@@ -117,7 +117,6 @@ scheduling-ui.workspace = true
 # Extracted feature pages — the shell routes to them, they own their
 # own protos and RPC calls. See crates/task/ui/ARCHITECTURE.md.
 links-ui.workspace = true
-email-ui.workspace = true
 goal-ui.workspace = true
 scripture-ui.workspace = true
 # Architect-generated vox clients for project + task, plus their

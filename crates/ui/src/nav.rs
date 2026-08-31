@@ -5,7 +5,7 @@
 
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Dumbbell,
-    Flag, FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Mail, MapPin, Notebook,
+    Flag, FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, MapPin, Notebook,
     Package, ReceiptText, RefreshCw, Scale, Settings as SettingsIcon, Target, Timer, Users,
     Utensils, Wallet,
     Waypoints, Youtube,
@@ -37,9 +37,6 @@ fn icon_recall() -> Element {
 }
 fn icon_contacts() -> Element {
     rsx! { BookUser { size: 16 } }
-}
-fn icon_email() -> Element {
-    rsx! { Mail { size: 16 } }
 }
 fn icon_projects() -> Element {
     rsx! { FolderKanban { size: 16 } }
@@ -144,12 +141,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "contacts",
             icon: icon_contacts,
             route: Route::ContactsRoute {},
-        },
-        NavTab {
-            label: "Email",
-            plugin: "email",
-            icon: icon_email,
-            route: Route::EmailRoute {},
         },
         NavTab {
             label: "Projects",
@@ -479,7 +470,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::InboxRoute {} => "Inbox",
         Route::RecallRoute {} => "Recall",
         Route::ContactsRoute {} => "Contacts",
-        Route::EmailRoute {} => "Email",
         Route::ProjectsRoute {} => "Projects",
         Route::ProjectDetailRoute { .. } => "Project",
         Route::GoalsRoute {} => "Goals",

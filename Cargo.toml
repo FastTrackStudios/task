@@ -72,6 +72,7 @@ members = [
     "crates/plugin-ui",
     "apps/plugins/cooking",
     "apps/plugins/scripture",
+    "apps/plugins/email",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -228,6 +229,7 @@ files-domain = { path = "features/files/files-domain" }
 files-fileprovider = { path = "features/files/files-fileprovider" }
 task-plugin-cooking = { path = "apps/plugins/cooking" }
 task-plugin-scripture = { path = "apps/plugins/scripture" }
+task-plugin-email = { path = "apps/plugins/email" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 files-fuse = { path = "features/files/files-fuse" }
