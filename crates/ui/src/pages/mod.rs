@@ -21,7 +21,6 @@ pub mod note_properties;
 pub mod note_view;
 pub mod project_detail;
 pub mod projects;
-pub mod recall;
 pub mod repos;
 pub mod schedule;
 pub mod settings;

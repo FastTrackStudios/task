@@ -1,0 +1,16 @@
+[package]
+name = "task-plugin-recall"
+description = "Recall as a Task app: the spaced-repetition deck and its live card store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-plugin-ui = { workspace = true }
+recall-ui = { workspace = true }
+
+[lints]
+workspace = true

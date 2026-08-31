@@ -77,6 +77,7 @@ members = [
     "apps/plugins/fitness",
     "apps/plugins/home",
     "apps/plugins/finance",
+    "apps/plugins/recall",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -143,6 +144,7 @@ members = [
     "features/project/project-proto",
     "features/recall/recall",
     "features/recall/recall-proto",
+    "features/recall/recall-ui",
     "features/resources/resources",
     "features/resources/resources-proto",
     "features/scheduling/scheduling",
@@ -242,6 +244,7 @@ task-plugin-email = { path = "apps/plugins/email" }
 task-plugin-fitness = { path = "apps/plugins/fitness" }
 task-plugin-home = { path = "apps/plugins/home" }
 task-plugin-finance = { path = "apps/plugins/finance" }
+task-plugin-recall = { path = "apps/plugins/recall" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
@@ -343,6 +346,7 @@ prefs-proto = { path = "features/prefs/prefs-proto" }
 project = { path = "features/project/project", default-features = false }
 project-proto = { path = "features/project/project-proto", default-features = false }
 recall = { path = "features/recall/recall" }
+recall-ui = { path = "features/recall/recall-ui" }
 recall-proto = { path = "features/recall/recall-proto", default-features = false }
 recipe-import = { path = "features/mealplan/recipe-import" }
 resources = { path = "features/resources/resources" }

@@ -1,28 +1,149 @@
-//! `/recall` — the spaced-repetition learning deck.
+//! Recall — the spaced-repetition deck, its wire calls and its store.
 //!
-//! A general, project-filterable deck of flashcards on an FSRS
-//! scheduler. The stream lists cards (grouped/filtered by project via
-//! chips); "Review" opens a full-screen flashcard flow — the prompt is
-//! shown, Space (or a click) reveals the back, then you rate Again /
-//! Hard / Good / Easy (keys 1–4). Each rating runs
-//! [`spaced_repetition::review`] to reschedule the card and upserts it.
+//! Cards live in the vault; the FSRS scheduler runs client-side (the
+//! `spaced-repetition` crate), so grading a card reschedules it here
+//! and the write is what persists.
 //!
-//! Bible study is the seed use case (verse↔reference, first-letter,
-//! cloze) but nothing here is Bible-specific: `project` and `card_type`
-//! are free-form. State is the shared optimistic store
-//! ([`crate::stores`]): every mutation patches the store instantly and
-//! reconciles against the server, so leaving review mode needs no
-//! refetch.
+//! ## The live store
+//!
+//! This is the first app whose store is **live**: the `stream:` line
+//! subscribes to `RecallStreamClient` for the selected org and folds
+//! every event into the shared store, so a card authored on another
+//! device shows up without a refetch. The subscription heals itself and
+//! re-runs the backing fetch when it re-establishes — the hubs are
+//! sliding mailboxes and replay nothing, so events published while
+//! detached are recovered by refetching rather than lost.
+//!
+//! Mounted by `task-plugin-recall`.
 
 use architect::Id;
 use architect_ui::prelude::*;
-use chrono::Utc;
 use dioxus::prelude::*;
+use task_stores::run_create;
+use task_ui_core::feeds;
+use task_ui_core::orgs::{OrgMeta, OrgSelection};
+
+use chrono::{NaiveDate, Utc};
 use recall_proto::{CardType, RecallCard};
 use spaced_repetition::Rating;
 
-use crate::orgs::{OrgMeta, OrgSelection};
-use crate::stores;
+/// This app's id in Task's catalog, and the first segment of every
+/// link it writes to itself.
+pub const APP_ID: &str = "recall";
+
+feeds! {
+    recall_proto::RecallClient {
+        /// Every recall card (all decks, archived + active), oldest first.
+        /// Consumers filter by `project` / `archived` / due-date client-side.
+        fetch_recall_cards() -> Vec<recall_proto::RecallCard>
+            = list_cards() as "list recall cards";
+
+        /// The due, non-archived review queue for `today` (ISO `YYYY-MM-DD`).
+        fetch_recall_due(today: &str) -> Vec<recall_proto::RecallCard>
+            = review_queue(today.to_string()) as "recall review queue";
+
+        /// Create or update one card (keyed by id). Authoring, edits, and
+        /// review-reschedules all flow through here.
+        upsert_recall_card(card: recall_proto::RecallCard) -> ()
+            = upsert_card(card) as "save recall card";
+
+        /// Delete one card.
+        delete_recall_card(id: &str) -> ()
+            = delete_card(id.to_string()) as "delete recall card";
+    }
+}
+
+/// Read one vault note's text (UTF-8, lossy) — backs the "generate
+/// cards from this note" action.
+///
+/// A core read, declared here rather than reached for through the
+/// shell: the vault is a service this app calls, not a crate it is
+/// inside of.
+pub async fn fetch_note_text(slug: &str, path: &str) -> Result<String, String> {
+    let client =
+        task_ui_core::vox_clients::establish_for::<vault_proto::VaultSyncClient>(slug).await?;
+    let bytes = client
+        .get_file("default".to_owned(), path.to_string())
+        .await
+        .map_err(|e| format!("{slug}: read {path}: {e:?}"))?;
+    Ok(String::from_utf8_lossy(&bytes.0).into_owned())
+}
+
+task_stores::stores! {
+    RecallStore: recall_proto::RecallCard {
+        provide: provide_recall_store,
+        handle: use_recall_store,
+        list: use_recall_list -> String = fetch_recall_cards,
+        stream: first recall_proto::RecallStreamClient => fold_recall_event,
+        mutations:
+            /// Optimistic writes for the deck. Upserts return unit on the wire, so
+            /// the row we sent doubles as the reconciled value (the id is
+            /// client-minted and stable).
+            RecallMutations via use_recall_mutations,
+    }
+}
+
+fn fold_recall_event(store: &RecallStore, _slug: &str, ev: recall_proto::RecallEvent) {
+    match ev {
+        recall_proto::RecallEvent::Upserted(card) => store.put(card),
+        recall_proto::RecallEvent::Deleted(id) => store.remove_real(&id),
+    }
+}
+
+impl RecallMutations {
+    /// Author a fresh card: it appears instantly, then persists.
+    pub fn create(&self, slug: String, card: recall_proto::RecallCard) {
+        run_create(self.write, self.store, card, move |card| async move {
+            self::upsert_recall_card(&slug, card.clone())
+                .await
+                .map(|()| card)
+        });
+    }
+
+    /// Replace a card in place (edits, archive, review reschedule),
+    /// then persist.
+    pub fn save(&self, slug: String, next: recall_proto::RecallCard) {
+        let id = next.id.clone();
+        let row = next.clone();
+        self.write.run(
+            self.store,
+            move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
+            move || async move {
+                self::upsert_recall_card(&slug, next.clone())
+                    .await
+                    .map(|()| Some(next))
+            },
+        );
+    }
+
+    /// Grade the card under review on `today`, reschedule it via FSRS,
+    /// and persist — an optimistic in-place update.
+    pub fn review(
+        &self,
+        slug: String,
+        card: recall_proto::RecallCard,
+        rating: spaced_repetition::Rating,
+        today: NaiveDate,
+    ) {
+        let mut next = card;
+        next.review(rating, today);
+        self.save(slug, next);
+    }
+
+    /// Remove a card now; restore (and notify) if the delete fails.
+    pub fn delete(&self, slug: String, id: String) {
+        let key = id.clone();
+        self.write.run(
+            self.store,
+            move |s| s.remove_optimistic(Id::Real(key)),
+            move || async move { self::delete_recall_card(&slug, &id).await.map(|()| None) },
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// The deck
+// ─────────────────────────────────────────────────────────────────────
 
 const INPUT_CLS: &str = "rounded-lg border border-input bg-input/30 px-3 py-2 text-sm transition-colors \
      focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] \
@@ -35,7 +156,7 @@ pub fn RecallView() -> Element {
 
     // The org we author into / review (first selected, or home).
     let slug = use_memo(move || {
-        crate::orgs::selected_slugs(&selection.read(), &org_list.read())
+        task_ui_core::orgs::selected_slugs(&selection.read(), &org_list.read())
             .into_iter()
             .next()
     });
@@ -54,9 +175,9 @@ pub fn RecallView() -> Element {
     let mut reviewing = use_signal(|| false);
     let mut queue = use_signal(Vec::<RecallCard>::new);
 
-    let result = stores::use_recall_list();
-    let store = stores::use_recall_store();
-    let muts = stores::use_recall_mutations();
+    let result = self::use_recall_list();
+    let store = self::use_recall_store();
+    let muts = self::use_recall_mutations();
 
     let today = Utc::now().date_naive().to_string();
 
@@ -128,7 +249,7 @@ pub fn RecallView() -> Element {
         let project = draft_project.read().trim().to_string();
         gen_path.set(String::new());
         spawn(async move {
-            let Ok(text) = crate::feeds::fetch_note_text(&s, &path).await else {
+            let Ok(text) = self::fetch_note_text(&s, &path).await else {
                 return;
             };
             for (front, back) in generate_from_note(&text) {
@@ -280,16 +401,16 @@ pub fn RecallView() -> Element {
 
             // ── The stream ─────────────────────────────────────────
             if first_load {
-                crate::states::LoadingState {}
+                task_ui_core::states::LoadingState {}
             } else if rows.is_empty() {
                 if let Some(err) = load_err {
-                    crate::states::ErrorState {
+                    task_ui_core::states::ErrorState {
                         title: "Couldn't load deck",
                         message: err,
                         on_retry: move |()| store.reload(),
                     }
                 } else {
-                    crate::states::EmptyState {
+                    task_ui_core::states::EmptyState {
                         title: "No cards yet",
                         hint: "Add a card above, or generate some from a note.",
                     }
@@ -322,7 +443,7 @@ fn ProjectChip(label: String, active: bool, on_pick: EventHandler<()>) -> Elemen
 /// archive / delete actions.
 #[component]
 fn RecallRow(card: RecallCard, slug: Memo<Option<String>>, pending: bool) -> Element {
-    let muts = stores::use_recall_mutations();
+    let muts = self::use_recall_mutations();
     let card = use_signal(|| card);
 
     let snap = card.read();
@@ -401,7 +522,7 @@ fn ReviewDeck(
     slug: Memo<Option<String>>,
     on_exit: EventHandler<()>,
 ) -> Element {
-    let muts = stores::use_recall_mutations();
+    let muts = self::use_recall_mutations();
     // Hold the frozen queue in a Copy signal so the per-rating +
     // keyboard closures stay Copy (a moved `Vec` capture wouldn't be).
     let items = use_signal(|| items);

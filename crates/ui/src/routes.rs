@@ -24,13 +24,8 @@ pub enum Route {
         #[route("/inbox")]
         InboxRoute {},
 
-        // Recall — the spaced-repetition learning deck (adjacent to
-        // Inbox; keep this anchor stable for clean merges).
-        #[route("/recall")]
-        RecallRoute {},
-
         // Contacts — the vault-backed people directory (adjacent to
-        // Recall; keep this anchor stable for clean merges).
+        // Inbox; keep this anchor stable for clean merges).
         #[route("/contacts")]
         ContactsRoute {},
 
@@ -263,13 +258,6 @@ fn DashboardRoute() -> Element {
 #[component]
 fn InboxRoute() -> Element {
     rsx! { pages::inbox::InboxView {} }
-}
-
-#[component]
-fn RecallRoute() -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "recall", pages::recall::RecallView {} }
-    }
 }
 
 #[component]

@@ -4,7 +4,7 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    BookOpen, BookUser, Bot, Brain, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag,
+    BookOpen, BookUser, Bot, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag,
     FolderKanban, FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, RefreshCw,
     Settings as SettingsIcon, Target, Timer, Users, Waypoints, Youtube,
 };
@@ -29,9 +29,6 @@ fn icon_house() -> Element {
 }
 fn icon_inbox() -> Element {
     rsx! { InboxIcon { size: 16 } }
-}
-fn icon_recall() -> Element {
-    rsx! { Brain { size: 16 } }
 }
 fn icon_contacts() -> Element {
     rsx! { BookUser { size: 16 } }
@@ -105,14 +102,7 @@ pub fn nav_tabs() -> Vec<NavTab> {
             icon: icon_inbox,
             route: Route::InboxRoute {},
         },
-        // Recall — spaced-repetition deck (adjacent to Inbox).
-        NavTab {
-            label: "Recall",
-            plugin: "recall",
-            icon: icon_recall,
-            route: Route::RecallRoute {},
-        },
-        // Contacts — the people directory (adjacent to Recall).
+        // Contacts — the people directory (adjacent to Inbox).
         NavTab {
             label: "Contacts",
             plugin: "contacts",
@@ -403,7 +393,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::HomeRoute {} => "Home",
         Route::DashboardRoute {} => "Home",
         Route::InboxRoute {} => "Inbox",
-        Route::RecallRoute {} => "Recall",
         Route::ContactsRoute {} => "Contacts",
         Route::ProjectsRoute {} => "Projects",
         Route::ProjectDetailRoute { .. } => "Project",

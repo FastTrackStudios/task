@@ -119,18 +119,6 @@ task_stores::stores! {
             first notify_proto::NotifyStreamClient => fold_notify_event,
     }
 
-    RecallStore: recall_proto::RecallCard {
-        provide: provide_recall_store,
-        handle: use_recall_store,
-        list: use_recall_list -> String = crate::feeds::fetch_recall_cards,
-        stream: first recall_proto::RecallStreamClient => fold_recall_event,
-        mutations:
-            /// Optimistic writes for the deck. Upserts return unit on the wire, so
-            /// the row we sent doubles as the reconciled value (the id is
-            /// client-minted and stable).
-            RecallMutations via use_recall_mutations,
-    }
-
     ContactStore: contacts_proto::Contact {
         provide: provide_contact_store,
         handle: use_contact_store,
@@ -251,13 +239,6 @@ fn fold_notify_event(store: &NotificationStore, _slug: &str, ev: notify_proto::N
     match ev {
         notify_proto::NotifyEvent::Upserted(n) => store.put(n),
         notify_proto::NotifyEvent::Deleted(id) => store.remove_real(&id),
-    }
-}
-
-fn fold_recall_event(store: &RecallStore, _slug: &str, ev: recall_proto::RecallEvent) {
-    match ev {
-        recall_proto::RecallEvent::Upserted(card) => store.put(card),
-        recall_proto::RecallEvent::Deleted(id) => store.remove_real(&id),
     }
 }
 
@@ -759,63 +740,6 @@ impl InboxMutations {
                 crate::feeds::upsert_inbox_item(&slug, done.clone())
                     .await
                     .map(|()| Some(done))
-            },
-        );
-    }
-}
-
-// ── recall (spaced-repetition deck) ─────────────────────────────────
-
-impl RecallMutations {
-    /// Author a fresh card: it appears instantly, then persists.
-    pub fn create(&self, slug: String, card: recall_proto::RecallCard) {
-        run_create(self.write, self.store, card, move |card| async move {
-            crate::feeds::upsert_recall_card(&slug, card.clone())
-                .await
-                .map(|()| card)
-        });
-    }
-
-    /// Replace a card in place (edits, archive, review reschedule),
-    /// then persist.
-    pub fn save(&self, slug: String, next: recall_proto::RecallCard) {
-        let id = next.id.clone();
-        let row = next.clone();
-        self.write.run(
-            self.store,
-            move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
-            move || async move {
-                crate::feeds::upsert_recall_card(&slug, next.clone())
-                    .await
-                    .map(|()| Some(next))
-            },
-        );
-    }
-
-    /// Grade the card under review on `today`, reschedule it via FSRS,
-    /// and persist — an optimistic in-place update.
-    pub fn review(
-        &self,
-        slug: String,
-        card: recall_proto::RecallCard,
-        rating: spaced_repetition::Rating,
-        today: NaiveDate,
-    ) {
-        let mut next = card;
-        next.review(rating, today);
-        self.save(slug, next);
-    }
-
-    /// Remove a card now; restore (and notify) if the delete fails.
-    pub fn delete(&self, slug: String, id: String) {
-        let key = id.clone();
-        self.write.run(
-            self.store,
-            move |s| s.remove_optimistic(Id::Real(key)),
-            move || async move {
-                crate::feeds::delete_recall_card(&slug, &id)
-                    .await
-                    .map(|()| None)
             },
         );
     }

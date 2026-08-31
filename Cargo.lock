@@ -17602,6 +17602,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "recall-ui"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "chrono",
+ "dioxus",
+ "recall-proto",
+ "spaced-repetition",
+ "task-stores",
+ "task-ui-core",
+ "uuid",
+ "vault-proto",
+]
+
+[[package]]
 name = "recipe-import"
 version = "0.1.0"
 dependencies = [
@@ -20970,6 +20986,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-plugin-recall"
+version = "0.1.0"
+dependencies = [
+ "recall-ui",
+ "task-plugin-ui",
+]
+
+[[package]]
 name = "task-plugin-scripture"
 version = "0.1.0"
 dependencies = [
@@ -20996,6 +21020,7 @@ dependencies = [
  "task-plugin-fitness",
  "task-plugin-home",
  "task-plugin-mealplan",
+ "task-plugin-recall",
  "task-plugin-scripture",
  "task-plugin-ui",
 ]
@@ -22473,7 +22498,6 @@ dependencies = [
  "nucleo-matcher",
  "prefs-proto",
  "project-proto",
- "recall-proto",
  "reqwest 0.12.28",
  "resources-proto",
  "scheduling-proto",
@@ -22484,7 +22508,6 @@ dependencies = [
  "serde",
  "serde_json",
  "share-proto",
- "spaced-repetition",
  "tag-proto",
  "task-note-tabs",
  "task-player-ui",

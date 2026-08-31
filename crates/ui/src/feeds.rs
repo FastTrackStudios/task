@@ -191,45 +191,6 @@ feeds! {
     }
 }
 
-// ── Recall (spaced-repetition learning deck) ─────────────────────────
-
-feeds! {
-    recall_proto::RecallClient {
-        /// Every recall card (all decks, archived + active), oldest first.
-        /// Consumers filter by `project` / `archived` / due-date client-side.
-        fetch_recall_cards() -> Vec<recall_proto::RecallCard>
-            = list_cards() as "list recall cards";
-
-        /// The due, non-archived review queue for `today` (ISO `YYYY-MM-DD`).
-        fetch_recall_due(today: &str) -> Vec<recall_proto::RecallCard>
-            = review_queue(today.to_string()) as "recall review queue";
-
-        /// Create or update one card (keyed by id). Authoring, edits, and
-        /// review-reschedules all flow through here.
-        upsert_recall_card(card: recall_proto::RecallCard) -> ()
-            = upsert_card(card) as "save recall card";
-    }
-}
-
-/// Read one vault note's text (UTF-8, lossy) — backs the recall
-/// "generate cards from note" action.
-pub async fn fetch_note_text(slug: &str, path: &str) -> Result<String, String> {
-    let client = crate::vox_clients::establish_for::<vault_proto::VaultSyncClient>(slug).await?;
-    let bytes = client
-        .get_file("default".to_owned(), path.to_string())
-        .await
-        .map_err(|e| format!("{slug}: read {path}: {e:?}"))?;
-    Ok(String::from_utf8_lossy(&bytes.0).into_owned())
-}
-
-feeds! {
-    recall_proto::RecallClient {
-        /// Delete one card.
-        delete_recall_card(id: &str) -> ()
-            = delete_card(id.to_string()) as "delete recall card";
-    }
-}
-
 // ── Contacts (vault-backed people directory) ─────────────────────────
 
 feeds! {

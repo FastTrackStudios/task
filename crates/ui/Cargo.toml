@@ -75,16 +75,10 @@ scheduling-proto = { workspace = true, features = ["vox", "atom"] }
 inbox-proto = { workspace = true, features = ["vox", "atom"] }
 # Notifications — the bell in the top bar (store + live fold + feeds).
 notify-proto = { workspace = true, features = ["vox", "atom"] }
-# Recall wire surface — `RecallCard` + `RecallService` client for the
-# `/recall` spaced-repetition deck. Wasm-clean (serde + the pure FSRS
-# scheduler); `vox` + `atom` for the optimistic store.
-recall-proto = { workspace = true, features = ["vox", "atom"] }
 # Contacts wire surface — `Contact` + `CardDavAccount` + `ContactsClient`
 # for the `/contacts` people directory. Wasm-clean; `vox` + `atom` for
 # the optimistic store.
 contacts-proto = { workspace = true, features = ["vox", "atom"] }
-# The FSRS scheduler the review flow drives client-side.
-spaced-repetition = { workspace = true }
 threads = { workspace = true, features = ["vox", "ui", "atom"] }
 # Scripture wire surface — `ScriptureService` client + verse DTOs
 # for the `/scripture` reader. Read-only, `vox` feature only.
@@ -143,7 +137,7 @@ vault-proto = { workspace = true, features = ["vox"] }
 # (archived articles + ^t-anchored video transcripts). `vox`
 # feature only, wasm-clean like the other proto clients.
 wiki-proto = { workspace = true, features = ["vox"] }
-# Forge wire surface — `RepoCatalog` / `IssueTracker` clients the
+# Git wire surface — `RepoCatalog` / `IssueTracker` clients the
 # `/repos` page binds to list repos + their issues for the
 # selected org. `vox` feature only, wasm-clean like the others.
 git-proto = { workspace = true, features = ["vox"] }
