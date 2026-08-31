@@ -26,6 +26,10 @@ fn main() {
     // register the sink `ui::watch_sync` publishes into (no-op off iOS).
     watch_sync::init();
 
+    // Before launch — the nav is built on first render, and an app
+    // registered after that has no tab until something else redraws.
+    task_plugins::register_all();
+
     dioxus::launch(Root);
 }
 

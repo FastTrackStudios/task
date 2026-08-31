@@ -64,12 +64,6 @@ pub enum Route {
         #[route("/inventory")]
         InventoryRoute {},
 
-        // `reference` deep-links straight to a passage (`John 3:16`,
-        // `John 3:16-20@ESV`) — e.g. from a note's scripture chip;
-        // empty opens the reader at its default position.
-        #[route("/scripture?:reference")]
-        ScriptureRoute { reference: String },
-
         #[route("/milestones")]
         MilestonesRoute {},
 
@@ -183,6 +177,13 @@ pub enum Route {
         // `q` carries a deep link the app parses itself — a scripture
         // reference, a note path. The shell does not know what any
         // app's parameters mean and must not pretend to.
+        //
+        // It is **one** parameter holding an encoded query, not the
+        // query itself, and that is load-bearing: an app's query is
+        // `dish=X&tx=Y`, and spliced in raw the `&` would end `q` and
+        // the app would silently receive only its first parameter.
+        // `plugin_route` encodes going in, `PluginScreen` decodes
+        // coming out.
         #[route("/app/:app?:q")]
         PluginRoute { app: String, q: String },
 
@@ -192,12 +193,12 @@ pub enum Route {
 
 #[component]
 fn PluginRoute(app: String, q: String) -> Element {
-    rsx! { PluginScreen { app, path: String::new(), query: q } }
+    rsx! { PluginScreen { app, path: String::new(), query: task_plugin_ui::decode(&q) } }
 }
 
 #[component]
 fn PluginPathRoute(app: String, path: Vec<String>, q: String) -> Element {
-    rsx! { PluginScreen { app, path: path.join("/"), query: q } }
+    rsx! { PluginScreen { app, path: path.join("/"), query: task_plugin_ui::decode(&q) } }
 }
 
 /// One registered app's screen, or an honest account of why there is
@@ -331,13 +332,6 @@ fn LocationsRoute() -> Element {
 fn InventoryRoute() -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "home", pages::inventory::InventoryView {} }
-    }
-}
-
-#[component]
-fn ScriptureRoute(reference: String) -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "scripture", scripture_ui::ScriptureView { reference } }
     }
 }
 

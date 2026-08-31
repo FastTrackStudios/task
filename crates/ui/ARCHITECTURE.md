@@ -94,17 +94,22 @@ feature crate and have the shell call through it — never copy.
 `crate::states::…` → `task_ui_core::states::…`, `crate::feeds::<fn>` →
 the local `<fn>`, and so on.
 
-**6. Point the route at it.** `routes.rs` keeps the `Route` variant and
-its wrapper component; only the body changes:
+**6. Give it a way in.** Two options, and the second is preferred for
+anything that is an *app* rather than part of Task itself:
 
-```rust
-fn ScriptureRoute(reference: String) -> Element {
-    rsx! { scripture_ui::ScriptureView { reference } }
-}
-```
+*a. A route in the shell* — `routes.rs` keeps the `Route` variant and
+its wrapper component; only the body changes. Right for core surfaces
+(vault, tasks, calendar) that every build has.
 
-Drop the module from `pages/mod.rs` and the slice's now-unused deps
-from `crates/task/ui/Cargo.toml`.
+*b. A plugin* — the feature crate gets a thin `apps/plugins/<name>`
+wrapper exporting a `PluginApp`, added to the `task-plugins` bundle.
+The shell then has no route, no nav entry and no dependency: it reaches
+the screen through `/app/<id>`, and the app claims its own wikilinks
+and URL schemes. Scripture is the worked migration — see
+`apps/plugins/scripture`.
+
+Either way, drop the module from `pages/mod.rs` and the slice's
+now-unused deps from `crates/ui/Cargo.toml`.
 
 **7. Verify** — all three, every time:
 

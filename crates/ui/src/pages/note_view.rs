@@ -356,13 +356,6 @@ pub(crate) fn NoteView(
             nav_links.push(plugin_route(app, &target));
             return;
         }
-        if let Some(target) = href.strip_prefix("scripture-open:") {
-            // Verse-card "Study ›" → the reader anchored at the passage.
-            nav_links.push(crate::routes::Route::ScriptureRoute {
-                reference: target.trim().to_string(),
-            });
-            return;
-        }
         if href.starts_with("http://") || href.starts_with("https://") {
             return; // the editor already window.open()s external links
         }
@@ -383,15 +376,6 @@ pub(crate) fn NoteView(
             && (claim.beats_a_page() || known.is_none())
         {
             nav_links.push(plugin_route(app, claim.target()));
-            return;
-        }
-        // A wikilink that matches no page but parses as a scripture
-        // reference opens the reader (same resolution order as the
-        // decoration pass: real pages win).
-        if known.is_none() && scripture_proto::ScriptureRef::parse(page).is_ok() {
-            nav_links.push(crate::routes::Route::ScriptureRoute {
-                reference: page.to_string(),
-            });
             return;
         }
         let path = known.unwrap_or_else(|| format!("{page}.md"));
@@ -695,17 +679,97 @@ mod note_body_tests {
 /// The one place a plugin's own path and query become a Task route —
 /// the same translation `nav` does for tabs, and for the same reason:
 /// `Route` is the shell's, and an app speaks in its own paths.
+#[cfg(test)]
+mod plugin_link_tests {
+    use super::plugin_route;
+    use task_plugin_ui::LinkTarget;
+
+    /// The shell's half of a claim: an app names a path and a query,
+    /// and this turns it into a URL. Deliberately tested with a made-up
+    /// app rather than a real one — `crates/ui` is not supposed to have
+    /// heard of scripture or cooking, and a test that imported one
+    /// would quietly make that false.
+    /// What the app must get back is what it asked for. The URL in
+    /// between is the shell's business, so this asserts the round trip
+    /// rather than the exact spelling.
+    fn round_trip(app: &str, target: &LinkTarget) -> (String, String) {
+        let url = plugin_route(app, target).to_string();
+        let q = url
+            .split_once("?q=")
+            .map(|(_, q)| task_plugin_ui::decode(q))
+            .unwrap_or_default();
+        (url, q)
+    }
+
+    #[test]
+    fn a_front_page_claim_becomes_an_app_url() {
+        let (url, q) = round_trip("scripture", &LinkTarget::param("reference", "John 3:16"));
+        assert!(url.starts_with("/app/scripture?"), "{url}");
+        assert_eq!(
+            task_plugin_ui::query_param(&q, "reference").as_deref(),
+            Some("John 3:16")
+        );
+    }
+
+    /// The bug the encoding exists for. An app's query may hold more
+    /// than one parameter, and its `&` must not be read as the URL's.
+    /// Truncated here, the app would receive only `dish` and have no
+    /// way to tell that from a link that genuinely only had one.
+    #[test]
+    fn an_app_with_two_parameters_keeps_both() {
+        let (_, q) = round_trip(
+            "scripture",
+            &LinkTarget::query("reference=John 3:16&tx=ESV"),
+        );
+        assert_eq!(
+            task_plugin_ui::query_param(&q, "reference").as_deref(),
+            Some("John 3:16")
+        );
+        assert_eq!(task_plugin_ui::query_param(&q, "tx").as_deref(), Some("ESV"));
+    }
+
+    /// A claim that names a screen has to keep it — dropping the path
+    /// would land every deep link on the app's front page, which looks
+    /// like the app working rather than like a bug.
+    #[test]
+    fn a_screen_claim_keeps_its_screen() {
+        let (url, q) = round_trip(
+            "mealplan",
+            &LinkTarget {
+                path: "recipes".into(),
+                query: "dish=Bolognese".into(),
+            },
+        );
+        assert!(url.starts_with("/app/mealplan/recipes?"), "{url}");
+        assert_eq!(
+            task_plugin_ui::query_param(&q, "dish").as_deref(),
+            Some("Bolognese")
+        );
+    }
+
+    #[test]
+    fn a_nested_screen_stays_nested() {
+        let (url, _) = round_trip("mealplan", &LinkTarget::path("recipes/weeknight"));
+        assert!(url.starts_with("/app/mealplan/recipes/weeknight"), "{url}");
+    }
+}
+
 fn plugin_route(app: &str, target: &task_plugin_ui::LinkTarget) -> crate::routes::Route {
+    // The app's whole query goes into the single `q` parameter,
+    // encoded. Spliced in raw, an app's own `&` would end `q` and it
+    // would receive only its first parameter — and would have no way to
+    // tell that from a link that genuinely only had one.
+    let q = task_plugin_ui::encode(&target.query);
     if target.path.is_empty() {
         crate::routes::Route::PluginRoute {
             app: app.to_string(),
-            q: target.query.clone(),
+            q,
         }
     } else {
         crate::routes::Route::PluginPathRoute {
             app: app.to_string(),
             path: target.path.split('/').map(str::to_string).collect(),
-            q: target.query.clone(),
+            q,
         }
     }
 }

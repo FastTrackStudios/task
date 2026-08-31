@@ -56,9 +56,6 @@ fn icon_locations() -> Element {
 fn icon_inventory() -> Element {
     rsx! { Package { size: 16 } }
 }
-fn icon_scripture() -> Element {
-    rsx! { BookOpen { size: 16 } }
-}
 fn icon_milestones() -> Element {
     rsx! { Flag { size: 16 } }
 }
@@ -198,14 +195,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "home",
             icon: icon_inventory,
             route: Route::InventoryRoute {},
-        },
-        NavTab {
-            label: "Scripture",
-            plugin: "scripture",
-            icon: icon_scripture,
-            route: Route::ScriptureRoute {
-                reference: String::new(),
-            },
         },
         NavTab {
             label: "Milestones",
@@ -499,7 +488,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::VaultRoute { .. } => "Vault",
         Route::LocationsRoute {} => "Locations",
         Route::InventoryRoute {} => "Inventory",
-        Route::ScriptureRoute { .. } => "Scripture",
         Route::MilestonesRoute {} => "Milestones",
         Route::FitnessRoute {} => "Fitness",
         Route::MealplanRoute {} => "Mealplan",

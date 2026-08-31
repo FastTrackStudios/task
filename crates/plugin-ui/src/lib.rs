@@ -104,6 +104,93 @@ impl LinkTarget {
             query: String::new(),
         }
     }
+
+    /// The app's front page with one parameter, encoded.
+    ///
+    /// Use this rather than `format!("k={v}")` for anything a person
+    /// typed. `John 3:16-20@ESV` is a perfectly ordinary value and it
+    /// contains a space; pasted into a URL raw, the space ends the URL
+    /// and the passage arrives as `John`.
+    #[must_use]
+    pub fn param(key: &str, value: &str) -> Self {
+        Self::query(format!("{key}={}", encode(value)))
+    }
+}
+
+/// Percent-encode everything that is not unreserved.
+///
+/// Deliberately conservative: it is never wrong to encode a character
+/// that did not need it, and the set of characters that *do* need it
+/// varies by where in a URL you are. Plugins should not have to know
+/// that.
+#[must_use]
+pub fn encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// Read one parameter out of a query string, decoded.
+///
+/// The shell hands an app its query verbatim — it has no idea what the
+/// keys mean, which is what keeps it from having to. This is the other
+/// half: the app names its key and gets its value back the way it was
+/// written.
+///
+/// Returns `None` for a key that is absent, and `Some("")` for one
+/// present and empty, because those are different questions.
+#[must_use]
+pub fn query_param(query: &str, key: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| decode(v))
+}
+
+/// Undo [`encode`], and `+` for a space — forms send that, and a query
+/// that came back through one should still read.
+///
+/// A malformed escape is left as written rather than dropped. Losing
+/// characters silently is worse than showing a stray `%`.
+#[must_use]
+pub fn decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// How strongly an app claims a link.
@@ -500,5 +587,46 @@ mod tests {
         let (id, claim) = claim_link("Washed", |_| true).expect("somebody claims it");
         assert_eq!(id, "test-both");
         assert!(claim.beats_a_page());
+    }
+
+    /// The case the encoding exists for. A reference has a space in it,
+    /// and a raw one truncates the passage to its book.
+    #[test]
+    fn a_reference_survives_the_round_trip() {
+        let there = LinkTarget::param("reference", "John 3:16-20@ESV");
+        assert!(!there.query.contains(' '), "a raw space ends the URL");
+        assert_eq!(
+            query_param(&there.query, "reference").as_deref(),
+            Some("John 3:16-20@ESV")
+        );
+    }
+
+    #[test]
+    fn an_absent_key_and_an_empty_one_are_different_answers() {
+        assert_eq!(query_param("dish=", "dish").as_deref(), Some(""));
+        assert_eq!(query_param("dish=", "reference"), None);
+    }
+
+    #[test]
+    fn a_later_key_does_not_shadow_the_one_asked_for() {
+        let query = "reference=John%203%3A16&tx=ESV";
+        assert_eq!(query_param(query, "tx").as_deref(), Some("ESV"));
+        assert_eq!(
+            query_param(query, "reference").as_deref(),
+            Some("John 3:16")
+        );
+    }
+
+    /// Dropping characters silently would turn a bad link into a
+    /// *plausible* one, which is the harder bug to see.
+    #[test]
+    fn a_malformed_escape_keeps_its_characters() {
+        assert_eq!(decode("100%"), "100%");
+        assert_eq!(decode("a%zz"), "a%zz");
+    }
+
+    #[test]
+    fn a_form_sends_a_space_as_a_plus() {
+        assert_eq!(query_param("reference=John+3:16", "reference").as_deref(), Some("John 3:16"));
     }
 }

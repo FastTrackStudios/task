@@ -30,20 +30,15 @@ fn main() {
     // thread — it runs a subprocess, and nothing on screen waits for it.
     std::thread::spawn(|| tracing::info!("{}", sync_service::ensure_installed()));
 
-    // Register the apps this build ships. The composition root is the
-    // one crate that may know both Task and a plugin; nothing lower
-    // names either direction, which is what keeps the extension point
-    // an extension point rather than more coupling.
+    // Register the apps this build ships. The list itself lives in
+    // `task-plugins`, so desktop, web and mobile cannot drift into
+    // shipping different sets.
     //
     // Before launch, because the nav is built on first render.
-    task_plugin_ui::register(task_plugin_cooking::APP);
-    // Said once at startup, because "which version of Session is this
-    // machine running?" is otherwise unanswerable: apps release from
-    // their own repositories, and two machines on the same Task can
-    // hold different ones with nothing to show for it.
+    task_plugins::register_all();
     tracing::info!(
         contract = task_plugin_ui::CONTRACT,
-        apps = ?task_plugin_ui::installed(),
+        apps = ?task_plugins::stamps(),
         "plugin apps registered"
     );
 

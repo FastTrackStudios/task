@@ -1,0 +1,19 @@
+[package]
+name = "task-plugin-scripture"
+description = "Scripture as a Task app: the reader screen, and the claim that makes `[[John 3:16]]` in any note open the passage."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The SDK, and the two crates that are Scripture's own. Nothing else in
+# the workspace — in particular not `task-ui`, which is the point.
+task-plugin-ui = { workspace = true }
+scripture-ui = { workspace = true }
+scripture-proto = { workspace = true }
+
+[lints]
+workspace = true

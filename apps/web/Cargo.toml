@@ -12,6 +12,9 @@ license.workspace = true
 # packages/web pattern.
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
+# The shipped app set — same list as desktop and mobile, by
+# construction rather than by remembering.
+task-plugins = { workspace = true }
 
 # getrandom 0.3 (pulled transitively via fake → rand → rand_core)
 # needs its `wasm_js` backend feature enabled on wasm32, paired with

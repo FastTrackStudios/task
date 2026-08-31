@@ -8,6 +8,9 @@ license.workspace = true
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
+# The shipped app set — same list as desktop and web, by construction
+# rather than by remembering.
+task-plugins = { workspace = true }
 # `otel` so shipped clients export traces/logs/metrics through the
 # server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
 architect-telemetry = { workspace = true, features = ["otel"] }
