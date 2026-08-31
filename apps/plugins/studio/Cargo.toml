@@ -1,0 +1,17 @@
+[package]
+name = "task-plugin-studio"
+description = "FastTrackStudio as a Task app: song and setlist widgets, chart fences, and the watch screen."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+task-plugin-ui = { workspace = true }
+task-player-ui = { workspace = true }
+resources-ui = { workspace = true }
+
+[lints]
+workspace = true

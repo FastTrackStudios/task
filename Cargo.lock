@@ -17902,6 +17902,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "resources-ui"
+version = "0.1.0"
+dependencies = [
+ "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.5.0)",
+ "dioxus",
+ "links-proto",
+ "resources-proto",
+ "task-plugin-ui",
+ "task-ui-core",
+ "vault-proto",
+]
+
+[[package]]
 name = "resvg"
 version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21031,6 +21044,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-plugin-studio"
+version = "0.1.0"
+dependencies = [
+ "resources-ui",
+ "task-player-ui",
+ "task-plugin-ui",
+]
+
+[[package]]
 name = "task-plugin-ui"
 version = "0.1.0"
 dependencies = [
@@ -21051,6 +21073,7 @@ dependencies = [
  "task-plugin-mealplan",
  "task-plugin-recall",
  "task-plugin-scripture",
+ "task-plugin-studio",
  "task-plugin-ui",
 ]
 
@@ -22528,7 +22551,6 @@ dependencies = [
  "prefs-proto",
  "project-proto",
  "reqwest 0.12.28",
- "resources-proto",
  "scheduling-proto",
  "scheduling-ui",
  "scripture-proto",

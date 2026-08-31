@@ -33,6 +33,7 @@ pub fn register_all() {
     task_plugin_ui::register(task_plugin_finance::APP);
     task_plugin_ui::register(task_plugin_recall::APP);
     task_plugin_ui::register(task_plugin_agent::APP);
+    task_plugin_ui::register(task_plugin_studio::APP);
 }
 
 /// What [`register_all`] just installed, as `id@version` — for the log
@@ -67,6 +68,7 @@ mod tests {
             [
                 "agent",
                 "email",
+                "fasttrackstudio",
                 "finance",
                 "fitness",
                 "home",
@@ -81,6 +83,6 @@ mod tests {
     fn registering_twice_is_not_two_copies() {
         super::register_all();
         super::register_all();
-        assert_eq!(task_plugin_ui::installed().len(), 8);
+        assert_eq!(task_plugin_ui::installed().len(), 9);
     }
 }

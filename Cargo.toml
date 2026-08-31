@@ -80,6 +80,7 @@ members = [
     "apps/plugins/finance",
     "apps/plugins/recall",
     "apps/plugins/agent",
+    "apps/plugins/studio",
     "apps/plugins/bundle",
     "features/files/files-fileprovider",
     "features/files/files-fuse",
@@ -149,6 +150,7 @@ members = [
     "features/recall/recall-ui",
     "features/resources/resources",
     "features/resources/resources-proto",
+    "features/resources/resources-ui",
     "features/scheduling/scheduling",
     "features/scheduling/scheduling-proto",
     "features/scheduling/scheduling-ui",
@@ -249,6 +251,7 @@ task-plugin-home = { path = "apps/plugins/home" }
 task-plugin-finance = { path = "apps/plugins/finance" }
 task-plugin-recall = { path = "apps/plugins/recall" }
 task-plugin-agent = { path = "apps/plugins/agent" }
+task-plugin-studio = { path = "apps/plugins/studio" }
 task-plugins = { path = "apps/plugins/bundle" }
 task-plugin-ui = { path = "crates/plugin-ui" }
 task-stores = { path = "crates/stores" }
@@ -354,6 +357,7 @@ recall-ui = { path = "features/recall/recall-ui" }
 recall-proto = { path = "features/recall/recall-proto", default-features = false }
 recipe-import = { path = "features/mealplan/recipe-import" }
 resources = { path = "features/resources/resources" }
+resources-ui = { path = "features/resources/resources-ui" }
 resources-proto = { path = "features/resources/resources-proto", default-features = false }
 scheduling = { path = "features/scheduling/scheduling" }
 scheduling-proto = { path = "features/scheduling/scheduling-proto", default-features = false }

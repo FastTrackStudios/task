@@ -1,20 +1,107 @@
-//! `/watch` — watch a YouTube video and take timestamped notes.
+//! Watch — a video, its transcript, and timestamped notes on it.
 //!
-//! Embeds the video via the IFrame API (`enablejsapi=1`) and drives it
-//! over the postMessage channel (same approach as the wiki-source
-//! viewer): clicking a moment seeks the player, and "Add note at current
-//! time" reads `getCurrentTime` back and writes a `TypedLink` from
-//! `<node>#t:<secs>`. The moments come from `LinksService.links_for`, so
-//! this works for any `video:` / `sermon:` / `song:` node — the sermon is
-//! already a populated example (`sermon:god-restores-broken-people`).
+//! Embeds the video via the YouTube IFrame API (`enablejsapi=1`) and
+//! drives it over the postMessage channel: clicking a moment seeks the
+//! player, and "add note at current time" reads `getCurrentTime` back
+//! and writes a `TypedLink` from `<node>#t:<secs>`. The moments come
+//! from `LinksService.links_for`, so this works for any `video:` /
+//! `sermon:` / `song:` node.
+//!
+//! Mounted by `task-plugin-studio`.
 
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use links_proto::{
     Anchor, Confidence, NodeKind, NodeRef, Relation, TypedLink, Visibility, format_timecode,
 };
+use task_ui_core::feeds;
+use task_ui_core::orgs::{OrgMeta, OrgSelection, selected_slugs};
 
-use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
+/// This app's id in Task's catalog, and the first segment of every
+/// link it writes to itself.
+pub const APP_ID: &str = "fasttrackstudio";
+
+/// Every typed link touching `node_token` (a `kind:id` NodeRef token,
+/// e.g. `sermon:god-restores-broken-people`) — the timestamped notes
+/// this view renders.
+///
+/// Declared here rather than reached for through the shell: the links
+/// service is a service this app calls. The vault page reads it too,
+/// for its own reasons, and declares its own.
+pub async fn fetch_links_for(
+    slug: &str,
+    node_token: &str,
+) -> Result<Vec<links_proto::TypedLink>, String> {
+    let node = links_proto::NodeRef::parse(node_token)
+        .ok_or_else(|| format!("bad node token: {node_token}"))?;
+    let client =
+        task_ui_core::vox_clients::establish_for::<links_proto::LinksServiceClient>(slug).await?;
+    client
+        .links_for(node)
+        .await
+        .map_err(|e| format!("{slug}: links_for: {e:?}"))
+}
+
+/// view's synced transcript. Empty vec on a missing sidecar.
+pub async fn fetch_transcript(
+    slug: &str,
+    rel_path: &str,
+) -> Result<Vec<resources_proto::TranscriptSegment>, String> {
+    let client =
+        task_ui_core::vox_clients::establish_for::<resources_proto::ResourcesServiceClient>(slug)
+            .await?;
+    // A missing / unreadable transcript just means no cues — never fatal.
+    Ok(client
+        .transcript(rel_path.to_owned())
+        .await
+        .map(|doc| doc.segments)
+        .unwrap_or_default())
+}
+
+/// Save a watched video to the library as a `type: video` vault note
+/// (`Videos/<id>.md`) so `[[id]]` resolves and it shows in a Videos base.
+/// `CreateOnly`, so re-saving an existing video is a no-op (the title
+/// stays whatever you renamed it to).
+pub async fn save_video_note(
+    slug: &str,
+    video_id: &str,
+    url: &str,
+    title: &str,
+) -> Result<(), String> {
+    let title = if title.trim().is_empty() {
+        video_id
+    } else {
+        title
+    };
+    let md = format!(
+        "---\ntitle: {title}\ntype: video\nkind: video\nvideo_id: {video_id}\nurl: {url}\ntags: [video]\n---\n\n# {title}\n\nTimestamped notes are typed links on `video:{video_id}`. Watch + annotate at `/watch?v={video_id}&node=video:{video_id}`.\n"
+    );
+    let client =
+        task_ui_core::vox_clients::establish_for::<vault_proto::VaultSyncClient>(slug).await?;
+    client
+        .put_file(
+            "default".to_owned(),
+            format!("Videos/{video_id}.md"),
+            md.into_bytes(),
+            vault_proto::IfMatch::CreateOnly,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("{slug}: save video: {e:?}"))
+}
+
+feeds! {
+    links_proto::LinksServiceClient {
+        /// Persist one typed link (the watch view's "add note at current time").
+        create_link(link: links_proto::TypedLink) -> links_proto::TypedLink
+            = create(link) as "create link";
+
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// The screen
+// ─────────────────────────────────────────────────────────────────────
 
 const EMBED_ID: &str = "watch-embed";
 
@@ -171,7 +258,7 @@ pub fn WatchView(v: String, node: String) -> Element {
                 .first()
                 .cloned()?;
             let node = NodeRef::parse(&nt)?;
-            let links = crate::feeds::fetch_links_for(&slug, &nt).await.ok()?;
+            let links = self::fetch_links_for(&slug, &nt).await.ok()?;
             let mut ms: Vec<Moment> = links.iter().filter_map(|l| moment(l, &node)).collect();
             ms.sort_by_key(|m| m.start);
             Some(ms)
@@ -198,7 +285,7 @@ pub fn WatchView(v: String, node: String) -> Element {
                 .first()
                 .cloned()?;
             let rel = transcript_rel_path(&tnt)?;
-            crate::feeds::fetch_transcript(&slug, &rel).await.ok()
+            self::fetch_transcript(&slug, &rel).await.ok()
         }
     });
 
@@ -230,7 +317,7 @@ pub fn WatchView(v: String, node: String) -> Element {
                 let mut link = TypedLink::new(source, target, relation, Confidence::Possible);
                 link.note = text;
                 link.visibility = Visibility::Private;
-                let _ = crate::feeds::create_link(&slug, link).await;
+                let _ = self::create_link(&slug, link).await;
                 refresh.set(refresh() + 1);
                 note_text.set(String::new());
                 target_text.set(String::new());
@@ -249,7 +336,7 @@ pub fn WatchView(v: String, node: String) -> Element {
         spawn(async move {
             if let Some(slug) = slug {
                 let url = format!("https://youtu.be/{id}");
-                let _ = crate::feeds::save_video_note(&slug, &id, &url, "").await;
+                let _ = self::save_video_note(&slug, &id, &url, "").await;
                 saved.set(true);
             }
         });
@@ -344,7 +431,7 @@ pub fn WatchView(v: String, node: String) -> Element {
                     button {
                         r#type: "button",
                         class: "text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground",
-                        onclick: move |_| { nav.push(crate::routes::Route::WatchRoute { v: String::new(), node: String::new() }); },
+                        onclick: move |_| { nav.push(task_plugin_ui::href(APP_ID, "", "")); },
                         "Open another video"
                     }
                 }
@@ -417,10 +504,17 @@ fn UrlPrompt() -> Element {
     let mut url = use_signal(String::new);
     let go = use_callback(move |()| {
         if let Some(id) = youtube_id(&url()) {
-            nav.push(crate::routes::Route::WatchRoute {
-                v: id.clone(),
-                node: format!("video:{id}"),
-            });
+            // Two parameters, so each value is encoded on its own —
+            // `href` cannot tell this app.s `&` from the URL.s.
+            nav.push(task_plugin_ui::href(
+                APP_ID,
+                "",
+                &format!(
+                    "v={}&node={}",
+                    task_plugin_ui::encode(&id),
+                    task_plugin_ui::encode(&format!("video:{id}"))
+                ),
+            ));
         }
     });
     rsx! {
@@ -442,4 +536,37 @@ fn UrlPrompt() -> Element {
             }
         }
     }
+}
+
+/// What this crate makes of a note.
+///
+/// A `type: video` note **is** the watch screen — the video, its
+/// transcript, and the timestamped notes hanging off it. The shell used
+/// to special-case that (`else if is_video`, right next to the widget
+/// registry it was bypassing), which meant the one place that decides
+/// what a note looks like had an exception carved into it for one note
+/// type belonging to one app.
+///
+/// The node token is derived from the note's own basename, the same way
+/// the shell derived it, so `Videos/dQw4w9WgXcQ.md` watches
+/// `video:dQw4w9WgXcQ`.
+#[must_use]
+pub fn widgets() -> Vec<task_plugin_ui::task_widgets::WidgetSpec> {
+    use task_plugin_ui::task_widgets::{WidgetMatch, WidgetSpec};
+    vec![
+        WidgetSpec::new("studio.video", vec![WidgetMatch::NoteType("video")])
+            .render(|ctx| {
+                let id = basename_of(&ctx.path).to_string();
+                rsx! {
+                    WatchView { v: id.clone(), node: format!("video:{id}") }
+                }
+            })
+            .plugin(APP_ID),
+    ]
+}
+
+/// A note's basename without its extension — `Videos/abc.md` → `abc`.
+fn basename_of(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.strip_suffix(".md").unwrap_or(name)
 }

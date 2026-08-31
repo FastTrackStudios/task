@@ -86,9 +86,6 @@ scripture-proto = { workspace = true, features = ["vox"] }
 # Typed-link wire surface — `LinksService` client + `TypedLink`/`NodeRef`
 # for the `/connections` graph (verse↔song↔sermon↔topic web). `vox` only.
 links-proto = { workspace = true, features = ["vox"] }
-# Resource Library wire surface — `ResourcesService` client + transcript
-# DTOs for the `/watch` synced transcript. `vox` only.
-resources-proto = { workspace = true, features = ["vox"] }
 milestone-proto = { workspace = true, features = ["vox", "atom"] }
 # The invoicing *service*, for one thing only: a project's budget panel
 # shows what has been billed against it. That is the shell reading a

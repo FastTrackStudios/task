@@ -1,0 +1,23 @@
+[package]
+name = "resources-ui"
+description = "The watch screen: a video, its synced transcript, and timestamped typed-link notes on it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+architect-ui = { workspace = true, features = ["router"] }
+dioxus = { workspace = true, features = ["router"] }
+links-proto = { workspace = true, features = ["vox"] }
+resources-proto = { workspace = true, features = ["vox"] }
+# For `href` — this screen links to itself with two parameters.
+task-plugin-ui = { workspace = true }
+task-ui-core = { workspace = true }
+# `save_video_note` writes a `type: video` note into the vault.
+vault-proto = { workspace = true, features = ["vox"] }
+
+[lints]
+workspace = true

@@ -14,11 +14,13 @@
 //!   pane falls back to the sha autosave, which still persists edits);
 //! - the editor sources (vault decorations + presence cursors + the
 //!   registered widget decoration passes, the `[[`/`#` completion) and
-//!   the `type:` dispatch: `type: video` and `.base` stay shell views,
-//!   while every other typed note consults the
-//!   `task_widgets::WidgetRegistry` (the player's song/setlist widgets,
-//!   the section tabs, …) before falling through to the rich markdown
-//!   editor;
+//!   the `type:` dispatch: `.base` is the one shell view left, and
+//!   every other typed note consults the `task_widgets::WidgetRegistry`
+//!   (the studio app's song / setlist / video widgets, the section
+//!   tabs, …) before falling through to the rich markdown editor.
+//!   `type: video` used to be a second exception here, carved in right
+//!   beside the registry it was bypassing; it is a widget now, which is
+//!   what the registry was for;
 //! - while focused, the shell status line (file · dirty · save · collab
 //!   · vim) and the `window.__taskVault` conformance mirror.
 //!
@@ -272,7 +274,6 @@ pub(crate) fn NoteView(
             .find(|p| p.path == type_path)
             .map(|p| p.page_type.to_lowercase())
     });
-    let is_video = current_type.read().as_deref() == Some("video");
     let is_base = path
         .rsplit_once('.')
         .is_some_and(|(_, e)| e.eq_ignore_ascii_case("base"));
@@ -553,11 +554,6 @@ pub(crate) fn NoteView(
                                 }),
                             }
                         },
-                    }
-                } else if is_video {
-                    crate::pages::watch::WatchView {
-                        v: basename_of(&current).to_string(),
-                        node: format!("video:{}", basename_of(&current)),
                     }
                 } else {
                     // The note's widget view (registry-matched): the

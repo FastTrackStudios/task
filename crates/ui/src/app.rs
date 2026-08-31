@@ -360,20 +360,33 @@ pub fn App() -> Element {
     crate::presence::use_provide_derived_presence();
 
     // ── Note-widget registry ──────────────────────────────────
-    // The ONE site where widget provider crates are named. Everything
-    // else in the shell (note_view, collab decorations, link clicks)
-    // goes through the `task_widgets::WidgetRegistry` context and never
-    // learns who provided a widget. Registration is explicit — no
-    // linker magic — so this list IS the app's widget roster.
+    // The larger half of what an app contributes: not a screen, but
+    // what a note of its kind *is* when you open it. Everything else in
+    // the shell (note_view, collab decorations, link clicks) goes
+    // through the `task_widgets::WidgetRegistry` context and never
+    // learns who provided a widget.
+    //
+    // The apps are asked; the two crates named below are the shell's
+    // own providers (section tabs, the file explorer embed), which are
+    // core and belong to no app.
     let widget_registry = use_context_provider(|| {
-        // Same spirit as the widget roster: the editor renders ```kf
-        // fences through a registry, not a dependency (editor-state must
-        // stay below the notation domain), so the app names the renderer
-        // explicitly. Without this, charts in notes show as source.
-        task_player_ui::register_chart_fences();
+        // Fences are the same shape of contribution: the editor renders
+        // ```kf and friends through a registry rather than a dependency
+        // (editor-state must stay below the notation domain), so
+        // somebody has to name the renderer. That somebody is now the
+        // app that owns the notation, not this file.
+        for app in task_plugin_ui::registered() {
+            if let Some(register) = app.fences {
+                register();
+            }
+        }
 
         let registry = task_widgets::WidgetRegistry::new();
-        registry.register(task_player_ui::widgets());
+        for app in task_plugin_ui::registered() {
+            if let Some(widgets) = app.widgets {
+                registry.register(widgets());
+            }
+        }
         registry.register(task_note_tabs::widgets());
         registry.register(files_ui::widgets());
         registry

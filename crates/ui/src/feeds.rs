@@ -645,62 +645,6 @@ feeds! {
     }
 }
 
-/// A resource's transcript cues (`resources/<rel_path>`), for the watch
-/// view's synced transcript. Empty vec on a missing sidecar.
-pub async fn fetch_transcript(
-    slug: &str,
-    rel_path: &str,
-) -> Result<Vec<resources_proto::TranscriptSegment>, String> {
-    let client =
-        crate::vox_clients::establish_for::<resources_proto::ResourcesServiceClient>(slug).await?;
-    // A missing / unreadable transcript just means no cues — never fatal.
-    Ok(client
-        .transcript(rel_path.to_owned())
-        .await
-        .map(|doc| doc.segments)
-        .unwrap_or_default())
-}
-
-/// Save a watched video to the library as a `type: video` vault note
-/// (`Videos/<id>.md`) so `[[id]]` resolves and it shows in a Videos base.
-/// `CreateOnly`, so re-saving an existing video is a no-op (the title
-/// stays whatever you renamed it to).
-pub async fn save_video_note(
-    slug: &str,
-    video_id: &str,
-    url: &str,
-    title: &str,
-) -> Result<(), String> {
-    let title = if title.trim().is_empty() {
-        video_id
-    } else {
-        title
-    };
-    let md = format!(
-        "---\ntitle: {title}\ntype: video\nkind: video\nvideo_id: {video_id}\nurl: {url}\ntags: [video]\n---\n\n# {title}\n\nTimestamped notes are typed links on `video:{video_id}`. Watch + annotate at `/watch?v={video_id}&node=video:{video_id}`.\n"
-    );
-    let client = crate::vox_clients::establish_for::<vault_proto::VaultSyncClient>(slug).await?;
-    client
-        .put_file(
-            "default".to_owned(),
-            format!("Videos/{video_id}.md"),
-            md.into_bytes(),
-            vault_proto::IfMatch::CreateOnly,
-        )
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("{slug}: save video: {e:?}"))
-}
-
-feeds! {
-    links_proto::LinksServiceClient {
-        /// Persist one typed link (the watch view's "add note at current time").
-        create_link(link: links_proto::TypedLink) -> links_proto::TypedLink
-            = create(link) as "create link";
-
-    }
-}
-
 pub async fn fetch_wiki_files(slug: &str) -> Result<Vec<view_knowledge_graph::WikiFile>, String> {
     use view_knowledge_graph::WikiFile;
 

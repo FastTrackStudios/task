@@ -85,11 +85,6 @@ pub enum Route {
         #[route("/bases")]
         BasesRoute {},
 
-        // `v` = YouTube id, `node` = the NodeRef token the timestamped
-        // notes hang on (empty → the paste-a-URL landing).
-        #[route("/watch?:v&:node")]
-        WatchRoute { v: String, node: String },
-
         // Deep-link to one curated wiki page (wiki-root-relative
         // path as a query value, like `VaultRoute`).
         #[route("/wiki/page?:path")]
@@ -305,13 +300,6 @@ fn ConnectionsRoute() -> Element {
 #[component]
 fn BasesRoute() -> Element {
     rsx! { pages::bases::BasesView {} }
-}
-
-#[component]
-fn WatchRoute(v: String, node: String) -> Element {
-    rsx! {
-        crate::plugin_gate::PluginGate { plugin: "fasttrackstudio", pages::watch::WatchView { v, node } }
-    }
 }
 
 #[component]

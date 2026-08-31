@@ -6,7 +6,7 @@
 use architect_ui::lucide_dioxus::{
     BookOpen, BookUser, CalendarClock, CalendarDays, ChartGantt, CircleCheck, Flag, FolderKanban,
     FolderOpen, GitBranch, House, Inbox as InboxIcon, Notebook, RefreshCw,
-    Settings as SettingsIcon, Target, Timer, Users, Waypoints, Youtube,
+    Settings as SettingsIcon, Target, Timer, Users, Waypoints,
 };
 use dioxus::prelude::*;
 
@@ -71,9 +71,6 @@ fn icon_wiki() -> Element {
 }
 fn icon_connections() -> Element {
     rsx! { Waypoints { size: 16 } }
-}
-fn icon_watch() -> Element {
-    rsx! { Youtube { size: 16 } }
 }
 fn icon_goals() -> Element {
     rsx! { Target { size: 18 } }
@@ -189,15 +186,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
         },
         // Bases now open inside the vault (selecting a `.base` file
         // renders its tables), so no dedicated tab — Obsidian-style.
-        NavTab {
-            label: "Watch",
-            plugin: "fasttrackstudio",
-            icon: icon_watch,
-            route: Route::WatchRoute {
-                v: String::new(),
-                node: String::new(),
-            },
-        },
         NavTab {
             label: "Repos",
             plugin: "git",
@@ -392,7 +380,6 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::WikiRoute {} => "Wiki",
         Route::ConnectionsRoute {} => "Connections",
         Route::BasesRoute {} => "Bases",
-        Route::WatchRoute { .. } => "Watch",
         Route::WikiPageRoute { .. } => "Wiki page",
         Route::WikiSourcesRoute {} => "Archived sources",
         Route::WikiSourceRoute { .. } => "Source",
