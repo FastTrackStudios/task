@@ -28,6 +28,7 @@ pub mod note_header;
 pub mod note_properties;
 pub mod note_view;
 pub mod project_detail;
+pub mod missing;
 pub mod projects;
 pub mod recall;
 pub mod recipe_edit;

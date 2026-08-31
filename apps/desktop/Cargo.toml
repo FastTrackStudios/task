@@ -24,6 +24,10 @@ tracing = { workspace = true }
 # files-daemon itself would pull jj, iroh and a chunk store into a
 # window that only needs to ask questions.
 files-daemon-proto = { workspace = true }
+# The composition root, and the only crate that names both Task and an
+# app plugin. This is where the dependency arrows meet, on purpose —
+# see task_ui_core::plugin.
+task-plugin-cooking = { workspace = true }
 vox = { workspace = true, features = ["transport-websocket"] }
 
 [features]

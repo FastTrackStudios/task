@@ -30,6 +30,14 @@ fn main() {
     // thread — it runs a subprocess, and nothing on screen waits for it.
     std::thread::spawn(|| tracing::info!("{}", sync_service::ensure_installed()));
 
+    // Register the apps this build ships. The composition root is the
+    // one crate that may know both Task and a plugin; nothing lower
+    // names either direction, which is what keeps the extension point
+    // an extension point rather than more coupling.
+    //
+    // Before launch, because the nav is built on first render.
+    task_ui_core::plugin::register(task_plugin_cooking::APP);
+
     let (pos, size, fullscreen) = window_placement();
     let mut window = WindowBuilder::new()
         .with_title("Task")

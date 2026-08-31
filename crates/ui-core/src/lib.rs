@@ -39,6 +39,7 @@ pub mod identity;
 pub mod iroh_transport;
 pub mod media_grant;
 pub mod nav;
+pub mod plugin;
 pub mod orgs;
 pub mod states;
 pub mod vox_clients;

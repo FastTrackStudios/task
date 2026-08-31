@@ -383,7 +383,36 @@ mod tests {
 pub fn nav_tabs_for(set: &task_plugin::PluginSet) -> Vec<NavTab> {
     nav_tabs()
         .into_iter()
+        .chain(plugin_tabs())
         .filter(|t| set.contains(t.plugin))
+        .collect()
+}
+
+/// The tabs registered apps contribute.
+///
+/// Built here rather than in the registry because a tab needs a
+/// `Route`, and `Route` is the shell's — which is the whole reason the
+/// plugin side speaks in paths. The shell does the one translation.
+fn plugin_tabs() -> Vec<NavTab> {
+    task_ui_core::plugin::registered()
+        .into_iter()
+        .flat_map(|app| {
+            app.nav.iter().map(move |nav| NavTab {
+                label: nav.label,
+                icon: nav.icon,
+                route: if nav.path.is_empty() {
+                    Route::PluginRoute {
+                        app: app.id.to_string(),
+                    }
+                } else {
+                    Route::PluginPathRoute {
+                        app: app.id.to_string(),
+                        path: nav.path.split('/').map(str::to_string).collect(),
+                    }
+                },
+                plugin: app.id,
+            })
+        })
         .collect()
 }
 
@@ -497,5 +526,27 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::FilesRoute {} => "Files",
         Route::SettingsRoute {} => "Settings",
         Route::SyncRoute {} => "Sync",
+        // A registered app names its own screens. The label is
+        // `&'static str` on the plugin side too, so this stays a
+        // borrow rather than forcing every other arm to allocate.
+        Route::PluginRoute { app } => plugin_title(app, ""),
+        Route::PluginPathRoute { app, path } => plugin_title(app, &path.join("/")),
     }
+}
+
+/// What to call a registered app's screen.
+///
+/// Its own label for that path, the app's front-page label otherwise,
+/// and a plain word when nothing is registered — a title bar should
+/// never be the thing that reports a missing plugin.
+fn plugin_title(app: &str, path: &str) -> &'static str {
+    task_ui_core::plugin::find(app)
+        .and_then(|a| {
+            a.nav
+                .iter()
+                .find(|n| n.path == path)
+                .or_else(|| a.nav.first())
+                .map(|n| n.label)
+        })
+        .unwrap_or("App")
 }

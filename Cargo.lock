@@ -7277,6 +7277,7 @@ dependencies = [
  "files-fuse",
  "files-proto",
  "files-sync",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
@@ -20668,6 +20669,7 @@ dependencies = [
  "architect-telemetry",
  "dioxus",
  "files-daemon-proto",
+ "task-plugin-cooking",
  "task-ui-core",
  "tracing",
  "ui",
@@ -20844,6 +20846,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "task-plugin-cooking"
+version = "0.1.0"
+dependencies = [
+ "task-ui-core",
 ]
 
 [[package]]

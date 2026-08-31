@@ -169,6 +169,72 @@ pub enum Route {
 
         #[route("/sync")]
         SyncRoute {},
+
+        // Every registered app lives under here, and this is the only
+        // route the shell has that it does not own the inside of. A
+        // plugin cannot add a variant to this enum — it is one enum in
+        // one crate — so instead of thirty typed routes nobody outside
+        // can write, there is one catch-all and a registry
+        // (`task_ui_core::plugin`) that says which app answers.
+        //
+        // Stringly-typed exactly here, and nowhere else: the shell's
+        // own routes stay typed, and an app's internal paths are its
+        // own business.
+        #[route("/app/:app")]
+        PluginRoute { app: String },
+
+        #[route("/app/:app/:..path")]
+        PluginPathRoute { app: String, path: Vec<String> },
+}
+
+#[component]
+fn PluginRoute(app: String) -> Element {
+    rsx! { PluginScreen { app, path: String::new() } }
+}
+
+#[component]
+fn PluginPathRoute(app: String, path: Vec<String>) -> Element {
+    rsx! { PluginScreen { app, path: path.join("/") } }
+}
+
+/// One registered app's screen, or an honest account of why there is
+/// none.
+///
+/// Three different nothings, told apart on purpose. An app nobody
+/// registered is not installed in this build. One that is registered
+/// but off for this org is a setting somebody can change. One that is
+/// on and does not recognise the path is a bad link. Collapsing them
+/// into a single "not found" would send a person looking in the wrong
+/// place every time.
+#[component]
+fn PluginScreen(app: String, path: String) -> Element {
+    let enabled = crate::nav::use_active_plugins();
+
+    let Some(registered) = task_ui_core::plugin::find(&app) else {
+        return rsx! {
+            pages::missing::Missing {
+                title: "That app is not installed",
+                detail: "Nothing in this build registers `{app}`.",
+            }
+        };
+    };
+    if !enabled.contains(registered.id) {
+        return rsx! {
+            pages::missing::Missing {
+                title: "That app is turned off",
+                detail: "`{app}` is not enabled for this organisation. Settings can turn it on.",
+            }
+        };
+    }
+    match (registered.view)(&path) {
+        Some(view) => view,
+        None => rsx! {
+            pages::missing::Missing {
+                title: "No such screen",
+                detail: "`{app}` has no page at `{path}`.",
+            }
+        },
+    }
 }
 
 #[component]
