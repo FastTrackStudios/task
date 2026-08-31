@@ -178,7 +178,35 @@ impl Inodes {
     }
 }
 
+/// Making a folder where no root is yet.
+///
+/// `mkdir` inside a root is an ordinary directory in that project. One
+/// at a *place* — `days-to-praise/Projects/New Song` — is somebody
+/// asking for a new project, in the only vocabulary a file manager has.
+/// Answering it by making a directory in the skeleton would be the
+/// worst of both: it appears, and it is gone at the next mount.
+///
+/// So the filesystem asks whoever composed it, and that decides whether
+/// a place is a project position and where its bytes should live. The
+/// default refuses, which is right for a mount of a single root — there
+/// are no places there to create.
+pub trait Composer: Send + Sync + 'static {
+    /// A directory was asked for at `place`, which no root owns. Make it
+    /// a root, or say why not.
+    fn create_root(&self, place: &Path) -> Result<Placed, String>;
+}
+
+/// Nothing may be created — the default.
+pub struct Fixed;
+
+impl Composer for Fixed {
+    fn create_root(&self, _place: &Path) -> Result<Placed, String> {
+        Err("this mount does not create roots".into())
+    }
+}
+
 /// One root, and where it appears in the composed tree.
+#[derive(Clone)]
 pub struct Placed {
     /// Its path in the tree people are shown — `org/Projects/Name`.
     /// Empty for a mount of a single root at the mountpoint itself.
@@ -214,7 +242,13 @@ pub struct LiveTree {
     /// The roots, longest place first so the deepest owner of a path
     /// wins — a root placed inside another root's place answers for its
     /// own files.
-    roots: Vec<Placed>,
+    ///
+    /// Behind a lock because a `mkdir` at a place adds one while the
+    /// mount is live: a new project should appear in the folder
+    /// somebody just made it in, not after a remount.
+    roots: Mutex<Vec<Placed>>,
+    /// Who decides whether a place may become a root.
+    composer: Arc<dyn Composer>,
     inodes: Mutex<Inodes>,
     handles: Mutex<HashMap<u64, Arc<File>>>,
     next_fh: Mutex<u64>,
@@ -253,14 +287,25 @@ impl LiveTree {
     /// in the business of creating directories outside the tree it
     /// serves.
     #[must_use]
-    pub fn composed(skeleton: impl Into<PathBuf>, mut roots: Vec<Placed>) -> Self {
+    pub fn composed(skeleton: impl Into<PathBuf>, roots: Vec<Placed>) -> Self {
+        Self::composing(skeleton, roots, Arc::new(Fixed))
+    }
+
+    /// The same, able to turn a `mkdir` at a place into a new root.
+    #[must_use]
+    pub fn composing(
+        skeleton: impl Into<PathBuf>,
+        mut roots: Vec<Placed>,
+        composer: Arc<dyn Composer>,
+    ) -> Self {
         // Longest place first: `resolve` takes the first match, and for
         // `a/b/c/take.wav` both a root at `a/b` and one at `a/b/c` are
         // prefixes. The deeper one owns it.
         roots.sort_by(|a, b| b.place.len().cmp(&a.place.len()));
         Self {
             skeleton: skeleton.into(),
-            roots,
+            roots: Mutex::new(roots),
+            composer,
             inodes: Mutex::new(Inodes::rooted(Path::new(""))),
             handles: Mutex::new(HashMap::new()),
             next_fh: Mutex::new(1),
@@ -268,13 +313,38 @@ impl LiveTree {
     }
 
     /// The root a shown path belongs to, if any.
-    fn owner(&self, shown: &Path) -> Option<&Placed> {
-        let shown = shown.to_string_lossy();
-        self.roots.iter().find(|r| {
-            r.place.is_empty()
-                || shown == r.place.as_str()
-                || shown.starts_with(&format!("{}/", r.place))
-        })
+    fn owner(&self, shown: &Path) -> Option<Placed> {
+        let text = shown.to_string_lossy();
+        self.roots
+            .lock()
+            .expect("roots lock")
+            .iter()
+            .find(|r| {
+                r.place.is_empty()
+                    || text == r.place.as_str()
+                    || text.starts_with(&format!("{}/", r.place))
+            })
+            .cloned()
+    }
+
+    /// Is `shown` a place where a *new* root belongs?
+    ///
+    /// Yes when some root already sits directly inside the same parent:
+    /// `days-to-praise/Projects/New Song` is a project because
+    /// `days-to-praise/Projects` already holds one. That keeps the rule
+    /// to something a person can predict — a new folder beside existing
+    /// projects is a project, a new folder inside one is a folder — and
+    /// needs no schema saying which depths mean what.
+    fn is_root_position(&self, shown: &Path) -> bool {
+        let Some(parent) = shown.parent().map(|p| p.to_string_lossy().into_owned()) else {
+            return false;
+        };
+        self.roots
+            .lock()
+            .expect("roots lock")
+            .iter()
+            .any(|r| Path::new(&r.place).parent().map(|p| p.to_string_lossy().into_owned())
+                == Some(parent.clone()))
     }
 
     /// Where a shown path actually is on disk.
@@ -674,6 +744,35 @@ impl Filesystem for LiveTree {
             return;
         };
         let child = parent_shown.join(name);
+
+        // A folder made beside existing projects is a new project, and
+        // this is where that happens. Without it the directory would be
+        // created in the skeleton — visible, and gone at the next mount,
+        // which is a worse answer than refusing.
+        if self.owner(&child).is_none() && self.is_root_position(&child) {
+            match self.composer.create_root(&child) {
+                Ok(placed) => {
+                    {
+                        let mut roots = self.roots.lock().expect("roots lock");
+                        roots.push(placed);
+                        roots.sort_by(|a, b| b.place.len().cmp(&a.place.len()));
+                    }
+                    // The skeleton needs the parents too, or a listing
+                    // of the level above will not show it.
+                    let _ = std::fs::create_dir_all(self.skeleton.join(&child));
+                    match self.attr(&child) {
+                        Ok(attr) => reply.entry(&TTL, &attr, fuser::Generation(0)),
+                        Err(e) => reply.error(errno(&e)),
+                    }
+                }
+                Err(why) => {
+                    tracing::warn!(place = %child.display(), error = %why, "fuse: could not make a project here");
+                    reply.error(Errno::EIO);
+                }
+            }
+            return;
+        }
+
         match std::fs::create_dir(self.real(&child)).and_then(|()| self.attr(&child)) {
             Ok(attr) => reply.entry(&TTL, &attr, fuser::Generation(0)),
             Err(e) => reply.error(errno(&e)),
@@ -725,7 +824,7 @@ impl Filesystem for LiveTree {
         // with a different history — a sync decision, not a rename, and
         // `std::fs::rename` across filesystems fails anyway. Refusing
         // here says so with EXDEV instead of a confusing errno.
-        if self.owner(&from).map(|r| &r.place) != self.owner(&to).map(|r| &r.place) {
+        if self.owner(&from).map(|r| r.place) != self.owner(&to).map(|r| r.place) {
             reply.error(Errno::EXDEV);
             return;
         }

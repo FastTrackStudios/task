@@ -317,3 +317,68 @@ async fn tags_reach_the_filesystem_without_being_stored_there() {
 
     rig.control.unmount(rig.root_id).await.unwrap();
 }
+
+/// Making a folder where projects live makes a project.
+///
+/// The vocabulary a file manager has is folders, so that is the
+/// vocabulary this answers in: a new folder beside existing projects
+/// becomes a root, adopted and placed, with its bytes beside its
+/// siblings' — and a new folder *inside* a project stays an ordinary
+/// folder, because that is what somebody meant by it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_folder_made_beside_projects_becomes_one() {
+    if !fuse_is_available() {
+        return;
+    }
+    let rig = rig().await;
+    rig.control
+        .set_place(rig.root_id, "acme/Projects/First".into())
+        .await
+        .unwrap();
+
+    let under = rig.mountpoint.join("Task");
+    rig.control
+        .mount_all(under.to_string_lossy().into_owned(), false)
+        .await
+        .unwrap();
+
+    // Beside an existing project.
+    let made = under.join("acme/Projects/Second");
+    std::fs::create_dir(&made).unwrap();
+
+    let placed = rig.control.placed_roots().await.unwrap();
+    let second = placed
+        .iter()
+        .find(|r| r.place == "acme/Projects/Second")
+        .expect("the new folder should have become a root");
+    assert_eq!(second.name, "Second");
+    // Its bytes sit beside its sibling's, wherever that turned out to
+    // be — not anywhere derived from the place string.
+    let sibling = std::path::Path::new(&rig.tree).parent().unwrap();
+    assert_eq!(
+        std::path::Path::new(&second.path).parent().unwrap(),
+        sibling,
+        "a new project belongs beside the ones already there"
+    );
+    assert!(std::path::Path::new(&second.path).is_dir());
+
+    // And it is browsable at once, through the same mount.
+    assert!(made.is_dir());
+
+    // Inside a project, a folder is just a folder.
+    let ordinary = under.join("acme/Projects/First/Stems");
+    std::fs::create_dir(&ordinary).unwrap();
+    assert!(rig.tree.join("Stems").is_dir(), "it belongs to the project");
+    assert!(
+        !rig.control
+            .placed_roots()
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.place.ends_with("Stems")),
+        "an ordinary folder must not become a root"
+    );
+
+    let mounted = rig.control.mounts().await.unwrap();
+    rig.control.unmount(mounted[0].0).await.unwrap();
+}

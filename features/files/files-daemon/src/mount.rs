@@ -169,6 +169,90 @@ fn frontmatter_tags(path: &Path) -> Vec<String> {
     tags
 }
 
+/// Turning `mkdir` at a place into a project.
+///
+/// The question this has to answer is where the bytes go, and the
+/// honest source is the siblings: a new folder in
+/// `days-to-praise/Projects` belongs beside the projects already there,
+/// whatever disk that turned out to be. Nothing is configured, nothing
+/// is guessed from the place string — the tree says where its own kind
+/// lives.
+#[cfg(target_os = "linux")]
+struct MakeProject {
+    daemon: SyncDaemon,
+    runtime: tokio::runtime::Handle,
+    /// `(place, backing)` for every root at mount time — what a new
+    /// sibling is placed beside.
+    siblings: Vec<(String, PathBuf)>,
+}
+
+#[cfg(target_os = "linux")]
+impl files_fuse::Composer for MakeProject {
+    fn create_root(&self, place: &Path) -> std::result::Result<files_fuse::Placed, String> {
+        let place = place.to_string_lossy().into_owned();
+        let parent = Path::new(&place)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = Path::new(&place)
+            .file_name()
+            .ok_or("a project needs a name")?
+            .to_string_lossy()
+            .into_owned();
+
+        // Where this org already keeps this kind of thing.
+        let beside = self
+            .siblings
+            .iter()
+            .find(|(p, _)| {
+                Path::new(p).parent().map(|p| p.to_string_lossy().into_owned())
+                    == Some(parent.clone())
+            })
+            .map(|(_, backing)| backing.clone())
+            .ok_or_else(|| format!("nothing in {parent} to put it beside"))?;
+        let dir = beside
+            .parent()
+            .ok_or("its siblings have no parent directory")?
+            .join(&name);
+
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+
+        let daemon = self.daemon.clone();
+        let place_for_tags = place.clone();
+        let (adopting, placing) = (dir.clone(), place.clone());
+        let root = self.runtime.block_on(async move {
+            // Registered without reading it: it is empty, and a new
+            // project should exist the instant somebody makes the
+            // folder rather than after a scan.
+            let root = daemon
+                .share_capturing(&adopting, Some(name), false)
+                .await
+                .map_err(|e| e.to_string())?;
+            daemon
+                .set_place(root.id, &placing)
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>(root)
+        })?;
+
+        tracing::info!(place = %place, at = %dir.display(), "made a project from a new folder");
+        Ok(files_fuse::Placed {
+            place,
+            backing: dir.clone(),
+            hydrator: std::sync::Arc::new(Fetch {
+                daemon: self.daemon.clone(),
+                root_id: root.id,
+                runtime: self.runtime.clone(),
+            }),
+            tags: std::sync::Arc::new(RootTags {
+                // The org is the first segment of the *place*, the same
+                // as every other root — not anything about the name.
+                org: place_for_tags.split_once('/').map(|(org, _)| org.to_string()),
+                tree: dir,
+            }),
+        })
+    }
+}
+
 /// Mount every placed root as one tree at `mountpoint`.
 ///
 /// One mount, not one per root. A mount per root is what this did
@@ -217,7 +301,15 @@ pub(crate) fn mount_composed(
     }
 
     let count = placed.len();
-    let session = files_fuse::LiveTree::composed(skeleton, placed)
+    let composer = MakeProject {
+        daemon: daemon.clone(),
+        runtime: runtime.clone(),
+        siblings: placed
+            .iter()
+            .map(|p| (p.place.clone(), p.backing.clone()))
+            .collect(),
+    };
+    let session = files_fuse::LiveTree::composing(skeleton, placed, std::sync::Arc::new(composer))
         .mount(mountpoint)
         .map_err(|e| DaemonError::Io(format!("mounting at {}: {e}", mountpoint.display())))?;
     tracing::info!(
