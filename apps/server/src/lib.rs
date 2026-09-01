@@ -937,6 +937,18 @@ pub(crate) async fn build_org_state(
                     .entry(org_proto::DEFAULT_WIKI.to_string())
                     .or_insert_with(|| org_root.wiki_knowledge_dir());
             }
+            // Compatibility alias. Every client predating multi-wiki
+            // asks for `"default"`, and renaming the tier to
+            // `knowledge` turned those into `WikiNotFound`. The alias
+            // points at the same directory and is excluded from
+            // `list_wikis`, so it resolves without appearing as a
+            // second wiki.
+            if let Some(knowledge) = roots.get(org_proto::DEFAULT_WIKI).cloned() {
+                roots.insert(
+                    wiki_live::backend::COMPAT_WIKI_ID.to_string(),
+                    knowledge,
+                );
+            }
             tracing::info!(
                 org = %org_root.slug(),
                 wikis = roots.len(),
@@ -3505,6 +3517,10 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             .with(
                 wiki_proto::service::subscriptions::subscriptions_rpc_service_descriptor(),
                 wiki_proto::service::subscriptions::serve(org.subscriptions.clone()),
+            )
+            .with(
+                wiki_proto::service::registry::registry_rpc_service_descriptor(),
+                wiki_proto::service::registry::serve(wiki.clone()),
             )
             .with(
                 wiki_proto::service::ingest::ingest_rpc_service_descriptor(),

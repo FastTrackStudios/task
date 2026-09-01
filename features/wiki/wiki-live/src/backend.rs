@@ -109,6 +109,113 @@ impl WikiBackend {
     }
 }
 
+// ────────────────────── Registry ──────────────────────
+
+impl wiki_proto::service::registry::Registry for WikiBackend {
+    /// t[impl wiki.many.addressable] — the org's whole set, so a
+    /// client can pick a wiki instead of hard-coding one. This is the
+    /// call that exists before a caller has a wiki id, which is why it
+    /// takes none.
+    fn list_wikis(&self) -> Result<Vec<wiki_proto::WikiSummary>, WikiError> {
+        let mut out: Vec<wiki_proto::WikiSummary> = match &self.layout {
+            Layout::Explicit(map) => map
+                .iter()
+                // The compatibility alias is a second name for a wiki
+                // already in the list; listing it twice would show one
+                // wiki as two.
+                .filter(|(slug, _)| slug.as_str() != COMPAT_WIKI_ID)
+                .map(|(slug, root)| summarize(slug, root))
+                .collect(),
+            Layout::UnderParent(parent) => std::fs::read_dir(parent)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| {
+                    let slug = e.file_name().to_str()?.to_owned();
+                    Some(summarize(&slug, &e.path()))
+                })
+                .collect(),
+        };
+        out.sort_by(|a, b| a.slug.cmp(&b.slug));
+        Ok(out)
+    }
+}
+
+/// The slug the org's long-standing curated tier answers to.
+const DEFAULT_SLUG: &str = "knowledge";
+
+/// The id every client used before an org could hold more than one
+/// wiki. Kept as an alias so an older caller still resolves; excluded
+/// from listings so it never looks like a second wiki.
+pub const COMPAT_WIKI_ID: &str = "default";
+
+fn summarize(slug: &str, root: &std::path::Path) -> wiki_proto::WikiSummary {
+    wiki_proto::WikiSummary {
+        slug: slug.to_owned(),
+        title: title_of(root).unwrap_or_else(|| prettify(slug)),
+        pages: count_markdown(root),
+        default: slug == DEFAULT_SLUG,
+    }
+}
+
+/// A wiki's own name for itself, from `purpose.md`'s frontmatter.
+fn title_of(root: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("purpose.md")).ok()?;
+    let mut lines = text.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    for line in lines {
+        let line = line.trim();
+        if line == "---" {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix("title:") {
+            let t = rest.trim().trim_matches('"').trim();
+            if !t.is_empty() {
+                return Some(t.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn prettify(slug: &str) -> String {
+    let mut out = String::with_capacity(slug.len());
+    for (i, word) in slug.split('-').enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    out
+}
+
+fn count_markdown(root: &std::path::Path) -> u32 {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut n = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // `_state/` is agent bookkeeping, not pages.
+            if path.file_name().is_some_and(|f| f == "_state") {
+                continue;
+            }
+            n += count_markdown(&path);
+        } else if path.extension().is_some_and(|x| x == "md") {
+            n += 1;
+        }
+    }
+    n
+}
+
 // ────────────────────── Schema ──────────────────────
 impl Schema for WikiBackend {
     fn bootstrap(&self, wiki_id: &str) -> Result<(), WikiError> {

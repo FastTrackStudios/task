@@ -102,6 +102,21 @@ struct Cached {
     until: Instant,
 }
 
+/// What one issuer endpoint said about a token.
+///
+/// The distinction that matters is `Declined` vs `Unreachable`: both end
+/// as `Principal::Anonymous`, and telling them apart is the difference
+/// between "your session expired" and "the auth server is down". Keeping
+/// them separate here is what lets the span say which.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Verdict {
+    Resolved(String),
+    /// The issuer answered, and did not recognise the token.
+    Declined,
+    /// We could not ask.
+    Unreachable,
+}
+
 impl CentralAuth {
     #[must_use]
     pub fn new(base_url: impl Into<String>) -> Self {
@@ -200,17 +215,49 @@ impl CentralAuth {
     /// Task specifically, and trying it first means the common path
     /// costs one request rather than two.
     async fn introspect(&self, token: &str) -> Option<String> {
-        if let Some(user_id) = self.ask(token, "/auth/session", &["user", "id"]).await {
+        use architect_telemetry::wide;
+
+        let session = self.ask(token, "/auth/session", &["user", "id"]).await;
+        if let Verdict::Resolved(user_id) = session {
+            wide::set("auth.central", "session_token");
             return Some(user_id);
         }
-        self.ask(token, "/oauth2/userinfo", &["sub"]).await
+        match self.ask(token, "/oauth2/userinfo", &["sub"]).await {
+            Verdict::Resolved(user_id) => {
+                wide::set("auth.central", "access_token");
+                Some(user_id)
+            }
+            // Both endpoints unreachable is an outage, not a bad token,
+            // and it is the one case an operator must be paged for: every
+            // central sign-in on this server is failing. One line,
+            // because denials are alertable and allows are not.
+            Verdict::Unreachable if matches!(session, Verdict::Unreachable) => {
+                wide::set("auth.central", "issuer_unreachable");
+                tracing::warn!(
+                    issuer = %self.base_url,
+                    "central auth: issuer unreachable — refusing every central token"
+                );
+                None
+            }
+            _ => {
+                // The issuer answered and did not recognise the token.
+                // Ordinary (an expired session), so it rides the wide
+                // event only — a log line per rejection is the scatter
+                // this pattern exists to delete.
+                wide::set("auth.central", "unrecognised");
+                None
+            }
+        }
     }
 
     /// One introspection request, reading the user id out at `path`.
     ///
-    /// `None` covers every failure — rejected, malformed, unreachable —
-    /// so a caller cannot accidentally treat "could not ask" as "yes".
-    async fn ask(&self, token: &str, endpoint: &str, path: &[&str]) -> Option<String> {
+    /// Returns a [`Verdict`] rather than `Option` so the caller can tell
+    /// "the issuer said no" from "we could not ask" — the two are the
+    /// same `Principal::Anonymous` downstream, and which one it was is
+    /// the difference between "your session expired" and "the auth
+    /// server is unreachable".
+    async fn ask(&self, token: &str, endpoint: &str, path: &[&str]) -> Verdict {
         let url = format!("{}{endpoint}", self.base_url);
         let res = match self
             .http
@@ -221,27 +268,26 @@ impl CentralAuth {
             .await
         {
             Ok(res) => res,
-            Err(e) => {
-                // Warn, not error: a token that cannot be checked is
-                // refused, and the refusal is what the caller sees. This
-                // line is for the operator wondering why sign-ins stopped.
-                tracing::warn!(
-                    error = %e,
-                    endpoint,
-                    "central auth: issuer unreachable — refusing"
-                );
-                return None;
-            }
+            Err(_) => return Verdict::Unreachable,
         };
+        // `/auth/session` answering 401 is the NORMAL first step for a
+        // redirect-flow token, so this is a routine answer, not a fault.
         if !res.status().is_success() {
-            return None;
+            return Verdict::Declined;
         }
-        let body: serde_json::Value = res.json().await.ok()?;
+        let Ok(body) = res.json::<serde_json::Value>().await else {
+            return Verdict::Declined;
+        };
         let mut cursor = &body;
         for key in path {
-            cursor = cursor.get(key)?;
+            let Some(next) = cursor.get(key) else {
+                return Verdict::Declined;
+            };
+            cursor = next;
         }
-        cursor.as_str().map(std::borrow::ToOwned::to_owned)
+        cursor
+            .as_str()
+            .map_or(Verdict::Declined, |id| Verdict::Resolved(id.to_owned()))
     }
 }
 
@@ -284,7 +330,12 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
                 return local;
             }
             let Some(token) = bearer_token else {
-                // No credential at all is not a case to ask about.
+                // No credential at all is not a case to ask about — but
+                // it still gets a value, because "the client never sent
+                // one" and "the issuer refused it" are the same
+                // `Anonymous` downstream, and a field that is merely
+                // ABSENT cannot tell them apart.
+                wide::set("auth.central", "no_token");
                 return Principal::Anonymous;
             };
             let Some(user_id) = self.central.user_for(token).await else {

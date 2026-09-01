@@ -31,7 +31,7 @@
 //! trait-split the same way `agent-proto` is, the impls
 //! become per-capability and slot in cleanly.
 
-mod backend;
+pub mod backend;
 mod context;
 mod error;
 pub mod findings;

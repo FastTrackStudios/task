@@ -53,7 +53,11 @@ pub fn SubscriptionsPanel() -> Element {
     let mut new_ref = use_signal(String::new);
     let mut as_resource = use_signal(|| false);
 
-    let mut act = move |qualified: String, what: Action| {
+    // An `EventHandler` rather than a closure passed by `&mut`: rsx
+    // event handlers must be `'static`, and a borrowed `FnMut` cannot
+    // escape into one. `EventHandler` is `Copy`, so each row can take
+    // it by value.
+    let act = EventHandler::new(move |(qualified, what): (String, Action)| {
         let Some(slug) = org() else { return };
         busy.set(qualified.clone());
         notice.set(String::new());
@@ -93,7 +97,7 @@ pub fn SubscriptionsPanel() -> Element {
             busy.set(String::new());
             held.restart();
         });
-    };
+    });
 
     let body = match &*held.read() {
         None => rsx! {
@@ -117,7 +121,7 @@ pub fn SubscriptionsPanel() -> Element {
             rsx! {
                 div { class: "flex flex-col gap-2",
                     for held_one in rows {
-                        {row(held_one, busy(), &mut act)}
+                        {row(held_one, busy(), act)}
                     }
                 }
             }
@@ -201,7 +205,7 @@ pub fn SubscriptionsPanel() -> Element {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Action {
     Refresh,
     Unsubscribe { force: bool },
@@ -210,7 +214,7 @@ enum Action {
 fn row(
     held: wiki_proto::HeldSubscription,
     busy: String,
-    act: &mut impl FnMut(String, Action),
+    act: EventHandler<(String, Action)>,
 ) -> Element {
     let s = held.subscription;
     let qualified = s.qualified();
@@ -267,18 +271,14 @@ fn row(
                 button {
                     class: "rounded-lg border border-border/70 px-2 py-1 text-xs hover:bg-accent",
                     disabled: working,
-                    onclick: {
-                        let q = q_refresh.clone();
-                        move |_| act(q.clone(), Action::Refresh)
-                    },
+                    onclick: move |_| act.call((q_refresh.clone(), Action::Refresh)),
                     if working { "Working…" } else { "Refresh" }
                 }
                 button {
                     class: "rounded-lg border border-border/70 px-2 py-1 text-xs hover:bg-accent",
                     disabled: working,
-                    onclick: {
-                        let q = q_drop.clone();
-                        move |_| act(q.clone(), Action::Unsubscribe { force: false })
+                    onclick: move |_| {
+                        act.call((q_drop.clone(), Action::Unsubscribe { force: false }))
                     },
                     "Unsubscribe"
                 }
@@ -289,9 +289,8 @@ fn row(
                 button {
                     class: "rounded-lg border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10",
                     disabled: working,
-                    onclick: {
-                        let q = q_force.clone();
-                        move |_| act(q.clone(), Action::Unsubscribe { force: true })
+                    onclick: move |_| {
+                        act.call((q_force.clone(), Action::Unsubscribe { force: true }))
                     },
                     "Discard copy"
                 }

@@ -807,6 +807,12 @@ table!(WIKI_PAGES, "wiki-pages", "wiki/pages/**", [
 // Subscriptions are the subscriber's own: reading what an org holds
 // is a read, taking one on or dropping one is a write. `core_set` is
 // a read of what the deployment hands everyone.
+// Listing an org's wikis is the call made before a caller has a wiki
+// id, so it guards nothing finer than "may read this org's wikis".
+#[cfg(feature = "plugin-wiki")]
+table!(WIKI_REGISTRY, "wiki-registry", "wiki/registry/**", [
+    rd "list_wikis",
+]);
 #[cfg(feature = "plugin-wiki")]
 table!(WIKI_SUBSCRIPTIONS, "wiki-subscriptions", "wiki/subscriptions/**", [
     rd "list_subscriptions", wr "subscribe", wr "unsubscribe",
@@ -1326,6 +1332,11 @@ pub fn mounts() -> Vec<Mount> {
             "wiki",
             wiki_proto::service::subscriptions::subscriptions_rpc_service_descriptor(),
             WIKI_SUBSCRIPTIONS,
+        ),
+        m(
+            "wiki",
+            wiki_proto::service::registry::registry_rpc_service_descriptor(),
+            WIKI_REGISTRY,
         ),
         m(
             "wiki",

@@ -661,6 +661,7 @@ feeds! {
 /// along as the legend's community summaries.
 pub async fn fetch_wiki_service_graph(
     slug: &str,
+    wiki_id: &str,
 ) -> Result<view_knowledge_graph::WikiGraph, String> {
     use std::collections::HashMap;
 
@@ -675,13 +676,13 @@ pub async fn fetch_wiki_service_graph(
         weights: None,
     };
     let graph = client
-        .build_graph("default".to_owned(), opts)
+        .build_graph(wiki_id.to_owned(), opts)
         .await
         .map_err(|e| format!("build_graph: {e:?}"))?;
     // Clusters are advisory (legend colors + summaries) — an error
     // here degrades to an unclustered graph, not a failed page.
     let clusters = client
-        .clusters("default".to_owned())
+        .clusters(wiki_id.to_owned())
         .await
         .unwrap_or_default();
 
@@ -933,4 +934,19 @@ pub async fn unsubscribe_from(
         .unsubscribe(wiki_proto::Subscriber::Vault, qualified.to_owned(), force)
         .await
         .map_err(|e| format!("unsubscribe: {e:?}"))
+}
+
+
+/// Every wiki this org holds (`wiki.many.addressable`).
+///
+/// The call a client makes *before* it has a wiki id — which is why
+/// every caller used to hard-code one.
+pub async fn fetch_wikis(slug: &str) -> Result<Vec<wiki_proto::WikiSummary>, String> {
+    let client =
+        crate::vox_clients::establish_for::<wiki_proto::service::registry::RegistryClient>(slug)
+            .await?;
+    client
+        .list_wikis()
+        .await
+        .map_err(|e| format!("list_wikis: {e:?}"))
 }
