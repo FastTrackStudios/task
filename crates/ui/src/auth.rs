@@ -906,6 +906,16 @@ pub fn SignInGate(children: Element) -> Element {
     if active.read().is_some() {
         return rsx! { {children} };
     }
+    // The one route that MUST render while signed out, because signing in
+    // is what it is for. The issuer redirects back here with an
+    // authorization code, and this gate sits above the router — so
+    // without this the page never mounts, the code is never redeemed,
+    // and the round trip ends silently back on the login form with the
+    // code sitting unused in the address bar. Which is exactly what it
+    // did.
+    if at_central_callback() {
+        return rsx! { {children} };
+    }
     if !booted() || busy() {
         // NEVER a dead end. This branch also covers "org discovery hasn't
         // resolved" — a failed or slow well-known fetch, or a server that
@@ -999,6 +1009,24 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
         .map_err(|e| format!("sign in {email}: {e}"))?;
     save_cached_token(email, &bundle.token);
     Ok(account_from(bundle.user, email, bundle.token))
+}
+
+/// Is this page load the central issuer redirecting back to us?
+///
+/// Read off `window.location` rather than the router, because
+/// [`SignInGate`] sits above the router and has no route to match on.
+#[cfg(target_arch = "wasm32")]
+fn at_central_callback() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().pathname().ok())
+        .is_some_and(|path| path.trim_end_matches('/') == "/auth/callback")
+}
+
+/// Native builds never make the round trip — the form signs in without
+/// leaving the process.
+#[cfg(not(target_arch = "wasm32"))]
+fn at_central_callback() -> bool {
+    false
 }
 
 /// Build the context value from an `AuthUser`, with dev-roster
