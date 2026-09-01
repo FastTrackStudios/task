@@ -485,3 +485,117 @@ async fn a_subscription_materializes_and_its_references_resolve() -> eyre::Resul
     assert_eq!(again.pulled, 0);
     Ok(())
 }
+
+/// The `Subscriptions` service, driven the way a client drives it.
+///
+/// Everything here goes through the trait rather than the store, so
+/// what passes is the surface the app actually calls — including the
+/// refusals, which are the half most likely to be right in the library
+/// and missing over the wire.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_manages_its_own_subscriptions() -> eyre::Result<()> {
+    use wiki_proto::service::subscriptions::Subscriptions as _;
+    use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
+
+    let tmp = tempfile::tempdir()?;
+    let data_root_path = tmp.path();
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(data_root_path, "acme-audio")?;
+    plant(data_root_path, "alice-personal")?;
+
+    let data_root = org_proto::DataRoot::new(data_root_path.to_owned());
+    let alice = data_root.org("alice-personal");
+
+    let mut domains = std::collections::HashMap::new();
+    domains.insert("acme.test".to_owned(), "acme-audio".to_owned());
+    let backend = wiki_live::subscriptions_backend::SubscriptionsBackend::new(
+        alice.path().to_path_buf(),
+        task_server::core_subscriptions(),
+        std::sync::Arc::new(wiki_live::subscriptions_backend::LocalOrgs::new(
+            data_root_path.to_path_buf(),
+            domains,
+        )),
+    );
+    let me = Subscriber::Vault;
+
+    // Planting handed the vault the core set, and the client can see
+    // it without having asked for it.
+    let held = backend.list_subscriptions(me.clone())?;
+    assert!(
+        held.iter().any(|h| h.subscription.core),
+        "core arrived without anyone opting in"
+    );
+    assert_eq!(backend.core_set()?.len(), 1);
+
+    // Take on a wiki.
+    let music = Subscription {
+        domain: "acme.test".into(),
+        slug: "music-theory".into(),
+        kind: SourceKind::Wiki,
+        title: "Music Theory".into(),
+        core: false,
+        declined: false,
+    };
+    backend.subscribe(me.clone(), music.clone())?;
+    // Twice is refused rather than silently ignored.
+    assert!(backend.subscribe(me.clone(), music.clone()).is_err());
+
+    // Nothing is on disk until it is refreshed.
+    let before = backend.list_subscriptions(me.clone())?;
+    let entry = before
+        .iter()
+        .find(|h| h.subscription.slug == "music-theory")
+        .expect("held");
+    assert_eq!(entry.files, 0, "a subscription is not a copy until refreshed");
+
+    let report = backend.refresh_subscription(me.clone(), "acme.test/music-theory")?;
+    assert!(report.pulled > 0);
+    assert!(report.conflicted.is_empty());
+
+    let after = backend.list_subscriptions(me.clone())?;
+    let entry = after
+        .iter()
+        .find(|h| h.subscription.slug == "music-theory")
+        .expect("held");
+    assert!(entry.files > 0, "the copy is on disk now");
+
+    // Edit the copy, then try to drop it. The refusal is the point:
+    // unsubscribing must not discard work upstream has never seen.
+    let copy =
+        wiki_live::materialize::local_copy_dir(alice.path(), "acme.test", "music-theory");
+    std::fs::write(copy.join("My Notes.md"), "# mine\n")?;
+    let refused = backend.unsubscribe(me.clone(), "acme.test/music-theory", false);
+    assert!(refused.is_err(), "unsubscribing must ask about local work");
+    assert!(
+        format!("{}", refused.unwrap_err()).contains("local change"),
+        "the refusal should say what is at stake"
+    );
+
+    // Forced, it goes.
+    backend.unsubscribe(me.clone(), "acme.test/music-theory", true)?;
+    assert!(
+        !backend
+            .list_subscriptions(me.clone())?
+            .iter()
+            .any(|h| h.subscription.slug == "music-theory")
+    );
+
+    // A core one declines rather than disappearing, so it can come
+    // back.
+    backend.unsubscribe(me.clone(), "fasttrackstudio.app/bible", true)?;
+    let bible = backend
+        .list_subscriptions(me.clone())?
+        .into_iter()
+        .find(|h| h.subscription.slug == "bible")
+        .expect("a declined core subscription is still listed");
+    assert!(bible.subscription.declined);
+
+    // Refreshing something not held is an error, not a silent no-op.
+    assert!(
+        backend
+            .refresh_subscription(me, "acme.test/nope")
+            .is_err()
+    );
+    Ok(())
+}

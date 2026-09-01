@@ -47,6 +47,7 @@ mod source_watcher;
 mod state;
 pub mod materialize;
 pub mod subscriptions;
+pub mod subscriptions_backend;
 mod vault;
 
 pub use backend::WikiBackend;

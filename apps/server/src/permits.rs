@@ -804,6 +804,14 @@ table!(WIKI_GRAPH, "wiki-graph", "wiki/graph/**", [
 table!(WIKI_PAGES, "wiki-pages", "wiki/pages/**", [
     rd "list_pages", rd "read_page", wr "write_page",
 ]);
+// Subscriptions are the subscriber's own: reading what an org holds
+// is a read, taking one on or dropping one is a write. `core_set` is
+// a read of what the deployment hands everyone.
+#[cfg(feature = "plugin-wiki")]
+table!(WIKI_SUBSCRIPTIONS, "wiki-subscriptions", "wiki/subscriptions/**", [
+    rd "list_subscriptions", wr "subscribe", wr "unsubscribe",
+    wr "refresh_subscription", rd "core_set",
+]);
 #[cfg(feature = "plugin-wiki")]
 table!(WIKI_INGEST, "wiki-ingest", "wiki/ingest/**", [
     wr "enqueue_ingest", rd "list_ingest", wr "claim_next_ingest", wr "record_analysis",
@@ -1313,6 +1321,11 @@ pub fn mounts() -> Vec<Mount> {
             "wiki",
             wiki_proto::service::pages::pages_rpc_service_descriptor(),
             WIKI_PAGES,
+        ),
+        m(
+            "wiki",
+            wiki_proto::service::subscriptions::subscriptions_rpc_service_descriptor(),
+            WIKI_SUBSCRIPTIONS,
         ),
         m(
             "wiki",

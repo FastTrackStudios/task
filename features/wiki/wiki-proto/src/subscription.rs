@@ -11,14 +11,16 @@
 //! between the two, so it is in the types rather than in a check
 //! somebody has to remember to write.
 
+use facet::Facet;
 use serde::{Deserialize, Serialize};
 
 /// What kind of thing is being subscribed to.
 ///
 /// There is no `Vault` member, and that is the point: a vault cannot
 /// be subscribed to by any route, so the type cannot express it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Facet)]
 #[serde(rename_all = "lowercase")]
+#[repr(u8)]
 pub enum SourceKind {
     /// Authored knowledge. Editable locally, and changes go back as
     /// Edit Requests.
@@ -46,8 +48,9 @@ impl SourceKind {
 ///
 /// A vault may subscribe; a vault may not *be* subscribed to. Both
 /// halves of that live here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Facet)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "slug")]
+#[repr(u8)]
 pub enum Subscriber {
     /// The org's own vault.
     Vault,
@@ -79,7 +82,8 @@ impl Subscriber {
 }
 
 /// One held subscription.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Facet)]
+#[repr(C)]
 pub struct Subscription {
     /// The publishing org's federation domain. This is a *name*, not
     /// a live address: it survives the org going away and another

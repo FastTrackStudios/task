@@ -103,5 +103,6 @@ pub use event::{WikiChange, WikiEvent};
 // `vox` feature.
 pub use service::{
     Catalog, Events, Federation, Graph, Ingest, Lint, Multimodal, Pages, RawLayer, Research,
-    Review, Schema, Search, Watcher,
+    Review, Schema, Search, Subscriptions, Watcher,
 };
+pub use service::subscriptions::{HeldSubscription, RefreshReport};

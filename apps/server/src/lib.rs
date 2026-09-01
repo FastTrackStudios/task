@@ -165,6 +165,11 @@ pub struct OrgAppState {
     /// Wiki feature backend rooted at this org's `vault/`.
     #[cfg(feature = "plugin-wiki")]
     pub wiki: wiki_live::WikiBackend,
+    /// What this org's vault and wikis subscribe to. Keyed by
+    /// subscriber rather than by wiki, because the org vault holds
+    /// subscriptions too and is not a wiki.
+    #[cfg(feature = "plugin-wiki")]
+    pub subscriptions: wiki_live::subscriptions_backend::SubscriptionsBackend,
     /// Project list / get backend — walks `vault/Projects/*.md`.
     pub projects: project::ProjectBackend,
     /// Goal list / get backend — walks `vault/Goals/**/*.md`.
@@ -976,6 +981,37 @@ pub(crate) async fn build_org_state(
             backend
         };
 
+        // The subscription service, over the same store the boot sweep
+        // just topped up. `LocalOrgs` resolves a source published by
+        // another org on this data root; a peer's is the same
+        // materialize call against a vox client, which is why the
+        // resolver is a trait rather than a match.
+        #[cfg(feature = "plugin-wiki")]
+        let subscriptions = {
+            let mut domains = std::collections::HashMap::new();
+            for (slug, _) in example_org::ORGS {
+                // The example's orgs answer to `<name>.test`, which is
+                // what its seeded references carry.
+                domains.insert(
+                    format!("{}.test", slug.split('-').next().unwrap_or(slug)),
+                    (*slug).to_owned(),
+                );
+            }
+            let upstream = std::sync::Arc::new(
+                wiki_live::subscriptions_backend::LocalOrgs::new(
+                    org_root.path().parent().and_then(std::path::Path::parent)
+                        .unwrap_or(org_root.path())
+                        .to_path_buf(),
+                    domains,
+                ),
+            );
+            wiki_live::subscriptions_backend::SubscriptionsBackend::new(
+                org_root.path().to_path_buf(),
+                core_subscriptions(),
+                upstream,
+            )
+        };
+
         // Agent-task queue. SQLite under the org root
         // (override via `TASK_SERVER_AGENT_TASKS_URL`).
         // `OrgRoot` doesn't yet have an `agent_tasks_db()`
@@ -1692,6 +1728,8 @@ pub(crate) async fn build_org_state(
             resources,
             #[cfg(feature = "plugin-wiki")]
             wiki,
+            #[cfg(feature = "plugin-wiki")]
+            subscriptions,
             projects,
             goals,
             milestones,
@@ -3463,6 +3501,10 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             .with(
                 wiki_proto::service::pages::pages_rpc_service_descriptor(),
                 wiki_proto::service::pages::serve(wiki.clone()),
+            )
+            .with(
+                wiki_proto::service::subscriptions::subscriptions_rpc_service_descriptor(),
+                wiki_proto::service::subscriptions::serve(org.subscriptions.clone()),
             )
             .with(
                 wiki_proto::service::ingest::ingest_rpc_service_descriptor(),

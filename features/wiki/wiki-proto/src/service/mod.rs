@@ -25,6 +25,7 @@ pub mod research;
 pub mod review;
 pub mod schema;
 pub mod search;
+pub mod subscriptions;
 pub mod watcher;
 
 pub use catalog::Catalog;
@@ -40,4 +41,5 @@ pub use research::Research;
 pub use review::Review;
 pub use schema::Schema;
 pub use search::Search;
+pub use subscriptions::{HeldSubscription, RefreshReport, Subscriptions};
 pub use watcher::Watcher;
