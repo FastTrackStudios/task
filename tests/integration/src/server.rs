@@ -125,10 +125,17 @@ impl Server {
                 std::env::set_var("TASK_DATA_ROOT", data.path());
                 std::env::set_var("TASK_ENFORCE_PERMISSIONS", "1");
             }
-            org_proto::DataRoot::from_env()
-                .expect("data root")
+            let data_root = org_proto::DataRoot::from_env().expect("data root");
+            data_root
                 .init_org(slug, name, true)
                 .expect("scaffold the org");
+            // Planted BEFORE the server boots, because that is the
+            // order a deployment sees: `admin demo` runs, then the
+            // server starts and reads what is on disk. The org's set
+            // of wikis in particular is read once at boot, so a wiki
+            // planted afterwards would be on disk and unreachable.
+            task_server::example_org::install(&data_root.org(slug), slug)
+                .expect("plant the example studio");
             AppState::new_with_auth(auth.clone(), ServerKeypair::generate_ephemeral())
                 .await
                 .expect("boot AppState")
@@ -137,11 +144,6 @@ impl Server {
         let mut org = state.org(slug).expect("the org we just scaffolded");
         let tree = data.path().join("orgs").join(slug).join("files");
         std::fs::create_dir_all(&tree).expect("files dir");
-        task_server::example_org::install(
-            &org_proto::DataRoot::new(data.path().into()).org(slug),
-            slug,
-        )
-        .expect("plant the example studio");
         fixture(&tree);
 
         let key = iroh::SecretKey::generate();

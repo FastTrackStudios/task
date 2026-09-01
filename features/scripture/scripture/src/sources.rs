@@ -125,9 +125,6 @@ mod tests {
         assert_eq!(source_for("WEB").unwrap().id, "WEB");
         // Case-insensitive, because a person types `web`.
         assert_eq!(source_for("web").unwrap().id, "WEB");
-        assert!(matches!(
-            source_for("nope"),
-            Err(SourceError::Unknown(_))
-        ));
+        assert!(matches!(source_for("nope"), Err(SourceError::Unknown(_))));
     }
 }

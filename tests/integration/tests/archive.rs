@@ -58,6 +58,8 @@ fn tally(reads: &[Read]) -> BTreeMap<&'static str, usize> {
             Entry::Projects(_) => "projects-root",
             Entry::Vault(_) => "vault",
             Entry::Wiki(_) => "wiki",
+            Entry::Resources(_) => "resources",
+            Entry::Repos(_) => "repos",
             Entry::Inbox(_) => "inbox",
             Entry::Org(_) => "org",
             Entry::Project(_) => "project",

@@ -84,6 +84,27 @@ async fn an_org_holds_more_than_its_projects() {
     assert_eq!(at(&d, "vnt-video/Wiki"), Entry::Wiki("vnt-video".into()));
 }
 
+/// An org holds a *set* of wikis (`wiki.many.set`), and the tree reads
+/// each named one as a wiki like the long-standing tier. Beside them sit
+/// the org's committed resources and the repositories a wiki can mirror
+/// (`wiki.source.repo`) — the org's own, and not projects.
+#[tokio::test]
+async fn named_wikis_resources_and_repos_are_explained() {
+    let d = data();
+    assert_eq!(
+        at(&d, "acme-audio/Wikis/Music Theory"),
+        Entry::Wiki("acme-audio".into())
+    );
+    assert_eq!(
+        at(&d, "acme-audio/Resources/songs"),
+        Entry::Resources("acme-audio".into())
+    );
+    assert_eq!(
+        at(&d, "acme-audio/Repos/task-docs"),
+        Entry::Repos("acme-audio".into())
+    );
+}
+
 /// The ordinary project: work, client, one session.
 #[tokio::test]
 async fn a_folder_name_carries_the_work_and_the_client() {

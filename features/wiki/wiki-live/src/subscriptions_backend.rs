@@ -22,10 +22,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use wiki_proto::WikiError;
 use wiki_proto::config::Visibility;
 use wiki_proto::service::subscriptions::{HeldSubscription, RefreshReport, Subscriptions};
 use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
-use wiki_proto::WikiError;
 
 use crate::materialize;
 use crate::subscriptions::SubscriptionStore;
@@ -86,10 +86,7 @@ pub struct LocalOrgs {
 
 impl LocalOrgs {
     #[must_use]
-    pub fn new(
-        data_root: PathBuf,
-        domains: std::collections::HashMap<String, String>,
-    ) -> Self {
+    pub fn new(data_root: PathBuf, domains: std::collections::HashMap<String, String>) -> Self {
         Self { data_root, domains }
     }
 
@@ -230,11 +227,7 @@ pub struct SubscriptionsBackend {
 
 impl SubscriptionsBackend {
     #[must_use]
-    pub fn new(
-        org_root: PathBuf,
-        core: Vec<Subscription>,
-        upstream: Arc<dyn Upstream>,
-    ) -> Self {
+    pub fn new(org_root: PathBuf, core: Vec<Subscription>, upstream: Arc<dyn Upstream>) -> Self {
         let store = SubscriptionStore::open(&org_root);
         let org_slug = org_root
             .file_name()
@@ -251,11 +244,8 @@ impl SubscriptionsBackend {
     }
 
     fn held(&self, subscription: &Subscription) -> HeldSubscription {
-        let copy = materialize::local_copy_dir(
-            &self.org_root,
-            &subscription.domain,
-            &subscription.slug,
-        );
+        let copy =
+            materialize::local_copy_dir(&self.org_root, &subscription.domain, &subscription.slug);
         let files = count_files(&copy);
         HeldSubscription {
             subscription: subscription.clone(),
@@ -472,11 +462,8 @@ mod tests {
     #[test]
     fn outsiders_are_admitted_or_refused_by_visibility() {
         let (dir, upstream) = world();
-        let alice = SubscriptionsBackend::new(
-            dir.path().join("orgs/alice"),
-            vec![],
-            upstream.clone(),
-        );
+        let alice =
+            SubscriptionsBackend::new(dir.path().join("orgs/alice"), vec![], upstream.clone());
         alice.subscribe(Subscriber::Vault, sub("theory")).unwrap();
         alice.subscribe(Subscriber::Vault, sub("cooking")).unwrap();
         let err = alice
@@ -497,17 +484,15 @@ mod tests {
     #[test]
     fn narrowing_stops_refresh_but_keeps_the_copy() {
         let (dir, upstream) = world();
-        let alice = SubscriptionsBackend::new(
-            dir.path().join("orgs/alice"),
-            vec![],
-            upstream.clone(),
-        );
+        let alice =
+            SubscriptionsBackend::new(dir.path().join("orgs/alice"), vec![], upstream.clone());
         alice.subscribe(Subscriber::Vault, sub("theory")).unwrap();
         let report = alice
             .refresh_subscription(Subscriber::Vault, "acme.test/theory")
             .unwrap();
         assert_eq!(report.pulled, 1);
-        let copy = materialize::local_copy_dir(&dir.path().join("orgs/alice"), "acme.test", "theory");
+        let copy =
+            materialize::local_copy_dir(&dir.path().join("orgs/alice"), "acme.test", "theory");
         assert!(copy.join("Page.md").is_file());
 
         let root = dir.path().join("orgs/acme/wikis/theory");
@@ -542,7 +527,10 @@ mod tests {
         let err = alice
             .subscribe(Subscriber::Vault, sub("nonesuch"))
             .expect_err("missing");
-        assert!(matches!(&err, WikiError::Refused(m) if m.contains("no wiki")), "{err:?}");
+        assert!(
+            matches!(&err, WikiError::Refused(m) if m.contains("no wiki")),
+            "{err:?}"
+        );
     }
 
     /// t[verify wiki.access.directory] — discovery lists public wikis
@@ -552,11 +540,8 @@ mod tests {
     #[test]
     fn discovery_shows_public_and_own_unlisted_only() {
         let (dir, upstream) = world();
-        let alice = SubscriptionsBackend::new(
-            dir.path().join("orgs/alice"),
-            vec![],
-            upstream.clone(),
-        );
+        let alice =
+            SubscriptionsBackend::new(dir.path().join("orgs/alice"), vec![], upstream.clone());
         let seen: Vec<String> = alice
             .discover()
             .unwrap()
@@ -565,7 +550,8 @@ mod tests {
             .collect();
         assert_eq!(seen, vec!["acme.test/theory"]);
 
-        let acme = SubscriptionsBackend::new(dir.path().join("orgs/acme"), vec![], upstream.clone());
+        let acme =
+            SubscriptionsBackend::new(dir.path().join("orgs/acme"), vec![], upstream.clone());
         let seen: Vec<String> = acme
             .discover()
             .unwrap()

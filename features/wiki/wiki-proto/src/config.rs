@@ -285,7 +285,11 @@ mod tests {
 
     #[test]
     fn visibility_words_round_trip() {
-        for v in [Visibility::Public, Visibility::Unlisted, Visibility::Private] {
+        for v in [
+            Visibility::Public,
+            Visibility::Unlisted,
+            Visibility::Private,
+        ] {
             assert_eq!(Visibility::parse(v.as_str()), Some(v));
         }
         assert_eq!(Visibility::parse("PUBLIC"), Some(Visibility::Public));

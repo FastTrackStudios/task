@@ -113,13 +113,7 @@ pub fn begin(redirect_uri: &str) -> Result<(), LoginError> {
         .set_item(ISSUER_KEY, &issuer)
         .map_err(|_| LoginError::NoBrowser)?;
 
-    let url = oidc::authorize_url(
-        &issuer,
-        CLIENT_ID,
-        redirect_uri,
-        &pkce,
-        oidc::DEFAULT_SCOPE,
-    );
+    let url = oidc::authorize_url(&issuer, CLIENT_ID, redirect_uri, &pkce, oidc::DEFAULT_SCOPE);
     web_sys::window()
         .ok_or(LoginError::NoBrowser)?
         .location()
@@ -153,11 +147,7 @@ pub struct Redeemed {
 /// token — the server introspects it at `/oauth2/userinfo` rather than
 /// `/auth/session`. Both are accepted; see `central_auth` on the server.
 #[cfg(target_arch = "wasm32")]
-pub async fn complete(
-    redirect_uri: &str,
-    code: &str,
-    state: &str,
-) -> Result<Redeemed, LoginError> {
+pub async fn complete(redirect_uri: &str, code: &str, state: &str) -> Result<Redeemed, LoginError> {
     let storage = session_storage().ok_or(LoginError::NoBrowser)?;
 
     let parked = |key: &str| {
@@ -345,9 +335,6 @@ mod tests {
             .check_state("not-the-state")
             .unwrap_err()
             .into();
-        assert!(
-            err.to_string().contains("state did not match"),
-            "got {err}"
-        );
+        assert!(err.to_string().contains("state did not match"), "got {err}");
     }
 }

@@ -94,8 +94,20 @@ pub enum Entry {
     /// An org's wiki: what it knows. Separate from the vault because the
     /// two age differently — a session note is true of one week, and a
     /// page on mic placement is meant to outlast every project that used
-    /// it.
+    /// it. Both the long-standing `Wiki/` tier and each named wiki under
+    /// `Wikis/<Name>/` — an org holds a set of wikis (`wiki.many.set`),
+    /// and to the tree they are the same kind of thing.
     Wiki(String),
+    /// An org's `Resources/` — material committed for the seed to hand
+    /// to projects: song folders with manifests, corpora. Owned like
+    /// assets, but shaped for a machine to consume rather than a person
+    /// to browse.
+    Resources(String),
+    /// An org's `Repos/` — git repositories the org keeps beside its
+    /// wikis, so a wiki can mirror a path in one (`wiki.source.repo`).
+    /// Not projects: nothing here is a session, and git already owns
+    /// the history.
+    Repos(String),
     /// An unfiled pile.
     Inbox(InboxScope),
     /// An org's directory — the whole of what it has on this disk.
@@ -165,7 +177,9 @@ pub fn classify(parts: &[&str]) -> Entry {
         [org] => Entry::Org((*org).to_string()),
         [org, "Assets", ..] => Entry::Assets((*org).to_string()),
         [org, "Vault", ..] => Entry::Vault((*org).to_string()),
-        [org, "Wiki", ..] => Entry::Wiki((*org).to_string()),
+        [org, "Wiki", ..] | [org, "Wikis", ..] => Entry::Wiki((*org).to_string()),
+        [org, "Resources", ..] => Entry::Resources((*org).to_string()),
+        [org, "Repos", ..] => Entry::Repos((*org).to_string()),
         [org, name] if is_inbox(name) => Entry::Inbox(InboxScope::Org((*org).to_string())),
         [org, "Projects"] => Entry::Projects((*org).to_string()),
         [org, "Projects", name] if is_inbox(name) => {
@@ -435,6 +449,26 @@ mod tests {
                 "{name:?}"
             );
         }
+    }
+
+    /// An org holds a set of wikis (`wiki.many.set`): the long-standing
+    /// `Wiki/` tier and every `Wikis/<Name>/` read as the same kind of
+    /// thing. `Resources/` and `Repos/` are the org's too, and neither
+    /// is a project.
+    #[test]
+    fn named_wikis_resources_and_repos_are_the_orgs_own() {
+        assert_eq!(
+            classify(&["acme-audio", "Wikis", "Music Theory", "Concepts"]),
+            Entry::Wiki("acme-audio".into())
+        );
+        assert_eq!(
+            classify(&["acme-audio", "Resources", "songs", "track-one"]),
+            Entry::Resources("acme-audio".into())
+        );
+        assert_eq!(
+            classify(&["acme-audio", "Repos", "task-docs", "docs"]),
+            Entry::Repos("acme-audio".into())
+        );
     }
 
     #[test]

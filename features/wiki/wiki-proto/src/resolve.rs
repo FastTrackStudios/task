@@ -41,6 +41,12 @@ pub struct Resolved<'a> {
 /// [`Unresolved`], which distinguishes an unheld source from an
 /// ambiguous one — a reader told "no such page" when the truth is "you
 /// do not subscribe to that" will go looking in the wrong place.
+///
+/// t[impl wiki.subscribe.resolution] — the only input besides the
+/// reference is the *reader's* subscriptions; nothing about the author
+/// or the page's home is consulted. t[impl wiki.subscribe.transitive]
+/// — nor is anything a subscribed source itself subscribes to: a source
+/// the reader has not taken on is one they do not have.
 pub fn resolve<'a>(
     reference: &'a Reference,
     subscriptions: &'a [Subscription],
@@ -114,8 +120,7 @@ mod tests {
     #[test]
     fn a_reference_resolves_on_the_readers_own_set() {
         let reader = [sub("acme.test", "music-theory")];
-        let written_by_someone_else =
-            Reference::parse("acme.test/music-theory::Ionian@2026-09-01");
+        let written_by_someone_else = Reference::parse("acme.test/music-theory::Ionian@2026-09-01");
         let hit = resolve(&written_by_someone_else, &reader)
             .expect("resolves")
             .expect("not local");

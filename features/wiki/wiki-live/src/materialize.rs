@@ -160,20 +160,19 @@ pub fn refresh<U: VaultSync>(
     })?;
     let base = load_base(base_at, upstream_id)?;
 
-    let mut manifest = upstream
-        .manifest(upstream_id)
-        .map_err(|source| MaterializeError::Manifest {
-            id: upstream_id.to_owned(),
-            source,
-        })?;
+    let mut manifest =
+        upstream
+            .manifest(upstream_id)
+            .map_err(|source| MaterializeError::Manifest {
+                id: upstream_id.to_owned(),
+                source,
+            })?;
     // The source's own bookkeeping — its declaration, its Edit
     // Requests, its queues under `_state/` — is not content and is
     // never the subscriber's: a copy that carried the publisher's
     // Editor list or open requests would present someone else's state
     // as its own. Pages only.
-    manifest
-        .files
-        .retain(|f| !is_source_bookkeeping(&f.path));
+    manifest.files.retain(|f| !is_source_bookkeeping(&f.path));
     let local = index_local(local_root).map_err(|source| MaterializeError::Sync {
         id: upstream_id.to_owned(),
         source,
@@ -217,10 +216,15 @@ pub fn refresh<U: VaultSync>(
                     // Local is untouched since the last refresh, so
                     // the difference is upstream's news and arrives.
                     Some(based) if based == local_sha => {
-                        apply(upstream, upstream_id, local_root, &SyncOp::Pull {
-                            path: path.clone(),
-                            remote_sha: remote_sha.clone(),
-                        })?;
+                        apply(
+                            upstream,
+                            upstream_id,
+                            local_root,
+                            &SyncOp::Pull {
+                                path: path.clone(),
+                                remote_sha: remote_sha.clone(),
+                            },
+                        )?;
                         out.pulled += 1;
                         next.0.insert(path.clone(), remote_sha.clone());
                     }
@@ -254,11 +258,9 @@ fn apply<U: VaultSync>(
     root: &Path,
     op: &SyncOp,
 ) -> Result<(), MaterializeError> {
-    vault_sync_client::apply_one(upstream, id, root, op).map_err(|source| {
-        MaterializeError::Sync {
-            id: id.to_owned(),
-            source,
-        }
+    vault_sync_client::apply_one(upstream, id, root, op).map_err(|source| MaterializeError::Sync {
+        id: id.to_owned(),
+        source,
     })
 }
 
@@ -294,6 +296,33 @@ fn save_base(path: &Path, base: &Base, id: &str) -> Result<(), MaterializeError>
     std::fs::rename(&tmp, path).map_err(io)
 }
 
+/// Whether a path in a source is the source's private bookkeeping
+/// rather than a page: anything under `_state/`, at the root or nested.
+fn is_source_bookkeeping(path: &str) -> bool {
+    let state = wiki_proto::paths::STATE_DIR;
+    path == state || path.starts_with(&format!("{state}/")) || path.contains(&format!("/{state}/"))
+}
+
+/// Refresh one held subscription into its place under `org_root`.
+///
+/// Wraps [`refresh`] with the two paths a subscription implies, so a
+/// caller never has to know where a copy or its base lives — the two
+/// must agree, and a caller that computed one and forgot the other
+/// would resync from scratch every time.
+///
+/// # Errors
+///
+/// As [`refresh`].
+pub fn refresh_subscription<U: vault_proto::VaultSync>(
+    upstream: &U,
+    org_root: &Path,
+    subscription: &wiki_proto::Subscription,
+) -> Result<Refreshed, MaterializeError> {
+    let copy = local_copy_dir(org_root, &subscription.domain, &subscription.slug);
+    let base = base_path(org_root, &subscription.domain, &subscription.slug);
+    refresh(upstream, &subscription.slug, &copy, &base)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,13 +350,25 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let base = tempfile::tempdir().unwrap();
 
-        let out = refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        let out = refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
         assert_eq!(out.pulled, 2);
         assert!(!out.has_local_work());
         assert!(local.path().join("Concepts/Ionian.md").is_file());
 
         // Idempotent: a second refresh pulls nothing.
-        let again = refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        let again = refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
         assert_eq!(again.pulled, 0);
         assert_eq!(again.in_sync, 2);
     }
@@ -341,7 +382,13 @@ mod tests {
         let (up, backend) = upstream_with(&[("Concepts/Modes.md", "# Modes\nSeven.\n")]);
         let local = tempfile::tempdir().unwrap();
         let base = tempfile::tempdir().unwrap();
-        refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
 
         drop(backend);
         drop(up);
@@ -357,11 +404,23 @@ mod tests {
         let (up, backend) = upstream_with(&[("purpose.md", "# Purpose\n")]);
         let local = tempfile::tempdir().unwrap();
         let base = tempfile::tempdir().unwrap();
-        refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
 
         std::fs::write(local.path().join("My Notes.md"), "# Mine\n").unwrap();
 
-        let out = refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        let out = refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
         assert_eq!(out.local_only, vec!["My Notes.md".to_owned()]);
         assert!(out.has_local_work());
         // Still ours...
@@ -378,7 +437,13 @@ mod tests {
         let (up, backend) = upstream_with(&[("Concepts/Ionian.md", "# Ionian\noriginal\n")]);
         let local = tempfile::tempdir().unwrap();
         let base = tempfile::tempdir().unwrap();
-        refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
 
         // The subscriber edits; upstream also moves on.
         std::fs::write(
@@ -392,9 +457,18 @@ mod tests {
         )
         .unwrap();
 
-        let out = refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        let out = refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
         assert_eq!(out.conflicted, vec!["Concepts/Ionian.md".to_owned()]);
-        assert_eq!(out.pulled, 0, "an upstream change never overwrites local work");
+        assert_eq!(
+            out.pulled, 0,
+            "an upstream change never overwrites local work"
+        );
 
         // Local work survives verbatim.
         let body = std::fs::read_to_string(local.path().join("Concepts/Ionian.md")).unwrap();
@@ -411,10 +485,22 @@ mod tests {
         let (up, backend) = upstream_with(&[("Concepts/Modes.md", "# Modes\nv1\n")]);
         let local = tempfile::tempdir().unwrap();
         let base = tempfile::tempdir().unwrap();
-        refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
 
         std::fs::write(up.path().join("Concepts/Modes.md"), "# Modes\nv2\n").unwrap();
-        let out = refresh(&backend, "music-theory", local.path(), &base.path().join("b.json")).unwrap();
+        let out = refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
 
         assert_eq!(out.pulled, 1);
         let body = std::fs::read_to_string(local.path().join("Concepts/Modes.md")).unwrap();
@@ -427,33 +513,4 @@ mod tests {
         let dir = local_copy_dir(org, "acme.test", "music-theory");
         assert!(dir.ends_with("subscribed/acme.test/music-theory"));
     }
-}
-
-/// Refresh one held subscription into its place under `org_root`.
-///
-/// Wraps [`refresh`] with the two paths a subscription implies, so a
-/// caller never has to know where a copy or its base lives — the two
-/// must agree, and a caller that computed one and forgot the other
-/// would resync from scratch every time.
-///
-/// # Errors
-///
-/// As [`refresh`].
-/// Whether a path in a source is the source's private bookkeeping
-/// rather than a page: anything under `_state/`, at the root or nested.
-fn is_source_bookkeeping(path: &str) -> bool {
-    let state = wiki_proto::paths::STATE_DIR;
-    path == state
-        || path.starts_with(&format!("{state}/"))
-        || path.contains(&format!("/{state}/"))
-}
-
-pub fn refresh_subscription<U: vault_proto::VaultSync>(
-    upstream: &U,
-    org_root: &Path,
-    subscription: &wiki_proto::Subscription,
-) -> Result<Refreshed, MaterializeError> {
-    let copy = local_copy_dir(org_root, &subscription.domain, &subscription.slug);
-    let base = base_path(org_root, &subscription.domain, &subscription.slug);
-    refresh(upstream, &subscription.slug, &copy, &base)
 }

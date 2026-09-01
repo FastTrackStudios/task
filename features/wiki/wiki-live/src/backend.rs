@@ -14,7 +14,6 @@ use std::sync::{Arc, RwLock};
 use chrono::Utc;
 use wiki_proto::config::{NewWiki, Visibility, WikiConfig};
 use wiki_proto::error::WikiError;
-use wiki_proto::service::registry::{WikiDescription, WikiSummary};
 use wiki_proto::graph as gtypes;
 use wiki_proto::health::WikiHealth as ProtoHealth;
 use wiki_proto::ingest as itypes;
@@ -26,6 +25,7 @@ use wiki_proto::review::ReviewItem;
 use wiki_proto::schema as stypes;
 use wiki_proto::search::{SearchHits, SearchOpts};
 use wiki_proto::service::events::EventsStreamSource;
+use wiki_proto::service::registry::{WikiDescription, WikiSummary};
 use wiki_proto::service::{
     Catalog, Graph, Ingest, Lint, Multimodal, Pages, RawLayer, Review, Schema, Search, Watcher,
 };
@@ -71,6 +71,32 @@ pub trait Caller: Send + Sync + 'static {
     fn is_org_admin(&self) -> bool {
         false
     }
+    /// Whether the caller is a member of the owning org. On the org
+    /// router every caller the gate admitted is one; the hook exists
+    /// for the account lane and for peers relaying a request, whose
+    /// proposals a `Members` gate holds rather than publishes
+    /// (`wiki.edit.gate`).
+    fn is_org_member(&self) -> bool {
+        true
+    }
+}
+
+/// Run work that may take a while — a graph build, a search, a git
+/// fetch — without holding a runtime worker.
+///
+/// The backend is dispatched inline so the caller task-local survives
+/// (see [`WikiBackend`]); the price is that a slow method would block
+/// the async worker that called it. `block_in_place` hands the worker's
+/// duties to another thread for the duration and keeps the task — and
+/// its task-locals — where they are. Outside a multi-thread runtime
+/// (a unit test, a current-thread runtime) it simply runs `f`.
+pub(crate) fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
 }
 
 /// The default [`Caller`]: whatever the permissions gate recorded for
@@ -87,7 +113,14 @@ impl Caller for GateCaller {
 }
 
 /// Cheaply clonable multi-vault backend.
+///
+/// Dispatched inline: `create_wiki` names its creator and `write_page`
+/// checks Editor from the caller the gate recorded in a task-local,
+/// which a `spawn_blocking` hop would lose — every caller would read as
+/// the server itself, and the Edit lane's check on direct writes
+/// (`wiki.edit.editor`) would pass anyone.
 #[derive(Clone, architect::HasDispatcher)]
+#[dispatch(architect::dispatch::CurrentThreadDispatcher)]
 pub struct WikiBackend {
     layout: Layout,
     caller: Arc<dyn Caller>,
@@ -174,6 +207,12 @@ impl WikiBackend {
         self.caller.is_org_admin()
     }
 
+    /// Whether the caller is a member of the owning org.
+    #[must_use]
+    pub fn caller_is_org_member(&self) -> bool {
+        self.caller.is_org_member()
+    }
+
     /// Every `(slug, root)` the backend currently serves, sorted by
     /// slug and without the compatibility alias.
     #[must_use]
@@ -238,7 +277,7 @@ impl WikiBackend {
     /// Call only *after* the write landed — subscribers use these to
     /// decide what to re-fetch, so a speculative event costs a
     /// pointless round-trip (or worse, shows state that never was).
-    fn emit(&self, wiki_id: &str, event: WikiEvent) {
+    pub(crate) fn emit(&self, wiki_id: &str, event: WikiEvent) {
         self.changes.publish(WikiChange {
             wiki_id: wiki_id.to_string(),
             event,
@@ -330,7 +369,7 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
                 "`{slug}` is reserved as an alias of the default wiki"
             )));
         }
-        if crate::config::retired(wikis_dir)?.iter().any(|s| *s == slug) {
+        if crate::config::retired(wikis_dir)?.contains(&slug) {
             return Err(WikiError::Refused(format!(
                 "`{slug}` was a wiki here once and references may still name it; \
                  a retired slug is never reassigned"
@@ -338,9 +377,13 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
         }
         let root = wikis_dir.join(&slug);
         {
-            let held = roots.read().map_err(|_| WikiError::Backend("roots lock".into()))?;
+            let held = roots
+                .read()
+                .map_err(|_| WikiError::Backend("roots lock".into()))?;
             if held.contains_key(&slug) || root.exists() {
-                return Err(WikiError::Refused(format!("a wiki `{slug}` already exists")));
+                return Err(WikiError::Refused(format!(
+                    "a wiki `{slug}` already exists"
+                )));
             }
         }
 
@@ -352,7 +395,10 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
         let purpose = if new.purpose.trim().is_empty() {
             format!("---\ntitle: \"{title}\"\n---\n\n# {title}\n")
         } else {
-            format!("---\ntitle: \"{title}\"\n---\n\n# {title}\n\n{}\n", new.purpose.trim())
+            format!(
+                "---\ntitle: \"{title}\"\n---\n\n# {title}\n\n{}\n",
+                new.purpose.trim()
+            )
         };
         std::fs::write(root.join(wiki_proto::paths::PURPOSE_MD), purpose)
             .map_err(|e| WikiError::Io(e.to_string()))?;
@@ -372,6 +418,19 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
             created_at: Utc::now().to_rfc3339(),
         };
         crate::config::save(&root, &config)?;
+
+        // t[impl wiki.source.repo] — a wiki declared over a repository
+        // is a mirror of it from its first moment: the first sync runs
+        // here, so the pages a creator sees are the repository's. A
+        // failed first sync still creates the wiki — it exists, holds
+        // no pages yet, and its source says why (`last_error`) — so a
+        // typo in the URL is fixed by editing the config rather than by
+        // retrying creation against a retired slug.
+        let mut config = config;
+        if let Some(source) = config.source.as_mut() {
+            let _ = blocking(|| crate::repo_source::sync(wikis_dir, &root, source));
+            crate::config::save(&root, &config)?;
+        }
 
         roots
             .write()
@@ -433,16 +492,51 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
         Ok(())
     }
 
+    /// t[impl wiki.source.sync] — fetch the repository and re-export
+    /// the followed path now. The source is saved whether the fetch
+    /// succeeded or not: on success it names the new commit, on
+    /// failure it carries `last_error`, and either way the wiki tells
+    /// the truth about what its pages reflect. The outcome rides the
+    /// call's span as `wiki.source.outcome`.
     fn refresh_source(&self, wiki_id: &str) -> Result<wiki_proto::config::RepoSource, WikiError> {
-        let config = self.config_of(wiki_id)?;
-        let Some(source) = config.source else {
+        let root = self.root_of(wiki_id)?;
+        let mut config = crate::config::load(&root, wiki_id)?;
+        let Some(source) = config.source.as_mut() else {
             return Err(WikiError::Refused(format!(
                 "`{wiki_id}` has no repository behind it; nothing to refresh"
             )));
         };
-        // The fetch itself lands with the repo-source module; until
-        // then this reports what the wiki currently reflects.
-        Ok(source)
+        let Layout::Explicit {
+            wikis_dir: Some(wikis_dir),
+            ..
+        } = &self.layout
+        else {
+            return Err(WikiError::Refused(
+                "this backend has no directory to keep a repository clone in".into(),
+            ));
+        };
+        let outcome = blocking(|| crate::repo_source::sync(wikis_dir, &root, source));
+        architect_telemetry::wide::set(
+            "wiki.source.outcome",
+            match &outcome {
+                Ok(o) if o.unchanged => "unchanged",
+                Ok(_) => "synced",
+                Err(_) => "failed",
+            },
+        );
+        let source = source.clone();
+        crate::config::save(&root, &config)?;
+        match outcome {
+            Ok(o) => {
+                if !o.unchanged {
+                    // Pages moved under a client's feet in bulk; a
+                    // re-read is the honest response.
+                    self.emit(wiki_id, WikiEvent::Resync);
+                }
+                Ok(source)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -533,7 +627,10 @@ fn retitle_frontmatter(text: &str, title: &str) -> String {
     };
     let (front, tail) = rest.split_at(end);
     let mut lines: Vec<String> = front.lines().map(str::to_owned).collect();
-    if let Some(l) = lines.iter_mut().find(|l| l.trim_start().starts_with("title:")) {
+    if let Some(l) = lines
+        .iter_mut()
+        .find(|l| l.trim_start().starts_with("title:"))
+    {
         *l = quoted;
     } else {
         lines.insert(0, quoted);
@@ -574,151 +671,6 @@ fn count_markdown(root: &Path) -> u32 {
         }
     }
     n
-}
-
-#[cfg(test)]
-mod registry_tests {
-    use super::*;
-    use wiki_proto::service::registry::Registry;
-
-    struct Alice;
-    impl Caller for Alice {
-        fn principal(&self) -> Option<String> {
-            Some("alice".into())
-        }
-    }
-
-    fn org(dir: &Path) -> WikiBackend {
-        let wikis = dir.join("wikis");
-        std::fs::create_dir_all(&wikis).unwrap();
-        WikiBackend::with_roots_under(HashMap::new(), wikis).with_caller(Arc::new(Alice))
-    }
-
-    /// t[verify wiki.many.set] — an org with none is legal; creating
-    /// one leaves the others byte-identical; deleting one leaves the
-    /// rest.
-    #[test]
-    fn the_set_grows_and_shrinks_one_wiki_at_a_time() {
-        let dir = tempfile::tempdir().unwrap();
-        let b = org(dir.path());
-        assert!(b.list_wikis().unwrap().is_empty());
-
-        let theory = b
-            .create_wiki(NewWiki {
-                title: "Music Theory".into(),
-                purpose: "Intervals, scales, harmony.".into(),
-                visibility: Visibility::Public,
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(theory.slug, "music-theory");
-        assert_eq!(theory.title, "Music Theory");
-        assert_eq!(theory.purpose, "Intervals, scales, harmony.");
-        assert_eq!(theory.visibility, Visibility::Public);
-
-        let before = snapshot(&dir.path().join("wikis/music-theory"));
-        b.create_wiki(NewWiki {
-            title: "Audio Production".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        assert_eq!(
-            snapshot(&dir.path().join("wikis/music-theory")),
-            before,
-            "creating a second wiki changed the first"
-        );
-        let slugs: Vec<String> = b.list_wikis().unwrap().into_iter().map(|w| w.slug).collect();
-        assert_eq!(slugs, vec!["audio-production", "music-theory"]);
-
-        b.delete_wiki("audio-production").unwrap();
-        let slugs: Vec<String> = b.list_wikis().unwrap().into_iter().map(|w| w.slug).collect();
-        assert_eq!(slugs, vec!["music-theory"]);
-        assert_eq!(snapshot(&dir.path().join("wikis/music-theory")), before);
-    }
-
-    /// t[verify wiki.many.identity] — a retitle changes no slug; a
-    /// deleted wiki's slug is refused forever; two wikis never share
-    /// one.
-    #[test]
-    fn a_slug_is_stable_unique_and_never_reassigned() {
-        let dir = tempfile::tempdir().unwrap();
-        let b = org(dir.path());
-        b.create_wiki(NewWiki {
-            title: "Cooking".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        b.set_title("cooking", "Kitchen Notes").unwrap();
-        let d = b.describe_wiki("cooking").unwrap();
-        assert_eq!(d.summary.slug, "cooking");
-        assert_eq!(d.summary.title, "Kitchen Notes");
-        assert!(
-            std::fs::read_to_string(dir.path().join("wikis/cooking/purpose.md"))
-                .unwrap()
-                .contains("title: \"Kitchen Notes\""),
-            "the mounted folder shows the new title too"
-        );
-
-        let dup = b.create_wiki(NewWiki {
-            title: "cooking".into(),
-            ..Default::default()
-        });
-        assert!(matches!(dup, Err(WikiError::Refused(_))), "{dup:?}");
-
-        b.delete_wiki("cooking").unwrap();
-        let again = b.create_wiki(NewWiki {
-            title: "Cooking".into(),
-            ..Default::default()
-        });
-        assert!(
-            matches!(again, Err(WikiError::Refused(ref m)) if m.contains("retired")),
-            "{again:?}"
-        );
-    }
-
-    /// The creator holds Editor from the first page, so the lane
-    /// governs a new wiki without a second step.
-    #[test]
-    fn the_creator_is_the_first_editor() {
-        let dir = tempfile::tempdir().unwrap();
-        let b = org(dir.path());
-        b.create_wiki(NewWiki {
-            title: "Bible Study".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let c = b.config_of("bible-study").unwrap();
-        assert_eq!(c.editors, vec!["alice".to_string()]);
-        assert!(c.has_edit_lane());
-        assert_eq!(c.visibility, Visibility::Private, "private until promoted");
-    }
-
-    #[test]
-    fn retitle_frontmatter_replaces_or_adds() {
-        assert_eq!(
-            retitle_frontmatter("---\ntitle: \"Old\"\nx: 1\n---\n\nbody", "New"),
-            "---\ntitle: \"New\"\nx: 1\n---\n\nbody"
-        );
-        assert_eq!(
-            retitle_frontmatter("---\nx: 1\n---\nbody", "New"),
-            "---\ntitle: \"New\"\nx: 1\n---\nbody"
-        );
-        assert_eq!(retitle_frontmatter("body", "New"), "---\ntitle: \"New\"\n---\n\nbody");
-    }
-
-    fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
-        let mut out = Vec::new();
-        for e in walkdir::WalkDir::new(root).into_iter().flatten() {
-            if e.file_type().is_file() {
-                out.push((
-                    e.path().strip_prefix(root).unwrap().display().to_string(),
-                    std::fs::read(e.path()).unwrap(),
-                ));
-            }
-        }
-        out.sort();
-        out
-    }
 }
 
 // ────────────────────── Schema ──────────────────────
@@ -794,7 +746,7 @@ impl Catalog for WikiBackend {
         // a full structured index is a follow-up. For now,
         // return an empty parsed index (callers wanting the
         // markdown can read the file directly).
-        let _ = w.rebuild_index().map_err(map_err)?;
+        let _ = blocking(|| w.rebuild_index()).map_err(map_err)?;
         Ok(ctypes::WikiIndex {
             sections: Vec::new(),
             total: 0,
@@ -802,7 +754,7 @@ impl Catalog for WikiBackend {
     }
     fn rebuild_index(&self, wiki_id: &str) -> Result<ctypes::WikiIndex, WikiError> {
         let w = self.resolve(wiki_id)?;
-        let _ = w.rebuild_index().map_err(map_err)?;
+        let _ = blocking(|| w.rebuild_index()).map_err(map_err)?;
         Ok(ctypes::WikiIndex {
             sections: Vec::new(),
             total: 0,
@@ -837,7 +789,7 @@ impl RawLayer for WikiBackend {
         source: ImportRawSource,
     ) -> Result<RawSourceRef, WikiError> {
         let w = self.resolve(wiki_id)?;
-        w.import_raw_source(source).map_err(map_err)
+        blocking(|| w.import_raw_source(source)).map_err(map_err)
     }
     fn list_raw_sources(&self, wiki_id: &str) -> Result<Vec<RawSourceRef>, WikiError> {
         // No wiki-live helper yet — walk `raw/sources/` here.
@@ -892,7 +844,7 @@ impl RawLayer for WikiBackend {
     }
     fn rescan_sources(&self, wiki_id: &str) -> Result<Vec<itypes::IngestTask>, WikiError> {
         let w = self.resolve(wiki_id)?;
-        let diff = w.rescan_sources().map_err(map_err)?;
+        let diff = blocking(|| w.rescan_sources()).map_err(map_err)?;
         let mut tasks = Vec::new();
         for rel in diff.created.iter().chain(diff.modified.iter()) {
             let abs = w.wiki_root().join(rel);
@@ -911,7 +863,7 @@ impl RawLayer for WikiBackend {
     }
     fn rescan_diff(&self, wiki_id: &str) -> Result<wiki_proto::raw::SourceDiff, WikiError> {
         let w = self.resolve(wiki_id)?;
-        let diff = w.rescan_sources().map_err(map_err)?;
+        let diff = blocking(|| w.rescan_sources()).map_err(map_err)?;
         Ok(wiki_proto::raw::SourceDiff {
             created: diff.created,
             modified: diff.modified,
@@ -983,6 +935,11 @@ impl Pages for WikiBackend {
         })
     }
 
+    /// t[impl wiki.edit.editor] — once a wiki has declared Editors,
+    /// only they write to it directly; everyone else's change goes
+    /// through an Edit Request. An in-process call (no principal — the
+    /// server planting a seed, the ingest pipeline) keeps writing: the
+    /// lane governs *people*, and the server is not one.
     fn write_page(
         &self,
         wiki_id: &str,
@@ -992,6 +949,14 @@ impl Pages for WikiBackend {
     ) -> Result<ptypes::WikiPageDoc, WikiError> {
         let w = self.resolve(wiki_id)?;
         let rel = sanitize_page_path(path)?;
+        if let Some(principal) = self.calling_principal() {
+            let config = self.config_of(wiki_id)?;
+            if config.has_edit_lane() && !config.is_editor(&principal) {
+                return Err(WikiError::Refused(format!(
+                    "`{wiki_id}` is governed by its Editors; open an Edit Request to change `{rel}`"
+                )));
+            }
+        }
         let abs = w.wiki_root().join(&rel);
         if !base_sha256.is_empty() {
             if let Ok(current) = std::fs::read(&abs) {
@@ -1142,7 +1107,8 @@ impl Graph for WikiBackend {
         opts: gtypes::GraphOpts,
     ) -> Result<gtypes::WikiGraph, WikiError> {
         let w = self.resolve(wiki_id)?;
-        wiki_graph::build_graph(w.vault_root(), opts).map_err(|e| WikiError::Backend(e.to_string()))
+        blocking(|| wiki_graph::build_graph(w.vault_root(), opts))
+            .map_err(|e| WikiError::Backend(e.to_string()))
     }
     fn relevance(
         &self,
@@ -1165,11 +1131,13 @@ impl Graph for WikiBackend {
     }
     fn clusters(&self, wiki_id: &str) -> Result<Vec<gtypes::Cluster>, WikiError> {
         let w = self.resolve(wiki_id)?;
-        wiki_graph::build_clusters(w.vault_root()).map_err(|e| WikiError::Backend(e.to_string()))
+        blocking(|| wiki_graph::build_clusters(w.vault_root()))
+            .map_err(|e| WikiError::Backend(e.to_string()))
     }
     fn gaps(&self, wiki_id: &str) -> Result<Vec<gtypes::KnowledgeGap>, WikiError> {
         let w = self.resolve(wiki_id)?;
-        wiki_graph::find_gaps(w.vault_root()).map_err(|e| WikiError::Backend(e.to_string()))
+        blocking(|| wiki_graph::find_gaps(w.vault_root()))
+            .map_err(|e| WikiError::Backend(e.to_string()))
     }
 }
 
@@ -1333,7 +1301,8 @@ impl Lint for WikiBackend {
 impl Search for WikiBackend {
     fn search(&self, wiki_id: &str, opts: SearchOpts) -> Result<SearchHits, WikiError> {
         let w = self.resolve(wiki_id)?;
-        wiki_search::search(w.vault_root(), opts).map_err(|e| WikiError::Backend(e.to_string()))
+        blocking(|| wiki_search::search(w.vault_root(), opts))
+            .map_err(|e| WikiError::Backend(e.to_string()))
     }
 }
 
@@ -1447,7 +1416,7 @@ fn to_proto_finding(f: crate::LintFinding) -> ltypes::LintFinding {
     }
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(bytes);
@@ -1537,7 +1506,270 @@ impl Multimodal for WikiBackend {
     ) -> Result<Vec<wiki_proto::multimodal::ExtractedImage>, WikiError> {
         let w = self.resolve(wiki_id)?;
         let abs = w.wiki_root().join(source_path);
-        wiki_extract::extract_path(&abs, &opts)
+        blocking(|| wiki_extract::extract_path(&abs, &opts))
             .map_err(|e| WikiError::Backend(format!("extract: {e}")))
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use wiki_proto::service::registry::Registry;
+
+    struct Alice;
+    impl Caller for Alice {
+        fn principal(&self) -> Option<String> {
+            Some("alice".into())
+        }
+    }
+
+    fn org(dir: &Path) -> WikiBackend {
+        let wikis = dir.join("wikis");
+        std::fs::create_dir_all(&wikis).unwrap();
+        WikiBackend::with_roots_under(HashMap::new(), wikis).with_caller(Arc::new(Alice))
+    }
+
+    /// t[verify wiki.many.set] — an org with none is legal; creating
+    /// one leaves the others byte-identical; deleting one leaves the
+    /// rest.
+    #[test]
+    fn the_set_grows_and_shrinks_one_wiki_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = org(dir.path());
+        assert!(b.list_wikis().unwrap().is_empty());
+
+        let theory = b
+            .create_wiki(NewWiki {
+                title: "Music Theory".into(),
+                purpose: "Intervals, scales, harmony.".into(),
+                visibility: Visibility::Public,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(theory.slug, "music-theory");
+        assert_eq!(theory.title, "Music Theory");
+        assert_eq!(theory.purpose, "Intervals, scales, harmony.");
+        assert_eq!(theory.visibility, Visibility::Public);
+
+        let before = snapshot(&dir.path().join("wikis/music-theory"));
+        b.create_wiki(NewWiki {
+            title: "Audio Production".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            snapshot(&dir.path().join("wikis/music-theory")),
+            before,
+            "creating a second wiki changed the first"
+        );
+        let slugs: Vec<String> = b
+            .list_wikis()
+            .unwrap()
+            .into_iter()
+            .map(|w| w.slug)
+            .collect();
+        assert_eq!(slugs, vec!["audio-production", "music-theory"]);
+
+        b.delete_wiki("audio-production").unwrap();
+        let slugs: Vec<String> = b
+            .list_wikis()
+            .unwrap()
+            .into_iter()
+            .map(|w| w.slug)
+            .collect();
+        assert_eq!(slugs, vec!["music-theory"]);
+        assert_eq!(snapshot(&dir.path().join("wikis/music-theory")), before);
+    }
+
+    /// t[verify wiki.many.identity] — a retitle changes no slug; a
+    /// deleted wiki's slug is refused forever; two wikis never share
+    /// one.
+    #[test]
+    fn a_slug_is_stable_unique_and_never_reassigned() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = org(dir.path());
+        b.create_wiki(NewWiki {
+            title: "Cooking".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        b.set_title("cooking", "Kitchen Notes").unwrap();
+        let d = b.describe_wiki("cooking").unwrap();
+        assert_eq!(d.summary.slug, "cooking");
+        assert_eq!(d.summary.title, "Kitchen Notes");
+        assert!(
+            std::fs::read_to_string(dir.path().join("wikis/cooking/purpose.md"))
+                .unwrap()
+                .contains("title: \"Kitchen Notes\""),
+            "the mounted folder shows the new title too"
+        );
+
+        let dup = b.create_wiki(NewWiki {
+            title: "cooking".into(),
+            ..Default::default()
+        });
+        assert!(matches!(dup, Err(WikiError::Refused(_))), "{dup:?}");
+
+        b.delete_wiki("cooking").unwrap();
+        let again = b.create_wiki(NewWiki {
+            title: "Cooking".into(),
+            ..Default::default()
+        });
+        assert!(
+            matches!(again, Err(WikiError::Refused(ref m)) if m.contains("retired")),
+            "{again:?}"
+        );
+    }
+
+    /// The creator holds Editor from the first page, so the lane
+    /// governs a new wiki without a second step.
+    #[test]
+    fn the_creator_is_the_first_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = org(dir.path());
+        b.create_wiki(NewWiki {
+            title: "Bible Study".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let c = b.config_of("bible-study").unwrap();
+        assert_eq!(c.editors, vec!["alice".to_string()]);
+        assert!(c.has_edit_lane());
+        assert_eq!(c.visibility, Visibility::Private, "private until promoted");
+    }
+
+    #[test]
+    fn retitle_frontmatter_replaces_or_adds() {
+        assert_eq!(
+            retitle_frontmatter("---\ntitle: \"Old\"\nx: 1\n---\n\nbody", "New"),
+            "---\ntitle: \"New\"\nx: 1\n---\n\nbody"
+        );
+        assert_eq!(
+            retitle_frontmatter("---\nx: 1\n---\nbody", "New"),
+            "---\ntitle: \"New\"\nx: 1\n---\nbody"
+        );
+        assert_eq!(
+            retitle_frontmatter("body", "New"),
+            "---\ntitle: \"New\"\n---\n\nbody"
+        );
+    }
+
+    /// t[verify wiki.source.repo] — a wiki created over a repository
+    /// holds the repository's pages the moment it exists, says which
+    /// commit, and lists as repo-sourced; one created over a URL that
+    /// does not answer still exists, empty, and says why.
+    #[test]
+    fn a_repo_sourced_wiki_mirrors_on_creation_and_refreshes() {
+        fn g(dir: &Path, args: &[&str]) {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.email=t@example.com", "-c", "user.name=T"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .expect("git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("remote.git");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(work.join("docs")).unwrap();
+        g(&bare, &["init", "--bare", "--initial-branch=main"]);
+        g(&work, &["init", "--initial-branch=main"]);
+        std::fs::write(work.join("docs/Getting Started.md"), "# Getting Started\n").unwrap();
+        g(&work, &["add", "-A"]);
+        g(&work, &["commit", "-m", "docs"]);
+        g(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        g(&work, &["push", "-u", "origin", "main"]);
+
+        let b = org(dir.path());
+        let source = wiki_proto::config::RepoSource {
+            url: format!("file://{}", bare.display()),
+            branch: "main".into(),
+            path: "docs".into(),
+            ..Default::default()
+        };
+        let summary = b
+            .create_wiki(NewWiki {
+                title: "Docs".into(),
+                visibility: Visibility::Public,
+                source: Some(source.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(summary.repo_sourced);
+        let d = b.describe_wiki("docs").unwrap();
+        let got = d.config.source.expect("source kept");
+        assert_eq!(got.commit.len(), 40, "{got:?}");
+        assert!(got.last_error.is_empty(), "{got:?}");
+        assert!(dir.path().join("wikis/docs/Getting Started.md").is_file());
+        assert!(
+            dir.path().join("wikis/docs/purpose.md").is_file(),
+            "the scaffold is kept"
+        );
+        let slugs: Vec<String> = b
+            .list_wikis()
+            .unwrap()
+            .into_iter()
+            .map(|w| w.slug)
+            .collect();
+        assert_eq!(
+            slugs,
+            vec!["docs"],
+            "the clone under `.repos/` is not a wiki"
+        );
+
+        // Upstream moves; a refresh follows it.
+        std::fs::write(work.join("docs/Deploying.md"), "# Deploying\n").unwrap();
+        g(&work, &["add", "-A"]);
+        g(&work, &["commit", "-m", "more"]);
+        g(&work, &["push", "origin", "main"]);
+        let after = b.refresh_source("docs").unwrap();
+        assert_ne!(after.commit, got.commit);
+        assert!(dir.path().join("wikis/docs/Deploying.md").is_file());
+
+        // A wiki with no repository refuses to refresh.
+        b.create_wiki(NewWiki {
+            title: "Plain".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(matches!(
+            b.refresh_source("plain"),
+            Err(WikiError::Refused(_))
+        ));
+
+        // A dead URL: the wiki exists and says it is stale.
+        b.create_wiki(NewWiki {
+            title: "Broken".into(),
+            source: Some(wiki_proto::config::RepoSource {
+                url: format!("file://{}", dir.path().join("nowhere.git").display()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        let broken = b.config_of("broken").unwrap().source.unwrap();
+        assert!(broken.commit.is_empty());
+        assert!(!broken.last_error.is_empty(), "{broken:?}");
+        assert!(matches!(b.refresh_source("broken"), Err(WikiError::Io(_))));
+    }
+
+    fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for e in walkdir::WalkDir::new(root).into_iter().flatten() {
+            if e.file_type().is_file() {
+                out.push((
+                    e.path().strip_prefix(root).unwrap().display().to_string(),
+                    std::fs::read(e.path()).unwrap(),
+                ));
+            }
+        }
+        out.sort();
+        out
     }
 }

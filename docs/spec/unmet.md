@@ -70,19 +70,40 @@ rather than a rewrite. Three slices are unbuilt, in this order:
 
 - **Multi-wiki, subscription and the Edit lane** — `wiki.many.*`,
   `wiki.boundary.*`, `wiki.promote.*`, `wiki.subscribe.*`, `wiki.ref.*`,
-  `wiki.link.*`, `wiki.edit.*`, `wiki.access.*`, `wiki.life.*`,
-  `wiki.local.mount`. Local copies are editable jj working states under
-  `Task/Wikis/<id>`; an Edit Request *is* a `TaskInfo` issue row viewed
-  through the Edit Tracker, accepted only at the wiki's home and landing
-  through the jj history Files already runs on. `Editor` is a per-wiki
-  role, finer-grained than the per-org `admin`/`member` strings on
-  `Membership`.
+  `wiki.link.*`, `wiki.access.*`, `wiki.life.*`, `wiki.local.mount`.
+  Local copies are editable jj working states under `Task/Wikis/<id>`.
+- **The Edit lane, the peer half** — `wiki.edit.home`. The lane itself
+  is built: `wiki_live::edits_backend` implements
+  `wiki_proto::service::edits::Edits` over one org's wikis, an Edit
+  Request *is* a `TaskInfo` row (`task_server::wiki_tracker`), and
+  `wiki.edit.{request,tracked,editor,auto-approve,reviewable,rebase,
+  claim,gate}` are implemented and verified in `wiki-live`'s unit tests,
+  `tests/integration/tests/wiki_edits.rs` and `apps/server/tests/
+  demo_plant.rs`. Not yet: a request opened on a *peer* reaching the
+  home's Editors — the backend accepts only at the wiki's home, but no
+  relay carries a request there. Also open: an org admin bootstrapping
+  the first Editor over RPC. `Caller::is_org_admin` is the hook; the
+  server's default caller answers `false` because the org lane has no
+  admin role to consult (see `permits.rs`), so today the first Editor is
+  the wiki's creator or the seed.
 - **Resources** — `wiki.resource.*` and `wiki.core.*`, whose first
   subject is `scripture`'s read-only verse spine. Brings the licence and
   per-passage availability posture that `Translation` already models.
-- **Repo-sourced wikis** — `wiki.source.*`, wanting the software-root
-  flavour of `files::repo_open` and the forge client's existing
-  `create_pull_request` for the landing path.
+- **Repo-sourced wikis, the linked-account half** — `wiki.source.*` is
+  built and verified: `wiki_live::repo_source` mirrors a path in a
+  repository, the server fetches on a schedule, the seed plants `Docs`
+  over `Repos/task-docs`, and an accepted Edit Request on such a wiki is
+  pushed as a branch, reads `Landing`, becomes a pull request when a
+  forge token is configured, and turns `Accepted` only once a sync sees
+  the repository holding it (`edits_backend::reconcile_landings`). What
+  `wiki.source.editable` still asks for and this does not do: the
+  commit and pull request are made with the *deployment's* forge token
+  (`TASK_GITHUB_TOKEN` / `TASK_FORGEJO_TOKEN`), with the proposer as
+  git author and the accepting Editor named in the message — not from
+  the Editor's own linked forge account, because no per-user forge link
+  exists yet. The repository's history is truthful about the author and
+  about the fact that Task pushed; it is not yet truthful about *which
+  person* pushed.
 
 Remove entries as their rules gain markers; the section goes when the
 last does.

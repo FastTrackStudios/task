@@ -170,13 +170,12 @@ fn install_archive(
     dest_dir: &Path,
 ) -> Result<Vec<Book>, PullError> {
     let staging = tempfile::tempdir().map_err(io(Path::new("(temp dir)")))?;
-    let mut zip =
-        zip::ZipArchive::new(std::io::Cursor::new(archive)).map_err(|source_err| {
-            PullError::Unzip {
-                id: source.id.to_owned(),
-                source: source_err,
-            }
-        })?;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive)).map_err(|source_err| {
+        PullError::Unzip {
+            id: source.id.to_owned(),
+            source: source_err,
+        }
+    })?;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|source_err| PullError::Unzip {
             id: source.id.to_owned(),
@@ -217,7 +216,10 @@ mod tests {
     async fn a_licensed_edition_is_refused_before_any_network_call() {
         let tmp = tempfile::tempdir().unwrap();
         let err = pull("NIV", tmp.path()).await.expect_err("must refuse");
-        assert!(matches!(err, PullError::Source(SourceError::Licensed { .. })));
+        assert!(matches!(
+            err,
+            PullError::Source(SourceError::Licensed { .. })
+        ));
         // Nothing was written: a refusal must not leave a corpus dir
         // behind for the reader to find and half-serve.
         assert!(std::fs::read_dir(tmp.path()).unwrap().next().is_none());
@@ -248,10 +250,12 @@ mod tests {
             let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
             use std::io::Write;
             // A nested path, to prove flattening.
-            w.start_file("release/USFM/41-MATeng-web.usfm", opts).unwrap();
+            w.start_file("release/USFM/41-MATeng-web.usfm", opts)
+                .unwrap();
             w.write_all(b"\\id MAT\n\\c 1\n\\v 1 A record.\n").unwrap();
             // Front matter, which is not a book.
-            w.start_file("release/USFM/00-FRTeng-web.usfm", opts).unwrap();
+            w.start_file("release/USFM/00-FRTeng-web.usfm", opts)
+                .unwrap();
             w.write_all(b"\\id FRT\n\\p About this edition.\n").unwrap();
             // Not USFM at all.
             w.start_file("release/copr.htm", opts).unwrap();

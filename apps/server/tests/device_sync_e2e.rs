@@ -14,6 +14,8 @@
 //! that started with the laptop's work would not prove the laptop ever
 //! had the project.
 
+// Every e2e binary compiles the whole of `support`; each uses a subset.
+#[allow(dead_code)]
 mod support;
 
 use std::time::Duration;

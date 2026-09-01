@@ -117,6 +117,13 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         .await?;
     }
 
+    // The Edit lane, now that the accounts it names exist: the owner
+    // holds Editor on Music Theory, one request is open from a cast
+    // member without the role, and one Editor change went through the
+    // lane and was approved within it.
+    #[cfg(feature = "plugin-wiki")]
+    plant_edit_lane(&org, &slug, &auth).await?;
+
     // The projects, DECLARED — pages in the org vault, which is what
     // the app's Projects view lists. Idempotent the same way the tree
     // planting is: a page already at the path is left alone.
@@ -578,6 +585,178 @@ async fn plant_bible(org: &org_proto::OrgRoot) {
 ///
 /// Never fatal, for the reason the Bible install is not: an org that
 /// cannot record its subscriptions should still plant.
+/// A caller pinned to one account: the seeder acting *as* a cast
+/// member, so what it plants is what that person would have made.
+#[cfg(feature = "plugin-wiki")]
+struct As(String);
+
+#[cfg(feature = "plugin-wiki")]
+impl wiki_live::backend::Caller for As {
+    fn principal(&self) -> Option<String> {
+        Some(self.0.clone())
+    }
+}
+
+/// Plant the Edit lane's seed on [`example_org::EDIT_LANE_WIKI`]:
+/// the owner as Editor, one open request from the employee
+/// (`wiki.edit.request`), one auto-approved Editor change
+/// (`wiki.edit.auto-approve`). Each is idempotent — the grant is a
+/// set-add, the requests are matched by title.
+///
+/// Through the real backend rather than by writing files: the request
+/// then has its tracker row on the org's board (`wiki.edit.tracked`)
+/// and the Editor's change went through the same lane a person's does.
+#[cfg(feature = "plugin-wiki")]
+async fn plant_edit_lane(
+    org: &org_proto::OrgRoot,
+    slug: &str,
+    auth: &crate::AuthState,
+) -> eyre::Result<()> {
+    use std::sync::Arc;
+
+    use wiki_proto::service::Pages as _;
+    use wiki_proto::service::edits::{Edits as _, NewEditRequest, PageChange};
+
+    let wiki = example_org::EDIT_LANE_WIKI;
+    let root = org.named_wiki_dir(wiki);
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let cast = example_org::cast_of(slug);
+    let (Some(owner), Some(employee)) = (
+        cast.iter().find(|m| matches!(m.holds, Holds::Owner)),
+        cast.iter().find(|m| matches!(m.holds, Holds::Employee)),
+    ) else {
+        return Ok(());
+    };
+    async fn id_of(auth: &crate::AuthState, email: &str) -> eyre::Result<String> {
+        auth.auth
+            .find_user_by_email(email)
+            .await
+            .map_err(|e| eyre::eyre!("look up `{email}`: {e:?}"))?
+            .map(|u| u.id.to_string())
+            .ok_or_else(|| eyre::eyre!("`{email}` was not created"))
+    }
+    let owner_id = id_of(auth, owner.email).await?;
+    let employee_id = id_of(auth, employee.email).await?;
+
+    // The owner is the first Editor — which is what turns the lane on
+    // for this wiki (`wiki.edit.editor`).
+    let config = wiki_live::config::update(&root, wiki, |c| {
+        if !c.is_editor(&owner_id) {
+            c.editors.push(owner_id.clone());
+        }
+    })
+    .map_err(|e| eyre::eyre!("declare {}'s Editor: {e}", owner.name))?;
+    println!(
+        "  editors: {} holds Editor on {wiki} ({} total)",
+        owner.name,
+        config.editors.len()
+    );
+
+    let roots: std::collections::HashMap<String, std::path::PathBuf> =
+        org.named_wikis().into_iter().collect();
+    let tracker = Arc::new(crate::wiki_tracker::TaskTracker::new(
+        task::TaskBackend::new(org.vault_dir()),
+    ));
+    let lane_as = |who: &str| {
+        wiki_live::edits_backend::EditsBackend::new(
+            wiki_live::WikiBackend::with_roots_under(roots.clone(), org.wikis_dir())
+                .with_caller(Arc::new(As(who.to_owned()))),
+            tracker.clone(),
+        )
+    };
+    let existing: Vec<String> = wiki_live::edits::list(&root)
+        .map_err(|e| eyre::eyre!("list edit requests: {e}"))?
+        .into_iter()
+        .map(|r| r.title)
+        .collect();
+
+    if !existing
+        .iter()
+        .any(|t| t == example_org::SEED_EDIT_REQUEST_TITLE)
+    {
+        let sam = lane_as(&employee_id);
+        let path = "Concepts/Ionian.md";
+        let page = sam
+            .wiki()
+            .read_page(wiki, path)
+            .map_err(|e| eyre::eyre!("read {path}: {e}"))?;
+        let proposed = page.markdown.replacen(
+            "## See also",
+            "## Hearing it\n\nPlay C major over a C drone and stop on B: the pull back to C is \
+             the leading tone doing its work.\n\n## See also",
+            1,
+        );
+        sam.open_edit_request(
+            wiki,
+            NewEditRequest {
+                title: example_org::SEED_EDIT_REQUEST_TITLE.to_owned(),
+                summary: "A way to hear the major 7th, for players who learn by ear.".into(),
+                changes: vec![PageChange {
+                    path: path.to_owned(),
+                    base_sha256: page.sha256,
+                    base_markdown: page.markdown,
+                    markdown: proposed,
+                    delete: false,
+                }],
+                request_review: false,
+            },
+        )
+        .map_err(|e| eyre::eyre!("open {}'s edit request: {e}", employee.name))?;
+        println!(
+            "  edit request: \"{}\" opened by {}",
+            example_org::SEED_EDIT_REQUEST_TITLE,
+            employee.name
+        );
+    }
+
+    if !existing
+        .iter()
+        .any(|t| t == example_org::SEED_EDITOR_CHANGE_TITLE)
+    {
+        let alice = lane_as(&owner_id);
+        let path = "Concepts/Modes.md";
+        let page = alice
+            .wiki()
+            .read_page(wiki, path)
+            .map_err(|e| eyre::eyre!("read {path}: {e}"))?;
+        let proposed = format!(
+            "{}\n## Naming\n\nThe Greek names are medieval labels, not the Greeks' own — the \
+             ancient *tonoi* were tuned differently and the names were reassigned later.\n",
+            page.markdown.trim_end_matches('\n')
+        );
+        let made = alice
+            .open_edit_request(
+                wiki,
+                NewEditRequest {
+                    title: example_org::SEED_EDITOR_CHANGE_TITLE.to_owned(),
+                    summary: "Says where the names come from.".into(),
+                    changes: vec![PageChange {
+                        path: path.to_owned(),
+                        base_sha256: page.sha256,
+                        base_markdown: page.markdown,
+                        markdown: proposed,
+                        delete: false,
+                    }],
+                    request_review: false,
+                },
+            )
+            .map_err(|e| eyre::eyre!("open {}'s change: {e}", owner.name))?;
+        println!(
+            "  edit request: \"{}\" by {} {}",
+            example_org::SEED_EDITOR_CHANGE_TITLE,
+            owner.name,
+            if made.auto_approved {
+                "auto-approved"
+            } else {
+                "left open"
+            }
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "plugin-wiki")]
 fn plant_core_subscriptions(org: &org_proto::OrgRoot) {
     let store = wiki_live::subscriptions::SubscriptionStore::open(org.path());

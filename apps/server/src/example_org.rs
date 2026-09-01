@@ -36,6 +36,7 @@
 //! | `Vault/`   | `vault/` |
 //! | `Wiki/`    | `wiki/Knowledge/` |
 //! | `Wikis/<Name>/` | `wikis/<slug>/` |
+//! | `Repos/<name>/` | `repos/<name>/`, then `git init` + one commit |
 //! | everything else | `files/` |
 //!
 //! `Wiki/` and `Wikis/` are both here because an org has one
@@ -96,6 +97,7 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     let wikis = org_root.wikis_dir();
     let files = org_root.path().join("files");
     let resources = org_root.resources_dir();
+    let repos = repos_dir(org_root);
 
     // `Dir::files` is one level deep, so walk the whole subtree.
     let mut planted = Planted::default();
@@ -107,9 +109,59 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
         &wikis,
         &files,
         &resources,
+        &repos,
         &mut planted,
     )?;
+    #[cfg(feature = "plugin-wiki")]
+    plant_repo_wikis(org_root, slug);
+    #[cfg(feature = "plugin-wiki")]
+    declare_wiki_configs(org_root, slug)?;
     Ok(planted)
+}
+
+/// Write each declared wiki's `_state/wiki.json` — its title and
+/// visibility — where none exists yet (`wiki.access.visibility`).
+///
+/// Only where none exists: a config is the wiki's own declaration, and
+/// somebody who narrowed Music Theory to unlisted on a planted root
+/// must not find it public again after a replant. Editors are not
+/// written here — they are account ids, and accounts exist only once
+/// the cast is created (`demo_cli`), or hired by the suite.
+#[cfg(feature = "plugin-wiki")]
+fn declare_wiki_configs(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<()> {
+    for declared in wikis_of(slug) {
+        let wiki_slug = wiki_slug(declared.title);
+        let root = org_root.named_wiki_dir(&wiki_slug);
+        if !root.is_dir() || wiki_live::config::config_path(&root).exists() {
+            continue;
+        }
+        let mut config = wiki_proto::config::WikiConfig::implicit(&wiki_slug);
+        config.title = declared.title.to_owned();
+        config.visibility = declared.visibility.into();
+        wiki_live::config::save(&root, &config).map_err(std::io::Error::other)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "plugin-wiki")]
+impl From<Visibility> for wiki_proto::config::Visibility {
+    fn from(v: Visibility) -> Self {
+        match v {
+            Visibility::Public => Self::Public,
+            Visibility::Unlisted => Self::Unlisted,
+            Visibility::Private => Self::Private,
+        }
+    }
+}
+
+/// Where the example's repositories are planted: `<org>/repos/`.
+///
+/// Org-local and outside `wikis/`, `files/` and `vault/`: a repository
+/// the seed *creates* is neither a File Root somebody adopted nor a
+/// wiki, and a directory of its own says so.
+#[must_use]
+pub fn repos_dir(org_root: &org_proto::OrgRoot) -> std::path::PathBuf {
+    org_root.path().join("repos")
 }
 
 /// What an install actually did.
@@ -129,6 +181,7 @@ fn plant(
     wikis: &Path,
     files: &Path,
     resources: &Path,
+    repos: &Path,
     planted: &mut Planted,
 ) -> std::io::Result<()> {
     for file in dir.files() {
@@ -158,6 +211,9 @@ fn plant(
             // `GET /org/{slug}/media/…`): the route reads the org's
             // `resources/` tree, so that is where these belong.
             Some("Resources") => resources.join(rel.strip_prefix("Resources").unwrap_or(rel)),
+            // `Repos/<name>/…` → `repos/<name>/…`: plain files here;
+            // `plant_repo_wikis` makes each a git repository afterwards.
+            Some("Repos") => repos.join(rel.strip_prefix("Repos").unwrap_or(rel)),
             _ => files.join(rel),
         };
         if dest.exists() {
@@ -171,7 +227,9 @@ fn plant(
         planted.written += 1;
     }
     for child in dir.dirs() {
-        plant(child, slug, vault, wiki, wikis, files, resources, planted)?;
+        plant(
+            child, slug, vault, wiki, wikis, files, resources, repos, planted,
+        )?;
     }
     Ok(())
 }
@@ -561,9 +619,206 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
     },
 ];
 
+/// The wiki the seed's Edit lane story is told on: the owner holds
+/// Editor here, one request is open from a cast member without the
+/// role, and one Editor change went through the lane
+/// (`wiki.edit.request`, `wiki.edit.auto-approve`).
+pub const EDIT_LANE_WIKI: &str = "music-theory";
+
+/// The open request the employee has against [`EDIT_LANE_WIKI`].
+/// Matched by title on a replant, so the seed never opens it twice.
+pub const SEED_EDIT_REQUEST_TITLE: &str = "A way to hear the leading tone";
+
+/// The owner's own change to [`EDIT_LANE_WIKI`], approved within the
+/// lane. Matched by title on a replant.
+pub const SEED_EDITOR_CHANGE_TITLE: &str = "Where the mode names come from";
+
 /// The wikis this org declares.
 pub fn wikis_of(slug: &str) -> impl Iterator<Item = &'static DeclaredWiki> + '_ {
     DECLARED_WIKIS.iter().filter(move |w| w.org == slug)
+}
+
+// ── The repo-sourced wikis ───────────────────────────────────────────
+
+/// A wiki the seed declares over a repository (`wiki.source.repo`).
+///
+/// Unlike a [`DeclaredWiki`], its pages are not committed under
+/// `Wikis/`: they are committed under `Repos/<repo>/<path>/`, the
+/// seeder makes that folder a git repository at plant time, and the
+/// wiki is *created over it* — the same call a person makes, so the
+/// planted world exercises the real path rather than a copy of its
+/// result.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredRepoWiki {
+    /// The org that owns it.
+    pub org: &'static str,
+    /// Display title; the slug derives from it.
+    pub title: &'static str,
+    /// Directory under `Repos/` in the example tree, and under
+    /// `<org>/repos/` on disk.
+    pub repo: &'static str,
+    /// Path inside the repository the wiki mirrors.
+    pub path: &'static str,
+    /// Who may find it and who may subscribe.
+    pub visibility: Visibility,
+    /// One paragraph on what it is for; becomes `purpose.md`.
+    pub purpose: &'static str,
+    /// One line on what this wiki exists in the seed to prove.
+    pub demonstrates: &'static str,
+}
+
+/// The branch every planted repository commits on and every wiki
+/// follows.
+pub const REPO_BRANCH: &str = "main";
+
+/// Every repo-sourced wiki the example plants.
+pub const DECLARED_REPO_WIKIS: &[DeclaredRepoWiki] = &[DeclaredRepoWiki {
+    org: "acme-audio",
+    title: "Docs",
+    repo: "task-docs",
+    path: "docs",
+    visibility: Visibility::Public,
+    purpose: "The documentation for ACME's tooling, mirrored from the `docs/` folder of \
+              the `task-docs` repository. The repository is the source of truth; this \
+              wiki follows its `main` branch.",
+    demonstrates: "a repo-sourced wiki over a small committed repository: the mirror \
+                   tracks the branch, says which commit it reflects, and is a wiki in \
+                   every other respect",
+}];
+
+/// The repo-sourced wikis this org declares.
+pub fn repo_wikis_of(slug: &str) -> impl Iterator<Item = &'static DeclaredRepoWiki> + '_ {
+    DECLARED_REPO_WIKIS.iter().filter(move |w| w.org == slug)
+}
+
+/// The slug a declared repo-sourced wiki plants under.
+#[must_use]
+pub fn repo_wiki_slug(w: &DeclaredRepoWiki) -> String {
+    wiki_slug(w.title)
+}
+
+/// Where a declared repository is planted on disk.
+#[must_use]
+pub fn repo_path(org_root: &org_proto::OrgRoot, w: &DeclaredRepoWiki) -> std::path::PathBuf {
+    repos_dir(org_root).join(w.repo)
+}
+
+/// Run `git` in `dir`; the error is its stderr.
+#[cfg(feature = "plugin-wiki")]
+fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=ACME Seed",
+            "-c",
+            "user.email=seed@acme.test",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("git {args:?}: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+    }
+}
+
+/// Make the planted `Repos/` folders repositories, and create or
+/// refresh the wikis declared over them.
+///
+/// Idempotent the way the tree planting is: a folder that is already a
+/// repository gets a commit only if the top-up left it dirty, a wiki
+/// that already exists is refreshed rather than recreated. Never fatal:
+/// a machine without `git` plants everything else and says what it
+/// skipped, the way a missing `ffmpeg` leaves video deliverables
+/// outstanding.
+#[cfg(feature = "plugin-wiki")]
+fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
+    use wiki_proto::service::registry::Registry as _;
+
+    let declared: Vec<&DeclaredRepoWiki> = repo_wikis_of(slug).collect();
+    if declared.is_empty() {
+        return;
+    }
+    if !wiki_live::repo_source::git_on_path() {
+        tracing::warn!(
+            org.slug = %slug,
+            "git is not on PATH: repo-sourced wikis not planted ({})",
+            declared.iter().map(|w| w.title).collect::<Vec<_>>().join(", ")
+        );
+        return;
+    }
+    for w in declared {
+        let repo = repo_path(org_root, w);
+        if !repo.is_dir() {
+            tracing::warn!(org.slug = %slug, repo = w.repo, "declared repository was not planted");
+            continue;
+        }
+        let commit = if repo.join(".git").exists() {
+            // A top-up may have added files; commit them so the wiki
+            // sees them. An unchanged tree commits nothing.
+            match git(&repo, &["status", "--porcelain"]) {
+                Ok(s) if s.trim().is_empty() => Ok(()),
+                Ok(_) => git(&repo, &["add", "-A"])
+                    .and_then(|_| git(&repo, &["commit", "-q", "-m", "Seed top-up"]))
+                    .map(drop),
+                Err(e) => Err(e),
+            }
+        } else {
+            git(&repo, &["init", "-q", "--initial-branch", REPO_BRANCH])
+                .and_then(|_| git(&repo, &["add", "-A"]))
+                .and_then(|_| git(&repo, &["commit", "-q", "-m", "Initial documentation"]))
+                .map(drop)
+        };
+        if let Err(e) = commit {
+            tracing::warn!(org.slug = %slug, repo = w.repo, "seed repository not committed: {e}");
+            continue;
+        }
+
+        let wiki_slug = repo_wiki_slug(w);
+        let wikis_dir = org_root.wikis_dir();
+        let roots: std::collections::HashMap<String, std::path::PathBuf> =
+            org_root.named_wikis().into_iter().collect();
+        let backend = wiki_live::WikiBackend::with_roots_under(roots, wikis_dir);
+        let outcome = if org_root.named_wiki_dir(&wiki_slug).is_dir() {
+            backend.refresh_source(&wiki_slug).map(|s| s.commit)
+        } else {
+            backend
+                .create_wiki(wiki_proto::config::NewWiki {
+                    title: w.title.to_owned(),
+                    slug: wiki_slug.clone(),
+                    purpose: w.purpose.to_owned(),
+                    visibility: match w.visibility {
+                        Visibility::Public => wiki_proto::config::Visibility::Public,
+                        Visibility::Unlisted => wiki_proto::config::Visibility::Unlisted,
+                        Visibility::Private => wiki_proto::config::Visibility::Private,
+                    },
+                    source: Some(wiki_proto::config::RepoSource {
+                        url: format!("file://{}", repo.display()),
+                        branch: REPO_BRANCH.to_owned(),
+                        path: w.path.to_owned(),
+                        ..Default::default()
+                    }),
+                })
+                .and_then(|_| backend.config_of(&wiki_slug))
+                .map(|c| c.source.map(|s| s.commit).unwrap_or_default())
+        };
+        match outcome {
+            Ok(commit) if !commit.is_empty() => {}
+            Ok(_) => tracing::warn!(
+                org.slug = %slug,
+                wiki.slug = %wiki_slug,
+                "repo-sourced wiki planted but its first sync did not land a commit"
+            ),
+            Err(e) => tracing::warn!(
+                org.slug = %slug,
+                wiki.slug = %wiki_slug,
+                "repo-sourced wiki not planted: {e}"
+            ),
+        }
+    }
 }
 
 // The seed is a contract, and these tests are what keep it one: every
@@ -713,6 +968,46 @@ mod declared_tests {
                 );
                 seen.push(slug);
             }
+        }
+    }
+
+    /// A repo-sourced wiki's pages are committed under `Repos/`, not
+    /// `Wikis/`: the repository must exist in the tree, the mirrored
+    /// path must hold markdown, and something must sit *outside* that
+    /// path or the seed cannot show that only the path is mirrored.
+    #[test]
+    fn every_declared_repo_wiki_has_its_repository() {
+        for w in DECLARED_REPO_WIKIS {
+            assert!(
+                ORGS.iter().any(|(s, _)| *s == w.org),
+                "{}: org `{}` is not in the example",
+                w.title,
+                w.org
+            );
+            let repo = format!("{}/Repos/{}", w.org, w.repo);
+            let docs = STUDIO
+                .get_dir(format!("{repo}/{}", w.path))
+                .unwrap_or_else(|| panic!("{}: no committed tree at {repo}/{}", w.title, w.path));
+            assert!(
+                docs.files()
+                    .any(|f| f.path().extension().is_some_and(|e| e == "md")),
+                "{}: `{repo}/{}` holds no markdown",
+                w.title,
+                w.path
+            );
+            assert!(
+                STUDIO.get_file(format!("{repo}/README.md")).is_some(),
+                "{}: `{repo}` needs a README outside `{}` so the subpath rule is visible",
+                w.title,
+                w.path
+            );
+            assert!(!w.purpose.trim().is_empty(), "{}: no purpose", w.title);
+            let slug = repo_wiki_slug(w);
+            assert!(
+                !wikis_of(w.org).any(|other| wiki_slug(other.title) == slug),
+                "{}: slug `{slug}` collides with a committed wiki",
+                w.title
+            );
         }
     }
 

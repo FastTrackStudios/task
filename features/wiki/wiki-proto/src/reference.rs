@@ -66,6 +66,9 @@ impl Reference {
         // Anchor next: `#^id`. A bare `#heading` is left in the target,
         // because heading references are not anchors and this type does
         // not pretend to resolve them.
+        // t[impl wiki.ref.block] — a section is referenced by its block
+        // anchor, the one form an outside markdown editor also resolves,
+        // so retitling or moving the section breaks nothing.
         let (body, anchor) = match body.rsplit_once("#^") {
             Some((b, a)) if !a.is_empty() => (b.trim(), Some(a.trim().to_owned())),
             _ => (body, None),
@@ -86,10 +89,7 @@ impl Reference {
         let (domain, source) = match source_part {
             None => (None, None),
             Some(s) => match s.split_once('/') {
-                Some((d, slug)) => (
-                    Some(d.trim().to_owned()),
-                    Some(slug.trim().to_owned()),
-                ),
+                Some((d, slug)) => (Some(d.trim().to_owned()), Some(slug.trim().to_owned())),
                 None => (None, Some(s.to_owned())),
             },
         };

@@ -22,9 +22,7 @@ pub mod snapshot;
 
 pub use issuer::{IssuerError, IssuerProfile};
 pub use manifest::{OrgManifest, ParseError};
-pub use root::{
-    DEFAULT_WIKI, DataRoot, OrgRoot, RootError, default_client_vault_root, wiki_slug,
-};
+pub use root::{DEFAULT_WIKI, DataRoot, OrgRoot, RootError, default_client_vault_root, wiki_slug};
 pub use service::{
     CreateOrgRequest, OrgManagementError, OrgManagementService, OrgManagementServiceRpc,
 };

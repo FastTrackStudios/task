@@ -18,12 +18,12 @@
 //! editor layer (future); vault is the sole storage path.
 
 pub mod admin_cli;
-#[cfg(feature = "plugin-scripture")]
-pub mod bible_cli;
 #[cfg(feature = "plugin-agent")]
 pub mod agent_router;
 pub mod api_ref;
 pub mod attachments;
+#[cfg(feature = "plugin-scripture")]
+pub mod bible_cli;
 pub mod capability;
 pub mod central_auth;
 #[cfg(feature = "plugin-git")]
@@ -51,6 +51,10 @@ pub mod watch_bridge;
 pub mod webdav;
 #[cfg(feature = "plugin-git")]
 pub mod webhooks;
+#[cfg(feature = "plugin-wiki")]
+pub mod wiki_repo;
+#[cfg(feature = "plugin-wiki")]
+pub mod wiki_tracker;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -170,6 +174,11 @@ pub struct OrgAppState {
     /// subscriptions too and is not a wiki.
     #[cfg(feature = "plugin-wiki")]
     pub subscriptions: wiki_live::subscriptions_backend::SubscriptionsBackend,
+    /// The Edit lane over this org's wikis (`wiki.edit.*`): requests,
+    /// claims, landings. Its tracker is this org's task board, so every
+    /// request is an issue here too.
+    #[cfg(feature = "plugin-wiki")]
+    pub edits: wiki_live::edits_backend::EditsBackend,
     /// Project list / get backend — walks `vault/Projects/*.md`.
     pub projects: project::ProjectBackend,
     /// Goal list / get backend — walks `vault/Goals/**/*.md`.
@@ -944,10 +953,7 @@ pub(crate) async fn build_org_state(
             // `list_wikis`, so it resolves without appearing as a
             // second wiki.
             if let Some(knowledge) = roots.get(org_proto::DEFAULT_WIKI).cloned() {
-                roots.insert(
-                    wiki_live::backend::COMPAT_WIKI_ID.to_string(),
-                    knowledge,
-                );
+                roots.insert(wiki_live::backend::COMPAT_WIKI_ID.to_string(), knowledge);
             }
             tracing::info!(
                 org = %org_root.slug(),
@@ -962,10 +968,8 @@ pub(crate) async fn build_org_state(
             // Created into `<org>/wikis/` at runtime (`wiki.many.set`),
             // so the map the backend holds is the set at boot plus
             // whatever `create_wiki` adds while the server runs.
-            let backend = wiki_live::WikiBackend::with_roots_under(
-                roots.clone(),
-                org_root.wikis_dir(),
-            );
+            let backend =
+                wiki_live::WikiBackend::with_roots_under(roots.clone(), org_root.wikis_dir());
             // Hand this org's vault and each of its wikis the core
             // set. Doing it at boot rather than at org creation is
             // what makes `wiki.core.retroactive` true: an org planted
@@ -1015,14 +1019,15 @@ pub(crate) async fn build_org_state(
                     (*slug).to_owned(),
                 );
             }
-            let upstream = std::sync::Arc::new(
-                wiki_live::subscriptions_backend::LocalOrgs::new(
-                    org_root.path().parent().and_then(std::path::Path::parent)
-                        .unwrap_or(org_root.path())
-                        .to_path_buf(),
-                    domains,
-                ),
-            );
+            let upstream = std::sync::Arc::new(wiki_live::subscriptions_backend::LocalOrgs::new(
+                org_root
+                    .path()
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .unwrap_or(org_root.path())
+                    .to_path_buf(),
+                domains,
+            ));
             wiki_live::subscriptions_backend::SubscriptionsBackend::new(
                 org_root.path().to_path_buf(),
                 core_subscriptions(),
@@ -1506,6 +1511,35 @@ pub(crate) async fn build_org_state(
             }
         }
         let tasks = task::TaskBackend::new(vault_root.clone());
+        // The Edit lane, over the wikis above and the tasks just built:
+        // an Edit Request is an issue on this org's board
+        // (`wiki.edit.tracked`). A claim stands an hour unless the
+        // deployment says otherwise (`TASK_WIKI_CLAIM_TTL_SECS`) — a
+        // test shrinks it to watch one expire.
+        #[cfg(feature = "plugin-wiki")]
+        let edits = {
+            let mut edits = wiki_live::edits_backend::EditsBackend::new(
+                wiki.clone(),
+                std::sync::Arc::new(crate::wiki_tracker::TaskTracker::new(tasks.clone())),
+            )
+            // A repo-sourced wiki lands through its forge
+            // (`wiki.source.editable`); the server holds the clients.
+            .with_lander(std::sync::Arc::new(crate::wiki_repo::ForgeLander));
+            if let Some(secs) = std::env::var("TASK_WIKI_CLAIM_TTL_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+            {
+                edits = edits.with_claim_ttl(std::time::Duration::from_secs(secs));
+            }
+            // t[impl wiki.source.sync] — every wiki with a repository
+            // behind it is fetched on a schedule, first pass at boot
+            // (spawned, so a slow remote never delays serving). What
+            // it finds is written to the wiki's config, which is what a
+            // client shows as "reflects commit …" or "stale since …";
+            // and each sync settles the Edit lane's landings against it.
+            crate::wiki_repo::spawn_sync_loop(org_root.slug().to_string(), edits.clone());
+            edits
+        };
         // Locations + mealplan / pantry each hold their own
         // `vault::Vault` snapshot behind an `Arc<Mutex<…>>`.
         // We open the vault once per store — they're independent
@@ -1748,6 +1782,8 @@ pub(crate) async fn build_org_state(
             wiki,
             #[cfg(feature = "plugin-wiki")]
             subscriptions,
+            #[cfg(feature = "plugin-wiki")]
+            edits,
             projects,
             goals,
             milestones,
@@ -3527,6 +3563,15 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             .with(
                 wiki_proto::service::registry::registry_rpc_service_descriptor(),
                 wiki_proto::service::registry::serve(wiki.clone()),
+            )
+            // t[impl wiki.source.same-surface] — one mount serves
+            // every wiki the org holds, repo-sourced or not: pages,
+            // search, graph, subscriptions and the Edit lane all take a
+            // slug, and nothing outside the landing path asks whether a
+            // repository stands behind it.
+            .with(
+                wiki_proto::service::edits::edits_rpc_service_descriptor(),
+                wiki_proto::service::edits::serve(org.edits.clone()),
             )
             .with(
                 wiki_proto::service::ingest::ingest_rpc_service_descriptor(),

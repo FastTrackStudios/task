@@ -73,6 +73,11 @@ git-config = { workspace = true, optional = true }
 # contract; `git-forgejo` the REST-backed impl.
 git-proto = { workspace = true, optional = true }
 git-forgejo = { workspace = true, optional = true }
+# A repo-sourced wiki whose repository lives on github.com lands its
+# accepted edits as pull requests there (`wiki_repo::open_pull_request`,
+# `wiki.source.editable`); the Forgejo backend above covers the org's
+# own forge.
+git-github = { workspace = true, optional = true }
 project = { workspace = true, features = ["vox"] }
 goal = { workspace = true, features = ["vox"] }
 milestone = { workspace = true, features = ["vox"] }
@@ -238,7 +243,7 @@ plugin-email = [
     "dep:email-smtp",
     "dep:email-product",
 ]
-plugin-git = ["dep:git-proto", "dep:git-forgejo", "dep:git-config"]
+plugin-git = ["dep:git-proto", "dep:git-forgejo", "dep:git-github", "dep:git-config"]
 plugin-agent = [
     "dep:agent-proto",
     "dep:agent-tasks",

@@ -861,9 +861,7 @@ feeds! {
 /// Everything this org's vault holds, declined entries included — a
 /// declined core subscription has to stay visible or turning it back
 /// on is impossible.
-pub async fn fetch_subscriptions(
-    slug: &str,
-) -> Result<Vec<wiki_proto::HeldSubscription>, String> {
+pub async fn fetch_subscriptions(slug: &str) -> Result<Vec<wiki_proto::HeldSubscription>, String> {
     let client = crate::vox_clients::establish_for::<
         wiki_proto::service::subscriptions::SubscriptionsClient,
     >(slug)
@@ -921,11 +919,7 @@ pub async fn subscribe_to(
 /// Drop a source. Without `force`, a copy carrying unpushed local work
 /// refuses rather than discarding it — the error text says what is at
 /// stake, and the caller is expected to show it.
-pub async fn unsubscribe_from(
-    slug: &str,
-    qualified: &str,
-    force: bool,
-) -> Result<(), String> {
+pub async fn unsubscribe_from(slug: &str, qualified: &str, force: bool) -> Result<(), String> {
     let client = crate::vox_clients::establish_for::<
         wiki_proto::service::subscriptions::SubscriptionsClient,
     >(slug)
@@ -935,7 +929,6 @@ pub async fn unsubscribe_from(
         .await
         .map_err(|e| format!("unsubscribe: {e:?}"))
 }
-
 
 /// Every wiki this org holds (`wiki.many.addressable`).
 ///

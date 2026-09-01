@@ -63,12 +63,12 @@ impl SubscriptionStore {
     fn load(&self) -> Result<Held, SubscriptionError> {
         match std::fs::read(&self.path) {
             Ok(bytes) if bytes.is_empty() => Ok(Held::default()),
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| {
-                SubscriptionError::Parse {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|source| SubscriptionError::Parse {
                     path: self.path.display().to_string(),
                     source,
-                }
-            }),
+                })
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Held::default()),
             Err(source) => Err(SubscriptionError::Io {
                 path: self.path.display().to_string(),
@@ -90,7 +90,9 @@ impl SubscriptionStore {
             path: self.path.display().to_string(),
             source,
         })?;
-        let tmp = self.path.with_extension(format!("tmp.{}", std::process::id()));
+        let tmp = self
+            .path
+            .with_extension(format!("tmp.{}", std::process::id()));
         std::fs::write(&tmp, &body).map_err(io)?;
         std::fs::rename(&tmp, &self.path).map_err(io)
     }
@@ -410,9 +412,7 @@ mod tests {
         store
             .subscribe(&vault, wiki_sub("acme.test", "music-theory"))
             .unwrap();
-        store
-            .unsubscribe(&vault, "acme.test/music-theory")
-            .unwrap();
+        store.unsubscribe(&vault, "acme.test/music-theory").unwrap();
         assert!(store.list(&vault).unwrap().is_empty());
         assert!(matches!(
             store.unsubscribe(&vault, "acme.test/music-theory"),
