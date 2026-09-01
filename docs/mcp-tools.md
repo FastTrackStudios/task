@@ -121,6 +121,26 @@ mail client. (The org's current maildir backend reports drafts as
 unsupported until its phase-3 write path lands; the tools surface that
 error verbatim.)
 
+### Cluster telemetry (account lane only, operator only)
+
+Listed on `POST /mcp` **only when** `TASK_TELEMETRY_TEMPO_URL` and/or
+`TASK_TELEMETRY_LOKI_URL` is set; absent otherwise. Telemetry spans every
+org, so these take no `org` argument and answer only an *operator*: the
+static `TASK_MCP_TOKEN`, or a session whose principal holds `admin` in
+the server's home org. Anyone else gets a tool-level refusal. Full guide,
+field names and a query cookbook: [`observability.md`](observability.md).
+
+| tool | args | does |
+|---|---|---|
+| `telemetry_status` | — | which backends are configured (URLs, userinfo stripped) and whether the caller is allowed |
+| `telemetry_query_traces` | `traceql` (req), `since` (`15m`/`2h`/`1d`, default `1h`), `limit` (1-200, default 20) | Tempo search → `[{trace_id, root_service, root_name, start, duration_ms, span_count}]` |
+| `telemetry_get_trace` | `trace_id` (req, hex) | one trace → spans sorted by start: `{span_id, parent, service, name, start, duration_ms, status, attributes{key: value}}` |
+| `telemetry_query_logs` | `logql` (req), `since`, `limit` | Loki range query, newest first → `[{ts, labels, line}]` with ANSI stripped |
+
+Every result carries `count` and `truncated` (output is capped near
+48 KB). Span fields: `mcp.tool`, `telemetry.backend`, `telemetry.outcome`
+(`ok` / `refused` / `unconfigured` / `bad_request` / `upstream_error`).
+
 ## Why there is no generic `invoke_service`
 
 `api_reference` shows ~80 services; a natural follow-on is

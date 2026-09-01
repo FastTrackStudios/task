@@ -39,6 +39,13 @@ use serde_json::{Value, json};
 
 use crate::AppState;
 
+/// The read-side Tempo/Loki client behind the `telemetry_*` tools.
+/// Declared here rather than in `lib.rs` so the MCP lane owns the one
+/// place the cluster's telemetry is read from; `lib.rs` may adopt it
+/// with a plain `pub mod telemetry_query;` later.
+#[path = "telemetry_query.rs"]
+pub mod telemetry_query;
+
 /// MCP revisions we can speak. We echo the client's requested
 /// version when it's one of these, else answer with the newest —
 /// the spec's negotiation rule.
@@ -1062,6 +1069,14 @@ async fn mcp_dispatch(
                     let mut payload = tools_list_payload(&org.plugins);
                     if pinned.is_none() {
                         payload = account_tools_payload(payload, &target);
+                        // Cluster telemetry: listed only when a backend
+                        // exists, so a self-hoster without a stack never
+                        // sees tools that can only say "not configured".
+                        if telemetry_query::TelemetryConfig::from_env().any()
+                            && let Some(tools) = payload["tools"].as_array_mut()
+                        {
+                            tools.extend(telemetry_tools_payload());
+                        }
                     }
                     Json(rpc_result(id, payload)).into_response()
                 }
@@ -1111,6 +1126,23 @@ async fn mcp_dispatch(
                     })),
                 ))
                 .into_response();
+            }
+            // `telemetry_*` is account-lane only and spans orgs too: it
+            // has its own operator check rather than a per-org session,
+            // and is method-not-found when no backend is configured.
+            if pinned.is_none()
+                && let Some(name) = params.get("name").and_then(Value::as_str)
+                && TELEMETRY_TOOLS.contains(&name)
+            {
+                return match telemetry_call(&state, &headers, name, &args_peek).await {
+                    Some(payload) => Json(rpc_result(id, payload)).into_response(),
+                    None => Json(rpc_error(
+                        id,
+                        code::METHOD_NOT_FOUND,
+                        format!("unknown tool `{name}`"),
+                    ))
+                    .into_response(),
+                };
             }
             let org = match authenticate_for(&state, &target, &headers).await {
                 Ok(org) => org,
@@ -1233,6 +1265,223 @@ fn account_tools_payload(payload: Value, default_slug: &str) -> Value {
         }),
     );
     json!({ "tools": tools })
+}
+
+// ── Telemetry tools (account lane, operator only) ────────────────
+//
+// The cluster's traces and logs span every org, so these are not org
+// tools and never take `org`. They exist on `POST /mcp` only, appear
+// only when a backend URL is configured (`TASK_TELEMETRY_TEMPO_URL` /
+// `TASK_TELEMETRY_LOKI_URL`), and answer only an OPERATOR: the static
+// `TASK_MCP_TOKEN`, or a session whose principal holds `admin` in the
+// server's home org. Everyone else gets a tool-level refusal.
+
+/// The `telemetry_*` tool names, in listing order.
+const TELEMETRY_TOOLS: &[&str] = &[
+    "telemetry_status",
+    "telemetry_query_traces",
+    "telemetry_get_trace",
+    "telemetry_query_logs",
+];
+
+/// `tools/list` entries for the telemetry tools. Descriptions carry
+/// example queries because the reader is a model that has to write
+/// TraceQL/LogQL from them.
+fn telemetry_tools_payload() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "telemetry_status",
+            "description": "Which telemetry backends this server can read (Tempo for traces, \
+                            Loki for logs) and whether YOU are allowed to query them. Call \
+                            this first when a telemetry tool refuses or errors. Operator-only: \
+                            the cluster's telemetry spans every org.",
+            "inputSchema": obj(json!({}), &[]),
+        }),
+        json!({
+            "name": "telemetry_query_traces",
+            "description": "Search the cluster's traces with TraceQL (Tempo). Every task-server \
+                            request is ONE span carrying wide-event fields — auth.*, perm.*, \
+                            rpc.*, org.slug, mcp.tool — so filter on those rather than on log \
+                            text. Returns one row per matching trace; follow up with \
+                            telemetry_get_trace for the spans. Examples: \
+                            `{ resource.service.name = \"task-server\" && span.auth.outcome = \"rejected\" }` \
+                            (sessions being refused); \
+                            `{ span.rpc.service = \"TimerService\" && duration > 500ms }` (slow RPCs); \
+                            `{ span.perm.decision = \"deny\" && span.org.slug = \"fasttrackstudios\" }` \
+                            (denials in one org); `{ span.mcp.tool = \"create_task\" }` (this lane). \
+                            Operator-only.",
+            "inputSchema": obj(
+                json!({
+                    "traceql": s_("TraceQL query, e.g. `{ resource.service.name = \"task-server\" && status = error }`."),
+                    "since": s_("Lookback window ending now: `15m`, `2h`, `1d` (max 30d). Default `1h`."),
+                    "limit": i_("Max traces to return (1-200, default 20)."),
+                }),
+                &["traceql"],
+            ),
+        }),
+        json!({
+            "name": "telemetry_get_trace",
+            "description": "One trace by id (from telemetry_query_traces), as its spans sorted \
+                            by start: service, name, duration_ms, status, and every attribute \
+                            flattened to `key: value`. This is where the wide event lives — \
+                            read auth.outcome, perm.decision, perm.reason, org.slug, rpc.method \
+                            off the span rather than guessing from logs. Operator-only.",
+            "inputSchema": obj(
+                json!({
+                    "trace_id": s_("Hex trace id exactly as telemetry_query_traces returned it."),
+                }),
+                &["trace_id"],
+            ),
+        }),
+        json!({
+            "name": "telemetry_query_logs",
+            "description": "Search the cluster's logs with LogQL (Loki), newest first, ANSI \
+                            colour stripped. Reach for this for boot lines, panics, and the \
+                            one-line denial/refusal warnings — allowed requests write NO log \
+                            line, only a span, so use telemetry_query_traces for those. \
+                            Examples: `{service_name=\"task-server\"} |= \"central auth\"`; \
+                            `{namespace=\"task\", container=\"task-server\"} |~ \"panic|ERROR\"`; \
+                            `{service_name=\"task-server\"} | json | perm_decision=\"deny\"`. \
+                            Labels available: service_name, namespace, app, container. \
+                            Operator-only.",
+            "inputSchema": obj(
+                json!({
+                    "logql": s_("LogQL query, e.g. `{service_name=\"task-server\"} |= \"warn\"`."),
+                    "since": s_("Lookback window ending now: `15m`, `2h`, `1d` (max 30d). Default `1h`."),
+                    "limit": i_("Max log lines to return (1-200, default 20)."),
+                }),
+                &["logql"],
+            ),
+        }),
+    ]
+}
+
+/// Is this caller an operator — allowed to read telemetry that spans
+/// every org? The static token is one by definition; a session is one
+/// when its principal holds `admin` in the HOME org, read from the
+/// memberships table when it exists and from the home org's own role
+/// column otherwise (the two places `admin set-role` / `adopt-principal`
+/// write).
+async fn is_operator(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(token) = crate::watch_bridge::bearer(headers) else {
+        return false;
+    };
+    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
+    if !static_token.is_empty() && token == static_token {
+        architect_telemetry::wide::set("auth.principal_kind", "static_token");
+        return true;
+    }
+    let Some(home_slug) = state.home_slug() else {
+        return false;
+    };
+    let Some(home) = state.org(&home_slug) else {
+        return false;
+    };
+    let Ok(bundle) = home
+        .auth
+        .auth
+        .current_session(architect_auth::CurrentSession { token })
+        .await
+    else {
+        return false;
+    };
+    if bundle.user.role.as_deref() == Some("admin") {
+        return true;
+    }
+    if let Some(identity) = &state.home_identity
+        && let Ok(Some(m)) = identity
+            .memberships
+            .role_for(bundle.user.id, &home_slug)
+            .await
+        && m.role.as_deref() == Some("admin")
+    {
+        return true;
+    }
+    false
+}
+
+/// One `telemetry_*` call, end to end: configured? operator? then the
+/// backend. Returns the MCP tool result (`tool_ok` / `tool_err`), or
+/// `None` when the tools are hidden (no backend configured), which the
+/// dispatcher turns into method-not-found — the same answer an
+/// unlisted tool gets.
+async fn telemetry_call(
+    state: &AppState,
+    headers: &HeaderMap,
+    name: &str,
+    args: &Value,
+) -> Option<Value> {
+    use architect_telemetry::wide;
+    use telemetry_query::{QueryError, TelemetryClient, TelemetryConfig, clamp_limit};
+
+    let cfg = TelemetryConfig::from_env();
+    if !cfg.any() {
+        return None;
+    }
+    wide::set("mcp.tool", name.to_owned());
+    let operator = is_operator(state, headers).await;
+    if name == "telemetry_status" {
+        wide::set("telemetry.outcome", if operator { "ok" } else { "refused" });
+        return Some(tool_ok(&json!({
+            "backends": cfg.describe(),
+            "allowed": operator,
+            "note": if operator {
+                "You may query. Traces: telemetry_query_traces / telemetry_get_trace. \
+                 Logs: telemetry_query_logs."
+            } else {
+                "Telemetry spans every org, so it needs an operator: the server's static \
+                 MCP token, or an `admin` in the home org."
+            },
+        })));
+    }
+    if !operator {
+        wide::set("telemetry.outcome", "refused");
+        return Some(tool_err(
+            "operator role required: telemetry spans every org on this server. Use the \
+             static MCP token, or an account holding `admin` in the home org.",
+        ));
+    }
+    let client = TelemetryClient::new(cfg);
+    let since = arg_str(args, "since").unwrap_or_else(|| telemetry_query::DEFAULT_SINCE.to_owned());
+    let limit = clamp_limit(args.get("limit").and_then(Value::as_u64));
+    let (backend, result) = match name {
+        "telemetry_query_traces" => (
+            "tempo",
+            match required_str(args, "traceql") {
+                Ok(q) => client.search_traces(&q, &since, limit).await,
+                Err(ToolFailure::Message(m)) => Err(QueryError::BadRequest(m)),
+                Err(ToolFailure::Unknown) => return None,
+            },
+        ),
+        "telemetry_get_trace" => (
+            "tempo",
+            match required_str(args, "trace_id") {
+                Ok(id) => client.get_trace(&id).await,
+                Err(ToolFailure::Message(m)) => Err(QueryError::BadRequest(m)),
+                Err(ToolFailure::Unknown) => return None,
+            },
+        ),
+        "telemetry_query_logs" => (
+            "loki",
+            match required_str(args, "logql") {
+                Ok(q) => client.query_logs(&q, &since, limit).await,
+                Err(ToolFailure::Message(m)) => Err(QueryError::BadRequest(m)),
+                Err(ToolFailure::Unknown) => return None,
+            },
+        ),
+        _ => return None,
+    };
+    wide::set("telemetry.backend", backend);
+    Some(match result {
+        Ok(v) => {
+            wide::set("telemetry.outcome", "ok");
+            tool_ok(&v)
+        }
+        Err(e) => {
+            wide::set("telemetry.outcome", e.outcome());
+            tool_err(e.to_string())
+        }
+    })
 }
 
 /// Account-lane orientation: the org-lane text for the default org,
@@ -3045,6 +3294,31 @@ mod tests {
             other => panic!("expected a disabled-plugin message, got {other:?}"),
         }
         assert_eq!(plugin_gate("no_such_tool", &no_email), Err(None));
+    }
+
+    /// The telemetry catalog and its dispatch list must agree, and every
+    /// required argument must be declared — the same shape rule the
+    /// org catalog is held to.
+    #[test]
+    fn telemetry_tools_match_their_dispatch_list_and_declare_required_args() {
+        let listed: Vec<String> = telemetry_tools_payload()
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(listed, TELEMETRY_TOOLS);
+        for tool in telemetry_tools_payload() {
+            let schema = &tool["inputSchema"];
+            for key in schema["required"].as_array().expect("required").iter() {
+                let key = key.as_str().expect("string");
+                assert!(
+                    schema["properties"].get(key).is_some(),
+                    "`{}` requires `{key}` but doesn't declare it",
+                    tool["name"]
+                );
+            }
+            let desc = tool["description"].as_str().expect("description");
+            assert!(desc.contains("Operator-only"), "{desc}");
+        }
     }
 
     #[test]

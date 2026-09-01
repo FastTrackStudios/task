@@ -48,6 +48,17 @@ server:
   #   env:
   #     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc:4318
   #     OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  #
+  # Reading that telemetry back through the account MCP lane
+  # (`telemetry_query_traces` / `telemetry_get_trace` /
+  # `telemetry_query_logs` on `POST /mcp`) is separately opt-in. Point
+  # the server at the Tempo and Loki HTTP APIs; either alone is fine.
+  # Operator-only (static TASK_MCP_TOKEN, or a home-org `admin`), and
+  # the tools are not listed at all when both are unset.
+  # See docs/observability.md.
+  #   env:
+  #     TASK_TELEMETRY_TEMPO_URL: http://tempo.observability.svc:3200
+  #     TASK_TELEMETRY_LOKI_URL: http://loki.observability.svc:3100
   env: {}
 
   # Name of an existing Secret whose keys are injected via envFrom.
