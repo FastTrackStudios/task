@@ -23,14 +23,14 @@ pub const APP: PluginApp = PluginApp {
     version: env!("CARGO_PKG_VERSION"),
     nav: &[PluginNav {
         label: "Fitness",
-        icon: icon,
+        icon,
         path: "",
         // Training is a daily thing for the people who use it at all,
         // but the rail is shared with everybody's; the sidebar is the
         // right home until somebody says otherwise.
         rail: false,
     }],
-    view: view,
+    view,
     // Body metrics and exercises, installed at the app root.
     panel: None,
     claim_file: None,

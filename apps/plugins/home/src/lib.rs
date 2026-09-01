@@ -33,7 +33,7 @@ pub const APP: PluginApp = PluginApp {
             rail: false,
         },
     ],
-    view: view,
+    view,
     panel: None,
     claim_file: None,
     provide: Some(provide),
