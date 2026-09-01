@@ -779,18 +779,13 @@ async fn adopt_principal(args: &[String]) -> eyre::Result<()> {
     // when an issuer is configured, the id has to be given explicitly
     // rather than guessed from a local store that is no longer the
     // authority.
-    let principal_id = match (flag(args, "--principal"), crate::central_auth::configured()) {
-        (Some(raw), _) => raw
-            .parse::<uuid::Uuid>()
-            .map_err(|e| eyre::eyre!("--principal must be a uuid: {e}"))?,
-        (None, Some(issuer)) => bail!(
-            "this server delegates identity to {} — pass the ISSUER's user id \
-             explicitly:\n\n    admin adopt-principal --email {email} --principal <uuid>\n\n\
-             The home org's id is not what a token from that issuer resolves to, so \
-             rows written from it would be invisible to every request.",
-            issuer.issuer()
-        ),
-        (None, None) => {
+    let principal_id = match principal_choice(
+        flag(args, "--principal").as_deref(),
+        crate::central_auth::configured().map(|c| c.issuer()),
+        &email,
+    )? {
+        PrincipalChoice::Given(id) => id,
+        PrincipalChoice::FromHomeOrg => {
             let home_auth = open_org_auth(&home_slug).await?;
             home_auth
                 .auth
@@ -2077,5 +2072,85 @@ mod merge_principals_tests {
         assert!(principals.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("no email"));
+    }
+}
+
+/// Where `adopt-principal` gets the id it keys membership rows to.
+#[derive(Debug, PartialEq, Eq)]
+enum PrincipalChoice {
+    /// The operator said, and it parsed.
+    Given(uuid::Uuid),
+    /// Look it up in the home org, as this command always did.
+    FromHomeOrg,
+}
+
+/// Decide, or refuse.
+///
+/// Extracted from the command so the refusal can be tested: it is the
+/// one branch whose failure is silent. Writing rows under the home
+/// org's id while tokens resolve to the issuer's produces a command
+/// that reports success and a server that then denies every request,
+/// with correct-looking rows sitting under an id nothing asks about.
+/// A loud refusal is worth more here than a convenient default.
+fn principal_choice(
+    explicit: Option<&str>,
+    issuer: Option<&str>,
+    email: &str,
+) -> eyre::Result<PrincipalChoice> {
+    match (explicit, issuer) {
+        (Some(raw), _) => Ok(PrincipalChoice::Given(
+            raw.trim()
+                .parse::<uuid::Uuid>()
+                .map_err(|e| eyre::eyre!("--principal must be a uuid: {e}"))?,
+        )),
+        (None, Some(issuer)) => bail!(
+            "this server delegates identity to {issuer} — pass the ISSUER's user id \
+             explicitly:\n\n    admin adopt-principal --email {email} --principal <uuid>\n\n\
+             The home org's id is not what a token from that issuer resolves to, so rows \
+             written from it would be invisible to every request."
+        ),
+        (None, None) => Ok(PrincipalChoice::FromHomeOrg),
+    }
+}
+
+#[cfg(test)]
+mod principal_tests {
+    use super::{PrincipalChoice, principal_choice};
+
+    /// Unchanged for every server that has not opted in.
+    #[test]
+    fn without_an_issuer_the_home_org_still_answers() {
+        assert_eq!(
+            principal_choice(None, None, "a@example.invalid").unwrap(),
+            PrincipalChoice::FromHomeOrg
+        );
+    }
+
+    /// The refusal this exists for. Guessing here writes rows nothing
+    /// will ever look up, and reports success doing it.
+    #[test]
+    fn with_an_issuer_it_refuses_to_guess() {
+        let err = principal_choice(None, Some("https://auth.example.app"), "a@example.invalid")
+            .expect_err("must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("auth.example.app"), "{msg}");
+        assert!(msg.contains("--principal"), "names the fix: {msg}");
+    }
+
+    #[test]
+    fn an_explicit_id_is_used_with_or_without_an_issuer() {
+        let id = uuid::Uuid::new_v4();
+        for issuer in [None, Some("https://auth.example.app")] {
+            assert_eq!(
+                principal_choice(Some(&id.to_string()), issuer, "a@example.invalid").unwrap(),
+                PrincipalChoice::Given(id)
+            );
+        }
+    }
+
+    /// A mistyped id must fail here, not become a row keyed to nothing.
+    #[test]
+    fn a_malformed_id_is_refused() {
+        assert!(principal_choice(Some("not-a-uuid"), None, "a@example.invalid").is_err());
     }
 }
