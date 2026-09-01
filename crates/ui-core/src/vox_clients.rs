@@ -680,6 +680,24 @@ where
     Ok(C::from_vox_lane(caller, None))
 }
 
+/// A client against an endpoint that is not one of this server's orgs.
+///
+/// The central auth issuer is the case this exists for: it mounts the
+/// *same* `AuthService` an org lane does, so the typed client works
+/// against it unchanged — what differs is only which URL and which
+/// credential, and both are the caller's to choose here.
+///
+/// **Shared**, unlike the private `establish_at` above, which dials
+/// fresh each time: identity resolves on a connection the issuer keeps,
+/// so one dial per issuer is right and one per call is not.
+pub async fn establish_shared_at<C>(url: &str, bearer: Option<String>) -> Result<C, String>
+where
+    C: vox_core::FromVoxLane + Clone + 'static,
+{
+    let caller = shared_caller_with(url, bearer).await?;
+    Ok(C::from_vox_lane(caller, None))
+}
+
 #[cfg(test)]
 mod subprotocol_tests {
     use super::{VOX_SUBPROTOCOL, subprotocols};
@@ -727,22 +745,4 @@ mod subprotocol_tests {
         );
         assert_eq!(super::percent_encode_component("Ok-1._~x"), "Ok-1._~x");
     }
-}
-
-/// A client against an endpoint that is not one of this server's orgs.
-///
-/// The central auth issuer is the case this exists for: it mounts the
-/// *same* `AuthService` an org lane does, so the typed client works
-/// against it unchanged — what differs is only which URL and which
-/// credential, and both are the caller's to choose here.
-///
-/// **Shared**, unlike the private `establish_at` above, which dials
-/// fresh each time: identity resolves on a connection the issuer keeps,
-/// so one dial per issuer is right and one per call is not.
-pub async fn establish_shared_at<C>(url: &str, bearer: Option<String>) -> Result<C, String>
-where
-    C: vox_core::FromVoxLane + Clone + 'static,
-{
-    let caller = shared_caller_with(url, bearer).await?;
-    Ok(C::from_vox_lane(caller, None))
 }

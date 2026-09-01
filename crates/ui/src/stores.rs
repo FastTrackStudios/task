@@ -169,8 +169,6 @@ task_stores::stores! {
 
 // ── shared plumbing ─────────────────────────────────────────────────
 
-/// The org-selection contexts every list hook keys its fetch off.
-
 fn fold_task_event(store: &TaskStore, slug: &str, ev: task_proto::TaskEvent) {
     match ev {
         task_proto::TaskEvent::Upserted(task) => store.put(OrgTask {
