@@ -22,12 +22,15 @@ name: task-macos
 on:
   push:
     branches: [main]
+    # See the same block in `task-ios.yml`: three of the four crate paths
+    # this used to name are monorepo leftovers that do not exist here, so
+    # the build did not trigger on most of what the app is made of.
     paths:
       - "apps/**"
-      - "crates/task/**"
-      - "features/task/**"
-      - "libs/architect/**"
-      - "features/editor/**"
+      - "crates/**"
+      - "features/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/task-macos.yml"

@@ -25,6 +25,19 @@
 /* The app crates themselves (main.rs is a thin shell — kept so a stray
  * utility class in one of them still compiles). */
 @source "./*/src/**/*.{rs,html,css}";
+/* The plugin apps, which sit one level deeper (apps/plugins/NAME/) and
+ * so are NOT matched by the single-level glob above. A plugin's screens
+ * usually live in its feature crate — caught by the features glob below
+ * — but the wrapper renders too: nav icons, the fleet-surface padding,
+ * whatever a `view` builds itself. Missing them is the silent failure
+ * this file keeps warning about; it happened not to show only because
+ * the one class involved was also used elsewhere.
+ *
+ * Careful writing comments here: a `star slash` sequence ends a CSS
+ * comment, so glob patterns belong outside one. Naming a path like
+ * features/STAR/STAR-ui inside these braces truncates the comment and
+ * the next @source becomes a syntax error. */
+@source "./plugins/*/src/**/*.rs";
 
 /* The glob is `crates/*` rather than naming `ui` alone: the shell split
  * produced `ui-core` and `player-ui`, and naming one crate meant their

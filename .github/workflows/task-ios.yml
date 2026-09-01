@@ -21,16 +21,29 @@ name: task-ios
 on:
   push:
     branches: [main]
+    # What the app is actually built from. `crates/**` and `features/**`
+    # rather than the `crates/task/**` / `features/task/**` /
+    # `libs/architect/**` / `features/editor/**` this used to name: those
+    # are the monorepo paths this repo was extracted from, and three of
+    # the four do not exist here. The effect was an iOS build that did
+    # not trigger on the shell, the UI-core crates, the stores, the
+    # player, or any feature `-ui` crate — most of what the app IS —
+    # and did so silently, because a `paths:` filter that matches
+    # nothing is not an error, it is just quiet.
+    #
+    # Broad on purpose. The concurrency group below queues builds rather
+    # than running them at once, so the cost of an extra build on the
+    # single Mac is latency; the cost of a missing one is a TestFlight
+    # build that does not contain the change somebody is waiting to test.
     paths:
       - "apps/**"
-      - "crates/task/**"
-      - "features/task/**"
-      - "libs/architect/**"
-      - "features/editor/**"
+      - "crates/**"
+      - "features/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/task-ios.yml"
-      - "apps/fasttrackstudio/ios/**"
   workflow_dispatch:
     inputs:
       marketing_version:
