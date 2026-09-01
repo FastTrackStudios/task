@@ -303,3 +303,96 @@ async fn demo_plants_the_orgs_named_wikis() -> eyre::Result<()> {
     assert_eq!(planted, again, "a replant changed the set of wikis");
     Ok(())
 }
+
+/// The references in the seeded pages resolve — against a reader's own
+/// subscriptions, which is the whole of `wiki.subscribe.resolution`.
+///
+/// This is the test the seed existed for before any of it worked: the
+/// committed pages were written in ADR 0002's format from the start,
+/// so they were a failing test waiting for a resolver.
+#[tokio::test(flavor = "multi_thread")]
+async fn seeded_references_resolve_against_the_readers_subscriptions() -> eyre::Result<()> {
+    use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
+
+    let tmp = tempfile::tempdir()?;
+    let data_root = tmp.path();
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(data_root, "acme-audio")?;
+
+    let org = org_proto::DataRoot::new(data_root.to_owned()).org("acme-audio");
+    let page = org
+        .named_wiki_dir("audio-production")
+        .join("Concepts")
+        .join("Equalization.md");
+    let markdown = std::fs::read_to_string(&page)?;
+
+    // Audio Production cites Music Theory, including a block anchor.
+    let found = wiki_proto::reference::scan(&markdown);
+    let cross: Vec<_> = found
+        .iter()
+        .map(|(_, r)| r)
+        .filter(|r| r.source.as_deref() == Some("music-theory"))
+        .collect();
+    eyre::ensure!(
+        cross.len() >= 2,
+        "the seeded page should cite Music Theory more than once"
+    );
+    eyre::ensure!(
+        cross.iter().any(|r| r.anchor.as_deref() == Some("partials")),
+        "the block-anchor citation is what `wiki.ref.block` is for"
+    );
+
+    let store = wiki_live::subscriptions::SubscriptionStore::open(org.path());
+    let reader = Subscriber::Vault;
+
+    // A reader holding nothing: unresolved, and told which source —
+    // never "no such page".
+    for r in &cross {
+        let err = wiki_proto::resolve(r, &[]).expect_err("nothing is held yet");
+        assert_eq!(
+            err,
+            wiki_proto::Unresolved::NoSubscription("acme.test/music-theory".into())
+        );
+    }
+
+    // The same reader, now subscribed: the same bytes resolve.
+    store.subscribe(
+        &reader,
+        Subscription {
+            domain: "acme.test".into(),
+            slug: "music-theory".into(),
+            kind: SourceKind::Wiki,
+            title: "Music Theory".into(),
+            core: false,
+            declined: false,
+        },
+    )?;
+    let held = store.active(&reader)?;
+    for r in &cross {
+        let hit = wiki_proto::resolve(r, &held)
+            .expect("resolves now")
+            .expect("not a local reference");
+        assert_eq!(hit.via.slug, "music-theory");
+        // And the page it names is really there.
+        let target = org
+            .named_wiki_dir("music-theory")
+            .join("Concepts")
+            .join(format!("{}.md", hit.target));
+        assert!(
+            target.is_file(),
+            "reference names `{}`, which the seed does not contain",
+            hit.target
+        );
+    }
+
+    // Core arrived without anyone asking, and is a Resource.
+    let core = store.list(&reader)?;
+    let bible = core
+        .iter()
+        .find(|s| s.slug == "bible")
+        .expect("scripture is core");
+    assert!(bible.core && !bible.declined);
+    assert!(!bible.kind.is_editable(), "a Resource is never editable");
+    Ok(())
+}

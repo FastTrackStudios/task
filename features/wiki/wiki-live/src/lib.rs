@@ -45,6 +45,7 @@ pub mod reviews;
 mod snapshot;
 mod source_watcher;
 mod state;
+pub mod subscriptions;
 mod vault;
 
 pub use backend::WikiBackend;

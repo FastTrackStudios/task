@@ -19,9 +19,8 @@ by the balance either way.
 
 Instruments an octave apart share most of their partials, so they
 overlap far more than their written registers suggest — see
-[[acme.test/music-theory::Harmonic Series@2026-09-01#^partials|the
-harmonic series]]. Once you can name which partials collide, the cut
-usually picks itself.
+[[acme.test/music-theory::Harmonic Series@2026-09-01#^partials|the harmonic series]].
+Once you can name which partials collide, the cut usually picks itself.
 
 A part that sounds harsh rather than loud is often a modal problem
 wearing an EQ costume: check what the bass is doing under it before

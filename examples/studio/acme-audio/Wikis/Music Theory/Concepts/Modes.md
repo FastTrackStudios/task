@@ -28,5 +28,4 @@ the material as the parent major scale, which is why modal parts often
 collapse the moment the bass moves.
 
 The drone works because of
-[[acme.test/music-theory::Harmonic Series@2026-09-01#^partials|the
-partials it already contains]].
+[[acme.test/music-theory::Harmonic Series@2026-09-01#^partials|the partials it already contains]].

@@ -20,8 +20,7 @@ those two.
 
 ## Phase before EQ
 
-Two mics on one source will cancel somewhere. Move a mic before you
-reach for
+Two mics on one source will cancel somewhere. Move a mic before you reach for
 [[acme.test/audio-production::Equalization@2026-09-01|EQ]] — a
 cancellation notch cannot be boosted back, because the energy is not
 attenuated, it is gone.

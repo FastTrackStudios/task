@@ -89,6 +89,9 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
     #[cfg(feature = "plugin-scripture")]
     plant_bible(&org).await;
 
+    #[cfg(feature = "plugin-wiki")]
+    plant_core_subscriptions(&org);
+
     // Accounts, in this org's own auth store.
     let url = format!("sqlite://{}?mode=rwc", org.auth_db().display());
     let auth = crate::AuthState::open(&url, &crate::auth_secret())
@@ -561,4 +564,42 @@ async fn plant_bible(org: &org_proto::OrgRoot) {
             org.slug()
         ),
     }
+}
+
+/// Hand the freshly planted org's vault and wikis the core set.
+///
+/// `wiki.core.default` says a vault carries the core set *from the
+/// moment it exists* — so planting one has to do this, not only
+/// booting a server against it. The boot-time sweep in
+/// `crate::OrgServices` is the retroactive half (`wiki.core.retroactive`),
+/// for orgs that existed before a source became core; this is the half
+/// that makes a brand-new vault able to reference a verse in its first
+/// line without anything else having run.
+///
+/// Never fatal, for the reason the Bible install is not: an org that
+/// cannot record its subscriptions should still plant.
+#[cfg(feature = "plugin-wiki")]
+fn plant_core_subscriptions(org: &org_proto::OrgRoot) {
+    let store = wiki_live::subscriptions::SubscriptionStore::open(org.path());
+    let core = crate::core_subscriptions();
+    let mut subscribers = vec![wiki_proto::Subscriber::Vault];
+    subscribers.extend(
+        org.named_wikis()
+            .into_iter()
+            .map(|(slug, _)| wiki_proto::Subscriber::Wiki(slug)),
+    );
+    let mut added = 0;
+    for subscriber in &subscribers {
+        match store.ensure_core(subscriber, &core) {
+            Ok(new) => added += new.len(),
+            Err(e) => {
+                println!("  subscriptions: not applied ({e})");
+                return;
+            }
+        }
+    }
+    println!(
+        "  subscriptions: core set on {} subscriber(s), {added} new",
+        subscribers.len()
+    );
 }

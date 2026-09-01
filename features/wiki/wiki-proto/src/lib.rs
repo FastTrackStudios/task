@@ -75,13 +75,19 @@ pub mod multimodal;
 pub mod pages;
 pub mod paths;
 pub mod raw;
+pub mod reference;
+pub mod resolve;
 pub mod research;
 pub mod review;
 pub mod schema;
 pub mod search;
 pub mod service;
+pub mod subscription;
 
 pub use error::WikiError;
+pub use reference::Reference;
+pub use resolve::{Resolved, resolve};
+pub use subscription::{SourceKind, Subscriber, Subscription, Unresolved};
 pub use event::{WikiChange, WikiEvent};
 
 // Per-capability trait re-exports. There is **no**

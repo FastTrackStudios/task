@@ -942,7 +942,38 @@ pub(crate) async fn build_org_state(
                     names.join(", ")
                 }
             );
-            wiki_live::WikiBackend::with_roots(roots)
+            let backend = wiki_live::WikiBackend::with_roots(roots.clone());
+            // Hand this org's vault and each of its wikis the core
+            // set. Doing it at boot rather than at org creation is
+            // what makes `wiki.core.retroactive` true: an org planted
+            // before a source became core picks it up on next start,
+            // and one that declined keeps its decline.
+            let subs = wiki_live::subscriptions::SubscriptionStore::open(org_root.path());
+            let core = core_subscriptions();
+            let mut subscribers = vec![wiki_proto::Subscriber::Vault];
+            subscribers.extend(
+                roots
+                    .keys()
+                    .map(|slug| wiki_proto::Subscriber::Wiki(slug.clone())),
+            );
+            for subscriber in subscribers {
+                match subs.ensure_core(&subscriber, &core) {
+                    Ok(added) if !added.is_empty() => tracing::info!(
+                        org = %org_root.slug(),
+                        subscriber = ?subscriber,
+                        "core subscriptions added: {}",
+                        added.join(", ")
+                    ),
+                    Ok(_) => {}
+                    // Never fatal: an org that cannot hold its
+                    // subscriptions should still serve its own wikis.
+                    Err(e) => tracing::warn!(
+                        org = %org_root.slug(),
+                        "core subscriptions not applied: {e}"
+                    ),
+                }
+            }
+            backend
         };
 
         // Agent-task queue. SQLite under the org root
@@ -4101,4 +4132,35 @@ mod range_tests {
         assert_eq!(parse_byte_range("garbage", 1000), None);
         assert_eq!(parse_byte_range("bytes=5000-6000", 1000), None); // start past end
     }
+}
+
+/// The domain this deployment publishes its own Resources under.
+///
+/// A reference carries the publishing org's federation domain
+/// (ADR 0002), and the first-party Resources — scripture today — are
+/// published by us. The constant exists so the domain in a reference
+/// and the domain in a subscription come from one place: a mismatch
+/// between them is a reference that resolves for nobody.
+pub const FIRST_PARTY_DOMAIN: &str = "fasttrackstudio.app";
+
+/// The deployment's core set — subscribed by default in every vault
+/// and every wiki (`wiki.core.default`).
+///
+/// Scripture is the founding member, and the reason the rule exists:
+/// a note written in a brand-new vault should be able to reference a
+/// verse in its first line, without anyone having gone looking for a
+/// setting.
+///
+/// Core membership is a property of the *source*, so this is a list of
+/// what everyone gets rather than a copy handed to each org. The
+/// corpus behind it is still installed per org today; sharing one copy
+/// is what the rest of the subscription work is for.
+#[cfg(feature = "plugin-wiki")]
+#[must_use]
+pub fn core_subscriptions() -> Vec<wiki_proto::Subscription> {
+    vec![wiki_live::subscriptions::core_resource(
+        FIRST_PARTY_DOMAIN,
+        "bible",
+        "Bible",
+    )]
 }
