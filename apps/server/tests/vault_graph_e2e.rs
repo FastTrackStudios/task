@@ -76,16 +76,25 @@ async fn graph_queries_over_seeded_vault() {
     assert_eq!(links[0].resolved.as_deref(), Some("Plans.md"));
     assert_eq!(links[1].resolved, None);
 
-    // Orphans + deadends: the unlinked, link-less pages — the one this
-    // test planted and the one the example vault ships with.
-    let unlinked = vec!["Loose.md".to_string(), support::EXAMPLE_PAGE.to_string()];
-    assert_eq!(
-        graph.orphans("default".to_string()).await.unwrap(),
-        unlinked
-    );
-    assert_eq!(
-        graph.deadends("default".to_string()).await.unwrap(),
-        unlinked
+    // Orphans + deadends: the unlinked, link-less pages. Asserted by
+    // membership, not as the whole list — every seeded page that happens
+    // to carry no links is also an orphan, so pinning the list makes
+    // adding an unrelated example file fail here, which is a confusing
+    // place to hear about it.
+    //
+    // What matters is that a page this test planted with no links *is*
+    // one, and a page it planted *with* links is not.
+    for page in ["Loose.md", support::EXAMPLE_PAGE] {
+        let orphans = graph.orphans("default".to_string()).await.unwrap();
+        assert!(orphans.contains(&page.to_string()), "{page}: {orphans:?}");
+        let deadends = graph.deadends("default".to_string()).await.unwrap();
+        assert!(deadends.contains(&page.to_string()), "{page}: {deadends:?}");
+    }
+    // The other half of the claim: a page WITH links is neither.
+    let orphans = graph.orphans("default".to_string()).await.unwrap();
+    assert!(
+        !orphans.contains(&"Wisdom.md".to_string()),
+        "a linked page is not an orphan: {orphans:?}"
     );
 
     // Unresolved carries (source, linkpath).

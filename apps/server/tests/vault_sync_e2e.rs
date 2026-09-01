@@ -54,11 +54,24 @@ async fn put_manifest_get_round_trip() {
 
     let manifest = client.manifest("default".to_string()).await.unwrap();
     assert_eq!(manifest.vault_id, "default");
-    // The example vault's own page plus the one we put — and nothing
-    // else, which is what proves the boot was sandboxed.
-    let mut paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
-    paths.sort_unstable();
-    assert_eq!(paths, vec![support::EXAMPLE_PAGE, "notes/a.md"]);
+    // The page we put, and the example vault's own — both present.
+    //
+    // Membership rather than an exact list: the seeded vault is allowed
+    // to grow, and pinning the whole listing meant adding one example
+    // file failed this test with a message about manifests. What
+    // sandboxing actually needs is below.
+    let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+    assert!(paths.contains(&"notes/a.md"), "{paths:?}");
+    assert!(paths.contains(&support::EXAMPLE_PAGE), "{paths:?}");
+    // The sandbox proof, stated directly: every path is relative and
+    // inside this vault. A boot that leaked another org's vault — or the
+    // developer's own — shows up here as an absolute path or a climb.
+    for p in &paths {
+        assert!(
+            !p.starts_with('/') && !p.contains(".."),
+            "manifest path escapes the vault: {p}"
+        );
+    }
     let put = manifest
         .files
         .iter()

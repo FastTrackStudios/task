@@ -22,9 +22,15 @@ use task_server::AppState;
 /// The org these tests boot — the example studio's audio company.
 pub const ORG: &str = "acme-audio";
 
-/// The one page `examples/studio/acme-audio/Vault/` seeds into the org
-/// vault. No links, no tags — so a graph test must expect it among the
-/// orphans, and a manifest test must expect it in the listing.
+/// A page `examples/studio/acme-audio/Vault/` seeds into the org vault.
+/// No links, no tags — so a graph test must expect it among the orphans,
+/// and a manifest test must expect it in the listing.
+///
+/// It is **not the only** seeded page, and a test must not assume it is.
+/// It was once, and a manifest test pinned the listing to exactly this
+/// plus whatever it wrote — so the day the seed grew a booking, that
+/// test failed complaining about the manifest rather than about the
+/// seed. Assert what you put is present, not that nothing else is.
 pub const EXAMPLE_PAGE: &str = "Studio Notes.md";
 
 /// Boot an `AppState` over a fresh tempdir data root holding the

@@ -23,6 +23,7 @@ pub mod agent_router;
 pub mod api_ref;
 pub mod attachments;
 pub mod capability;
+pub mod central_auth;
 #[cfg(feature = "plugin-git")]
 pub mod connections;
 #[cfg(debug_assertions)]
@@ -2979,6 +2980,34 @@ fn build_org_permissions_gate(
             // same `Principal::Anonymous` without it (see `AuditedIdentityResolver`).
             _ => Arc::new(permits::AuditedIdentityResolver::new(own, slug)),
         };
+    // Central identity: a token no local store knows may still be a real
+    // FastTrackStudio account. Only when an issuer is configured and this
+    // server has a membership table to check against — see
+    // `central_auth`, which is a no-op on a self-hosted server that has
+    // not opted in.
+    let resolver = match (central_auth::configured(), home_identity) {
+        (Some(central), Some(home)) => Arc::new(central_auth::CentralFallbackResolver::new(
+            resolver,
+            Arc::clone(central),
+            Arc::clone(&home.memberships),
+            slug,
+        ))
+            as Arc<dyn architect_permissions::IdentityResolver + Send + Sync>,
+        // Configured but no home identity means no membership table, and
+        // the table is the whole fence — admitting on identity alone
+        // would let one account reach every org here. Say so once rather
+        // than failing quietly for every sign-in.
+        (Some(_), None) => {
+            tracing::warn!(
+                org.slug = slug,
+                "central auth is configured but this server has no home identity — \
+                 central accounts cannot be admitted without a membership table \
+                 (`admin adopt-principal`)"
+            );
+            resolver
+        }
+        (None, _) => resolver,
+    };
     // Outermost: a `host:<endpoint-id>` bearer resolves against this
     // org's admitted set instead of its auth store. Non-host bearers
     // fall straight through, so nothing about a person's sign-in

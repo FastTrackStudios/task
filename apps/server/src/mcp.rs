@@ -3005,38 +3005,46 @@ mod tests {
     /// tools vanish from `tools/list`, and `tools/call` refuses them
     /// with a message naming the plugin — while unknown tools stay a
     /// protocol-level method-not-found.
+    ///
+    /// Exercised through `email`, which must stay a **non-core** plugin
+    /// that owns tools for this to test anything: `PluginSet::resolve`
+    /// keeps core plugins whatever the deny-list says, so naming a core
+    /// one here would assert that a plugin which cannot be disabled is
+    /// disabled. This test used to name `scheduling`, and started
+    /// failing the day scheduling became core — correctly, and for a
+    /// reason that read like a toggle bug.
     #[test]
     fn disabled_plugin_hides_and_refuses_its_tools() {
         use task_plugin::{PluginChoice, PluginSet};
-        let no_scheduling =
-            PluginSet::resolve(Some(&PluginChoice::Disabled(vec!["scheduling".into()])));
+        let no_email = PluginSet::resolve(Some(&PluginChoice::Disabled(vec!["email".into()])));
+        assert!(!no_email.contains("email"), "email must be disableable");
 
-        let payload = tools_list_payload(&no_scheduling);
+        let payload = tools_list_payload(&no_email);
         let names: Vec<&str> = payload["tools"]
             .as_array()
             .expect("tools array")
             .iter()
             .filter_map(|t| t["name"].as_str())
             .collect();
-        assert!(!names.contains(&"list_events"), "scheduling tool listed");
+        assert!(!names.contains(&"read_email"), "email tool listed");
         assert!(names.contains(&"create_task"), "core tool missing");
         let dropped = tool_catalog()
             .iter()
-            .filter(|t| t.plugin == "scheduling")
+            .filter(|t| t.plugin == "email")
             .count();
-        assert!(dropped > 0, "the scheduling plugin owns tools");
+        assert!(dropped > 0, "the email plugin owns tools");
         assert_eq!(names.len(), tool_catalog().len() - dropped);
 
         // Call gate mirrors the listing.
-        assert!(plugin_gate("create_task", &no_scheduling).is_ok());
-        match plugin_gate("list_events", &no_scheduling) {
+        assert!(plugin_gate("create_task", &no_email).is_ok());
+        match plugin_gate("read_email", &no_email) {
             Err(Some(msg)) => {
-                assert!(msg.contains("scheduling"), "{msg}");
+                assert!(msg.contains("email"), "{msg}");
                 assert!(msg.contains("disabled"), "{msg}");
             }
             other => panic!("expected a disabled-plugin message, got {other:?}"),
         }
-        assert_eq!(plugin_gate("no_such_tool", &no_scheduling), Err(None));
+        assert_eq!(plugin_gate("no_such_tool", &no_email), Err(None));
     }
 
     #[test]

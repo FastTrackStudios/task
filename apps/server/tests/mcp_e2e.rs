@@ -1,18 +1,25 @@
 //! End-to-end cover for the MCP agent surface (`POST /org/{slug}/mcp`).
 //!
 //! One booted `AppState` over an org whose `org.toml` deny-lists
-//! `scheduling`, exercised over real HTTP with JSON-RPC bodies:
+//! `email`, exercised over real HTTP with JSON-RPC bodies:
+//!
+//! The denied plugin has to be a **non-core** one that owns tools.
+//! `PluginSet::resolve` keeps core plugins whatever the deny-list says,
+//! so denying a core plugin asserts that something which cannot be
+//! turned off is off. This named `scheduling` until scheduling became
+//! core, at which point it failed for a reason that read like a gate
+//! bug and was not one.
 //!
 //! - **auth**: `initialize` answers without a token; `tools/list` and
 //!   `tools/call` refuse a missing/wrong bearer and accept
 //!   `TASK_MCP_TOKEN`;
 //! - **round-trip**: `create_task` → `list_tasks` sees the task,
 //!   `update_task` moves it to done;
-//! - **plugin gate**: the scheduling tools are absent from
-//!   `tools/list` and `tools/call list_events` fails with a message
+//! - **plugin gate**: the email tools are absent from
+//!   `tools/list` and `tools/call read_email` fails with a message
 //!   naming the plugin, while unknown tools stay `-32601`;
 //! - **discovery**: `api_reference` lists the vox surface with the
-//!   scheduling services flagged unmounted.
+//!   email services flagged unmounted.
 //!
 //! Self-sandboxed: tempdir data root via `TASK_DATA_ROOT`, one test
 //! per binary so the env setup races nothing.
@@ -84,9 +91,10 @@ async fn mcp_surface_end_to_end() {
     data_root.ensure().unwrap();
     let org_root = data_root.init_org("alpha", "Alpha", true).unwrap();
     std::fs::create_dir_all(org_root.vault_dir()).unwrap();
-    // Deny-list scheduling — the plugin gate under test.
+    // Deny-list email — the plugin gate under test. Non-core, so it can
+    // actually be denied; a core plugin survives any deny-list.
     let mut manifest = org_root.manifest().unwrap();
-    manifest.disabled_plugins = vec!["scheduling".to_owned()].into();
+    manifest.disabled_plugins = vec!["email".to_owned()].into();
     manifest.write_to_dir(org_root.path()).unwrap();
 
     let state = AppState::new(None).await.expect("boot AppState");
@@ -131,10 +139,10 @@ async fn mcp_surface_end_to_end() {
             "core tool `{core}` missing: {names:?}"
         );
     }
-    for sched in ["list_events", "book_slot", "upsert_day_plan"] {
+    for denied in ["read_email", "list_envelopes", "list_email_accounts"] {
         assert!(
-            !names.contains(&sched),
-            "scheduling tool `{sched}` listed despite the deny-list"
+            !names.contains(&denied),
+            "email tool `{denied}` listed despite the deny-list"
         );
     }
 
@@ -172,10 +180,10 @@ async fn mcp_surface_end_to_end() {
     assert_eq!(updated["status"], "done");
 
     // ── plugin gate on tools/call ────────────────────────────────
-    let (err, refused) = call_tool(&client, &url, "list_events", json!({})).await;
+    let (err, refused) = call_tool(&client, &url, "read_email", json!({})).await;
     assert!(err, "disabled plugin's tool must be a tool-level error");
     let msg = refused.as_str().expect("error text");
-    assert!(msg.contains("scheduling"), "{msg}");
+    assert!(msg.contains("email"), "{msg}");
     assert!(msg.contains("disabled"), "{msg}");
 
     // Unknown tools stay protocol-level method-not-found.
@@ -196,8 +204,8 @@ async fn mcp_surface_end_to_end() {
     assert!(services.len() > 50, "the surface is ~80 services");
     let calendar = services
         .iter()
-        .find(|s| s["plugin"] == "scheduling")
-        .expect("scheduling services are still listed");
+        .find(|s| s["plugin"] == "email")
+        .expect("email services are still listed");
     assert_eq!(calendar["mounted"], false, "…but flagged unmounted");
     assert!(
         services
