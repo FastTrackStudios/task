@@ -637,24 +637,9 @@ async fn run_central_token_sign_in(mut st: AuthState, token: String, issuer: Str
         let user = crate::central_login::user_info(&issuer, &token)
             .await
             .map_err(|e| e.to_string())?;
-        // `sub` is a string in OIDC but a uuid everywhere in Task, and
-        // the membership rows are keyed on the uuid. An issuer that
-        // handed back something else would otherwise be discovered much
-        // later, as a lookup that silently never matches.
-        let user_id = user
-            .sub
-            .parse::<Uuid>()
-            .map_err(|_| format!("the issuer returned a non-uuid subject: {}", user.sub))?;
-        // An account with no email still signs in; the id is the part
-        // that has to exist, and it is what memberships key on.
-        let email = user.email.clone().unwrap_or_else(|| user.sub.clone());
-        save_cached_token(&email, &token);
-        Ok::<ActiveAccount, String>(ActiveAccount {
-            user_id,
-            name: user.name.unwrap_or_else(|| email.clone()),
-            email,
-            token,
-        })
+        let account = central_account(user, token)?;
+        save_cached_token(&account.email, &account.token);
+        Ok::<ActiveAccount, String>(account)
     }
     .await;
 
@@ -977,6 +962,35 @@ pub fn SignInGate(children: Element) -> Element {
     }
 }
 
+/// Turn what the issuer says about a token into an account.
+///
+/// Shared by the redirect sign-in and by boot restore, so a session
+/// restored from cache is identical to the one that created it — a
+/// difference between those two is the kind of bug that only shows up
+/// after a reload.
+fn central_account(
+    user: crate::central_login::UserInfo,
+    token: String,
+) -> Result<ActiveAccount, String> {
+    // `sub` is a string in OIDC but a uuid everywhere in Task, and the
+    // membership rows are keyed on the uuid. An issuer that handed back
+    // something else would otherwise be discovered much later, as a
+    // lookup that silently never matches.
+    let user_id = user
+        .sub
+        .parse::<Uuid>()
+        .map_err(|_| format!("the issuer returned a non-uuid subject: {}", user.sub))?;
+    // An account with no email still signs in; the id is the part that
+    // has to exist, and it is what memberships key on.
+    let email = user.email.clone().unwrap_or_else(|| user.sub.clone());
+    Ok(ActiveAccount {
+        user_id,
+        name: user.name.unwrap_or_else(|| email.clone()),
+        email,
+        token,
+    })
+}
+
 /// Token-cache-first session resolution against the home org.
 async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, String> {
     let client = establish_for::<AuthServiceClient>(slug).await?;
@@ -985,7 +999,22 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
     if let Some(token) = load_cached_token(email) {
         match client.whoami(token.clone()).await {
             Ok(user) => return Ok(account_from(user, email, token)),
-            Err(_) => clear_cached_token(email), // expired/revoked — fall through
+            // 1b. The org's auth store cannot validate a token it did
+            //     not mint, and a central sign-in leaves exactly that:
+            //     an OAuth access token from the issuer. Ask the issuer
+            //     before giving up — otherwise every reload throws a
+            //     centrally-signed-in person back to the login screen
+            //     holding a token that was never actually expired.
+            Err(_) => {
+                if let Some(issuer) = task_ui_core::central_auth::issuer() {
+                    if let Ok(user) = crate::central_login::user_info(&issuer, &token).await {
+                        if let Ok(account) = central_account(user, token) {
+                            return Ok(account);
+                        }
+                    }
+                }
+                clear_cached_token(email); // expired/revoked — fall through
+            }
         }
     }
 
