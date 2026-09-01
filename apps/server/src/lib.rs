@@ -959,7 +959,13 @@ pub(crate) async fn build_org_state(
                     names.join(", ")
                 }
             );
-            let backend = wiki_live::WikiBackend::with_roots(roots.clone());
+            // Created into `<org>/wikis/` at runtime (`wiki.many.set`),
+            // so the map the backend holds is the set at boot plus
+            // whatever `create_wiki` adds while the server runs.
+            let backend = wiki_live::WikiBackend::with_roots_under(
+                roots.clone(),
+                org_root.wikis_dir(),
+            );
             // Hand this org's vault and each of its wikis the core
             // set. Doing it at boot rather than at org creation is
             // what makes `wiki.core.retroactive` true: an org planted

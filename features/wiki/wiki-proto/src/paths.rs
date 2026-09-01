@@ -93,3 +93,13 @@ pub const PEERS_JSON: &str = "peers.json";
 /// File-content snapshot (sha256-keyed) for change detection
 /// (relative to `Wiki/_state/`).
 pub const SNAPSHOT_JSON: &str = "snapshot.json";
+
+/// `_state/wiki.json` — what the wiki declares about itself:
+/// visibility, Editors, proposer gate, repository source
+/// ([`crate::config::WikiConfig`]).
+pub const WIKI_JSON: &str = "wiki.json";
+
+/// `_state/edits/` — one JSON file per Edit Request, named by its id.
+/// The tracker row holds status; this holds the change
+/// (`wiki.edit.tracked`).
+pub const EDITS_DIR: &str = "edits";

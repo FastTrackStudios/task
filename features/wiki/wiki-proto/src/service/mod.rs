@@ -13,6 +13,7 @@
 //! `wiki-live` implements most of them.
 
 pub mod catalog;
+pub mod edits;
 pub mod events;
 pub mod federation;
 pub mod graph;
@@ -30,6 +31,7 @@ pub mod subscriptions;
 pub mod watcher;
 
 pub use catalog::Catalog;
+pub use edits::Edits;
 pub use events::Events;
 pub use federation::Federation;
 pub use graph::Graph;

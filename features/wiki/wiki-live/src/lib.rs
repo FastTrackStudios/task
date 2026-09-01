@@ -32,6 +32,7 @@
 //! become per-capability and slot in cleanly.
 
 pub mod backend;
+pub mod config;
 mod context;
 mod error;
 pub mod findings;

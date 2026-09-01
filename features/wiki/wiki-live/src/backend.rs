@@ -8,11 +8,13 @@
 //! [`Self::under_parent`].
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
+use wiki_proto::config::{NewWiki, Visibility, WikiConfig};
 use wiki_proto::error::WikiError;
+use wiki_proto::service::registry::{WikiDescription, WikiSummary};
 use wiki_proto::graph as gtypes;
 use wiki_proto::health::WikiHealth as ProtoHealth;
 use wiki_proto::ingest as itypes;
@@ -31,16 +33,64 @@ use wiki_proto::{WikiChange, WikiEvent};
 
 use crate::WikiLive;
 
+/// How wiki ids become directories.
+///
+/// `Explicit` is the shape the server mounts: every wiki the org holds
+/// at boot, keyed by slug, plus the directory new ones are created in.
+/// The map is behind a lock because the set changes while the server
+/// runs (`wiki.many.set`) — `create_wiki` adds to it and `delete_wiki`
+/// removes from it, and every clone of the backend sees the change.
+///
+/// `UnderParent` is the older multi-tenant shape, `parent/<id>/`, where
+/// the filesystem is the map.
 #[derive(Clone)]
 enum Layout {
-    Explicit(HashMap<String, PathBuf>),
+    Explicit {
+        roots: Arc<RwLock<HashMap<String, PathBuf>>>,
+        /// Where a created wiki goes: `<org>/wikis/`. `None` when the
+        /// backend was built from a fixed map with nowhere to grow,
+        /// which is what a single-root test wants.
+        wikis_dir: Option<PathBuf>,
+    },
     UnderParent(PathBuf),
+}
+
+/// Who is calling, as far as the wiki lane needs to know.
+///
+/// The gate in front of the org router has already decided the caller
+/// may reach this org; what the lane still needs is *which account*,
+/// so it can record a proposer and check Editor. The default reads
+/// `architect`'s per-call principal; the server can swap in something
+/// richer, and a test can pin a caller.
+pub trait Caller: Send + Sync + 'static {
+    /// The account id the gate resolved, or `None` for an in-process
+    /// call — the server acting on its own behalf.
+    fn principal(&self) -> Option<String>;
+    /// Whether the caller holds the org's admin role. Admins may grant
+    /// Editor and change what the set holds (`wiki.edit.editor`).
+    fn is_org_admin(&self) -> bool {
+        false
+    }
+}
+
+/// The default [`Caller`]: whatever the permissions gate recorded for
+/// this call.
+pub struct GateCaller;
+
+impl Caller for GateCaller {
+    fn principal(&self) -> Option<String> {
+        match architect::permissions_gate::caller() {
+            Some(architect_permissions::Principal::User { user_id }) => Some(user_id),
+            _ => None,
+        }
+    }
 }
 
 /// Cheaply clonable multi-vault backend.
 #[derive(Clone, architect::HasDispatcher)]
 pub struct WikiBackend {
     layout: Layout,
+    caller: Arc<dyn Caller>,
     /// Watcher state per wiki — `true` = watcher running.
     /// Implementation is stub-level (just records the
     /// toggle); spawning the actual watcher thread happens
@@ -64,7 +114,10 @@ impl WikiBackend {
         std::fs::create_dir_all(&vault_root)?;
         let mut roots = HashMap::with_capacity(1);
         roots.insert(wiki_id.into(), vault_root);
-        Ok(Self::from_layout(Layout::Explicit(roots)))
+        Ok(Self::from_layout(Layout::Explicit {
+            roots: Arc::new(RwLock::new(roots)),
+            wikis_dir: None,
+        }))
     }
 
     /// Multi-tenant: `wiki_id` → `parent/{wiki_id}/`.
@@ -73,17 +126,112 @@ impl WikiBackend {
         Ok(Self::from_layout(Layout::UnderParent(parent)))
     }
 
+    /// A fixed set. Nothing can be created into it; see
+    /// [`Self::with_roots_under`] for the shape the server mounts.
     #[must_use]
     pub fn with_roots(roots: HashMap<String, PathBuf>) -> Self {
-        Self::from_layout(Layout::Explicit(roots))
+        Self::from_layout(Layout::Explicit {
+            roots: Arc::new(RwLock::new(roots)),
+            wikis_dir: None,
+        })
+    }
+
+    /// The set an org holds at boot, plus the directory new wikis are
+    /// created in (`<org>/wikis/`).
+    #[must_use]
+    pub fn with_roots_under(roots: HashMap<String, PathBuf>, wikis_dir: PathBuf) -> Self {
+        Self::from_layout(Layout::Explicit {
+            roots: Arc::new(RwLock::new(roots)),
+            wikis_dir: Some(wikis_dir),
+        })
+    }
+
+    /// Replace how the backend learns who is calling.
+    #[must_use]
+    pub fn with_caller(mut self, caller: Arc<dyn Caller>) -> Self {
+        self.caller = caller;
+        self
     }
 
     fn from_layout(layout: Layout) -> Self {
         Self {
             layout,
+            caller: Arc::new(GateCaller),
             watch_flags: Arc::new(std::sync::Mutex::new(HashMap::new())),
             changes: architect::PubSub::sliding(256),
         }
+    }
+
+    /// The account making this call, when the gate knows one.
+    #[must_use]
+    pub fn calling_principal(&self) -> Option<String> {
+        self.caller.principal()
+    }
+
+    /// Whether the caller holds the org's admin role.
+    #[must_use]
+    pub fn caller_is_org_admin(&self) -> bool {
+        self.caller.is_org_admin()
+    }
+
+    /// Every `(slug, root)` the backend currently serves, sorted by
+    /// slug and without the compatibility alias.
+    #[must_use]
+    pub fn roots(&self) -> Vec<(String, PathBuf)> {
+        let mut out: Vec<(String, PathBuf)> = match &self.layout {
+            Layout::Explicit { roots, .. } => roots
+                .read()
+                .map(|m| {
+                    m.iter()
+                        .filter(|(slug, _)| slug.as_str() != COMPAT_WIKI_ID)
+                        .map(|(s, p)| (s.clone(), p.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Layout::UnderParent(parent) => std::fs::read_dir(parent)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| Some((e.file_name().to_str()?.to_owned(), e.path())))
+                .collect(),
+        };
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// The directory a wiki id resolves to, without opening it.
+    pub fn root_of(&self, wiki_id: &str) -> Result<PathBuf, WikiError> {
+        match &self.layout {
+            Layout::Explicit { roots, .. } => roots
+                .read()
+                .ok()
+                .and_then(|m| m.get(wiki_id).cloned())
+                .ok_or_else(|| WikiError::WikiNotFound(wiki_id.to_string())),
+            Layout::UnderParent(parent) => {
+                let root = parent.join(wiki_id);
+                root.is_dir()
+                    .then_some(root)
+                    .ok_or_else(|| WikiError::WikiNotFound(wiki_id.to_string()))
+            }
+        }
+    }
+
+    /// A wiki's declaration (`_state/wiki.json`), implicit when it has
+    /// never written one.
+    pub fn config_of(&self, wiki_id: &str) -> Result<WikiConfig, WikiError> {
+        let root = self.root_of(wiki_id)?;
+        crate::config::load(&root, wiki_id)
+    }
+
+    /// Read, change and write a wiki's declaration.
+    pub fn update_config(
+        &self,
+        wiki_id: &str,
+        f: impl FnOnce(&mut WikiConfig),
+    ) -> Result<WikiConfig, WikiError> {
+        let root = self.root_of(wiki_id)?;
+        crate::config::update(&root, wiki_id, f)
     }
 
     /// Announce a committed change to every `changes` subscriber.
@@ -99,10 +247,14 @@ impl WikiBackend {
 
     fn resolve(&self, wiki_id: &str) -> Result<WikiLive, WikiError> {
         let root = match &self.layout {
-            Layout::Explicit(map) => map
-                .get(wiki_id)
-                .cloned()
+            Layout::Explicit { roots, .. } => roots
+                .read()
+                .ok()
+                .and_then(|m| m.get(wiki_id).cloned())
                 .ok_or_else(|| WikiError::WikiNotFound(wiki_id.to_string()))?,
+            // The older shape creates on first touch; keeping that
+            // here rather than in `root_of` so a listing never invents
+            // a wiki by asking about it.
             Layout::UnderParent(parent) => parent.join(wiki_id),
         };
         Ok(WikiLive::open(root))
@@ -110,37 +262,6 @@ impl WikiBackend {
 }
 
 // ────────────────────── Registry ──────────────────────
-
-impl wiki_proto::service::registry::Registry for WikiBackend {
-    /// t[impl wiki.many.addressable] — the org's whole set, so a
-    /// client can pick a wiki instead of hard-coding one. This is the
-    /// call that exists before a caller has a wiki id, which is why it
-    /// takes none.
-    fn list_wikis(&self) -> Result<Vec<wiki_proto::WikiSummary>, WikiError> {
-        let mut out: Vec<wiki_proto::WikiSummary> = match &self.layout {
-            Layout::Explicit(map) => map
-                .iter()
-                // The compatibility alias is a second name for a wiki
-                // already in the list; listing it twice would show one
-                // wiki as two.
-                .filter(|(slug, _)| slug.as_str() != COMPAT_WIKI_ID)
-                .map(|(slug, root)| summarize(slug, root))
-                .collect(),
-            Layout::UnderParent(parent) => std::fs::read_dir(parent)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .filter_map(|e| {
-                    let slug = e.file_name().to_str()?.to_owned();
-                    Some(summarize(&slug, &e.path()))
-                })
-                .collect(),
-        };
-        out.sort_by(|a, b| a.slug.cmp(&b.slug));
-        Ok(out)
-    }
-}
 
 /// The slug the org's long-standing curated tier answers to.
 const DEFAULT_SLUG: &str = "knowledge";
@@ -150,18 +271,194 @@ const DEFAULT_SLUG: &str = "knowledge";
 /// from listings so it never looks like a second wiki.
 pub const COMPAT_WIKI_ID: &str = "default";
 
-fn summarize(slug: &str, root: &std::path::Path) -> wiki_proto::WikiSummary {
-    wiki_proto::WikiSummary {
+impl wiki_proto::service::registry::Registry for WikiBackend {
+    /// t[impl wiki.many.addressable] — the org's whole set, so a
+    /// client can pick a wiki instead of hard-coding one. This is the
+    /// call that exists before a caller has a wiki id, which is why it
+    /// takes none.
+    fn list_wikis(&self) -> Result<Vec<WikiSummary>, WikiError> {
+        Ok(self
+            .roots()
+            .iter()
+            .map(|(slug, root)| summarize(slug, root))
+            .collect())
+    }
+
+    fn describe_wiki(&self, wiki_id: &str) -> Result<WikiDescription, WikiError> {
+        let root = self.root_of(wiki_id)?;
+        let config = crate::config::load(&root, wiki_id)?;
+        Ok(WikiDescription {
+            summary: summarize_with(wiki_id, &root, &config),
+            config,
+        })
+    }
+
+    /// t[impl wiki.many.set] — creating a wiki touches its own
+    /// directory and the set's index, nothing else; every other wiki
+    /// is byte-identical afterwards.
+    ///
+    /// t[impl wiki.many.identity] — the slug is checked against every
+    /// wiki the org holds *and* every slug it has ever retired, so a
+    /// reference in someone else's vault can never come to mean a
+    /// different wiki.
+    fn create_wiki(&self, new: NewWiki) -> Result<WikiSummary, WikiError> {
+        let Layout::Explicit {
+            roots,
+            wikis_dir: Some(wikis_dir),
+        } = &self.layout
+        else {
+            return Err(WikiError::Refused(
+                "this backend has no directory to create wikis in".into(),
+            ));
+        };
+        let title = new.title.trim();
+        if title.is_empty() {
+            return Err(WikiError::Refused("a wiki needs a title".into()));
+        }
+        let slug = if new.slug.trim().is_empty() {
+            wiki_proto::config::slugify(title)
+        } else {
+            new.slug.trim().to_owned()
+        };
+        if slug.is_empty() || slug != wiki_proto::config::slugify(&slug) {
+            return Err(WikiError::Refused(format!(
+                "`{slug}` is not a slug: lowercase words joined by single hyphens"
+            )));
+        }
+        if slug == COMPAT_WIKI_ID {
+            return Err(WikiError::Refused(format!(
+                "`{slug}` is reserved as an alias of the default wiki"
+            )));
+        }
+        if crate::config::retired(wikis_dir)?.iter().any(|s| *s == slug) {
+            return Err(WikiError::Refused(format!(
+                "`{slug}` was a wiki here once and references may still name it; \
+                 a retired slug is never reassigned"
+            )));
+        }
+        let root = wikis_dir.join(&slug);
+        {
+            let held = roots.read().map_err(|_| WikiError::Backend("roots lock".into()))?;
+            if held.contains_key(&slug) || root.exists() {
+                return Err(WikiError::Refused(format!("a wiki `{slug}` already exists")));
+            }
+        }
+
+        std::fs::create_dir_all(&root).map_err(|e| WikiError::Io(e.to_string()))?;
+        let live = WikiLive::open(&root);
+        // Purpose first, so the bootstrap keeps ours instead of writing
+        // the stub. The title rides its frontmatter, which is where
+        // `list_wikis` has always read it from.
+        let purpose = if new.purpose.trim().is_empty() {
+            format!("---\ntitle: \"{title}\"\n---\n\n# {title}\n")
+        } else {
+            format!("---\ntitle: \"{title}\"\n---\n\n# {title}\n\n{}\n", new.purpose.trim())
+        };
+        std::fs::write(root.join(wiki_proto::paths::PURPOSE_MD), purpose)
+            .map_err(|e| WikiError::Io(e.to_string()))?;
+        live.bootstrap().map_err(map_err)?;
+
+        // The creator is the first Editor. That is what turns the Edit
+        // lane on for this wiki from its first page (`wiki.edit.editor`);
+        // an in-process creation — the server planting a seed — has no
+        // caller and leaves the lane to whoever grants it.
+        let config = WikiConfig {
+            slug: slug.clone(),
+            title: title.to_owned(),
+            visibility: new.visibility,
+            editors: self.calling_principal().into_iter().collect(),
+            proposers: wiki_proto::config::ProposerGate::default(),
+            source: new.source,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        crate::config::save(&root, &config)?;
+
+        roots
+            .write()
+            .map_err(|_| WikiError::Backend("roots lock".into()))?
+            .insert(slug.clone(), root.clone());
+        Ok(summarize_with(&slug, &root, &config))
+    }
+
+    /// t[impl wiki.access.visibility] — set per wiki, and read by
+    /// every subscriber's resolver on the next attempt, so narrowing
+    /// takes effect on what is already published without deleting it.
+    fn set_visibility(&self, wiki_id: &str, visibility: Visibility) -> Result<(), WikiError> {
+        self.update_config(wiki_id, |c| c.visibility = visibility)?;
+        Ok(())
+    }
+
+    /// t[impl wiki.many.identity] — retitling changes the title and
+    /// nothing a reference or a subscription carries.
+    fn set_title(&self, wiki_id: &str, title: &str) -> Result<(), WikiError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(WikiError::Refused("a wiki needs a title".into()));
+        }
+        let root = self.root_of(wiki_id)?;
+        crate::config::update(&root, wiki_id, |c| c.title = title.to_owned())?;
+        // Keep `purpose.md`'s frontmatter in step, since a mounted
+        // folder shows that and not the JSON.
+        let path = root.join(wiki_proto::paths::PURPOSE_MD);
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let rewritten = retitle_frontmatter(&text, title);
+            std::fs::write(&path, rewritten).map_err(|e| WikiError::Io(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// t[impl wiki.many.set] — deleting one wiki removes its directory
+    /// and its entry, and leaves every other untouched. The slug is
+    /// retired rather than freed (`wiki.many.identity`).
+    fn delete_wiki(&self, wiki_id: &str) -> Result<(), WikiError> {
+        if wiki_id == COMPAT_WIKI_ID {
+            return Err(WikiError::Refused(
+                "`default` is an alias; delete the wiki by its own slug".into(),
+            ));
+        }
+        let Layout::Explicit { roots, wikis_dir } = &self.layout else {
+            return Err(WikiError::Refused(
+                "this backend does not manage its wikis' lifetimes".into(),
+            ));
+        };
+        let root = self.root_of(wiki_id)?;
+        if let Some(dir) = wikis_dir {
+            crate::config::retire(dir, wiki_id)?;
+        }
+        std::fs::remove_dir_all(&root).map_err(|e| WikiError::Io(e.to_string()))?;
+        roots
+            .write()
+            .map_err(|_| WikiError::Backend("roots lock".into()))?
+            .remove(wiki_id);
+        Ok(())
+    }
+}
+
+fn summarize(slug: &str, root: &Path) -> WikiSummary {
+    let config = crate::config::load(root, slug).unwrap_or_else(|_| WikiConfig::implicit(slug));
+    summarize_with(slug, root, &config)
+}
+
+fn summarize_with(slug: &str, root: &Path, config: &WikiConfig) -> WikiSummary {
+    let title = if config.title.trim().is_empty() {
+        title_of(root).unwrap_or_else(|| prettify(slug))
+    } else {
+        config.title.clone()
+    };
+    WikiSummary {
         slug: slug.to_owned(),
-        title: title_of(root).unwrap_or_else(|| prettify(slug)),
+        title,
+        purpose: purpose_of(root),
+        visibility: config.visibility,
         pages: count_markdown(root),
         default: slug == DEFAULT_SLUG,
+        repo_sourced: config.is_repo_sourced(),
     }
 }
 
 /// A wiki's own name for itself, from `purpose.md`'s frontmatter.
-fn title_of(root: &std::path::Path) -> Option<String> {
-    let text = std::fs::read_to_string(root.join("purpose.md")).ok()?;
+fn title_of(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join(wiki_proto::paths::PURPOSE_MD)).ok()?;
     let mut lines = text.lines();
     if lines.next()?.trim() != "---" {
         return None;
@@ -181,6 +478,57 @@ fn title_of(root: &std::path::Path) -> Option<String> {
     None
 }
 
+/// The first paragraph of `purpose.md` after its frontmatter and
+/// heading — one line of orientation for a picker.
+fn purpose_of(root: &Path) -> String {
+    let Ok(text) = std::fs::read_to_string(root.join(wiki_proto::paths::PURPOSE_MD)) else {
+        return String::new();
+    };
+    let mut body = text.as_str();
+    if let Some(rest) = body.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            body = &rest[end + 4..];
+        }
+    }
+    let mut para = String::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            if !para.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        if !para.is_empty() {
+            para.push(' ');
+        }
+        para.push_str(line);
+    }
+    para
+}
+
+/// Replace (or add) `title:` in a markdown file's frontmatter.
+fn retitle_frontmatter(text: &str, title: &str) -> String {
+    let quoted = format!("title: \"{title}\"");
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return format!("---\n{quoted}\n---\n\n{text}");
+    };
+    let Some(end) = rest.find("\n---") else {
+        return format!("---\n{quoted}\n---\n\n{text}");
+    };
+    let (front, tail) = rest.split_at(end);
+    let mut lines: Vec<String> = front.lines().map(str::to_owned).collect();
+    if let Some(l) = lines.iter_mut().find(|l| l.trim_start().starts_with("title:")) {
+        *l = quoted;
+    } else {
+        lines.insert(0, quoted);
+    }
+    format!("---\n{}{tail}", lines.join("\n"))
+}
+
 fn prettify(slug: &str) -> String {
     let mut out = String::with_capacity(slug.len());
     for (i, word) in slug.split('-').enumerate() {
@@ -196,7 +544,7 @@ fn prettify(slug: &str) -> String {
     out
 }
 
-fn count_markdown(root: &std::path::Path) -> u32 {
+fn count_markdown(root: &Path) -> u32 {
     let Ok(entries) = std::fs::read_dir(root) else {
         return 0;
     };
@@ -214,6 +562,151 @@ fn count_markdown(root: &std::path::Path) -> u32 {
         }
     }
     n
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use wiki_proto::service::registry::Registry;
+
+    struct Alice;
+    impl Caller for Alice {
+        fn principal(&self) -> Option<String> {
+            Some("alice".into())
+        }
+    }
+
+    fn org(dir: &Path) -> WikiBackend {
+        let wikis = dir.join("wikis");
+        std::fs::create_dir_all(&wikis).unwrap();
+        WikiBackend::with_roots_under(HashMap::new(), wikis).with_caller(Arc::new(Alice))
+    }
+
+    /// t[verify wiki.many.set] — an org with none is legal; creating
+    /// one leaves the others byte-identical; deleting one leaves the
+    /// rest.
+    #[test]
+    fn the_set_grows_and_shrinks_one_wiki_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = org(dir.path());
+        assert!(b.list_wikis().unwrap().is_empty());
+
+        let theory = b
+            .create_wiki(NewWiki {
+                title: "Music Theory".into(),
+                purpose: "Intervals, scales, harmony.".into(),
+                visibility: Visibility::Public,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(theory.slug, "music-theory");
+        assert_eq!(theory.title, "Music Theory");
+        assert_eq!(theory.purpose, "Intervals, scales, harmony.");
+        assert_eq!(theory.visibility, Visibility::Public);
+
+        let before = snapshot(&dir.path().join("wikis/music-theory"));
+        b.create_wiki(NewWiki {
+            title: "Audio Production".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            snapshot(&dir.path().join("wikis/music-theory")),
+            before,
+            "creating a second wiki changed the first"
+        );
+        let slugs: Vec<String> = b.list_wikis().unwrap().into_iter().map(|w| w.slug).collect();
+        assert_eq!(slugs, vec!["audio-production", "music-theory"]);
+
+        b.delete_wiki("audio-production").unwrap();
+        let slugs: Vec<String> = b.list_wikis().unwrap().into_iter().map(|w| w.slug).collect();
+        assert_eq!(slugs, vec!["music-theory"]);
+        assert_eq!(snapshot(&dir.path().join("wikis/music-theory")), before);
+    }
+
+    /// t[verify wiki.many.identity] — a retitle changes no slug; a
+    /// deleted wiki's slug is refused forever; two wikis never share
+    /// one.
+    #[test]
+    fn a_slug_is_stable_unique_and_never_reassigned() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = org(dir.path());
+        b.create_wiki(NewWiki {
+            title: "Cooking".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        b.set_title("cooking", "Kitchen Notes").unwrap();
+        let d = b.describe_wiki("cooking").unwrap();
+        assert_eq!(d.summary.slug, "cooking");
+        assert_eq!(d.summary.title, "Kitchen Notes");
+        assert!(
+            std::fs::read_to_string(dir.path().join("wikis/cooking/purpose.md"))
+                .unwrap()
+                .contains("title: \"Kitchen Notes\""),
+            "the mounted folder shows the new title too"
+        );
+
+        let dup = b.create_wiki(NewWiki {
+            title: "cooking".into(),
+            ..Default::default()
+        });
+        assert!(matches!(dup, Err(WikiError::Refused(_))), "{dup:?}");
+
+        b.delete_wiki("cooking").unwrap();
+        let again = b.create_wiki(NewWiki {
+            title: "Cooking".into(),
+            ..Default::default()
+        });
+        assert!(
+            matches!(again, Err(WikiError::Refused(ref m)) if m.contains("retired")),
+            "{again:?}"
+        );
+    }
+
+    /// The creator holds Editor from the first page, so the lane
+    /// governs a new wiki without a second step.
+    #[test]
+    fn the_creator_is_the_first_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = org(dir.path());
+        b.create_wiki(NewWiki {
+            title: "Bible Study".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let c = b.config_of("bible-study").unwrap();
+        assert_eq!(c.editors, vec!["alice".to_string()]);
+        assert!(c.has_edit_lane());
+        assert_eq!(c.visibility, Visibility::Private, "private until promoted");
+    }
+
+    #[test]
+    fn retitle_frontmatter_replaces_or_adds() {
+        assert_eq!(
+            retitle_frontmatter("---\ntitle: \"Old\"\nx: 1\n---\n\nbody", "New"),
+            "---\ntitle: \"New\"\nx: 1\n---\n\nbody"
+        );
+        assert_eq!(
+            retitle_frontmatter("---\nx: 1\n---\nbody", "New"),
+            "---\ntitle: \"New\"\nx: 1\n---\nbody"
+        );
+        assert_eq!(retitle_frontmatter("body", "New"), "---\ntitle: \"New\"\n---\n\nbody");
+    }
+
+    fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for e in walkdir::WalkDir::new(root).into_iter().flatten() {
+            if e.file_type().is_file() {
+                out.push((
+                    e.path().strip_prefix(root).unwrap().display().to_string(),
+                    std::fs::read(e.path()).unwrap(),
+                ));
+            }
+        }
+        out.sort();
+        out
+    }
 }
 
 // ────────────────────── Schema ──────────────────────
