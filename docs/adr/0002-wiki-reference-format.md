@@ -44,9 +44,15 @@ A reference is **readable, qualified by federation domain, and stamped with
 the moment it was made.**
 
 ```
-[[fasttrackstudio.app/music-theory::Ionian]]
-[[fasttrackstudio.app/music-theory::Ionian#^k3n9x2]]
+[[acme.test/music-theory::Ionian@2026-09-01]]
+[[acme.test/music-theory::Harmonic Series@2026-09-01#^partials]]
+[[acme.test/music-theory::Ionian@2026-09-01|Ionian]]
 ```
+
+`<domain>/<wiki-slug>::<Page>[@<stamp>][#^<anchor>][|<display>]`. The
+stamp is a date on the target rather than in the alias slot, so the
+alias stays available for display text and an outside markdown editor
+still renders something sensible.
 
 1. **Readable, not opaque.** The target's slug appears literally. Raw
    markdown is noisier than `[[Ionian]]` and that is accepted: legibility

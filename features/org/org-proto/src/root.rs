@@ -342,6 +342,26 @@ impl OrgRoot {
         self.wiki_dir().join("Knowledge")
     }
 
+    /// `<org>/wikis/` — the named wikis an org holds, one directory
+    /// per wiki, keyed by the slug a reference carries
+    /// (`acme.test/music-theory::Ionian` → `wikis/music-theory/`).
+    ///
+    /// A sibling of `wiki/` rather than a child of it, so a wiki can
+    /// be named anything without colliding with the reserved
+    /// `Knowledge/` and `LLM/` tiers. Each subtree has the same shape
+    /// [`Self::wiki_knowledge_dir`] does — `wiki-live` is rooted at
+    /// one of these exactly as it is rooted at Knowledge.
+    #[must_use]
+    pub fn wikis_dir(&self) -> PathBuf {
+        self.path.join("wikis")
+    }
+
+    /// `<org>/wikis/<slug>/` — one named wiki's root.
+    #[must_use]
+    pub fn named_wiki_dir(&self, slug: &str) -> PathBuf {
+        self.wikis_dir().join(slug)
+    }
+
     /// `<org>/wiki/LLM/` — LLM scratch space (memories,
     /// journals, agent logs). No enforced schema; tools write
     /// here freely without spilling into curated `Knowledge/`.

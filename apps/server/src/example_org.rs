@@ -35,7 +35,15 @@
 //! |---|---|
 //! | `Vault/`   | `vault/` |
 //! | `Wiki/`    | `wiki/Knowledge/` |
+//! | `Wikis/<Name>/` | `wikis/<slug>/` |
 //! | everything else | `files/` |
+//!
+//! `Wiki/` and `Wikis/` are both here because an org has one
+//! long-standing curated tier (`wiki/Knowledge/`, which predates
+//! multi-wiki and is the default wiki's home) and any number of named
+//! wikis beside it. The slug is the directory name lowercased and
+//! hyphenated — `Music Theory` plants to `wikis/music-theory/` and is
+//! referenced as `acme.test/music-theory::Page`.
 //!
 //! Keeping the translation here rather than reshaping the example is
 //! deliberate, and the same call `archive::org_roots` makes in the suite
@@ -55,7 +63,11 @@ static STUDIO: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../examples/studio
 /// ACME first: it is the one that owns the audio work, holds the
 /// deliverables a client is shown, and is the home org in every
 /// arrangement here.
-pub const ORGS: &[(&str, &str)] = &[("acme-audio", "ACME Audio"), ("vnt-video", "VNT Video")];
+pub const ORGS: &[(&str, &str)] = &[
+    ("acme-audio", "ACME Audio"),
+    ("vnt-video", "VNT Video"),
+    ("alice-personal", "Alice Personal"),
+];
 
 /// Whether the example describes this org.
 #[must_use]
@@ -81,12 +93,22 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
 
     let vault = org_root.vault_dir();
     let wiki = org_root.wiki_knowledge_dir();
+    let wikis = org_root.wikis_dir();
     let files = org_root.path().join("files");
     let resources = org_root.resources_dir();
 
     // `Dir::files` is one level deep, so walk the whole subtree.
     let mut planted = Planted::default();
-    plant(dir, slug, &vault, &wiki, &files, &resources, &mut planted)?;
+    plant(
+        dir,
+        slug,
+        &vault,
+        &wiki,
+        &wikis,
+        &files,
+        &resources,
+        &mut planted,
+    )?;
     Ok(planted)
 }
 
@@ -104,6 +126,7 @@ fn plant(
     slug: &str,
     vault: &Path,
     wiki: &Path,
+    wikis: &Path,
     files: &Path,
     resources: &Path,
     planted: &mut Planted,
@@ -120,6 +143,17 @@ fn plant(
             // files.
             Some("Vault") => vault.join(rel.strip_prefix("Vault").unwrap_or(rel)),
             Some("Wiki") => wiki.join(rel.strip_prefix("Wiki").unwrap_or(rel)),
+            // `Wikis/<Name>/…` → `wikis/<slug>/…`: one directory per
+            // named wiki, slugged so the on-disk name matches the one
+            // a reference carries.
+            Some("Wikis") => {
+                let inner = rel.strip_prefix("Wikis").unwrap_or(rel);
+                let mut parts = inner.iter();
+                match parts.next().and_then(|s| s.to_str()) {
+                    Some(name) => wikis.join(wiki_slug(name)).join(parts.as_path()),
+                    None => continue,
+                }
+            }
             // Deliverable media (and anything else the org serves over
             // `GET /org/{slug}/media/…`): the route reads the org's
             // `resources/` tree, so that is where these belong.
@@ -137,7 +171,7 @@ fn plant(
         planted.written += 1;
     }
     for child in dir.dirs() {
-        plant(child, slug, vault, wiki, files, resources, planted)?;
+        plant(child, slug, vault, wiki, wikis, files, resources, planted)?;
     }
     Ok(())
 }
@@ -442,6 +476,96 @@ pub fn song_slug(title: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
+/// A wiki's slug from its display name — the same slugging, named for
+/// what it identifies.
+///
+/// `Music Theory` → `music-theory`, which is both the directory under
+/// `<org>/wikis/` and the middle of every reference into it
+/// (`acme.test/music-theory::Ionian`). Those two must agree, so they
+/// come from one function rather than from a convention people
+/// remember.
+#[must_use]
+pub fn wiki_slug(title: &str) -> String {
+    song_slug(title)
+}
+
+// ── The wikis ────────────────────────────────────────────────────────
+
+/// A wiki the seed DECLARES, and what it is there to demonstrate.
+///
+/// `features/wiki/spec/wiki.md` says an org holds a *set* of wikis and
+/// that a vault is not one of them. A seed with a single wiki cannot
+/// show the difference between those claims and the one-wiki world
+/// that preceded them, so the example carries four across three orgs —
+/// two owned by the studio, two personal, each at a different
+/// visibility.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredWiki {
+    /// The org that owns it. Personal wikis belong to a person's own
+    /// org (`wiki.boundary.role`); there is no second ownership path.
+    pub org: &'static str,
+    /// Directory name under `<org>/Wikis/` in the example tree, and
+    /// the wiki's display title.
+    pub title: &'static str,
+    /// Who may find it and who may subscribe (`wiki.access.visibility`).
+    pub visibility: Visibility,
+    /// One line on what this wiki exists in the seed to prove.
+    pub demonstrates: &'static str,
+}
+
+/// Who may find a wiki, and who may subscribe to it.
+///
+/// The distinction between `Unlisted` and `Private` is a refusal, not
+/// an absence — see `wiki.access.visibility`. Conflating them is the
+/// mistake this enum exists to make impossible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    /// Listed in discovery; anyone may subscribe.
+    Public,
+    /// Listed to nobody; anyone holding the reference may subscribe.
+    Unlisted,
+    /// Not listed, and a subscription from outside the owning org is
+    /// refused.
+    Private,
+}
+
+/// Every wiki the example plants.
+pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
+    DeclaredWiki {
+        org: "acme-audio",
+        title: "Music Theory",
+        visibility: Visibility::Public,
+        demonstrates: "the target of a cross-wiki reference, and a block anchor \
+                       (`Harmonic Series#^partials`) referenced from another wiki",
+    },
+    DeclaredWiki {
+        org: "acme-audio",
+        title: "Audio Production",
+        visibility: Visibility::Public,
+        demonstrates: "two wikis in one org referencing each other both ways, so the \
+                       web is one web while each page keeps one owning wiki",
+    },
+    DeclaredWiki {
+        org: "alice-personal",
+        title: "Bible Study",
+        visibility: Visibility::Private,
+        demonstrates: "a wiki that annotates a Resource without writing into it — every \
+                       page anchors to a VerseId, so it survives a translation swap",
+    },
+    DeclaredWiki {
+        org: "alice-personal",
+        title: "Cooking",
+        visibility: Visibility::Unlisted,
+        demonstrates: "a personal wiki in a person's own org, unlisted rather than \
+                       private: absent from discovery, subscribable with the reference",
+    },
+];
+
+/// The wikis this org declares.
+pub fn wikis_of(slug: &str) -> impl Iterator<Item = &'static DeclaredWiki> + '_ {
+    DECLARED_WIKIS.iter().filter(move |w| w.org == slug)
+}
+
 // The seed is a contract, and these tests are what keep it one: every
 // declaration must be backed by the committed tree, or a demo plants a
 // world where clicking the thing the seed promised does nothing. The
@@ -531,6 +655,63 @@ mod declared_tests {
                     }
                     project::Scope::Excerpt => {}
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn every_declared_wiki_has_its_tree() {
+        for w in DECLARED_WIKIS {
+            assert!(
+                ORGS.iter().any(|(s, _)| *s == w.org),
+                "{}: org `{}` is not in the example",
+                w.title,
+                w.org
+            );
+            assert!(
+                STUDIO
+                    .get_dir(format!("{}/Wikis/{}", w.org, w.title))
+                    .is_some(),
+                "{}: no committed tree at {}/Wikis/{}",
+                w.title,
+                w.org,
+                w.title
+            );
+        }
+    }
+
+    /// A wiki says what it is for. `purpose.md` is the one file
+    /// `wiki-proto`'s schema layer will not invent, and a wiki without
+    /// it plants as an unexplained pile of pages.
+    #[test]
+    fn every_declared_wiki_states_its_purpose() {
+        for w in DECLARED_WIKIS {
+            assert!(
+                STUDIO
+                    .get_file(format!("{}/Wikis/{}/purpose.md", w.org, w.title))
+                    .is_some(),
+                "{}: no purpose.md — a wiki that cannot say what it is for is a folder",
+                w.title
+            );
+        }
+    }
+
+    /// The slug is load-bearing in two places that must agree: the
+    /// directory the seeder plants to, and the middle of every
+    /// reference into the wiki. A title that slugs to nothing, or to
+    /// the same thing as its neighbour, breaks both silently.
+    #[test]
+    fn wiki_slugs_are_distinct_within_an_org() {
+        for (org, _) in ORGS {
+            let mut seen: Vec<String> = Vec::new();
+            for w in wikis_of(org) {
+                let slug = wiki_slug(w.title);
+                assert!(!slug.is_empty(), "{}: title slugs to nothing", w.title);
+                assert!(
+                    !seen.contains(&slug),
+                    "{org}: two wikis both slug to `{slug}`"
+                );
+                seen.push(slug);
             }
         }
     }

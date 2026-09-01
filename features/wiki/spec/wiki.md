@@ -756,20 +756,33 @@ Per `CLAUDE.md`, the planted world is part of the feature. Every rule above is
 exercised from the seed through the integration suite, not from the UI alone.
 The seeded world is:
 
-| what | kind | demonstrates |
-|---|---|---|
-| **Music Theory** | wiki | multiplicity; the target of a cross-wiki reference |
-| **Audio Production** | wiki | cross-wiki references resolving both ways as one web |
-| **Bible Study** | vault | a private vault subscribed to a wiki and a Resource; not itself subscribable |
-| **Bible Resource** | Resource | read-only spine, verse addressing, core membership, licence and per-passage availability |
-| **Cooking** | wiki | a personal wiki in a person's own org; unlisted visibility |
+| what | owner | kind | demonstrates |
+|---|---|---|---|
+| **Music Theory** | acme-audio | wiki, public | multiplicity; the target of a cross-wiki reference, including a block anchor |
+| **Audio Production** | acme-audio | wiki, public | two wikis referencing each other both ways — one web, one owning wiki per page |
+| **Bible Study** | alice-personal | wiki, private | a wiki annotating a Resource without writing into it; private is a refusal, not an absence |
+| **Cooking** | alice-personal | wiki, unlisted | a personal wiki in a person's own org; unlisted rather than private |
+| **Bible** | — | Resource | read-only spine, verse addressing, core membership, licence and per-passage availability |
+
+`alice-personal` is a third org in the example, hosted on the same data root as
+ACME. It is what "a person's own org" means (`wiki.boundary.role`) and it is
+what makes two orgs on one server, and a personal wiki, testable at all.
+
+The Bible Resource is **declared but not committed**. `OrgRoot::resources_dir`
+already says corpora "never live in the git repo" — they install into
+`resources/bible/<TRANSLATION>/` through `scripture::install_usfm_dir`. So the
+seed carries the Resource's identity, addressing, licence and core membership,
+and the text arrives by install. Everything anchored to a verse is exercised
+without a verse of scripture being committed; what needs real text is marked
+and skipped when no edition is installed.
 
 On top of that world: the org vault subscribed to Music Theory and Audio
-Production so `[[Ionian]]` resolves from a vault note; annotations in Bible Study
-and in a Bible wiki gathering against the same verse of the Bible Resource; one
-open Edit Request from a cast member holding no Editor role; one auto-approved
-Editor change; a repo-sourced wiki over a small committed repository; and one
-subscription across the federation peer, so `wiki.subscribe.federated` is
+Production so `[[Ionian]]` resolves from a vault note; a private journal note in
+`alice-personal`'s vault referencing a private wiki, a personal wiki and the
+Resource, none of which can reference it back; one open Edit Request from a cast
+member holding no Editor role; one auto-approved Editor change; a repo-sourced
+wiki over a small committed repository; and VNT subscribed to ACME's Audio
+Production across the two demo servers, so `wiki.subscribe.federated` is
 exercised against a second server rather than asserted.
 
 Scripture is in the seeded core set, so a freshly planted vault resolves a verse
