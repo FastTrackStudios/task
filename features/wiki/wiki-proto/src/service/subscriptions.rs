@@ -90,4 +90,11 @@ pub trait Subscriptions {
     /// of the deployment, and a client that could edit it would be
     /// changing what every other vault gets.
     fn core_set(&self) -> Result<Vec<Subscription>, WikiError>;
+
+    /// Sources open to subscription that this server can see: every
+    /// public wiki on this data root, other orgs' included
+    /// (`wiki.access.visibility`, `wiki.access.directory`). Unlisted
+    /// and private wikis are absent — subscribing to an unlisted one
+    /// takes its reference, and to a private one is refused.
+    fn discover(&self) -> Result<Vec<Subscription>, WikiError>;
 }

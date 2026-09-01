@@ -835,7 +835,7 @@ table!(WIKI_EDITS, "wiki-edits", "wiki/edits/**", [
 #[cfg(feature = "plugin-wiki")]
 table!(WIKI_SUBSCRIPTIONS, "wiki-subscriptions", "wiki/subscriptions/**", [
     rd "list_subscriptions", wr "subscribe", wr "unsubscribe",
-    wr "refresh_subscription", rd "core_set",
+    wr "refresh_subscription", rd "core_set", rd "discover",
 ]);
 #[cfg(feature = "plugin-wiki")]
 table!(WIKI_INGEST, "wiki-ingest", "wiki/ingest/**", [

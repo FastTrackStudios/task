@@ -13,6 +13,8 @@ architect = { workspace = true, features = ["dispatch-tokio"] }
 # Who is calling: the per-call principal the gate recorded, read by
 # the Edit lane to name a proposer and check Editor.
 architect-permissions = { workspace = true }
+# The span is the wide event: subscription and edit outcomes ride it.
+architect-telemetry = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 mime_guess = "2"
 serde = { workspace = true }

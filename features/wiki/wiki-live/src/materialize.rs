@@ -160,12 +160,20 @@ pub fn refresh<U: VaultSync>(
     })?;
     let base = load_base(base_at, upstream_id)?;
 
-    let manifest = upstream
+    let mut manifest = upstream
         .manifest(upstream_id)
         .map_err(|source| MaterializeError::Manifest {
             id: upstream_id.to_owned(),
             source,
         })?;
+    // The source's own bookkeeping — its declaration, its Edit
+    // Requests, its queues under `_state/` — is not content and is
+    // never the subscriber's: a copy that carried the publisher's
+    // Editor list or open requests would present someone else's state
+    // as its own. Pages only.
+    manifest
+        .files
+        .retain(|f| !is_source_bookkeeping(&f.path));
     let local = index_local(local_root).map_err(|source| MaterializeError::Sync {
         id: upstream_id.to_owned(),
         source,
@@ -431,6 +439,15 @@ mod tests {
 /// # Errors
 ///
 /// As [`refresh`].
+/// Whether a path in a source is the source's private bookkeeping
+/// rather than a page: anything under `_state/`, at the root or nested.
+fn is_source_bookkeeping(path: &str) -> bool {
+    let state = wiki_proto::paths::STATE_DIR;
+    path == state
+        || path.starts_with(&format!("{state}/"))
+        || path.contains(&format!("/{state}/"))
+}
+
 pub fn refresh_subscription<U: vault_proto::VaultSync>(
     upstream: &U,
     org_root: &Path,
