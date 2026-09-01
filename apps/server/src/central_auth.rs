@@ -179,10 +179,39 @@ impl CentralAuth {
         );
     }
 
-    /// Ask the issuer. `GET /auth/session` with the bearer — the same
-    /// endpoint the auth server's own clients use to validate a session.
+    /// Ask the issuer who this token belongs to.
+    ///
+    /// Two endpoints, because a person can arrive holding either of two
+    /// different credentials and the server cannot tell them apart by
+    /// looking:
+    ///
+    /// * a **session token**, from Task's own sign-in form posting
+    ///   straight to the issuer — validated at `/auth/session`;
+    /// * an **OAuth access token**, from the redirect flow, minted by
+    ///   `/oauth2/token` in exchange for an authorization code —
+    ///   validated at `/oauth2/userinfo`.
+    ///
+    /// The access token is derived from a session token but is not one,
+    /// so `/auth/session` rejects it. Checking only that endpoint is why
+    /// a redirect sign-in would look like it succeeded and then land the
+    /// person as anonymous.
+    ///
+    /// Session first: it is the flow that carries a token minted for
+    /// Task specifically, and trying it first means the common path
+    /// costs one request rather than two.
     async fn introspect(&self, token: &str) -> Option<String> {
-        let url = format!("{}/auth/session", self.base_url);
+        if let Some(user_id) = self.ask(token, "/auth/session", &["user", "id"]).await {
+            return Some(user_id);
+        }
+        self.ask(token, "/oauth2/userinfo", &["sub"]).await
+    }
+
+    /// One introspection request, reading the user id out at `path`.
+    ///
+    /// `None` covers every failure — rejected, malformed, unreachable —
+    /// so a caller cannot accidentally treat "could not ask" as "yes".
+    async fn ask(&self, token: &str, endpoint: &str, path: &[&str]) -> Option<String> {
+        let url = format!("{}{endpoint}", self.base_url);
         let res = match self
             .http
             .get(&url)
@@ -196,7 +225,11 @@ impl CentralAuth {
                 // Warn, not error: a token that cannot be checked is
                 // refused, and the refusal is what the caller sees. This
                 // line is for the operator wondering why sign-ins stopped.
-                tracing::warn!(error = %e, "central auth: issuer unreachable — refusing");
+                tracing::warn!(
+                    error = %e,
+                    endpoint,
+                    "central auth: issuer unreachable — refusing"
+                );
                 return None;
             }
         };
@@ -204,10 +237,11 @@ impl CentralAuth {
             return None;
         }
         let body: serde_json::Value = res.json().await.ok()?;
-        body.get("user")?
-            .get("id")?
-            .as_str()
-            .map(std::borrow::ToOwned::to_owned)
+        let mut cursor = &body;
+        for key in path {
+            cursor = cursor.get(key)?;
+        }
+        cursor.as_str().map(std::borrow::ToOwned::to_owned)
     }
 }
 
