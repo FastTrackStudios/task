@@ -215,8 +215,13 @@ pub enum AuthAction {
     /// flow. The only action carrying no credentials: the password was
     /// typed at the issuer and Task never saw it, which is the point of
     /// going the long way round.
+    ///
+    /// Carries the issuer rather than looking it up, because this
+    /// arrives on a fresh page load where discovery may not have
+    /// resolved yet — see `central_login::ISSUER_KEY`.
     AdoptCentralToken {
         token: String,
+        issuer: String,
     },
     SignOut,
 }
@@ -276,9 +281,10 @@ impl AuthCtx {
     /// authorization code. Fire-and-forget like the rest: the work runs
     /// in the root coroutine, so the callback page is free to navigate
     /// away immediately.
-    pub fn adopt_central_token(self, token: impl Into<String>) {
+    pub fn adopt_central_token(self, token: impl Into<String>, issuer: impl Into<String>) {
         self.actions.send(AuthAction::AdoptCentralToken {
             token: token.into(),
+            issuer: issuer.into(),
         });
     }
 
@@ -623,14 +629,7 @@ async fn run_credential_sign_in(
 /// `/auth/session` then `/oauth2/userinfo`), so everything downstream —
 /// vox dialing, the locker, cached-token switch-back — is identical to a
 /// credential sign-in and none of it needs to know which door was used.
-async fn run_central_token_sign_in(mut st: AuthState, token: String) {
-    let Some(issuer) = task_ui_core::central_auth::issuer() else {
-        // Reachable if the server stopped advertising an issuer while a
-        // sign-in was in flight in another tab.
-        st.error
-            .set(Some("this server issues its own accounts".to_owned()));
-        return;
-    };
+async fn run_central_token_sign_in(mut st: AuthState, token: String, issuer: String) {
     st.busy.set(true);
     st.error.set(None);
 
@@ -638,24 +637,9 @@ async fn run_central_token_sign_in(mut st: AuthState, token: String) {
         let user = crate::central_login::user_info(&issuer, &token)
             .await
             .map_err(|e| e.to_string())?;
-        // `sub` is a string in OIDC but a uuid everywhere in Task, and
-        // the membership rows are keyed on the uuid. An issuer that
-        // handed back something else would otherwise be discovered much
-        // later, as a lookup that silently never matches.
-        let user_id = user
-            .sub
-            .parse::<Uuid>()
-            .map_err(|_| format!("the issuer returned a non-uuid subject: {}", user.sub))?;
-        // An account with no email still signs in; the id is the part
-        // that has to exist, and it is what memberships key on.
-        let email = user.email.clone().unwrap_or_else(|| user.sub.clone());
-        save_cached_token(&email, &token);
-        Ok::<ActiveAccount, String>(ActiveAccount {
-            user_id,
-            name: user.name.unwrap_or_else(|| email.clone()),
-            email,
-            token,
-        })
+        let account = central_account(user, token)?;
+        save_cached_token(&account.email, &account.token);
+        Ok::<ActiveAccount, String>(account)
     }
     .await;
 
@@ -788,8 +772,8 @@ pub fn provide_auth() -> AuthCtx {
                 } => {
                     run_credential_sign_in(st, &email, &password, Some(&name)).await;
                 }
-                AuthAction::AdoptCentralToken { token } => {
-                    run_central_token_sign_in(st, token).await;
+                AuthAction::AdoptCentralToken { token, issuer } => {
+                    run_central_token_sign_in(st, token, issuer).await;
                 }
                 AuthAction::SignOut => run_sign_out(st).await,
             }
@@ -906,6 +890,16 @@ pub fn SignInGate(children: Element) -> Element {
     if active.read().is_some() {
         return rsx! { {children} };
     }
+    // The one route that MUST render while signed out, because signing in
+    // is what it is for. The issuer redirects back here with an
+    // authorization code, and this gate sits above the router — so
+    // without this the page never mounts, the code is never redeemed,
+    // and the round trip ends silently back on the login form with the
+    // code sitting unused in the address bar. Which is exactly what it
+    // did.
+    if at_central_callback() {
+        return rsx! { {children} };
+    }
     if !booted() || busy() {
         // NEVER a dead end. This branch also covers "org discovery hasn't
         // resolved" — a failed or slow well-known fetch, or a server that
@@ -968,6 +962,35 @@ pub fn SignInGate(children: Element) -> Element {
     }
 }
 
+/// Turn what the issuer says about a token into an account.
+///
+/// Shared by the redirect sign-in and by boot restore, so a session
+/// restored from cache is identical to the one that created it — a
+/// difference between those two is the kind of bug that only shows up
+/// after a reload.
+fn central_account(
+    user: crate::central_login::UserInfo,
+    token: String,
+) -> Result<ActiveAccount, String> {
+    // `sub` is a string in OIDC but a uuid everywhere in Task, and the
+    // membership rows are keyed on the uuid. An issuer that handed back
+    // something else would otherwise be discovered much later, as a
+    // lookup that silently never matches.
+    let user_id = user
+        .sub
+        .parse::<Uuid>()
+        .map_err(|_| format!("the issuer returned a non-uuid subject: {}", user.sub))?;
+    // An account with no email still signs in; the id is the part that
+    // has to exist, and it is what memberships key on.
+    let email = user.email.clone().unwrap_or_else(|| user.sub.clone());
+    Ok(ActiveAccount {
+        user_id,
+        name: user.name.unwrap_or_else(|| email.clone()),
+        email,
+        token,
+    })
+}
+
 /// Token-cache-first session resolution against the home org.
 async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, String> {
     let client = establish_for::<AuthServiceClient>(slug).await?;
@@ -976,7 +999,22 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
     if let Some(token) = load_cached_token(email) {
         match client.whoami(token.clone()).await {
             Ok(user) => return Ok(account_from(user, email, token)),
-            Err(_) => clear_cached_token(email), // expired/revoked — fall through
+            // 1b. The org's auth store cannot validate a token it did
+            //     not mint, and a central sign-in leaves exactly that:
+            //     an OAuth access token from the issuer. Ask the issuer
+            //     before giving up — otherwise every reload throws a
+            //     centrally-signed-in person back to the login screen
+            //     holding a token that was never actually expired.
+            Err(_) => {
+                if let Some(issuer) = task_ui_core::central_auth::issuer() {
+                    if let Ok(user) = crate::central_login::user_info(&issuer, &token).await {
+                        if let Ok(account) = central_account(user, token) {
+                            return Ok(account);
+                        }
+                    }
+                }
+                clear_cached_token(email); // expired/revoked — fall through
+            }
         }
     }
 
@@ -999,6 +1037,24 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
         .map_err(|e| format!("sign in {email}: {e}"))?;
     save_cached_token(email, &bundle.token);
     Ok(account_from(bundle.user, email, bundle.token))
+}
+
+/// Is this page load the central issuer redirecting back to us?
+///
+/// Read off `window.location` rather than the router, because
+/// [`SignInGate`] sits above the router and has no route to match on.
+#[cfg(target_arch = "wasm32")]
+fn at_central_callback() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().pathname().ok())
+        .is_some_and(|path| path.trim_end_matches('/') == "/auth/callback")
+}
+
+/// Native builds never make the round trip — the form signs in without
+/// leaving the process.
+#[cfg(not(target_arch = "wasm32"))]
+fn at_central_callback() -> bool {
+    false
 }
 
 /// Build the context value from an `AuthUser`, with dev-roster

@@ -30,3 +30,4 @@ pub mod vault;
 pub mod wiki;
 pub mod wiki_page;
 pub mod wiki_source;
+pub mod wiki_subscriptions;

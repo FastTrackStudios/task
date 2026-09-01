@@ -37,12 +37,20 @@ use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 const WIKI_ID: &str = "default";
 
 /// Which corpus the graph shows.
+///
+/// `Subscriptions` is not a corpus — it swaps the body for the
+/// management panel. It rides the same tab strip because subscribing
+/// is what *changes* the graph: a subscribed source's pages become
+/// resolvable in your own writing, so the two belong on one page
+/// rather than behind a settings screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GraphSource {
     /// Curated wiki tree via the wiki Graph service.
     Wiki,
     /// Raw vault `[[wikilink]]` web via VaultSync.
     Vault,
+    /// What this org subscribes to, and the controls for it.
+    Subscriptions,
 }
 
 #[component]
@@ -138,7 +146,9 @@ pub fn WikiView() -> Element {
     );
 
     let discovering = org_list.read().is_empty();
-    let body = if discovering {
+    let body = if source() == GraphSource::Subscriptions {
+        rsx! { crate::pages::wiki_subscriptions::SubscriptionsPanel {} }
+    } else if discovering {
         render_loading()
     } else {
         match &*graph.read() {
@@ -213,6 +223,9 @@ pub fn WikiView() -> Element {
         GraphSource::Vault => {
             "The wikilink web of your vault — pages are nodes, `[[links]]` are edges."
         }
+        GraphSource::Subscriptions => {
+            "Sources this org holds. A subscribed wiki's pages resolve inside your own writing."
+        }
     };
 
     rsx! {
@@ -232,6 +245,9 @@ pub fn WikiView() -> Element {
                             {source_tab("Vault", GraphSource::Vault, source(), move |s| {
                                 source.set(s);
                                 filters.with_mut(|f| f.hidden_kinds.clear());
+                            })}
+                            {source_tab("Subscriptions", GraphSource::Subscriptions, source(), move |s| {
+                                source.set(s);
                             })}
                         }
                     }
@@ -275,6 +291,10 @@ fn render_loading() -> Element {
 
 fn render_empty(source: GraphSource) -> Element {
     let (title, hint) = match source {
+        // The panel owns its own empty state; this arm exists so the
+        // match stays exhaustive rather than being papered over with a
+        // wildcard that would swallow a future variant.
+        GraphSource::Subscriptions => ("", ""),
         GraphSource::Wiki => (
             "The wiki is empty",
             "Bootstrap it with `task wiki init`, then ingest a source — pages land in `wiki/Knowledge/` and show up here.",

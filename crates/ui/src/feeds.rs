@@ -849,3 +849,88 @@ feeds! {
             = list_issues(repo, git_proto::issues::IssueFilter::default()) as "list issues";
     }
 }
+
+// ── Wiki subscriptions ───────────────────────────────────────────────
+//
+// What a vault or wiki subscribes to (`features/wiki/spec/wiki.md`).
+// The subscriber is the org's vault: that is what "my subscriptions"
+// means for a person looking at the wiki page. Per-wiki subscriber
+// selection wants a list-wikis call the service does not have yet.
+
+/// Everything this org's vault holds, declined entries included — a
+/// declined core subscription has to stay visible or turning it back
+/// on is impossible.
+pub async fn fetch_subscriptions(
+    slug: &str,
+) -> Result<Vec<wiki_proto::HeldSubscription>, String> {
+    let client = crate::vox_clients::establish_for::<
+        wiki_proto::service::subscriptions::SubscriptionsClient,
+    >(slug)
+    .await?;
+    client
+        .list_subscriptions(wiki_proto::Subscriber::Vault)
+        .await
+        .map_err(|e| format!("list_subscriptions: {e:?}"))
+}
+
+/// Bring one subscribed source's local copy up to date.
+pub async fn refresh_subscription(
+    slug: &str,
+    qualified: &str,
+) -> Result<wiki_proto::RefreshReport, String> {
+    let client = crate::vox_clients::establish_for::<
+        wiki_proto::service::subscriptions::SubscriptionsClient,
+    >(slug)
+    .await?;
+    client
+        .refresh_subscription(wiki_proto::Subscriber::Vault, qualified.to_owned())
+        .await
+        .map_err(|e| format!("refresh: {e:?}"))
+}
+
+/// Take on a source. `domain/slug` is the qualified id a reference
+/// carries; `kind` decides whether the copy will be editable.
+pub async fn subscribe_to(
+    slug: &str,
+    domain: &str,
+    source_slug: &str,
+    title: &str,
+    kind: wiki_proto::SourceKind,
+) -> Result<(), String> {
+    let client = crate::vox_clients::establish_for::<
+        wiki_proto::service::subscriptions::SubscriptionsClient,
+    >(slug)
+    .await?;
+    client
+        .subscribe(
+            wiki_proto::Subscriber::Vault,
+            wiki_proto::Subscription {
+                domain: domain.to_owned(),
+                slug: source_slug.to_owned(),
+                kind,
+                title: title.to_owned(),
+                core: false,
+                declined: false,
+            },
+        )
+        .await
+        .map_err(|e| format!("subscribe: {e:?}"))
+}
+
+/// Drop a source. Without `force`, a copy carrying unpushed local work
+/// refuses rather than discarding it — the error text says what is at
+/// stake, and the caller is expected to show it.
+pub async fn unsubscribe_from(
+    slug: &str,
+    qualified: &str,
+    force: bool,
+) -> Result<(), String> {
+    let client = crate::vox_clients::establish_for::<
+        wiki_proto::service::subscriptions::SubscriptionsClient,
+    >(slug)
+    .await?;
+    client
+        .unsubscribe(wiki_proto::Subscriber::Vault, qualified.to_owned(), force)
+        .await
+        .map_err(|e| format!("unsubscribe: {e:?}"))
+}

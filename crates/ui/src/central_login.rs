@@ -38,6 +38,19 @@ pub use auth_client::oidc::UserInfo;
 const VERIFIER_KEY: &str = "task.auth.pkce.verifier";
 #[cfg(target_arch = "wasm32")]
 const STATE_KEY: &str = "task.auth.pkce.state";
+/// The issuer this attempt was started against.
+///
+/// Parked rather than looked up on return, because coming back from the
+/// issuer is a FRESH page load: org discovery has not fetched
+/// `/.well-known` yet, so the issuer registry is still empty and
+/// `central_auth::issuer()` answers `None`. The redemption then fails
+/// with "this server issues its own accounts" — a message about
+/// self-hosting, on a server that had just redirected us to its issuer.
+///
+/// It is also the more correct value: a code must be redeemed at the
+/// issuer that minted it, not at whatever the app has since discovered.
+#[cfg(target_arch = "wasm32")]
+const ISSUER_KEY: &str = "task.auth.pkce.issuer";
 
 /// The OIDC client id Task is registered under at the issuer.
 ///
@@ -96,6 +109,9 @@ pub fn begin(redirect_uri: &str) -> Result<(), LoginError> {
     storage
         .set_item(STATE_KEY, pkce.state())
         .map_err(|_| LoginError::NoBrowser)?;
+    storage
+        .set_item(ISSUER_KEY, &issuer)
+        .map_err(|_| LoginError::NoBrowser)?;
 
     let url = oidc::authorize_url(
         &issuer,
@@ -120,14 +136,28 @@ pub fn begin(_redirect_uri: &str) -> Result<(), LoginError> {
 
 // ── Finishing ────────────────────────────────────────────────────────
 
+/// What a completed redemption yields.
+///
+/// Carries the issuer as well as the token so nothing downstream has to
+/// look it up again — the lookup is exactly what races with discovery on
+/// the way back in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redeemed {
+    pub token: String,
+    pub issuer: String,
+}
+
 /// Redeem the authorization code for a token Task can present.
 ///
 /// The token that comes back is an OAuth **access token**, not a session
 /// token — the server introspects it at `/oauth2/userinfo` rather than
 /// `/auth/session`. Both are accepted; see `central_auth` on the server.
 #[cfg(target_arch = "wasm32")]
-pub async fn complete(redirect_uri: &str, code: &str, state: &str) -> Result<String, LoginError> {
-    let issuer = task_ui_core::central_auth::issuer().ok_or(LoginError::NoIssuer)?;
+pub async fn complete(
+    redirect_uri: &str,
+    code: &str,
+    state: &str,
+) -> Result<Redeemed, LoginError> {
     let storage = session_storage().ok_or(LoginError::NoBrowser)?;
 
     let parked = |key: &str| {
@@ -138,6 +168,9 @@ pub async fn complete(redirect_uri: &str, code: &str, state: &str) -> Result<Str
             .filter(|v| !v.is_empty())
             .ok_or(LoginError::NoAttemptInProgress)
     };
+    // The issuer comes from the attempt, not from discovery — see
+    // ISSUER_KEY. Read before the clear below.
+    let issuer = parked(ISSUER_KEY)?;
     let pkce = Pkce::resume(parked(VERIFIER_KEY)?, parked(STATE_KEY)?);
     pkce.check_state(state)?;
 
@@ -146,6 +179,7 @@ pub async fn complete(redirect_uri: &str, code: &str, state: &str) -> Result<Str
     // replayed, never legitimately reused.
     let _ = storage.remove_item(VERIFIER_KEY);
     let _ = storage.remove_item(STATE_KEY);
+    let _ = storage.remove_item(ISSUER_KEY);
 
     let body = oidc::token_request_body(CLIENT_ID, redirect_uri, code, &pkce);
     let text = post_form(
@@ -153,7 +187,10 @@ pub async fn complete(redirect_uri: &str, code: &str, state: &str) -> Result<Str
         &body,
     )
     .await?;
-    Ok(oidc::access_token_from(&text)?)
+    Ok(Redeemed {
+        token: oidc::access_token_from(&text)?,
+        issuer,
+    })
 }
 
 /// Ask the issuer who a token belongs to.
