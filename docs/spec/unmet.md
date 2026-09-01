@@ -9,7 +9,9 @@ As of the last update: **117 of 119 built-feature rules verified, 93 with
 an implementation reference.** What follows is the remainder — two rules,
 down from three — and one rule met in part. The 57 rules of
 [`../../features/wiki/spec/wiki.md`](../../features/wiki/spec/wiki.md)
-are excluded from those tallies and accounted for below.
+are tallied separately: **32 carry an implementation marker, 27 of those
+are verified, 25 have neither** — the "declared, not built" section below
+says which and why.
 
 ## Met, and not checkable by a test
 
@@ -56,22 +58,34 @@ which `docs/spec/scenario-album.md` already says.
 
 ## Declared, not built
 
-**The whole of `features/wiki/spec/wiki.md` — all 57 rules.** Written
-ahead of the work rather than behind it, so `tracey query . uncovered`
-lists every `wiki.*` id and that is correct, not drift. The reference
-format the spec rests on is `docs/adr/0002-wiki-reference-format.md`;
-the vocabulary is in `CONTEXT.md`.
+**`features/wiki/spec/wiki.md` — 25 of 57 rules.** The spec was written
+ahead of the work; `tracey query . uncovered` now lists the ids below and
+that is correct, not drift. The reference format the spec rests on is
+`docs/adr/0002-wiki-reference-format.md`; the vocabulary is in
+`CONTEXT.md`.
 
-What exists today is one wiki per org, mounted as
-`WikiBackend::single("default", <org>/wiki/Knowledge/)`. The service
-traits already carry a `wiki_id` and `federation::PeerWiki` already
-describes a peer, so `wiki.many.*` is a registry and a resolver away
-rather than a rewrite. Three slices are unbuilt, in this order:
+What exists: an org holds a set of wikis, each declaring visibility,
+Editors, a proposer gate and an optional repository source in
+`_state/wiki.json` (`wiki.many.*`, `wiki.access.visibility`,
+`wiki.access.directory`, `wiki.boundary.no-subscribe`); subscriptions
+that materialise a source and refuse what the source does not admit
+(`wiki.subscribe.{reference,editability,local-copy,local-authority,
+refresh,resolution,transitive}`, `wiki.core.*`); the Edit lane and
+repo-sourced wikis (below); and `wiki.ref.{format,block}`. What remains,
+grouped:
 
-- **Multi-wiki, subscription and the Edit lane** — `wiki.many.*`,
-  `wiki.boundary.*`, `wiki.promote.*`, `wiki.subscribe.*`, `wiki.ref.*`,
-  `wiki.link.*`, `wiki.access.*`, `wiki.life.*`, `wiki.local.mount`.
-  Local copies are editable jj working states under `Task/Wikis/<id>`.
+- **Promotion, local presence and the rest of subscription** —
+  `wiki.boundary.role`, `wiki.promote.*`, `wiki.local.mount`,
+  `wiki.subscribe.{working-copy,no-ceremony,push,inherit,federated}`.
+  Local copies are meant to be editable jj working states under
+  `Task/Wikis/<id>`, and a push from one is an Edit Request; today a copy
+  is a plain materialised tree and the lane is reached over vox only.
+- **Linking and references** — `wiki.link.*`, `wiki.ref.{picker,stamp,
+  redirect}`: backlinks across wikis, rename repair from history, the
+  editor's picker, staleness from the stamp, and the org-registry redirect.
+- **Lifecycle** — `wiki.life.*`: adoption, signed handover, orphans.
+- **Resources** — `wiki.resource.{subscribe,not-a-wiki,addressing,
+  no-annotations,layers}`; `wiki.resource.rights` is met by `scripture`.
 - **The Edit lane, the peer half** — `wiki.edit.home`. The lane itself
   is built: `wiki_live::edits_backend` implements
   `wiki_proto::service::edits::Edits` over one org's wikis, an Edit
