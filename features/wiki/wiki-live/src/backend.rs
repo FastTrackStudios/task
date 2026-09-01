@@ -432,6 +432,18 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
             .remove(wiki_id);
         Ok(())
     }
+
+    fn refresh_source(&self, wiki_id: &str) -> Result<wiki_proto::config::RepoSource, WikiError> {
+        let config = self.config_of(wiki_id)?;
+        let Some(source) = config.source else {
+            return Err(WikiError::Refused(format!(
+                "`{wiki_id}` has no repository behind it; nothing to refresh"
+            )));
+        };
+        // The fetch itself lands with the repo-source module; until
+        // then this reports what the wiki currently reflects.
+        Ok(source)
+    }
 }
 
 fn summarize(slug: &str, root: &Path) -> WikiSummary {

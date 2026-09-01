@@ -21,6 +21,9 @@ architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
 files-sync = { workspace = true }
 task-proto = { workspace = true }
+# The wiki lane: registry, pages, subscriptions and Edit Requests, all
+# reached as a signed-in person on the org router.
+wiki-proto = { workspace = true }
 task = { workspace = true }
 project = { workspace = true }
 pollster = { workspace = true }

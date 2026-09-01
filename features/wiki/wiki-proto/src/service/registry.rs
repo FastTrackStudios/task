@@ -14,7 +14,7 @@
 //! Deliberately not per-wiki in its listing call, unlike every other
 //! trait here: this is the call you make *before* you have a wiki id.
 
-use crate::config::{NewWiki, Visibility, WikiConfig};
+use crate::config::{NewWiki, RepoSource, Visibility, WikiConfig};
 use crate::error::WikiError;
 
 /// One wiki, as a list a person reads.
@@ -92,4 +92,11 @@ pub trait Registry {
     /// is untouched. Subscribers keep their local copies
     /// (`wiki.life.orphan`).
     fn delete_wiki(&self, wiki_id: &str) -> Result<(), WikiError>;
+
+    /// Bring a repo-sourced wiki up to date with its repository now,
+    /// rather than on the next scheduled fetch (`wiki.source.sync`).
+    /// Returns the source as it stands afterwards — the commit
+    /// reflected, or the error the fetch reported. Refused for a wiki
+    /// that has no repository behind it.
+    fn refresh_source(&self, wiki_id: &str) -> Result<RepoSource, WikiError>;
 }
