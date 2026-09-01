@@ -173,3 +173,73 @@ async fn demo_plants_adopted_roots_with_video_deliverables() -> eyre::Result<()>
     );
     Ok(())
 }
+
+/// The seeded booking the finance integration is written against.
+///
+/// The repo's policy is that a feature lives in the suite *and* in the
+/// planted world, and an integration is the case where that matters
+/// most: `bookings-ui` decides in a unit test that a **completed**
+/// booking gets an "Invoice…" action, and this is what proves there is
+/// a completed booking to see it on. Without this, a demo user turns
+/// finance on and finds nothing different anywhere.
+///
+/// Asserted through the scheduler that the app reads, not by looking at
+/// the file — a booking that parses is the claim, not a file that
+/// exists.
+#[cfg(feature = "plugin-scheduling")]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_planted_org_has_a_completed_booking_to_invoice() -> eyre::Result<()> {
+    use scheduling::VaultScheduler;
+    use scheduling_proto::BookingStatus;
+    use scheduling_proto::service::bookings::Bookings;
+    use scheduling_proto::service::event_types::EventTypes;
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    plant(tmp.path(), slug)?;
+
+    let root = org_proto::DataRoot::new(tmp.path().to_path_buf());
+    let scheduler = VaultScheduler::new(root.org(slug).vault_dir())
+        .map_err(|e| eyre::eyre!("scheduler: {e}"))?;
+
+    let bookings = scheduler
+        .list_bookings()
+        .map_err(|e| eyre::eyre!("list bookings: {e}"))?;
+    let done = bookings
+        .iter()
+        .find(|b| matches!(b.status, BookingStatus::Completed))
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "no completed booking in the planted org — the finance \
+                 integration has nothing to appear on ({} booking(s) planted)",
+                bookings.len()
+            )
+        })?;
+
+    // The three things the integration hands to whoever bills it. A
+    // booking with no attendee would produce an "Invoice…" link that
+    // says who nothing.
+    assert!(
+        !done.attendee_name.trim().is_empty(),
+        "the completed booking names nobody to bill"
+    );
+
+    // And the event type it points at, since that is where the link
+    // gets what the work *was* and how long it took.
+    let types = scheduler
+        .list_event_types()
+        .map_err(|e| eyre::eyre!("list event types: {e}"))?;
+    let et = types
+        .iter()
+        .find(|et| et.id == done.event_type_id)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "the completed booking points at event type {:?}, which is \
+                 not planted — the invoice link would say \"Booking\" and 0 min",
+                done.event_type_id
+            )
+        })?;
+    assert!(!et.title.trim().is_empty(), "the event type has no title");
+    assert!(et.duration_min > 0, "the event type has no duration");
+    Ok(())
+}

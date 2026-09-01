@@ -417,25 +417,150 @@ fn use_billing_href(booking: &Booking) -> Option<String> {
     // points at it.
     let types = use_event_type_list();
 
-    // Only a booking that happened. Offering to invoice a cancelled
-    // slot, or one that has not occurred yet, is offering a mistake.
-    if !matches!(booking.status, BookingStatus::Completed) {
-        return None;
-    }
     let enabled = task_ui_core::orgs::active_plugin_set(&selection.read(), &org_list.read());
-    let billing = task_plugin_ui::offered::<finance_contract::Billing>(|id| enabled.contains(id))?;
-
+    let billing = task_plugin_ui::offered::<finance_contract::Billing>(|id| enabled.contains(id));
     let event_type = types.value().and_then(|rows| {
         rows.iter()
             .map(|(_, et)| et)
             .find(|et| et.id == booking.event_type_id)
             .cloned()
     });
+    billing_href(booking, event_type.as_ref(), billing.as_deref())
+}
+
+/// Whether this booking gets an "Invoice…" link, and where it goes.
+///
+/// Separate from the hook above so it can be tested: everything that
+/// decides is here, and the hook is only the part that reads context.
+/// The rules are small but each one is a way to get it wrong —
+/// offering to bill the wrong thing, or offering at all when nobody can.
+fn billing_href(
+    booking: &Booking,
+    event_type: Option<&EventType>,
+    billing: Option<&finance_contract::Billing>,
+) -> Option<String> {
+    // Only a booking that happened. Offering to invoice a cancelled
+    // slot, or one that has not occurred yet, is offering a mistake.
+    if !matches!(booking.status, BookingStatus::Completed) {
+        return None;
+    }
+    // Nobody enabled offers billing. Not a failure — the row simply has
+    // one fewer action.
+    let billing = billing?;
     Some((billing.bill_href)(&finance_contract::Billable {
-        what: event_type
-            .as_ref()
-            .map_or_else(|| "Booking".to_string(), |et| et.title.clone()),
+        // The event type may not have loaded yet, or may have been
+        // deleted out from under a historical booking. Neither is a
+        // reason to withhold the action — the invoice screen asks for
+        // the details anyway.
+        what: event_type.map_or_else(|| "Booking".to_string(), |et| et.title.clone()),
         client: booking.attendee_name.clone(),
         minutes: event_type.map_or(0, |et| u32::from(et.duration_min)),
     }))
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    /// The seeded booking, as `Records/bookings/mix-review-sam-reeve.md`
+    /// describes it.
+    fn seeded_booking(status: BookingStatus) -> Booking {
+        Booking {
+            path: "Records/bookings/mix-review-sam-reeve.md".into(),
+            id: scheduling_proto::BookingId("8f3b1c62-4d5a-4e7f-9a10-6b2c8d4e5f71".into()),
+            event_type_id: scheduling_proto::EventTypeId("mix-review-30".into()),
+            start_utc: "2026-08-24T15:00:00Z".into(),
+            end_utc: "2026-08-24T15:30:00Z".into(),
+            attendee_name: "Sam Reeve".into(),
+            attendee_email: "sam@example.com".into(),
+            note: Some("Rough mix of \"Washed\" — asked about the vocal bus.".into()),
+            status,
+            created_utc: "2026-08-17T09:12:00Z".into(),
+        }
+    }
+
+    /// The seeded event type it points at.
+    fn seeded_event_type() -> EventType {
+        draft_event_type("Mix review".into(), 30)
+    }
+
+    /// Stands in for finance: the same shape, so what is exercised is
+    /// the handover rather than finance's URL scheme.
+    fn billing() -> finance_contract::Billing {
+        finance_contract::Billing {
+            bill_href: |work| {
+                format!(
+                    "/app/finance/invoices?what={}&client={}&minutes={}",
+                    work.what, work.client, work.minutes
+                )
+            },
+        }
+    }
+
+    /// The whole point: a booking that happened, an app that bills, and
+    /// the work reaching it intact.
+    #[test]
+    fn a_completed_booking_can_be_invoiced() {
+        let href = billing_href(
+            &seeded_booking(BookingStatus::Completed),
+            Some(&seeded_event_type()),
+            Some(&billing()),
+        )
+        .expect("a completed booking is billable");
+        assert!(href.contains("what=Mix review"), "{href}");
+        assert!(href.contains("client=Sam Reeve"), "{href}");
+        assert!(href.contains("minutes=30"), "{href}");
+    }
+
+    /// The other half of "optional": with nobody offering to bill,
+    /// nothing here changes except that the action is absent. This is
+    /// the case that must not panic, and must not render a dead link.
+    #[test]
+    fn without_a_billing_app_there_is_no_action() {
+        assert!(
+            billing_href(
+                &seeded_booking(BookingStatus::Completed),
+                Some(&seeded_event_type()),
+                None,
+            )
+            .is_none()
+        );
+    }
+
+    /// Billing a slot that was cancelled, or has not happened yet, is
+    /// offering somebody a mistake.
+    #[test]
+    fn only_a_booking_that_happened_is_billable() {
+        for status in [
+            BookingStatus::Pending,
+            BookingStatus::Confirmed,
+            BookingStatus::Cancelled,
+            BookingStatus::NoShow,
+        ] {
+            assert!(
+                billing_href(
+                    &seeded_booking(status),
+                    Some(&seeded_event_type()),
+                    Some(&billing())
+                )
+                .is_none(),
+                "{status:?} is not something that happened"
+            );
+        }
+    }
+
+    /// A historical booking whose event type was deleted still bills —
+    /// the invoice screen asks for the details anyway, and withholding
+    /// the action would strand the work.
+    #[test]
+    fn a_booking_with_no_event_type_still_bills() {
+        let href = billing_href(
+            &seeded_booking(BookingStatus::Completed),
+            None,
+            Some(&billing()),
+        )
+        .expect("still billable");
+        assert!(href.contains("what=Booking"), "{href}");
+        assert!(href.contains("minutes=0"), "{href}");
+    }
 }
