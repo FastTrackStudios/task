@@ -897,18 +897,51 @@ pub(crate) async fn build_org_state(
                 None
             }
         };
-        // Wiki rooted at `<org>/wiki/Knowledge/` (the curated
-        // tier). `LLM/` scratch is a sibling subtree the
-        // wiki backend doesn't touch — agents read/write it
-        // through plain filesystem ops. `wiki_id = "default"`
-        // is conventional for the one-wiki-per-org case;
-        // future federation may surface multiple ids.
+        // Every wiki this org holds, not one. `LLM/` scratch stays a
+        // sibling subtree the wiki backend doesn't touch — agents
+        // read/write it through plain filesystem ops.
+        //
+        // t[impl wiki.many.addressable] — one mount serves the whole
+        // set, so every wiki is reachable by its own slug across the
+        // service surface, and there is no method that works only on a
+        // default wiki. t[impl wiki.many.isolation] — the backend
+        // resolves each call's `wiki_id` to its own root, so an
+        // operation on one wiki cannot read or write another's state.
+        //
+        // `TASK_SERVER_WIKI_ROOT` still pins a single root when it is
+        // set: it exists so a test can point the wiki somewhere
+        // disposable, and it names that root `knowledge` so the
+        // override is a member of the set rather than a fourth shape.
         #[cfg(any(feature = "plugin-wiki", feature = "plugin-mealplan"))]
         let wiki_root = std::env::var("TASK_SERVER_WIKI_ROOT")
             .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from);
         #[cfg(feature = "plugin-wiki")]
-        let wiki = wiki_live::WikiBackend::single("default", wiki_root.clone())
-            .map_err(|e| eyre::eyre!("wiki backend: {e}"))?;
+        let wiki = {
+            let mut roots: std::collections::HashMap<String, PathBuf> =
+                std::collections::HashMap::new();
+            if std::env::var_os("TASK_SERVER_WIKI_ROOT").is_some() {
+                roots.insert(org_proto::DEFAULT_WIKI.to_string(), wiki_root.clone());
+            } else {
+                roots.extend(org_root.named_wikis());
+                // A fresh org has no wiki directory yet. Keep the
+                // default in the map anyway, so bootstrapping one is a
+                // write rather than a `WikiNotFound`.
+                roots
+                    .entry(org_proto::DEFAULT_WIKI.to_string())
+                    .or_insert_with(|| org_root.wiki_knowledge_dir());
+            }
+            tracing::info!(
+                org = %org_root.slug(),
+                wikis = roots.len(),
+                "wiki backend serving {}",
+                {
+                    let mut names: Vec<&str> = roots.keys().map(String::as_str).collect();
+                    names.sort_unstable();
+                    names.join(", ")
+                }
+            );
+            wiki_live::WikiBackend::with_roots(roots)
+        };
 
         // Agent-task queue. SQLite under the org root
         // (override via `TASK_SERVER_AGENT_TASKS_URL`).
@@ -1501,11 +1534,28 @@ pub(crate) async fn build_org_state(
         );
         // Resource Library reader (transcript sidecars under resources/).
         let resources = resources::ResourcesBackend::new(org_root.resources_dir());
-        // Cookbook lives at `<wiki_root>/Cookbook/*.cook` —
-        // typically `<org>/wiki/Knowledge/Cookbook/`, NOT the
-        // vault root. Match the wiki backend's anchor.
+        // Cookbook lives at `<wiki>/Cookbook/*.cook`, NOT the vault
+        // root. Which wiki is now a real question: with named wikis an
+        // org can hold a Cooking wiki, and recipes belong there rather
+        // than in the org's default knowledge tier — a wiki is
+        // subscribable, so recipes kept in one can be shared and
+        // referenced instead of being a per-org plugin store nobody
+        // else can reach.
+        //
+        // Prefer a `cooking` wiki when the org has one; fall back to
+        // the default wiki, which is where every existing org's
+        // recipes already are. Backwards compatible by construction:
+        // an org with no Cooking wiki sees exactly what it saw before.
         #[cfg(feature = "plugin-mealplan")]
-        let cookbook = cookbook::Store::new(wiki_root.clone());
+        let cookbook = {
+            let cooking = org_root.named_wiki_dir("cooking");
+            let root = if cooking.is_dir() {
+                cooking
+            } else {
+                wiki_root.clone()
+            };
+            cookbook::Store::new(root)
+        };
         #[cfg(feature = "plugin-mealplan")]
         let mealplan_vault =
             vault::Vault::open(&vault_root).map_err(|e| eyre::eyre!("open mealplan vault: {e}"))?;

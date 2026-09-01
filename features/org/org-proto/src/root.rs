@@ -35,6 +35,37 @@ use std::path::{Path, PathBuf};
 
 use crate::manifest::{OrgManifest, ParseError};
 
+/// The slug the org's long-standing curated tier (`wiki/Knowledge/`)
+/// appears under in [`OrgRoot::named_wikis`].
+///
+/// It predates named wikis and keeps its own directory, but it is not
+/// privileged: it is one member of the set, and code that enumerates
+/// wikis must not special-case it.
+pub const DEFAULT_WIKI: &str = "knowledge";
+
+/// A wiki's slug from a display name — lowercase, non-alphanumerics
+/// collapsed to single hyphens, no leading or trailing hyphen.
+///
+/// The same slug names the directory under `<org>/wikis/` and sits in
+/// the middle of every reference into the wiki
+/// (`acme.test/music-theory::Ionian`). Those two must agree, so both
+/// come from here.
+#[must_use]
+pub fn wiki_slug(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut dash = false;
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RootError {
     #[error("resolve data root: {0}")]
@@ -343,6 +374,7 @@ impl OrgRoot {
     }
 
     /// `<org>/wikis/` — the named wikis an org holds, one directory
+    /// (see [`Self::named_wikis`] for the set as a whole)
     /// per wiki, keyed by the slug a reference carries
     /// (`acme.test/music-theory::Ionian` → `wikis/music-theory/`).
     ///
@@ -360,6 +392,48 @@ impl OrgRoot {
     #[must_use]
     pub fn named_wiki_dir(&self, slug: &str) -> PathBuf {
         self.wikis_dir().join(slug)
+    }
+
+    /// Every wiki this org holds, as `(slug, root)`.
+    ///
+    /// t[impl wiki.many.set] — the set is what is on disk, so creating
+    /// a wiki is creating its directory and no wiki is privileged. The
+    /// default wiki (`wiki/Knowledge/`) is in the set under the slug
+    /// `knowledge`, which is what makes the one-wiki case a set of
+    /// size one rather than a separate code path.
+    ///
+    /// Sorted by slug, so a caller enumerating wikis gets a stable
+    /// order rather than the filesystem's. Missing directories are
+    /// absent rather than an error: an org with no `wikis/` holds
+    /// whatever `wiki/Knowledge/` is, which may itself be nothing.
+    #[must_use]
+    pub fn named_wikis(&self) -> Vec<(String, PathBuf)> {
+        let mut out = Vec::new();
+        let knowledge = self.wiki_knowledge_dir();
+        if knowledge.is_dir() {
+            out.push((DEFAULT_WIKI.to_string(), knowledge));
+        }
+        if let Ok(entries) = std::fs::read_dir(self.wikis_dir()) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(slug) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                // A slug that is not the directory name would make the
+                // reference in a page and the folder on disk disagree,
+                // and the disagreement would only surface as an
+                // unresolved link. Skip rather than guess.
+                if slug != wiki_slug(&slug) {
+                    continue;
+                }
+                out.push((slug, path));
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// `<org>/wiki/LLM/` — LLM scratch space (memories,
@@ -522,5 +596,63 @@ mod tests {
         assert_eq!(org.prefs_db().file_name().unwrap(), "prefs.sqlite");
         assert!(org.vault_dir().exists());
         assert!(org.attachments_dir().exists());
+    }
+
+    /// t[verify wiki.many.set] — an org's wikis are the set on disk,
+    /// the default tier is one member of it rather than a privileged
+    /// case, and adding a wiki leaves the others exactly as they were.
+    #[test]
+    fn named_wikis_are_a_set_with_no_privileged_member() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = DataRoot::new(tmp.path().to_owned());
+        let org = root.init_org("acme-audio", "ACME Audio", true).unwrap();
+
+        // A fresh org is scaffolded with `wiki/Knowledge/`, so it
+        // starts as a set of size one rather than as a special case.
+        assert_eq!(
+            org.named_wikis(),
+            vec![(DEFAULT_WIKI.to_string(), org.wiki_knowledge_dir())]
+        );
+
+        for slug in ["music-theory", "audio-production"] {
+            std::fs::create_dir_all(org.named_wiki_dir(slug)).unwrap();
+        }
+        let wikis = org.named_wikis();
+        let slugs: Vec<&str> = wikis.iter().map(|(s, _)| s.as_str()).collect();
+        // Sorted, and the default tier sits among them by name rather
+        // than at the front.
+        assert_eq!(slugs, ["audio-production", DEFAULT_WIKI, "music-theory"]);
+
+        // Each resolves to its own root: no two wikis share a
+        // directory, which is what keeps their state separate.
+        let roots: std::collections::HashSet<&std::path::Path> =
+            wikis.iter().map(|(_, p)| p.as_path()).collect();
+        assert_eq!(roots.len(), wikis.len());
+
+        // Adding one did not disturb the others.
+        assert!(org.wiki_knowledge_dir().is_dir());
+    }
+
+    /// A directory whose name is not already a slug would make the
+    /// folder on disk and the reference in a page disagree, and the
+    /// disagreement would surface only as a link that does not
+    /// resolve. It is skipped rather than guessed at.
+    #[test]
+    fn a_directory_that_is_not_a_slug_is_not_a_wiki() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = DataRoot::new(tmp.path().to_owned());
+        let org = root.init_org("acme-audio", "ACME Audio", true).unwrap();
+        std::fs::create_dir_all(org.wikis_dir().join("Music Theory")).unwrap();
+        std::fs::create_dir_all(org.wikis_dir().join("music-theory")).unwrap();
+        let slugs: Vec<String> = org.named_wikis().into_iter().map(|(s, _)| s).collect();
+        assert_eq!(slugs, [DEFAULT_WIKI, "music-theory"]);
+    }
+
+    #[test]
+    fn wiki_slug_matches_what_a_reference_carries() {
+        assert_eq!(wiki_slug("Music Theory"), "music-theory");
+        assert_eq!(wiki_slug("Bible Study"), "bible-study");
+        assert_eq!(wiki_slug("  Cooking!  "), "cooking");
+        assert_eq!(wiki_slug(""), "");
     }
 }
