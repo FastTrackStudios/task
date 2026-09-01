@@ -1010,20 +1010,15 @@ pub(crate) async fn build_org_state(
         // resolver is a trait rather than a match.
         #[cfg(feature = "plugin-wiki")]
         let subscriptions = {
-            let mut domains = std::collections::HashMap::new();
-            for (slug, _) in example_org::ORGS {
-                // The example's orgs answer to `<name>.test`, which is
-                // what its seeded references carry.
-                domains.insert(
-                    format!("{}.test", slug.split('-').next().unwrap_or(slug)),
-                    (*slug).to_owned(),
-                );
-            }
+            let orgs_dir = org_root
+                .path()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| org_root.path().to_path_buf());
+            let domains = wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok());
             let upstream = std::sync::Arc::new(wiki_live::subscriptions_backend::LocalOrgs::new(
-                org_root
-                    .path()
+                orgs_dir
                     .parent()
-                    .and_then(std::path::Path::parent)
                     .unwrap_or(org_root.path())
                     .to_path_buf(),
                 domains,
@@ -4251,6 +4246,70 @@ mod range_tests {
 /// and the domain in a subscription come from one place: a mismatch
 /// between them is a reference that resolves for nobody.
 pub const FIRST_PARTY_DOMAIN: &str = "fasttrackstudio.app";
+
+/// Domain → org slug, for resolving a reference's publishing domain to
+/// an org on this data root (`wiki.ref.format`: the domain is a name,
+/// not an address).
+///
+/// Three sources, later ones winning: every org answers to its own
+/// slug (`fasttrackstudios/music-theory::Ionian` resolves on the box
+/// that hosts it, with nothing configured); the example's orgs answer
+/// to `<name>.test`, which is what its seeded references carry; and
+/// `TASK_WIKI_DOMAINS` — `domain=slug,domain=slug` — names the real
+/// federation domains a deployment publishes under
+/// (`fasttrackstudio.app=fasttrackstudios`).
+#[cfg(feature = "plugin-wiki")]
+#[must_use]
+pub fn wiki_domains(
+    orgs_dir: &std::path::Path,
+    configured: Option<String>,
+) -> std::collections::HashMap<String, String> {
+    let mut domains = std::collections::HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(orgs_dir) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if let Some(slug) = entry.file_name().to_str() {
+                domains.insert(slug.to_owned(), slug.to_owned());
+            }
+        }
+    }
+    for (slug, _) in example_org::ORGS {
+        domains.insert(
+            format!("{}.test", slug.split('-').next().unwrap_or(slug)),
+            (*slug).to_owned(),
+        );
+    }
+    for pair in configured.as_deref().unwrap_or_default().split(',') {
+        if let Some((domain, slug)) = pair.split_once('=') {
+            let (domain, slug) = (domain.trim(), slug.trim());
+            if !domain.is_empty() && !slug.is_empty() {
+                domains.insert(domain.to_owned(), slug.to_owned());
+            }
+        }
+    }
+    domains
+}
+
+#[cfg(all(test, feature = "plugin-wiki"))]
+mod wiki_domain_tests {
+    #[test]
+    fn slugs_examples_and_configured_domains_all_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("fasttrackstudios")).unwrap();
+        std::fs::create_dir_all(dir.path().join("codywright")).unwrap();
+        let d = super::wiki_domains(
+            dir.path(),
+            Some(" fasttrackstudio.app=fasttrackstudios, codywright.fasttrackstudio.app = codywright ,bad".into()),
+        );
+        assert_eq!(d["fasttrackstudios"], "fasttrackstudios");
+        assert_eq!(d["fasttrackstudio.app"], "fasttrackstudios");
+        assert_eq!(d["codywright.fasttrackstudio.app"], "codywright");
+        assert_eq!(d["acme.test"], "acme-audio");
+        assert!(!d.contains_key("bad"));
+    }
+}
 
 /// The deployment's core set — subscribed by default in every vault
 /// and every wiki (`wiki.core.default`).
