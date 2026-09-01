@@ -396,3 +396,92 @@ async fn seeded_references_resolve_against_the_readers_subscriptions() -> eyre::
     assert!(!bible.kind.is_editable(), "a Resource is never editable");
     Ok(())
 }
+
+/// A subscription end to end: alice-personal takes on ACME's Music
+/// Theory wiki, materializes it, and a reference written in ACME's own
+/// prose then resolves to a file on alice's disk.
+///
+/// Two orgs on one data root, which is the arrangement `admin seed`
+/// uses. The upstream side is the real vault sync backend over ACME's
+/// wiki directory — the same engine the product syncs vaults with, and
+/// the reason no second replication path had to be written.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_subscription_materializes_and_its_references_resolve() -> eyre::Result<()> {
+    use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
+
+    let tmp = tempfile::tempdir()?;
+    let data_root_path = tmp.path();
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(data_root_path, "acme-audio")?;
+    plant(data_root_path, "alice-personal")?;
+
+    let data_root = org_proto::DataRoot::new(data_root_path.to_owned());
+    let acme = data_root.org("acme-audio");
+    let alice = data_root.org("alice-personal");
+
+    // ACME serves its Music Theory wiki. A wiki is a vault, so the
+    // vault sync backend mounts it unchanged.
+    let upstream = vault::Backend::single(
+        "music-theory",
+        acme.named_wiki_dir("music-theory"),
+    )?;
+
+    let subscription = Subscription {
+        domain: "acme.test".into(),
+        slug: "music-theory".into(),
+        kind: SourceKind::Wiki,
+        title: "Music Theory".into(),
+        core: false,
+        declined: false,
+    };
+    let store = wiki_live::subscriptions::SubscriptionStore::open(alice.path());
+    store.subscribe(&Subscriber::Vault, subscription.clone())?;
+
+    let out =
+        wiki_live::materialize::refresh_subscription(&upstream, alice.path(), &subscription)?;
+    eyre::ensure!(out.pulled > 0, "a fresh subscription pulls the source");
+    assert!(!out.has_local_work());
+
+    // The copy is where a reference says it is, and it is markdown a
+    // person could open.
+    let copy =
+        wiki_live::materialize::local_copy_dir(alice.path(), "acme.test", "music-theory");
+    let ionian = copy.join("Concepts").join("Ionian.md");
+    assert!(ionian.is_file(), "the subscribed page is on alice's disk");
+    assert!(std::fs::read_to_string(&ionian)?.contains("major"));
+
+    // Now the payoff: a reference ACME wrote resolves for alice,
+    // because alice holds the source — and lands on a real file.
+    let acme_page = std::fs::read_to_string(
+        acme.named_wiki_dir("audio-production")
+            .join("Concepts")
+            .join("Equalization.md"),
+    )?;
+    let held = store.active(&Subscriber::Vault)?;
+    let mut resolved_files = 0;
+    for (_, reference) in wiki_proto::reference::scan(&acme_page) {
+        let Ok(Some(hit)) = wiki_proto::resolve(&reference, &held) else {
+            continue;
+        };
+        let target = copy.join("Concepts").join(format!("{}.md", hit.target));
+        assert!(
+            target.is_file(),
+            "`{}` resolved but is not on disk at {}",
+            hit.target,
+            target.display()
+        );
+        resolved_files += 1;
+    }
+    eyre::ensure!(
+        resolved_files >= 2,
+        "the seeded cross-wiki references should resolve to real files"
+    );
+
+    // Refreshing again is a no-op, and the base makes that cheap
+    // rather than a re-download.
+    let again =
+        wiki_live::materialize::refresh_subscription(&upstream, alice.path(), &subscription)?;
+    assert_eq!(again.pulled, 0);
+    Ok(())
+}

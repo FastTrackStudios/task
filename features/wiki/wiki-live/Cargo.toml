@@ -19,6 +19,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 vault-live = { workspace = true }
+# Materializing a subscribed source rides the vault sync engine: a
+# wiki is a vault, so the tree-diff already exists and works over vox.
+vault-proto = { workspace = true }
+vault-sync-client = { workspace = true }
 walkdir = { workspace = true }
 wiki-extract = { workspace = true }
 wiki-graph = { workspace = true }
