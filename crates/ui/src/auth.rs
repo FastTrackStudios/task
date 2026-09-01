@@ -215,8 +215,13 @@ pub enum AuthAction {
     /// flow. The only action carrying no credentials: the password was
     /// typed at the issuer and Task never saw it, which is the point of
     /// going the long way round.
+    ///
+    /// Carries the issuer rather than looking it up, because this
+    /// arrives on a fresh page load where discovery may not have
+    /// resolved yet — see `central_login::ISSUER_KEY`.
     AdoptCentralToken {
         token: String,
+        issuer: String,
     },
     SignOut,
 }
@@ -276,9 +281,10 @@ impl AuthCtx {
     /// authorization code. Fire-and-forget like the rest: the work runs
     /// in the root coroutine, so the callback page is free to navigate
     /// away immediately.
-    pub fn adopt_central_token(self, token: impl Into<String>) {
+    pub fn adopt_central_token(self, token: impl Into<String>, issuer: impl Into<String>) {
         self.actions.send(AuthAction::AdoptCentralToken {
             token: token.into(),
+            issuer: issuer.into(),
         });
     }
 
@@ -623,14 +629,7 @@ async fn run_credential_sign_in(
 /// `/auth/session` then `/oauth2/userinfo`), so everything downstream —
 /// vox dialing, the locker, cached-token switch-back — is identical to a
 /// credential sign-in and none of it needs to know which door was used.
-async fn run_central_token_sign_in(mut st: AuthState, token: String) {
-    let Some(issuer) = task_ui_core::central_auth::issuer() else {
-        // Reachable if the server stopped advertising an issuer while a
-        // sign-in was in flight in another tab.
-        st.error
-            .set(Some("this server issues its own accounts".to_owned()));
-        return;
-    };
+async fn run_central_token_sign_in(mut st: AuthState, token: String, issuer: String) {
     st.busy.set(true);
     st.error.set(None);
 
@@ -788,8 +787,8 @@ pub fn provide_auth() -> AuthCtx {
                 } => {
                     run_credential_sign_in(st, &email, &password, Some(&name)).await;
                 }
-                AuthAction::AdoptCentralToken { token } => {
-                    run_central_token_sign_in(st, token).await;
+                AuthAction::AdoptCentralToken { token, issuer } => {
+                    run_central_token_sign_in(st, token, issuer).await;
                 }
                 AuthAction::SignOut => run_sign_out(st).await,
             }

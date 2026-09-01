@@ -14,7 +14,7 @@
 use dioxus::prelude::*;
 
 use crate::auth::AuthCtx;
-use crate::central_login::{self, LoginError};
+use crate::central_login::{self, LoginError, Redeemed};
 use crate::routes::Route;
 
 #[component]
@@ -53,10 +53,12 @@ pub fn AuthCallbackView(code: String, state: String, error: String) -> Element {
                 }
 
                 match exchange(&code, &state).await {
-                    Ok(token) => {
+                    Ok(redeemed) => {
                         // Fire-and-forget into the root coroutine, so
                         // navigating away immediately cannot cancel it.
-                        auth.adopt_central_token(token);
+                        // The issuer rides along because discovery may
+                        // not have resolved on this fresh page load.
+                        auth.adopt_central_token(redeemed.token, redeemed.issuer);
                         nav.replace(Route::HomeRoute {});
                     }
                     Err(e) => failure.set(Some(e.to_string())),
@@ -87,7 +89,7 @@ pub fn AuthCallbackView(code: String, state: String, error: String) -> Element {
 /// Redeem the code. Split out so the component body stays about what is
 /// shown, and because the two builds differ only here.
 #[cfg(target_arch = "wasm32")]
-async fn exchange(code: &str, state: &str) -> Result<String, LoginError> {
+async fn exchange(code: &str, state: &str) -> Result<Redeemed, LoginError> {
     let redirect_uri = central_login::redirect_uri().ok_or(LoginError::NoBrowser)?;
     central_login::complete(&redirect_uri, code, state).await
 }
@@ -97,7 +99,7 @@ async fn exchange(code: &str, state: &str) -> Result<String, LoginError> {
 /// for the desktop and mobile targets that share this crate.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::unused_async)]
-async fn exchange(_code: &str, _state: &str) -> Result<String, LoginError> {
+async fn exchange(_code: &str, _state: &str) -> Result<Redeemed, LoginError> {
     let _ = central_login::CLIENT_ID;
     Err(LoginError::NoBrowser)
 }
