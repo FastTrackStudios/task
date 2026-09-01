@@ -243,3 +243,63 @@ async fn the_planted_org_has_a_completed_booking_to_invoice() -> eyre::Result<()
     assert!(et.duration_min > 0, "the event type has no duration");
     Ok(())
 }
+
+/// The named wikis land where a reference expects to find them.
+///
+/// t[verify wiki.many.set] — planting an org produces the *set* of
+/// wikis it declares, each at `wikis/<slug>/`, and the slug on disk is
+/// the one a reference carries (`alice.test/cooking::…`). A mismatch
+/// here would surface only as a link that quietly fails to resolve,
+/// which is exactly the failure the suite exists to catch early.
+///
+/// The Bible is deliberately NOT asserted: it downloads, and the suite
+/// must pass on a machine with no network. `TASK_DEMO_NO_BIBLE` keeps
+/// this test off the wire entirely.
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_the_orgs_named_wikis() -> eyre::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let data_root = tmp.path();
+    // SAFETY: nextest runs one process per test, so this env write is
+    // not racing another test in this binary.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(data_root, "alice-personal")?;
+
+    let org = org_proto::DataRoot::new(data_root.to_owned()).org("alice-personal");
+
+    let declared: Vec<String> = task_server::example_org::wikis_of("alice-personal")
+        .map(|w| org_proto::wiki_slug(w.title))
+        .collect();
+    assert!(!declared.is_empty(), "the example declares personal wikis");
+
+    let planted: Vec<String> = org.named_wikis().into_iter().map(|(s, _)| s).collect();
+    for slug in &declared {
+        assert!(
+            planted.contains(slug),
+            "declared wiki `{slug}` is not in the planted set {planted:?}"
+        );
+        assert!(
+            org.named_wiki_dir(slug).join("purpose.md").is_file(),
+            "`{slug}` planted without its purpose.md"
+        );
+    }
+
+    // The default tier is a member of the set rather than a fourth
+    // shape beside it.
+    assert!(planted.iter().any(|s| s == org_proto::DEFAULT_WIKI));
+
+    // Recipes reach the cookbook through the Cooking wiki, which is
+    // what makes them shareable rather than a per-org store.
+    assert!(
+        org.named_wiki_dir("cooking")
+            .join("Cookbook")
+            .join("Sourdough Loaf.cook")
+            .is_file(),
+        "the Cooking wiki's cookbook did not plant"
+    );
+
+    // A replant tops up rather than duplicating.
+    plant(data_root, "alice-personal")?;
+    let again: Vec<String> = org.named_wikis().into_iter().map(|(s, _)| s).collect();
+    assert_eq!(planted, again, "a replant changed the set of wikis");
+    Ok(())
+}

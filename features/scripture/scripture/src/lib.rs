@@ -34,6 +34,8 @@ pub mod refs;
 pub mod stepbible;
 pub mod store;
 pub mod topics;
+pub mod pull;
+pub mod sources;
 pub mod usfm;
 pub mod versification;
 
@@ -44,6 +46,8 @@ pub use compare::{CompareSpec, extract_compare_specs};
 pub use crossref::{CrossRefEntry, CrossRefs};
 pub use entities::{Entity, from_bible_data};
 pub use install::{InstallError, install_usfm_dir};
+pub use pull::{PullError, Pulled, pull, pull_from_archive};
+pub use sources::{Source, SourceError, installable, source_for};
 pub use lexicon::{Lexicon, js_to_json, normalize_strongs};
 pub use original::{OrigMeta, OrigText, OrigVerse, OrigWord};
 pub use refs::{VerseRefHit, extract_verse_refs};

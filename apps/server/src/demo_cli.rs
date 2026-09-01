@@ -86,6 +86,9 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         planted.written, planted.kept
     );
 
+    #[cfg(feature = "plugin-scripture")]
+    plant_bible(&org).await;
+
     // Accounts, in this org's own auth store.
     let url = format!("sqlite://{}?mode=rwc", org.auth_db().display());
     let auth = crate::AuthState::open(&url, &crate::auth_secret())
@@ -498,4 +501,64 @@ fn which_ffmpeg() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Put a Bible in the org's resource library, so the seeded Bible
+/// Study wiki has something to anchor to and the scripture reader has
+/// something to read.
+///
+/// Public domain only — `scripture::pull` refuses anything else, and
+/// the demo asks for WEB by name. A licensed edition could not be
+/// planted even if someone tried.
+///
+/// **Never fails the plant.** A demo that will not stand up because a
+/// download timed out is worse than a demo with an empty reader, and
+/// the reader already handles an absent corpus (`load_resource_root`
+/// returns an empty store for a missing directory). So every failure
+/// here is a printed line and nothing more.
+///
+/// Offline is a first-class path: the archive is cached under
+/// `$TASK_BIBLE_CACHE`, so the first plant on a machine downloads and
+/// every plant after that — including on a plane — installs from disk.
+/// `TASK_DEMO_NO_BIBLE=1` skips it entirely.
+///
+/// One copy per org for now, which `wiki.core.default` will replace:
+/// core membership is meant to be a property of the source rather than
+/// a copy of it, so once subscription exists these orgs will share one
+/// corpus instead of each holding a canon.
+#[cfg(feature = "plugin-scripture")]
+async fn plant_bible(org: &org_proto::OrgRoot) {
+    const TRANSLATION: &str = "WEB";
+
+    if std::env::var_os("TASK_DEMO_NO_BIBLE").is_some() {
+        println!("  bible: skipped (TASK_DEMO_NO_BIBLE)");
+        return;
+    }
+    let dest = org.bible_dir(TRANSLATION);
+    if dest.is_dir()
+        && std::fs::read_dir(&dest)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false)
+    {
+        println!("  bible: {TRANSLATION} already installed");
+        return;
+    }
+    match scripture::pull(TRANSLATION, &dest).await {
+        Ok(pulled) => println!(
+            "  bible: {} books of {} ({})",
+            pulled.books.len(),
+            pulled.id,
+            if pulled.from_cache {
+                "from cache"
+            } else {
+                "downloaded"
+            }
+        ),
+        Err(e) => println!(
+            "  bible: not installed ({e}).\n         \
+             The scripture reader will be empty until you run\n         \
+             `task-server admin bible install --org {}`.",
+            org.slug()
+        ),
+    }
 }

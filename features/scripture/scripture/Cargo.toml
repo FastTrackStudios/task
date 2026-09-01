@@ -24,6 +24,10 @@ serde_json = { workspace = true }
 roxmltree = "0.20"
 # Entity datasets (BibleData) ship as quoted CSV.
 csv = "1"
+# Public-domain corpora arrive as USFM zips (eBible.org). Pure Rust.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Unpacked to a temp dir before install, so a bad archive lands nothing.
+tempfile = "3"
 
 vox = { workspace = true, optional = true }
 vox-types = { workspace = true, optional = true }

@@ -18,6 +18,8 @@
 //! editor layer (future); vault is the sole storage path.
 
 pub mod admin_cli;
+#[cfg(feature = "plugin-scripture")]
+pub mod bible_cli;
 #[cfg(feature = "plugin-agent")]
 pub mod agent_router;
 pub mod api_ref;
