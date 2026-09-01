@@ -370,6 +370,10 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::FilesRoute {} => "Files",
         Route::SettingsRoute {} => "Settings",
         Route::SyncRoute {} => "Sync",
+        // Titled, though nobody should ever read it: the page redeems a
+        // code and navigates away. It shows only if the exchange fails
+        // and the person is left sitting here.
+        Route::AuthCallbackRoute { .. } => "Signing in",
         // A registered app names its own screens. The label is
         // `&'static str` on the plugin side too, so this stays a
         // borrow rather than forcing every other arm to allocate.

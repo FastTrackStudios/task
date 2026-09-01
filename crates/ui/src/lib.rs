@@ -21,6 +21,7 @@ pub mod actions;
 pub mod app;
 pub mod app_views;
 pub mod auth;
+pub mod central_login;
 pub mod chrome;
 pub mod collab;
 pub mod device_pairing;
