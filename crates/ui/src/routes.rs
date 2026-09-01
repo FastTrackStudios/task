@@ -116,6 +116,22 @@ pub enum Route {
         // the app would silently receive only its first parameter.
         // `plugin_route` encodes going in, `PluginScreen` decodes
         // coming out.
+        // The far end of the central sign-in redirect: the issuer sends
+        // the browser back here carrying an authorization code, which
+        // the page redeems for a token before moving on.
+        //
+        // The path is not free to change — it is registered in the
+        // issuer's `redirect_uris` for the `task` client, and authorize
+        // refuses any redirect_uri that is not an exact match, before
+        // the person ever reaches a login page.
+        //
+        // `error` is part of the contract too: OAuth reports refusals by
+        // redirecting here with `error=` instead of `code=`, so a route
+        // that only accepted `code` would drop a denial on the floor and
+        // show an empty page.
+        #[route("/auth/callback?:code&:state&:error")]
+        AuthCallbackRoute { code: String, state: String, error: String },
+
         #[route("/app/:app?:q")]
         PluginRoute { app: String, q: String },
 
@@ -366,4 +382,9 @@ fn SettingsRoute() -> Element {
 #[component]
 fn SyncRoute() -> Element {
     rsx! { pages::sync::SyncView {} }
+}
+
+#[component]
+fn AuthCallbackRoute(code: String, state: String, error: String) -> Element {
+    rsx! { pages::auth_callback::AuthCallbackView { code, state, error } }
 }

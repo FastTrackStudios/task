@@ -211,6 +211,13 @@ pub enum AuthAction {
         password: String,
         name: String,
     },
+    /// A token the central issuer already vouched for, from the redirect
+    /// flow. The only action carrying no credentials: the password was
+    /// typed at the issuer and Task never saw it, which is the point of
+    /// going the long way round.
+    AdoptCentralToken {
+        token: String,
+    },
     SignOut,
 }
 
@@ -260,6 +267,18 @@ impl AuthCtx {
             email: email.into(),
             password: password.into(),
             name: name.into(),
+        });
+    }
+
+    /// Adopt a token from the central redirect flow.
+    ///
+    /// Called by the `/auth/callback` page once it has redeemed an
+    /// authorization code. Fire-and-forget like the rest: the work runs
+    /// in the root coroutine, so the callback page is free to navigate
+    /// away immediately.
+    pub fn adopt_central_token(self, token: impl Into<String>) {
+        self.actions.send(AuthAction::AdoptCentralToken {
+            token: token.into(),
         });
     }
 
@@ -593,6 +612,67 @@ async fn run_credential_sign_in(
     st.busy.set(false);
 }
 
+/// Sign in with a token the central issuer already vouched for.
+///
+/// The redirect flow hands back a token and nothing else, so unlike the
+/// credential path there is no bundle to read a user out of — we ask the
+/// issuer who it belongs to.
+///
+/// The token is an OAuth access token, not a session token. Task's
+/// server accepts both (see `central_auth` there, which tries
+/// `/auth/session` then `/oauth2/userinfo`), so everything downstream —
+/// vox dialing, the locker, cached-token switch-back — is identical to a
+/// credential sign-in and none of it needs to know which door was used.
+async fn run_central_token_sign_in(mut st: AuthState, token: String) {
+    let Some(issuer) = task_ui_core::central_auth::issuer() else {
+        // Reachable if the server stopped advertising an issuer while a
+        // sign-in was in flight in another tab.
+        st.error
+            .set(Some("this server issues its own accounts".to_owned()));
+        return;
+    };
+    st.busy.set(true);
+    st.error.set(None);
+
+    let result = async {
+        let user = crate::central_login::user_info(&issuer, &token)
+            .await
+            .map_err(|e| e.to_string())?;
+        // `sub` is a string in OIDC but a uuid everywhere in Task, and
+        // the membership rows are keyed on the uuid. An issuer that
+        // handed back something else would otherwise be discovered much
+        // later, as a lookup that silently never matches.
+        let user_id = user
+            .sub
+            .parse::<Uuid>()
+            .map_err(|_| format!("the issuer returned a non-uuid subject: {}", user.sub))?;
+        // An account with no email still signs in; the id is the part
+        // that has to exist, and it is what memberships key on.
+        let email = user.email.clone().unwrap_or_else(|| user.sub.clone());
+        save_cached_token(&email, &token);
+        Ok::<ActiveAccount, String>(ActiveAccount {
+            user_id,
+            name: user.name.unwrap_or_else(|| email.clone()),
+            email,
+            token,
+        })
+    }
+    .await;
+
+    match result {
+        Ok(account) => {
+            save_active_email(&account.email);
+            sync_active_server_entry(st.registry, Some(&account));
+            publish_session_token(st, Some(&account));
+            pull_locker(st, &account).await;
+            push_link(st, &account).await;
+            st.active.set(Some(account));
+        }
+        Err(e) => st.error.set(Some(e)),
+    }
+    st.busy.set(false);
+}
+
 /// Explicit sign-out: revoke the session server-side, drop the cached
 /// token + active marker, then fall back to Guest (the anonymous
 /// default — auto sign-in).
@@ -707,6 +787,9 @@ pub fn provide_auth() -> AuthCtx {
                     name,
                 } => {
                     run_credential_sign_in(st, &email, &password, Some(&name)).await;
+                }
+                AuthAction::AdoptCentralToken { token } => {
+                    run_central_token_sign_in(st, token).await;
                 }
                 AuthAction::SignOut => run_sign_out(st).await,
             }
@@ -990,8 +1073,54 @@ pub fn LoginForm() -> Element {
         }
     };
 
+    // Read each render rather than cached in a signal: discovery
+    // resolves asynchronously at boot, and a value captured once would
+    // hide the button from anyone who reached this screen first.
+    let central_issuer = task_ui_core::central_auth::issuer();
+
+    let central_sign_in = move |_| {
+        error.set(None);
+        #[cfg(target_arch = "wasm32")]
+        {
+            match crate::central_login::redirect_uri() {
+                Some(uri) => {
+                    // Only returns on failure — success is the page
+                    // navigating away to the issuer.
+                    if let Err(e) = crate::central_login::begin(&uri) {
+                        error.set(Some(e.to_string()));
+                    }
+                }
+                None => error.set(Some("no browser context".to_owned())),
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        error.set(Some(
+            "Signing in through the browser isn't available here — use your email and password."
+                .to_owned(),
+        ));
+    };
+
     rsx! {
         div { class: "flex flex-col gap-2",
+            // The central account, offered first because it is the one
+            // that spans every FastTrackStudio app — the form below
+            // signs into this server alone. Absent entirely on a
+            // self-hosted server, which advertises no issuer and where
+            // the button would lead nowhere.
+            if central_issuer.is_some() {
+                Button {
+                    variant: ButtonVariant::Primary,
+                    size: ButtonSize::Medium,
+                    on_click: central_sign_in,
+                    class: "w-full",
+                    "Continue with FastTrackStudio"
+                }
+                div { class: "flex items-center gap-2 py-1",
+                    div { class: "h-px flex-1 bg-border" }
+                    span { class: "text-xs text-muted-foreground", "or" }
+                    div { class: "h-px flex-1 bg-border" }
+                }
+            }
             if creating() {
                 Input {
                     value: name,

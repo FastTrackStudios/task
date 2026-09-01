@@ -179,6 +179,12 @@ serde_json.workspace = true
 # Desktop side of the org-discovery boot cache (web uses localStorage).
 dirs = "5"
 
+# The shared redirect sign-in: PKCE, the request shapes, the response
+# shapes. Lives in architect so all five FastTrackStudio apps use one
+# implementation — see `central_login`, which is only the browser glue
+# around it.
+auth-client.workspace = true
+
 # Browser glue. Compiles cleanly on native too; the source uses
 # them only inside `cfg(target_arch = "wasm32")` blocks.
 wasm-bindgen.workspace = true
@@ -189,6 +195,10 @@ web-sys = { workspace = true, features = [
     "MediaQueryList",
     "Location",
     "History",
+    # PKCE needs unguessable bytes. js_sys::Math::random is not that —
+    # it is seeded per-context and predictable, and a guessable verifier
+    # defeats the whole point of PKCE.
+    "Crypto",
     "Navigator",
     "MediaQueryList",
     "WebSocket",

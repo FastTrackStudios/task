@@ -4,6 +4,7 @@
 //! (sidebar + headers + bottom bar) is provided by the route
 //! layout; pages only render the content area.
 
+pub mod auth_callback;
 pub mod bases;
 pub mod contacts;
 pub mod files;
