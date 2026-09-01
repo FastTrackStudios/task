@@ -112,6 +112,12 @@ impl CentralAuth {
         }
     }
 
+    /// The issuer's base URL, for discovery to advertise.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.base_url
+    }
+
     /// The user this token belongs to, or `None`.
     ///
     /// `None` covers every failure — rejected, malformed, issuer

@@ -548,7 +548,7 @@ async fn run_credential_sign_in(
     st.busy.set(true);
     st.error.set(None);
     let result = async {
-        let client = establish_for::<AuthServiceClient>(&slug).await?;
+        let client = auth_client(&slug).await?;
         let bundle = if let Some(name) = name {
             client
                 .sign_up_email_password(SignUpEmailPassword {
@@ -596,6 +596,38 @@ async fn run_credential_sign_in(
 /// Explicit sign-out: revoke the session server-side, drop the cached
 /// token + active marker, then fall back to Guest (the anonymous
 /// default — auto sign-in).
+/// The `AuthService` this server wants sign-in to go through.
+///
+/// The central issuer when discovery advertised one, the home org
+/// otherwise. Both mount the *same* service, so this is only a choice
+/// of endpoint — the sign-in, sign-up and sign-out calls below are
+/// identical either way, and nothing downstream of the returned bundle
+/// knows or needs to know which answered.
+///
+/// Anonymous on purpose: a sign-in has no session yet, and presenting a
+/// stale one to the issuer would dial a connection keyed to the wrong
+/// identity (see `shared_caller_with` on why identity is part of the
+/// cache key).
+///
+/// Falls back to the home org if the issuer cannot be reached. That is
+/// deliberate and it is the *client's* call to make, not a security
+/// decision: a server that trusts an issuer still validates whatever
+/// token arrives, so the worst case here is a sign-in that fails twice
+/// instead of once. Silently failing when a self-hosted org could have
+/// answered would be worse.
+async fn auth_client(slug: &str) -> Result<AuthServiceClient, String> {
+    if let Some(url) = task_ui_core::central_auth::issuer_vox() {
+        match task_ui_core::vox_clients::establish_shared_at::<AuthServiceClient>(&url, None).await
+        {
+            Ok(client) => return Ok(client),
+            Err(e) => {
+                tracing::warn!(%e, "central issuer unreachable — trying this server's own accounts");
+            }
+        }
+    }
+    establish_for::<AuthServiceClient>(slug).await
+}
+
 async fn run_sign_out(mut st: AuthState) {
     let Some(account) = st.active.peek().clone() else {
         return;

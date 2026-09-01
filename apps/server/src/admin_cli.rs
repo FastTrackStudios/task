@@ -729,7 +729,14 @@ fn home_org(
         })
 }
 
-/// `admin adopt-principal --email <addr>` — S1 of one-account-per-server.
+/// `admin adopt-principal --email <addr> [--principal <uuid>]` — S1 of
+/// one-account-per-server.
+///
+/// `--principal` names the id the rows are keyed to, and is **required**
+/// when this server delegates identity to a central issuer: the id a
+/// token resolves to then belongs to the issuer, not to any local auth
+/// store. Without an issuer it is optional and the home org's id is
+/// used, which is what this command always did.
 ///
 /// Give one principal a membership row in every org on this server that
 /// already holds an account with that address, carrying THAT org's role
@@ -757,25 +764,52 @@ async fn adopt_principal(args: &[String]) -> eyre::Result<()> {
     let home = home_org(&orgs)?;
     let home_slug = home.slug().to_owned();
 
-    // The principal id is the home org's user id, so nothing that
-    // already references it in the home org — where nearly all the data
-    // is — has to be rewritten.
-    let home_auth = open_org_auth(&home_slug).await?;
-    let principal = home_auth
-        .auth
-        .find_user_by_email(&email)
-        .await
-        .map_err(|e| eyre::eyre!("look up `{email}` in home org `{home_slug}`: {e:?}"))?
-        .ok_or_else(|| {
-            eyre::eyre!(
-                "no account with email `{email}` in the home org `{home_slug}` — the principal \
-                 must exist there first (`admin create-user --org {home_slug} --email {email}`)"
-            )
-        })?;
+    // Who the membership rows are keyed to.
+    //
+    // Normally the home org's user id, so nothing that already
+    // references it in the home org — where nearly all the data is —
+    // has to be rewritten.
+    //
+    // Under central auth it must instead be the ISSUER's user id,
+    // because that is what a token resolves to and therefore what
+    // `role_for` is asked about. Getting this wrong is the worst kind of
+    // wrong: the rows write, the command reports success, and every
+    // request is then refused for a principal that has "no membership
+    // row" — with rows sitting right there under a different id. So
+    // when an issuer is configured, the id has to be given explicitly
+    // rather than guessed from a local store that is no longer the
+    // authority.
+    let principal_id = match (flag(args, "--principal"), crate::central_auth::configured()) {
+        (Some(raw), _) => raw
+            .parse::<uuid::Uuid>()
+            .map_err(|e| eyre::eyre!("--principal must be a uuid: {e}"))?,
+        (None, Some(issuer)) => bail!(
+            "this server delegates identity to {} — pass the ISSUER's user id \
+             explicitly:\n\n    admin adopt-principal --email {email} --principal <uuid>\n\n\
+             The home org's id is not what a token from that issuer resolves to, so \
+             rows written from it would be invisible to every request.",
+            issuer.issuer()
+        ),
+        (None, None) => {
+            let home_auth = open_org_auth(&home_slug).await?;
+            home_auth
+                .auth
+                .find_user_by_email(&email)
+                .await
+                .map_err(|e| eyre::eyre!("look up `{email}` in home org `{home_slug}`: {e:?}"))?
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "no account with email `{email}` in the home org `{home_slug}` — the \
+                         principal must exist there first (`admin create-user --org \
+                         {home_slug} --email {email}`)"
+                    )
+                })?
+                .id
+        }
+    };
 
     println!(
-        "principal {} ({email}) — home org `{home_slug}`{}",
-        principal.id,
+        "principal {principal_id} ({email}) — home org `{home_slug}`{}",
         if dry { "  [DRY RUN]" } else { "" }
     );
 
@@ -802,7 +836,7 @@ async fn adopt_principal(args: &[String]) -> eyre::Result<()> {
     if !dry {
         let store = crate::memberships::Memberships::open(&home.memberships_db()).await?;
         for (slug, role) in &adopted {
-            store.upsert(principal.id, slug, role.as_deref()).await?;
+            store.upsert(principal_id, slug, role.as_deref()).await?;
         }
     }
 

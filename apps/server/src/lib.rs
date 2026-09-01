@@ -2689,6 +2689,18 @@ async fn well_known_handler(
         "build": std::env::var("TASK_BUILD_REV").unwrap_or_else(|_| "unknown".to_owned()),
         "orgs": orgs,
         "schema_stamps": stamps,
+        // Where accounts come from, when they do not come from here.
+        //
+        // Absent (`null`) on a self-hosted server, which is the default
+        // and means what it always meant: sign in against the home org.
+        // Present, and a client signs in *there* instead — one account
+        // across every FastTrackStudio app rather than one per org.
+        //
+        // It belongs in discovery because the client has to know before
+        // it has a session, and discovery is the only thing it fetches
+        // before one exists. Public: an issuer URL is not a secret, and
+        // a client that cannot learn it cannot sign in at all.
+        "central_auth": crate::central_auth::configured().map(|c| c.issuer().to_owned()),
     }))
 }
 

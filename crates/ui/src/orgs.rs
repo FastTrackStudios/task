@@ -17,6 +17,11 @@ pub use task_ui_core::orgs::*;
 #[derive(serde::Deserialize)]
 struct WellKnown {
     orgs: Vec<RawOrg>,
+    /// Where accounts come from, when not from this server. Absent on
+    /// a self-hosted server and on every server predating central
+    /// auth — both mean "sign in against the home org".
+    #[serde(default)]
+    central_auth: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -58,6 +63,10 @@ fn parse_orgs(body: &str) -> Result<Vec<OrgMeta>, String> {
             iroh: o.iroh,
         })
         .collect();
+    // Discovery is also where the client learns whether this server
+    // issues its own accounts. Same reason as the endpoint ids below:
+    // sign-in needs it from a plain async fn, not a component.
+    task_ui_core::central_auth::note(wk.central_auth);
     // Discovery is where a native client learns each org's iroh
     // endpoint id; the transport keeps its own registry because
     // `caller_for` is a free fn with no reach into the org-list signal.

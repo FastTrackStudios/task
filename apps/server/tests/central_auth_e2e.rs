@@ -142,3 +142,66 @@ async fn a_resolved_token_is_not_asked_about_twice() {
         "the cached answer was not used"
     );
 }
+
+/// Discovery advertises the issuer — the client's only way to learn it.
+///
+/// The client has to know where to sign in *before* it has a session,
+/// and discovery is the one thing it fetches in that state. If this
+/// field is missing the app silently signs in against the home org
+/// instead, which succeeds locally and then fails everywhere else, so
+/// it is worth an assertion rather than an assumption.
+///
+/// Both directions in one test: unset means self-hosted and the field
+/// is null, which is the default every existing deployment is in.
+#[tokio::test(flavor = "multi_thread")]
+async fn discovery_says_where_accounts_come_from() {
+    let tmp = tempfile::tempdir().unwrap();
+    // SAFETY: one test per binary, so nothing races this env setup.
+    unsafe {
+        std::env::set_var("TASK_DATA_ROOT", tmp.path());
+        for var in ["TASK_SERVER_ORG", "TASK_SERVER_VAULT_ROOT"] {
+            std::env::remove_var(var);
+        }
+    }
+    // Set before the first read: the issuer is resolved once per process.
+    let expected = issuer();
+    if let Some(url) = &expected {
+        unsafe { std::env::set_var("TASK_CENTRAL_AUTH_URL", url) };
+    } else {
+        unsafe { std::env::remove_var("TASK_CENTRAL_AUTH_URL") };
+    }
+
+    let data_root = org_proto::DataRoot::from_env().unwrap();
+    data_root.ensure().unwrap();
+    data_root.init_org("alpha", "Alpha", true).unwrap();
+
+    let state = task_server::AppState::new(None).await.expect("boot");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = task_server::router(state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let doc: serde_json::Value = reqwest::get(format!(
+        "http://127.0.0.1:{port}/.well-known/task-server.json"
+    ))
+    .await
+    .expect("discovery")
+    .json()
+    .await
+    .expect("discovery json");
+
+    match expected {
+        Some(url) => assert_eq!(
+            doc["central_auth"].as_str(),
+            Some(url.as_str()),
+            "discovery must name the issuer the client should sign in against"
+        ),
+        None => assert!(
+            doc["central_auth"].is_null(),
+            "a self-hosted server must advertise no issuer: {}",
+            doc["central_auth"]
+        ),
+    }
+}
