@@ -1017,10 +1017,7 @@ pub(crate) async fn build_org_state(
                 .unwrap_or_else(|| org_root.path().to_path_buf());
             let domains = wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok());
             let upstream = std::sync::Arc::new(wiki_live::subscriptions_backend::LocalOrgs::new(
-                orgs_dir
-                    .parent()
-                    .unwrap_or(org_root.path())
-                    .to_path_buf(),
+                orgs_dir.parent().unwrap_or(org_root.path()).to_path_buf(),
                 domains,
             ));
             wiki_live::subscriptions_backend::SubscriptionsBackend::new(
