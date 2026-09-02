@@ -235,6 +235,16 @@ pub struct Placed {
     pub backing: PathBuf,
     pub hydrator: Arc<dyn Hydrator>,
     pub tags: Arc<dyn Tags>,
+    /// Whether writes under this place are refused.
+    ///
+    /// A subscribed copy of somebody else's wiki and the resource
+    /// library are shown so they can be read, and an edit to either is
+    /// an edit nothing upstream will keep — worse, one the sync engine
+    /// would faithfully carry back to the server as a local change. So
+    /// the tree says no at the kernel: every entry lists without write
+    /// bits, and the mutating calls answer `EROFS`, which is the errno
+    /// a person's tools already know how to explain.
+    pub read_only: bool,
 }
 
 /// The mounted tree.
@@ -295,6 +305,7 @@ impl LiveTree {
                 backing,
                 hydrator,
                 tags,
+                read_only: false,
             }],
         )
     }
@@ -364,6 +375,15 @@ impl LiveTree {
                 .map(|p| p.to_string_lossy().into_owned())
                 == Some(parent.clone())
         })
+    }
+
+    /// Whether `shown` sits under a root that refuses writes.
+    ///
+    /// Above every root there is only the skeleton, which is nobody's to
+    /// write either — but `mkdir` there is how a project is made, so the
+    /// skeleton is left to the composer and only placed roots answer.
+    fn is_read_only(&self, shown: &Path) -> bool {
+        self.owner(shown).is_some_and(|r| r.read_only)
     }
 
     /// Where a shown path actually is on disk.
@@ -448,6 +468,14 @@ impl LiveTree {
             FileType::Directory => 0o755,
             _ if executable => 0o755,
             _ => 0o644,
+        };
+        // No write bits under a read-only root. The mount runs with
+        // `DefaultPermissions`, so the kernel refuses on these before
+        // any call below is made — and `ls -l` shows why.
+        let perm = if self.is_read_only(shown) {
+            perm & !0o222
+        } else {
+            perm
         };
 
         Ok(FileAttr {
@@ -616,6 +644,10 @@ impl Filesystem for LiveTree {
 
         let raw = flags.0;
         let accmode = raw & libc::O_ACCMODE;
+        if accmode != libc::O_RDONLY && self.is_read_only(&shown) {
+            reply.error(Errno::EROFS);
+            return;
+        }
         let mut opts = std::fs::OpenOptions::new();
         opts.read(accmode == libc::O_RDONLY || accmode == libc::O_RDWR);
         opts.write(accmode == libc::O_WRONLY || accmode == libc::O_RDWR);
@@ -695,6 +727,10 @@ impl Filesystem for LiveTree {
             return;
         };
         let child = parent_shown.join(name);
+        if self.is_read_only(&child) {
+            reply.error(Errno::EROFS);
+            return;
+        }
         let path = self.real(&child);
         let mut opts = std::fs::OpenOptions::new();
         opts.create(true).read(true).write(true);
@@ -744,6 +780,10 @@ impl Filesystem for LiveTree {
         // and reported back, which is what a passthrough over one
         // person's own files can honestly do.
         if let Some(size) = size {
+            if self.is_read_only(&shown) {
+                reply.error(Errno::EROFS);
+                return;
+            }
             if let Err(e) = std::fs::OpenOptions::new()
                 .write(true)
                 .open(&path)
@@ -773,6 +813,10 @@ impl Filesystem for LiveTree {
             return;
         };
         let child = parent_shown.join(name);
+        if self.is_read_only(&child) {
+            reply.error(Errno::EROFS);
+            return;
+        }
 
         // A folder made beside existing projects is a new project, and
         // this is where that happens. Without it the directory would be
@@ -818,7 +862,12 @@ impl Filesystem for LiveTree {
             reply.error(Errno::ENOENT);
             return;
         };
-        match std::fs::remove_file(self.real(&parent_shown.join(name))) {
+        let child = parent_shown.join(name);
+        if self.is_read_only(&child) {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        match std::fs::remove_file(self.real(&child)) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(errno(&e)),
         }
@@ -829,7 +878,12 @@ impl Filesystem for LiveTree {
             reply.error(Errno::ENOENT);
             return;
         };
-        match std::fs::remove_dir(self.real(&parent_shown.join(name))) {
+        let child = parent_shown.join(name);
+        if self.is_read_only(&child) {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        match std::fs::remove_dir(self.real(&child)) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(errno(&e)),
         }
@@ -854,6 +908,10 @@ impl Filesystem for LiveTree {
             return;
         };
         let (from, to) = (from_dir.join(name), to_dir.join(newname));
+        if self.is_read_only(&from) || self.is_read_only(&to) {
+            reply.error(Errno::EROFS);
+            return;
+        }
         // A rename across roots would move a file into a different tree
         // with a different history — a sync decision, not a rename, and
         // `std::fs::rename` across filesystems fails anyway. Refusing

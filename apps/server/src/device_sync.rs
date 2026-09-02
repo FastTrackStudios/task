@@ -156,6 +156,12 @@ pub async fn sweep(state: &AppState, slug: &str, endpoint: &iroh::Endpoint) {
     let Some(org) = state.org(slug) else { return };
     let org_root = state.data_root.org(slug).path().to_path_buf();
     apply_admissions(&org.files, &org_root);
+    // A wiki created or a source subscribed since the last pass becomes
+    // a root here, so it is in the next `roots` answer a device pulls.
+    match crate::org_roots::adopt_knowledge_roots(&org.files, &org.org_root).await {
+        0 => {}
+        n => info!(%slug, adopted = n, "device sync: new knowledge trees adopted as roots"),
+    }
 
     for (host, hosting) in org.files.admitted_hosts() {
         // Never dial ourselves: an org's own endpoint id can legitimately
@@ -469,6 +475,8 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             name: "Laptop Project".into(),
             flavor: files::RootFlavor::Media,
+            place: None,
+            read_only: false,
         };
         // No `TASK_DEVICE_SYNC_ADOPT` in this process's environment —
         // asserted rather than assumed, since the default is the point.

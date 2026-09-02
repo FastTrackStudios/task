@@ -1346,6 +1346,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match daemon.peer_roots(&coordinator).await {
                     Ok(offered) => {
                         for root in offered {
+                            // The org says where each of its roots
+                            // belongs; a root nobody here has placed
+                            // takes that, so a wiki made on the server
+                            // shows up under `<org>/Wiki/<slug>` after a
+                            // restart with nothing typed.
+                            daemon.place_offered(&root);
                             match daemon
                                 .sync_from_peer(&coordinator, root.id, vec![], &roots_under)
                                 .await

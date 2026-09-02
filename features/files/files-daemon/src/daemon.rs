@@ -190,6 +190,11 @@ struct DaemonInner {
     /// `set_place`. Keyed by root, and deliberately not the same thing
     /// as where its bytes are.
     places: Mutex<BTreeMap<Uuid, String>>,
+    /// Roots the org that offered them wants shown read-only — a
+    /// subscribed copy, the resource library. Recorded beside the places
+    /// and for the same reason: it is a fact about how the root is
+    /// shown, not about where its bytes are.
+    read_only: Mutex<std::collections::BTreeSet<Uuid>>,
     /// The capture running right now, if one is — what `status`
     /// reports so an hours-long read is legible while it happens.
     capturing: Mutex<Option<crate::model::CaptureProgress>>,
@@ -233,6 +238,7 @@ impl SyncDaemon {
                 endpoint: Mutex::new(None),
                 roots_dir: Mutex::new(data_dir_for_roots.clone()),
                 places: Mutex::new(BTreeMap::new()),
+                read_only: Mutex::new(std::collections::BTreeSet::new()),
                 capturing: Mutex::new(None),
                 made_by: Mutex::new(BTreeMap::new()),
                 mounts: Mutex::new(BTreeMap::new()),
@@ -765,8 +771,118 @@ impl SyncDaemon {
             .unwrap_or_else(|| name.to_string())
     }
 
+    /// Take the place an org offers for a root, unless somebody here
+    /// already decided.
+    ///
+    /// The org knows what each of its directories is — this one is a
+    /// wiki, that one a subscribed copy — and says so in
+    /// [`files_sync::WireRoot::place`]. Recording it is what lets a wiki
+    /// created on the server appear in this machine's mount at
+    /// `<org>/Wiki/<slug>` with nobody typing a place. Two things beat
+    /// the offer:
+    ///
+    /// - **a place already recorded**, because `place` is a person's
+    ///   decision and an org's suggestion does not overrule it;
+    /// - **another root already at that place**, because a place names
+    ///   one root — two trees at one path would answer for each other's
+    ///   files. Logged, so the collision is findable rather than silent.
+    ///
+    /// Read-only follows the same rule. Returns the place now in force
+    /// for the root, offered or kept.
+    pub fn place_offered(&self, root: &files_sync::WireRoot) -> Option<String> {
+        let offered = root.place.as_deref()?.trim_matches('/');
+        if offered.is_empty() || offered.split('/').any(|p| p == ".." || p.is_empty()) {
+            tracing::warn!(root = %root.name, place = %offered, "ignoring an offered place that is not inside the tree");
+            return None;
+        }
+        let mut places = self.inner.places.lock().expect("places lock");
+        if let Some(kept) = places.get(&root.id) {
+            return Some(kept.clone());
+        }
+        if let Some((other, _)) = places.iter().find(|(_, p)| p.as_str() == offered) {
+            tracing::warn!(
+                root = %root.name,
+                place = %offered,
+                held_by = %other,
+                "the offered place is already another root's — leaving it where it is"
+            );
+            return None;
+        }
+        places.insert(root.id, offered.to_string());
+        drop(places);
+        if root.read_only {
+            self.inner
+                .read_only
+                .lock()
+                .expect("read-only lock")
+                .insert(root.id);
+        }
+        self.save_places();
+        tracing::info!(root = %root.name, place = %offered, read_only = root.read_only, "placed as the org offered");
+        self.inner.events.publish(self.status());
+        Some(offered.to_string())
+    }
+
+    /// Whether the root is shown read-only — see [`Self::place_offered`].
+    #[must_use]
+    pub fn is_read_only(&self, root_id: Uuid) -> bool {
+        self.inner
+            .read_only
+            .lock()
+            .expect("read-only lock")
+            .contains(&root_id)
+    }
+
+    /// Where a fresh replica of `remote` lands on this disk.
+    ///
+    /// `under` is what the caller asked for, and is honoured unless it
+    /// is the composed mount itself — which it is on a machine whose
+    /// roots directory and mountpoint are one path. Landing a tree there
+    /// would `mkdir` *through* the mount, and a `mkdir` at a place is how
+    /// a project is made: the replica would arrive as a new, empty
+    /// project named after itself. The agent's own data dir is the
+    /// fallback, grouped by org when the offer says which.
+    fn landing_for(
+        &self,
+        under: &std::path::Path,
+        remote: &files_sync::WireRoot,
+    ) -> std::path::PathBuf {
+        let mounted_here = self
+            .inner
+            .mounts
+            .lock()
+            .expect("mount lock")
+            .values()
+            .any(|(at, _)| under.starts_with(at));
+        let org = remote
+            .place
+            .as_deref()
+            .and_then(|p| p.split('/').next())
+            .filter(|o| !o.is_empty());
+        match (mounted_here, org) {
+            (false, None) => under.join(&remote.name),
+            (false, Some(org)) => under.join(org).join(&remote.name),
+            (true, org) => {
+                let base = self.inner.data_dir.join("roots");
+                tracing::info!(
+                    asked = %under.display(),
+                    landing = %base.display(),
+                    "the roots directory is the mount itself — landing the replica beside the store"
+                );
+                match org {
+                    Some(org) => base.join(org).join(&remote.name),
+                    None => base.join(&remote.name),
+                }
+            }
+        }
+    }
+
     fn places_path(&self) -> std::path::PathBuf {
         self.inner.data_dir.join("places.json")
+    }
+
+    fn read_only_path(&self) -> std::path::PathBuf {
+        self.inner.data_dir.join("read-only.json")
     }
 
     fn save_places(&self) {
@@ -779,12 +895,27 @@ impl SyncDaemon {
             }
             Err(e) => tracing::warn!(error = %e, "could not serialize the places"),
         }
+        let read_only = self.inner.read_only.lock().expect("read-only lock").clone();
+        match serde_json::to_vec_pretty(&read_only) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(self.read_only_path(), bytes) {
+                    tracing::warn!(error = %e, "could not record which roots are read-only");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not serialize the read-only set"),
+        }
     }
 
     /// Read back where roots appear. Called at startup, beside the sync
     /// choices and the mounts, for the same reason: it is a decision
     /// somebody made.
     pub fn restore_places(&self) {
+        if let Ok(raw) = std::fs::read_to_string(self.read_only_path()) {
+            match serde_json::from_str::<std::collections::BTreeSet<Uuid>>(&raw) {
+                Ok(set) => *self.inner.read_only.lock().expect("read-only lock") = set,
+                Err(e) => tracing::warn!(error = %e, "the recorded read-only set is unreadable"),
+            }
+        }
         let Ok(raw) = std::fs::read_to_string(self.places_path()) else {
             return;
         };
@@ -850,7 +981,12 @@ impl SyncDaemon {
                 place
             };
             outcomes.push((shown.clone(), None));
-            placed.push((root.id, std::path::PathBuf::from(tree), shown));
+            placed.push((
+                root.id,
+                std::path::PathBuf::from(tree),
+                shown,
+                self.is_read_only(root.id),
+            ));
         }
 
         if placed.is_empty() {
@@ -1242,7 +1378,10 @@ impl SyncDaemon {
                     .ok_or_else(|| {
                         DaemonError::NotFound(format!("{endpoint_id} holds no root {root_id}"))
                     })?;
-                let tree = under.join(&remote.name);
+                // Placed before it lands, so the first mount after this
+                // shows it where the org meant rather than by name.
+                self.place_offered(&remote);
+                let tree = self.landing_for(under, &remote);
                 std::fs::create_dir_all(&tree).map_err(|e| DaemonError::Io(e.to_string()))?;
                 self.inner.backend.adopt_replica(
                     root_id,
