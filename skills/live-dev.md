@@ -107,6 +107,20 @@ authority, but older builds matched the full origin).
 - `auth.central` on a span says how the token was read: `member`,
   `not_a_member`, `unrecognised`, `issuer_unreachable`.
 
+## 6. The org's files as a folder
+
+`task-sync.service` (the files agent, `fts-files-daemon`) mounts every
+root it holds at `~/Task/<org>/…` — `Projects/`, `Vault/`, `Wiki/`
+(`Knowledge/`, `LLM/`, and each named wiki under its slug),
+read-only `Subscribed/<domain>/<slug>/` and `Resources/`. The server
+adopts each wiki, subscribed copy and the resource library as a root
+and tells the agent where each belongs, so a wiki created in the app is
+a folder after `systemctl --user restart task-sync` — no `place`
+needed. Layout, rules and the hand-placed-root caveat:
+`docs/sync.md` § "What the composed tree shows, per org". Wiki pages
+under `Wiki/` are plain markdown you and the agent can edit; the edit
+syncs on the next pull and the wiki watcher sees it on the server.
+
 ## Decision boundaries
 
 - The deployment is real data. Create and edit freely as the account;

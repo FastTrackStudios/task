@@ -129,6 +129,39 @@ pub struct WireRoot {
     pub id: Uuid,
     pub name: String,
     pub flavor: files_proto::model::RootFlavor,
+    /// Where the org shows this root in the composed tree —
+    /// `<org>/Wiki/music-theory` — when the org knows. A puller records
+    /// it for any root nobody has placed by hand, which is what lets a
+    /// wiki created on the server appear in a laptop's mount without
+    /// anyone typing a place for it.
+    ///
+    /// `None` from a peer that predates places or holds a root outside
+    /// its layout; the puller then places by name, as it always did.
+    /// `#[facet(default)]` so a new puller decodes an old peer's answer.
+    #[facet(default)]
+    pub place: Option<String>,
+    /// Whether the org wants this root shown read-only — a subscribed
+    /// copy of somebody else's wiki, the resource library. Advisory to a
+    /// peer that only replicates; binding on one that mounts.
+    #[facet(default)]
+    pub read_only: bool,
+}
+
+/// What an org says about where a root appears — see [`WireRoot::place`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placement {
+    pub place: String,
+    pub read_only: bool,
+}
+
+/// Who knows where a root belongs in the shown tree.
+///
+/// The backend does not: a root is a directory with an id, and nothing
+/// in the registry says whether it is a wiki or a session. The org's
+/// layout does, so the server hands its host one of these and the
+/// daemon — which is nobody's org — hands it none.
+pub trait Placer: Send + Sync {
+    fn place(&self, root: &files_proto::model::FileRootInfo) -> Option<Placement>;
 }
 
 /// The per-root sync surface one backend serves to its peers.
@@ -327,6 +360,9 @@ pub async fn dial_peer(
 #[derive(Clone, architect::HasDispatcher)]
 pub struct SyncHost {
     backend: FilesBackend,
+    /// Who places roots in the shown tree — the org, when this host is
+    /// an org's. `None` on a device, which offers its roots by name.
+    placer: Option<std::sync::Arc<dyn Placer>>,
 }
 
 impl std::fmt::Debug for SyncHost {
@@ -338,7 +374,18 @@ impl std::fmt::Debug for SyncHost {
 impl SyncHost {
     #[must_use]
     pub fn new(backend: FilesBackend) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            placer: None,
+        }
+    }
+
+    /// The same host, answering [`SyncService::roots`] with each root's
+    /// place as `placer` sees it.
+    #[must_use]
+    pub fn placing(mut self, placer: std::sync::Arc<dyn Placer>) -> Self {
+        self.placer = Some(placer);
+        self
     }
 }
 
@@ -358,10 +405,15 @@ impl SyncService for SyncHost {
             .map_err(from_files)?;
         Ok(roots
             .into_iter()
-            .map(|r| WireRoot {
-                id: r.id,
-                name: r.name,
-                flavor: r.flavor,
+            .map(|r| {
+                let placed = self.placer.as_ref().and_then(|p| p.place(&r));
+                WireRoot {
+                    id: r.id,
+                    name: r.name,
+                    flavor: r.flavor,
+                    read_only: placed.as_ref().is_some_and(|p| p.read_only),
+                    place: placed.map(|p| p.place),
+                }
             })
             .collect())
     }

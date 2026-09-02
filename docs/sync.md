@@ -313,6 +313,48 @@ Writes, renames and mkdir through the mount are ordinary writes to the
 tree underneath, so the watcher, the cadence engine and checkpointing
 see them exactly as they see any other edit.
 
+### What the composed tree shows, per org
+
+`mount-all` composes every root at its *place*, and the org now says
+where each of its own roots belongs — the agent records the offered
+place for any root nobody here has placed with `fts-files-daemon place`.
+So `~/Task/<org>/` is, without typing anything:
+
+| shown | on the server | writes |
+|---|---|---|
+| `Projects/<name>/` | `files/Projects/<name>/` | read-write |
+| `Vault/` | `vault/` | read-write |
+| `Wiki/` — `Knowledge/`, `LLM/` | `wiki/` | read-write |
+| `Wiki/<slug>/` | `wikis/<slug>/` | read-write |
+| `Subscribed/<domain>/<slug>/` | `subscribed/<domain>/<slug>/` | read-only |
+| `Resources/` (the Bible as USFM, …) | `resources/` | read-only |
+
+One canonical path per wiki. The default wiki stays at `Wiki/Knowledge`
+— the directory it lives in and the name every page, skill and lint
+already uses — rather than surfacing again under its slug `knowledge`;
+named wikis sit beside it under their slug. Editing a page under
+`Wiki/` is an ordinary write to the synced tree, so it reaches the server
+on the next pull and the wiki watcher sees it there. `Subscribed/` and
+`Resources/` list without write bits and answer `EROFS`: neither is the
+org's to edit, and an edit the engine faithfully carried back would be a
+local change to somebody else's wiki.
+
+The server side is data-driven (`apps/server/src/org_roots.rs`,
+`org_proto::OrgRoot::{knowledge_trees,tree_place}`): at boot and on every
+device-sync sweep it adopts each wiki, subscribed copy and the resource
+library as a File Root, and the replica lane's `roots` answer carries the
+place and the read-only bit (`files_sync::WireRoot`). A wiki created
+after boot is a root within a sweep; the agent takes new roots from its
+coordinator at startup, so **`systemctl --user restart task-sync`** is
+what makes a new wiki appear in the folder.
+
+Two rules the agent keeps when an offer arrives: a place you set by hand
+wins over the org's, and a place another root already holds is not
+taken (logged as "already another root's"). A machine that shared
+`~/.task/orgs/<org>/wiki` by hand at `<org>/Wiki` therefore keeps that
+root there and the server's `Wiki` root lands by name until you
+`unshare` the hand-made one or `place` it elsewhere.
+
 ## The cloud folder on macOS
 
 macOS has no FUSE, and does not need one: the system loads a **File
