@@ -139,8 +139,10 @@ The `eprintln!` reflex applies to scaffolding too, and the order is:
 
 On the account lane (`POST /mcp`, `apps/server/src/mcp.rs`), when the
 server has `TASK_TELEMETRY_TEMPO_URL` and/or `TASK_TELEMETRY_LOKI_URL`
-set. Operator-only: the static `TASK_MCP_TOKEN`, or a session holding
-`admin` in the home org. Backed by `apps/server/src/telemetry_query.rs`.
+set. Operator-only: the static `TASK_MCP_TOKEN`, or a principal holding
+`admin` or `owner` in the home org — a home-org session, or an account
+the central issuer vouches for that has a membership row here
+(`central_auth::home_principal`). Backed by `apps/server/src/telemetry_query.rs`.
 
 | tool | arguments | returns |
 |---|---|---|

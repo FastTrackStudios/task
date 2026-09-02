@@ -185,3 +185,104 @@ async fn the_locker_answers_a_central_principal() -> eyre::Result<()> {
     );
     Ok(())
 }
+
+/// The MCP account lane admits a CENTRAL principal.
+///
+/// `POST /mcp` found a caller's orgs by asking each org's own auth store
+/// whether the token validated there, plus the locker. A token the
+/// issuer minted validates nowhere local, so the lane answered "no
+/// reachable org for this token" to the very person who owns every org
+/// on the server — and the telemetry tools, gated on `admin` in the
+/// home org's own store, refused them a second time. Membership rows
+/// are the fence the RPC lane uses; this pins that the MCP lane uses the
+/// same one, and that an `owner` is an operator.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_mcp_lane_admits_a_central_principal_and_its_owner_reads_telemetry() -> eyre::Result<()>
+{
+    let principal = uuid::Uuid::new_v4();
+    let (base, _tmp) = boot(async |data_root| {
+        let home = data_root.org("mine");
+        let m = task_server::memberships::Memberships::open(&home.memberships_db())
+            .await
+            .expect("open memberships");
+        m.upsert(principal, "mine", Some("owner"))
+            .await
+            .expect("mine row");
+        m.upsert(principal, "theirs", Some("member"))
+            .await
+            .expect("theirs row");
+    })
+    .await?;
+    // Telemetry tools are listed only when a backend is configured;
+    // nobody listens here, and `telemetry_status` never dials.
+    // SAFETY: single-threaded with respect to env writes — see `boot`.
+    unsafe {
+        std::env::set_var("TASK_TELEMETRY_TEMPO_URL", "http://127.0.0.1:9");
+    }
+    task_server::central_auth::configured()
+        .expect("configured")
+        .remember_for_test(TOKEN, Some(principal.to_string()));
+
+    let client = reqwest::Client::new();
+    let rpc = |method: &'static str, params: serde_json::Value| {
+        let client = client.clone();
+        let url = format!("{base}/mcp");
+        async move {
+            client
+                .post(url)
+                .bearer_auth(TOKEN)
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": method, "params": params
+                }))
+                .send()
+                .await
+                .expect("POST /mcp")
+                .json::<serde_json::Value>()
+                .await
+                .expect("json-rpc body")
+        }
+    };
+
+    let listed = rpc("tools/list", serde_json::json!({})).await;
+    assert!(
+        listed.get("error").is_none(),
+        "a central principal with membership rows must reach the lane: {listed}"
+    );
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"list_orgs"), "{names:?}");
+    assert!(names.contains(&"telemetry_status"), "{names:?}");
+
+    let orgs = rpc(
+        "tools/call",
+        serde_json::json!({"name": "list_orgs", "arguments": {}}),
+    )
+    .await;
+    let text = orgs["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list_orgs text");
+    assert!(text.contains("mine") && text.contains("theirs"), "{text}");
+    assert!(
+        !text.contains("nobodys"),
+        "no row, no reach — the same fence as the RPC lane: {text}"
+    );
+
+    let status = rpc(
+        "tools/call",
+        serde_json::json!({"name": "telemetry_status", "arguments": {}}),
+    )
+    .await;
+    let text = status["result"]["content"][0]["text"]
+        .as_str()
+        .expect("telemetry_status text");
+    let payload: serde_json::Value = serde_json::from_str(text)?;
+    assert_eq!(
+        payload["allowed"], true,
+        "an owner of the home org is an operator: {payload}"
+    );
+    Ok(())
+}

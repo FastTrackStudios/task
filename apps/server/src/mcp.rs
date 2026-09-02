@@ -1377,27 +1377,37 @@ async fn is_operator(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(home) = state.org(&home_slug) else {
         return false;
     };
-    let Ok(bundle) = home
+    // An operator role on the home org's own account, when the token
+    // is one of its sessions…
+    if let Ok(bundle) = home
         .auth
         .auth
-        .current_session(architect_auth::CurrentSession { token })
+        .current_session(architect_auth::CurrentSession {
+            token: token.clone(),
+        })
         .await
-    else {
-        return false;
-    };
-    if bundle.user.role.as_deref() == Some("admin") {
+        && operator_role(bundle.user.role.as_deref())
+    {
         return true;
     }
+    // …or on the home org's membership row, for any principal the home
+    // org recognises — its own accounts and, with central auth, the
+    // issuer's (`central_auth::home_principal`). An `owner` outranks an
+    // `admin`; refusing one would refuse the person who runs the server.
     if let Some(identity) = &state.home_identity
-        && let Ok(Some(m)) = identity
-            .memberships
-            .role_for(bundle.user.id, &home_slug)
-            .await
-        && m.role.as_deref() == Some("admin")
+        && let Some(user_id) = crate::central_auth::home_principal(state, &token).await
+        && let Ok(Some(m)) = identity.memberships.role_for(user_id, &home_slug).await
+        && operator_role(m.role.as_deref())
     {
         return true;
     }
     false
+}
+
+/// The roles that may read telemetry: it spans every org on the server,
+/// so only whoever administers the server as a whole.
+fn operator_role(role: Option<&str>) -> bool {
+    matches!(role, Some("admin" | "owner"))
 }
 
 /// One `telemetry_*` call, end to end: configured? operator? then the
@@ -1549,8 +1559,34 @@ pub async fn reachable_orgs(state: &AppState, headers: &HeaderMap) -> Vec<String
             reachable.push(slug);
         }
     }
+    // Plus every org the memberships table says this principal belongs
+    // to — the only way a token the issuer minted reaches anything,
+    // since no org's own store ever saw it.
+    for slug in member_slugs(state, &token).await {
+        if !reachable.contains(&slug) && hosted.contains(&slug) {
+            reachable.push(slug);
+        }
+    }
     reachable.sort();
     reachable
+}
+
+/// Org slugs the home org's memberships table holds for this token's
+/// principal — a home-org session or, with central auth, an account the
+/// issuer vouches for (`central_auth::home_principal`). Empty when the
+/// token is neither, or the server has no home identity.
+async fn member_slugs(state: &AppState, token: &str) -> Vec<String> {
+    let Some(home) = &state.home_identity else {
+        return Vec::new();
+    };
+    let Some(user_id) = crate::central_auth::home_principal(state, token).await else {
+        return Vec::new();
+    };
+    home.memberships
+        .for_user(user_id)
+        .await
+        .map(|rows| rows.into_iter().map(|m| m.org_slug).collect())
+        .unwrap_or_default()
 }
 
 /// Org slugs the caller's home identity locker holds a link for.
@@ -1635,6 +1671,12 @@ async fn authenticate_for(
             .await
             .is_ok()
     {
+        return Ok(org);
+    }
+    // Or a membership row: the fence the org lane itself uses for a
+    // central principal (`CentralFallbackResolver`), so the MCP lane
+    // admits exactly whom the RPCs would.
+    if member_slugs(state, &token).await.iter().any(|s| s == slug) {
         return Ok(org);
     }
     Err(format!(
