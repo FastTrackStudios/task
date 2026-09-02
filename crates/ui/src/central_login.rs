@@ -58,6 +58,120 @@ const ISSUER_KEY: &str = "task.auth.pkce.issuer";
 /// mismatch is refused at `/oauth2/authorize` before anything else.
 pub const CLIENT_ID: &str = "task";
 
+/// What Task asks the issuer for.
+///
+/// [`oidc::DEFAULT_SCOPE`] plus `offline_access`, which is the scope that
+/// makes the issuer hand back a **refresh token**. Without it the
+/// redirect yields an access token alone, that token lives an hour, and
+/// the hour ends on the sign-in screen — every hour. With it the access
+/// token is renewed in the background for as long as the refresh token
+/// lasts (seven days at the issuer, extended on every use).
+pub const SCOPE: &str = "openid email profile offline_access";
+
+/// How much longer the issuer says an access token lives when it does
+/// not say — the issuer's actual default, so the schedule is right even
+/// for an answer that omits `expires_in`.
+const DEFAULT_ACCESS_TTL_SECS: i64 = 3600;
+
+/// Everything a `/oauth2/token` answer carries that Task keeps.
+///
+/// [`oidc::access_token_from`] reads only the access token, because that
+/// is all the other apps needed. Task keeps the session alive across
+/// the token's expiry, so it also wants the refresh token and how long
+/// the access token is good for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenSet {
+    /// The bearer token Task presents to the server and the issuer.
+    pub access: String,
+    /// The credential that mints the next access token, when the issuer
+    /// granted `offline_access`. A refresh answer may omit it (no
+    /// rotation) — the one already held stays valid then.
+    pub refresh: Option<String>,
+    /// Seconds until `access` expires, as the issuer stated it.
+    pub expires_in: Option<i64>,
+}
+
+impl TokenSet {
+    /// When `access` expires, as unix seconds, given that it was issued
+    /// at `now`. Falls back to the issuer's known default so a token
+    /// with no stated lifetime is still refreshed on time.
+    #[must_use]
+    pub fn expires_at(&self, now: i64) -> i64 {
+        now + self.expires_in.unwrap_or(DEFAULT_ACCESS_TTL_SECS)
+    }
+}
+
+/// Parse a `/oauth2/token` answer.
+///
+/// # Errors
+///
+/// [`LoginError::Exchange`] when the body is not JSON or has no usable
+/// `access_token` — the same conditions [`oidc::access_token_from`]
+/// refuses, so the two never disagree about what counts as signed in.
+pub fn token_set_from(text: &str) -> Result<TokenSet, LoginError> {
+    let access = oidc::access_token_from(text)?;
+    let v: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| LoginError::Exchange(e.to_string()))?;
+    Ok(TokenSet {
+        access,
+        refresh: v["refresh_token"]
+            .as_str()
+            .filter(|t| !t.trim().is_empty())
+            .map(str::to_owned),
+        expires_in: v["expires_in"].as_i64().filter(|s| *s > 0),
+    })
+}
+
+/// The form-encoded body that trades a refresh token for a new access
+/// token (RFC 6749 §6). Public-client shape: no secret, the client id in
+/// the body, PKCE having been proven at the original redemption.
+#[must_use]
+pub fn refresh_request_body(refresh_token: &str) -> String {
+    format!(
+        "grant_type=refresh_token&client_id={}&refresh_token={}",
+        form_encode(CLIENT_ID),
+        form_encode(refresh_token),
+    )
+}
+
+/// Percent-encode a form value. RFC 3986 unreserved characters pass
+/// through; everything else is escaped. `oidc` has the same function
+/// and keeps it private, so here is the one copy this crate needs.
+fn form_encode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + raw.len() / 2);
+    for byte in raw.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// Mint a new access token from a refresh token.
+///
+/// A rotated refresh token in the answer replaces the one presented —
+/// callers persist `TokenSet::refresh` when it is `Some`, and keep the
+/// old one when it is not.
+///
+/// # Errors
+///
+/// [`LoginError::Denied`] when the issuer answers 4xx — the grant is
+/// spent, revoked or expired, and only a fresh sign-in helps.
+/// [`LoginError::Exchange`] for anything else (network, 5xx, an
+/// unusable body), which says nothing about the grant and is worth
+/// retrying.
+pub async fn refresh(issuer: &str, refresh_token: &str) -> Result<TokenSet, LoginError> {
+    let text = post_form(
+        &format!("{}/oauth2/token", issuer.trim_end_matches('/')),
+        &refresh_request_body(refresh_token),
+    )
+    .await?;
+    token_set_from(&text)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoginError {
     /// No issuer advertised — this server mints its own accounts.
@@ -66,7 +180,13 @@ pub enum LoginError {
     NoBrowser,
     /// We never started a sign-in in this tab, so there is no verifier.
     NoAttemptInProgress,
-    /// The issuer refused, or answered with something unusable.
+    /// The issuer said no, in so many words: a 4xx with its body. The
+    /// credential presented is no good and presenting it again will not
+    /// change that — distinct from [`Self::Exchange`], which covers the
+    /// network being down or the issuer answering something unusable.
+    Denied(u16, String),
+    /// The issuer could not be reached, or answered with something
+    /// unusable.
     Exchange(String),
 }
 
@@ -84,6 +204,7 @@ impl std::fmt::Display for LoginError {
             Self::NoAttemptInProgress => {
                 write!(f, "no sign-in was started in this tab — start again")
             }
+            Self::Denied(status, body) => write!(f, "the issuer refused ({status}): {body}"),
             Self::Exchange(why) => write!(f, "the issuer refused the sign-in: {why}"),
         }
     }
@@ -113,7 +234,7 @@ pub fn begin(redirect_uri: &str) -> Result<(), LoginError> {
         .set_item(ISSUER_KEY, &issuer)
         .map_err(|_| LoginError::NoBrowser)?;
 
-    let url = oidc::authorize_url(&issuer, CLIENT_ID, redirect_uri, &pkce, oidc::DEFAULT_SCOPE);
+    let url = oidc::authorize_url(&issuer, CLIENT_ID, redirect_uri, &pkce, SCOPE);
     web_sys::window()
         .ok_or(LoginError::NoBrowser)?
         .location()
@@ -132,20 +253,22 @@ pub fn begin(_redirect_uri: &str) -> Result<(), LoginError> {
 
 /// What a completed redemption yields.
 ///
-/// Carries the issuer as well as the token so nothing downstream has to
+/// Carries the issuer as well as the tokens so nothing downstream has to
 /// look it up again — the lookup is exactly what races with discovery on
 /// the way back in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Redeemed {
-    pub token: String,
+    pub tokens: TokenSet,
     pub issuer: String,
 }
 
-/// Redeem the authorization code for a token Task can present.
+/// Redeem the authorization code for tokens Task can present.
 ///
 /// The token that comes back is an OAuth **access token**, not a session
 /// token — the server introspects it at `/oauth2/userinfo` rather than
 /// `/auth/session`. Both are accepted; see `central_auth` on the server.
+/// Alongside it, because [`SCOPE`] asks for `offline_access`, comes the
+/// refresh token that keeps the sign-in alive past the access token.
 #[cfg(target_arch = "wasm32")]
 pub async fn complete(redirect_uri: &str, code: &str, state: &str) -> Result<Redeemed, LoginError> {
     let storage = session_storage().ok_or(LoginError::NoBrowser)?;
@@ -178,7 +301,7 @@ pub async fn complete(redirect_uri: &str, code: &str, state: &str) -> Result<Red
     )
     .await?;
     Ok(Redeemed {
-        token: oidc::access_token_from(&text)?,
+        tokens: token_set_from(&text)?,
         issuer,
     })
 }
@@ -273,9 +396,25 @@ async fn post_json(url: &str, body: &str) -> Result<String, LoginError> {
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn post_json(url: &str, body: &str) -> Result<String, LoginError> {
+    post_with_content_type(url, "application/json", body).await
+}
+
+/// Native: the same form POST the browser path makes through `fetch`,
+/// over reqwest. Redeems codes and refresh tokens alike.
+#[cfg(not(target_arch = "wasm32"))]
+async fn post_form(url: &str, body: &str) -> Result<String, LoginError> {
+    post_with_content_type(url, "application/x-www-form-urlencoded", body).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn post_with_content_type(
+    url: &str,
+    content_type: &str,
+    body: &str,
+) -> Result<String, LoginError> {
     let response = reqwest::Client::new()
         .post(url)
-        .header("content-type", "application/json")
+        .header("content-type", content_type)
         .body(body.to_owned())
         .send()
         .await
@@ -285,10 +424,19 @@ async fn post_json(url: &str, body: &str) -> Result<String, LoginError> {
         .text()
         .await
         .map_err(|e| LoginError::Exchange(e.to_string()))?;
-    if status.is_success() {
-        Ok(text)
-    } else {
-        Err(LoginError::Exchange(format!("{status}: {text}")))
+    classify(status.as_u16(), text)
+}
+
+/// Sort an HTTP answer into success, a refusal, and everything else.
+///
+/// 4xx is the issuer saying no to *this* credential — [`LoginError::Denied`]
+/// — and callers treat it as final. 5xx and the like are the issuer
+/// having a bad moment, which says nothing about the credential.
+fn classify(status: u16, text: String) -> Result<String, LoginError> {
+    match status {
+        200..=299 => Ok(text),
+        400..=499 => Err(LoginError::Denied(status, text)),
+        _ => Err(LoginError::Exchange(format!("{status}: {text}"))),
     }
 }
 
@@ -334,7 +482,7 @@ pub mod native {
 
     use auth_client::oidc::{self, Pkce};
 
-    use super::{CLIENT_ID, LoginError, Redeemed};
+    use super::{CLIENT_ID, LoginError, Redeemed, SCOPE};
 
     /// What the operating system provides: open a URL for sign-in and
     /// deliver the callback URL it was redirected to.
@@ -456,7 +604,7 @@ pub mod native {
 
     /// Sign in through the installed [`BrowserSession`]: send the person
     /// to the issuer, take the callback, redeem the code. Returns the
-    /// token and the issuer it came from, ready for
+    /// tokens and the issuer they came from, ready for
     /// `AuthCtx::adopt_central_token`.
     ///
     /// # Errors
@@ -469,13 +617,7 @@ pub mod native {
         let issuer = task_ui_core::central_auth::issuer().ok_or(LoginError::NoIssuer)?;
         let redirect_uri = redirect_uri().ok_or(LoginError::NoBrowser)?;
         let pkce = Pkce::from_entropy(entropy::<32>(), entropy::<16>());
-        let url = oidc::authorize_url(
-            &issuer,
-            CLIENT_ID,
-            &redirect_uri,
-            &pkce,
-            oidc::DEFAULT_SCOPE,
-        );
+        let url = oidc::authorize_url(&issuer, CLIENT_ID, &redirect_uri, &pkce, SCOPE);
 
         let (tx, rx) = futures_channel::oneshot::channel::<Result<String, String>>();
         let tx = std::sync::Mutex::new(Some(tx));
@@ -497,23 +639,13 @@ pub mod native {
         pkce.check_state(&state)?;
 
         let body = oidc::token_request_body(CLIENT_ID, &redirect_uri, &code, &pkce);
-        let response = reqwest::Client::new()
-            .post(format!("{}/oauth2/token", issuer.trim_end_matches('/')))
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| LoginError::Exchange(e.to_string()))?;
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| LoginError::Exchange(e.to_string()))?;
-        if !status.is_success() {
-            return Err(LoginError::Exchange(format!("{status}: {text}")));
-        }
+        let text = super::post_form(
+            &format!("{}/oauth2/token", issuer.trim_end_matches('/')),
+            &body,
+        )
+        .await?;
         Ok(Redeemed {
-            token: oidc::access_token_from(&text)?,
+            tokens: super::token_set_from(&text)?,
             issuer,
         })
     }
@@ -610,11 +742,7 @@ async fn send(request: web_sys::Request) -> Result<String, LoginError> {
         .map_err(js)?
         .as_string()
         .unwrap_or_default();
-    if (200..300).contains(&status) {
-        Ok(text)
-    } else {
-        Err(LoginError::Exchange(format!("{status}: {text}")))
-    }
+    classify(status, text)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -660,7 +788,7 @@ pub fn redirect_uri() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CLIENT_ID, LoginError};
+    use super::{CLIENT_ID, LoginError, SCOPE, classify, refresh_request_body, token_set_from};
     use auth_client::oidc::{self, Pkce};
 
     /// The client id is what the issuer matches against its registered
@@ -674,9 +802,87 @@ mod tests {
             CLIENT_ID,
             "https://task.fasttrackstudio.app/auth/callback",
             &Pkce::from_entropy([1u8; 32], [2u8; 16]),
-            oidc::DEFAULT_SCOPE,
+            SCOPE,
         );
         assert!(url.contains("client_id=task"));
+    }
+
+    /// Without `offline_access` there is no refresh token, and without a
+    /// refresh token the sign-in ends when the access token does — an
+    /// hour later, on the login screen. The scope is the fix; pin it.
+    #[test]
+    fn the_scope_asks_for_a_refresh_token() {
+        assert!(SCOPE.starts_with(oidc::DEFAULT_SCOPE));
+        assert!(SCOPE.split(' ').any(|s| s == "offline_access"));
+        let url = oidc::authorize_url(
+            "https://auth.fasttrackstudio.app",
+            CLIENT_ID,
+            "https://task.fasttrackstudio.app/auth/callback",
+            &Pkce::from_entropy([1u8; 32], [2u8; 16]),
+            SCOPE,
+        );
+        assert!(url.contains("offline_access"), "{url}");
+    }
+
+    #[test]
+    fn a_full_token_answer_parses() {
+        let set = token_set_from(
+            r#"{"access_token":"at-1","token_type":"Bearer","expires_in":3600,
+                "refresh_token":"rt-1","scope":"openid email profile offline_access"}"#,
+        )
+        .unwrap();
+        assert_eq!(set.access, "at-1");
+        assert_eq!(set.refresh.as_deref(), Some("rt-1"));
+        assert_eq!(set.expires_in, Some(3600));
+        assert_eq!(set.expires_at(1_000), 4_600);
+    }
+
+    #[test]
+    fn a_bare_access_token_still_parses() {
+        let set = token_set_from(r#"{"access_token":"at-1","token_type":"Bearer"}"#).unwrap();
+        assert_eq!(set.access, "at-1");
+        assert_eq!(set.refresh, None);
+        assert_eq!(set.expires_in, None);
+        // No stated lifetime falls back to the issuer's default, so the
+        // renewal is still scheduled rather than never.
+        assert_eq!(set.expires_at(0), 3600);
+    }
+
+    #[test]
+    fn an_empty_refresh_token_is_no_refresh_token() {
+        let set = token_set_from(r#"{"access_token":"at-1","refresh_token":"  ","expires_in":0}"#)
+            .unwrap();
+        assert_eq!(set.refresh, None);
+        assert_eq!(set.expires_in, None);
+    }
+
+    #[test]
+    fn a_missing_access_token_is_refused() {
+        assert!(token_set_from(r#"{"refresh_token":"rt-1"}"#).is_err());
+        assert!(token_set_from("not json").is_err());
+    }
+
+    #[test]
+    fn the_refresh_body_is_a_public_client_grant() {
+        assert_eq!(
+            refresh_request_body("abc/+=1"),
+            "grant_type=refresh_token&client_id=task&refresh_token=abc%2F%2B%3D1"
+        );
+    }
+
+    /// A 4xx is the grant being dead; anything else is weather. The
+    /// caller drops tokens on the first and keeps them on the second.
+    #[test]
+    fn refusals_are_told_apart_from_outages() {
+        assert_eq!(classify(200, "ok".into()), Ok("ok".into()));
+        assert!(matches!(
+            classify(400, "invalid_grant".into()),
+            Err(LoginError::Denied(400, ref b)) if b == "invalid_grant"
+        ));
+        assert!(matches!(
+            classify(503, String::new()),
+            Err(LoginError::Exchange(_))
+        ));
     }
 
     /// A state mismatch has to surface as a refusal, not as a mystery:

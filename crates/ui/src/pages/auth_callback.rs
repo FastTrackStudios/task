@@ -58,7 +58,7 @@ pub fn AuthCallbackView(code: String, state: String, error: String) -> Element {
                         // navigating away immediately cannot cancel it.
                         // The issuer rides along because discovery may
                         // not have resolved on this fresh page load.
-                        auth.adopt_central_token(redeemed.token, redeemed.issuer);
+                        auth.adopt_central_token(redeemed.tokens, redeemed.issuer);
                         nav.replace(Route::HomeRoute {});
                     }
                     Err(e) => failure.set(Some(e.to_string())),
