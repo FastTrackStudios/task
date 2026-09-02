@@ -31,6 +31,7 @@
 //! coupling the split is undoing.
 
 pub mod avatar;
+pub mod boot_trace;
 pub mod central_auth;
 pub mod feeds;
 pub mod format;

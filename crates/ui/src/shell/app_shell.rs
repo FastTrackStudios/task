@@ -10,6 +10,8 @@ use crate::shell::mobile::{BottomTabBar, MobileHeader};
 #[component]
 pub fn AppShell() -> Element {
     let current = use_route::<Route>();
+    // Boot: the shell has painted (effects run after the first render).
+    use_effect(|| task_ui_core::boot_trace::mark("shell"));
 
     // Quick-capture + data-refresh signals for the persistent chrome.
     provide_chrome_contexts();

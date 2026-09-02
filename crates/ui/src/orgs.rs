@@ -22,6 +22,64 @@ struct WellKnown {
     /// auth — both mean "sign in against the home org".
     #[serde(default)]
     central_auth: Option<String>,
+    /// The account the bearer we sent resolved to — `None` when we sent
+    /// none, or the server did not recognise it. Absent on servers
+    /// predating the field.
+    #[serde(default)]
+    principal: Option<RawPrincipal>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawPrincipal {
+    id: uuid::Uuid,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// What discovery said about the token it carried.
+///
+/// Boot restore reads this instead of validating the cached token a
+/// second time: the server has already resolved it (against its org
+/// stores or the issuer) to tag membership, so `whoami` over the lane
+/// and a `/userinfo` round trip to the issuer would only repeat that
+/// work — three network hops that were the bulk of a five-second reload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredPrincipal {
+    /// The bearer this answer is about. A principal is only trusted for
+    /// the exact token that produced it.
+    pub token: String,
+    pub user_id: uuid::Uuid,
+    pub email: Option<String>,
+    pub name: Option<String>,
+}
+
+static DISCOVERED: std::sync::RwLock<Option<DiscoveredPrincipal>> = std::sync::RwLock::new(None);
+
+/// The principal the last discovery resolved, if it was for `token`.
+#[must_use]
+pub fn discovered_principal_for(token: &str) -> Option<DiscoveredPrincipal> {
+    DISCOVERED
+        .read()
+        .ok()
+        .and_then(|d| d.clone())
+        .filter(|d| d.token == token)
+}
+
+fn note_principal(bearer: Option<&str>, raw: Option<RawPrincipal>) {
+    let fresh = match (bearer, raw) {
+        (Some(token), Some(p)) => Some(DiscoveredPrincipal {
+            token: token.to_owned(),
+            user_id: p.id,
+            email: p.email,
+            name: p.name,
+        }),
+        _ => None,
+    };
+    if let Ok(mut d) = DISCOVERED.write() {
+        *d = fresh;
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -48,8 +106,9 @@ struct RawOrg {
     iroh: Option<String>,
 }
 
-fn parse_orgs(body: &str) -> Result<Vec<OrgMeta>, String> {
+fn parse_orgs(body: &str, bearer: Option<&str>) -> Result<Vec<OrgMeta>, String> {
     let wk: WellKnown = serde_json::from_str(body).map_err(|e| format!("parse well-known: {e}"))?;
+    note_principal(bearer, wk.principal);
     let list: Vec<OrgMeta> = wk
         .orgs
         .into_iter()
@@ -93,7 +152,8 @@ async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
     // ours (#109 criterion 6). A bare `fetch_with_str` cannot set headers,
     // so build a Request. Unlike `<audio>`/`<img>`, `fetch` CAN send an
     // Authorization header — this is only about the API shape.
-    let resp_val = match crate::vox_session::bearer() {
+    let bearer = crate::vox_session::bearer();
+    let resp_val = match &bearer {
         Some(token) => {
             let headers = web_sys::Headers::new().map_err(|e| format!("headers: {e:?}"))?;
             headers
@@ -116,7 +176,7 @@ async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
         .await
         .map_err(|e| format!("orgs body await: {e:?}"))?;
     let text = text_val.as_string().ok_or("orgs body not a string")?;
-    parse_orgs(&text)
+    parse_orgs(&text, bearer.as_deref())
 }
 
 /// Fetch the hosted org list from `/.well-known/task-server.json`.
@@ -145,8 +205,9 @@ async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
         .map_err(|e| format!("http client: {e}"))?;
     let result = async {
         let mut req = client.get(&url);
+        let bearer = crate::vox_session::bearer();
         // Same tagging as wasm — native clients own their requests.
-        if let Some(token) = crate::vox_session::bearer() {
+        if let Some(token) = &bearer {
             req = req.bearer_auth(token);
         }
         let body = req
@@ -158,7 +219,7 @@ async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
             .text()
             .await
             .map_err(|e| format!("orgs body `{url}`: {e}"))?;
-        parse_orgs(&body)
+        parse_orgs(&body, bearer.as_deref())
     }
     .await;
     match &result {

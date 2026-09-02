@@ -21041,6 +21041,7 @@ dependencies = [
  "dioxus",
  "getrandom 0.3.4",
  "task-plugins",
+ "task-ui-core",
  "ui",
 ]
 
@@ -21512,6 +21513,7 @@ dependencies = [
  "vox-types",
  "vox-websocket",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

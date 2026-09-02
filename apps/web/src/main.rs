@@ -32,6 +32,9 @@ fn main() {
     // genuine problems still surface, but the request-loop chatter
     // doesn't drown them.
     let _ = dioxus::logger::init(dioxus::logger::tracing::Level::INFO);
+    // Boot: wasm is running. Measured from navigation start, this is the
+    // fetch + compile + instantiate cost of the bundle.
+    task_ui_core::boot_trace::mark("wasm_main");
     // Before launch — the nav is built on first render, and an app
     // registered after that has no tab until something else redraws.
     task_plugins::register_all();
