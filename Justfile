@@ -39,6 +39,23 @@ task *args:
 web: css
     cd apps/web && dx serve --web --addr 0.0.0.0 --hot-patch false
 
+# The production web bundle, exactly as nix builds it
+# (nix/modules/packages/web-bundles.nix): `[profile.wasm-release]` from
+# the root Cargo.toml, DWARF dropped, and the binary split into a main
+# chunk plus one lazily fetched chunk per route and per plugin app
+# (needs the dev shell's dx — the #5668 fork from nix/modules/dx.nix;
+# the published 0.8.0-alpha.0 panics splitting this app, see
+# docs/task-webapp.md). Output: target/dx/task-app-web/release/web/public/.
+# Prints the chunk sizes at the end so a size regression is visible
+# without deploying.
+web-release: css
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd apps/web && env -u RUSTC_WRAPPER dx build --release --platform web \
+        --debug-symbols false --wasm-split --features wasm-split
+    cd ../..
+    du -h target/dx/task-app-web/release/web/public/assets/*.wasm | sort -h
+
 # The local web app against a DEPLOYED server, signed in as you.
 #
 # Reads TASK_LIVE_{SERVER,EMAIL,PASSWORD,NAME} from `.env` (gitignored;

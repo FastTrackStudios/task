@@ -283,8 +283,16 @@ tokio-tungstenite = { version = "0.29", default-features = false, features = [
 
 [features]
 default = []
-# Opt-in WASM bundle splitting along route variants.
-wasm-split = ["dioxus-router/wasm-split"]
+# Opt-in WASM bundle splitting: every `#[route]` component becomes a
+# lazily fetched chunk (the router macro's `maybe_wasm_split!` needs
+# `dioxus/wasm-split` on for that arm to exist), and each plugin app's
+# screens become one (`task_plugin_ui::lazy_view!`). Build with
+# `dx build --release --wasm-split --features wasm-split`.
+wasm-split = [
+    "dioxus/wasm-split",
+    "dioxus-router/wasm-split",
+    "task-plugin-ui/wasm-split",
+]
 
 [lints]
 workspace = true

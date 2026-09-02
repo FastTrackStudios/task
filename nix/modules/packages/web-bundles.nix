@@ -50,10 +50,24 @@
             mkdir -p "$HOME"
             ${preBuild}
             cd ${appDir}
+            # The profile is `[profile.wasm-release]` in the root
+            # Cargo.toml — dx's default name for a web release build, so
+            # no --profile flag; that is where opt-level/LTO/panic live.
+            #
             # --debug-symbols false: drop DWARF for a smaller release
             # bundle (and it sidesteps DWARF-version mismatches in
             # wasm-opt).
-            dx build --release --platform web --debug-symbols false
+            # --wasm-split + --features wasm-split: cut the binary into
+            # a main chunk plus one lazily fetched chunk per route and
+            # per plugin app (`dioxus-router/wasm-split` and
+            # `task_plugin_ui::lazy_view!`). The cargo feature compiles
+            # the lazy loaders in; the dx flag runs the splitter that
+            # writes the chunks they fetch. One without the other is a
+            # broken bundle, so they travel together. Needs the dx from
+            # nix/modules/dx.nix (the #5668 fork) — the published alpha
+            # panics on this app. Details in docs/task-webapp.md.
+            dx build --release --platform web --debug-symbols false \
+              --wasm-split --features wasm-split
           '';
           # buildPhase ends inside ${appDir}; anchor the copy at the
           # workspace root explicitly.

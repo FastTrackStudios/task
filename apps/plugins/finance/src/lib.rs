@@ -69,6 +69,13 @@ fn icon_ledger() -> Element {
 }
 
 fn view(path: &str, query: &str) -> Option<Element> {
+    // The screens are their own wasm chunk on the web, downloaded the
+    // first time somebody opens this app; everything else the app
+    // registers stays in the shell. A plain call everywhere else.
+    task_plugin_ui::lazy_view!("finance", finance_screen, path, query)
+}
+
+fn finance_screen(path: &str, query: &str) -> Option<Element> {
     match path {
         "" => Some(rsx! { FinancesView {} }),
         // Work another app sent here to be billed arrives as ordinary

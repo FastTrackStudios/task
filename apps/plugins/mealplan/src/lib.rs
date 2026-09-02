@@ -121,6 +121,13 @@ fn icon_shopping() -> Element {
 /// difference between a bad link and a broken app, and only this crate
 /// knows which one a path is.
 fn view(path: &str, query: &str) -> Option<Element> {
+    // The screens are their own wasm chunk on the web, downloaded the
+    // first time somebody opens this app; everything else the app
+    // registers stays in the shell. A plain call everywhere else.
+    task_plugin_ui::lazy_view!("mealplan", mealplan_screen, path, query)
+}
+
+fn mealplan_screen(path: &str, query: &str) -> Option<Element> {
     // Every recipe screen is addressed by its vault-relative `.cook`
     // path, which is why they all read the same parameter.
     let recipe = || task_plugin_ui::query_param(query, "path").unwrap_or_default();
