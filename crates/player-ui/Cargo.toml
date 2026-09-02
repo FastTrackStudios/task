@@ -21,6 +21,10 @@ task-ui-core.workspace = true
 # `type: setlist` note widgets + embed href handling (`src/widgets.rs`)
 # that the shell's note view mounts through the registry.
 task-widgets.workspace = true
+# The lazy boundaries (`lazy_render!`, `lazy_element!`) that keep the
+# player's Web Audio stack, the daw worklet and the engraver out of the
+# web app's first load. The SDK names no plugin, so this is not a cycle.
+task-plugin-ui.workspace = true
 
 # Presentational session components + the global signals the player
 # drives each tick (mixer, transport, progress bars, chart view state).
@@ -128,6 +132,14 @@ gloo-timers = { workspace = true, features = ["futures"] }
 session = { workspace = true }
 daw = { workspace = true }
 daw-standalone = { workspace = true, features = ["decode", "web", "bootstrap"] }
+
+[features]
+default = []
+# The split web build: the now-playing engine, the song/setlist widgets
+# and the chart engraver each become a lazily fetched chunk (see the
+# `task_plugin_ui::lazy_*!` macros). Off everywhere else — desktop,
+# mobile and `dx serve` call straight through.
+wasm-split = ["task-plugin-ui/wasm-split", "dioxus/wasm-split"]
 
 [lints]
 workspace = true

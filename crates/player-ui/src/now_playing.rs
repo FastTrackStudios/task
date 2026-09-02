@@ -206,9 +206,10 @@ mod imp {
 
     /// Headless engine: owns the audio + queue, mirrors state to
     /// [`NowPlayingCtl`], and runs transport commands. Renders nothing (the
-    /// UI is [`super::NowPlayingTab`], in the status bar).
+    /// UI is [`super::NowPlayingTab`], in the status bar). Mounted by
+    /// [`super::GlobalNowPlayer`] once something asks to play.
     #[component]
-    pub fn GlobalNowPlayer() -> Element {
+    pub fn NowPlayingEngine() -> Element {
         let element: Rc<RefCell<Option<HtmlAudioElement>>> =
             use_hook(|| Rc::new(RefCell::new(None)));
         // Web Audio graph for the now-playing waveform amplitude — created
@@ -604,7 +605,7 @@ mod imp {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use imp::{GlobalNowPlayer, NowPlayingStripHighlighter};
+pub use imp::{NowPlayingEngine, NowPlayingStripHighlighter};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod stub {
@@ -612,7 +613,7 @@ mod stub {
 
     /// Server/native build: the engine runs in the browser only.
     #[component]
-    pub fn GlobalNowPlayer() -> Element {
+    pub fn NowPlayingEngine() -> Element {
         rsx! {}
     }
 
@@ -623,4 +624,33 @@ mod stub {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use stub::{GlobalNowPlayer, NowPlayingStripHighlighter};
+pub use stub::{NowPlayingEngine, NowPlayingStripHighlighter};
+
+/// The shell's mount point for the global player — outside the route
+/// `Outlet`, so playback survives navigation.
+///
+/// Renders nothing until the first play request arrives, then mounts
+/// the engine and the setlist-row highlighter. Two reasons for the
+/// gate. Most sessions never play anything, so the engine's Web Audio
+/// graph, its polling futures and its analyser should not exist for
+/// them. And on the split web build the engine is its own chunk
+/// ([`task_plugin_ui::lazy_element!`]): the request is what downloads
+/// it, and the engine's own mount effect then reads that same request
+/// — its `last_gen` starts at zero — so nothing is lost in the gap.
+#[component]
+pub fn GlobalNowPlayer() -> Element {
+    let requests = use_context::<crate::context::NowPlaying>().0;
+    if requests.read().generation == 0 {
+        return rsx! {};
+    }
+    task_plugin_ui::lazy_element!("player_engine", player_engine)
+}
+
+/// What the engine chunk contains: the headless player and the
+/// highlighter that follows it through the DOM.
+fn player_engine() -> Element {
+    rsx! {
+        NowPlayingEngine {}
+        NowPlayingStripHighlighter {}
+    }
+}

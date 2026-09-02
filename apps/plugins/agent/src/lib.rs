@@ -48,7 +48,7 @@ pub const APP: PluginApp = PluginApp {
     // resources. What this installs is the docked panel's selection,
     // which has to outlive both the panel closing and the route
     // changing under it.
-    provide: Some(provide_stores),
+    provide: Some(provide),
     widgets: None,
     fences: None,
     claim_link: None,
@@ -56,7 +56,17 @@ pub const APP: PluginApp = PluginApp {
 };
 
 fn panel() -> Element {
+    // The conversation strip is its own wasm chunk on the web,
+    // downloaded the first time the dock is opened.
+    task_plugin_ui::lazy_element!("agent_panel", agent_panel)
+}
+
+fn agent_panel() -> Element {
     rsx! { AgentPanel {} }
+}
+
+fn provide() {
+    task_plugin_ui::lazy_provide!("agent_stores", provide_stores)
 }
 
 fn icon_agents() -> Element {

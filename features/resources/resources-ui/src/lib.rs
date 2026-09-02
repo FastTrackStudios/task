@@ -555,14 +555,23 @@ pub fn widgets() -> Vec<task_plugin_ui::task_widgets::WidgetSpec> {
     use task_plugin_ui::task_widgets::{WidgetMatch, WidgetSpec};
     vec![
         WidgetSpec::new("studio.video", vec![WidgetMatch::NoteType("video")])
-            .render(|ctx| {
-                let id = basename_of(&ctx.path).to_string();
-                rsx! {
-                    WatchView { v: id.clone(), node: format!("video:{id}") }
-                }
-            })
+            // The match stays in the shell; the watch screen it mounts
+            // is its own wasm chunk on the web.
+            .render(task_plugin_ui::lazy_render!(
+                "studio_video",
+                video_note_widget
+            ))
             .plugin(APP_ID),
     ]
+}
+
+/// The `studio.video` block render: the watch screen for the note's
+/// own video id.
+fn video_note_widget(ctx: task_plugin_ui::task_widgets::WidgetCtx) -> Element {
+    let id = basename_of(&ctx.path).to_string();
+    rsx! {
+        WatchView { v: id.clone(), node: format!("video:{id}") }
+    }
 }
 
 /// A note's basename without its extension — `Videos/abc.md` → `abc`.

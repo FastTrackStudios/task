@@ -52,7 +52,7 @@ pub const APP: PluginApp = PluginApp {
         },
     ],
     view,
-    provide: Some(provide_stores),
+    provide: Some(provide),
     // A recipe is a `.cook` file, and a `.cook` file in the note editor
     // is raw cooklang. Claimed so it opens where it reads.
     panel: None,
@@ -104,6 +104,12 @@ fn claim_file(path: &str) -> Option<LinkTarget> {
         path: "recipe/read".into(),
         query: format!("path={}", task_plugin_ui::encode(path)),
     })
+}
+
+/// The recipe and plan stores, at the app root — their own wasm chunk
+/// on the web, installed once it has downloaded.
+fn provide() {
+    task_plugin_ui::lazy_provide!("mealplan_stores", provide_stores)
 }
 
 fn icon_plan() -> Element {

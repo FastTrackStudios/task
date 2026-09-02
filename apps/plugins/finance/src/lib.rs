@@ -94,6 +94,12 @@ fn finance_screen(path: &str, query: &str) -> Option<Element> {
 /// finance's business, and the binary that assembles the build should
 /// not have to know the list.
 fn provide() {
+    // Its own wasm chunk on the web: the invoice store's types and
+    // fetchers download once, then install at the root.
+    task_plugin_ui::lazy_provide!("finance_stores", provide_all)
+}
+
+fn provide_all() {
     provide_stores();
     offer_integrations();
 }
