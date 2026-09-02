@@ -257,16 +257,10 @@ impl SnapshotImpl {
                 "missing session token (sign in to the home org, or use the backup token)".into(),
             ));
         }
-        let home = self.state.org(&home_slug).ok_or_else(|| {
-            SnapshotError::Unauthorized(format!("home org `{home_slug}` not in live dispatcher"))
-        })?;
-        home.auth
-            .auth
-            .current_session(architect_auth::commands::CurrentSession {
-                token: token.to_owned(),
-            })
+        let _ = home_slug;
+        crate::central_auth::home_principal(&self.state, token)
             .await
-            .map_err(|e| SnapshotError::Unauthorized(format!("invalid session token: {e}")))?;
+            .ok_or_else(|| SnapshotError::Unauthorized("invalid session token".into()))?;
         Ok(())
     }
 

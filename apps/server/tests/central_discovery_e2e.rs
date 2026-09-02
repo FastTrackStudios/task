@@ -129,3 +129,59 @@ async fn discovery_tags_a_central_principal_by_its_membership_rows() -> eyre::Re
     }
     Ok(())
 }
+
+/// The identity locker answers a CENTRAL account too.
+///
+/// `list_links` is the call the web app makes right after sign-in to
+/// learn which orgs it can present a credential for. The locker validated
+/// the token against the home org's own store and nothing else, so an
+/// issuer-minted token — admitted by every org lane — came back
+/// `invalid session token` here, and the switcher never grew past one org.
+/// `central_auth::home_principal` is the shared answer; this pins it on
+/// the lane that surfaced the gap.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_locker_answers_a_central_principal() -> eyre::Result<()> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+
+    let principal = uuid::Uuid::new_v4();
+    let (base, _tmp) = boot(async |data_root| {
+        let home = data_root.org("mine");
+        let m = task_server::memberships::Memberships::open(&home.memberships_db())
+            .await
+            .expect("open memberships");
+        m.upsert(principal, "theirs", Some("member"))
+            .await
+            .expect("theirs row");
+    })
+    .await?;
+    let central = task_server::central_auth::configured().expect("configured");
+    central.remember_for_test(TOKEN, Some(principal.to_string()));
+    central.remember_for_test("unknown-to-everyone", None);
+
+    let ws = format!("{}/server/vox", base.replacen("http", "ws", 1));
+    let mut request = ws.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", "vox.v1".parse()?);
+    let (stream, _) = tokio_tungstenite::connect_async(request).await?;
+    let locker = vox_core::initiator_on(vox_websocket::WsLink::new(stream))
+        .establish::<identity_proto::IdentityServiceClient>()
+        .await
+        .map_err(|e| eyre::eyre!("establish: {e:?}"))?;
+
+    // An account the issuer vouches for, with a row here: a home-org
+    // account as far as the locker is concerned — empty, but answered.
+    let links = locker
+        .list_links(TOKEN.to_owned())
+        .await
+        .map_err(|e| eyre::eyre!("locker refused the central token: {e:?}"))?;
+    assert!(links.is_empty(), "a fresh principal has linked nothing yet");
+
+    // One the issuer rejects is still nobody.
+    let refused = locker.list_links("unknown-to-everyone".to_owned()).await;
+    assert!(
+        refused.is_err(),
+        "a token nobody knows must not read the locker"
+    );
+    Ok(())
+}

@@ -441,16 +441,10 @@ impl files_storage::OperatorAuth for HomeOrgOperator {
                     "missing session token (storage administration is an operator action)".into(),
                 ));
             }
-            let home = self.state.org(&home_slug).ok_or_else(|| {
-                StorageError::Unauthorized(format!("home org `{home_slug}` not in live dispatcher"))
-            })?;
-            home.auth
-                .auth
-                .current_session(architect_auth::commands::CurrentSession {
-                    token: session_token.to_string(),
-                })
+            let _ = home_slug;
+            crate::central_auth::home_principal(&self.state, session_token)
                 .await
-                .map_err(|e| StorageError::Unauthorized(format!("invalid session token: {e}")))?;
+                .ok_or_else(|| StorageError::Unauthorized("invalid session token".into()))?;
             Ok(())
         })
     }

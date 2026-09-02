@@ -80,16 +80,12 @@ impl OrgManagementService for OrgManagementImpl {
                     "home org `{home_slug}` not in live dispatcher"
                 ))
             })?;
+            let _ = home;
+            let state = self.state.clone();
             let token = req.session_token.clone();
-            let session_check = tokio::runtime::Handle::current().block_on(async move {
-                home.auth
-                    .auth
-                    .current_session(architect_auth::commands::CurrentSession { token })
-                    .await
-            });
-            session_check.map_err(|e| {
-                OrgManagementError::Unauthorized(format!("invalid session token: {e}"))
-            })?;
+            tokio::runtime::Handle::current()
+                .block_on(async move { crate::central_auth::home_principal(&state, &token).await })
+                .ok_or_else(|| OrgManagementError::Unauthorized("invalid session token".into()))?;
         }
 
         // Enforce single-home invariant up front so we don't

@@ -72,23 +72,11 @@ impl IdentityServiceImpl {
                 "missing session token".into(),
             ));
         }
-        let home = self.state.org(&home_slug).ok_or_else(|| {
-            IdentityServiceError::Unauthorized(format!(
-                "home org `{home_slug}` not in live dispatcher"
-            ))
-        })?;
+        let state = self.state.clone();
         let token = session_token.to_owned();
-        let bundle = tokio::runtime::Handle::current()
-            .block_on(async move {
-                home.auth
-                    .auth
-                    .current_session(architect_auth::commands::CurrentSession { token })
-                    .await
-            })
-            .map_err(|e| {
-                IdentityServiceError::Unauthorized(format!("invalid session token: {e}"))
-            })?;
-        let home_user_id = bundle.user.id;
+        let home_user_id = tokio::runtime::Handle::current()
+            .block_on(async move { crate::central_auth::home_principal(&state, &token).await })
+            .ok_or_else(|| IdentityServiceError::Unauthorized("invalid session token".into()))?;
 
         let store = self
             .state

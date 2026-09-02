@@ -2730,29 +2730,9 @@ async fn home_membership(state: &AppState, token: &str, slug: &str) -> bool {
         return false;
     };
     // Who is asking: a home-org session, or — when the server delegates
-    // identity — an account the issuer vouches for. The second half is
-    // the same resolution the org lane does (`CentralFallbackResolver`);
-    // without it a person signed in through the issuer was admitted to
-    // every RPC and tagged a member of nothing here, so the client drew
-    // an empty org list over a server that was answering them fine.
-    let user_id = match home
-        .auth
-        .auth
-        .current_session(architect_auth::CurrentSession {
-            token: token.to_owned(),
-        })
-        .await
-    {
-        Ok(bundle) => Some(bundle.user.id),
-        Err(_) => match central_auth::configured() {
-            Some(central) => central
-                .user_for(token)
-                .await
-                .and_then(|id| id.parse::<uuid::Uuid>().ok()),
-            None => None,
-        },
-    };
-    let Some(user_id) = user_id else {
+    // identity — an account the issuer vouches for. `home_principal` is
+    // the one place that answers this for every home-org lane.
+    let Some(user_id) = central_auth::home_principal(state, token).await else {
         return false;
     };
     home.memberships
