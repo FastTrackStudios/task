@@ -48,7 +48,9 @@ mod imp {
         unsafe impl NSObjectProtocol for PresentationContext {}
 
         unsafe impl ASWebAuthenticationPresentationContextProviding for PresentationContext {
-            #[unsafe(method(presentationAnchorForWebAuthenticationSession:))]
+            // `method_id`: the method hands back a `Retained`, which is
+            // what objc2's `define_class!` requires for that return type.
+            #[unsafe(method_id(presentationAnchorForWebAuthenticationSession:))]
             // `keyWindow`/`windows` are deprecated in favour of scenes;
             // this app has one scene and one window, and the deprecated
             // pair is the one that needs no scene bookkeeping.
@@ -65,8 +67,8 @@ mod imp {
                     .keyWindow()
                     .or_else(|| app.windows().firstObject())
                     .expect("an application window to present the sign-in over");
-                // `ASPresentationAnchor` is `UIWindow` on iOS; the alias is
-                // spelled through `NSObject` in the bindings.
+                // `ASPresentationAnchor` is `UIWindow` on iOS; the bindings
+                // spell the alias as `NSObject`, which a `UIWindow` is.
                 unsafe { Retained::cast_unchecked(window) }
             }
         }
@@ -113,7 +115,7 @@ mod imp {
                 done(Err("sign-in must start on the main thread".to_owned()));
                 return;
             }
-            let Some(ns_url) = (unsafe { NSURL::URLWithString(&NSString::from_str(&url)) }) else {
+            let Some(ns_url) = NSURL::URLWithString(&NSString::from_str(&url)) else {
                 done(Err("the authorize URL did not parse".to_owned()));
                 return;
             };
@@ -153,6 +155,10 @@ mod imp {
             // to; the session copies/retains it, so `handler` may drop at
             // the end of this call.
             let handler_ptr = std::ptr::from_ref(&*handler).cast_mut();
+            // The undeprecated initializer takes an `ASWebAuthenticationSessionCallback`
+            // (iOS 17.4+); the scheme form runs on every iOS this app
+            // supports and is what the issuer's registration matches.
+            #[allow(deprecated)]
             let session = unsafe {
                 ASWebAuthenticationSession::initWithURL_callbackURLScheme_completionHandler(
                     ASWebAuthenticationSession::alloc(),

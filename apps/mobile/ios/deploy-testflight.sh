@@ -139,6 +139,14 @@ else
          dx build --platform ios --device --release $DX_FEATURES" \
         > /tmp/fts-build.log 2>&1 || true
     tail -2 /tmp/fts-build.log
+    # A failed cargo build used to surface as two lines of dx summary and
+    # then a PlistBuddy error on a stale bundle. Show the compiler's own
+    # words and stop here instead.
+    if grep -q 'finished with errors' /tmp/fts-build.log; then
+        echo "=== rustc errors ==="
+        grep -E '^(error|warning: unused)' -A14 /tmp/fts-build.log | head -200
+        exit 1
+    fi
 fi
 # Resolve the actual .app (dx names it from the Dioxus.toml, per package).
 # shellcheck disable=SC2086
