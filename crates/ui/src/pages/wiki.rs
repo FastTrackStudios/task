@@ -57,8 +57,12 @@ enum GraphSource {
     Subscriptions,
 }
 
+/// The relevance graph over one wiki, or the vault's wikilink web.
+///
+/// Lives at `/graph`. The wiki page itself is a list of wikis you open;
+/// this is one way of looking at a wiki, reached from there.
 #[component]
-pub fn WikiView() -> Element {
+pub fn GraphView() -> Element {
     let nav = use_navigator();
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
@@ -99,13 +103,6 @@ pub fn WikiView() -> Element {
             }
         }
     });
-    // The "New wiki" form: shown on demand, cleared on success.
-    let mut composing = use_signal(|| false);
-    let mut new_title = use_signal(String::new);
-    let mut new_purpose = use_signal(String::new);
-    let mut new_visibility = use_signal(|| "private".to_owned());
-    let mut create_error = use_signal(|| Option::<String>::None);
-    let mut creating = use_signal(|| false);
     let mut picked = use_signal(String::new);
     // Settle on a wiki once the list arrives: the org's default tier
     // if it has one, else the first. Only when nothing is picked, so a
@@ -259,7 +256,11 @@ pub fn WikiView() -> Element {
                             on_node_click: move |id: String| {
                                 if let Some(path) = path_of.get(&id) {
                                     let route = match src {
-                                        GraphSource::Wiki => crate::routes::Route::WikiPageRoute {
+                                        GraphSource::Wiki => crate::routes::Route::WikiDocRoute {
+                                            wiki: {
+                                                let p = picked();
+                                                if p.is_empty() { FALLBACK_WIKI_ID.to_owned() } else { p }
+                                            },
                                             path: path.clone(),
                                         },
                                         GraphSource::Vault | GraphSource::Subscriptions => {
@@ -344,16 +345,6 @@ pub fn WikiView() -> Element {
                                 graph.restart();
                             })
                         }
-                        // An org holds a set of wikis (`wiki.many.set`);
-                        // this is where the set grows.
-                        button {
-                            class: "shrink-0 rounded-md border border-border/70 px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
-                            onclick: move |_| {
-                                composing.toggle();
-                                create_error.set(None);
-                            },
-                            if composing() { "Cancel" } else { "New wiki" }
-                        }
                     }
                     Link {
                         to: crate::routes::Route::WikiSourcesRoute {},
@@ -362,83 +353,6 @@ pub fn WikiView() -> Element {
                     }
                 }
                 Text { variant: TextVariant::Muted, "{subtitle}" }
-                if composing() && source() == GraphSource::Wiki {
-                    // Title, one line of purpose, and who may see it.
-                    // Private by default: promotion is what makes private
-                    // writing public, and it must be a choice
-                    // (`wiki.promote.vault`, `wiki.access.visibility`).
-                    form {
-                        class: "flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-card/40 p-2",
-                        onsubmit: move |e| {
-                            e.prevent_default();
-                            let title = new_title.read().trim().to_owned();
-                            if title.is_empty() || creating() {
-                                return;
-                            }
-                            let slugs = selected_slugs(&selection.read(), &org_list.read());
-                            let Some(org) = slugs.first().cloned() else {
-                                create_error.set(Some("no organization selected".to_owned()));
-                                return;
-                            };
-                            let new = wiki_proto::NewWiki {
-                                title,
-                                slug: String::new(),
-                                purpose: new_purpose.read().trim().to_owned(),
-                                visibility: wiki_proto::Visibility::parse(&new_visibility.read())
-                                    .unwrap_or_default(),
-                                source: None,
-                            };
-                            let mut wikis = wikis;
-                            let mut graph = graph;
-                            creating.set(true);
-                            spawn(async move {
-                                match crate::feeds::create_wiki(&org, new).await {
-                                    Ok(summary) => {
-                                        new_title.set(String::new());
-                                        new_purpose.set(String::new());
-                                        composing.set(false);
-                                        create_error.set(None);
-                                        picked.set(summary.slug);
-                                        wikis.restart();
-                                        graph.restart();
-                                    }
-                                    Err(e) => create_error.set(Some(e)),
-                                }
-                                creating.set(false);
-                            });
-                        },
-                        input {
-                            class: "min-w-0 flex-1 rounded-lg border border-border/70 bg-background px-2 py-1 text-sm",
-                            placeholder: "Title — Music Theory",
-                            value: "{new_title}",
-                            autofocus: true,
-                            oninput: move |e| new_title.set(e.value()),
-                        }
-                        input {
-                            class: "min-w-0 flex-[2] rounded-lg border border-border/70 bg-background px-2 py-1 text-sm",
-                            placeholder: "What it is for, in a sentence",
-                            value: "{new_purpose}",
-                            oninput: move |e| new_purpose.set(e.value()),
-                        }
-                        select {
-                            class: "rounded-lg border border-border/70 bg-background px-2 py-1 text-sm",
-                            value: "{new_visibility}",
-                            onchange: move |e| new_visibility.set(e.value()),
-                            option { value: "private", "Private" }
-                            option { value: "unlisted", "Unlisted" }
-                            option { value: "public", "Public" }
-                        }
-                        button {
-                            r#type: "submit",
-                            class: "rounded-lg border border-border/70 px-3 py-1 text-sm hover:bg-accent",
-                            disabled: creating(),
-                            if creating() { "Creating…" } else { "Create" }
-                        }
-                        if let Some(e) = create_error() {
-                            span { class: "basis-full text-xs text-destructive", "{e}" }
-                        }
-                    }
-                }
             }
             {body}
         }

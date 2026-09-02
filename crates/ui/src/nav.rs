@@ -166,6 +166,15 @@ pub fn nav_tabs() -> Vec<NavTab> {
             icon: icon_wiki,
             route: Route::WikiRoute {},
         },
+        // The relevance graph over a wiki or the vault. Its own tab: the
+        // wiki page is a list of wikis you open, and a graph is a way of
+        // looking at one, not the door to it.
+        NavTab {
+            label: "Graph",
+            plugin: "wiki",
+            icon: icon_connections,
+            route: Route::GraphRoute {},
+        },
         // The typed-link graph, beside the wikilink one. Tagged `git`
         // until the rename made it obvious that a knowledge web has
         // nothing to do with a code forge.
@@ -325,6 +334,9 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::TimerRoute {} => "Timer",
         Route::MembersRoute {} => "Members",
         Route::WikiRoute {} => "Wiki",
+        Route::GraphRoute {} => "Graph",
+        Route::WikiHomeRoute { .. } => "Wiki",
+        Route::WikiDocRoute { .. } => "Wiki page",
         Route::ConnectionsRoute {} => "Connections",
         Route::BasesRoute {} => "Bases",
         Route::WikiPageRoute { .. } => "Wiki page",

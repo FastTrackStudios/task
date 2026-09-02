@@ -70,8 +70,23 @@ pub enum Route {
         #[route("/files")]
         FilesRoute {},
 
+        // The org's wikis, as a list you open (`wiki.many.set`).
         #[route("/wiki")]
         WikiRoute {},
+
+        // The knowledge graph over one wiki or the vault — its own
+        // surface, not the front door of the wiki.
+        #[route("/graph")]
+        GraphRoute {},
+
+        // One wiki: what it is for, who edits it, and its pages.
+        #[route("/wiki/w/:wiki")]
+        WikiHomeRoute { wiki: String },
+
+        // One page of one wiki (wiki-root-relative path as a query
+        // value, like `VaultRoute`).
+        #[route("/wiki/w/:wiki/page?:path")]
+        WikiDocRoute { wiki: String, path: String },
 
         #[route("/connections")]
         ConnectionsRoute {},
@@ -349,14 +364,39 @@ fn FilesRoute() -> Element {
 #[component]
 fn WikiRoute() -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki::WikiView {} }
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_index::WikiIndexView {} }
     }
 }
 
 #[component]
+fn GraphRoute() -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki::GraphView {} }
+    }
+}
+
+#[component]
+fn WikiHomeRoute(wiki: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_home::WikiHomeView { wiki } }
+    }
+}
+
+#[component]
+fn WikiDocRoute(wiki: String, path: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { wiki, path } }
+    }
+}
+
+/// The pre-multi-wiki deep link: a page of the org's default tier.
+#[component]
 fn WikiPageRoute(path: String) -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { path } }
+        crate::plugin_gate::PluginGate {
+            plugin: "wiki",
+            pages::wiki_page::WikiPageView { wiki: "knowledge".to_owned(), path }
+        }
     }
 }
 

@@ -944,6 +944,20 @@ pub async fn fetch_wikis(slug: &str) -> Result<Vec<wiki_proto::WikiSummary>, Str
         .map_err(|e| format!("list_wikis: {e:?}"))
 }
 
+/// The pages of ONE wiki, by slug (`wiki.many.addressable`) — what a
+/// wiki's home page and the sidebar's tree list.
+pub async fn fetch_wiki_pages_of(
+    slug: &str,
+    wiki: &str,
+) -> Result<Vec<wiki_proto::pages::PageInfo>, String> {
+    let client =
+        crate::vox_clients::establish_for::<wiki_proto::service::pages::PagesClient>(slug).await?;
+    client
+        .list_pages(wiki.to_owned())
+        .await
+        .map_err(|e| format!("list_pages: {e:?}"))
+}
+
 /// Add a wiki to the org's set (`wiki.many.set`). The caller becomes its
 /// first Editor (`wiki.edit.editor`); the slug derives from the title.
 pub async fn create_wiki(

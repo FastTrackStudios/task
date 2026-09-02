@@ -107,6 +107,12 @@ pub fn AppShell() -> Element {
                                 files_ui::FilesSidebar {}
                             } else if let Route::ProjectDetailRoute { id } = &current {
                                 crate::shell::project_sidebar::ProjectSidebar { id: id.clone() }
+                            } else if let Route::WikiHomeRoute { wiki } = &current {
+                                // Inside a wiki the column is THAT wiki's
+                                // pages, not the vault's folders.
+                                crate::shell::wiki_sidebar::WikiSidebar { wiki: wiki.clone(), selected: String::new() }
+                            } else if let Route::WikiDocRoute { wiki, path } = &current {
+                                crate::shell::wiki_sidebar::WikiSidebar { wiki: wiki.clone(), selected: path.clone() }
                             } else {
                                 crate::shell::explorer::VaultExplorer {}
                             }

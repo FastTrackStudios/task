@@ -16,28 +16,27 @@ use wiki_proto::pages::WikiPageDoc;
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 
-const WIKI_ID: &str = "default";
-
 async fn pages_client(slug: &str) -> Result<wiki_proto::service::pages::PagesClient, String> {
     crate::vox_clients::establish_for::<wiki_proto::service::pages::PagesClient>(slug).await
 }
 
-async fn fetch_page(slug: &str, path: &str) -> Result<WikiPageDoc, String> {
+async fn fetch_page(slug: &str, wiki: &str, path: &str) -> Result<WikiPageDoc, String> {
     let c = pages_client(slug).await?;
-    c.read_page(WIKI_ID.to_owned(), path.to_owned())
+    c.read_page(wiki.to_owned(), path.to_owned())
         .await
         .map_err(|e| format!("read_page: {e:?}"))
 }
 
 async fn save_page(
     slug: &str,
+    wiki: &str,
     doc_path: &str,
     markdown: &str,
     base_sha256: &str,
 ) -> Result<WikiPageDoc, String> {
     let c = pages_client(slug).await?;
     c.write_page(
-        WIKI_ID.to_owned(),
+        wiki.to_owned(),
         doc_path.to_owned(),
         markdown.to_owned(),
         base_sha256.to_owned(),
@@ -78,17 +77,19 @@ fn fm_get<'a>(kv: &'a [(String, String)], key: &str) -> Option<&'a str> {
 }
 
 #[component]
-pub fn WikiPageView(path: String) -> Element {
+pub fn WikiPageView(wiki: String, path: String) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
     // Refetch on org switch or deep-link change.
     let fetch_path = path.clone();
-    let mut page = use_resource(use_reactive!(|(fetch_path,)| async move {
+    let fetch_wiki = wiki.clone();
+    let mut page = use_resource(use_reactive!(|(fetch_wiki, fetch_path)| async move {
         let slug = first_slug(&selection, &org_list)
             .ok_or_else(|| "no organization selected".to_string())?;
-        fetch_page(&slug, &fetch_path).await
+        fetch_page(&slug, &fetch_wiki, &fetch_path).await
     }));
+    let live_wiki = wiki.clone();
 
     // ── Live page changes ─────────────────────────────────────
     // The `Events` `#[subscribe]` stream — a page rewritten by the
@@ -118,7 +119,7 @@ pub fn WikiPageView(path: String) -> Element {
         },
         move |change: wiki_proto::WikiChange| {
             let mut page = page;
-            if change.wiki_id != WIKI_ID || *editing.peek() {
+            if change.wiki_id != live_wiki || *editing.peek() {
                 return;
             }
             let touched = match &change.event {
@@ -139,8 +140,10 @@ pub fn WikiPageView(path: String) -> Element {
     let mut saving = use_signal(|| false);
 
     let save_path = path.clone();
+    let save_wiki = wiki.clone();
     let on_save = move |_| {
         let save_path = save_path.clone();
+        let save_wiki = save_wiki.clone();
         spawn(async move {
             let Some(slug) = first_slug(&selection, &org_list) else {
                 save_error.set("no organization selected".to_string());
@@ -148,7 +151,14 @@ pub fn WikiPageView(path: String) -> Element {
             };
             saving.set(true);
             save_error.set(String::new());
-            let res = save_page(&slug, &save_path, &draft.peek(), &base_sha.peek()).await;
+            let res = save_page(
+                &slug,
+                &save_wiki,
+                &save_path,
+                &draft.peek(),
+                &base_sha.peek(),
+            )
+            .await;
             saving.set(false);
             match res {
                 Ok(_) => {
@@ -295,9 +305,9 @@ pub fn WikiPageView(path: String) -> Element {
     rsx! {
         div { class: "mx-auto flex h-full w-full max-w-3xl flex-col gap-4 overflow-y-auto p-4 sm:p-6 lg:p-8",
             Link {
-                to: crate::routes::Route::WikiRoute {},
+                to: crate::routes::Route::WikiHomeRoute { wiki: wiki.clone() },
                 class: "text-xs text-muted-foreground hover:text-foreground",
-                "← Knowledge graph"
+                "← {wiki}"
             }
             {body}
         }

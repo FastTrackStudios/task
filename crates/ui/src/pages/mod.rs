@@ -28,6 +28,8 @@ pub mod tasks;
 pub mod timer;
 pub mod vault;
 pub mod wiki;
+pub mod wiki_home;
+pub mod wiki_index;
 pub mod wiki_page;
 pub mod wiki_source;
 pub mod wiki_subscriptions;
