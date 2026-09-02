@@ -40,6 +40,41 @@ pub fn WikiSidebar(wiki: String, selected: String) -> Element {
             .map(|w| if w.title.is_empty() { w.slug } else { w.title })
     }));
 
+    // Live: a page written from this client (Add page, a save) or by
+    // the wiki pipeline shows up here without a reload — the tree is
+    // the map, and a map that lags the territory teaches people to
+    // distrust it.
+    let live_wiki = wiki.clone();
+    architect::use_stream(
+        move |tx| {
+            let slug = active();
+            async move {
+                let Ok(client) = crate::vox_clients::establish_for::<
+                    wiki_proto::service::events::EventsStreamClient,
+                >(&slug)
+                .await
+                else {
+                    return false;
+                };
+                client.changes(tx).await.is_ok()
+            }
+        },
+        move |change: wiki_proto::WikiChange| {
+            let mut pages = pages;
+            if change.wiki_id != live_wiki {
+                return;
+            }
+            if matches!(
+                change.event,
+                wiki_proto::WikiEvent::PageWritten { .. }
+                    | wiki_proto::WikiEvent::PageDeleted { .. }
+                    | wiki_proto::WikiEvent::Resync
+            ) {
+                pages.restart();
+            }
+        },
+    );
+
     let expanded = use_signal(HashSet::<String>::new);
     let heading = title
         .read()
