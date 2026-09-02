@@ -483,6 +483,10 @@ pub(crate) enum WikiCmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Pages of one wiki: list, read, write. The authoring surface an
+    /// agent scaffolds a wiki with (`wiki.many.set`).
+    #[command(subcommand)]
+    Page(WikiPageCmd),
     /// Rename a wiki — the title people see; the slug stays.
     SetTitle {
         slug: String,
@@ -2074,6 +2078,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         WikiCmd::ResearchPlans(c) => run_wiki_research_plans(c).await,
         WikiCmd::Watch(c) => run_wiki_watch(c).await,
         WikiCmd::Edits(c) => run_wiki_edits(c).await,
+        WikiCmd::Page(c) => run_wiki_page(c).await,
         WikiCmd::Create { .. }
         | WikiCmd::List { .. }
         | WikiCmd::Describe { .. }
@@ -4276,5 +4281,121 @@ mod tests {
             err.to_string().contains("no-such-vault"),
             "the error should name the path the caller typed: {err}"
         );
+    }
+}
+
+/// `task wiki page …` — one wiki's pages over the `Pages` service.
+#[derive(Subcommand)]
+pub enum WikiPageCmd {
+    /// List the wiki's pages (path, type, title).
+    List {
+        /// The wiki's slug.
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Print one page's markdown (frontmatter included). `--sha` prints
+    /// the content hash instead, for a guarded `write`.
+    Read {
+        wiki: String,
+        /// Wiki-root-relative path, e.g. `Concepts/Ionian.md`.
+        path: String,
+        #[arg(long)]
+        sha: bool,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Write one page from a file (or `-` for stdin). Creates it when
+    /// missing. With `--base-sha256` the write is refused if the page
+    /// changed since that hash was read.
+    Write {
+        wiki: String,
+        /// Wiki-root-relative path, e.g. `Concepts/Ionian.md`.
+        path: String,
+        /// File to read the markdown from, or `-` for stdin.
+        #[arg(long, default_value = "-")]
+        from: String,
+        #[arg(long, default_value = "")]
+        base_sha256: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+}
+
+/// The Pages service over vox: the calls made about pages *in* one wiki.
+async fn run_wiki_page(cmd: WikiPageCmd) -> eyre::Result<()> {
+    use wiki_proto::service::pages::PagesClient;
+
+    async fn client(org: Option<String>, server: Option<String>) -> eyre::Result<PagesClient> {
+        let slug = resolve_active_org(org)?;
+        establish_for_url(&resolve_org_vox_url(server, &slug)).await
+    }
+
+    match cmd {
+        WikiPageCmd::List { wiki, org, server } => {
+            let c = client(org, server).await?;
+            let pages = c
+                .list_pages(wiki)
+                .await
+                .map_err(|e| eyre::eyre!("list pages: {e:?}"))?;
+            for p in &pages {
+                let kind = if p.page_type.is_empty() {
+                    "-".to_owned()
+                } else {
+                    p.page_type.clone()
+                };
+                println!("{:<48} {:<12} {}", p.path, kind, p.title);
+            }
+            eprintln!("{} page(s)", pages.len());
+            Ok(())
+        }
+        WikiPageCmd::Read {
+            wiki,
+            path,
+            sha,
+            org,
+            server,
+        } => {
+            let c = client(org, server).await?;
+            let doc = c
+                .read_page(wiki, path)
+                .await
+                .map_err(|e| eyre::eyre!("read page: {e:?}"))?;
+            if sha {
+                println!("{}", doc.sha256);
+            } else {
+                print!("{}", doc.markdown);
+            }
+            Ok(())
+        }
+        WikiPageCmd::Write {
+            wiki,
+            path,
+            from,
+            base_sha256,
+            org,
+            server,
+        } => {
+            let markdown = if from == "-" {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+                s
+            } else {
+                std::fs::read_to_string(&from)?
+            };
+            let c = client(org, server).await?;
+            let doc = c
+                .write_page(wiki, path.clone(), markdown, base_sha256)
+                .await
+                .map_err(|e| eyre::eyre!("write page: {e:?}"))?;
+            println!("{path}  sha256 {}", doc.sha256);
+            Ok(())
+        }
     }
 }
