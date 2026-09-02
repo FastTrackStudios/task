@@ -84,8 +84,11 @@ grouped:
   redirect}`: backlinks across wikis, rename repair from history, the
   editor's picker, staleness from the stamp, and the org-registry redirect.
 - **Lifecycle** — `wiki.life.*`: adoption, signed handover, orphans.
-- **Resources** — `wiki.resource.{subscribe,not-a-wiki,addressing,
-  no-annotations,layers}`; `wiki.resource.rights` is met by `scripture`.
+- **Resources** — `wiki.resource.{not-a-wiki,addressing,no-annotations,
+  layers}`; `wiki.resource.rights` is met by `scripture`, and
+  `wiki.resource.subscribe` by `wiki_live::materialize::refresh_resource`
+  (the core Bible is served from its publisher's `resources/bible` and
+  refreshes into the subscriber's own corpus library).
 - **The Edit lane, the peer half** — `wiki.edit.home`. The lane itself
   is built: `wiki_live::edits_backend` implements
   `wiki_proto::service::edits::Edits` over one org's wikis, an Edit

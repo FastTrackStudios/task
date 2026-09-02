@@ -323,9 +323,147 @@ pub fn refresh_subscription<U: vault_proto::VaultSync>(
     refresh(upstream, &subscription.slug, &copy, &base)
 }
 
+/// Where an org keeps a subscribed **Resource**: its corpus library,
+/// `<org>/resources/<slug>/` — the same place `admin bible install`
+/// puts an edition, and the only place the scripture store reads.
+///
+/// Not `subscribed/…` like a wiki, deliberately. A wiki's copy is
+/// markdown that file-sync clients show and a person may annotate; a
+/// Resource's copy is a corpus that readers open by canonical address
+/// (`wiki.resource.addressing`), and putting it anywhere the reader
+/// does not look would be a copy nobody can read.
+#[must_use]
+pub fn resource_copy_dir(org_root: &Path, slug: &str) -> PathBuf {
+    org_root.join("resources").join(slug)
+}
+
+/// Bring a subscribed Resource's corpus up to date from `upstream_root`,
+/// the publishing org's `resources/<slug>` directory.
+///
+/// t[impl wiki.resource.subscribe] — a Resource is subscribed to on the
+/// same terms as a wiki: it has a local presence, it refreshes, and
+/// what arrives is what the publisher holds.
+///
+/// Every file upstream has lands here byte-for-byte; a file the
+/// subscriber already holds identically is `in_sync`; a file that
+/// differs is overwritten, because nothing is ever written into a
+/// Resource (`wiki.resource.no-annotations`) so a difference can only
+/// be a stale or corrupt copy. Files only the subscriber has — an
+/// edition installed here that the publisher does not carry — are kept
+/// and reported `local_only`, never deleted.
+///
+/// The vault engine is not used: it carries markdown, and a corpus is
+/// USFM, JSON, whatever the Resource's format is.
+///
+/// # Errors
+///
+/// Any failure reading upstream or writing the copy.
+pub fn refresh_resource(
+    upstream_root: &Path,
+    org_root: &Path,
+    subscription: &wiki_proto::Subscription,
+) -> Result<Refreshed, MaterializeError> {
+    let copy = resource_copy_dir(org_root, &subscription.slug);
+    let io = |path: &Path, source: std::io::Error| MaterializeError::Io {
+        path: path.display().to_string(),
+        source,
+    };
+    let mut out = Refreshed::default();
+    let mut upstream_files = std::collections::BTreeSet::new();
+    for rel in walk_files(upstream_root).map_err(|(p, e)| io(&p, e))? {
+        upstream_files.insert(rel.clone());
+        let src = upstream_root.join(&rel);
+        let dst = copy.join(&rel);
+        let theirs = std::fs::read(&src).map_err(|e| io(&src, e))?;
+        if let Ok(mine) = std::fs::read(&dst)
+            && mine == theirs
+        {
+            out.in_sync += 1;
+            continue;
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+        }
+        std::fs::write(&dst, &theirs).map_err(|e| io(&dst, e))?;
+        out.pulled += 1;
+    }
+    if copy.is_dir() {
+        for rel in walk_files(&copy).map_err(|(p, e)| io(&p, e))? {
+            if !upstream_files.contains(&rel) {
+                out.local_only.push(rel);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Every regular file under `root`, as `/`-separated paths relative to
+/// it, sorted.
+fn walk_files(root: &Path) -> Result<Vec<String>, (PathBuf, std::io::Error)> {
+    fn go(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), (PathBuf, std::io::Error)> {
+        let entries = std::fs::read_dir(dir).map_err(|e| (dir.to_path_buf(), e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| (dir.to_path_buf(), e))?;
+            let path = entry.path();
+            if path.is_dir() {
+                go(root, &path, out)?;
+            } else if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    go(root, root, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// t[verify wiki.resource.subscribe] — a Resource refreshes into
+    /// the corpus library whole, a second refresh finds it in sync, and
+    /// an edition only the subscriber holds is kept and named.
+    #[test]
+    fn a_resource_lands_in_the_corpus_library_and_keeps_local_editions() {
+        let up = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(up.path().join("WEB")).unwrap();
+        std::fs::write(up.path().join("WEB/JHN.usfm"), "\\id JHN\n").unwrap();
+        let org = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(org.path().join("resources/bible/BSB")).unwrap();
+        std::fs::write(
+            org.path().join("resources/bible/BSB/JHN.usfm"),
+            "\\id JHN bsb\n",
+        )
+        .unwrap();
+        let sub = wiki_proto::Subscription {
+            domain: "acme.test".into(),
+            slug: "bible".into(),
+            kind: wiki_proto::subscription::SourceKind::Resource,
+            title: "Bible".into(),
+            core: true,
+            declined: false,
+        };
+
+        let first = refresh_resource(up.path(), org.path(), &sub).unwrap();
+        assert_eq!(first.pulled, 1);
+        assert_eq!(first.in_sync, 0);
+        assert_eq!(first.local_only, vec!["BSB/JHN.usfm".to_owned()]);
+        assert_eq!(
+            std::fs::read_to_string(org.path().join("resources/bible/WEB/JHN.usfm")).unwrap(),
+            "\\id JHN\n"
+        );
+
+        let again = refresh_resource(up.path(), org.path(), &sub).unwrap();
+        assert_eq!(again.pulled, 0);
+        assert_eq!(again.in_sync, 1);
+        assert!(
+            org.path().join("resources/bible/BSB/JHN.usfm").is_file(),
+            "kept"
+        );
+    }
 
     /// An upstream wiki, served by the real vault backend over a real
     /// directory — the same type the server mounts, so this exercises

@@ -483,6 +483,15 @@ pub(crate) enum WikiCmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Rename a wiki — the title people see; the slug stays.
+    SetTitle {
+        slug: String,
+        title: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Change who may find and subscribe to a wiki.
     SetVisibility {
         slug: String,
@@ -2069,6 +2078,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         | WikiCmd::List { .. }
         | WikiCmd::Describe { .. }
         | WikiCmd::RefreshSource { .. }
+        | WikiCmd::SetTitle { .. }
         | WikiCmd::SetVisibility { .. } => run_wiki_registry(cmd).await,
     }
 }
@@ -2225,6 +2235,19 @@ async fn run_wiki_registry(cmd: WikiCmd) -> eyre::Result<()> {
                 .await
                 .map_err(|e| eyre::eyre!("refresh source: {e:?}"))?;
             print_source(&source);
+            Ok(())
+        }
+        WikiCmd::SetTitle {
+            slug,
+            title,
+            org,
+            server,
+        } => {
+            let c = client(org, server).await?;
+            c.set_title(slug.clone(), title.clone())
+                .await
+                .map_err(|e| eyre::eyre!("set title: {e:?}"))?;
+            println!("`{slug}` is now titled {title:?}");
             Ok(())
         }
         WikiCmd::SetVisibility {
