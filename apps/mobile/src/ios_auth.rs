@@ -23,7 +23,7 @@ mod imp {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
-    use objc2::{AnyThread as _, MainThreadMarker, define_class, msg_send};
+    use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_authentication_services::{
         ASPresentationAnchor, ASWebAuthenticationPresentationContextProviding,
         ASWebAuthenticationSession,
@@ -42,6 +42,9 @@ mod imp {
         /// Required on iOS 13+; without it `start` fails with
         /// "presentation context invalid".
         #[unsafe(super(NSObject))]
+        // The protocol is main-thread-only (it hands out UI), so the class
+        // conforming to it must be too.
+        #[thread_kind = MainThreadOnly]
         #[name = "TaskAuthPresentationContext"]
         struct PresentationContext;
 
@@ -75,8 +78,8 @@ mod imp {
     );
 
     impl PresentationContext {
-        fn new() -> Retained<Self> {
-            let this = Self::alloc().set_ivars(());
+        fn new(mtm: MainThreadMarker) -> Retained<Self> {
+            let this = Self::alloc(mtm).set_ivars(());
             unsafe { msg_send![super(this), init] }
         }
     }
@@ -111,10 +114,10 @@ mod imp {
         ) {
             // The UI event that asked runs on the main thread, which is
             // where UIKit wants the sheet presented from.
-            if MainThreadMarker::new().is_none() {
+            let Some(mtm) = MainThreadMarker::new() else {
                 done(Err("sign-in must start on the main thread".to_owned()));
                 return;
-            }
+            };
             let Some(ns_url) = NSURL::URLWithString(&NSString::from_str(&url)) else {
                 done(Err("the authorize URL did not parse".to_owned()));
                 return;
@@ -167,7 +170,7 @@ mod imp {
                     handler_ptr,
                 )
             };
-            let context = PresentationContext::new();
+            let context = PresentationContext::new(mtm);
             unsafe {
                 session.setPresentationContextProvider(Some(ProtocolObject::from_ref(&*context)));
                 // Share Safari's cookies: that is what turns a sign-in at
