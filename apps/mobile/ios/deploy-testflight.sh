@@ -144,7 +144,12 @@ else
     # words and stop here instead.
     if grep -q 'finished with errors' /tmp/fts-build.log; then
         echo "=== rustc errors ==="
-        grep -E '^(error|warning: unused)' -A14 /tmp/fts-build.log | head -200
+        # dx indents and prefixes cargo's output, so match anywhere on
+        # the line rather than at column 0, and keep the tail as well in
+        # case the shape changes again.
+        grep -n -i -E 'error(\[E[0-9]+\])?:|-->' /tmp/fts-build.log | head -120
+        echo "=== build log tail ==="
+        tail -150 /tmp/fts-build.log
         exit 1
     fi
 fi
