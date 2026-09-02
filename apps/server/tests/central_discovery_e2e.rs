@@ -286,3 +286,51 @@ async fn the_mcp_lane_admits_a_central_principal_and_its_owner_reads_telemetry()
     );
     Ok(())
 }
+
+/// Discovery names the principal it validated.
+///
+/// A client that holds a cached token used to learn who it was by
+/// dialling the org lane for `whoami`, failing (an issuer token is
+/// unknown to the org's store), then asking the issuer, then fetching
+/// discovery AGAIN with the token — four round trips on every reload.
+/// Discovery already resolves the token to tag membership; handing the
+/// account back in the same response is what lets the client restore a
+/// session from one fetch.
+#[tokio::test(flavor = "multi_thread")]
+async fn discovery_names_the_principal_it_validated() -> eyre::Result<()> {
+    let principal = uuid::Uuid::new_v4();
+    let (base, _tmp) = boot(async |data_root| {
+        let home = data_root.org("mine");
+        let m = task_server::memberships::Memberships::open(&home.memberships_db())
+            .await
+            .expect("open memberships");
+        m.upsert(principal, "mine", Some("owner"))
+            .await
+            .expect("mine row");
+    })
+    .await?;
+    task_server::central_auth::configured()
+        .expect("configured")
+        .remember_for_test(TOKEN, Some(principal.to_string()));
+
+    let client = reqwest::Client::new();
+    let doc: serde_json::Value = client
+        .get(format!("{base}/.well-known/task-server.json"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(doc["principal"]["id"], principal.to_string());
+    assert_eq!(doc["principal"]["via"], "issuer");
+
+    // No token, no principal — and never an error.
+    let anon: serde_json::Value = client
+        .get(format!("{base}/.well-known/task-server.json"))
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert!(anon["principal"].is_null(), "{}", anon["principal"]);
+    Ok(())
+}

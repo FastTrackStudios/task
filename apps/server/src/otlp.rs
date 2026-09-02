@@ -139,5 +139,14 @@ async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), Respo
             return Ok(());
         }
     }
+    // Or an account the home org recognises through the issuer — the
+    // browser build signs in that way and exports its boot trace with
+    // the same token it holds for everything else.
+    if crate::central_auth::home_principal(state, &token)
+        .await
+        .is_some()
+    {
+        return Ok(());
+    }
     Err((StatusCode::UNAUTHORIZED, "invalid session token").into_response())
 }

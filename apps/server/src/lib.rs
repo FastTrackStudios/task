@@ -2765,32 +2765,22 @@ async fn well_known_handler(
     // 6). Enforcement of actual data access is the permission gate's job
     // on the org lane, not this endpoint's.
     let bearer = crate::watch_bridge::bearer(&headers);
+    // Who the bearer is, learned once while tagging membership. Handed
+    // back as `principal` so a client holding a cached token can restore
+    // its session from this one response instead of validating the token
+    // again against the org lane and then the issuer — the chain that
+    // made a warm reload take five seconds.
+    let mut principal: Option<serde_json::Value> = None;
     let mut orgs: Vec<serde_json::Value> = Vec::new();
     for slug in state.org_slugs() {
-        // We only have the slug here — the display
-        // name + federation URL live in `org.toml`,
-        // re-loaded for each entry. Cheap (TOML parse
-        // of a tiny file) and avoids holding manifest
-        // copies on every dispatched request.
         let Ok(manifest) = state.data_root.org(slug.as_str()).manifest() else {
             continue;
         };
-        // `null` (unknown) when the caller presented nothing, so a client
-        // can tell "signed out" from "signed in and not a member" — the
-        // former must still show every org (that's the sign-in path), the
-        // latter must not.
-        // Membership, in two steps. A token this org issued still means
-        // membership — that is what it meant before cross-org identity,
-        // and an org detached onto its own server must keep working. If
-        // it did not, the token may still be a home-org one, in which
-        // case the memberships table is the authority.
-        //
-        // The client turns this tag into what "All organizations" means
-        // (`orgs::my_orgs_with_links`), so a `false` here is exactly the
-        // org disappearing from every multi-org view.
         let member = match &bearer {
             None => None,
             Some(token) => {
+                // The org's own store first: a session it minted is a
+                // member by definition, and the bundle names the account.
                 let own = match state.org(&slug) {
                     Some(org) => org
                         .auth
@@ -2799,13 +2789,22 @@ async fn well_known_handler(
                             token: token.clone(),
                         })
                         .await
-                        .is_ok(),
-                    None => false,
+                        .ok(),
+                    None => None,
                 };
-                if own {
-                    Some(true)
-                } else {
-                    Some(home_membership(&state, token, &slug).await)
+                match own {
+                    Some(bundle) => {
+                        principal.get_or_insert_with(|| {
+                            serde_json::json!({
+                                "id": bundle.user.id,
+                                "email": bundle.user.email,
+                                "name": bundle.user.name,
+                                "via": "org",
+                            })
+                        });
+                        Some(true)
+                    }
+                    None => Some(home_membership(&state, token, &slug).await),
                 }
             }
         };
@@ -2836,6 +2835,21 @@ async fn well_known_handler(
             .filter(|s| !s.is_empty()),
         }));
     }
+    // A token no org here minted may still be the issuer's — the same
+    // resolution the org lane does, answered from its cache after the
+    // first ask.
+    if principal.is_none()
+        && let Some(token) = &bearer
+        && let Some(central) = central_auth::configured()
+        && let Some(profile) = central.profile_for(token).await
+    {
+        principal = Some(serde_json::json!({
+            "id": profile.user_id,
+            "email": profile.email,
+            "name": profile.name,
+            "via": "issuer",
+        }));
+    }
     // Schema stamps — the proto/server skew guard. Clients
     // (`task doctor`) compare these against their own build;
     // see `schema_stamps`.
@@ -2851,6 +2865,9 @@ async fn well_known_handler(
         // a green run means the deployment is actually serving it.
         "build": std::env::var("TASK_BUILD_REV").unwrap_or_else(|_| "unknown".to_owned()),
         "orgs": orgs,
+        // The account the bearer resolved to (`null` without one, or when
+        // nothing here or at the issuer recognised it). `via` says which.
+        "principal": principal,
         "schema_stamps": stamps,
         // Where accounts come from, when they do not come from here.
         //

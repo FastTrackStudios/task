@@ -98,8 +98,20 @@ pub struct CentralAuth {
 
 struct Cached {
     /// `None` is a remembered rejection, not a missing entry.
-    user_id: Option<String>,
+    profile: Option<CentralProfile>,
     until: Instant,
+}
+
+/// Who the issuer says a token belongs to.
+///
+/// The id is the part that has to exist — memberships key on it. Email
+/// and name are carried so discovery can hand a client its own
+/// account without a second trip to the issuer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CentralProfile {
+    pub user_id: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
 }
 
 /// What one issuer endpoint said about a token.
@@ -110,7 +122,7 @@ struct Cached {
 /// them separate here is what lets the span say which.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Verdict {
-    Resolved(String),
+    Resolved(CentralProfile),
     /// The issuer answered, and did not recognise the token.
     Declined,
     /// We could not ask.
@@ -140,6 +152,12 @@ impl CentralAuth {
     /// "could not ask" would be tempted to admit on the second, and an
     /// auth server being down must never widen access.
     pub async fn user_for(&self, token: &str) -> Option<String> {
+        self.profile_for(token).await.map(|p| p.user_id)
+    }
+
+    /// The user this token belongs to, with what the issuer knows of
+    /// them, or `None` (same contract as [`Self::user_for`]).
+    pub async fn profile_for(&self, token: &str) -> Option<CentralProfile> {
         if let Some(hit) = self.cached(token) {
             return hit;
         }
@@ -148,14 +166,14 @@ impl CentralAuth {
         fresh
     }
 
-    fn cached(&self, token: &str) -> Option<Option<String>> {
+    fn cached(&self, token: &str) -> Option<Option<CentralProfile>> {
         let mut cache = self.cache.lock().ok()?;
         let entry = cache.get(token)?;
         if entry.until <= Instant::now() {
             cache.remove(token);
             return None;
         }
-        Some(entry.user_id.clone())
+        Some(entry.profile.clone())
     }
 
     /// Seed the cache, for the e2e test that proves a second lookup does
@@ -164,14 +182,21 @@ impl CentralAuth {
     /// as a dependency and so never sees its `cfg(test)` items.
     #[doc(hidden)]
     pub fn remember_for_test(&self, token: &str, user_id: Option<String>) {
-        self.remember(token, user_id);
+        self.remember(
+            token,
+            user_id.map(|user_id| CentralProfile {
+                user_id,
+                email: None,
+                name: None,
+            }),
+        );
     }
 
-    fn remember(&self, token: &str, user_id: Option<String>) {
+    fn remember(&self, token: &str, profile: Option<CentralProfile>) {
         let Ok(mut cache) = self.cache.lock() else {
             return;
         };
-        let ttl = if user_id.is_some() {
+        let ttl = if profile.is_some() {
             CACHE_TTL
         } else {
             NEGATIVE_TTL
@@ -188,7 +213,7 @@ impl CentralAuth {
         cache.insert(
             token.to_owned(),
             Cached {
-                user_id,
+                profile,
                 until: Instant::now() + ttl,
             },
         );
@@ -214,18 +239,20 @@ impl CentralAuth {
     /// Session first: it is the flow that carries a token minted for
     /// Task specifically, and trying it first means the common path
     /// costs one request rather than two.
-    async fn introspect(&self, token: &str) -> Option<String> {
+    async fn introspect(&self, token: &str) -> Option<CentralProfile> {
         use architect_telemetry::wide;
 
-        let session = self.ask(token, "/auth/session", &["user", "id"]).await;
-        if let Verdict::Resolved(user_id) = session {
+        // `/auth/session` nests the account under `user`; `/oauth2/userinfo`
+        // is flat OIDC claims (`sub`, `email`, `name`).
+        let session = self.ask(token, "/auth/session", Some("user"), "id").await;
+        if let Verdict::Resolved(profile) = session {
             wide::set("auth.central", "session_token");
-            return Some(user_id);
+            return Some(profile);
         }
-        match self.ask(token, "/oauth2/userinfo", &["sub"]).await {
-            Verdict::Resolved(user_id) => {
+        match self.ask(token, "/oauth2/userinfo", None, "sub").await {
+            Verdict::Resolved(profile) => {
                 wide::set("auth.central", "access_token");
-                Some(user_id)
+                Some(profile)
             }
             // Both endpoints unreachable is an outage, not a bad token,
             // and it is the one case an operator must be paged for: every
@@ -250,14 +277,16 @@ impl CentralAuth {
         }
     }
 
-    /// One introspection request, reading the user id out at `path`.
+    /// One introspection request, reading the account out of the reply:
+    /// under `nest` when the endpoint wraps it, its id at `id_key`, and
+    /// `email`/`name` beside the id when present.
     ///
     /// Returns a [`Verdict`] rather than `Option` so the caller can tell
     /// "the issuer said no" from "we could not ask" — the two are the
     /// same `Principal::Anonymous` downstream, and which one it was is
     /// the difference between "your session expired" and "the auth
     /// server is unreachable".
-    async fn ask(&self, token: &str, endpoint: &str, path: &[&str]) -> Verdict {
+    async fn ask(&self, token: &str, endpoint: &str, nest: Option<&str>, id_key: &str) -> Verdict {
         let url = format!("{}{endpoint}", self.base_url);
         let res = match self
             .http
@@ -278,16 +307,28 @@ impl CentralAuth {
         let Ok(body) = res.json::<serde_json::Value>().await else {
             return Verdict::Declined;
         };
-        let mut cursor = &body;
-        for key in path {
-            let Some(next) = cursor.get(key) else {
-                return Verdict::Declined;
-            };
-            cursor = next;
-        }
-        cursor
-            .as_str()
-            .map_or(Verdict::Declined, |id| Verdict::Resolved(id.to_owned()))
+        let account = match nest {
+            Some(key) => match body.get(key) {
+                Some(inner) => inner,
+                None => return Verdict::Declined,
+            },
+            None => &body,
+        };
+        let Some(user_id) = account.get(id_key).and_then(|v| v.as_str()) else {
+            return Verdict::Declined;
+        };
+        let text = |key: &str| {
+            account
+                .get(key)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        };
+        Verdict::Resolved(CentralProfile {
+            user_id: user_id.to_owned(),
+            email: text("email"),
+            name: text("name"),
+        })
     }
 }
 

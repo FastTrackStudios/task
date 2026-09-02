@@ -12,6 +12,7 @@ license.workspace = true
 # packages/web pattern.
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
+task-ui-core.workspace = true
 # The shipped app set — same list as desktop and mobile, by
 # construction rather than by remembering.
 task-plugins = { workspace = true }

@@ -115,8 +115,20 @@ pub fn App() -> Element {
     // request per page load, before the session existed. So the token is
     // a dependency of the resource below, and resolving a session
     // re-discovers with it.
-    let session_token: Signal<Option<String>> =
-        use_context_provider(|| Signal::new(None::<String>));
+    //
+    // Seeded from localStorage, not `None`: the token boot is about to
+    // restore is already on this machine, so the first fetch can carry
+    // it and come back with membership AND the principal
+    // (`auth::boot_session_token`). One discovery instead of two, and the
+    // sockets dialled after it already hold the right identity, so
+    // sign-in no longer tears them all down.
+    let session_token: Signal<Option<String>> = use_context_provider(|| {
+        let boot = crate::auth::boot_session_token();
+        if boot.is_some() {
+            crate::vox_session::set_session_token(boot.clone());
+        }
+        Signal::new(boot)
+    });
     // Re-discover orgs whenever the active server OR the session changes
     // (reading both inside the resource closure registers them as
     // dependencies).
@@ -217,6 +229,7 @@ pub fn App() -> Element {
     let mut discovery_err = use_context_provider(|| crate::orgs::DiscoveryError(Signal::new(None)));
     use_effect(move || match &*orgs_res.read_unchecked() {
         Some(Ok(list)) => {
+            task_ui_core::boot_trace::mark("discovery");
             if *org_list.peek() != *list {
                 org_list.set(list.clone());
                 // Discovery answers `member` for the ONE token it
@@ -287,7 +300,7 @@ pub fn App() -> Element {
     // hooks/caches downstream to invalidate; `caller_for`'s root cache
     // additionally self-validates via `is_connected()` (see
     // `vox_clients`), so the reconnect lands on a fresh socket.
-    let _conn: architect::Connection<vox_core::Caller> = architect::use_app_supervised(
+    let conn: architect::Connection<vox_core::Caller> = architect::use_app_supervised(
         move || {
             let slug = match &*org_selection.read() {
                 OrgSelection::One(slug) => slug.clone(),
@@ -304,6 +317,12 @@ pub fn App() -> Element {
         },
         |caller: vox_core::Caller| async move { caller.closed().await },
     );
+    // Boot: the moment the org socket is first usable.
+    use_effect(move || {
+        if conn.ready().is_some() {
+            task_ui_core::boot_trace::mark("connection");
+        }
+    });
 
     // The per-feature optimistic stores (architect-atom `Store`s) every
     // route page's `use_<entity>_list` / `use_<entity>_mutations` hooks

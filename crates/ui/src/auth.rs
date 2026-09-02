@@ -547,6 +547,7 @@ async fn run_switch(mut st: AuthState, email: &str) {
             pull_locker(st, &account).await;
             push_link(st, &account).await;
             st.active.set(Some(account));
+            task_ui_core::boot_trace::mark("session");
         }
         Err(e) => st.error.set(Some(e)),
     }
@@ -1032,8 +1033,46 @@ fn central_account(
     })
 }
 
+/// The token boot will restore, before anything has been fetched.
+///
+/// Read at app-root construction so the FIRST discovery fetch carries it
+/// (`app.rs`): the server then tags membership and names the principal
+/// in that one response, and `resolve_session` restores the session
+/// from it without a `whoami` or a trip to the issuer. Before this the
+/// boot fetch was anonymous, so every reload discovered twice, validated
+/// the token twice over the network, and tore every socket down to
+/// re-dial under the identity it had held in localStorage all along.
+#[must_use]
+pub fn boot_session_token() -> Option<String> {
+    let email = load_active_email()?;
+    load_cached_token(&email)
+}
+
 /// Token-cache-first session resolution against the home org.
 async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, String> {
+    // 0. Discovery already validated the cached token and told us who it
+    //    is (`orgs::discovered_principal_for`). That is the whole answer:
+    //    no lane dial, no `whoami`, no issuer round trip.
+    if let Some(token) = load_cached_token(email)
+        && let Some(p) = crate::orgs::discovered_principal_for(&token)
+    {
+        let dev_name = dev_accounts()
+            .iter()
+            .find(|a| a.email == email)
+            .map(|a| a.name.to_owned());
+        let email = p.email.clone().unwrap_or_else(|| email.to_owned());
+        return Ok(ActiveAccount {
+            user_id: p.user_id,
+            name: p
+                .name
+                .filter(|n| !n.trim().is_empty())
+                .or(dev_name)
+                .unwrap_or_else(|| email.clone()),
+            email,
+            token,
+        });
+    }
+
     let client = establish_for::<AuthServiceClient>(slug).await?;
 
     // 1. Cached token → whoami validates it without a fresh sign-in.
