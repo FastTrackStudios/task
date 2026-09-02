@@ -18,6 +18,8 @@ tests/playwright/
 ├── package.json          # @playwright/test (pinned to nix playwright-driver)
 ├── playwright.config.js   # workers=1, single dx-serve webServer
 ├── smoke.spec.js          # shell + route smoke + screenshots
+├── connection-stability.spec.js  # vox reconnect-storm regression (needs a server)
+├── vault-editing.spec.js  # create/type/link a note + reload (CRDT path; needs a server)
 └── README.md              # you are here
 ```
 

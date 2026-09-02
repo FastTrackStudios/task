@@ -98,8 +98,13 @@ pub(crate) fn NoteView(
     // fullscreen experience owns the screen (see `note_body_visible`).
     let widget_fullscreen = use_signal(|| false);
     let vim = use_signal(VimState::new);
-    // Vim is a physical-keyboard idiom — decide once at mount.
-    let vim = (!use_hook(editor::editor_view::coarse_pointer)).then_some(vim);
+    // Modal editing is OPT-IN (`UserPrefs::vim_mode`, default off): with
+    // it on the editor opens in NORMAL mode, so letters are commands
+    // instead of text. Still gated on a physical keyboard — vim on a
+    // touch keyboard is unusable whatever the preference says.
+    let vim_pref = use_context::<crate::prefs::PrefsCtx>().prefs;
+    let vim = (vim_pref.read().vim_mode && !use_hook(editor::editor_view::coarse_pointer))
+        .then_some(vim);
     let slash = use_signal(|| None::<SlashState>);
 
     // ── Cross-file lookup + lazy fetch worker ─────────────────

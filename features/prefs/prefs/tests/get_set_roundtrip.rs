@@ -39,6 +39,7 @@ async fn set_then_get_round_trips() {
         theme_preset: "rose-pine".into(),
         theme_mode: "dark".into(),
         shortcuts_priority: false,
+        vim_mode: true,
     };
     let stored = store.set(wanted.clone()).await.unwrap();
     assert_eq!(stored, wanted);
@@ -59,6 +60,7 @@ async fn second_set_upserts_in_place() {
         theme_preset: "nord".into(),
         theme_mode: "light".into(),
         shortcuts_priority: true,
+        vim_mode: true,
     };
     store.set(updated.clone()).await.unwrap();
     assert_eq!(store.get(user).await.unwrap(), updated);
@@ -77,9 +79,25 @@ async fn prefs_are_per_user() {
         theme_preset: String::new(),
         theme_mode: String::new(),
         shortcuts_priority: false,
+        vim_mode: false,
     };
     store.set(a_prefs.clone()).await.unwrap();
     assert_eq!(store.get(a).await.unwrap(), a_prefs);
     // b never wrote — still defaults.
     assert_eq!(store.get(b).await.unwrap(), UserPrefs::defaults_for(b));
+}
+
+/// Modal editing is opt-in. A user who never touched the setting must
+/// get a plain editor: with vim on, a note opens in NORMAL mode and
+/// letters are commands rather than text, which is not a default
+/// anyone should be handed.
+#[tokio::test]
+async fn vim_mode_is_off_by_default() {
+    let store = new_store().await;
+    let user = Uuid::new_v4();
+    assert!(
+        !store.get(user).await.unwrap().vim_mode,
+        "an untouched account must default to vim OFF"
+    );
+    assert!(!UserPrefs::defaults_for(user).vim_mode);
 }
