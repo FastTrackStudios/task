@@ -23,7 +23,9 @@ mod imp {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
-    use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
+    // `AnyThread` for allocating the session, `MainThreadOnly` for the
+    // context provider class the protocol makes main-thread-only.
+    use objc2::{AnyThread as _, MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_authentication_services::{
         ASPresentationAnchor, ASWebAuthenticationPresentationContextProviding,
         ASWebAuthenticationSession,
