@@ -474,7 +474,7 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CACHE_TTL, CentralAuth, NEGATIVE_TTL};
+    use super::{CACHE_TTL, CentralAuth, CentralProfile, NEGATIVE_TTL};
 
     /// A rejection is remembered for a shorter time than an acceptance,
     /// because a refresh is exactly the thing that changes it.
@@ -500,8 +500,13 @@ mod tests {
         let auth = CentralAuth::new("https://auth.example.app");
         assert!(auth.cached("tok").is_none(), "nothing remembered yet");
 
-        auth.remember("tok", Some("user-1".into()));
-        assert_eq!(auth.cached("tok"), Some(Some("user-1".into())));
+        let profile = CentralProfile {
+            user_id: "user-1".into(),
+            email: Some("one@example.app".into()),
+            name: None,
+        };
+        auth.remember("tok", Some(profile.clone()));
+        assert_eq!(auth.cached("tok"), Some(Some(profile)));
 
         auth.remember("bad", None);
         assert_eq!(
