@@ -1356,60 +1356,6 @@ fn telemetry_tools_payload() -> Vec<Value> {
     ]
 }
 
-/// Is this caller an operator — allowed to read telemetry that spans
-/// every org? The static token is one by definition; a session is one
-/// when its principal holds `admin` in the HOME org, read from the
-/// memberships table when it exists and from the home org's own role
-/// column otherwise (the two places `admin set-role` / `adopt-principal`
-/// write).
-async fn is_operator(state: &AppState, headers: &HeaderMap) -> bool {
-    let Some(token) = crate::watch_bridge::bearer(headers) else {
-        return false;
-    };
-    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
-    if !static_token.is_empty() && token == static_token {
-        architect_telemetry::wide::set("auth.principal_kind", "static_token");
-        return true;
-    }
-    let Some(home_slug) = state.home_slug() else {
-        return false;
-    };
-    let Some(home) = state.org(&home_slug) else {
-        return false;
-    };
-    // An operator role on the home org's own account, when the token
-    // is one of its sessions…
-    if let Ok(bundle) = home
-        .auth
-        .auth
-        .current_session(architect_auth::CurrentSession {
-            token: token.clone(),
-        })
-        .await
-        && operator_role(bundle.user.role.as_deref())
-    {
-        return true;
-    }
-    // …or on the home org's membership row, for any principal the home
-    // org recognises — its own accounts and, with central auth, the
-    // issuer's (`central_auth::home_principal`). An `owner` outranks an
-    // `admin`; refusing one would refuse the person who runs the server.
-    if let Some(identity) = &state.home_identity
-        && let Some(user_id) = crate::central_auth::home_principal(state, &token).await
-        && let Ok(Some(m)) = identity.memberships.role_for(user_id, &home_slug).await
-        && operator_role(m.role.as_deref())
-    {
-        return true;
-    }
-    false
-}
-
-/// The roles that may read telemetry: it spans every org on the server,
-/// so only whoever administers the server as a whole.
-fn operator_role(role: Option<&str>) -> bool {
-    matches!(role, Some("admin" | "owner"))
-}
-
 /// One `telemetry_*` call, end to end: configured? operator? then the
 /// backend. Returns the MCP tool result (`tool_ok` / `tool_err`), or
 /// `None` when the tools are hidden (no backend configured), which the
@@ -1429,7 +1375,7 @@ async fn telemetry_call(
         return None;
     }
     wide::set("mcp.tool", name.to_owned());
-    let operator = is_operator(state, headers).await;
+    let operator = crate::operator::is_operator(state, headers).await;
     if name == "telemetry_status" {
         wide::set("telemetry.outcome", if operator { "ok" } else { "refused" });
         return Some(tool_ok(&json!({

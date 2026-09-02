@@ -78,7 +78,7 @@ families here when you introduce them.
 | `rpc.scope` | instance scope, `""` when unscoped | architect |
 | `route` / `method` / `status` | matched HTTP route, verb, status code | `main.rs` TraceLayer |
 | `org.slug` | org slug — high cardinality, keep it | `permits` |
-| `auth.principal_kind` | `user` \| `anonymous` \| `static_token` | `permits`, `mcp` |
+| `auth.principal_kind` | `user` \| `anonymous` \| `static_token` | `permits`, `operator` |
 | `auth.user_id` | present when resolved | `permits` |
 | `auth.token_presented` | bool | `permits` |
 | `auth.outcome` | `resolved` \| `rejected` \| `absent` | `permits` |
@@ -94,6 +94,7 @@ families here when you introduce them.
 | `mcp.tool` | the MCP tool name (`create_task`, `telemetry_query_logs`, …) | `mcp` |
 | `telemetry.backend` | `tempo` \| `loki` | `mcp::telemetry_call` |
 | `telemetry.outcome` | `ok` \| `refused` \| `unconfigured` \| `bad_request` \| `upstream_error` | `mcp::telemetry_call` |
+| `debug.profile_seconds` / `debug.format` | the sampling window (1–60) and `flamegraph` \| `pprof` | `debug_profile` |
 | `wiki.subscribe.source` / `wiki.subscribe.outcome` | subscription materialisation | `wiki-live` |
 | `wiki.slug` | the wiki being served | `wiki-live` |
 | `wiki.edit.id` / `wiki.edit.outcome` | Edit Request id and its fate (`opened`, `auto_approved`, `held`, `claimed`, `accepted`, `landing`, `rejected`, `returned`, `conflict`, `refused`) | `wiki-live::edits_backend` |
@@ -239,6 +240,47 @@ with `q=<TraceQL>`, `start`/`end` in unix seconds, `limit`; and
 Why not `kubectl logs`: iroh emits `net_report: IPv4 address detected by
 QAD varies by destination` several times a second, so a `--tail` window
 never reaches anything real. Loki's filters find what a tail cannot.
+
+### CPU profiling — the server samples itself
+
+When the process burns cores and the spans say nothing (a hot loop is
+not a request), traces and logs are the wrong instrument. Nobody has
+root on the node, so `perf` is out; instead the server profiles itself
+on two operator-only routes under `/server/debug/`
+(`apps/server/src/debug_profile.rs`). The gate is the one the
+`telemetry_*` tools use (`operator::is_operator`): the static
+`TASK_MCP_TOKEN`, or a session holding `admin`/`owner` in the home org.
+Anything else is a one-line 401. Linux only — elsewhere they answer 501.
+
+Start with the thread table: it says *which* threads are hot before a
+flamegraph says why. It reads `/proc/self/task/*/stat` twice, one second
+apart, and answers `[{tid, name, cpu_pct}]` hottest-first (`name` is
+the 15-char `comm`, so tokio workers read `tokio-runtime-w`):
+
+```bash
+TOKEN=…   # TASK_MCP_TOKEN, or your own session token
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  https://task.fasttrackstudio.app/server/debug/threads | jq '.[:12]'
+```
+
+Then a profile. `seconds` defaults to 10 and caps at 60; the sampler
+runs at 99 Hz across every thread and blocklists `libc`/`libgcc`/
+`pthread`/`vdso` frames so the graph shows our code. `format=flamegraph`
+(default) is an SVG you open in a browser and click into;
+`format=pprof` is a gzipped pprof protobuf for `go tool pprof` or
+`pprof -http=:8080 prof.pb.gz`.
+
+```bash
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  'https://task.fasttrackstudio.app/server/debug/profile?seconds=15' > prof.svg
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  'https://task.fasttrackstudio.app/server/debug/profile?seconds=15&format=pprof' > prof.pb.gz
+```
+
+One profile at a time — a second call during a window gets 409. The
+request's span carries `debug.profile_seconds`, `debug.format` and
+`auth.principal_kind`, so a profile that someone took is itself a
+queryable event (`{ span.debug.format != nil }`).
 
 ## 7. Local dev
 
