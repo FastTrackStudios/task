@@ -329,23 +329,6 @@ pub fn App() -> Element {
     // read. Provided after `use_app_supervised` so mutations find the
     // notifications + reactivity registries it installed above.
     crate::stores::provide_stores();
-    // The same, for every registered app — an app's rows are its own,
-    // and it declares `provide` to install them here rather than on its
-    // screen. A store provided when a page mounts dies with that page,
-    // taking the cache and any in-flight write; and an app's rows are
-    // wanted where its screens are not (a note widget, a search hit).
-    //
-    // Not filtered by the org's enabled set, deliberately. Providing
-    // context is cheap and idempotent, and hooks cannot be called
-    // conditionally — a set that changes when somebody switches org
-    // would change the number of hooks this component runs, which is
-    // the one thing Dioxus cannot survive. Enablement is enforced where
-    // it shows: nav, screens, and link claims.
-    for app in task_plugin_ui::registered() {
-        if let Some(provide) = app.provide {
-            provide();
-        }
-    }
 
     // Web auth: the active-account context + boot restore (validate
     // the persisted session, or auto sign-in as Guest). Needs the
@@ -428,6 +411,32 @@ pub fn App() -> Element {
     // publisher, roster, and picker consume. The publisher itself
     // lives in the shell (`PresencePublisher`) — it needs the router.
     crate::presence::provide_org_presence();
+
+    // The apps' stores, last — an app's rows are its own, and it
+    // declares `provide` to install them here rather than on its
+    // screen. A store provided when a page mounts dies with that page,
+    // taking the cache and any in-flight write; and an app's rows are
+    // wanted where its screens are not (a note widget, a search hit).
+    //
+    // Not filtered by the org's enabled set, deliberately. Providing
+    // context is cheap and idempotent, and hooks cannot be called
+    // conditionally — a set that changes when somebody switches org
+    // would change the number of hooks this component runs, which is
+    // the one thing Dioxus cannot survive. Enablement is enforced where
+    // it shows: nav, screens, and link claims.
+    //
+    // Last, and nothing may follow it, because of the split web build:
+    // there an app's `provide` only *records* its chunk, and
+    // `use_deferred_providers` runs the real providers once those
+    // chunks have downloaded — appending their hooks after every hook
+    // above. A hook of this component's own placed after that point
+    // would be read back from the wrong slot on the render they land.
+    for app in task_plugin_ui::registered() {
+        if let Some(provide) = app.provide {
+            provide();
+        }
+    }
+    task_plugin_ui::use_deferred_providers();
 
     // NOTE: the app-wide keyboard shortcut engine
     // (`crate::shortcuts::use_app_shortcuts`) cannot mount here — it

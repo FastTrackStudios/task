@@ -292,6 +292,7 @@ wasm-split = [
     "dioxus/wasm-split",
     "dioxus-router/wasm-split",
     "task-plugin-ui/wasm-split",
+    "task-player-ui/wasm-split",
 ]
 
 [lints]

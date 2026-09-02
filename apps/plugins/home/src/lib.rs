@@ -50,6 +50,12 @@ pub const APP: PluginApp = PluginApp {
 /// same hooks every time. It does, because the app list is fixed
 /// before launch.
 fn provide() {
+    // One wasm chunk for both registers' stores on the web, installed
+    // at the root once it has downloaded.
+    task_plugin_ui::lazy_provide!("home_stores", provide_all)
+}
+
+fn provide_all() {
     locations_ui::provide_stores();
     inventory_ui::provide_stores();
 }

@@ -34,7 +34,7 @@ pub const APP: PluginApp = PluginApp {
     // Body metrics and exercises, installed at the app root.
     panel: None,
     claim_file: None,
-    provide: Some(provide_stores),
+    provide: Some(provide),
     widgets: None,
     fences: None,
     // No claims. Fitness has no vocabulary that a wikilink would carry
@@ -45,6 +45,12 @@ pub const APP: PluginApp = PluginApp {
     claim_link: None,
     claim_href: None,
 };
+
+/// The stores, at the app root — their own wasm chunk on the web,
+/// installed once it has downloaded.
+fn provide() {
+    task_plugin_ui::lazy_provide!("fitness_stores", provide_stores)
+}
 
 fn icon() -> Element {
     rsx! { Dumbbell { size: 16 } }

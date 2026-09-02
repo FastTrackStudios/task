@@ -199,9 +199,9 @@ pub fn AppShell() -> Element {
         // Global Now Playing engine — headless, mounted here (outside the
         // route Outlet) so playback survives navigation. The UI is the
         // status-bar tab (desktop) / the floating tab below (mobile).
+        // Nothing mounts (and on the web, nothing downloads) until the
+        // first play request; the setlist-row highlighter rides with it.
         task_player_ui::GlobalNowPlayer {}
-        // Marks the playing setlist row + feeds its artwork waveform.
-        task_player_ui::NowPlayingStripHighlighter {}
         // The unified media host: the persistent review player (dock
         // strip ⇄ zoomed review screen, one element) and the
         // one-audible-source rule. Outside the Outlet for the same

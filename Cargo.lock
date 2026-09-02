@@ -20997,6 +20997,7 @@ dependencies = [
  "session",
  "session-proto",
  "session-ui",
+ "task-plugin-ui",
  "task-ui-core",
  "task-widgets",
  "tracing",
