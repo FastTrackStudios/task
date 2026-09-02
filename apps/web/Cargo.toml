@@ -27,9 +27,13 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 [features]
 default = ["web"]
 web = ["dioxus/web", "dioxus/launch"]
-# Bundle-split the wasm binary along route variants. Requires
-# running `dx serve --wasm-split`.
-wasm-split = ["ui/wasm-split"]
+# Bundle-split the wasm binary: route components and plugin screens
+# become lazily fetched chunks. The feature only makes sense together
+# with dx's splitter — `dx build --release --wasm-split --features
+# wasm-split` — because the lazy loaders import their chunks from the
+# `__wasm_split.js` that dx writes. Off for `dx serve` so the dev loop
+# stays one plain module.
+wasm-split = ["ui/wasm-split", "dioxus/wasm-split"]
 
 [lints]
 workspace = true

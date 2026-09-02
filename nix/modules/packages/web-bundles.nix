@@ -50,9 +50,25 @@
             mkdir -p "$HOME"
             ${preBuild}
             cd ${appDir}
+            # The profile is `[profile.wasm-release]` in the root
+            # Cargo.toml — dx's default name for a web release build, so
+            # no --profile flag; that is where opt-level/LTO/panic live.
+            #
             # --debug-symbols false: drop DWARF for a smaller release
             # bundle (and it sidesteps DWARF-version mismatches in
             # wasm-opt).
+            #
+            # NOT yet: `--wasm-split --features wasm-split`, which would
+            # cut the binary into a main chunk plus one lazily fetched
+            # chunk per route and per plugin app (the code side is in
+            # place — `dioxus-router/wasm-split` and
+            # `task_plugin_ui::lazy_view!`). The pinned dx
+            # (0.8.0-alpha.0) panics in its splitter on this app
+            # (walrus `assertion failed: !self.dead.contains(&id)` while
+            # emitting the main module, after all 41 chunks emit fine).
+            # Flip both flags on together once dx is bumped past that —
+            # one without the other is a broken bundle. Details in
+            # docs/task-webapp.md.
             dx build --release --platform web --debug-symbols false
           '';
           # buildPhase ends inside ${appDir}; anchor the copy at the

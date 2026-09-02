@@ -692,6 +692,182 @@ pub fn find(id: &str) -> Option<PluginApp> {
         .copied()
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Lazy screens — the wasm-split boundary
+// ─────────────────────────────────────────────────────────────────────
+
+/// What a screen is asked for, owned so it can cross a chunk boundary.
+///
+/// [`PluginApp::view`] takes `&str`s because it is called synchronously
+/// from the shell's route. A screen that lives in its own wasm chunk
+/// (see [`lazy_view!`]) is called *after* that chunk has downloaded, by
+/// which point the borrowed strings are gone — so the arguments are
+/// copied into this and handed over by value.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ViewArgs {
+    /// What followed `/app/<id>/`, empty for the front page.
+    pub path: String,
+    /// The app's raw query, empty when there is none.
+    pub query: String,
+}
+
+/// Put an app's screens in their own wasm chunk, downloaded on first
+/// visit.
+///
+/// The web bundle is one binary, and every app in it pays its weight
+/// on the first load whether or not anybody opens it: notation fonts,
+/// a PDF engine, an IMAP stack. `dx build --wasm-split` cuts the binary
+/// along `wasm_split` boundaries and this macro puts one around an
+/// app's screens, so the shell downloads only itself and the chunks it
+/// actually navigates to. Only the *screens* move — an app's nav
+/// entries, widgets, fences and store providers are registered at
+/// startup and stay in the main chunk, because the shell consults them
+/// before anything is clicked.
+///
+/// Use it as the body of [`PluginApp::view`]:
+///
+/// ```ignore
+/// fn view(path: &str, query: &str) -> Option<Element> {
+///     task_plugin_ui::lazy_view!("scripture", screen, path, query)
+/// }
+///
+/// fn screen(path: &str, query: &str) -> Option<Element> {
+///     match path { "" => Some(rsx! { ScriptureView {} }), _ => None }
+/// }
+/// ```
+///
+/// `"scripture"` names the chunk (`module_N_scripture.wasm` in the
+/// bundle) and must be unique across apps. `screen` is the ordinary
+/// synchronous view function; everything it reaches that the shell
+/// does not is what ends up in the chunk.
+///
+/// Outside a split build — desktop, mobile, `dx serve` without
+/// `--wasm-split` — this is a plain call to `screen`. The
+/// `wasm-split` cargo feature on this crate is what switches it, and
+/// the web app turns that on only for its split release build.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+#[macro_export]
+macro_rules! lazy_view {
+    ($module:literal, $screen:ident, $path:expr, $query:expr) => {{
+        fn __lazy_screen_adapter(
+            args: $crate::ViewArgs,
+        ) -> Option<$crate::dioxus::prelude::Element> {
+            $screen(&args.path, &args.query)
+        }
+        static __LOADER: $crate::lazy::Loader = {
+            use $crate::dioxus::wasm_split;
+            wasm_split::lazy_loader!(
+                extern $module fn __lazy_screen_adapter(
+                    args: $crate::ViewArgs,
+                ) -> Option<$crate::dioxus::prelude::Element>
+            )
+        };
+        $crate::lazy::lazy_screen($crate::lazy::LazyView(&__LOADER), $path, $query)
+    }};
+}
+
+/// See the documentation on the `wasm-split` variant of this macro.
+///
+/// This is the arm every non-split build gets: a direct call, no
+/// loader, no suspense — the app behaves exactly as if it had written
+/// `screen(path, query)` itself.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-split")))]
+#[macro_export]
+macro_rules! lazy_view {
+    ($module:literal, $screen:ident, $path:expr, $query:expr) => {
+        $screen($path, $query)
+    };
+}
+
+/// The runtime half of [`lazy_view!`]: the loader type the macro's
+/// `static` has, and the component that suspends on it.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+#[doc(hidden)]
+pub mod lazy {
+    use super::ViewArgs;
+    use dioxus::prelude::*;
+
+    /// A screen function living in a not-yet-downloaded chunk.
+    pub type Loader = dioxus::wasm_split::LazyLoader<ViewArgs, Option<Element>>;
+
+    /// A `'static` loader as a prop. Two views are the same view when
+    /// they are the same static.
+    #[derive(Clone, Copy)]
+    pub struct LazyView(pub &'static Loader);
+
+    impl PartialEq for LazyView {
+        fn eq(&self, other: &Self) -> bool {
+            std::ptr::eq(self.0, other.0)
+        }
+    }
+
+    /// What `lazy_view!` returns to the shell: a screen that suspends
+    /// until its chunk is here, then renders whatever the app's own
+    /// view function says.
+    pub fn lazy_screen(view: LazyView, path: &str, query: &str) -> Option<Element> {
+        let path = path.to_string();
+        let query = query.to_string();
+        Some(rsx! {
+            SuspenseBoundary {
+                fallback: |_| rsx! { LazyFallback {} },
+                LazyScreen { view, path, query }
+            }
+        })
+    }
+
+    #[component]
+    fn LazyScreen(view: LazyView, path: String, query: String) -> Element {
+        let loader = view.0;
+        let loaded = use_resource(move || async move { loader.load().await }).suspend()?;
+        if !*loaded.read() {
+            return rsx! {
+                LazyNotice {
+                    title: "This screen could not be loaded",
+                    detail: "Its code did not download. Check the connection and reload.",
+                }
+            };
+        }
+        match loader.call(ViewArgs { path, query }) {
+            Ok(Some(view)) => view,
+            // The same answer the shell gives for an eager app that
+            // returns `None` — a path the app does not recognise.
+            Ok(None) => rsx! {
+                LazyNotice {
+                    title: "No such screen",
+                    detail: "This app has no page at that address.",
+                }
+            },
+            Err(_) => rsx! {
+                LazyNotice {
+                    title: "This screen could not be loaded",
+                    detail: "Its code did not download. Check the connection and reload.",
+                }
+            },
+        }
+    }
+
+    /// Shown while the chunk downloads — a first visit only; the
+    /// browser caches it afterwards.
+    #[component]
+    fn LazyFallback() -> Element {
+        rsx! {
+            div { class: "flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground",
+                "Loading…"
+            }
+        }
+    }
+
+    #[component]
+    fn LazyNotice(title: &'static str, detail: &'static str) -> Element {
+        rsx! {
+            div { class: "flex h-full min-h-40 flex-col items-center justify-center gap-1 p-6 text-center",
+                p { class: "text-base font-medium", "{title}" }
+                p { class: "text-sm text-muted-foreground", "{detail}" }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -627,6 +627,38 @@ facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0
 # repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
 # and needs no patch entry here.
 
+# ONE engraver. `editor-keyflow{,-lang}` come from the keyflow repo
+# (v0.0.3), whose workspace carries its own copy of `engraver`,
+# `engraver-proto`, `keyflow-text` and `keyflow-chordpro`; everything
+# else here takes the same crates from FastTrackStudio v0.1.0.
+# Unpatched, cargo sees two distinct git sources and links BOTH
+# engravers — two copies of the notation fonts and the layout engine,
+# ~10 MB of the web bundle — plus the keyflow repo's private
+# `keyflow-proto`/`keyflow-syntax` (from `daw` v0.0.2) and an
+# `architect` v0.0.2 for good measure.
+#
+# The keyflow copy is the newer of the two (it adds `api::pipeline`,
+# which `editor-keyflow` needs, and `ChartFontBundle::embeddable_fonts`),
+# so the FastTrackStudio consumers are pointed at IT — and the keyflow
+# copy's `Chart` types are pointed back at FastTrackStudio's
+# `keyflow-proto`/`keyflow-syntax`, so a chart parsed by the `keyflow`
+# facade is the type the engraver lays out. Same crate names and
+# versions in both repos (the keyflow repo is a split of the same tree).
+#
+# The right fix lives upstream: FastTrackStudio should take `engraver`
+# and `keyflow-text` from the keyflow repo instead of carrying its own
+# copies (or the keyflow repo should stop carrying them). Until one of
+# those ships, this is that fix, applied at the consumer.
+[patch."https://github.com/FastTrackStudios/FastTrackStudio"]
+engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
+engraver-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
+keyflow-text = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
+keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
+
+[patch."https://github.com/FastTrackStudios/daw"]
+keyflow-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+keyflow-syntax = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+
 # ── Lints ─────────────────────────────────────────────────────────────
 [workspace.lints.rust]
 dead_code = "warn"
@@ -703,6 +735,37 @@ strip = "debuginfo"
 
 [profile.wasm-dev.package."*"]
 opt-level = 3
+
+# dx web RELEASE builds. `wasm-release` is the profile name dx picks for
+# `dx build --release --platform web` when none is given; defining it
+# here replaces dx's ad-hoc one (`inherits = "release"`, `opt-level = "s"`)
+# so the production bundle is governed from this file, not the tool.
+#
+# The server keeps the plain `release` profile — none of this is worth
+# paying for on a native binary, and `panic = "abort"` would change
+# how the server's tests report failures.
+#
+#   opt-level = "z"      smallest code; measured smaller than "s" here
+#   lto = "fat"          one LTO unit across every crate — also what
+#                        `dx --wasm-split` needs to see the whole call
+#                        graph when it carves the binary into chunks
+#   codegen-units = 1    lets LTO dedupe across the whole module
+#   panic = "abort"      drops the unwinding tables; a panic on the web
+#                        is fatal anyway (console_error_panic_hook still
+#                        prints the message before the trap)
+#   debug = line-tables  wasm-split reads symbol names to find its
+#                        `#[wasm_split]` boundaries, so the profile may
+#                        not strip; dx runs wasm-opt --strip-debug on
+#                        the final chunks (`--debug-symbols false`), so
+#                        none of this reaches the wire.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = "line-tables-only"
+strip = "none"
 
 # Dependencies at opt-level 1: gets rid of the pathological O0 debug
 # codegen at a fraction of the compile cost. Applies to dependencies only

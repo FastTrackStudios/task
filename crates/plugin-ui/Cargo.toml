@@ -18,5 +18,13 @@ task-widgets.workspace = true
 # The `q` packing — see `pack`.
 base64 = { workspace = true }
 
+[features]
+default = []
+# Put each app's screens in their own wasm chunk — see `lazy_view!`.
+# Turned on by the web app's split release build only; needs
+# `dx build --wasm-split` alongside it or the loaders have nothing to
+# fetch.
+wasm-split = ["dioxus/wasm-split"]
+
 [lints]
 workspace = true
