@@ -70,8 +70,23 @@ pub enum Route {
         #[route("/files")]
         FilesRoute {},
 
+        // The org's wikis, as a list you open (`wiki.many.set`).
         #[route("/wiki")]
         WikiRoute {},
+
+        // The knowledge graph over one wiki or the vault — its own
+        // surface, not the front door of the wiki.
+        #[route("/graph")]
+        GraphRoute {},
+
+        // One wiki: what it is for, who edits it, and its pages.
+        #[route("/wiki/w/:org/:wiki")]
+        WikiHomeRoute { org: String, wiki: String },
+
+        // One page of one wiki (wiki-root-relative path as a query
+        // value, like `VaultRoute`).
+        #[route("/wiki/w/:org/:wiki/page?:path")]
+        WikiDocRoute { org: String, wiki: String, path: String },
 
         #[route("/connections")]
         ConnectionsRoute {},
@@ -349,14 +364,42 @@ fn FilesRoute() -> Element {
 #[component]
 fn WikiRoute() -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki::WikiView {} }
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_index::WikiIndexView {} }
     }
 }
 
 #[component]
-fn WikiPageRoute(path: String) -> Element {
+fn GraphRoute() -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { path } }
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki::GraphView {} }
+    }
+}
+
+#[component]
+fn WikiHomeRoute(org: String, wiki: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_home::WikiHomeView { org, wiki } }
+    }
+}
+
+#[component]
+fn WikiDocRoute(org: String, wiki: String, path: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { org, wiki, path } }
+    }
+}
+
+/// The pre-multi-wiki deep link: a page of the active org's default tier.
+#[component]
+fn WikiPageRoute(path: String) -> Element {
+    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
+    let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
+    let org = crate::orgs::active_slug(&selection.read(), &org_list.read());
+    rsx! {
+        crate::plugin_gate::PluginGate {
+            plugin: "wiki",
+            pages::wiki_page::WikiPageView { org, wiki: "knowledge".to_owned(), path }
+        }
     }
 }
 

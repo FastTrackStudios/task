@@ -27,6 +27,10 @@ on the CLI for idempotence + audit.
 
 ## Current skills
 
+- [`live-dev.md`](live-dev.md) — the local web app against the
+  deployed server and the real issuer, signed in as the account in
+  `.env` (`just live`); the CLI as that account; the traps that make
+  it look broken.
 - [`email-triage.md`](email-triage.md) — curator sorts the agent@
   inbox, links to tasks/projects, applies Proton labels, marks
   processed.

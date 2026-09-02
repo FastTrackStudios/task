@@ -200,6 +200,98 @@ pub async fn user_info(issuer: &str, token: &str) -> Result<UserInfo, LoginError
 
 /// Native builds never run the redirect flow, but `auth.rs` calls this
 /// from code compiled for every target.
+/// What the issuer hands back for a password sign-in: a session token
+/// and who it belongs to. Enough to build an account without a second
+/// round trip — the server's `central_auth` validates this token at
+/// `/auth/session`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuerSession {
+    pub token: String,
+    pub user_id: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+}
+
+fn issuer_session_from(text: &str) -> Result<IssuerSession, LoginError> {
+    let v: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| LoginError::Exchange(e.to_string()))?;
+    let token = v["token"]
+        .as_str()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| LoginError::Exchange("no token in the issuer's answer".to_owned()))?
+        .to_owned();
+    let user_id = v["user"]["id"]
+        .as_str()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| LoginError::Exchange("no user id in the issuer's answer".to_owned()))?
+        .to_owned();
+    Ok(IssuerSession {
+        token,
+        user_id,
+        email: v["user"]["email"].as_str().map(str::to_owned),
+        name: v["user"]["name"].as_str().map(str::to_owned),
+    })
+}
+
+/// Sign in to the issuer with an email and password, over its HTTP
+/// surface (`POST /auth/sign-up/email`'s sibling, `/auth/sign-in/email`).
+///
+/// HTTP rather than the issuer's vox lane on purpose: the lane needs the
+/// two ends to run the same vox wire version, and the issuer is a
+/// separately released binary. When they drift the vox handshake fails
+/// and the form quietly falls back to the org's own store — where the
+/// address has an older password or none — as "invalid credentials".
+/// The HTTP contract is the one `central_auth` on the server already
+/// depends on, so it is the one to sign in against.
+///
+/// # Errors
+///
+/// [`LoginError::Exchange`] with the issuer's status and body.
+pub async fn password_sign_in(
+    issuer: &str,
+    email: &str,
+    password: &str,
+) -> Result<IssuerSession, LoginError> {
+    let body = serde_json::json!({ "email": email, "password": password }).to_string();
+    let url = format!("{}/auth/sign-in/email", issuer.trim_end_matches('/'));
+    let text = post_json(&url, &body).await?;
+    issuer_session_from(&text)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn post_json(url: &str, body: &str) -> Result<String, LoginError> {
+    let headers = web_sys::Headers::new().map_err(js)?;
+    headers
+        .set("content-type", "application/json")
+        .map_err(js)?;
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_headers(&headers);
+    init.set_body(&wasm_bindgen::JsValue::from_str(body));
+    send(web_sys::Request::new_with_str_and_init(url, &init).map_err(js)?).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn post_json(url: &str, body: &str) -> Result<String, LoginError> {
+    let response = reqwest::Client::new()
+        .post(url)
+        .header("content-type", "application/json")
+        .body(body.to_owned())
+        .send()
+        .await
+        .map_err(|e| LoginError::Exchange(e.to_string()))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| LoginError::Exchange(e.to_string()))?;
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(LoginError::Exchange(format!("{status}: {text}")))
+    }
+}
+
 /// Native: the same `/oauth2/userinfo` GET over reqwest. Needed because a
 /// token redeemed by the native redirect ([`native::sign_in`]) goes
 /// through the same adoption path as the browser's.

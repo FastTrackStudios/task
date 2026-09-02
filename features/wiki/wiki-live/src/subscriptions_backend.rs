@@ -103,10 +103,26 @@ impl LocalOrgs {
     }
 }
 
+impl LocalOrgs {
+    /// Where a source's files live in its publishing org: a wiki under
+    /// `wikis/<slug>`, a Resource under `resources/<slug>` — the
+    /// corpus library (`OrgRoot::resources_dir`), where `admin bible
+    /// install` puts scripture. A Resource is not a wiki
+    /// (`wiki.resource.not-a-wiki`), and its text was never going to
+    /// sit in the wikis directory.
+    fn source_root(&self, org: &str, subscription: &Subscription) -> PathBuf {
+        let kind_dir = match subscription.kind {
+            SourceKind::Wiki => "wikis",
+            SourceKind::Resource => "resources",
+        };
+        self.org_dir(org).join(kind_dir).join(&subscription.slug)
+    }
+}
+
 impl Upstream for LocalOrgs {
     fn local_root(&self, subscription: &Subscription) -> Option<PathBuf> {
         let org = self.domains.get(&subscription.domain)?;
-        let root = self.org_dir(org).join("wikis").join(&subscription.slug);
+        let root = self.source_root(org, subscription);
         root.is_dir().then_some(root)
     }
 
@@ -132,12 +148,24 @@ impl Upstream for LocalOrgs {
                 org
             ));
         }
-        let root = self.org_dir(org).join("wikis").join(&subscription.slug);
+        let root = self.source_root(org, subscription);
         if !root.is_dir() {
             return Admission::Refused(format!(
-                "`{}` has no wiki `{}`",
-                subscription.domain, subscription.slug
+                "`{}` has no {} `{}`",
+                subscription.domain,
+                match subscription.kind {
+                    SourceKind::Wiki => "wiki",
+                    SourceKind::Resource => "resource",
+                },
+                subscription.slug
             ));
+        }
+        // t[impl wiki.resource.rights] — a Resource this platform
+        // publishes is held whole because its licence allows it (only
+        // public-domain editions install), so it admits everyone; it has
+        // no config to consult and no visibility to be in.
+        if subscription.kind == SourceKind::Resource {
+            return Admission::Admitted;
         }
         let config = match crate::config::load(&root, &subscription.slug) {
             Ok(c) => c,
@@ -244,8 +272,16 @@ impl SubscriptionsBackend {
     }
 
     fn held(&self, subscription: &Subscription) -> HeldSubscription {
-        let copy =
-            materialize::local_copy_dir(&self.org_root, &subscription.domain, &subscription.slug);
+        let copy = match subscription.kind {
+            SourceKind::Wiki => materialize::local_copy_dir(
+                &self.org_root,
+                &subscription.domain,
+                &subscription.slug,
+            ),
+            SourceKind::Resource => {
+                materialize::resource_copy_dir(&self.org_root, &subscription.slug)
+            }
+        };
         let files = count_files(&copy);
         HeldSubscription {
             subscription: subscription.clone(),
@@ -389,10 +425,18 @@ impl Subscriptions for SubscriptionsBackend {
                 "`{qualified}` is not reachable from here; the local copy still resolves"
             ))
         })?;
-        let upstream = vault_live::Backend::single(&held.slug, root)
-            .map_err(|e| WikiError::Io(e.to_string()))?;
-        let out = materialize::refresh_subscription(&upstream, &self.org_root, &held)
-            .map_err(|e| WikiError::Io(e.to_string()))?;
+        let out = match held.kind {
+            SourceKind::Wiki => {
+                let upstream = vault_live::Backend::single(&held.slug, root)
+                    .map_err(|e| WikiError::Io(e.to_string()))?;
+                materialize::refresh_subscription(&upstream, &self.org_root, &held)
+                    .map_err(|e| WikiError::Io(e.to_string()))?
+            }
+            // A corpus, not a wiki: copied whole into the library the
+            // reader opens (`materialize::resource_copy_dir`).
+            SourceKind::Resource => materialize::refresh_resource(&root, &self.org_root, &held)
+                .map_err(|e| WikiError::Io(e.to_string()))?,
+        };
         Ok(RefreshReport {
             qualified: qualified.to_owned(),
             pulled: u32::try_from(out.pulled).unwrap_or(u32::MAX),
@@ -454,6 +498,54 @@ mod tests {
             core: false,
             declined: false,
         }
+    }
+
+    /// t[verify wiki.resource.subscribe] — the platform's Resource is
+    /// served from its publisher's corpus library, admits an outsider
+    /// with no config to consult, and refreshes into the subscriber's
+    /// own library where the reader looks.
+    #[test]
+    fn a_resource_is_served_from_the_corpus_library() {
+        let (dir, upstream) = world();
+        let corpus = dir.path().join("orgs/acme/resources/bible/WEB");
+        std::fs::create_dir_all(&corpus).unwrap();
+        std::fs::write(corpus.join("JHN.usfm"), "\\id JHN\n").unwrap();
+        let bible = Subscription {
+            kind: SourceKind::Resource,
+            core: true,
+            title: "Bible".into(),
+            ..sub("bible")
+        };
+        assert_eq!(upstream.admits("alice", &bible), Admission::Admitted);
+        assert_eq!(
+            upstream.local_root(&bible),
+            Some(dir.path().join("orgs/acme/resources/bible"))
+        );
+
+        let alice = SubscriptionsBackend::new(
+            dir.path().join("orgs/alice"),
+            vec![bible.clone()],
+            upstream.clone(),
+        );
+        alice.subscribe(Subscriber::Vault, bible.clone()).unwrap();
+        let report = alice
+            .refresh_subscription(Subscriber::Vault, &bible.qualified())
+            .unwrap();
+        assert_eq!(report.pulled, 1);
+        assert!(
+            dir.path()
+                .join("orgs/alice/resources/bible/WEB/JHN.usfm")
+                .is_file()
+        );
+        let held = alice.list_subscriptions(Subscriber::Vault).unwrap();
+        let mine = held
+            .iter()
+            .find(|h| h.subscription.slug == "bible")
+            .expect("held");
+        assert_eq!(
+            mine.files, 1,
+            "presence counts the corpus, not a subscribed/ dir"
+        );
     }
 
     /// t[verify wiki.access.visibility] — from outside the owning org:

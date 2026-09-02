@@ -291,6 +291,53 @@ impl CentralAuth {
     }
 }
 
+/// Who holds this token, as far as the HOME org is concerned.
+///
+/// The home org is this server's identity authority: the locker, the
+/// snapshot lane, storage administration and org creation all ask "is
+/// this a home-org account?" before anything else. Each of them used to
+/// ask the home org's own auth store and nothing else — so a person
+/// signed in through the issuer, whom every org lane admitted, was
+/// `invalid session token` to the locker and saw one org in the switcher.
+///
+/// Same order as [`CentralFallbackResolver`]: the local store first (a
+/// token minted here never costs a round trip), then the issuer. And the
+/// same fence: an issuer account is admitted only when this server holds
+/// at least one membership row for it — knowing who you are is not
+/// knowing you belong here.
+pub async fn home_principal(state: &crate::AppState, token: &str) -> Option<uuid::Uuid> {
+    if token.is_empty() {
+        return None;
+    }
+    let home = state.home_identity.as_ref()?;
+    if let Ok(bundle) = home
+        .auth
+        .auth
+        .current_session(architect_auth::commands::CurrentSession {
+            token: token.to_owned(),
+        })
+        .await
+    {
+        return Some(bundle.user.id);
+    }
+    let central = configured()?;
+    let user_id = central.user_for(token).await?.parse::<uuid::Uuid>().ok()?;
+    match home.memberships.for_user(user_id).await {
+        Ok(rows) if !rows.is_empty() => Some(user_id),
+        Ok(_) => {
+            tracing::warn!(
+                "central auth: principal has no membership row on this server — \
+                 refusing as a home-org account"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "central auth: membership lookup failed — refusing");
+            None
+        }
+    }
+}
+
 /// Ask the issuer when nothing local knows the token.
 ///
 /// Ordered deliberately: the inner chain (this org's store, then the

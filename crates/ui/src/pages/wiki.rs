@@ -57,24 +57,58 @@ enum GraphSource {
     Subscriptions,
 }
 
+/// The relevance graph over one wiki, or the vault's wikilink web.
+///
+/// Lives at `/graph`. The wiki page itself is a list of wikis you open;
+/// this is one way of looking at a wiki, reached from there.
 #[component]
-pub fn WikiView() -> Element {
+pub fn GraphView() -> Element {
     let nav = use_navigator();
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
     let mut source = use_signal(|| GraphSource::Wiki);
+    // The org a wiki node's deep link belongs to: the one the graph reads.
+    let graph_org = use_memo(move || {
+        selected_slugs(&selection.read(), &org_list.read())
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    });
 
     // The org's wikis, and which one the graph is showing. Fetched
     // rather than assumed: hard-coding one id is what made an org with
     // four wikis show only ever one, and made renaming the default
     // tier a `WikiNotFound`.
+    // Re-run when the session changes, not only when the org does. The
+    // first run happens at mount, which on a cold load is before the
+    // restored token is attached; that call goes out anonymous, is
+    // refused, and — swallowed — left an org with four wikis showing no
+    // picker at all. Reading the account signal here is what makes the
+    // refetch happen the moment sign-in lands.
+    let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
     let wikis = use_resource(move || async move {
+        let _session = account.read().as_ref().map(|a| a.user_id);
         let slugs = selected_slugs(&selection.read(), &org_list.read());
         let Some(slug) = slugs.first().cloned() else {
             return Vec::new();
         };
-        crate::feeds::fetch_wikis(&slug).await.unwrap_or_default()
+        match crate::feeds::fetch_wikis(&slug).await {
+            Ok(list) => {
+                let slugs: Vec<&str> = list.iter().map(|w| w.slug.as_str()).collect();
+                tracing::info!(
+                    org = %slug,
+                    vox = %task_ui_core::vox_session::vox_url(),
+                    ?slugs,
+                    "wiki list"
+                );
+                list
+            }
+            Err(e) => {
+                tracing::warn!(%e, org = %slug, "wiki list unavailable");
+                Vec::new()
+            }
+        }
     });
     let mut picked = use_signal(String::new);
     // Settle on a wiki once the list arrives: the org's default tier
@@ -229,7 +263,12 @@ pub fn WikiView() -> Element {
                             on_node_click: move |id: String| {
                                 if let Some(path) = path_of.get(&id) {
                                     let route = match src {
-                                        GraphSource::Wiki => crate::routes::Route::WikiPageRoute {
+                                        GraphSource::Wiki => crate::routes::Route::WikiDocRoute {
+                                            org: graph_org(),
+                                            wiki: {
+                                                let p = picked();
+                                                if p.is_empty() { FALLBACK_WIKI_ID.to_owned() } else { p }
+                                            },
                                             path: path.clone(),
                                         },
                                         GraphSource::Vault | GraphSource::Subscriptions => {
