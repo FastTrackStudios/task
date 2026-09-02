@@ -909,6 +909,33 @@ fn mtime_ms(abs: &Path) -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
+/// What a path looked like the last time the watcher reported it —
+/// the memory that tells a read apart from a write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Seen {
+    mtime_ms: i64,
+    sha256: String,
+}
+
+/// Whether an event for `rel` carries new content, remembering it if
+/// so.
+///
+/// notify's inotify mask includes `OPEN`, so merely READING a file
+/// reports it as changed, and the debouncer collapses every kind to
+/// "any". Forwarded as a `Put`, a read becomes a write downstream: the
+/// link sync reads the note to re-sync it, which is an open, which is
+/// an event, which is a re-sync — one loop per note, forever. A
+/// production flamegraph showed the server burning ~4.8 cores on
+/// exactly that. A file whose mtime and hash both match the last
+/// report has not changed, whatever inotify says.
+fn is_fresh(seen: &mut HashMap<String, Seen>, rel: &str, now: Seen) -> bool {
+    if seen.get(rel) == Some(&now) {
+        return false;
+    }
+    seen.insert(rel.to_owned(), now);
+    true
+}
+
 /// Pump `watcher` events into the in-process broadcast channel and
 /// the wire hub — the same pair [`Backend::emit`] writes, so an
 /// external edit is indistinguishable from a PUT downstream. Runs
@@ -921,6 +948,7 @@ fn forward_watcher_events(
     hub: architect::PubSub<VaultChange>,
     vault_id: String,
 ) {
+    let mut seen: HashMap<String, Seen> = HashMap::new();
     while let Ok(evt) = rx.recv() {
         let abs = match evt {
             watcher::VaultEvent::Changed { abs_path } => abs_path,
@@ -939,18 +967,30 @@ fn forward_watcher_events(
         // `notify::EventKind`.
         let payload = if abs.exists() {
             match std::fs::read(&abs) {
-                Ok(bytes) => VaultEvent::Put {
-                    path: rel,
-                    sha256: sha256_hex(&bytes),
-                    mtime_ms: mtime_ms(&abs),
-                    size: bytes.len() as u64,
-                },
+                Ok(bytes) => {
+                    let sha256 = sha256_hex(&bytes);
+                    let mtime_ms = mtime_ms(&abs);
+                    let now = Seen {
+                        mtime_ms,
+                        sha256: sha256.clone(),
+                    };
+                    if !is_fresh(&mut seen, &rel, now) {
+                        continue;
+                    }
+                    VaultEvent::Put {
+                        path: rel,
+                        sha256,
+                        mtime_ms,
+                        size: bytes.len() as u64,
+                    }
+                }
                 Err(e) => {
                     tracing::warn!(?abs, ?e, "watcher: failed to read changed file");
                     continue;
                 }
             }
         } else {
+            seen.remove(&rel);
             VaultEvent::Delete { path: rel }
         };
         hub.publish(VaultChange {
@@ -979,6 +1019,54 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A read is not a write: the same mtime and hash reported twice
+    /// is one event, not two; a different hash (an edit) or a different
+    /// mtime (a touch) is fresh; a delete forgets the path so a recreate
+    /// is fresh again.
+    #[test]
+    fn a_reread_file_is_not_a_change() {
+        let mut seen = super::HashMap::new();
+        let same = || super::Seen {
+            mtime_ms: 1_700_000_000_000,
+            sha256: "abc".into(),
+        };
+        assert!(
+            super::is_fresh(&mut seen, "Note.md", same()),
+            "first sighting"
+        );
+        assert!(
+            !super::is_fresh(&mut seen, "Note.md", same()),
+            "an open, not an edit"
+        );
+        assert!(
+            super::is_fresh(
+                &mut seen,
+                "Note.md",
+                super::Seen {
+                    mtime_ms: 1_700_000_000_000,
+                    sha256: "def".into()
+                }
+            ),
+            "new content"
+        );
+        assert!(
+            super::is_fresh(
+                &mut seen,
+                "Note.md",
+                super::Seen {
+                    mtime_ms: 1_700_000_001_000,
+                    sha256: "def".into()
+                }
+            ),
+            "a touch moves the mtime and is reported"
+        );
+        seen.remove("Note.md");
+        assert!(
+            super::is_fresh(&mut seen, "Note.md", same()),
+            "recreated after delete"
+        );
+    }
+
     use super::*;
 
     fn make_backend() -> (tempfile::TempDir, Backend) {
