@@ -57,19 +57,17 @@
             # --debug-symbols false: drop DWARF for a smaller release
             # bundle (and it sidesteps DWARF-version mismatches in
             # wasm-opt).
-            #
-            # NOT yet: `--wasm-split --features wasm-split`, which would
-            # cut the binary into a main chunk plus one lazily fetched
-            # chunk per route and per plugin app (the code side is in
-            # place — `dioxus-router/wasm-split` and
-            # `task_plugin_ui::lazy_view!`). The pinned dx
-            # (0.8.0-alpha.0) panics in its splitter on this app
-            # (walrus `assertion failed: !self.dead.contains(&id)` while
-            # emitting the main module, after all 41 chunks emit fine).
-            # Flip both flags on together once dx is bumped past that —
-            # one without the other is a broken bundle. Details in
-            # docs/task-webapp.md.
-            dx build --release --platform web --debug-symbols false
+            # --wasm-split + --features wasm-split: cut the binary into
+            # a main chunk plus one lazily fetched chunk per route and
+            # per plugin app (`dioxus-router/wasm-split` and
+            # `task_plugin_ui::lazy_view!`). The cargo feature compiles
+            # the lazy loaders in; the dx flag runs the splitter that
+            # writes the chunks they fetch. One without the other is a
+            # broken bundle, so they travel together. Needs the dx from
+            # nix/modules/dx.nix (the #5668 fork) — the published alpha
+            # panics on this app. Details in docs/task-webapp.md.
+            dx build --release --platform web --debug-symbols false \
+              --wasm-split --features wasm-split
           '';
           # buildPhase ends inside ${appDir}; anchor the copy at the
           # workspace root explicitly.

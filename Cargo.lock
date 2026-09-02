@@ -5153,7 +5153,7 @@ source = "git+https://github.com/DioxusLabs/dioxus?rev=f717a8e184a522d078b70bb4b
 [[package]]
 name = "dioxus-core"
 version = "0.8.0-alpha.0"
-source = "git+https://github.com/DioxusLabs/dioxus?rev=f717a8e184a522d078b70bb4b4d62a5f9a99ddfc#f717a8e184a522d078b70bb4b4d62a5f9a99ddfc"
+source = "git+https://github.com/Brahmastra-Labs/dioxus?rev=19ea84261d3feab7c2015d7b5eab2c8514bc2e5c#19ea84261d3feab7c2015d7b5eab2c8514bc2e5c"
 dependencies = [
  "anyhow",
  "const_format",
@@ -5187,7 +5187,7 @@ dependencies = [
 [[package]]
 name = "dioxus-core-types"
 version = "0.8.0-alpha.0"
-source = "git+https://github.com/DioxusLabs/dioxus?rev=f717a8e184a522d078b70bb4b4d62a5f9a99ddfc#f717a8e184a522d078b70bb4b4d62a5f9a99ddfc"
+source = "git+https://github.com/Brahmastra-Labs/dioxus?rev=19ea84261d3feab7c2015d7b5eab2c8514bc2e5c#19ea84261d3feab7c2015d7b5eab2c8514bc2e5c"
 
 [[package]]
 name = "dioxus-desktop"
@@ -8152,7 +8152,7 @@ dependencies = [
 [[package]]
 name = "generational-box"
 version = "0.8.0-alpha.0"
-source = "git+https://github.com/DioxusLabs/dioxus?rev=f717a8e184a522d078b70bb4b4d62a5f9a99ddfc#f717a8e184a522d078b70bb4b4d62a5f9a99ddfc"
+source = "git+https://github.com/Brahmastra-Labs/dioxus?rev=19ea84261d3feab7c2015d7b5eab2c8514bc2e5c#19ea84261d3feab7c2015d7b5eab2c8514bc2e5c"
 dependencies = [
  "parking_lot",
  "tracing",
@@ -20118,7 +20118,7 @@ dependencies = [
 [[package]]
 name = "subsecond"
 version = "0.8.0-alpha.0"
-source = "git+https://github.com/DioxusLabs/dioxus?rev=f717a8e184a522d078b70bb4b4d62a5f9a99ddfc#f717a8e184a522d078b70bb4b4d62a5f9a99ddfc"
+source = "git+https://github.com/Brahmastra-Labs/dioxus?rev=19ea84261d3feab7c2015d7b5eab2c8514bc2e5c#19ea84261d3feab7c2015d7b5eab2c8514bc2e5c"
 dependencies = [
  "js-sys",
  "libc",
@@ -20136,7 +20136,7 @@ dependencies = [
 [[package]]
 name = "subsecond-types"
 version = "0.8.0-alpha.0"
-source = "git+https://github.com/DioxusLabs/dioxus?rev=f717a8e184a522d078b70bb4b4d62a5f9a99ddfc#f717a8e184a522d078b70bb4b4d62a5f9a99ddfc"
+source = "git+https://github.com/Brahmastra-Labs/dioxus?rev=19ea84261d3feab7c2015d7b5eab2c8514bc2e5c#19ea84261d3feab7c2015d7b5eab2c8514bc2e5c"
 dependencies = [
  "serde",
 ]

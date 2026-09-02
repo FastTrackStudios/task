@@ -50,10 +50,10 @@ fn view(path: &str, query: &str) -> Option<Element> {
     // The screens are their own wasm chunk on the web, downloaded the
     // first time somebody opens this app; everything else the app
     // registers stays in the shell. A plain call everywhere else.
-    task_plugin_ui::lazy_view!("bookings", screen, path, query)
+    task_plugin_ui::lazy_view!("bookings", bookings_screen, path, query)
 }
 
-fn screen(path: &str, _query: &str) -> Option<Element> {
+fn bookings_screen(path: &str, _query: &str) -> Option<Element> {
     match path {
         "" => Some(rsx! { BookingsView {} }),
         _ => None,

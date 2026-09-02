@@ -659,6 +659,24 @@ keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = 
 keyflow-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
 keyflow-syntax = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
 
+# dioxus-core with DioxusLabs/dioxus#5668's suspense fixes. With the
+# web bundle split into lazily loaded chunks every route sits behind a
+# SuspenseBoundary, and upstream core corrupts the render when a nested
+# boundary resolves while an ancestor is still suspended (click through
+# five routes in a second: `cannot reclaim ElementId(N)`, a blank page,
+# the chunk never requested). The fork is upstream main@e1c6342 + the
+# fix; the workspace rev f717a8e is main@e1c6342 + the Blitz beta.1
+# sync, which touches only packages/native*. The three in-repo deps of
+# dioxus-core (and subsecond's) ride along so there is one copy of each
+# type; they are byte-identical between the two revs. Drop this block
+# when the PR is merged and the dioxus rev is bumped past it.
+[patch."https://github.com/DioxusLabs/dioxus"]
+dioxus-core = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
+dioxus-core-types = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
+generational-box = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
+subsecond = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
+subsecond-types = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
+
 # ── Lints ─────────────────────────────────────────────────────────────
 [workspace.lints.rust]
 dead_code = "warn"

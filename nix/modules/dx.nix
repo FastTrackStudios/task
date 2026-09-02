@@ -17,27 +17,34 @@
       fts.pkgsDx = pkgsDx;
       # dx at the version the workspace tracks (dioxus 0.8 line — root
       # Cargo.toml pins the dioxus git rev, Cargo.lock resolves it to
-      # 0.8.0-alpha.0). nixpkgs carries 0.7.9; override src onto the
-      # published alpha crate. Bump together with the dioxus git rev.
+      # 0.8.0-alpha.0). nixpkgs carries 0.7.9; override src. Bump
+      # together with the dioxus git rev.
+      #
+      # Built from the dioxus REPO (packages/cli), not the published
+      # alpha crate, at DioxusLabs/dioxus#5668's branch: that PR fixes
+      # wasm-split-cli's symbol resolution (it matched mangled against
+      # demangled names, so nearly every shared function fell out of the
+      # call graph and `dx build --wasm-split` died in walrus with
+      # `assertion failed: !self.dead.contains(&id)` — dioxus#4769). The
+      # branch is upstream main@e1c6342 + two commits, one commit behind
+      # the workspace's dioxus rev (f717a8e, the Blitz beta.1 sync,
+      # which touches no CLI code). Move back to a published crate once
+      # the PR is in a release.
       fts.dx.cli = pkgsDx.dioxus-cli.overrideAttrs (old: rec {
         version = "0.8.0-alpha.0";
-        # static.crates.io, NOT fetchCrate: nixpkgs' fetchCrate builds the
-        # legacy `crates.io/api/v1/crates/<c>/<v>/download` URL, which now
-        # answers 403 to the fetcher. The crate is fine and unyanked — only
-        # that endpoint is gone. static.crates.io serves the identical
-        # tarball, so the hash below is unchanged. This 403 is what broke
-        # EVERY iOS build (the devshell can't even evaluate without dx).
-        src = pkgsDx.fetchzip {
-          name = "dioxus-cli-${version}";
-          url = "https://static.crates.io/crates/dioxus-cli/dioxus-cli-${version}.crate";
-          hash = "sha256-gEC5MtvkTBAhv2ChvWPQIx4u/OJ5Qx2sN2+epdcXwSA=";
-          extension = "tar.gz";
+        src = pkgsDx.fetchFromGitHub {
+          owner = "Brahmastra-Labs";
+          repo = "dioxus";
+          rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c";
+          hash = "sha256-eEbQokzRBTOkHiMloKC85yIpMY8J+rds0ILxZt4oa5I=";
         };
         cargoDeps = pkgsDx.rustPlatform.fetchCargoVendor {
           inherit src;
           name = "dioxus-cli-${version}-vendor";
-          hash = "sha256-znRYZFhWP5PzS6ftcShzNBvRqJXRjnM10OZ+KzUOOsg=";
+          hash = "sha256-ySPcW+fE/rcx8zolmKaYvMVKoWvwse68T5qOlIcv5Jk=";
         };
+        # The workspace root is the repo; the CLI crate is a member.
+        buildAndTestSubdir = "packages/cli";
         # 0.7.9-era patches/checks don't apply to the alpha.
         patches = [ ];
         doCheck = false;

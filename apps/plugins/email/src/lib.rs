@@ -61,10 +61,10 @@ fn view(path: &str, query: &str) -> Option<Element> {
     // The screens are their own wasm chunk on the web, downloaded the
     // first time somebody opens this app; everything else the app
     // registers stays in the shell. A plain call everywhere else.
-    task_plugin_ui::lazy_view!("email", screen, path, query)
+    task_plugin_ui::lazy_view!("email", email_screen, path, query)
 }
 
-fn screen(path: &str, _query: &str) -> Option<Element> {
+fn email_screen(path: &str, _query: &str) -> Option<Element> {
     match path {
         // `compose` is claimed and carried, but the reading room does
         // not open a composer yet — it lands on the mailbox. Claiming

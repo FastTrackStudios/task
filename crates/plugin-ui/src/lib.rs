@@ -728,17 +728,18 @@ pub struct ViewArgs {
 ///
 /// ```ignore
 /// fn view(path: &str, query: &str) -> Option<Element> {
-///     task_plugin_ui::lazy_view!("scripture", screen, path, query)
+///     task_plugin_ui::lazy_view!("scripture", scripture_screen, path, query)
 /// }
 ///
-/// fn screen(path: &str, query: &str) -> Option<Element> {
+/// fn scripture_screen(path: &str, query: &str) -> Option<Element> {
 ///     match path { "" => Some(rsx! { ScriptureView {} }), _ => None }
 /// }
 /// ```
 ///
 /// `"scripture"` names the chunk (`module_N_scripture.wasm` in the
-/// bundle) and must be unique across apps. `screen` is the ordinary
-/// synchronous view function; everything it reaches that the shell
+/// bundle) and must be unique across apps. `scripture_screen` is the ordinary
+/// synchronous view function — dx also puts its name in the chunk's file
+/// name, so name it after the app; everything it reaches that the shell
 /// does not is what ends up in the chunk.
 ///
 /// Outside a split build — desktop, mobile, `dx serve` without
@@ -749,15 +750,13 @@ pub struct ViewArgs {
 #[macro_export]
 macro_rules! lazy_view {
     ($module:literal, $screen:ident, $path:expr, $query:expr) => {{
-        fn __lazy_screen_adapter(
-            args: $crate::ViewArgs,
-        ) -> Option<$crate::dioxus::prelude::Element> {
-            $screen(&args.path, &args.query)
+        fn $screen(args: $crate::ViewArgs) -> Option<$crate::dioxus::prelude::Element> {
+            self::$screen(&args.path, &args.query)
         }
         static __LOADER: $crate::lazy::Loader = {
             use $crate::dioxus::wasm_split;
             wasm_split::lazy_loader!(
-                extern $module fn __lazy_screen_adapter(
+                extern $module fn $screen(
                     args: $crate::ViewArgs,
                 ) -> Option<$crate::dioxus::prelude::Element>
             )
