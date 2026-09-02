@@ -547,6 +547,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 # Sentry error/crash telemetry — rustls (not native-tls) for iOS.
 sentry = { version = "0.44", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
+# In-process CPU sampling for the operator profiling endpoint
+# (`GET /server/debug/profile`, Linux only). `prost-codec` ships
+# pre-generated code, so no `protoc` at build time.
+pprof = { version = "0.15", default-features = false, features = ["flamegraph", "prost-codec"] }
+flate2 = "1"
 
 # ── wasm / browser ────────────────────────────────────────────────────
 web-sys = "0.3.98"

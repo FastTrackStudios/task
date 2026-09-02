@@ -204,6 +204,13 @@ architect-permissions.workspace = true
 architect-permissions-proto.workspace = true
 share-proto.workspace = true
 
+# `GET /server/debug/profile` — the server samples its own CPU
+# (`debug_profile.rs`). pprof's signal-based sampler is Linux-only; the
+# route answers 501 elsewhere and the crate stays out of the graph.
+[target.'cfg(target_os = "linux")'.dependencies]
+pprof = { workspace = true }
+flate2 = { workspace = true }
+
 [features]
 # One feature per non-core plugin (`task_plugin::CATALOG` ids with the
 # `plugin-` prefix). Default = everything, so a plain build is

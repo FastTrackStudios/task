@@ -28,6 +28,7 @@ pub mod capability;
 pub mod central_auth;
 #[cfg(feature = "plugin-git")]
 pub mod connections;
+pub mod debug_profile;
 #[cfg(debug_assertions)]
 pub mod demo_cli;
 pub mod device_sync;
@@ -39,6 +40,7 @@ pub mod mcp;
 pub mod media;
 pub mod memberships;
 pub mod notifier;
+pub mod operator;
 pub mod otlp;
 pub mod permits;
 pub mod presence;
@@ -2590,6 +2592,12 @@ pub fn router(state: AppState) -> Router {
         // like them it is 503 when that token is unset — no new secret,
         // and nothing new is exposed on a default dev boot.
         .route("/server/permissions", get(permissions_report_handler))
+        // The server profiling itself: a CPU flamegraph / pprof profile
+        // and a per-thread CPU table. Gated by the operator rule the
+        // MCP telemetry tools use (`operator::is_operator`), not the
+        // backup bearer — these read the process, not the data root.
+        .route("/server/debug/profile", get(debug_profile::profile_handler))
+        .route("/server/debug/threads", get(debug_profile::threads_handler))
         .with_state(state.clone());
 
     let router = Router::new()
