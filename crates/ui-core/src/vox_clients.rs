@@ -105,10 +105,15 @@ where
 ///
 /// The token deliberately does NOT ride a URL query parameter — those land
 /// in every proxy and access log on the path. Session tokens are
-/// base64url-no-pad, whose alphabet is a subset of the RFC 7230 token
-/// charset a subprotocol value must use, so no extra encoding is needed;
-/// a token containing anything else is dropped rather than sent as a
-/// malformed header that would fail the whole handshake.
+/// base64url-no-pad, and the issuer's redirect-flow tokens are JWT-shaped
+/// (base64url segments joined by `.`); both fit the RFC 7230 token
+/// charset a subprotocol value must use, so no extra encoding is needed.
+/// The dot matters: the OAuth token was being dropped for containing
+/// one, so a person who signed in through the issuer's redirect dialled
+/// every socket anonymously and saw "not a member" on every screen. A
+/// token containing anything outside that charset is still dropped
+/// rather than sent as a malformed header that would fail the whole
+/// handshake.
 ///
 /// Browser-only: native presents the identity as an `Authorization`
 /// header instead (see [`dial_ws_native`] for why symmetry is a trap).
@@ -119,7 +124,7 @@ fn subprotocols(bearer: Option<&str>) -> Vec<String> {
     if let Some(token) = bearer.filter(|t| {
         !t.is_empty()
             && t.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
     }) {
         protos.push(format!("{VOX_BEARER_SUBPROTOCOL_PREFIX}{token}"));
     }
@@ -714,6 +719,17 @@ mod subprotocol_tests {
         assert_eq!(
             subprotocols(Some("Zm9v-ba_r9")),
             vec!["vox.v1".to_owned(), "vox.bearer.Zm9v-ba_r9".to_owned()]
+        );
+    }
+
+    /// The issuer's redirect flow hands back a JWT: three base64url
+    /// segments joined by dots. It must ride the handshake whole.
+    #[test]
+    fn a_jwt_shaped_token_is_offered() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abc-DEF_123";
+        assert_eq!(
+            subprotocols(Some(jwt)),
+            vec![VOX_SUBPROTOCOL.to_owned(), format!("vox.bearer.{jwt}")]
         );
     }
 
