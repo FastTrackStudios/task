@@ -20,6 +20,12 @@ tracing = { workspace = true }
 # TLS / XOAUTH2. Both Apache-2.0/MIT.
 mail-builder = "0.4"
 mail-send = "0.5"
+# mail-send's TLS is rustls, and rustls needs a process-level
+# CryptoProvider. In a workspace build both `ring` and `aws-lc-rs` end
+# up enabled (feature unification), so rustls cannot pick one on its own
+# and the first TLS handshake panics. `SmtpSender::new` installs ring
+# once — the same fix `git-github` and the CLI carry.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
 
 [features]

@@ -3,7 +3,7 @@
 //! Run with: `cargo xtask <command>`
 //!
 //! Commands:
-//!   codegen <out-dir> — Generate TypeScript bindings from Vox services
+//!   codegen `<out-dir>` — Generate TypeScript bindings from Vox services
 
 use std::path::{Path, PathBuf};
 

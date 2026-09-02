@@ -19,14 +19,14 @@ pub const APP: PluginApp = PluginApp {
     version: env!("CARGO_PKG_VERSION"),
     nav: &[PluginNav {
         label: "Recall",
-        icon: icon,
+        icon,
         path: "",
         // A review queue is a daily errand — it is worth a rail slot
         // for the same reason Inbox is: the value is in being seen
         // without being looked for.
         rail: true,
     }],
-    view: view,
+    view,
     panel: None,
     claim_file: None,
     provide: Some(provide_stores),

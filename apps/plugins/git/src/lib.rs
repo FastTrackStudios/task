@@ -26,11 +26,11 @@ pub const APP: PluginApp = PluginApp {
     version: env!("CARGO_PKG_VERSION"),
     nav: &[PluginNav {
         label: "Repos",
-        icon: icon,
+        icon,
         path: "",
         rail: false,
     }],
-    view: view,
+    view,
     panel: None,
     claim_file: None,
     provide: None,

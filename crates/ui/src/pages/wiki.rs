@@ -32,17 +32,29 @@ use view_knowledge_graph::{
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 
-/// The single wiki id the server hosts per org (mirrors
-/// `wiki_page::WIKI_ID`).
-const WIKI_ID: &str = "default";
+/// The wiki this page shows when the org's set has not loaded yet, and
+/// the id the live-event stream filters on until then.
+///
+/// An org holds many wikis now (`wiki.many.set`), so this is a
+/// starting point rather than *the* wiki — the picker below replaces
+/// it as soon as `list_wikis` answers.
+const FALLBACK_WIKI_ID: &str = "knowledge";
 
 /// Which corpus the graph shows.
+///
+/// `Subscriptions` is not a corpus — it swaps the body for the
+/// management panel. It rides the same tab strip because subscribing
+/// is what *changes* the graph: a subscribed source's pages become
+/// resolvable in your own writing, so the two belong on one page
+/// rather than behind a settings screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GraphSource {
     /// Curated wiki tree via the wiki Graph service.
     Wiki,
     /// Raw vault `[[wikilink]]` web via VaultSync.
     Vault,
+    /// What this org subscribes to, and the controls for it.
+    Subscriptions,
 }
 
 #[component]
@@ -52,6 +64,32 @@ pub fn WikiView() -> Element {
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
     let mut source = use_signal(|| GraphSource::Wiki);
+
+    // The org's wikis, and which one the graph is showing. Fetched
+    // rather than assumed: hard-coding one id is what made an org with
+    // four wikis show only ever one, and made renaming the default
+    // tier a `WikiNotFound`.
+    let wikis = use_resource(move || async move {
+        let slugs = selected_slugs(&selection.read(), &org_list.read());
+        let Some(slug) = slugs.first().cloned() else {
+            return Vec::new();
+        };
+        crate::feeds::fetch_wikis(&slug).await.unwrap_or_default()
+    });
+    let mut picked = use_signal(String::new);
+    // Settle on a wiki once the list arrives: the org's default tier
+    // if it has one, else the first. Only when nothing is picked, so a
+    // person's choice survives a refetch.
+    use_effect(move || {
+        if !picked.read().is_empty() {
+            return;
+        }
+        if let Some(list) = wikis.read().as_ref() {
+            if let Some(first) = list.iter().find(|w| w.default).or_else(|| list.first()) {
+                picked.set(first.slug.clone());
+            }
+        }
+    });
 
     // Page-owned visibility filters, driven from the legend. Start
     // from everything-visible (not the crate default, which hides
@@ -70,11 +108,23 @@ pub fn WikiView() -> Element {
             .cloned()
             .ok_or_else(|| "no organization selected".to_string())?;
         match source() {
-            GraphSource::Wiki => crate::feeds::fetch_wiki_service_graph(&slug).await,
+            GraphSource::Wiki => {
+                let id = picked();
+                let id = if id.is_empty() {
+                    FALLBACK_WIKI_ID.to_owned()
+                } else {
+                    id
+                };
+                crate::feeds::fetch_wiki_service_graph(&slug, &id).await
+            }
             GraphSource::Vault => {
                 let files = crate::feeds::fetch_wiki_files(&slug).await?;
                 Ok::<WikiGraph, String>(build_wiki_graph(&files))
             }
+            // Not a corpus. The panel owns its own fetching, and
+            // building a graph nobody will render would be a round
+            // trip per tab switch.
+            GraphSource::Subscriptions => Ok(WikiGraph::default()),
         }
     });
 
@@ -120,7 +170,15 @@ pub fn WikiView() -> Element {
             let mut graph = graph;
             // The stream is unfiltered — one backend can serve
             // several wikis. Keep the one this page shows.
-            if change.wiki_id != WIKI_ID {
+            // One backend serves several wikis, so the stream is
+            // unfiltered. Keep the one this page is showing.
+            let showing = picked();
+            let showing = if showing.is_empty() {
+                FALLBACK_WIKI_ID.to_owned()
+            } else {
+                showing
+            };
+            if change.wiki_id != showing {
                 return;
             }
             // Only corpus changes move the graph; queue traffic
@@ -138,7 +196,9 @@ pub fn WikiView() -> Element {
     );
 
     let discovering = org_list.read().is_empty();
-    let body = if discovering {
+    let body = if source() == GraphSource::Subscriptions {
+        rsx! { crate::pages::wiki_subscriptions::SubscriptionsPanel {} }
+    } else if discovering {
         render_loading()
     } else {
         match &*graph.read() {
@@ -172,10 +232,12 @@ pub fn WikiView() -> Element {
                                         GraphSource::Wiki => crate::routes::Route::WikiPageRoute {
                                             path: path.clone(),
                                         },
-                                        GraphSource::Vault => crate::routes::Route::VaultRoute {
-                                            path: path.clone(),
-                                            org: String::new(),
-                                        },
+                                        GraphSource::Vault | GraphSource::Subscriptions => {
+                                            crate::routes::Route::VaultRoute {
+                                                path: path.clone(),
+                                                org: String::new(),
+                                            }
+                                        }
                                     };
                                     nav.push(route);
                                 }
@@ -213,6 +275,9 @@ pub fn WikiView() -> Element {
         GraphSource::Vault => {
             "The wikilink web of your vault — pages are nodes, `[[links]]` are edges."
         }
+        GraphSource::Subscriptions => {
+            "Sources this org holds. A subscribed wiki's pages resolve inside your own writing."
+        }
     };
 
     rsx! {
@@ -233,6 +298,21 @@ pub fn WikiView() -> Element {
                                 source.set(s);
                                 filters.with_mut(|f| f.hidden_kinds.clear());
                             })}
+                            {source_tab("Subscriptions", GraphSource::Subscriptions, source(), move |s| {
+                                source.set(s);
+                            })}
+                        }
+                    }
+                    if source() == GraphSource::Wiki {
+                        // Which wiki the graph is drawing. Absent when
+                        // the org holds one — a picker with a single
+                        // option is furniture.
+                        {
+                            let mut graph = graph;
+                            wiki_picker(wikis.read().clone().unwrap_or_default(), picked(), move |slug| {
+                                picked.set(slug);
+                                graph.restart();
+                            })
                         }
                     }
                     Link {
@@ -244,6 +324,42 @@ pub fn WikiView() -> Element {
                 Text { variant: TextVariant::Muted, "{subtitle}" }
             }
             {body}
+        }
+    }
+}
+
+/// A row of wiki names, when the org holds more than one.
+fn wiki_picker(
+    wikis: Vec<wiki_proto::WikiSummary>,
+    current: String,
+    on_pick: impl FnMut(String) + Clone + 'static,
+) -> Element {
+    if wikis.len() < 2 {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "flex flex-wrap items-center gap-1 text-xs",
+            for w in wikis {
+                {
+                    let active = w.slug == current;
+                    let class = if active {
+                        "rounded-md bg-accent px-2 py-0.5 font-medium text-foreground"
+                    } else {
+                        "rounded-md px-2 py-0.5 text-muted-foreground hover:text-foreground"
+                    };
+                    let slug = w.slug.clone();
+                    let mut pick = on_pick.clone();
+                    let label = if w.title.is_empty() { w.slug.clone() } else { w.title.clone() };
+                    rsx! {
+                        button {
+                            class,
+                            title: "{w.pages} page(s)",
+                            onclick: move |_| pick(slug.clone()),
+                            "{label}"
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -275,6 +391,10 @@ fn render_loading() -> Element {
 
 fn render_empty(source: GraphSource) -> Element {
     let (title, hint) = match source {
+        // The panel owns its own empty state; this arm exists so the
+        // match stays exhaustive rather than being papered over with a
+        // wildcard that would swallow a future variant.
+        GraphSource::Subscriptions => ("", ""),
         GraphSource::Wiki => (
             "The wiki is empty",
             "Bootstrap it with `task wiki init`, then ingest a source — pages land in `wiki/Knowledge/` and show up here.",

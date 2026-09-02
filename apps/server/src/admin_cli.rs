@@ -53,6 +53,8 @@ pub async fn dispatch() -> eyre::Result<bool> {
         #[cfg(debug_assertions)]
         Some("demo") => crate::demo_cli::demo(&args[2..]).await.map(|()| true),
         Some("webdav") => webdav(&args[2..]).map(|()| true),
+        #[cfg(feature = "plugin-scripture")]
+        Some("bible") => crate::bible_cli::bible(&args[2..]).await.map(|()| true),
         other => {
             eprintln!(
                 "usage:\n  \
@@ -72,7 +74,11 @@ pub async fn dispatch() -> eyre::Result<bool> {
                  (plants `examples/studio` as one org on this data root — `just demo`\n     \
                  runs it twice, on two data roots, for two servers that federate)\n  \
                  task-server admin webdav --org <slug> [--hide <root-id>|--show <root-id>]\n    \
-                 (no flag lists the org's File Roots and their WebDAV visibility)\n"
+                 (no flag lists the org's File Roots and their WebDAV visibility)\n  \
+                 task-server admin bible list\n  \
+                 task-server admin bible install --org <slug> [--translation WEB] \\\n    \
+                 [--from <usfm-dir-or-zip>]\n    \
+                 (public-domain editions only; licensed ones are read through their API)\n"
             );
             bail!("unknown admin subcommand: {}", other.unwrap_or("(none)"));
         }

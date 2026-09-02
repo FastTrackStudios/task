@@ -97,6 +97,12 @@ Rules live in `docs/spec/`; coverage is tracked with `t[impl]`/`t[verify]`
 markers and the gaps in `docs/spec/unmet.md`. When you meet a rule, update
 both.
 
+## Observability
+
+The span is the wide event: enrich it with `architect_telemetry::wide::set`,
+never scatter log or print lines. Field registry, hard rules, TraceQL/LogQL
+cookbook and the `telemetry_*` MCP tools: `docs/observability.md`.
+
 ## File writing
 
 Use the Write/Edit tools for file creation — never python or shell

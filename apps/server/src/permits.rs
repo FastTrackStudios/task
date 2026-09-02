@@ -804,6 +804,39 @@ table!(WIKI_GRAPH, "wiki-graph", "wiki/graph/**", [
 table!(WIKI_PAGES, "wiki-pages", "wiki/pages/**", [
     rd "list_pages", rd "read_page", wr "write_page",
 ]);
+// Subscriptions are the subscriber's own: reading what an org holds
+// is a read, taking one on or dropping one is a write. `core_set` is
+// a read of what the deployment hands everyone.
+// Listing an org's wikis is the call made before a caller has a wiki
+// id, so it guards nothing finer than "may read this org's wikis".
+#[cfg(feature = "plugin-wiki")]
+table!(WIKI_REGISTRY, "wiki-registry", "wiki/registry/**", [
+    rd "list_wikis", rd "describe_wiki",
+    // Changing what the set holds is audited: a create is what makes a
+    // slug exist forever (`wiki.many.identity`), a delete retires one,
+    // and a visibility change is what publishes private writing
+    // (`wiki.promote.vault`).
+    wa "create_wiki", wa "set_visibility", wr "set_title", wa "delete_wiki",
+    wr "refresh_source",
+]);
+// The Edit lane (`wiki.edit.*`). Opening a request is a write to the
+// *request*, never to the wiki — the wiki only changes on `accept`,
+// which is why accept, reject and return are audited and the Editor
+// check itself lives in the backend (Editor is per wiki, finer than
+// this per-org gate can see).
+#[cfg(feature = "plugin-wiki")]
+table!(WIKI_EDITS, "wiki-edits", "wiki/edits/**", [
+    rd "list_edit_requests", rd "get_edit_request", rd "diff_edit_request", rd "editors",
+    wr "open_edit_request", wr "revise_edit_request", wr "claim_edit_request",
+    wr "release_edit_request",
+    wa "accept_edit_request", wa "reject_edit_request", wa "return_edit_request",
+    wa "grant_editor", wa "revoke_editor", wa "set_proposer_gate",
+]);
+#[cfg(feature = "plugin-wiki")]
+table!(WIKI_SUBSCRIPTIONS, "wiki-subscriptions", "wiki/subscriptions/**", [
+    rd "list_subscriptions", wr "subscribe", wr "unsubscribe",
+    wr "refresh_subscription", rd "core_set", rd "discover",
+]);
 #[cfg(feature = "plugin-wiki")]
 table!(WIKI_INGEST, "wiki-ingest", "wiki/ingest/**", [
     wr "enqueue_ingest", rd "list_ingest", wr "claim_next_ingest", wr "record_analysis",
@@ -1313,6 +1346,21 @@ pub fn mounts() -> Vec<Mount> {
             "wiki",
             wiki_proto::service::pages::pages_rpc_service_descriptor(),
             WIKI_PAGES,
+        ),
+        m(
+            "wiki",
+            wiki_proto::service::subscriptions::subscriptions_rpc_service_descriptor(),
+            WIKI_SUBSCRIPTIONS,
+        ),
+        m(
+            "wiki",
+            wiki_proto::service::registry::registry_rpc_service_descriptor(),
+            WIKI_REGISTRY,
+        ),
+        m(
+            "wiki",
+            wiki_proto::service::edits::edits_rpc_service_descriptor(),
+            WIKI_EDITS,
         ),
         m(
             "wiki",

@@ -119,6 +119,13 @@ plant() {
   ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/vnt" \
       cargo run --quiet -p task-server -- admin demo --org vnt-video )
   echo
+  # Alice's own org, on ACME's data root — two orgs on one server, and
+  # the only place a *personal* wiki exists (Bible Study, Cooking).
+  # Without it the subscription demo has one org to subscribe to and
+  # nothing personal to subscribe from.
+  ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/acme" \
+      cargo run --quiet -p task-server -- admin demo --org alice-personal )
+  echo
   echo ">> planted. next: '$0 serve' in one terminal, '$0 web' in another."
 }
 

@@ -40,11 +40,11 @@ pub const APP: PluginApp = PluginApp {
     version: env!("CARGO_PKG_VERSION"),
     nav: &[PluginNav {
         label: "Scripture",
-        icon: icon,
+        icon,
         path: "",
         rail: true,
     }],
-    view: view,
+    view,
     panel: None,
     claim_file: None,
     provide: None,

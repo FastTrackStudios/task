@@ -88,6 +88,9 @@ pub(super) fn budget_tile_value(logged_seconds: i64, estimated_seconds: i64) -> 
 /// `amount_minor` + ISO currency → display string. Minor units are
 /// hundredths (cents); an empty currency falls back to `$` like the
 /// finances / invoices pages.
+// Only its tests call it today; the budget table renders amounts through
+// the finances helpers. Kept for the per-line view that is coming.
+#[allow(dead_code)]
 pub(super) fn money_label(amount_minor: i64, currency: &str) -> String {
     let amount = amount_minor as f64 / 100.0;
     if currency.is_empty() {

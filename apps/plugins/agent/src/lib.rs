@@ -39,7 +39,7 @@ pub const APP: PluginApp = PluginApp {
             rail: true,
         },
     ],
-    view: view,
+    view,
     // The docked conversation strip — refer to an agent while doing
     // something else, without leaving the page you are on.
     panel: Some(panel),

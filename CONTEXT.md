@@ -5,7 +5,48 @@ on their tickets.
 
 - **Vault** — the small, fully-replicated layer: markdown notes and
   structured overlays (tasks, projects, events). Lives in full on every
-  device a user is logged into. Offline-first, multiplayer.
+  device a user is logged into. Offline-first, multiplayer. Countable:
+  an owner may hold several, though one is the norm.
+- **Wiki** — a vault built on the same primitives, differing in reach:
+  it is publishable, so others may subscribe to it, link into it, and
+  ask to change it. Owned by an org — a person's own wiki is owned by
+  their own org. A vault is not subscribable; a wiki is, and that is
+  the whole of the difference — same primitives, same tree, different
+  name. A vault may be promoted whole into a wiki, or a single note
+  contributed to one, as suits.
+- **Subscription** — holding another org's Wiki or a Resource such that
+  its content resolves inside your own writing: links, search, graph,
+  embeds. Held by a vault or a wiki, never granted by a share link.
+  Not transitive — what a source you subscribe to subscribes to does
+  not become yours — though what you already hold resolves regardless
+  of who wrote the link.
+- **Resource** — an external work pulled in and archived to be
+  referenced later: a book, a video, a paper, a scripture text. Read,
+  annotated and cited; never authored here, and never edit-requestable.
+  Most are *personal* — archived under someone's own rights, and
+  therefore not shareable outward. A *published* Resource is one whose
+  rights permit redistribution, and only those can be subscribed to.
+  The Bible Resource is the text itself; the Bible Wiki is the curated
+  collection *about* it. Both are subscribable, and they are different
+  things. A Resource carries no annotations of its own: everything
+  anyone says about it lives in a wiki or a vault, anchored to the
+  Resource's canonical address (verse, timecode, page) rather than to
+  its text.
+- **Editor** — a role on one wiki: may accept changes into it,
+  including their own. Granted by that wiki's owner or an org admin.
+  Distinct from org `admin` / `member`, which say nothing about any
+  particular wiki.
+- **Adoption** — claiming a wiki whose publishing org is gone, so it
+  keeps a home and its references keep resolving. Offered by a
+  departing org, or claimed from an orphan. The wiki keeps its
+  original qualified name; the org registry holds the redirect. If
+  nobody adopts, subscribers simply keep their local copies.
+- **Edit Request** — a proposed change to a wiki from someone without
+  the Editor role on it: the changed pages themselves, against a named
+  version, not a description of them. It *is* an issue on the owning
+  org's tracker, so closing the issue and resolving the request are one
+  event. An Editor's own change is not exempt from the lane — it is
+  auto-approved within it, so every change to a wiki has one trail.
 - **Files** *(working name — final term unsettled)* — the large binary
   layer: audio/video/project media. Lives primarily on servers;
   reaches devices only by selective sync or NAS-transparent access.
@@ -108,7 +149,7 @@ on their tickets.
   tracked, retroactively editable, disable-not-delete. Targets a note,
   a root slice, a Named Version, or a Review page. Carries capability
   axes (view / comment / download / file request) plus optional
-  password and expiry. Edit is never link-based.
+  password and expiry. Write access is never link-based.
 - **File request** — a share link capability letting anonymous
   visitors *add* files into the target slice; never overwrite or
   delete. Uploads land in a per-link incoming area the owner promotes

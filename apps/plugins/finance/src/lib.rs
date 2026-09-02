@@ -45,7 +45,7 @@ pub const APP: PluginApp = PluginApp {
             rail: false,
         },
     ],
-    view: view,
+    view,
     panel: None,
     claim_file: None,
     // The invoice store, and the billing offer other apps look up.

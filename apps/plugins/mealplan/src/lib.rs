@@ -51,7 +51,7 @@ pub const APP: PluginApp = PluginApp {
             rail: false,
         },
     ],
-    view: view,
+    view,
     provide: Some(provide_stores),
     // A recipe is a `.cook` file, and a `.cook` file in the note editor
     // is raw cooklang. Claimed so it opens where it reads.

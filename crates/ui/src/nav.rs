@@ -201,43 +201,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
     ]
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every tab reaches a nav surface, or it exists only in this file.
-    ///
-    /// Written after adding Sync and then squinting at a screenshot to
-    /// work out whether it was there — which is not a test, and was not
-    /// even an answer. A page nobody can navigate to is a page that does
-    /// not exist, and the gap between "declared" and "rendered" is a
-    /// plugin string away.
-    #[test]
-    fn the_sync_tab_is_offered_to_an_org_with_files() {
-        // `None` = every plugin on, which is what an org with no
-        // deny-list gets.
-        let files_on = task_plugin::PluginSet::resolve(None);
-        let tabs = nav_tabs_for(&files_on);
-        assert!(
-            tabs.iter().any(|t| t.label == "Sync"),
-            "no Sync tab for a default org: {:?}",
-            tabs.iter().map(|t| t.label).collect::<Vec<_>>()
-        );
-    }
-
-    /// And it is gated on the thing it syncs: an org with Files off has
-    /// no folders to keep in step and should not be offered a page
-    /// about them.
-    #[test]
-    fn the_sync_tab_follows_the_files_plugin() {
-        let sync = nav_tabs()
-            .into_iter()
-            .find(|t| t.label == "Sync")
-            .expect("a Sync tab exists");
-        assert_eq!(sync.plugin, "files");
-    }
-}
-
 /// [`nav_tabs`] with the tabs of disabled plugins hidden — what every
 /// nav surface (sidebar, rail, mobile "More", command palette) renders.
 #[must_use]
@@ -397,4 +360,41 @@ fn plugin_title(app: &str, path: &str) -> &'static str {
                 .map(|n| n.label)
         })
         .unwrap_or("App")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every tab reaches a nav surface, or it exists only in this file.
+    ///
+    /// Written after adding Sync and then squinting at a screenshot to
+    /// work out whether it was there — which is not a test, and was not
+    /// even an answer. A page nobody can navigate to is a page that does
+    /// not exist, and the gap between "declared" and "rendered" is a
+    /// plugin string away.
+    #[test]
+    fn the_sync_tab_is_offered_to_an_org_with_files() {
+        // `None` = every plugin on, which is what an org with no
+        // deny-list gets.
+        let files_on = task_plugin::PluginSet::resolve(None);
+        let tabs = nav_tabs_for(&files_on);
+        assert!(
+            tabs.iter().any(|t| t.label == "Sync"),
+            "no Sync tab for a default org: {:?}",
+            tabs.iter().map(|t| t.label).collect::<Vec<_>>()
+        );
+    }
+
+    /// And it is gated on the thing it syncs: an org with Files off has
+    /// no folders to keep in step and should not be offered a page
+    /// about them.
+    #[test]
+    fn the_sync_tab_follows_the_files_plugin() {
+        let sync = nav_tabs()
+            .into_iter()
+            .find(|t| t.label == "Sync")
+            .expect("a Sync tab exists");
+        assert_eq!(sync.plugin, "files");
+    }
 }

@@ -150,7 +150,7 @@ async fn write_checkpoint_async(capture: Capture<'_>) -> Result<CheckpointResult
     for (index, file) in disk_files.iter().enumerate() {
         if let Some(progress) = &progress {
             progress(
-                &file.repo_path.as_internal_file_string().to_string(),
+                &file.repo_path.as_internal_file_string(),
                 index as u64,
                 total,
             );

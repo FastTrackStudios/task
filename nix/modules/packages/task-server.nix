@@ -20,9 +20,12 @@
         task-server-image = pkgs.dockerTools.streamLayeredImage {
           name = "task-server";
           tag = "latest";
-          # git + curl: the snapshot engine shells out to them; cacert
-          # for outbound TLS; yt-dlp for the watch-view transcript
-          # ingest. /data is the TASK_DATA_ROOT volume.
+          # git + curl: the snapshot engine shells out to them, and so
+          # do repo-sourced wikis (`wiki_live::repo_source` clones,
+          # fetches and pushes with the `git` binary — `wiki.source.*`);
+          # cacert for outbound TLS, which `GIT_SSL_CAINFO` below hands
+          # to git for https clones; yt-dlp for the watch-view
+          # transcript ingest. /data is the TASK_DATA_ROOT volume.
           contents = with pkgs; [
             task-server
             git

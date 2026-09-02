@@ -150,6 +150,8 @@ sane defaults (`TASK_DATA_ROOT=/data`, `TASK_SERVER_BIND=0.0.0.0:8080`).
 | `TASK_SENTRY_DSN` | Sentry error reporting (optional; unset = no reporting) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | **opt-in** OpenTelemetry export — traces, logs, and metrics over OTLP `http/protobuf` (e.g. `http://otel-collector-opentelemetry-collector.observability.svc:4318`). Unset = the server emits no telemetry at all |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_RESOURCE_ATTRIBUTES` | standard OTLP knobs, honoured by the SDK when the endpoint is set |
+| `TASK_TELEMETRY_TEMPO_URL` | **opt-in** read access to traces: the Tempo HTTP API base (e.g. `http://tempo.observability.svc:3200`). Enables `telemetry_query_traces` / `telemetry_get_trace` on the account MCP lane (`POST /mcp`), operator-only (static `TASK_MCP_TOKEN` or a home-org `admin`). Unset = those tools are not listed |
+| `TASK_TELEMETRY_LOKI_URL` | **opt-in** read access to logs: the Loki HTTP API base (e.g. `http://loki.observability.svc:3100`). Enables `telemetry_query_logs`, same gate. See `docs/observability.md` |
 
 `TASK_VOX_URL` / `TASK_VOX_URL_WEB` are **client-side** knobs (CLI/desktop
 runtime env, wasm compile-time bake) — not server config, and deliberately

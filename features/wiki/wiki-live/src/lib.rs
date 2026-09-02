@@ -31,20 +31,27 @@
 //! trait-split the same way `agent-proto` is, the impls
 //! become per-capability and slot in cleanly.
 
-mod backend;
+pub mod backend;
+pub mod config;
 mod context;
+pub mod edits;
+pub mod edits_backend;
 mod error;
 pub mod findings;
 mod folder_import;
 mod health;
 mod index;
 pub mod log_md;
+pub mod materialize;
 pub mod queue;
 mod raw;
+pub mod repo_source;
 pub mod reviews;
 mod snapshot;
 mod source_watcher;
 mod state;
+pub mod subscriptions;
+pub mod subscriptions_backend;
 mod vault;
 
 pub use backend::WikiBackend;

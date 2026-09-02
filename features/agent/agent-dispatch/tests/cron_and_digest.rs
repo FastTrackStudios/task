@@ -136,7 +136,17 @@ async fn weekly_digest_groups_by_project() {
     assert_eq!(report.dispatched.len(), 2);
 
     // Complete just one of them.
-    let port_id = report.dispatched[0].agent_task.id.to_string();
+    // By title, not by position: the dispatch order follows the
+    // filesystem's, which differs between machines — CI completed
+    // "Refactor store" here and the digest assertions below inverted.
+    let port_id = report
+        .dispatched
+        .iter()
+        .find(|d| d.agent_task.title == "Port view to dx07")
+        .expect("the port task was dispatched")
+        .agent_task
+        .id
+        .to_string();
     store
         .claim_agent_task(port_id.clone(), "w".into())
         .await

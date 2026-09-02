@@ -425,6 +425,74 @@ pub(crate) enum WikiCmd {
     /// accepts the proposal (rewrite-page / append-note / etc).
     #[command(subcommand)]
     Review(WikiReviewCmd),
+    /// Add a wiki to the org's set (`wiki.many.set`). With `--repo`
+    /// the wiki mirrors a path inside that repository and is synced
+    /// at once (`wiki.source.repo`).
+    Create {
+        /// Display title; the slug derives from it unless `--slug`.
+        #[arg(long)]
+        title: String,
+        /// Explicit slug (lowercase words joined by hyphens).
+        #[arg(long, default_value = "")]
+        slug: String,
+        /// One paragraph on what the wiki is for.
+        #[arg(long, default_value = "")]
+        purpose: String,
+        /// `public`, `unlisted` or `private` (the default).
+        #[arg(long, default_value = "private")]
+        visibility: String,
+        /// Clone URL of a repository to mirror.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Branch to follow; empty follows the remote's default.
+        #[arg(long, default_value = "")]
+        branch: String,
+        /// Path inside the repository that becomes the wiki.
+        #[arg(long, default_value = "")]
+        path: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Every wiki the org holds that you may see.
+    List {
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// One wiki, with everything it declares about itself.
+    Describe {
+        slug: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fetch a repo-sourced wiki's repository now rather than at the
+    /// next scheduled sync (`wiki.source.sync`).
+    RefreshSource {
+        slug: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Change who may find and subscribe to a wiki.
+    SetVisibility {
+        slug: String,
+        /// `public`, `unlisted` or `private`.
+        visibility: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Research plans — list + status. The proposer is the
     /// existing flat `wiki research` (LLM call). This sub-tree
     /// manages the plans the server tracks.
@@ -433,6 +501,175 @@ pub(crate) enum WikiCmd {
     /// Filesystem watcher — re-ingest on external edits.
     #[command(subcommand)]
     Watch(WikiWatchCmd),
+    /// Edit Requests — how someone without Editor changes a wiki, and
+    /// how an Editor reviews and lands it (`wiki.edit.*`).
+    #[command(subcommand)]
+    Edits(WikiEditsCmd),
+}
+
+/// `task wiki edits …` — the Edit lane over vox.
+///
+/// Every verb names the wiki with `--wiki <slug>`; a request is named
+/// by its id, which is also its issue id on the org's board.
+#[derive(Subcommand)]
+pub(crate) enum WikiEditsCmd {
+    /// Open requests against a wiki (`--all` for resolved ones too).
+    List {
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// One request, in full.
+    Show {
+        id: uuid::Uuid,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Propose a change to one page. Reads the page first so the
+    /// request is against the version you saw.
+    Open {
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        title: String,
+        /// Wiki-relative page path, `Concepts/Ionian.md`.
+        #[arg(long)]
+        page: String,
+        /// Local markdown file holding the proposed content.
+        #[arg(long)]
+        file: std::path::PathBuf,
+        #[arg(long, default_value = "")]
+        summary: String,
+        /// An Editor asking for review rather than auto-approval.
+        #[arg(long)]
+        request_review: bool,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// The request as a diff against the current pages.
+    Diff {
+        id: uuid::Uuid,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Take a request to review it (Editor).
+    Claim {
+        id: uuid::Uuid,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Give a claim back early (Editor).
+    Release {
+        id: uuid::Uuid,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Land a request (Editor).
+    Accept {
+        id: uuid::Uuid,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Decline a request (Editor). The wiki is untouched.
+    Reject {
+        id: uuid::Uuid,
+        #[arg(long, default_value = "")]
+        reason: String,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Send a request back for changes (Editor).
+    Return {
+        id: uuid::Uuid,
+        #[arg(long, default_value = "")]
+        reason: String,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Who reviews, and who may propose.
+    Editors {
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Grant Editor to an account id (Editor or org admin).
+    GrantEditor {
+        principal: String,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Revoke Editor. The last Editor cannot be revoked.
+    RevokeEditor {
+        principal: String,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Declare who may propose: `readers`, `members` or `closed`.
+    Gate {
+        gate: String,
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -1827,6 +2064,184 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         WikiCmd::Review(c) => run_wiki_review(c).await,
         WikiCmd::ResearchPlans(c) => run_wiki_research_plans(c).await,
         WikiCmd::Watch(c) => run_wiki_watch(c).await,
+        WikiCmd::Edits(c) => run_wiki_edits(c).await,
+        WikiCmd::Create { .. }
+        | WikiCmd::List { .. }
+        | WikiCmd::Describe { .. }
+        | WikiCmd::RefreshSource { .. }
+        | WikiCmd::SetVisibility { .. } => run_wiki_registry(cmd).await,
+    }
+}
+
+// ── The org's set of wikis (`wiki.many.*`, `wiki.source.*`) ──────────
+
+/// The Registry service over vox: the calls made *about* the set of
+/// wikis rather than about any page in one.
+async fn run_wiki_registry(cmd: WikiCmd) -> eyre::Result<()> {
+    use wiki_proto::config::{NewWiki, RepoSource, Visibility};
+    use wiki_proto::service::registry::RegistryClient;
+
+    fn parse_visibility(s: &str) -> eyre::Result<Visibility> {
+        Visibility::parse(s)
+            .ok_or_else(|| eyre::eyre!("`{s}` is not a visibility: public, unlisted or private"))
+    }
+
+    async fn client(org: Option<String>, server: Option<String>) -> eyre::Result<RegistryClient> {
+        let slug = resolve_active_org(org)?;
+        establish_for_url(&resolve_org_vox_url(server, &slug)).await
+    }
+
+    fn print_source(source: &RepoSource) {
+        println!("repository:   {}", source.url);
+        if !source.branch.is_empty() {
+            println!("branch:       {}", source.branch);
+        }
+        if !source.path.is_empty() {
+            println!("path:         {}", source.path);
+        }
+        if source.commit.is_empty() {
+            println!("commit:       (never synced)");
+        } else {
+            println!("commit:       {}", source.commit);
+            println!("fetched_at:   {}", source.fetched_at);
+        }
+        if !source.last_error.is_empty() {
+            println!("STALE:        {}", source.last_error);
+        }
+    }
+
+    match cmd {
+        WikiCmd::Create {
+            title,
+            slug,
+            purpose,
+            visibility,
+            repo,
+            branch,
+            path,
+            org,
+            server,
+        } => {
+            let c = client(org, server).await?;
+            let source = repo.map(|url| RepoSource {
+                url,
+                branch,
+                path,
+                ..Default::default()
+            });
+            let summary = c
+                .create_wiki(NewWiki {
+                    title,
+                    slug,
+                    purpose,
+                    visibility: parse_visibility(&visibility)?,
+                    source,
+                })
+                .await
+                .map_err(|e| eyre::eyre!("create wiki: {e:?}"))?;
+            println!("created `{}` ({})", summary.slug, summary.title);
+            if summary.repo_sourced {
+                let d = c
+                    .describe_wiki(summary.slug.clone())
+                    .await
+                    .map_err(|e| eyre::eyre!("describe wiki: {e:?}"))?;
+                if let Some(source) = &d.config.source {
+                    print_source(source);
+                }
+            }
+            Ok(())
+        }
+        WikiCmd::List { org, server, json } => {
+            let c = client(org, server).await?;
+            let wikis = c
+                .list_wikis()
+                .await
+                .map_err(|e| eyre::eyre!("list wikis: {e:?}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&wikis)?);
+                return Ok(());
+            }
+            if wikis.is_empty() {
+                println!("(no wikis)");
+            }
+            for w in wikis {
+                let mut flags = Vec::new();
+                if w.default {
+                    flags.push("default");
+                }
+                if w.repo_sourced {
+                    flags.push("repo");
+                }
+                let flags = if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", flags.join(", "))
+                };
+                println!(
+                    "{:<24} {:<9} {:>5} pages  {}{flags}",
+                    w.slug,
+                    w.visibility.as_str(),
+                    w.pages,
+                    w.title
+                );
+            }
+            Ok(())
+        }
+        WikiCmd::Describe {
+            slug,
+            org,
+            server,
+            json,
+        } => {
+            let c = client(org, server).await?;
+            let d = c
+                .describe_wiki(slug)
+                .await
+                .map_err(|e| eyre::eyre!("describe wiki: {e:?}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&d)?);
+                return Ok(());
+            }
+            println!("slug:         {}", d.summary.slug);
+            println!("title:        {}", d.summary.title);
+            println!("visibility:   {}", d.config.visibility.as_str());
+            println!("proposers:    {}", d.config.proposers.as_str());
+            println!("pages:        {}", d.summary.pages);
+            if !d.config.editors.is_empty() {
+                println!("editors:      {}", d.config.editors.join(", "));
+            }
+            if !d.summary.purpose.is_empty() {
+                println!("purpose:      {}", d.summary.purpose);
+            }
+            if let Some(source) = &d.config.source {
+                print_source(source);
+            }
+            Ok(())
+        }
+        WikiCmd::RefreshSource { slug, org, server } => {
+            let c = client(org, server).await?;
+            let source = c
+                .refresh_source(slug)
+                .await
+                .map_err(|e| eyre::eyre!("refresh source: {e:?}"))?;
+            print_source(&source);
+            Ok(())
+        }
+        WikiCmd::SetVisibility {
+            slug,
+            visibility,
+            org,
+            server,
+        } => {
+            let c = client(org, server).await?;
+            let v = parse_visibility(&visibility)?;
+            c.set_visibility(slug.clone(), v)
+                .await
+                .map_err(|e| eyre::eyre!("set visibility: {e:?}"))?;
+            println!("`{slug}` is now {}", v.as_str());
+            Ok(())
+        }
+        _ => unreachable!("routed here by run_wiki"),
     }
 }
 
@@ -3390,6 +3805,323 @@ async fn run_wiki_research_plans(cmd: WikiResearchCmd) -> eyre::Result<()> {
                 .await
                 .map_err(|e| eyre::eyre!("set_research_status: {e:?}"))?;
             println!("{plan_id} → {status}");
+        }
+    }
+    Ok(())
+}
+
+// ── Edit Requests (`wiki.edit.*`) ────────────────────────────────────
+
+/// The Edits service over vox, plus one read of the Pages service so
+/// `open` can name the version it is against.
+async fn run_wiki_edits(cmd: WikiEditsCmd) -> eyre::Result<()> {
+    use wiki_proto::config::ProposerGate;
+    use wiki_proto::service::edits::{EditRequest, EditsClient, NewEditRequest, PageChange};
+    use wiki_proto::service::pages::PagesClient;
+
+    async fn client(org: Option<String>, server: Option<String>) -> eyre::Result<EditsClient> {
+        let slug = resolve_active_org(org)?;
+        establish_for_url(&resolve_org_vox_url(server, &slug)).await
+    }
+
+    fn print_request(r: &EditRequest) {
+        let claim = if r.claimed_by.is_empty() {
+            String::new()
+        } else {
+            format!("  claimed by {} until {}", r.claimed_by, r.claimed_until)
+        };
+        let flags = match (r.auto_approved, r.held) {
+            (true, _) => "  [auto-approved]",
+            (_, true) => "  [held]",
+            _ => "",
+        };
+        println!(
+            "{}  {:<9} {}  by {}  {}{claim}{flags}",
+            r.id,
+            r.status.as_str(),
+            r.title,
+            r.proposer,
+            r.opened_at
+        );
+    }
+
+    fn print_full(r: &EditRequest) {
+        print_request(r);
+        if !r.summary.trim().is_empty() {
+            println!("  {}", r.summary.trim());
+        }
+        if !r.resolution.is_empty() {
+            println!(
+                "  {}{}",
+                r.resolution,
+                if r.resolved_by.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {} at {}", r.resolved_by, r.resolved_at)
+                }
+            );
+        }
+        for c in &r.changes {
+            println!(
+                "  {} {}{}",
+                if c.delete { "delete" } else { "change" },
+                c.path,
+                if c.base_sha256.is_empty() {
+                    " (new page)".to_owned()
+                } else {
+                    format!(" against {}", &c.base_sha256[..c.base_sha256.len().min(12)])
+                }
+            );
+        }
+    }
+
+    fn json<T: serde::Serialize>(value: &T) -> eyre::Result<()> {
+        println!("{}", serde_json::to_string_pretty(value)?);
+        Ok(())
+    }
+
+    match cmd {
+        WikiEditsCmd::List {
+            wiki,
+            all,
+            org,
+            server,
+            json: as_json,
+        } => {
+            let c = client(org, server).await?;
+            let rows = c
+                .list_edit_requests(wiki, all)
+                .await
+                .map_err(|e| eyre::eyre!("list_edit_requests: {e:?}"))?;
+            if as_json {
+                return json(&rows);
+            }
+            if rows.is_empty() {
+                println!("(no edit requests)");
+            }
+            for r in &rows {
+                print_request(r);
+            }
+        }
+        WikiEditsCmd::Show {
+            id,
+            wiki,
+            org,
+            server,
+            json: as_json,
+        } => {
+            let c = client(org, server).await?;
+            let r = c
+                .get_edit_request(wiki, id)
+                .await
+                .map_err(|e| eyre::eyre!("get_edit_request: {e:?}"))?;
+            if as_json {
+                return json(&r);
+            }
+            print_full(&r);
+        }
+        WikiEditsCmd::Open {
+            wiki,
+            title,
+            page,
+            file,
+            summary,
+            request_review,
+            org,
+            server,
+            json: as_json,
+        } => {
+            let markdown = std::fs::read_to_string(&file)
+                .map_err(|e| eyre::eyre!("read {}: {e}", file.display()))?;
+            let slug = resolve_active_org(org)?;
+            let url = resolve_org_vox_url(server, &slug);
+            // The version this request is against: the page as it is
+            // now, or nothing for a page being created.
+            let pages: PagesClient = establish_for_url(&url).await?;
+            let (base_sha256, base_markdown) =
+                match pages.read_page(wiki.clone(), page.clone()).await {
+                    Ok(doc) => (doc.sha256, doc.markdown),
+                    Err(_) => (String::new(), String::new()),
+                };
+            let c: EditsClient = establish_for_url(&url).await?;
+            let r = c
+                .open_edit_request(
+                    wiki,
+                    NewEditRequest {
+                        title,
+                        summary,
+                        changes: vec![PageChange {
+                            path: page,
+                            base_sha256,
+                            base_markdown,
+                            markdown,
+                            delete: false,
+                        }],
+                        request_review,
+                    },
+                )
+                .await
+                .map_err(|e| eyre::eyre!("open_edit_request: {e:?}"))?;
+            if as_json {
+                return json(&r);
+            }
+            print_full(&r);
+        }
+        WikiEditsCmd::Diff {
+            id,
+            wiki,
+            org,
+            server,
+            json: as_json,
+        } => {
+            let c = client(org, server).await?;
+            let diffs = c
+                .diff_edit_request(wiki, id)
+                .await
+                .map_err(|e| eyre::eyre!("diff_edit_request: {e:?}"))?;
+            if as_json {
+                return json(&diffs);
+            }
+            for d in &diffs {
+                println!(
+                    "== {}  {}{}",
+                    d.path,
+                    if d.stale { "stale, " } else { "" },
+                    if d.applies { "applies" } else { "CONFLICT" }
+                );
+                let after = if d.applies { &d.merged } else { &d.proposed };
+                print!("{}", diffy::create_patch(&d.current, after));
+            }
+        }
+        WikiEditsCmd::Claim {
+            id,
+            wiki,
+            org,
+            server,
+        } => {
+            let r = client(org, server)
+                .await?
+                .claim_edit_request(wiki, id)
+                .await
+                .map_err(|e| eyre::eyre!("claim_edit_request: {e:?}"))?;
+            print_request(&r);
+        }
+        WikiEditsCmd::Release {
+            id,
+            wiki,
+            org,
+            server,
+        } => {
+            let r = client(org, server)
+                .await?
+                .release_edit_request(wiki, id)
+                .await
+                .map_err(|e| eyre::eyre!("release_edit_request: {e:?}"))?;
+            print_request(&r);
+        }
+        WikiEditsCmd::Accept {
+            id,
+            wiki,
+            org,
+            server,
+        } => {
+            let r = client(org, server)
+                .await?
+                .accept_edit_request(wiki, id)
+                .await
+                .map_err(|e| eyre::eyre!("accept_edit_request: {e:?}"))?;
+            print_request(&r);
+        }
+        WikiEditsCmd::Reject {
+            id,
+            reason,
+            wiki,
+            org,
+            server,
+        } => {
+            let r = client(org, server)
+                .await?
+                .reject_edit_request(wiki, id, reason)
+                .await
+                .map_err(|e| eyre::eyre!("reject_edit_request: {e:?}"))?;
+            print_request(&r);
+        }
+        WikiEditsCmd::Return {
+            id,
+            reason,
+            wiki,
+            org,
+            server,
+        } => {
+            let r = client(org, server)
+                .await?
+                .return_edit_request(wiki, id, reason)
+                .await
+                .map_err(|e| eyre::eyre!("return_edit_request: {e:?}"))?;
+            print_request(&r);
+        }
+        WikiEditsCmd::Editors {
+            wiki,
+            org,
+            server,
+            json: as_json,
+        } => {
+            let e = client(org, server)
+                .await?
+                .editors(wiki)
+                .await
+                .map_err(|e| eyre::eyre!("editors: {e:?}"))?;
+            if as_json {
+                return json(&e);
+            }
+            println!("proposers: {}", e.gate.as_str());
+            if e.editors.is_empty() {
+                println!("editors:   (none — org role governs writes)");
+            }
+            for ed in &e.editors {
+                println!("editor:    {ed}");
+            }
+        }
+        WikiEditsCmd::GrantEditor {
+            principal,
+            wiki,
+            org,
+            server,
+        } => {
+            client(org, server)
+                .await?
+                .grant_editor(wiki, principal.clone())
+                .await
+                .map_err(|e| eyre::eyre!("grant_editor: {e:?}"))?;
+            println!("granted Editor to {principal}");
+        }
+        WikiEditsCmd::RevokeEditor {
+            principal,
+            wiki,
+            org,
+            server,
+        } => {
+            client(org, server)
+                .await?
+                .revoke_editor(wiki, principal.clone())
+                .await
+                .map_err(|e| eyre::eyre!("revoke_editor: {e:?}"))?;
+            println!("revoked Editor from {principal}");
+        }
+        WikiEditsCmd::Gate {
+            gate,
+            wiki,
+            org,
+            server,
+        } => {
+            let parsed = ProposerGate::parse(&gate)
+                .ok_or_else(|| eyre::eyre!("`{gate}` is not a gate: readers, members or closed"))?;
+            client(org, server)
+                .await?
+                .set_proposer_gate(wiki, parsed)
+                .await
+                .map_err(|e| eyre::eyre!("set_proposer_gate: {e:?}"))?;
+            println!("proposers: {}", parsed.as_str());
         }
     }
     Ok(())

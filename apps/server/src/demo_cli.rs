@@ -86,6 +86,12 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         planted.written, planted.kept
     );
 
+    #[cfg(feature = "plugin-scripture")]
+    plant_bible(&org).await;
+
+    #[cfg(feature = "plugin-wiki")]
+    plant_core_subscriptions(&org);
+
     // Accounts, in this org's own auth store.
     let url = format!("sqlite://{}?mode=rwc", org.auth_db().display());
     let auth = crate::AuthState::open(&url, &crate::auth_secret())
@@ -110,6 +116,13 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         )
         .await?;
     }
+
+    // The Edit lane, now that the accounts it names exist: the owner
+    // holds Editor on Music Theory, one request is open from a cast
+    // member without the role, and one Editor change went through the
+    // lane and was approved within it.
+    #[cfg(feature = "plugin-wiki")]
+    plant_edit_lane(&org, &slug, &auth).await?;
 
     // The projects, DECLARED — pages in the org vault, which is what
     // the app's Projects view lists. Idempotent the same way the tree
@@ -498,4 +511,274 @@ fn which_ffmpeg() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Put a Bible in the org's resource library, so the seeded Bible
+/// Study wiki has something to anchor to and the scripture reader has
+/// something to read.
+///
+/// Public domain only — `scripture::pull` refuses anything else, and
+/// the demo asks for WEB by name. A licensed edition could not be
+/// planted even if someone tried.
+///
+/// **Never fails the plant.** A demo that will not stand up because a
+/// download timed out is worse than a demo with an empty reader, and
+/// the reader already handles an absent corpus (`load_resource_root`
+/// returns an empty store for a missing directory). So every failure
+/// here is a printed line and nothing more.
+///
+/// Offline is a first-class path: the archive is cached under
+/// `$TASK_BIBLE_CACHE`, so the first plant on a machine downloads and
+/// every plant after that — including on a plane — installs from disk.
+/// `TASK_DEMO_NO_BIBLE=1` skips it entirely.
+///
+/// One copy per org for now, which `wiki.core.default` will replace:
+/// core membership is meant to be a property of the source rather than
+/// a copy of it, so once subscription exists these orgs will share one
+/// corpus instead of each holding a canon.
+#[cfg(feature = "plugin-scripture")]
+async fn plant_bible(org: &org_proto::OrgRoot) {
+    const TRANSLATION: &str = "WEB";
+
+    if std::env::var_os("TASK_DEMO_NO_BIBLE").is_some() {
+        println!("  bible: skipped (TASK_DEMO_NO_BIBLE)");
+        return;
+    }
+    let dest = org.bible_dir(TRANSLATION);
+    if dest.is_dir()
+        && std::fs::read_dir(&dest)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false)
+    {
+        println!("  bible: {TRANSLATION} already installed");
+        return;
+    }
+    match scripture::pull(TRANSLATION, &dest).await {
+        Ok(pulled) => println!(
+            "  bible: {} books of {} ({})",
+            pulled.books.len(),
+            pulled.id,
+            if pulled.from_cache {
+                "from cache"
+            } else {
+                "downloaded"
+            }
+        ),
+        Err(e) => println!(
+            "  bible: not installed ({e}).\n         \
+             The scripture reader will be empty until you run\n         \
+             `task-server admin bible install --org {}`.",
+            org.slug()
+        ),
+    }
+}
+
+/// Hand the freshly planted org's vault and wikis the core set.
+///
+/// `wiki.core.default` says a vault carries the core set *from the
+/// moment it exists* — so planting one has to do this, not only
+/// booting a server against it. The boot-time sweep in
+/// `crate::OrgServices` is the retroactive half (`wiki.core.retroactive`),
+/// for orgs that existed before a source became core; this is the half
+/// that makes a brand-new vault able to reference a verse in its first
+/// line without anything else having run.
+///
+/// Never fatal, for the reason the Bible install is not: an org that
+/// cannot record its subscriptions should still plant.
+/// A caller pinned to one account: the seeder acting *as* a cast
+/// member, so what it plants is what that person would have made.
+#[cfg(feature = "plugin-wiki")]
+struct As(String);
+
+#[cfg(feature = "plugin-wiki")]
+impl wiki_live::backend::Caller for As {
+    fn principal(&self) -> Option<String> {
+        Some(self.0.clone())
+    }
+}
+
+/// Plant the Edit lane's seed on [`example_org::EDIT_LANE_WIKI`]:
+/// the owner as Editor, one open request from the employee
+/// (`wiki.edit.request`), one auto-approved Editor change
+/// (`wiki.edit.auto-approve`). Each is idempotent — the grant is a
+/// set-add, the requests are matched by title.
+///
+/// Through the real backend rather than by writing files: the request
+/// then has its tracker row on the org's board (`wiki.edit.tracked`)
+/// and the Editor's change went through the same lane a person's does.
+#[cfg(feature = "plugin-wiki")]
+async fn plant_edit_lane(
+    org: &org_proto::OrgRoot,
+    slug: &str,
+    auth: &crate::AuthState,
+) -> eyre::Result<()> {
+    use std::sync::Arc;
+
+    use wiki_proto::service::Pages as _;
+    use wiki_proto::service::edits::{Edits as _, NewEditRequest, PageChange};
+
+    let wiki = example_org::EDIT_LANE_WIKI;
+    let root = org.named_wiki_dir(wiki);
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let cast = example_org::cast_of(slug);
+    let (Some(owner), Some(employee)) = (
+        cast.iter().find(|m| matches!(m.holds, Holds::Owner)),
+        cast.iter().find(|m| matches!(m.holds, Holds::Employee)),
+    ) else {
+        return Ok(());
+    };
+    async fn id_of(auth: &crate::AuthState, email: &str) -> eyre::Result<String> {
+        auth.auth
+            .find_user_by_email(email)
+            .await
+            .map_err(|e| eyre::eyre!("look up `{email}`: {e:?}"))?
+            .map(|u| u.id.to_string())
+            .ok_or_else(|| eyre::eyre!("`{email}` was not created"))
+    }
+    let owner_id = id_of(auth, owner.email).await?;
+    let employee_id = id_of(auth, employee.email).await?;
+
+    // The owner is the first Editor — which is what turns the lane on
+    // for this wiki (`wiki.edit.editor`).
+    let config = wiki_live::config::update(&root, wiki, |c| {
+        if !c.is_editor(&owner_id) {
+            c.editors.push(owner_id.clone());
+        }
+    })
+    .map_err(|e| eyre::eyre!("declare {}'s Editor: {e}", owner.name))?;
+    println!(
+        "  editors: {} holds Editor on {wiki} ({} total)",
+        owner.name,
+        config.editors.len()
+    );
+
+    let roots: std::collections::HashMap<String, std::path::PathBuf> =
+        org.named_wikis().into_iter().collect();
+    let tracker = Arc::new(crate::wiki_tracker::TaskTracker::new(
+        task::TaskBackend::new(org.vault_dir()),
+    ));
+    let lane_as = |who: &str| {
+        wiki_live::edits_backend::EditsBackend::new(
+            wiki_live::WikiBackend::with_roots_under(roots.clone(), org.wikis_dir())
+                .with_caller(Arc::new(As(who.to_owned()))),
+            tracker.clone(),
+        )
+    };
+    let existing: Vec<String> = wiki_live::edits::list(&root)
+        .map_err(|e| eyre::eyre!("list edit requests: {e}"))?
+        .into_iter()
+        .map(|r| r.title)
+        .collect();
+
+    if !existing
+        .iter()
+        .any(|t| t == example_org::SEED_EDIT_REQUEST_TITLE)
+    {
+        let sam = lane_as(&employee_id);
+        let path = "Concepts/Ionian.md";
+        let page = sam
+            .wiki()
+            .read_page(wiki, path)
+            .map_err(|e| eyre::eyre!("read {path}: {e}"))?;
+        let proposed = page.markdown.replacen(
+            "## See also",
+            "## Hearing it\n\nPlay C major over a C drone and stop on B: the pull back to C is \
+             the leading tone doing its work.\n\n## See also",
+            1,
+        );
+        sam.open_edit_request(
+            wiki,
+            NewEditRequest {
+                title: example_org::SEED_EDIT_REQUEST_TITLE.to_owned(),
+                summary: "A way to hear the major 7th, for players who learn by ear.".into(),
+                changes: vec![PageChange {
+                    path: path.to_owned(),
+                    base_sha256: page.sha256,
+                    base_markdown: page.markdown,
+                    markdown: proposed,
+                    delete: false,
+                }],
+                request_review: false,
+            },
+        )
+        .map_err(|e| eyre::eyre!("open {}'s edit request: {e}", employee.name))?;
+        println!(
+            "  edit request: \"{}\" opened by {}",
+            example_org::SEED_EDIT_REQUEST_TITLE,
+            employee.name
+        );
+    }
+
+    if !existing
+        .iter()
+        .any(|t| t == example_org::SEED_EDITOR_CHANGE_TITLE)
+    {
+        let alice = lane_as(&owner_id);
+        let path = "Concepts/Modes.md";
+        let page = alice
+            .wiki()
+            .read_page(wiki, path)
+            .map_err(|e| eyre::eyre!("read {path}: {e}"))?;
+        let proposed = format!(
+            "{}\n## Naming\n\nThe Greek names are medieval labels, not the Greeks' own — the \
+             ancient *tonoi* were tuned differently and the names were reassigned later.\n",
+            page.markdown.trim_end_matches('\n')
+        );
+        let made = alice
+            .open_edit_request(
+                wiki,
+                NewEditRequest {
+                    title: example_org::SEED_EDITOR_CHANGE_TITLE.to_owned(),
+                    summary: "Says where the names come from.".into(),
+                    changes: vec![PageChange {
+                        path: path.to_owned(),
+                        base_sha256: page.sha256,
+                        base_markdown: page.markdown,
+                        markdown: proposed,
+                        delete: false,
+                    }],
+                    request_review: false,
+                },
+            )
+            .map_err(|e| eyre::eyre!("open {}'s change: {e}", owner.name))?;
+        println!(
+            "  edit request: \"{}\" by {} {}",
+            example_org::SEED_EDITOR_CHANGE_TITLE,
+            owner.name,
+            if made.auto_approved {
+                "auto-approved"
+            } else {
+                "left open"
+            }
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "plugin-wiki")]
+fn plant_core_subscriptions(org: &org_proto::OrgRoot) {
+    let store = wiki_live::subscriptions::SubscriptionStore::open(org.path());
+    let core = crate::core_subscriptions();
+    let mut subscribers = vec![wiki_proto::Subscriber::Vault];
+    subscribers.extend(
+        org.named_wikis()
+            .into_iter()
+            .map(|(slug, _)| wiki_proto::Subscriber::Wiki(slug)),
+    );
+    let mut added = 0;
+    for subscriber in &subscribers {
+        match store.ensure_core(subscriber, &core) {
+            Ok(new) => added += new.len(),
+            Err(e) => {
+                println!("  subscriptions: not applied ({e})");
+                return;
+            }
+        }
+    }
+    println!(
+        "  subscriptions: core set on {} subscriber(s), {added} new",
+        subscribers.len()
+    );
 }

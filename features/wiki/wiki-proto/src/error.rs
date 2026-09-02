@@ -41,6 +41,20 @@ pub enum WikiError {
     #[error("illegal state: {0}")]
     IllegalState(String),
 
+    /// The caller may not do this — not an Editor, not a member of the
+    /// owning org, or a wiki that has closed requests. Distinct from
+    /// [`Self::IllegalState`] because it is about *who*, not *when*,
+    /// and a client shows it as a refusal with the reason
+    /// (`wiki.boundary.no-subscribe`, `wiki.edit.gate`).
+    #[error("refused: {0}")]
+    Refused(String),
+
+    /// Two sides changed the same lines. Carries the paths so both
+    /// parties can be shown what to resolve; never resolved by
+    /// recency (`wiki.edit.rebase`, `wiki.subscribe.refresh`).
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     /// Backend IO failure (disk full, permission denied, etc.).
     #[error("io: {0}")]
     Io(String),

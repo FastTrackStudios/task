@@ -174,6 +174,30 @@ impl Session {
         self.establish().await
     }
 
+    /// The org's set of wikis — the call made before a caller has a
+    /// wiki id (`wiki.many.addressable`).
+    pub async fn wikis(&self) -> wiki_proto::service::registry::RegistryClient {
+        self.establish().await
+    }
+
+    /// One wiki's pages, by slug.
+    pub async fn wiki_pages(&self) -> wiki_proto::service::pages::PagesClient {
+        self.establish().await
+    }
+
+    /// What the org's vault and wikis subscribe to.
+    pub async fn wiki_subscriptions(
+        &self,
+    ) -> wiki_proto::service::subscriptions::SubscriptionsClient {
+        self.establish().await
+    }
+
+    /// The Edit lane: how someone without Editor changes a wiki, and
+    /// how an Editor lands it (`wiki.edit.*`).
+    pub async fn wiki_edits(&self) -> wiki_proto::service::edits::EditsClient {
+        self.establish().await
+    }
+
     /// The replica lane: the commit graph and the chunks under it.
     ///
     /// A peer host calls this, not a person — but it is signed with a
@@ -262,4 +286,8 @@ signable!(
     SyncServiceClient,
     ProjectServiceClient,
     TaskServiceClient,
+    wiki_proto::service::registry::RegistryClient,
+    wiki_proto::service::pages::PagesClient,
+    wiki_proto::service::subscriptions::SubscriptionsClient,
+    wiki_proto::service::edits::EditsClient,
 );

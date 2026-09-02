@@ -10,15 +10,28 @@ repository.workspace = true
 
 [dependencies]
 architect = { workspace = true, features = ["dispatch-tokio"] }
+# Who is calling: the per-call principal the gate recorded, read by
+# the Edit lane to name a proposer and check Editor.
+architect-permissions = { workspace = true }
+# The span is the wide event: subscription and edit outcomes ride it.
+architect-telemetry = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
+# Three-way merge for a stale Edit Request (`wiki.edit.rebase`).
+diffy = "0.4"
 mime_guess = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+# `block_in_place` for the heavy calls of an inline-dispatched backend.
+tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 vault-live = { workspace = true }
+# Materializing a subscribed source rides the vault sync engine: a
+# wiki is a vault, so the tree-diff already exists and works over vox.
+vault-proto = { workspace = true }
+vault-sync-client = { workspace = true }
 walkdir = { workspace = true }
 wiki-extract = { workspace = true }
 wiki-graph = { workspace = true }
@@ -27,3 +40,6 @@ wiki-search = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3"

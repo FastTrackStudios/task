@@ -22,6 +22,8 @@ pub mod admin_cli;
 pub mod agent_router;
 pub mod api_ref;
 pub mod attachments;
+#[cfg(feature = "plugin-scripture")]
+pub mod bible_cli;
 pub mod capability;
 pub mod central_auth;
 #[cfg(feature = "plugin-git")]
@@ -49,6 +51,10 @@ pub mod watch_bridge;
 pub mod webdav;
 #[cfg(feature = "plugin-git")]
 pub mod webhooks;
+#[cfg(feature = "plugin-wiki")]
+pub mod wiki_repo;
+#[cfg(feature = "plugin-wiki")]
+pub mod wiki_tracker;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -163,6 +169,16 @@ pub struct OrgAppState {
     /// Wiki feature backend rooted at this org's `vault/`.
     #[cfg(feature = "plugin-wiki")]
     pub wiki: wiki_live::WikiBackend,
+    /// What this org's vault and wikis subscribe to. Keyed by
+    /// subscriber rather than by wiki, because the org vault holds
+    /// subscriptions too and is not a wiki.
+    #[cfg(feature = "plugin-wiki")]
+    pub subscriptions: wiki_live::subscriptions_backend::SubscriptionsBackend,
+    /// The Edit lane over this org's wikis (`wiki.edit.*`): requests,
+    /// claims, landings. Its tracker is this org's task board, so every
+    /// request is an issue here too.
+    #[cfg(feature = "plugin-wiki")]
+    pub edits: wiki_live::edits_backend::EditsBackend,
     /// Project list / get backend — walks `vault/Projects/*.md`.
     pub projects: project::ProjectBackend,
     /// Goal list / get backend — walks `vault/Goals/**/*.md`.
@@ -897,18 +913,119 @@ pub(crate) async fn build_org_state(
                 None
             }
         };
-        // Wiki rooted at `<org>/wiki/Knowledge/` (the curated
-        // tier). `LLM/` scratch is a sibling subtree the
-        // wiki backend doesn't touch — agents read/write it
-        // through plain filesystem ops. `wiki_id = "default"`
-        // is conventional for the one-wiki-per-org case;
-        // future federation may surface multiple ids.
+        // Every wiki this org holds, not one. `LLM/` scratch stays a
+        // sibling subtree the wiki backend doesn't touch — agents
+        // read/write it through plain filesystem ops.
+        //
+        // t[impl wiki.many.addressable] — one mount serves the whole
+        // set, so every wiki is reachable by its own slug across the
+        // service surface, and there is no method that works only on a
+        // default wiki. t[impl wiki.many.isolation] — the backend
+        // resolves each call's `wiki_id` to its own root, so an
+        // operation on one wiki cannot read or write another's state.
+        //
+        // `TASK_SERVER_WIKI_ROOT` still pins a single root when it is
+        // set: it exists so a test can point the wiki somewhere
+        // disposable, and it names that root `knowledge` so the
+        // override is a member of the set rather than a fourth shape.
         #[cfg(any(feature = "plugin-wiki", feature = "plugin-mealplan"))]
         let wiki_root = std::env::var("TASK_SERVER_WIKI_ROOT")
             .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from);
         #[cfg(feature = "plugin-wiki")]
-        let wiki = wiki_live::WikiBackend::single("default", wiki_root.clone())
-            .map_err(|e| eyre::eyre!("wiki backend: {e}"))?;
+        let wiki = {
+            let mut roots: std::collections::HashMap<String, PathBuf> =
+                std::collections::HashMap::new();
+            if std::env::var_os("TASK_SERVER_WIKI_ROOT").is_some() {
+                roots.insert(org_proto::DEFAULT_WIKI.to_string(), wiki_root.clone());
+            } else {
+                roots.extend(org_root.named_wikis());
+                // A fresh org has no wiki directory yet. Keep the
+                // default in the map anyway, so bootstrapping one is a
+                // write rather than a `WikiNotFound`.
+                roots
+                    .entry(org_proto::DEFAULT_WIKI.to_string())
+                    .or_insert_with(|| org_root.wiki_knowledge_dir());
+            }
+            // Compatibility alias. Every client predating multi-wiki
+            // asks for `"default"`, and renaming the tier to
+            // `knowledge` turned those into `WikiNotFound`. The alias
+            // points at the same directory and is excluded from
+            // `list_wikis`, so it resolves without appearing as a
+            // second wiki.
+            if let Some(knowledge) = roots.get(org_proto::DEFAULT_WIKI).cloned() {
+                roots.insert(wiki_live::backend::COMPAT_WIKI_ID.to_string(), knowledge);
+            }
+            tracing::info!(
+                org = %org_root.slug(),
+                wikis = roots.len(),
+                "wiki backend serving {}",
+                {
+                    let mut names: Vec<&str> = roots.keys().map(String::as_str).collect();
+                    names.sort_unstable();
+                    names.join(", ")
+                }
+            );
+            // Created into `<org>/wikis/` at runtime (`wiki.many.set`),
+            // so the map the backend holds is the set at boot plus
+            // whatever `create_wiki` adds while the server runs.
+            let backend =
+                wiki_live::WikiBackend::with_roots_under(roots.clone(), org_root.wikis_dir());
+            // Hand this org's vault and each of its wikis the core
+            // set. Doing it at boot rather than at org creation is
+            // what makes `wiki.core.retroactive` true: an org planted
+            // before a source became core picks it up on next start,
+            // and one that declined keeps its decline.
+            let subs = wiki_live::subscriptions::SubscriptionStore::open(org_root.path());
+            let core = core_subscriptions();
+            let mut subscribers = vec![wiki_proto::Subscriber::Vault];
+            subscribers.extend(
+                roots
+                    .keys()
+                    .map(|slug| wiki_proto::Subscriber::Wiki(slug.clone())),
+            );
+            for subscriber in subscribers {
+                match subs.ensure_core(&subscriber, &core) {
+                    Ok(added) if !added.is_empty() => tracing::info!(
+                        org = %org_root.slug(),
+                        subscriber = ?subscriber,
+                        "core subscriptions added: {}",
+                        added.join(", ")
+                    ),
+                    Ok(_) => {}
+                    // Never fatal: an org that cannot hold its
+                    // subscriptions should still serve its own wikis.
+                    Err(e) => tracing::warn!(
+                        org = %org_root.slug(),
+                        "core subscriptions not applied: {e}"
+                    ),
+                }
+            }
+            backend
+        };
+
+        // The subscription service, over the same store the boot sweep
+        // just topped up. `LocalOrgs` resolves a source published by
+        // another org on this data root; a peer's is the same
+        // materialize call against a vox client, which is why the
+        // resolver is a trait rather than a match.
+        #[cfg(feature = "plugin-wiki")]
+        let subscriptions = {
+            let orgs_dir = org_root
+                .path()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| org_root.path().to_path_buf());
+            let domains = wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok());
+            let upstream = std::sync::Arc::new(wiki_live::subscriptions_backend::LocalOrgs::new(
+                orgs_dir.parent().unwrap_or(org_root.path()).to_path_buf(),
+                domains,
+            ));
+            wiki_live::subscriptions_backend::SubscriptionsBackend::new(
+                org_root.path().to_path_buf(),
+                core_subscriptions(),
+                upstream,
+            )
+        };
 
         // Agent-task queue. SQLite under the org root
         // (override via `TASK_SERVER_AGENT_TASKS_URL`).
@@ -1386,6 +1503,35 @@ pub(crate) async fn build_org_state(
             }
         }
         let tasks = task::TaskBackend::new(vault_root.clone());
+        // The Edit lane, over the wikis above and the tasks just built:
+        // an Edit Request is an issue on this org's board
+        // (`wiki.edit.tracked`). A claim stands an hour unless the
+        // deployment says otherwise (`TASK_WIKI_CLAIM_TTL_SECS`) — a
+        // test shrinks it to watch one expire.
+        #[cfg(feature = "plugin-wiki")]
+        let edits = {
+            let mut edits = wiki_live::edits_backend::EditsBackend::new(
+                wiki.clone(),
+                std::sync::Arc::new(crate::wiki_tracker::TaskTracker::new(tasks.clone())),
+            )
+            // A repo-sourced wiki lands through its forge
+            // (`wiki.source.editable`); the server holds the clients.
+            .with_lander(std::sync::Arc::new(crate::wiki_repo::ForgeLander));
+            if let Some(secs) = std::env::var("TASK_WIKI_CLAIM_TTL_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+            {
+                edits = edits.with_claim_ttl(std::time::Duration::from_secs(secs));
+            }
+            // t[impl wiki.source.sync] — every wiki with a repository
+            // behind it is fetched on a schedule, first pass at boot
+            // (spawned, so a slow remote never delays serving). What
+            // it finds is written to the wiki's config, which is what a
+            // client shows as "reflects commit …" or "stale since …";
+            // and each sync settles the Edit lane's landings against it.
+            crate::wiki_repo::spawn_sync_loop(org_root.slug().to_string(), edits.clone());
+            edits
+        };
         // Locations + mealplan / pantry each hold their own
         // `vault::Vault` snapshot behind an `Arc<Mutex<…>>`.
         // We open the vault once per store — they're independent
@@ -1501,11 +1647,28 @@ pub(crate) async fn build_org_state(
         );
         // Resource Library reader (transcript sidecars under resources/).
         let resources = resources::ResourcesBackend::new(org_root.resources_dir());
-        // Cookbook lives at `<wiki_root>/Cookbook/*.cook` —
-        // typically `<org>/wiki/Knowledge/Cookbook/`, NOT the
-        // vault root. Match the wiki backend's anchor.
+        // Cookbook lives at `<wiki>/Cookbook/*.cook`, NOT the vault
+        // root. Which wiki is now a real question: with named wikis an
+        // org can hold a Cooking wiki, and recipes belong there rather
+        // than in the org's default knowledge tier — a wiki is
+        // subscribable, so recipes kept in one can be shared and
+        // referenced instead of being a per-org plugin store nobody
+        // else can reach.
+        //
+        // Prefer a `cooking` wiki when the org has one; fall back to
+        // the default wiki, which is where every existing org's
+        // recipes already are. Backwards compatible by construction:
+        // an org with no Cooking wiki sees exactly what it saw before.
         #[cfg(feature = "plugin-mealplan")]
-        let cookbook = cookbook::Store::new(wiki_root.clone());
+        let cookbook = {
+            let cooking = org_root.named_wiki_dir("cooking");
+            let root = if cooking.is_dir() {
+                cooking
+            } else {
+                wiki_root.clone()
+            };
+            cookbook::Store::new(root)
+        };
         #[cfg(feature = "plugin-mealplan")]
         let mealplan_vault =
             vault::Vault::open(&vault_root).map_err(|e| eyre::eyre!("open mealplan vault: {e}"))?;
@@ -1609,6 +1772,10 @@ pub(crate) async fn build_org_state(
             resources,
             #[cfg(feature = "plugin-wiki")]
             wiki,
+            #[cfg(feature = "plugin-wiki")]
+            subscriptions,
+            #[cfg(feature = "plugin-wiki")]
+            edits,
             projects,
             goals,
             milestones,
@@ -3382,6 +3549,23 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
                 wiki_proto::service::pages::serve(wiki.clone()),
             )
             .with(
+                wiki_proto::service::subscriptions::subscriptions_rpc_service_descriptor(),
+                wiki_proto::service::subscriptions::serve(org.subscriptions.clone()),
+            )
+            .with(
+                wiki_proto::service::registry::registry_rpc_service_descriptor(),
+                wiki_proto::service::registry::serve(wiki.clone()),
+            )
+            // t[impl wiki.source.same-surface] — one mount serves
+            // every wiki the org holds, repo-sourced or not: pages,
+            // search, graph, subscriptions and the Edit lane all take a
+            // slug, and nothing outside the landing path asks whether a
+            // repository stands behind it.
+            .with(
+                wiki_proto::service::edits::edits_rpc_service_descriptor(),
+                wiki_proto::service::edits::serve(org.edits.clone()),
+            )
+            .with(
                 wiki_proto::service::ingest::ingest_rpc_service_descriptor(),
                 wiki_proto::service::ingest::serve(wiki.clone()),
             )
@@ -4049,4 +4233,99 @@ mod range_tests {
         assert_eq!(parse_byte_range("garbage", 1000), None);
         assert_eq!(parse_byte_range("bytes=5000-6000", 1000), None); // start past end
     }
+}
+
+/// The domain this deployment publishes its own Resources under.
+///
+/// A reference carries the publishing org's federation domain
+/// (ADR 0002), and the first-party Resources — scripture today — are
+/// published by us. The constant exists so the domain in a reference
+/// and the domain in a subscription come from one place: a mismatch
+/// between them is a reference that resolves for nobody.
+pub const FIRST_PARTY_DOMAIN: &str = "fasttrackstudio.app";
+
+/// Domain → org slug, for resolving a reference's publishing domain to
+/// an org on this data root (`wiki.ref.format`: the domain is a name,
+/// not an address).
+///
+/// Three sources, later ones winning: every org answers to its own
+/// slug (`fasttrackstudios/music-theory::Ionian` resolves on the box
+/// that hosts it, with nothing configured); the example's orgs answer
+/// to `<name>.test`, which is what its seeded references carry; and
+/// `TASK_WIKI_DOMAINS` — `domain=slug,domain=slug` — names the real
+/// federation domains a deployment publishes under
+/// (`fasttrackstudio.app=fasttrackstudios`).
+#[cfg(feature = "plugin-wiki")]
+#[must_use]
+pub fn wiki_domains(
+    orgs_dir: &std::path::Path,
+    configured: Option<String>,
+) -> std::collections::HashMap<String, String> {
+    let mut domains = std::collections::HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(orgs_dir) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if let Some(slug) = entry.file_name().to_str() {
+                domains.insert(slug.to_owned(), slug.to_owned());
+            }
+        }
+    }
+    for (slug, _) in example_org::ORGS {
+        domains.insert(
+            format!("{}.test", slug.split('-').next().unwrap_or(slug)),
+            (*slug).to_owned(),
+        );
+    }
+    for pair in configured.as_deref().unwrap_or_default().split(',') {
+        if let Some((domain, slug)) = pair.split_once('=') {
+            let (domain, slug) = (domain.trim(), slug.trim());
+            if !domain.is_empty() && !slug.is_empty() {
+                domains.insert(domain.to_owned(), slug.to_owned());
+            }
+        }
+    }
+    domains
+}
+
+#[cfg(all(test, feature = "plugin-wiki"))]
+mod wiki_domain_tests {
+    #[test]
+    fn slugs_examples_and_configured_domains_all_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("fasttrackstudios")).unwrap();
+        std::fs::create_dir_all(dir.path().join("codywright")).unwrap();
+        let d = super::wiki_domains(
+            dir.path(),
+            Some(" fasttrackstudio.app=fasttrackstudios, codywright.fasttrackstudio.app = codywright ,bad".into()),
+        );
+        assert_eq!(d["fasttrackstudios"], "fasttrackstudios");
+        assert_eq!(d["fasttrackstudio.app"], "fasttrackstudios");
+        assert_eq!(d["codywright.fasttrackstudio.app"], "codywright");
+        assert_eq!(d["acme.test"], "acme-audio");
+        assert!(!d.contains_key("bad"));
+    }
+}
+
+/// The deployment's core set — subscribed by default in every vault
+/// and every wiki (`wiki.core.default`).
+///
+/// Scripture is the founding member, and the reason the rule exists:
+/// a note written in a brand-new vault should be able to reference a
+/// verse in its first line, without anyone having gone looking for a
+/// setting.
+///
+/// Core membership is a property of the *source*, so this is a list of
+/// what everyone gets rather than a copy handed to each org. The
+/// corpus behind it is still installed per org today; sharing one copy
+/// is what the rest of the subscription work is for.
+#[cfg(feature = "plugin-wiki")]
+#[must_use]
+pub fn core_subscriptions() -> Vec<wiki_proto::Subscription> {
+    vec![wiki_live::subscriptions::core_resource(
+        FIRST_PARTY_DOMAIN,
+        "bible",
+        "Bible",
+    )]
 }

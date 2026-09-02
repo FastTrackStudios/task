@@ -63,6 +63,7 @@
 //! or compose through [`Service`] into an `architect::Services`
 //! bundle.
 
+pub mod config;
 pub mod error;
 pub mod event;
 pub mod federation;
@@ -75,14 +76,21 @@ pub mod multimodal;
 pub mod pages;
 pub mod paths;
 pub mod raw;
+pub mod reference;
 pub mod research;
+pub mod resolve;
 pub mod review;
 pub mod schema;
 pub mod search;
 pub mod service;
+pub mod subscription;
 
+pub use config::{NewWiki, ProposerGate, RepoSource, Visibility, WikiConfig};
 pub use error::WikiError;
 pub use event::{WikiChange, WikiEvent};
+pub use reference::Reference;
+pub use resolve::{Resolved, resolve};
+pub use subscription::{SourceKind, Subscriber, Subscription, Unresolved};
 
 // Per-capability trait re-exports. There is **no**
 // umbrella `WikiService` — callers express what they need
@@ -95,7 +103,10 @@ pub use event::{WikiChange, WikiEvent};
 // Each trait is `#[architect::rpc]`-decorated and emits
 // its own client + dispatcher + descriptor under the
 // `vox` feature.
+pub use service::edits::{EditRequest, EditStatus, Editors, NewEditRequest, PageChange, PageDiff};
+pub use service::registry::{WikiDescription, WikiSummary};
+pub use service::subscriptions::{HeldSubscription, RefreshReport};
 pub use service::{
-    Catalog, Events, Federation, Graph, Ingest, Lint, Multimodal, Pages, RawLayer, Research,
-    Review, Schema, Search, Watcher,
+    Catalog, Edits, Events, Federation, Graph, Ingest, Lint, Multimodal, Pages, RawLayer, Registry,
+    Research, Review, Schema, Search, Subscriptions, Watcher,
 };

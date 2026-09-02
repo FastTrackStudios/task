@@ -30,7 +30,9 @@ pub mod lexicon;
 pub mod morphgnt;
 pub mod original;
 pub mod oshb;
+pub mod pull;
 pub mod refs;
+pub mod sources;
 pub mod stepbible;
 pub mod store;
 pub mod topics;
@@ -46,6 +48,7 @@ pub use entities::{Entity, from_bible_data};
 pub use install::{InstallError, install_usfm_dir};
 pub use lexicon::{Lexicon, js_to_json, normalize_strongs};
 pub use original::{OrigMeta, OrigText, OrigVerse, OrigWord};
+pub use pull::{PullError, Pulled, pull, pull_from_archive};
 pub use refs::{VerseRefHit, extract_verse_refs};
 pub use scripture_proto::{
     Availability, Book, ChapterView, ComparisonRow, ComparisonView, InterlinearWord, LexiconEntry,
@@ -53,6 +56,7 @@ pub use scripture_proto::{
     TopicTag, Translation, TranslationInfo, VerseBacklink, VerseBacklinks, VerseId, VerseLine,
     VerseRange, WeightedRef, WordStudyReport, WordToken,
 };
+pub use sources::{Source, SourceError, installable, source_for};
 pub use store::Store;
 pub use topics::{TopicVerse, Topics};
 pub use usfm::{UsfmError, Verse, Word, parse_book};
