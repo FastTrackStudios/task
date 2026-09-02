@@ -18,21 +18,24 @@ use crate::pages::wiki_home::{DirNode, build_tree};
 use crate::routes::Route;
 
 #[component]
-pub fn WikiSidebar(wiki: String, selected: String) -> Element {
-    let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
-    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
+pub fn WikiSidebar(org: String, wiki: String, selected: String) -> Element {
     let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
-    let active = use_memo(move || crate::orgs::active_slug(&selection.read(), &org_list.read()));
+    // The org comes from the route, not the switcher: under "All" the
+    // list spans every org, and a wiki opened from it must read from
+    // the org that holds it.
+    let org_sig = use_signal(|| org.clone());
+    let active = use_memo(move || org_sig());
 
     let wiki_id = wiki.clone();
-    let mut pages = use_resource(use_reactive!(|(wiki_id,)| async move {
+    let org_for_pages = org.clone();
+    let mut pages = use_resource(use_reactive!(|(wiki_id, org_for_pages)| async move {
         let _session = account.read().as_ref().map(|a| a.user_id);
-        let slug = active();
-        crate::feeds::fetch_wiki_pages_of(&slug, &wiki_id).await
+        crate::feeds::fetch_wiki_pages_of(&org_for_pages, &wiki_id).await
     }));
     let title_wiki = wiki.clone();
-    let title = use_resource(use_reactive!(|(title_wiki,)| async move {
-        let slug = active();
+    let title_org = org.clone();
+    let title = use_resource(use_reactive!(|(title_wiki, title_org)| async move {
+        let slug = title_org;
         crate::feeds::fetch_wikis(&slug)
             .await
             .ok()
@@ -91,7 +94,7 @@ pub fn WikiSidebar(wiki: String, selected: String) -> Element {
                     "← Wikis"
                 }
                 Link {
-                    to: Route::WikiHomeRoute { wiki: wiki.clone() },
+                    to: Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
                     class: "flex items-center gap-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground",
                     span { class: "flex h-3.5 w-3.5 items-center justify-center", BookOpen { size: 13 } }
                     span { class: "truncate", "{heading}" }
@@ -106,7 +109,7 @@ pub fn WikiSidebar(wiki: String, selected: String) -> Element {
                         let tree = build_tree(list);
                         rsx! {
                             nav { class: "flex flex-col gap-px px-1.5",
-                                {dir_children(&tree, String::new(), 0, expanded, &wiki, &selected)}
+                                {dir_children(&tree, String::new(), 0, expanded, &org, &wiki, &selected)}
                             }
                         }
                     },
@@ -136,15 +139,16 @@ fn dir_children(
     prefix: String,
     depth: usize,
     expanded: Signal<HashSet<String>>,
+    org: &str,
     wiki: &str,
     selected: &str,
 ) -> Element {
     rsx! {
         for page in &node.pages {
-            {page_row(page, depth, wiki, selected)}
+            {page_row(page, depth, org, wiki, selected)}
         }
         for (seg, child) in &node.dirs {
-            {dir_node(seg, child, prefix.clone(), depth, expanded, wiki, selected)}
+            {dir_node(seg, child, prefix.clone(), depth, expanded, org, wiki, selected)}
         }
     }
 }
@@ -157,6 +161,7 @@ fn dir_node(
     prefix: String,
     depth: usize,
     mut expanded: Signal<HashSet<String>>,
+    org: &str,
     wiki: &str,
     selected: &str,
 ) -> Element {
@@ -189,7 +194,7 @@ fn dir_node(
                 span { class: "truncate font-medium", "{name}" }
             }
             if open {
-                {dir_children(node, key.clone(), depth + 1, expanded, wiki, selected)}
+                {dir_children(node, key.clone(), depth + 1, expanded, org, wiki, selected)}
             }
         }
     }
@@ -198,6 +203,7 @@ fn dir_node(
 fn page_row(
     page: &wiki_proto::pages::PageInfo,
     depth: usize,
+    org: &str,
     wiki: &str,
     selected: &str,
 ) -> Element {
@@ -211,6 +217,7 @@ fn page_row(
     };
     let path = page.path.clone();
     let wiki = wiki.to_owned();
+    let org = org.to_owned();
     let title = if page.title.is_empty() {
         page.path.clone()
     } else {
@@ -224,7 +231,7 @@ fn page_row(
             class: "{row_cls}",
             style: "padding-left: {indent + 6}px",
             onclick: move |_| {
-                nav.push(Route::WikiDocRoute { wiki: wiki.clone(), path: path.clone() });
+                nav.push(Route::WikiDocRoute { org: org.clone(), wiki: wiki.clone(), path: path.clone() });
             },
             if ai {
                 span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary",

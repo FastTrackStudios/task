@@ -80,13 +80,13 @@ pub enum Route {
         GraphRoute {},
 
         // One wiki: what it is for, who edits it, and its pages.
-        #[route("/wiki/w/:wiki")]
-        WikiHomeRoute { wiki: String },
+        #[route("/wiki/w/:org/:wiki")]
+        WikiHomeRoute { org: String, wiki: String },
 
         // One page of one wiki (wiki-root-relative path as a query
         // value, like `VaultRoute`).
-        #[route("/wiki/w/:wiki/page?:path")]
-        WikiDocRoute { wiki: String, path: String },
+        #[route("/wiki/w/:org/:wiki/page?:path")]
+        WikiDocRoute { org: String, wiki: String, path: String },
 
         #[route("/connections")]
         ConnectionsRoute {},
@@ -376,26 +376,29 @@ fn GraphRoute() -> Element {
 }
 
 #[component]
-fn WikiHomeRoute(wiki: String) -> Element {
+fn WikiHomeRoute(org: String, wiki: String) -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_home::WikiHomeView { wiki } }
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_home::WikiHomeView { org, wiki } }
     }
 }
 
 #[component]
-fn WikiDocRoute(wiki: String, path: String) -> Element {
+fn WikiDocRoute(org: String, wiki: String, path: String) -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { wiki, path } }
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { org, wiki, path } }
     }
 }
 
-/// The pre-multi-wiki deep link: a page of the org's default tier.
+/// The pre-multi-wiki deep link: a page of the active org's default tier.
 #[component]
 fn WikiPageRoute(path: String) -> Element {
+    let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
+    let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
+    let org = crate::orgs::active_slug(&selection.read(), &org_list.read());
     rsx! {
         crate::plugin_gate::PluginGate {
             plugin: "wiki",
-            pages::wiki_page::WikiPageView { wiki: "knowledge".to_owned(), path }
+            pages::wiki_page::WikiPageView { org, wiki: "knowledge".to_owned(), path }
         }
     }
 }

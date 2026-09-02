@@ -68,6 +68,13 @@ pub fn GraphView() -> Element {
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
     let mut source = use_signal(|| GraphSource::Wiki);
+    // The org a wiki node's deep link belongs to: the one the graph reads.
+    let graph_org = use_memo(move || {
+        selected_slugs(&selection.read(), &org_list.read())
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    });
 
     // The org's wikis, and which one the graph is showing. Fetched
     // rather than assumed: hard-coding one id is what made an org with
@@ -257,6 +264,7 @@ pub fn GraphView() -> Element {
                                 if let Some(path) = path_of.get(&id) {
                                     let route = match src {
                                         GraphSource::Wiki => crate::routes::Route::WikiDocRoute {
+                                            org: graph_org(),
                                             wiki: {
                                                 let p = picked();
                                                 if p.is_empty() { FALLBACK_WIKI_ID.to_owned() } else { p }

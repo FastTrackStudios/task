@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
-use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 use crate::routes::Route;
 
 /// A directory in a wiki's tree: subdirectories and the pages at this
@@ -57,16 +56,14 @@ fn is_scaffold(path: &str) -> bool {
 }
 
 #[component]
-pub fn WikiHomeView(wiki: String) -> Element {
-    let selection = use_context::<Signal<OrgSelection>>();
-    let org_list = use_context::<Signal<Vec<OrgMeta>>>();
+pub fn WikiHomeView(org: String, wiki: String) -> Element {
     let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
 
-    let org = use_memo(move || {
-        selected_slugs(&selection.read(), &org_list.read())
-            .first()
-            .cloned()
-    });
+    // The org is the route's, not the switcher's: under "All" the wiki
+    // list spans every org, and this wiki belongs to exactly one.
+    let org_sig = use_signal(|| org.clone());
+    let org = use_memo(move || Some(org_sig()));
+    let route_org = org_sig();
 
     let wiki_id = wiki.clone();
     let description = use_resource(use_reactive!(|(wiki_id,)| async move {
@@ -132,6 +129,7 @@ pub fn WikiHomeView(wiki: String) -> Element {
     let mut page_error = use_signal(|| Option::<String>::None);
     let nav = use_navigator();
     let wiki_for_new = wiki.clone();
+    let org_for_nav = route_org.clone();
     let on_new_page = move |e: Event<FormData>| {
         e.prevent_default();
         let title = new_page.read().trim().to_owned();
@@ -143,6 +141,7 @@ pub fn WikiHomeView(wiki: String) -> Element {
             return;
         };
         let wiki_id = wiki_for_new.clone();
+        let org_for_nav = org_for_nav.clone();
         spawn(async move {
             let path = format!("{}.md", title.replace('/', "-"));
             let markdown = format!("---\ntitle: \"{title}\"\n---\n\n# {title}\n\n");
@@ -165,6 +164,7 @@ pub fn WikiHomeView(wiki: String) -> Element {
                     new_page.set(String::new());
                     page_error.set(None);
                     nav.push(Route::WikiDocRoute {
+                        org: org_for_nav.clone(),
                         wiki: wiki_id,
                         path,
                     });
@@ -260,6 +260,7 @@ pub fn WikiHomeView(wiki: String) -> Element {
     };
 
     let wiki_for_rows = wiki.clone();
+    let org_for_rows = route_org.clone();
     let body = match &*pages.read() {
         Some(Ok(list)) => {
             let (scaffold, content): (Vec<_>, Vec<_>) =
@@ -289,7 +290,7 @@ pub fn WikiHomeView(wiki: String) -> Element {
                         }
                     } else {
                         div { class: "rounded-xl border border-border/70 bg-card/30 p-2",
-                            {dir_rows(&tree, &wiki_for_rows, 0)}
+                            {dir_rows(&tree, &org_for_rows, &wiki_for_rows, 0)}
                         }
                     }
                     if !scaffold.is_empty() {
@@ -297,7 +298,7 @@ pub fn WikiHomeView(wiki: String) -> Element {
                             summary { class: "cursor-pointer text-xs text-muted-foreground", "About this wiki (schema, purpose, index, log)" }
                             div { class: "mt-2 rounded-xl border border-border/70 bg-card/30 p-2",
                                 for p in scaffold.iter() {
-                                    {page_row(p, &wiki_for_rows, 0)}
+                                    {page_row(p, &org_for_rows, &wiki_for_rows, 0)}
                                 }
                             }
                         }
@@ -325,7 +326,7 @@ pub fn WikiHomeView(wiki: String) -> Element {
     }
 }
 
-fn dir_rows(node: &DirNode, wiki: &str, depth: usize) -> Element {
+fn dir_rows(node: &DirNode, org: &str, wiki: &str, depth: usize) -> Element {
     rsx! {
         for (name, child) in node.dirs.iter() {
             div { key: "{name}",
@@ -334,16 +335,16 @@ fn dir_rows(node: &DirNode, wiki: &str, depth: usize) -> Element {
                     style: "padding-left: {depth * 12 + 6}px",
                     "{name}"
                 }
-                {dir_rows(child, wiki, depth + 1)}
+                {dir_rows(child, org, wiki, depth + 1)}
             }
         }
         for p in node.pages.iter() {
-            {page_row(p, wiki, depth)}
+            {page_row(p, org, wiki, depth)}
         }
     }
 }
 
-fn page_row(page: &wiki_proto::pages::PageInfo, wiki: &str, depth: usize) -> Element {
+fn page_row(page: &wiki_proto::pages::PageInfo, org: &str, wiki: &str, depth: usize) -> Element {
     let title = if page.title.is_empty() {
         page.path.clone()
     } else {
@@ -352,7 +353,7 @@ fn page_row(page: &wiki_proto::pages::PageInfo, wiki: &str, depth: usize) -> Ele
     rsx! {
         Link {
             key: "{page.path}",
-            to: Route::WikiDocRoute { wiki: wiki.to_owned(), path: page.path.clone() },
+            to: Route::WikiDocRoute { org: org.to_owned(), wiki: wiki.to_owned(), path: page.path.clone() },
             class: "flex w-full items-center justify-between gap-3 rounded-md px-1.5 py-1 text-sm text-foreground hover:bg-accent/40",
             style: "padding-left: {depth * 12 + 6}px",
             span { class: "truncate", "{title}" }

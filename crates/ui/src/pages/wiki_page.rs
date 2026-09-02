@@ -14,8 +14,6 @@ use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use wiki_proto::pages::WikiPageDoc;
 
-use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
-
 async fn pages_client(slug: &str) -> Result<wiki_proto::service::pages::PagesClient, String> {
     crate::vox_clients::establish_for::<wiki_proto::service::pages::PagesClient>(slug).await
 }
@@ -45,12 +43,6 @@ async fn save_page(
     .map_err(|e| format!("write_page: {e:?}"))
 }
 
-fn first_slug(selection: &Signal<OrgSelection>, orgs: &Signal<Vec<OrgMeta>>) -> Option<String> {
-    selected_slugs(&selection.read(), &orgs.read())
-        .first()
-        .cloned()
-}
-
 /// Frontmatter key/values + the body that follows. Only flat
 /// `key: value` lines are lifted; anything else stays raw.
 fn split_frontmatter(raw: &str) -> (Vec<(String, String)>, &str) {
@@ -77,16 +69,16 @@ fn fm_get<'a>(kv: &'a [(String, String)], key: &str) -> Option<&'a str> {
 }
 
 #[component]
-pub fn WikiPageView(wiki: String, path: String) -> Element {
-    let selection = use_context::<Signal<OrgSelection>>();
-    let org_list = use_context::<Signal<Vec<OrgMeta>>>();
+pub fn WikiPageView(org: String, wiki: String, path: String) -> Element {
+    // The org is the route's (a wiki belongs to one org; under "All" the
+    // list spans several), so every read and write here goes to it.
+    let org_sig = use_signal(|| org.clone());
 
     // Refetch on org switch or deep-link change.
     let fetch_path = path.clone();
     let fetch_wiki = wiki.clone();
     let mut page = use_resource(use_reactive!(|(fetch_wiki, fetch_path)| async move {
-        let slug = first_slug(&selection, &org_list)
-            .ok_or_else(|| "no organization selected".to_string())?;
+        let slug = org_sig();
         fetch_page(&slug, &fetch_wiki, &fetch_path).await
     }));
     let live_wiki = wiki.clone();
@@ -102,11 +94,8 @@ pub fn WikiPageView(wiki: String, path: String) -> Element {
     let live_path = path.clone();
     architect::use_stream(
         move |tx| {
-            let slug = first_slug(&selection, &org_list);
+            let slug = org_sig();
             async move {
-                let Some(slug) = slug else {
-                    return false;
-                };
                 let Ok(client) = crate::vox_clients::establish_for::<
                     wiki_proto::service::events::EventsStreamClient,
                 >(&slug)
@@ -145,10 +134,7 @@ pub fn WikiPageView(wiki: String, path: String) -> Element {
         let save_path = save_path.clone();
         let save_wiki = save_wiki.clone();
         spawn(async move {
-            let Some(slug) = first_slug(&selection, &org_list) else {
-                save_error.set("no organization selected".to_string());
-                return;
-            };
+            let slug = org_sig();
             saving.set(true);
             save_error.set(String::new());
             let res = save_page(
@@ -305,7 +291,7 @@ pub fn WikiPageView(wiki: String, path: String) -> Element {
     rsx! {
         div { class: "mx-auto flex h-full w-full max-w-3xl flex-col gap-4 overflow-y-auto p-4 sm:p-6 lg:p-8",
             Link {
-                to: crate::routes::Route::WikiHomeRoute { wiki: wiki.clone() },
+                to: crate::routes::Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
                 class: "text-xs text-muted-foreground hover:text-foreground",
                 "← {wiki}"
             }

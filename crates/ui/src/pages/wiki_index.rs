@@ -15,24 +15,50 @@ use dioxus::prelude::*;
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 use crate::routes::Route;
 
+/// One org's wikis, for the list — the org rides along so a card can
+/// name it and link into it.
+#[derive(Clone, PartialEq)]
+struct OrgWikis {
+    slug: String,
+    name: String,
+    wikis: Result<Vec<wiki_proto::WikiSummary>, String>,
+}
+
 #[component]
 pub fn WikiIndexView() -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
     let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
 
-    let org = use_memo(move || {
-        selected_slugs(&selection.read(), &org_list.read())
-            .first()
-            .cloned()
+    // Every org the switcher covers: one under a single org, all of
+    // mine under "All". The list is the union, grouped by org.
+    let orgs = use_memo(move || {
+        let list = org_list.read();
+        selected_slugs(&selection.read(), &list)
+            .into_iter()
+            .map(|slug| {
+                let name = list
+                    .iter()
+                    .find(|o| o.slug == slug)
+                    .map(|o| o.name.clone())
+                    .unwrap_or_else(|| slug.clone());
+                (slug, name)
+            })
+            .collect::<Vec<_>>()
     });
 
     let mut wikis = use_resource(move || async move {
         let _session = account.read().as_ref().map(|a| a.user_id);
-        let Some(slug) = org() else {
+        let targets = orgs();
+        if targets.is_empty() {
             return Err("no organization selected".to_owned());
-        };
-        crate::feeds::fetch_wikis(&slug).await
+        }
+        let mut out = Vec::with_capacity(targets.len());
+        for (slug, name) in targets {
+            let wikis = crate::feeds::fetch_wikis(&slug).await;
+            out.push(OrgWikis { slug, name, wikis });
+        }
+        Ok::<_, String>(out)
     });
 
     // The "New wiki" form: shown on demand, cleared on success.
@@ -40,6 +66,9 @@ pub fn WikiIndexView() -> Element {
     let mut new_title = use_signal(String::new);
     let mut new_purpose = use_signal(String::new);
     let mut new_visibility = use_signal(|| "private".to_owned());
+    // Which org gets the new wiki: the only one, or a pick under "All"
+    // (defaulting to the first — home).
+    let mut new_org = use_signal(String::new);
     let mut create_error = use_signal(|| Option::<String>::None);
     let mut creating = use_signal(|| false);
     let nav = use_navigator();
@@ -50,10 +79,16 @@ pub fn WikiIndexView() -> Element {
         if title.is_empty() || creating() {
             return;
         }
-        let Some(slug) = org() else {
+        let picked = new_org.read().clone();
+        let slug = if picked.is_empty() {
+            orgs().first().map(|(s, _)| s.clone()).unwrap_or_default()
+        } else {
+            picked
+        };
+        if slug.is_empty() {
             create_error.set(Some("no organization selected".to_owned()));
             return;
-        };
+        }
         // Private by default: promotion is what makes private writing
         // public, and it must be a choice (`wiki.promote.vault`).
         let new = wiki_proto::NewWiki {
@@ -72,7 +107,10 @@ pub fn WikiIndexView() -> Element {
                     composing.set(false);
                     create_error.set(None);
                     wikis.restart();
-                    nav.push(Route::WikiHomeRoute { wiki: summary.slug });
+                    nav.push(Route::WikiHomeRoute {
+                        org: slug.clone(),
+                        wiki: summary.slug,
+                    });
                 }
                 Err(err) => create_error.set(Some(err)),
             }
@@ -131,6 +169,16 @@ pub fn WikiIndexView() -> Element {
                         value: "{new_purpose}",
                         oninput: move |e| new_purpose.set(e.value()),
                     }
+                    if orgs().len() > 1 {
+                        select {
+                            class: "rounded-lg border border-border/70 bg-background px-2 py-1 text-sm",
+                            value: "{new_org}",
+                            onchange: move |e| new_org.set(e.value()),
+                            for (slug , name) in orgs() {
+                                option { key: "{slug}", value: "{slug}", "{name}" }
+                            }
+                        }
+                    }
                     select {
                         class: "rounded-lg border border-border/70 bg-background px-2 py-1 text-sm",
                         value: "{new_visibility}",
@@ -152,21 +200,52 @@ pub fn WikiIndexView() -> Element {
             }
 
             match &*wikis.read() {
-                Some(Ok(list)) if list.is_empty() => rsx! {
+                Some(Ok(groups)) if groups.iter().all(|g| matches!(&g.wikis, Ok(l) if l.is_empty())) => rsx! {
                     div { class: "rounded-xl border border-dashed border-border/70 px-6 py-12 text-center text-sm text-muted-foreground",
                         "No wikis yet. Create the first one above."
                     }
                 },
-                Some(Ok(list)) => rsx! {
-                    div { class: "grid gap-3 sm:grid-cols-2",
-                        for w in list.iter() {
-                            {wiki_card(w)}
+                Some(Ok(groups)) => rsx! {
+                    for g in groups.iter() {
+                        section { key: "{g.slug}", class: "flex flex-col gap-2",
+                            // Under "All" every group is named; under one
+                            // org the heading would only repeat the switcher.
+                            if groups.len() > 1 {
+                                div { class: "flex items-baseline gap-2 pt-1",
+                                    Heading { level: HeadingLevel::H2, class: "text-base tracking-tight", "{g.name}" }
+                                    span { class: "font-mono text-xs text-muted-foreground", "{g.slug}" }
+                                }
+                            }
+                            match &g.wikis {
+                                Ok(list) if list.is_empty() => rsx! {
+                                    div { class: "rounded-xl border border-dashed border-border/70 px-4 py-4 text-sm text-muted-foreground",
+                                        "No wikis in this org yet."
+                                    }
+                                },
+                                Ok(list) => rsx! {
+                                    div { class: "grid gap-3 sm:grid-cols-2",
+                                        for w in list.iter() {
+                                            {wiki_card(&g.slug, w)}
+                                        }
+                                    }
+                                },
+                                Err(e) => rsx! {
+                                    div { class: "rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm",
+                                        "Couldn't list this org's wikis: {e}"
+                                        button {
+                                            class: "ml-2 underline",
+                                            onclick: move |_| wikis.restart(),
+                                            "Retry"
+                                        }
+                                    }
+                                },
+                            }
                         }
                     }
                 },
                 Some(Err(e)) => rsx! {
                     div { class: "rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm",
-                        "Couldn't list this org's wikis: {e}"
+                        "Couldn't list wikis: {e}"
                         button {
                             class: "ml-2 underline",
                             onclick: move |_| wikis.restart(),
@@ -193,7 +272,7 @@ pub fn WikiIndexView() -> Element {
 }
 
 /// One wiki, as a card: title, purpose, visibility, size.
-fn wiki_card(w: &wiki_proto::WikiSummary) -> Element {
+fn wiki_card(org: &str, w: &wiki_proto::WikiSummary) -> Element {
     let title = if w.title.is_empty() {
         w.slug.clone()
     } else {
@@ -216,10 +295,11 @@ fn wiki_card(w: &wiki_proto::WikiSummary) -> Element {
         w.purpose.clone()
     };
     let slug = w.slug.clone();
+    let org = org.to_owned();
     rsx! {
         Link {
             key: "{w.slug}",
-            to: Route::WikiHomeRoute { wiki: slug },
+            to: Route::WikiHomeRoute { org, wiki: slug },
             class: "group flex flex-col gap-2 rounded-xl border border-border/70 bg-card/40 p-4 text-left transition hover:border-border hover:bg-card/70",
             div { class: "flex items-start justify-between gap-3",
                 span { class: "text-base font-semibold text-foreground group-hover:underline", "{title}" }
