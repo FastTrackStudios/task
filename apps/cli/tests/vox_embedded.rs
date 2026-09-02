@@ -70,11 +70,19 @@ fn scratch_org() -> tempfile::TempDir {
 fn auth_signup_and_users_over_embedded_vox() {
     let tmp = scratch_org();
 
-    // Empty org: the users listing answers over vox (tokenless
-    // fallback enumerates the org store — no auth.sqlite opened by
-    // the CLI, and no "local-only command" refusal).
+    // Empty org, no session: the listing is REFUSED, not answered.
+    // `AuthService::list_org_members` requires a session that validates
+    // against this org — the tokenless enumerate-everything fallback
+    // used to hand every user's name and email to anonymous callers
+    // (found open on production 2026-08-08). It is still a vox call,
+    // not a "local-only command" refusal: the error is the service's.
     let out = task(tmp.path(), &["--org", "t", "auth", "users"]);
-    assert!(ok(&out).contains("(no users)"));
+    assert!(!out.status.success(), "a tokenless listing must be refused");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("permission denied"),
+        "expected the service's refusal, got:\n{stderr}"
+    );
 
     // Sign up over the embedded org AuthService, then list again.
     let out = task(
