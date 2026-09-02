@@ -22,6 +22,12 @@ tracing = { workspace = true }
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-watch-connectivity = "0.3"
+# Central sign-in through the system browser sheet (`src/ios_auth.rs`):
+# ASWebAuthenticationSession, its presentation anchor (a UIWindow), and
+# the block its completion handler is.
+objc2-authentication-services = "0.3"
+objc2-ui-kit = "0.3"
+block2 = "0.6"
 
 [features]
 default = ["mobile"]

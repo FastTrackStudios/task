@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use ui::App;
 
+mod ios_auth;
 mod watch_sync;
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -25,6 +26,10 @@ fn main() {
     // Apple Watch config bridge: activate the WCSession host and
     // register the sink `ui::watch_sync` publishes into (no-op off iOS).
     watch_sync::init();
+    // Central sign-in through the system browser sheet, so one sign-in
+    // at the issuer covers every FastTrackStudio app on the device
+    // (no-op off iOS — the login screen then offers the form only).
+    ios_auth::init();
 
     // Before launch — the nav is built on first render, and an app
     // registered after that has no tab until something else redraws.
