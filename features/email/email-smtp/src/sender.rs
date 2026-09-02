@@ -39,6 +39,14 @@ pub struct SmtpSender {
 impl SmtpSender {
     #[must_use]
     pub fn new(config: SmtpConfig) -> Self {
+        // rustls needs a process-level CryptoProvider, and a workspace
+        // build has both `ring` and `aws-lc-rs` enabled, so it cannot
+        // choose one itself. Install ring once; `Err` means somebody
+        // already did, which is fine.
+        static CRYPTO: std::sync::Once = std::sync::Once::new();
+        CRYPTO.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
         Self { config }
     }
 

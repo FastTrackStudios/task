@@ -6407,6 +6407,7 @@ dependencies = [
  "email-smtp",
  "mail-builder",
  "mail-send",
+ "rustls",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
