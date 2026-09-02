@@ -589,6 +589,23 @@ async fn run_credential_sign_in(
                 .await
                 .map_err(|e| format!("create account: {e}"))?
         } else {
+            // The issuer's HTTP door first, when there is an issuer: it
+            // does not depend on the two binaries agreeing on a vox wire
+            // version, which the lane does (see
+            // `central_login::password_sign_in`). Anything but a clean
+            // refusal falls through to the lane and the org's own store.
+            if let Some(issuer) = task_ui_core::central_auth::issuer() {
+                match crate::central_login::password_sign_in(&issuer, email, password).await {
+                    Ok(session) => {
+                        let account = issuer_account(session, email)?;
+                        save_cached_token(email, &account.token);
+                        return Ok::<ActiveAccount, String>(account);
+                    }
+                    Err(e) => {
+                        tracing::warn!(%e, "issuer sign-in over HTTP refused — trying the lane")
+                    }
+                }
+            }
             client
                 .sign_in_email_password(SignInEmailPassword {
                     email: email.to_owned(),
@@ -962,6 +979,30 @@ pub fn SignInGate(children: Element) -> Element {
     }
 }
 
+/// An account from the issuer's password sign-in answer.
+///
+/// The session token it carries is what the server's `central_auth`
+/// validates at `/auth/session`, so downstream this is indistinguishable
+/// from a token the redirect flow redeemed.
+fn issuer_account(
+    session: crate::central_login::IssuerSession,
+    email: &str,
+) -> Result<ActiveAccount, String> {
+    let user_id = session.user_id.parse::<Uuid>().map_err(|_| {
+        format!(
+            "the issuer returned a non-uuid user id: {}",
+            session.user_id
+        )
+    })?;
+    let email = session.email.unwrap_or_else(|| email.to_owned());
+    Ok(ActiveAccount {
+        user_id,
+        name: session.name.unwrap_or_else(|| email.clone()),
+        email,
+        token: session.token,
+    })
+}
+
 /// Turn what the issuer says about a token into an account.
 ///
 /// Shared by the redirect sign-in and by boot restore, so a session
@@ -1026,7 +1067,24 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
     let Some(dev) = dev_accounts().iter().find(|a| a.email == email) else {
         return Err(format!("sign in as {email} to continue"));
     };
-    let bundle = client
+    // The same doors the login form uses, in the same order: the
+    // issuer's HTTP sign-in when this server advertises an issuer, then
+    // the lane. The cast's password is whatever those accept — against
+    // a deployment on central auth it is the issuer's, and posting it
+    // to the org store (which holds an older or no password for the
+    // address) was "invalid credentials" on every boot of `just live`.
+    if let Some(issuer) = task_ui_core::central_auth::issuer() {
+        match crate::central_login::password_sign_in(&issuer, email, dev.password).await {
+            Ok(session) => {
+                let account = issuer_account(session, email)?;
+                save_cached_token(email, &account.token);
+                return Ok(account);
+            }
+            Err(e) => tracing::warn!(%e, "issuer sign-in over HTTP refused — trying the lane"),
+        }
+    }
+    let bundle = auth_client(slug)
+        .await?
         .sign_in_email_password(SignInEmailPassword {
             email: email.to_owned(),
             password: dev.password.to_owned(),

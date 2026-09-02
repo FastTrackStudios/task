@@ -943,3 +943,18 @@ pub async fn fetch_wikis(slug: &str) -> Result<Vec<wiki_proto::WikiSummary>, Str
         .await
         .map_err(|e| format!("list_wikis: {e:?}"))
 }
+
+/// Add a wiki to the org's set (`wiki.many.set`). The caller becomes its
+/// first Editor (`wiki.edit.editor`); the slug derives from the title.
+pub async fn create_wiki(
+    slug: &str,
+    new: wiki_proto::NewWiki,
+) -> Result<wiki_proto::WikiSummary, String> {
+    let client =
+        crate::vox_clients::establish_for::<wiki_proto::service::registry::RegistryClient>(slug)
+            .await?;
+    client
+        .create_wiki(new)
+        .await
+        .map_err(|e| format!("create_wiki: {e:?}"))
+}

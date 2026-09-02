@@ -39,6 +39,28 @@ task *args:
 web: css
     cd apps/web && dx serve --web --addr 0.0.0.0 --hot-patch false
 
+# The local web app against a DEPLOYED server, signed in as you.
+#
+# Reads TASK_LIVE_{SERVER,EMAIL,PASSWORD,NAME} from `.env` (gitignored;
+# `.env.example` documents them). The wasm build bakes the server's vox
+# URL and the account as the debug demo cast, so :8766 boots signed in
+# through the server's issuer and every edit hot-reloads against the
+# real data. Debug builds only — `TASK_DEMO_CAST` is `option_env!`
+# behind `debug_assertions`.
+live: css
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -f .env ] && set -a && . ./.env && set +a
+    : "${TASK_LIVE_SERVER:?set TASK_LIVE_SERVER in .env (https://task.example.com)}"
+    : "${TASK_LIVE_EMAIL:?set TASK_LIVE_EMAIL in .env}"
+    : "${TASK_LIVE_PASSWORD:?set TASK_LIVE_PASSWORD in .env}"
+    vox="${TASK_LIVE_SERVER/https:\/\//wss://}"; vox="${vox/http:\/\//ws://}"
+    echo ">> web on http://127.0.0.1:8766 → ${vox%/}/vox as ${TASK_LIVE_EMAIL}"
+    cd apps/web && exec env \
+        TASK_VOX_URL_WEB="${vox%/}/vox" \
+        TASK_DEMO_CAST="${TASK_LIVE_EMAIL}:${TASK_LIVE_PASSWORD}:${TASK_LIVE_NAME:-$TASK_LIVE_EMAIL}:" \
+        dx serve --web --addr 127.0.0.1 --port 8766 --hot-patch false
+
 # Regenerate every app's assets/tailwind.css from the ONE source input,
 # `apps/tailwind.css`.
 #

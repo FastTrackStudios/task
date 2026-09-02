@@ -1104,6 +1104,13 @@ where
 /// `wss://host:port/anything` → `wss://host:port`. Everything past the
 /// authority is per-org routing, not identity scope — two orgs on one
 /// server share a session, two servers never do.
+/// `host[:port]` of a URL, scheme dropped — `https://a/x` and
+/// `wss://a/y` are the same server.
+fn authority(u: &str) -> &str {
+    let o = origin(u);
+    o.split_once("://").map_or(o, |(_, rest)| rest)
+}
+
 fn origin(u: &str) -> &str {
     let (scheme, rest) = u.split_once("://").unwrap_or(("", u));
     let prefix = if scheme.is_empty() {
@@ -1132,8 +1139,11 @@ fn origin(u: &str) -> &str {
 /// the refusal reads identically to being signed out.
 fn session_bearer_for(url: &str) -> Option<String> {
     let session = crate::session_store::load().ok().flatten()?;
+    // Authority only: a session saved as `https://host` must sign a dial
+    // to `wss://host/org/x/vox` — same server, different scheme — or the
+    // call goes out anonymous and every command reads "not a member".
     let same_server = |e: &crate::session_store::ServerEntry| {
-        origin(&e.url) == origin(url) && !e.token.is_empty()
+        authority(&e.url) == authority(url) && !e.token.is_empty()
     };
     if let Some(slug) = url
         .rsplit_once("/org/")
