@@ -202,19 +202,19 @@ are lines — allowed requests are spans, query those in Tempo.
 
 ```
 # the one-line warnings around central auth
-{service_name="task-server"} |= "central auth"
+{service_name="task"} |= "central auth"
 
 # denials, by structured field
-{service_name="task-server"} | json | perm_decision="deny"
+{service_name="task"} | json | perm_decision="deny"
 
 # panics and errors, all containers in the namespace
 {namespace="task"} |~ "panic|ERROR"
 
 # a specific trace's log lines (trace id from telemetry_query_traces)
-{service_name="task-server"} |= "0af7651916cd43dd8448eb211c80319c"
+{service_name="task"} |= "0af7651916cd43dd8448eb211c80319c"
 
 # boot lines — kubectl logs never reaches them past the iroh noise
-{namespace="task", container="task-server"} |= "listening"
+{namespace="task", container="server"} |= "listening"
 ```
 
 ### Fallback — the in-cluster URLs directly

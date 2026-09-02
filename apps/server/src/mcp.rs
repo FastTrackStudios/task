@@ -1339,14 +1339,14 @@ fn telemetry_tools_payload() -> Vec<Value> {
                             colour stripped. Reach for this for boot lines, panics, and the \
                             one-line denial/refusal warnings — allowed requests write NO log \
                             line, only a span, so use telemetry_query_traces for those. \
-                            Examples: `{service_name=\"task-server\"} |= \"central auth\"`; \
-                            `{namespace=\"task\", container=\"task-server\"} |~ \"panic|ERROR\"`; \
-                            `{service_name=\"task-server\"} | json | perm_decision=\"deny\"`. \
-                            Labels available: service_name, namespace, app, container. \
+                            Examples: `{service_name=\"task\"} |= \"central auth\"`; \
+                            `{namespace=\"task\", container=\"server\"} |~ \"panic|ERROR\"`; \
+                            `{service_name=\"task\"} | json | perm_decision=\"deny\"`. \
+                            Labels available: service_name (`task`), namespace (`task`), app, container (`server`). \
                             Operator-only.",
             "inputSchema": obj(
                 json!({
-                    "logql": s_("LogQL query, e.g. `{service_name=\"task-server\"} |= \"warn\"`."),
+                    "logql": s_("LogQL query, e.g. `{service_name=\"task\"} |= \"warn\"`."),
                     "since": s_("Lookback window ending now: `15m`, `2h`, `1d` (max 30d). Default `1h`."),
                     "limit": i_("Max log lines to return (1-200, default 20)."),
                 }),
