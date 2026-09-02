@@ -21,11 +21,11 @@
 //! is the part that genuinely is Task's: where to park a verifier, how
 //! to leave the page, and how to make an HTTP request.
 
-use auth_client::oidc::OidcError;
-// Only the browser paths build URLs and bodies; native reaches the
-// issuer through the credential form instead.
+use auth_client::oidc::{self, OidcError};
+// The browser paths build URLs and bodies here; native does the same in
+// `native`, through the operating system's authentication session.
 #[cfg(target_arch = "wasm32")]
-use auth_client::oidc::{self, Pkce};
+use auth_client::oidc::Pkce;
 
 pub use auth_client::oidc::UserInfo;
 
@@ -200,10 +200,270 @@ pub async fn user_info(issuer: &str, token: &str) -> Result<UserInfo, LoginError
 
 /// Native builds never run the redirect flow, but `auth.rs` calls this
 /// from code compiled for every target.
+/// Native: the same `/oauth2/userinfo` GET over reqwest. Needed because a
+/// token redeemed by the native redirect ([`native::sign_in`]) goes
+/// through the same adoption path as the browser's.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::unused_async, clippy::missing_errors_doc)]
-pub async fn user_info(_issuer: &str, _token: &str) -> Result<UserInfo, LoginError> {
-    Err(LoginError::NoBrowser)
+#[allow(clippy::missing_errors_doc)]
+pub async fn user_info(issuer: &str, token: &str) -> Result<UserInfo, LoginError> {
+    let response = reqwest::Client::new()
+        .get(format!("{}/oauth2/userinfo", issuer.trim_end_matches('/')))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| LoginError::Exchange(e.to_string()))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| LoginError::Exchange(e.to_string()))?;
+    if !status.is_success() {
+        return Err(LoginError::Exchange(format!("{status}: {text}")));
+    }
+    Ok(oidc::user_from(&text)?)
+}
+
+/// The redirect on a device that is not a browser.
+///
+/// A native app has no page to navigate away from and no `/auth/callback`
+/// route the issuer could send it to. What it has is the operating
+/// system's authentication session — `ASWebAuthenticationSession` on
+/// iOS — which opens the issuer in a system browser sheet and hands the
+/// callback URL straight back to the app on a custom scheme. That sheet
+/// shares Safari's cookies, so signing in to one FastTrackStudio app
+/// signs in to all of them on the device: the point of the redirect.
+///
+/// The platform half is a [`native::BrowserSession`] the app installs at
+/// boot; everything that is not platform — PKCE, the callback's shape,
+/// the token exchange — lives here so five apps share one copy.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native {
+    use std::sync::{Arc, OnceLock};
+
+    use auth_client::oidc::{self, Pkce};
+
+    use super::{CLIENT_ID, LoginError, Redeemed};
+
+    /// What the operating system provides: open a URL for sign-in and
+    /// deliver the callback URL it was redirected to.
+    pub trait BrowserSession: Send + Sync + 'static {
+        /// The URL scheme the callback arrives on — the app's bundle id
+        /// on iOS (`app.fasttrackstudio.task`).
+        fn callback_scheme(&self) -> String;
+
+        /// Open `url` in a system authentication session. `done` is
+        /// called exactly once with the full callback URL, or with why
+        /// there is none (the person cancelled, the system refused).
+        fn authenticate(
+            &self,
+            url: String,
+            callback_scheme: String,
+            done: Box<dyn FnOnce(Result<String, String>) + Send + 'static>,
+        );
+    }
+
+    static BROWSER: OnceLock<Arc<dyn BrowserSession>> = OnceLock::new();
+
+    /// Install the platform's session. Once per process; a second call
+    /// is ignored.
+    pub fn install(browser: Arc<dyn BrowserSession>) {
+        let _ = BROWSER.set(browser);
+    }
+
+    /// Whether this build can sign in through the system browser.
+    #[must_use]
+    pub fn available() -> bool {
+        BROWSER.get().is_some()
+    }
+
+    /// The redirect the issuer must have registered for this app:
+    /// `<scheme>://auth/callback`.
+    #[must_use]
+    pub fn redirect_uri() -> Option<String> {
+        BROWSER
+            .get()
+            .map(|b| format!("{}://auth/callback", b.callback_scheme()))
+    }
+
+    /// `code` and `state` from a callback URL, in that order.
+    ///
+    /// Written by hand rather than through a URL crate because the shape
+    /// is fixed by us on both ends and the scheme is not one a general
+    /// parser has opinions about. Percent-decoding is applied because the
+    /// issuer encodes the values it puts in the query.
+    pub fn parse_callback(url: &str) -> Result<(String, String), LoginError> {
+        let query = url.split_once('?').map(|(_, q)| q).unwrap_or_default();
+        let query = query.split('#').next().unwrap_or_default();
+        let mut code = None;
+        let mut state = None;
+        let mut error = None;
+        for pair in query.split('&') {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            let v = percent_decode(v);
+            match k {
+                "code" => code = Some(v),
+                "state" => state = Some(v),
+                "error" => error = Some(v),
+                _ => {}
+            }
+        }
+        if let Some(error) = error {
+            return Err(LoginError::Exchange(error));
+        }
+        match (code, state) {
+            (Some(c), Some(s)) if !c.is_empty() => Ok((c, s)),
+            _ => Err(LoginError::NoAttemptInProgress),
+        }
+    }
+
+    fn percent_decode(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'%' if i + 2 < bytes.len() => {
+                    let hex = &s[i + 1..i + 3];
+                    match u8::from_str_radix(hex, 16) {
+                        Ok(b) => {
+                            out.push(b);
+                            i += 3;
+                        }
+                        Err(_) => {
+                            out.push(b'%');
+                            i += 1;
+                        }
+                    }
+                }
+                b'+' => {
+                    out.push(b' ');
+                    i += 1;
+                }
+                b => {
+                    out.push(b);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    fn entropy<const N: usize>() -> [u8; N] {
+        // Two v4 UUIDs are 32 bytes of OS randomness, which is what the
+        // verifier wants; the state takes the first 16.
+        let mut buf = [0u8; N];
+        let mut filled = 0;
+        while filled < N {
+            let chunk = *uuid::Uuid::new_v4().as_bytes();
+            let take = (N - filled).min(chunk.len());
+            buf[filled..filled + take].copy_from_slice(&chunk[..take]);
+            filled += take;
+        }
+        buf
+    }
+
+    /// Sign in through the installed [`BrowserSession`]: send the person
+    /// to the issuer, take the callback, redeem the code. Returns the
+    /// token and the issuer it came from, ready for
+    /// `AuthCtx::adopt_central_token`.
+    ///
+    /// # Errors
+    ///
+    /// [`LoginError::NoBrowser`] when no session is installed or the
+    /// server advertises no issuer; [`LoginError::Exchange`] with the
+    /// system's or the issuer's own words otherwise.
+    pub async fn sign_in() -> Result<Redeemed, LoginError> {
+        let browser = BROWSER.get().cloned().ok_or(LoginError::NoBrowser)?;
+        let issuer = task_ui_core::central_auth::issuer().ok_or(LoginError::NoIssuer)?;
+        let redirect_uri = redirect_uri().ok_or(LoginError::NoBrowser)?;
+        let pkce = Pkce::from_entropy(entropy::<32>(), entropy::<16>());
+        let url = oidc::authorize_url(
+            &issuer,
+            CLIENT_ID,
+            &redirect_uri,
+            &pkce,
+            oidc::DEFAULT_SCOPE,
+        );
+
+        let (tx, rx) = futures_channel::oneshot::channel::<Result<String, String>>();
+        let tx = std::sync::Mutex::new(Some(tx));
+        browser.authenticate(
+            url,
+            browser.callback_scheme(),
+            Box::new(move |outcome| {
+                if let Some(tx) = tx.lock().ok().and_then(|mut t| t.take()) {
+                    let _ = tx.send(outcome);
+                }
+            }),
+        );
+        let callback = rx
+            .await
+            .map_err(|_| LoginError::Exchange("the sign-in sheet went away".to_owned()))?
+            .map_err(LoginError::Exchange)?;
+
+        let (code, state) = parse_callback(&callback)?;
+        pkce.check_state(&state)?;
+
+        let body = oidc::token_request_body(CLIENT_ID, &redirect_uri, &code, &pkce);
+        let response = reqwest::Client::new()
+            .post(format!("{}/oauth2/token", issuer.trim_end_matches('/')))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| LoginError::Exchange(e.to_string()))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| LoginError::Exchange(e.to_string()))?;
+        if !status.is_success() {
+            return Err(LoginError::Exchange(format!("{status}: {text}")));
+        }
+        Ok(Redeemed {
+            token: oidc::access_token_from(&text)?,
+            issuer,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_callback_yields_its_code_and_state() {
+            let (code, state) = parse_callback(
+                "app.fasttrackstudio.task://auth/callback?code=abc%2F1&state=xyz&extra=1",
+            )
+            .unwrap();
+            assert_eq!(code, "abc/1");
+            assert_eq!(state, "xyz");
+        }
+
+        #[test]
+        fn a_refusal_is_the_issuers_word() {
+            let err =
+                parse_callback("app.fasttrackstudio.task://auth/callback?error=access_denied")
+                    .unwrap_err();
+            assert!(
+                matches!(err, LoginError::Exchange(ref m) if m == "access_denied"),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn a_callback_without_a_code_is_not_a_sign_in() {
+            assert!(matches!(
+                parse_callback("app.fasttrackstudio.task://auth/callback"),
+                Err(LoginError::NoAttemptInProgress)
+            ));
+        }
+
+        #[test]
+        fn nothing_installed_means_no_browser() {
+            assert!(!available() || redirect_uri().is_some());
+        }
+    }
 }
 
 // ── HTTP, the way this crate already does it on wasm ─────────────────

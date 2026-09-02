@@ -1150,10 +1150,24 @@ pub fn LoginForm() -> Element {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        error.set(Some(
-            "Signing in through the browser isn't available here — use your email and password."
-                .to_owned(),
-        ));
+        {
+            // iOS installs a system authentication session at boot
+            // (`ios_auth`); desktop has none yet and says so.
+            if crate::central_login::native::available() {
+                spawn(async move {
+                    match crate::central_login::native::sign_in().await {
+                        Ok(redeemed) => ctx.adopt_central_token(redeemed.token, redeemed.issuer),
+                        Err(e) => error.set(Some(e.to_string())),
+                    }
+                });
+            } else {
+                error.set(Some(
+                    "Signing in through the browser isn't available here — use your email and \
+                     password."
+                        .to_owned(),
+                ));
+            }
+        }
     };
 
     rsx! {

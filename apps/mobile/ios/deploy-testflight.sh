@@ -159,6 +159,19 @@ MARKETING_VER="${MARKETING_VER:-0.0.1}"
 # Launch screen — required because iPad multitasking is implied by the
 # orientation set. An empty UILaunchScreen dict = system default (fine).
 /usr/libexec/PlistBuddy -c "Add :UILaunchScreen dict" "$APP/Info.plist" 2>/dev/null || true
+# URL scheme = bundle id. The central sign-in (`ui::central_login::native`,
+# `ios_auth.rs`) sends the person to the issuer in an
+# ASWebAuthenticationSession and gets the redirect back on
+# `<bundle id>://auth/callback`; the issuer has exactly that URI
+# registered for this app (fts-auth.nix). Declaring the scheme here is
+# what lets the system hand the URL to this app and no other.
+/usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$APP/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string $BUNDLE" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleTypeRole string Editor" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string $BUNDLE" "$APP/Info.plist"
 # Single supported platform — dx leaves both iPhoneOS+iPadOS, which Apple
 # rejects (91177). This is an iOS app; keep only iPhoneOS.
 /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$APP/Info.plist" 2>/dev/null || true
