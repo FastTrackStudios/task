@@ -327,15 +327,24 @@ jobs:
         run: ${NIX_DEV} just ci-docs
 
       # Cargo never collects stale artifacts: every rebuild leaves the old
-      # one in deps/ forever. On a throwaway VM that does not matter and on
-      # a persistent runner it is unbounded growth — measured at 70 GB of
-      # deps/ in one instance's dir. Sweep what has not been touched in a
-      # week, so the current build stays warm and the sediment goes.
+      # one in deps/ forever. On a throwaway VM that is invisible; on a
+      # persistent runner it is unbounded — this dir reached 167 GB in two
+      # runs, because changing a flag (CARGO_INCREMENTAL) re-fingerprints
+      # everything and orphans the previous full set beside the new one.
       #
-      # always(): a red run still has to give the disk back.
-      - name: Sweep stale artifacts
+      # --maxsize, not --time: an age cutoff cleans nothing when every
+      # artifact is from today, which is exactly the CI case ("Cleaned
+      # nothing" from --time 7 against a 167 GB dir). This bounds the cache
+      # and evicts oldest-first, which is the behaviour we actually want —
+      # the current build stays warm, the sediment goes.
+      #
+      # always(): a red run has to give the disk back too.
+      - name: Bound the target dir
         if: ${{ always() && needs.plan.outputs.skip != 'true' }}
         run: |
-          ${NIX_DEV} cargo sweep --time 7 || true
+          # CARGO_INCREMENTAL=0 stops new incremental output but does not
+          # remove what earlier runs left; nothing regenerates this now.
+          rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
+          ${NIX_DEV} cargo sweep --maxsize 60GB || true
           du -sh "${CARGO_TARGET_DIR}" || true
           df -h /var/lib | tail -1
