@@ -58,6 +58,8 @@ pub mod webhooks;
 pub mod wiki_repo;
 #[cfg(feature = "plugin-wiki")]
 pub mod wiki_tracker;
+#[cfg(feature = "plugin-wiki")]
+pub mod wiki_vault;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -176,6 +178,11 @@ pub struct OrgAppState {
     /// Wiki feature backend rooted at this org's `vault/`.
     #[cfg(feature = "plugin-wiki")]
     pub wiki: wiki_live::WikiBackend,
+    /// The wikis' second door: every wiki root registered as the vault
+    /// `wiki:<slug>` (sync, graph, collab, watcher, event bridge).
+    /// Held for the watchers' lifetime.
+    #[cfg(feature = "plugin-wiki")]
+    pub wiki_vaults: wiki_vault::WikiVaults,
     /// What this org's vault and wikis subscribe to. Keyed by
     /// subscriber rather than by wiki, because the org vault holds
     /// subscriptions too and is not a wiki.
@@ -874,16 +881,60 @@ pub(crate) async fn build_org_state(
         // flat parent dir).
         let vault_root = std::env::var("TASK_SERVER_VAULT_ROOT")
             .map_or_else(|_| org_root.vault_dir(), PathBuf::from);
-        // `single("default", vault_root)` — one vault per org,
-        // and `vault_id = "default"` resolves *to the org's vault
-        // root directly*. Earlier we used `under_parent`, which
-        // routed writes into `vault_root/default/…` — and every
-        // `ProjectBackend` / `GoalBackend` scan then saw each
-        // file twice (once at the real path, once under the
-        // ghost `default/` subdir). Same `wiki_id = "default"`
-        // convention the wiki backend already uses on line 304.
+        // Every wiki this org holds, not one. `LLM/` scratch stays a
+        // sibling subtree the wiki backend doesn't touch — agents
+        // read/write it through plain filesystem ops.
+        //
+        // t[impl wiki.many.addressable] — one mount serves the whole
+        // set, so every wiki is reachable by its own slug across the
+        // service surface, and there is no method that works only on a
+        // default wiki. t[impl wiki.many.isolation] — the backend
+        // resolves each call's `wiki_id` to its own root, so an
+        // operation on one wiki cannot read or write another's state.
+        //
+        // `TASK_SERVER_WIKI_ROOT` still pins a single root when it is
+        // set: it exists so a test can point the wiki somewhere
+        // disposable, and it names that root `knowledge` so the
+        // override is a member of the set rather than a fourth shape.
+        //
+        // Computed before the vault backend because the same map feeds
+        // it: each wiki root is also a vault root (`wiki:<slug>`), which
+        // is what lets the vault editor open a wiki page.
+        #[cfg(any(feature = "plugin-wiki", feature = "plugin-mealplan"))]
+        let wiki_root = std::env::var("TASK_SERVER_WIKI_ROOT")
+            .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from);
+        #[cfg(feature = "plugin-wiki")]
+        let wiki_roots: std::collections::HashMap<String, PathBuf> = {
+            let mut roots = std::collections::HashMap::new();
+            if std::env::var_os("TASK_SERVER_WIKI_ROOT").is_some() {
+                roots.insert(org_proto::DEFAULT_WIKI.to_string(), wiki_root.clone());
+            } else {
+                roots.extend(org_root.named_wikis());
+                // A fresh org has no wiki directory yet. Keep the
+                // default in the map anyway, so bootstrapping one is a
+                // write rather than a `WikiNotFound`.
+                roots
+                    .entry(org_proto::DEFAULT_WIKI.to_string())
+                    .or_insert_with(|| org_root.wiki_knowledge_dir());
+            }
+            roots
+        };
+        // `"default"` → the org's vault root *directly* — one vault per
+        // org. Earlier we used `under_parent`, which routed writes
+        // into `vault_root/default/…` — and every `ProjectBackend` /
+        // `GoalBackend` scan then saw each file twice (once at the
+        // real path, once under the ghost `default/` subdir). Beside
+        // it, `wiki:<slug>` → that wiki's root for every wiki the org
+        // holds (`wiki_vault`), registered below once the wiki backend
+        // exists — the same explicit layout, so an unknown id is still
+        // `NotFound` and a page path is still guarded the same way.
+        std::fs::create_dir_all(&vault_root).map_err(|e| eyre::eyre!("vault backend: {e}"))?;
         let vault_sync_state = vault::Backend::single("default", vault_root.clone())
             .map_err(|e| eyre::eyre!("vault backend: {e}"))?;
+        // Link-graph reader over the same roots the sync backend
+        // serves — read-only, so no dir creation. Wiki roots join it
+        // in the same registration as the sync backend.
+        let vault_graph = vault::GraphBackend::single("default", vault_root.clone());
         // Recipes are `.cook` files under the wiki root, outside the
         // vault this backend serves — so a `.base` filtering
         // `type: recipe` matches nothing unless the backend is told
@@ -920,39 +971,9 @@ pub(crate) async fn build_org_state(
                 None
             }
         };
-        // Every wiki this org holds, not one. `LLM/` scratch stays a
-        // sibling subtree the wiki backend doesn't touch — agents
-        // read/write it through plain filesystem ops.
-        //
-        // t[impl wiki.many.addressable] — one mount serves the whole
-        // set, so every wiki is reachable by its own slug across the
-        // service surface, and there is no method that works only on a
-        // default wiki. t[impl wiki.many.isolation] — the backend
-        // resolves each call's `wiki_id` to its own root, so an
-        // operation on one wiki cannot read or write another's state.
-        //
-        // `TASK_SERVER_WIKI_ROOT` still pins a single root when it is
-        // set: it exists so a test can point the wiki somewhere
-        // disposable, and it names that root `knowledge` so the
-        // override is a member of the set rather than a fourth shape.
-        #[cfg(any(feature = "plugin-wiki", feature = "plugin-mealplan"))]
-        let wiki_root = std::env::var("TASK_SERVER_WIKI_ROOT")
-            .map_or_else(|_| org_root.wiki_knowledge_dir(), PathBuf::from);
         #[cfg(feature = "plugin-wiki")]
-        let wiki = {
-            let mut roots: std::collections::HashMap<String, PathBuf> =
-                std::collections::HashMap::new();
-            if std::env::var_os("TASK_SERVER_WIKI_ROOT").is_some() {
-                roots.insert(org_proto::DEFAULT_WIKI.to_string(), wiki_root.clone());
-            } else {
-                roots.extend(org_root.named_wikis());
-                // A fresh org has no wiki directory yet. Keep the
-                // default in the map anyway, so bootstrapping one is a
-                // write rather than a `WikiNotFound`.
-                roots
-                    .entry(org_proto::DEFAULT_WIKI.to_string())
-                    .or_insert_with(|| org_root.wiki_knowledge_dir());
-            }
+        let (wiki, wiki_vaults) = {
+            let mut roots = wiki_roots.clone();
             // Compatibility alias. Every client predating multi-wiki
             // asks for `"default"`, and renaming the tier to
             // `knowledge` turned those into `WikiNotFound`. The alias
@@ -977,6 +998,25 @@ pub(crate) async fn build_org_state(
             // whatever `create_wiki` adds while the server runs.
             let backend =
                 wiki_live::WikiBackend::with_roots_under(roots.clone(), org_root.wikis_dir());
+            // Each wiki root is a vault root too (`wiki:<slug>`): the
+            // editor's sync / collab / graph / live-changes path over
+            // the same files the `Pages` service writes. Registered
+            // now for every wiki at boot, and again by `create_wiki`
+            // for one made while the server runs. The `default` alias
+            // is skipped — it is the `knowledge` tier under another
+            // name, and one vault id per directory is enough.
+            let wiki_vaults = wiki_vault::WikiVaults::new(
+                org_root.slug(),
+                vault_sync_state.clone(),
+                vault_graph.clone(),
+                vault_collab.clone(),
+                backend.clone(),
+            );
+            let backend = backend
+                .with_on_created(wiki_vaults.created_hook(tokio::runtime::Handle::current()));
+            for (slug, root) in &wiki_roots {
+                wiki_vaults.attach(slug, root).await;
+            }
             // Hand this org's vault and each of its wikis the core
             // set. Doing it at boot rather than at org creation is
             // what makes `wiki.core.retroactive` true: an org planted
@@ -1007,7 +1047,7 @@ pub(crate) async fn build_org_state(
                     ),
                 }
             }
-            backend
+            (backend, wiki_vaults)
         };
 
         // The subscription service, over the same store the boot sweep
@@ -1651,9 +1691,6 @@ pub(crate) async fn build_org_state(
             .map_or_else(|_| org_root.path().join("collections.jsonl"), PathBuf::from);
         #[cfg(feature = "plugin-fasttrackstudio")]
         let collections = collection::Store::open(collections_path);
-        // Link-graph reader over the same `"default"` vault root
-        // the sync backend serves — read-only, so no dir creation.
-        let vault_graph = vault::GraphBackend::single("default", vault_root.clone());
         // Keep `note → verse` + `note → note` links live as notes are
         // saved: a background task syncs each changed note's
         // `[[wikilinks]]` into the store.
@@ -1791,6 +1828,8 @@ pub(crate) async fn build_org_state(
             resources,
             #[cfg(feature = "plugin-wiki")]
             wiki,
+            #[cfg(feature = "plugin-wiki")]
+            wiki_vaults,
             #[cfg(feature = "plugin-wiki")]
             subscriptions,
             #[cfg(feature = "plugin-wiki")]

@@ -189,13 +189,16 @@ impl ClientVaultIndex {
 /// spawning at the root nor writing page signals is allowed.
 pub fn use_vault_fetch_worker(
     org: Memo<String>,
+    vault_id: String,
     lookup: Signal<Option<Rc<ClientVaultIndex>>>,
 ) -> Coroutine<String> {
     use futures_util::StreamExt;
-    use_coroutine(
-        move |mut rx: dioxus::prelude::UnboundedReceiver<String>| async move {
+    use_coroutine(move |mut rx: dioxus::prelude::UnboundedReceiver<String>| {
+        let vault_id = vault_id.clone();
+        async move {
             while let Some(path) = rx.next().await {
                 let slug = org.peek().clone();
+                let vault_id = vault_id.clone();
                 let fetched = if let Some(rest) = path.strip_prefix(SCRIPTURE_SCHEME) {
                     // `scripture://<TX>/<osis>` → passage text via the
                     // compare verb (handles single verses and ranges).
@@ -225,7 +228,7 @@ pub fn use_vault_fetch_worker(
                         },
                     )
                 } else {
-                    crate::document_session::fetch_file(slug, path.clone()).await
+                    crate::document_session::fetch_file(slug, vault_id, path.clone()).await
                 };
                 // The index may have been swapped (folder-index refresh)
                 // mid-fetch; landing on the current one still warms the
@@ -235,8 +238,8 @@ pub fn use_vault_fetch_worker(
                 };
                 idx.complete_fetch(&path, fetched);
             }
-        },
-    )
+        }
+    })
 }
 
 impl VaultLookup for ClientVaultIndex {
@@ -509,18 +512,18 @@ pub fn wikilink_candidates(pages: &[PageMeta]) -> Vec<LinkCandidate> {
 /// Tag completion candidates (`#…`): every tag in the vault —
 /// frontmatter and inline — with page counts, by descending
 /// count, via the `VaultGraph` RPC.
-pub async fn tag_candidates(org: String) -> Result<Vec<TagCount>, String> {
+pub async fn tag_candidates(org: String, vault_id: String) -> Result<Vec<TagCount>, String> {
     let client = crate::vox_clients::vault_graph_client(&org).await?;
     #[cfg(target_arch = "wasm32")]
     {
         client
-            .tags(crate::document_session::VAULT_ID.to_owned())
+            .tags(vault_id)
             .await
             .map_err(|e| format!("tags: {e:?}"))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = client;
+        let _ = (client, vault_id);
         Err("native client not wired yet".to_owned())
     }
 }

@@ -40,8 +40,9 @@
 //! pages linking to the *focused* note via the same RPC and refreshes
 //! after every save.
 //!
-//! The server registers exactly one vault per org under the id
-//! `"default"`.
+//! This page browses the org's own vault, registered under the id
+//! `"default"`; each wiki is a further vault (`wiki:<slug>`) that the
+//! wiki page opens through the same `NoteView`.
 //!
 //! ## Module layout
 //!
@@ -90,10 +91,11 @@ pub(crate) use tree::{TreeNode, basename_of, build_tree};
 // split, and other pages (search, note_view, the mobile shell) import
 // them by their old paths.
 use crate::vault_lookup;
-pub(crate) use rpc::{create_new_file, fetch_folder_index};
-use rpc::{fetch_backlinks, fetch_links, move_to_folder};
+// The wiki page mounts the same `NoteView` over a wiki's vault id and
+// needs the same index + graph calls.
+use rpc::move_to_folder;
+pub(crate) use rpc::{create_new_file, fetch_backlinks, fetch_folder_index, fetch_links};
 
-#[cfg(target_arch = "wasm32")]
 use crate::document_session::VAULT_ID;
 
 /// Minimal payload to open a file: its path + last-known sha.
@@ -135,7 +137,7 @@ pub fn VaultView(
     });
     let mut files = use_resource(move || {
         let slug = active();
-        async move { fetch_folder_index(slug).await }
+        async move { fetch_folder_index(slug, VAULT_ID.to_owned()).await }
     });
 
     let mut new_name = use_signal(String::new);
@@ -415,7 +417,7 @@ pub fn VaultView(
         let slug = active();
         let _refresh = refresh_key();
         spawn(async move {
-            if let Ok(tags) = vault_lookup::tag_candidates(slug).await {
+            if let Ok(tags) = vault_lookup::tag_candidates(slug, VAULT_ID.to_owned()).await {
                 tag_rows.set(tags);
             }
         });
@@ -426,7 +428,7 @@ pub fn VaultView(
     let do_move = use_callback(
         move |(path, prev_sha, parent): (String, String, Option<String>)| {
             spawn(async move {
-                match move_to_folder(active(), path, parent, prev_sha).await {
+                match move_to_folder(active(), VAULT_ID.to_owned(), path, parent, prev_sha).await {
                     Ok(_new_sha) => {
                         move_target.set(None);
                         files.restart();
@@ -454,14 +456,20 @@ pub fn VaultView(
         }
         let parent = create_parent.peek().clone();
         spawn(async move {
-            match create_new_file(active(), name.clone()).await {
+            match create_new_file(active(), VAULT_ID.to_owned(), name.clone()).await {
                 Ok(created_sha) => {
                     new_name.set(String::new());
                     create_parent.set(None);
                     let mut open_sha = created_sha.clone();
                     if let Some(parent) = parent {
-                        match move_to_folder(active(), name.clone(), Some(parent), created_sha)
-                            .await
+                        match move_to_folder(
+                            active(),
+                            VAULT_ID.to_owned(),
+                            name.clone(),
+                            Some(parent),
+                            created_sha,
+                        )
+                        .await
                         {
                             Ok(new_sha) => open_sha = new_sha,
                             Err(e) => {
@@ -518,7 +526,7 @@ pub fn VaultView(
         let _refresh = refresh_key();
         async move {
             match path {
-                Some(p) => fetch_backlinks(slug, p).await,
+                Some(p) => fetch_backlinks(slug, VAULT_ID.to_owned(), p).await,
                 None => Ok(Vec::new()),
             }
         }
@@ -531,7 +539,7 @@ pub fn VaultView(
         let _refresh = refresh_key();
         async move {
             match path {
-                Some(p) => fetch_links(slug, p).await,
+                Some(p) => fetch_links(slug, VAULT_ID.to_owned(), p).await,
                 None => Ok(Vec::new()),
             }
         }
@@ -893,6 +901,7 @@ pub fn VaultView(
                                     path: tab.path.clone(),
                                     sha: tab.sha.clone(),
                                     home: active,
+                                    vault_id: VAULT_ID.to_owned(),
                                     pane_index: pi,
                                     focused,
                                     pages: pages_memo,

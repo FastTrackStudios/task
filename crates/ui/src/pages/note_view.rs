@@ -52,6 +52,12 @@ pub(crate) fn NoteView(
     sha: String,
     /// Home-org slug the vault lives under.
     home: Memo<String>,
+    /// Which of the org's vaults the note lives in:
+    /// [`VAULT_ID`](crate::document_session::VAULT_ID) for the vault
+    /// page, `wiki:<slug>` for a wiki page. Every RPC below (open,
+    /// save, collab, lookup, tags) and the link navigation key on it —
+    /// this is what lets a wiki page use the vault editor unchanged.
+    vault_id: String,
     /// Which pane this view lives in, and the focused-pane signal — the
     /// two combine into a reactive `is_focused` that gates collab, the
     /// status line, and the conformance mirror to the active pane.
@@ -74,7 +80,7 @@ pub(crate) fn NoteView(
     let is_focused = use_memo(move || *focused.read() == pane_index);
 
     // ── Session ───────────────────────────────────────────────
-    let session = use_document_session(home);
+    let session = use_document_session(home, vault_id.clone());
     use_context_provider(|| session);
     // Open exactly once — this instance is keyed by pane:path, so the
     // props never change under it (a tab switch remounts). No signal
@@ -103,13 +109,13 @@ pub(crate) fn NoteView(
     // instead of text. Still gated on a physical keyboard — vim on a
     // touch keyboard is unusable whatever the preference says.
     let vim_pref = use_context::<crate::prefs::PrefsCtx>().prefs;
-    let vim = (vim_pref.read().vim_mode && !use_hook(editor::editor_view::coarse_pointer))
-        .then_some(vim);
+    let vim =
+        (vim_pref.read().vim_mode && !use_hook(editor::editor_view::coarse_pointer)).then_some(vim);
     let slash = use_signal(|| None::<SlashState>);
 
     // ── Cross-file lookup + lazy fetch worker ─────────────────
     let mut lookup = use_signal(|| None::<Rc<ClientVaultIndex>>);
-    let fetcher = vault_lookup::use_vault_fetch_worker(home, lookup);
+    let fetcher = vault_lookup::use_vault_fetch_worker(home, vault_id.clone(), lookup);
     use_effect(move || {
         let list = pages.read().clone();
         lookup.set(Some(ClientVaultIndex::new(&list, session.state, fetcher)));
@@ -130,6 +136,7 @@ pub(crate) fn NoteView(
     let account = try_use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
     let conn = architect::use_connection::<vox_core::Caller>();
     let collab_path = path.clone();
+    let collab_vault = vault_id.clone();
     use_effect(move || {
         // Reactive reads: re-open collab on reconnect (generation bump)
         // and whenever this pane gains/loses focus.
@@ -143,8 +150,9 @@ pub(crate) fn NoteView(
         }
         let slug = home.peek().clone();
         let path = collab_path.clone();
+        let vault = collab_vault.clone();
         spawn(async move {
-            match crate::collab::open_collab(slug, path.clone()).await {
+            match crate::collab::open_collab(slug, vault, path.clone()).await {
                 Ok(ack) => {
                     if session.current_path().as_deref() == Some(path.as_str()) {
                         collab_doc.set(Some(ack.doc_id));
@@ -290,11 +298,12 @@ pub(crate) fn NoteView(
     // note. The first claimant with a render fn mounts below; boolean
     // flags aggregate (OR) across all claimants.
     let nav_links = use_navigator();
+    // Which route a note of THIS vault opens on: the vault page for the
+    // org's vault, the wiki page route for a wiki. Same decision for
+    // widget-opened notes below and wikilink clicks further down.
+    let route_vault = vault_id.clone();
     let open_note = use_callback(move |p: String| {
-        nav_links.push(crate::routes::Route::VaultRoute {
-            path: p,
-            org: home(),
-        });
+        nav_links.push(crate::routes::note_route(&home(), &route_vault, p));
     });
     let note_href = task_ui_core::nav::use_note_href();
     let widget_ctx = {
@@ -353,6 +362,7 @@ pub(crate) fn NoteView(
     let lookup_for_links = lookup;
     let registry_for_links = registry.clone();
     let link_ctx = widget_ctx.clone();
+    let link_vault = vault_id.clone();
     let on_link_click = use_callback(move |href: String| {
         if registry_for_links.handle_href(&href, &link_ctx) {
             return;
@@ -387,7 +397,7 @@ pub(crate) fn NoteView(
             return;
         }
         let path = known.unwrap_or_else(|| format!("{page}.md"));
-        nav_links.push(crate::routes::Route::VaultRoute { path, org: home() });
+        nav_links.push(crate::routes::note_route(&home(), &link_vault, path));
     });
 
     // ── Save / conflict state ─────────────────────────────────

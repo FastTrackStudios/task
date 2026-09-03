@@ -169,7 +169,12 @@ fn PaletteModal() -> Element {
             // org so opening routes to the right one.
             let mut out = Vec::new();
             for slug in slugs {
-                if let Ok(pages) = crate::pages::vault::fetch_folder_index(slug.clone()).await {
+                if let Ok(pages) = crate::pages::vault::fetch_folder_index(
+                    slug.clone(),
+                    crate::document_session::VAULT_ID.to_owned(),
+                )
+                .await
+                {
                     for p in pages {
                         out.push((p, slug.clone()));
                     }
@@ -378,7 +383,12 @@ pub fn OmniPicker() -> Element {
             // org so opening routes to the right one.
             let mut out = Vec::new();
             for slug in slugs {
-                if let Ok(pages) = crate::pages::vault::fetch_folder_index(slug.clone()).await {
+                if let Ok(pages) = crate::pages::vault::fetch_folder_index(
+                    slug.clone(),
+                    crate::document_session::VAULT_ID.to_owned(),
+                )
+                .await
+                {
                     for p in pages {
                         out.push((p, slug.clone()));
                     }

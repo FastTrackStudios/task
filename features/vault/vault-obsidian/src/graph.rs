@@ -34,7 +34,9 @@ use vault_live::refs::Ref;
 #[derive(Debug, Clone)]
 enum Layout {
     /// Explicit `vault_id → path` registry; unknown ids fail.
-    Explicit(HashMap<String, PathBuf>),
+    /// Shared and growable ([`GraphBackend::add_root`]) so a wiki
+    /// created at runtime gets a graph without a restart.
+    Explicit(Arc<std::sync::RwLock<HashMap<String, PathBuf>>>),
     /// `{parent}/{vault_id}/` for any id; missing dirs read as
     /// empty vaults.
     UnderParent(PathBuf),
@@ -174,8 +176,20 @@ impl GraphBackend {
     #[must_use]
     pub fn with_roots(roots: HashMap<String, PathBuf>) -> Self {
         Self {
-            layout: Layout::Explicit(roots),
+            layout: Layout::Explicit(Arc::new(std::sync::RwLock::new(roots))),
             cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Register one more `vault_id → root` (explicit layout only —
+    /// `UnderParent` resolves any id already). Every clone sees it:
+    /// the sync backend and this graph are handed the same roots, and
+    /// a root added to one must be queryable through the other.
+    pub fn add_root(&self, vault_id: impl Into<String>, root: PathBuf) {
+        if let Layout::Explicit(map) = &self.layout {
+            map.write()
+                .expect("vault::graph roots poisoned")
+                .insert(vault_id.into(), root);
         }
     }
 
@@ -191,7 +205,12 @@ impl GraphBackend {
 
     fn root(&self, vault_id: &str) -> Result<PathBuf, VaultSyncError> {
         match &self.layout {
-            Layout::Explicit(map) => map.get(vault_id).cloned().ok_or(VaultSyncError::NotFound),
+            Layout::Explicit(map) => map
+                .read()
+                .expect("vault::graph roots poisoned")
+                .get(vault_id)
+                .cloned()
+                .ok_or(VaultSyncError::NotFound),
             Layout::UnderParent(parent) => {
                 // Refuse path-traversal-shaped ids, same stance as
                 // the sync backend's file_path guard.

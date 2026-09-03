@@ -431,3 +431,72 @@ fn SyncRoute() -> Element {
 fn AuthCallbackRoute(code: String, state: String, error: String) -> Element {
     rsx! { pages::auth_callback::AuthCallbackView { code, state, error } }
 }
+
+/// Where a note lives, by the vault it is in: a page of the org's own
+/// vault opens on the vault route, a page of a wiki (`wiki:<slug>`)
+/// on that wiki's page route. The one place the editor's link
+/// navigation decides between the two — a `[[Page]]` clicked inside a
+/// wiki page must land on the wiki, not on the vault.
+///
+/// `org` is the route's org: empty keeps the vault route on the org
+/// switcher (the vault page's convention); a wiki route always names
+/// its org, since a wiki belongs to one.
+pub(crate) fn note_route(org: &str, vault_id: &str, path: String) -> Route {
+    match crate::document_session::wiki_of_vault_id(vault_id) {
+        Some(wiki) => Route::WikiDocRoute {
+            org: org.to_owned(),
+            wiki: wiki.to_owned(),
+            path,
+        },
+        None => Route::VaultRoute {
+            path,
+            org: org.to_owned(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod note_route_tests {
+    use super::{Route, note_route};
+    use crate::document_session::{VAULT_ID, wiki_vault_id};
+
+    #[test]
+    fn a_vault_note_opens_on_the_vault_route() {
+        assert_eq!(
+            note_route("", VAULT_ID, "Plans.md".into()),
+            Route::VaultRoute {
+                path: "Plans.md".into(),
+                org: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_wiki_page_opens_on_its_wiki_route() {
+        assert_eq!(
+            note_route(
+                "acme-audio",
+                &wiki_vault_id("music-theory"),
+                "Concepts/Modes.md".into()
+            ),
+            Route::WikiDocRoute {
+                org: "acme-audio".into(),
+                wiki: "music-theory".into(),
+                path: "Concepts/Modes.md".into(),
+            }
+        );
+    }
+
+    /// The bug this decides against: a link followed from a wiki page
+    /// used to be pushed as a vault route, which opened the vault page
+    /// on a path that only exists inside the wiki.
+    #[test]
+    fn a_wiki_link_never_becomes_a_vault_route() {
+        let route = note_route(
+            "acme-audio",
+            "wiki:audio-production",
+            "Concepts/EQ.md".into(),
+        );
+        assert!(matches!(route, Route::WikiDocRoute { .. }), "{route:?}");
+    }
+}

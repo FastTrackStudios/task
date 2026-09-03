@@ -9,13 +9,17 @@
 use vault_proto::PageMeta;
 
 use super::seed_note_bytes;
-use crate::document_session::VAULT_ID;
 
-/// Frontmatter-derived page index for the folder tree.
-pub(crate) async fn fetch_folder_index(slug: String) -> Result<Vec<PageMeta>, String> {
+/// Frontmatter-derived page index for the folder tree. `vault_id` is
+/// the org's own vault ([`crate::document_session::VAULT_ID`]) or a
+/// wiki's (`wiki:<slug>`) — the same index either way.
+pub(crate) async fn fetch_folder_index(
+    slug: String,
+    vault_id: String,
+) -> Result<Vec<PageMeta>, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
     let idx = client
-        .folder_index(VAULT_ID.to_owned())
+        .folder_index(vault_id)
         .await
         .map_err(|e| format!("folder_index: {e:?}"))?;
     let mut pages: Vec<PageMeta> = idx
@@ -37,22 +41,27 @@ pub(crate) async fn fetch_folder_index(slug: String) -> Result<Vec<PageMeta>, St
 }
 
 /// Outgoing wikilinks of `path`, via the `VaultGraph` RPC.
-pub(super) async fn fetch_links(
+pub(crate) async fn fetch_links(
     slug: String,
+    vault_id: String,
     path: String,
 ) -> Result<Vec<vault_proto::GraphLink>, String> {
     let client = crate::vox_clients::vault_graph_client(&slug).await?;
     client
-        .links(VAULT_ID.to_owned(), path)
+        .links(vault_id, path)
         .await
         .map_err(|e| format!("links: {e:?}"))
 }
 
 /// Pages linking to `path`, via the `VaultGraph` RPC.
-pub(super) async fn fetch_backlinks(slug: String, path: String) -> Result<Vec<String>, String> {
+pub(crate) async fn fetch_backlinks(
+    slug: String,
+    vault_id: String,
+    path: String,
+) -> Result<Vec<String>, String> {
     let client = crate::vox_clients::vault_graph_client(&slug).await?;
     client
-        .backlinks(VAULT_ID.to_owned(), path)
+        .backlinks(vault_id, path)
         .await
         .map_err(|e| format!("backlinks: {e:?}"))
 }
@@ -62,6 +71,7 @@ pub(super) async fn fetch_backlinks(slug: String, path: String) -> Result<Vec<St
 /// unconditional. Returns the freshly committed sha.
 pub(super) async fn move_to_folder(
     slug: String,
+    vault_id: String,
     path: String,
     parent: Option<String>,
     prev_sha: String,
@@ -74,7 +84,7 @@ pub(super) async fn move_to_folder(
         IfMatch::Sha(prev_sha)
     };
     let ack = client
-        .set_folder(VAULT_ID.to_owned(), path, parent, if_match)
+        .set_folder(vault_id, path, parent, if_match)
         .await
         .map_err(|e| format!("set_folder: {e:?}"))?;
     Ok(ack.sha256)
@@ -84,16 +94,15 @@ pub(super) async fn move_to_folder(
 /// frontmatter scaffold ([`seed_note_bytes`]) so the Properties
 /// panel opens with `created`/`tags`/`aliases` already present.
 /// Returns its sha.
-pub(crate) async fn create_new_file(slug: String, path: String) -> Result<String, String> {
+pub(crate) async fn create_new_file(
+    slug: String,
+    vault_id: String,
+    path: String,
+) -> Result<String, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
     use vault_proto::IfMatch;
     let ack = client
-        .put_file(
-            VAULT_ID.to_owned(),
-            path,
-            seed_note_bytes(),
-            IfMatch::CreateOnly,
-        )
+        .put_file(vault_id, path, seed_note_bytes(), IfMatch::CreateOnly)
         .await
         .map_err(|e| format!("put_file: {e:?}"))?;
     Ok(ack.sha256)
