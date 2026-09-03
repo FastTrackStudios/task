@@ -564,13 +564,17 @@ pub async fn fetch_bases(slug: &str) -> Result<Vec<String>, String> {
 }
 
 /// The executed views of one `.base` file — server-rendered tables.
+/// `vault_id` is the sync root the base lives in — `default` for the
+/// vault, `wiki:<slug>` for a base inside a wiki (`Resources/Sermons/
+/// Sermons.base`), whose rows are that wiki's pages.
 pub async fn fetch_base_views(
     slug: &str,
+    vault_id: &str,
     base_path: &str,
 ) -> Result<Vec<vault_proto::BaseView>, String> {
     let client = crate::vox_clients::establish_for::<vault_proto::VaultSyncClient>(slug).await?;
     client
-        .base_views("default".to_owned(), base_path.to_owned())
+        .base_views(vault_id.to_owned(), base_path.to_owned())
         .await
         .map_err(|e| format!("{base_path}: {e:?}"))
 }

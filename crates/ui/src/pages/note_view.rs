@@ -302,6 +302,7 @@ pub(crate) fn NoteView(
     // org's vault, the wiki page route for a wiki. Same decision for
     // widget-opened notes below and wikilink clicks further down.
     let route_vault = vault_id.clone();
+    let base_vault = vault_id.clone();
     let open_note = use_callback(move |p: String| {
         nav_links.push(crate::routes::note_route(&home(), &route_vault, p));
     });
@@ -554,6 +555,7 @@ pub(crate) fn NoteView(
                 if is_base && !edit_base_source() {
                     crate::pages::bases::BaseDoc {
                         base_path: current.clone(),
+                        vault_id: base_vault.clone(),
                         // Not every vault file is a note. A `.cook` row
                         // wants the recipe reader, not raw cooklang in
                         // the pane — but which files those are is the

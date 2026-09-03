@@ -9,6 +9,8 @@
 
 use share_proto::{NewShareLink, ShareServiceClient, ShareTarget};
 
+// Boot helpers only; the seed constants are for the vault suites.
+#[allow(dead_code)]
 mod support;
 
 const WIKI_VAULT: &str = "wiki:music-theory";

@@ -62,6 +62,22 @@ pub enum SermonsCmd {
         #[command(flatten)]
         common: SyncArgs,
     },
+    /// Move a channel folder from the org-wide `resources/sermons/`
+    /// tier into a named wiki (`Resources/Sermons/<folder>/`), so the
+    /// sermons become that wiki's pages. Slugs, links, transcripts and
+    /// annotations travel with them.
+    Move {
+        /// The channel folder (`crossroads`).
+        #[arg(long)]
+        folder: String,
+        /// The wiki to move into (`bible`).
+        #[arg(long)]
+        wiki: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// The synced sermons the server holds.
     List {
         #[arg(long)]
@@ -81,10 +97,16 @@ pub struct SyncArgs {
     /// session's server. Always pass it against a deployment.
     #[arg(long)]
     pub server: Option<String>,
-    /// Subfolder under `resources/sermons/` the channel's sermons go
-    /// in (`crossroads`). Also the default second tag.
+    /// Subfolder under the sermons root the channel's sermons go in
+    /// (`crossroads`). Also the default second tag.
     #[arg(long)]
     pub folder: String,
+    /// The named wiki the sermons belong to (`bible`): they become
+    /// pages under that wiki's `Resources/Sermons/<folder>/`, with a
+    /// `Sermons.base` over them. Without it they land in the org-wide
+    /// `resources/sermons/` tier. Also `TASK_WIKI`.
+    #[arg(long, env = "TASK_WIKI")]
+    pub wiki: Option<String>,
     /// `tags:` for a new sermon (repeatable). Default: `sermon` plus
     /// the folder name.
     #[arg(long = "tag")]
@@ -116,6 +138,22 @@ impl SyncArgs {
 
 pub async fn run_resources(cmd: ResourcesCmd, global_org: Option<&str>) -> eyre::Result<()> {
     match cmd {
+        ResourcesCmd::Sermons(SermonsCmd::Move {
+            folder,
+            wiki,
+            org,
+            server,
+        }) => {
+            let client = client(org.or_else(|| global_org.map(str::to_owned)), server).await?;
+            let moved = client
+                .relocate_sermons(folder.clone(), wiki.clone())
+                .await
+                .map_err(|e| eyre::eyre!("relocate_sermons: {e:?}"))?;
+            println!(
+                "moved {moved} sermon(s): resources/sermons/{folder}/ → wikis/{wiki}/Resources/Sermons/{folder}/"
+            );
+            Ok(())
+        }
         ResourcesCmd::Sermons(SermonsCmd::List { org, server, json }) => {
             let client = client(org.or_else(|| global_org.map(str::to_owned)), server).await?;
             let mut list = client
@@ -327,6 +365,7 @@ async fn sync_video(
     }
     let sermon = SermonResource {
         folder: args.folder.clone(),
+        wiki: args.wiki.clone().unwrap_or_default(),
         video_id: id.to_string(),
         video_url: url,
         title: meta.title.clone(),
@@ -603,6 +642,7 @@ mod tests {
             org: None,
             server: None,
             folder: "crossroads".into(),
+            wiki: None,
             tags: vec![],
             channel_name: None,
             dry_run: false,

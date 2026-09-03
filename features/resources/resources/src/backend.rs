@@ -28,13 +28,28 @@ use crate::{ResourceError, sermon, sidecar, transcript};
 /// replaces only its own links, never a reader's annotations.
 pub const SOURCE_REF: &str = "sermon-sync";
 
-/// The subtree sermons live in, under the resources root.
+/// The subtree sermons live in, under the org-wide resources root.
 const SERMONS_DIR: &str = "sermons";
+
+/// The subtree sermons live in inside a named wiki
+/// (`<org>/wikis/<wiki>/Resources/Sermons/`).
+pub const WIKI_SERMONS_DIR: &str = "Resources/Sermons";
+
+/// Prefix of a `rel_path` that points into the wikis tree rather than
+/// the resources tier (`wikis/<wiki>/Resources/Sermons/...`).
+const WIKIS_PREFIX: &str = "wikis/";
+
+/// The `.base` laid down next to a wiki's sermon folders — the table
+/// the wiki opens the collection through.
+pub const SERMONS_BASE: &str = "Sermons.base";
 
 #[derive(Clone, architect::HasDispatcher)]
 pub struct ResourcesBackend {
     /// `<org>/resources`.
     root: Arc<PathBuf>,
+    /// `<org>/wikis`, when the host has named wikis — sermons synced
+    /// with a `wiki` land under `<wikis>/<wiki>/Resources/Sermons/`.
+    wikis: Option<Arc<PathBuf>>,
     /// The org's typed-link store, when the host wires one in.
     links: Option<links::Store>,
 }
@@ -44,8 +59,17 @@ impl ResourcesBackend {
     pub fn new(resources_root: impl Into<PathBuf>) -> Self {
         Self {
             root: Arc::new(resources_root.into()),
+            wikis: None,
             links: None,
         }
+    }
+
+    /// Attach the named-wikis root (`<org>/wikis`), so a sermon can be
+    /// hosted by a wiki instead of the org-wide resources tier.
+    #[must_use]
+    pub fn with_wikis(mut self, wikis_root: impl Into<PathBuf>) -> Self {
+        self.wikis = Some(Arc::new(wikis_root.into()));
+        self
     }
 
     /// Attach the typed-link store `upsert_sermon` writes into.
@@ -59,34 +83,114 @@ impl ResourcesBackend {
         self.root.join(SERMONS_DIR)
     }
 
-    /// Every sermon manifest under `sermons/**` as `(slug, resource,
-    /// absolute path)`.
+    /// Where sermons of `wiki` live; the org-wide tier for `""`.
+    fn sermons_root_for(&self, wiki: &str) -> Result<PathBuf, ResourcesError> {
+        if wiki.is_empty() {
+            return Ok(self.sermons_root());
+        }
+        safe_segment(wiki, "wiki")?;
+        let wikis = self
+            .wikis
+            .as_ref()
+            .ok_or_else(|| ResourcesError::BadRequest("this server has no named wikis".into()))?;
+        let dir = wikis.join(wiki);
+        if !dir.is_dir() {
+            return Err(ResourcesError::NotFound(format!("wiki {wiki}")));
+        }
+        Ok(dir.join(WIKI_SERMONS_DIR))
+    }
+
+    /// Every sermons root that exists: `("", <resources>/sermons)` plus
+    /// one per named wiki that has a `Resources/Sermons/`.
+    fn roots(&self) -> Vec<(String, PathBuf)> {
+        let mut out = vec![(String::new(), self.sermons_root())];
+        if let Some(wikis) = &self.wikis {
+            let mut named: Vec<(String, PathBuf)> = std::fs::read_dir(wikis.as_path())
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| {
+                    let root = e.path().join(WIKI_SERMONS_DIR);
+                    root.is_dir()
+                        .then(|| (e.file_name().to_string_lossy().into_owned(), root))
+                })
+                .collect();
+            named.sort();
+            out.extend(named);
+        }
+        out
+    }
+
+    /// Every sermon manifest under every sermons root.
     fn sermons(&self) -> Vec<LoadedResource> {
-        walk(self.sermons_root())
+        self.roots()
             .into_iter()
+            .flat_map(|(_, root)| walk(root))
             .filter(|r| r.resource.kind == crate::types::ResourceKind::Sermon)
             .collect()
     }
 
+    /// `(wiki, sermons root)` the path lives under.
+    fn home_of(&self, path: &Path) -> (String, PathBuf) {
+        self.roots()
+            .into_iter()
+            .find(|(_, root)| path.starts_with(root))
+            .unwrap_or_else(|| (String::new(), self.sermons_root()))
+    }
+
+    /// Resources-relative (`sermons/...`) or wikis-relative
+    /// (`wikis/<wiki>/...`) form of an absolute path.
     fn rel(&self, path: &Path) -> String {
+        if let Some(wikis) = &self.wikis {
+            if let Ok(rest) = path.strip_prefix(wikis.as_path()) {
+                return format!(
+                    "{WIKIS_PREFIX}{}",
+                    rest.to_string_lossy().replace('\\', "/")
+                );
+            }
+        }
         path.strip_prefix(self.root.as_path())
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/")
     }
 
+    /// Absolute path of a `rel_path` in either form.
+    fn abs(&self, rel_path: &str) -> PathBuf {
+        match (&self.wikis, rel_path.strip_prefix(WIKIS_PREFIX)) {
+            (Some(wikis), Some(rest)) => wikis.join(rest),
+            _ => self.root.join(rel_path),
+        }
+    }
+
+    /// Lay down `Sermons.base` next to a wiki's sermon folders when it
+    /// is not there yet — the reader's table over the collection. Never
+    /// rewritten: the views are theirs to shape.
+    fn ensure_base(sermons_root: &Path) -> Result<(), ResourcesError> {
+        let base = sermons_root.join(SERMONS_BASE);
+        if base.exists() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(sermons_root).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        std::fs::write(&base, SERMONS_BASE_YAML).map_err(|e| ResourcesError::Io(e.to_string()))
+    }
+
     fn summary(&self, r: &LoadedResource) -> SermonSummary {
         let video = r.resource.media_of("video");
+        let (wiki, root) = self.home_of(&r.path);
         let folder = r
             .path
             .parent()
-            .and_then(|p| p.strip_prefix(self.sermons_root()).ok())
+            .and_then(|p| p.strip_prefix(&root).ok())
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
         SermonSummary {
             slug: r.resource.slug.clone(),
             title: r.resource.title.clone(),
             folder,
+            wiki,
             channel: r.resource.writers.first().cloned().unwrap_or_default(),
             video_id: video.map(|m| m.id.clone()).unwrap_or_default(),
             video_url: video.map(|m| m.url.clone()).unwrap_or_default(),
@@ -158,6 +262,50 @@ fn io_err(e: &ResourceError) -> ResourcesError {
     ResourcesError::Io(e.to_string())
 }
 
+/// The default `Sermons.base`: every sermon manifest under the wiki,
+/// newest first, plus a per-channel board.
+const SERMONS_BASE_YAML: &str = r#"filters:
+  and:
+    - resource_kind == "sermon"
+properties:
+  title:
+    displayName: "Sermon"
+  published:
+    displayName: "Published"
+  duration_secs:
+    displayName: "Length (s)"
+  writers:
+    displayName: "Speaker / channel"
+  scripture:
+    displayName: "Scripture"
+views:
+  - type: table
+    name: "All sermons"
+    order:
+      - title
+      - published
+      - duration_secs
+      - writers
+      - scripture
+    sort:
+      - property: published
+        direction: DESC
+  - type: board
+    name: "By channel"
+    groupBy: writers
+"#;
+
+/// Move one file, falling back to copy + remove across filesystems.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            std::fs::copy(from, to)?;
+            std::fs::remove_file(from)
+        }
+    }
+}
+
 /// Reject anything that could climb out of the resources tier.
 fn safe_segment(s: &str, what: &str) -> Result<(), ResourcesError> {
     if s.is_empty() || s.contains("..") || s.contains('/') || s.contains('\\') || s.starts_with('.')
@@ -169,17 +317,17 @@ fn safe_segment(s: &str, what: &str) -> Result<(), ResourcesError> {
 
 impl ResourcesService for ResourcesBackend {
     fn transcript(&self, rel_path: &str) -> Result<TranscriptDoc, ResourcesError> {
-        // No traversal outside the resources tier.
+        // No traversal outside the resources / wikis trees.
         if rel_path.contains("..") {
             return Err(ResourcesError::NotFound(rel_path.to_string()));
         }
-        let mut path = self.root.join(rel_path);
+        let mut path = self.abs(rel_path);
         if !path.is_file() {
             // `sermons/<slug>.transcript.json` for a sermon synced into
             // `sermons/<folder>/` — look one directory down.
             let rel = Path::new(rel_path);
             if let (Some(parent), Some(name)) = (rel.parent(), rel.file_name()) {
-                let found = std::fs::read_dir(self.root.join(parent))
+                let found = std::fs::read_dir(self.abs(&parent.to_string_lossy()))
                     .ok()
                     .into_iter()
                     .flatten()
@@ -218,16 +366,18 @@ impl ResourcesService for ResourcesBackend {
         let slug = sermon::slug_for(&slugs, &sermon.video_id, &sermon.title);
 
         // A known id keeps its file wherever it is (even another
-        // folder); a new one goes into the sync's folder.
-        let md_path = existing
-            .iter()
-            .find(|r| r.resource.slug == slug)
-            .map(|r| r.path.clone())
-            .unwrap_or_else(|| {
-                self.sermons_root()
-                    .join(&sermon.folder)
-                    .join(format!("{slug}.md"))
-            });
+        // folder or wiki); a new one goes into the sync's folder under
+        // the wiki it names.
+        let md_path = match existing.iter().find(|r| r.resource.slug == slug) {
+            Some(r) => r.path.clone(),
+            None => {
+                let root = self.sermons_root_for(&sermon.wiki)?;
+                if !sermon.wiki.is_empty() {
+                    Self::ensure_base(&root)?;
+                }
+                root.join(&sermon.folder).join(format!("{slug}.md"))
+            }
+        };
 
         let hits = scripture_refs::extract(&sermon.segments);
         let scripture = scripture_refs::distinct_osis(&hits);
@@ -284,6 +434,39 @@ impl ResourcesService for ResourcesBackend {
             .map(|r| self.summary(r))
             .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))
     }
+
+    fn relocate_sermons(&self, folder: &str, wiki: &str) -> Result<u32, ResourcesError> {
+        safe_segment(folder, "folder")?;
+        if wiki.is_empty() {
+            return Err(ResourcesError::BadRequest("wiki is empty".into()));
+        }
+        let src = self.sermons_root().join(folder);
+        if !src.is_dir() {
+            return Err(ResourcesError::NotFound(format!("sermons/{folder}")));
+        }
+        let root = self.sermons_root_for(wiki)?;
+        Self::ensure_base(&root)?;
+        let dst = root.join(folder);
+        std::fs::create_dir_all(&dst).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        let mut moved = 0u32;
+        let entries = std::fs::read_dir(&src).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        for entry in entries.filter_map(Result::ok) {
+            let from = entry.path();
+            if !from.is_file() {
+                continue;
+            }
+            let Some(name) = from.file_name() else {
+                continue;
+            };
+            move_file(&from, &dst.join(name)).map_err(|e| ResourcesError::Io(e.to_string()))?;
+            if from.extension().is_some_and(|e| e == "md") {
+                moved += 1;
+            }
+        }
+        // Leave no empty channel folder behind in the org-wide tier.
+        let _ = std::fs::remove_dir(&src);
+        Ok(moved)
+    }
 }
 
 #[cfg(test)]
@@ -293,6 +476,7 @@ mod tests {
     fn sermon(id: &str, title: &str, text: &str) -> SermonResource {
         SermonResource {
             folder: "crossroads".into(),
+            wiki: String::new(),
             video_id: id.into(),
             video_url: format!("https://youtu.be/{id}"),
             title: title.into(),
@@ -398,6 +582,105 @@ mod tests {
         assert!(ann.contains("\"t:9\""));
         let all = store.graph(Confidence::Speculative, true).unwrap();
         assert_eq!(all.len(), 2, "old link gone, two new: {all:?}");
+    }
+
+    #[test]
+    fn a_wiki_sermon_lands_in_the_wikis_resources_with_a_base() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("wikis/bible")).unwrap();
+        let store = links::Store::open(dir.path().join("links.jsonl"));
+        let be = ResourcesBackend::new(dir.path().join("resources"))
+            .with_wikis(dir.path().join("wikis"))
+            .with_links(store);
+
+        let mut s = sermon(
+            "AAA",
+            "God Restores",
+            "first Peter chapter five verse seven",
+        );
+        s.wiki = "bible".into();
+        let out = be.upsert_sermon(s.clone()).unwrap();
+        assert_eq!(
+            out.rel_path,
+            "wikis/bible/Resources/Sermons/crossroads/god-restores.md"
+        );
+        let root = dir.path().join("wikis/bible/Resources/Sermons");
+        assert!(root.join("crossroads/god-restores.md").is_file());
+        assert!(
+            root.join("crossroads/god-restores.transcript.json")
+                .is_file()
+        );
+        assert!(
+            root.join(SERMONS_BASE).is_file(),
+            "the base is laid down once"
+        );
+        // The org-wide tier stays empty.
+        assert!(!dir.path().join("resources/sermons").exists());
+
+        let listed = be.list_sermons().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].wiki, "bible");
+        assert_eq!(listed[0].folder, "crossroads");
+        // The transcript resolves through the wikis-relative path.
+        let doc = be.transcript(&listed[0].transcript_rel_path).unwrap();
+        assert_eq!(doc.segments.len(), 1);
+
+        // A re-sync without `wiki` keeps the file where it is.
+        s.wiki.clear();
+        let again = be.upsert_sermon(s).unwrap();
+        assert_eq!(again.rel_path, out.rel_path);
+        assert!(!again.created);
+
+        // An unknown wiki is refused, not created.
+        let mut other = sermon("BBB", "Elsewhere", "hello");
+        other.wiki = "nope".into();
+        assert!(matches!(
+            be.upsert_sermon(other),
+            Err(ResourcesError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn relocate_moves_a_folder_into_the_wiki_and_keeps_slugs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("wikis/bible")).unwrap();
+        let store = links::Store::open(dir.path().join("links.jsonl"));
+        let be = ResourcesBackend::new(dir.path().join("resources"))
+            .with_wikis(dir.path().join("wikis"))
+            .with_links(store);
+        be.upsert_sermon(sermon("AAA", "God Restores", "John 3:16"))
+            .unwrap();
+        be.upsert_sermon(sermon("BBB", "Hope", "Romans 8:28"))
+            .unwrap();
+        assert!(dir.path().join("resources/sermons/crossroads").is_dir());
+
+        let moved = be.relocate_sermons("crossroads", "bible").unwrap();
+        assert_eq!(moved, 2);
+        assert!(!dir.path().join("resources/sermons/crossroads").exists());
+        let dst = dir.path().join("wikis/bible/Resources/Sermons/crossroads");
+        assert!(dst.join("god-restores.md").is_file());
+        assert!(dst.join("god-restores.transcript.json").is_file());
+        assert!(dst.join("god-restores.annotations.json").is_file());
+        assert!(
+            dir.path()
+                .join("wikis/bible/Resources/Sermons")
+                .join(SERMONS_BASE)
+                .is_file()
+        );
+
+        let s = be.sermon("hope").unwrap();
+        assert_eq!(s.wiki, "bible");
+        assert_eq!(
+            s.rel_path,
+            "wikis/bible/Resources/Sermons/crossroads/hope.md"
+        );
+        assert!(be.transcript(&s.transcript_rel_path).is_ok());
+
+        // Gone from the tier, so a second move is a NotFound.
+        assert!(matches!(
+            be.relocate_sermons("crossroads", "bible"),
+            Err(ResourcesError::NotFound(_))
+        ));
     }
 
     #[test]

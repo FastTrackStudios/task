@@ -31,6 +31,7 @@ fn seg(start: f32, text: &str) -> TranscriptSegment {
 fn sermon(title: &str, segments: Vec<TranscriptSegment>) -> SermonResource {
     SermonResource {
         folder: "crossroads".into(),
+        wiki: String::new(),
         video_id: "YMypVgZXFIU".into(),
         video_url: "https://youtu.be/YMypVgZXFIU".into(),
         title: title.into(),
@@ -42,6 +43,86 @@ fn sermon(title: &str, segments: Vec<TranscriptSegment>) -> SermonResource {
         language: "en".into(),
         segments,
     }
+}
+
+/// A sermon synced with `wiki` is a page of that wiki
+/// (`wikis/<wiki>/Resources/Sermons/<folder>/`), the wiki gets its
+/// `Sermons.base`, and a folder synced into the org-wide tier moves
+/// into the wiki with `relocate_sermons` — slugs and links intact.
+#[tokio::test(flavor = "multi_thread")]
+async fn wiki_sermons_live_in_the_wiki_and_a_tier_folder_relocates() {
+    let (url, _tmp) = support::boot_ws().await.unwrap();
+    let resources: ResourcesServiceClient = vox::connect_lane(&url).establish().await.unwrap();
+    let links: LinksServiceClient = vox::connect_lane(&url).establish().await.unwrap();
+    let org_root = org_proto::DataRoot::from_env().unwrap().org(support::ORG);
+    let wiki_dir = org_root.named_wiki_dir("bible");
+    std::fs::create_dir_all(&wiki_dir).unwrap();
+
+    // Straight into the wiki.
+    let mut into_wiki = sermon(
+        "Hope In Exile",
+        vec![seg(
+            30.0,
+            "turn to Jeremiah chapter twenty nine verse eleven",
+        )],
+    );
+    into_wiki.wiki = "bible".into();
+    into_wiki.video_id = "WIKI000001".into();
+    let out = resources.upsert_sermon(into_wiki).await.unwrap();
+    assert_eq!(
+        out.rel_path,
+        "wikis/bible/Resources/Sermons/crossroads/hope-in-exile.md"
+    );
+    let sermons_root = wiki_dir.join("Resources/Sermons");
+    assert!(sermons_root.join("crossroads/hope-in-exile.md").is_file());
+    assert!(sermons_root.join("Sermons.base").is_file());
+    assert!(!org_root.resources_dir().join("sermons").exists());
+
+    // Into the org-wide tier, then moved.
+    let mut into_tier = sermon("Tier Talk", vec![seg(5.0, "Psalm 23:1")]);
+    into_tier.video_id = "TIER000001".into();
+    let tier = resources.upsert_sermon(into_tier).await.unwrap();
+    assert_eq!(tier.rel_path, "sermons/crossroads/tier-talk.md");
+    let moved = resources
+        .relocate_sermons("crossroads".into(), "bible".into())
+        .await
+        .unwrap();
+    assert_eq!(moved, 1);
+    assert!(sermons_root.join("crossroads/tier-talk.md").is_file());
+    assert!(
+        sermons_root
+            .join("crossroads/tier-talk.transcript.json")
+            .is_file()
+    );
+    assert!(!org_root.resources_dir().join("sermons/crossroads").exists());
+
+    // Both read back as the wiki's, and transcripts resolve either way.
+    let list = resources.list_sermons().await.unwrap();
+    let mut slugs: Vec<(String, String)> = list
+        .iter()
+        .map(|s| (s.slug.clone(), s.wiki.clone()))
+        .collect();
+    slugs.sort();
+    assert_eq!(
+        slugs,
+        [
+            ("hope-in-exile".to_string(), "bible".to_string()),
+            ("tier-talk".to_string(), "bible".to_string()),
+        ]
+    );
+    for s in &list {
+        let doc = resources
+            .transcript(s.transcript_rel_path.clone())
+            .await
+            .unwrap();
+        assert_eq!(doc.slug, s.slug);
+    }
+    // The verse links survived the move (keyed by slug, not path).
+    let on_psalm = links.links_for(NodeRef::verse("Ps.23.1")).await.unwrap();
+    assert!(
+        on_psalm.iter().any(|l| l.source.id == "tier-talk"),
+        "link kept: {on_psalm:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

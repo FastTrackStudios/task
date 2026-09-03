@@ -230,6 +230,7 @@ mod tests {
     fn sermon() -> SermonResource {
         SermonResource {
             folder: "crossroads".into(),
+            wiki: String::new(),
             video_id: "YMypVgZXFIU".into(),
             video_url: "https://youtu.be/YMypVgZXFIU".into(),
             title: "God Restores Broken People".into(),

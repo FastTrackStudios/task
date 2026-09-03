@@ -44,9 +44,17 @@ pub struct TranscriptDoc {
 /// scripture references it extracts from the cues.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
 pub struct SermonResource {
-    /// Subfolder under `resources/sermons/` (`crossroads`). Kebab-case;
+    /// Subfolder under the sermons root (`crossroads`). Kebab-case;
     /// the sync's name for the channel.
     pub folder: String,
+    /// The named wiki the sermons belong to (`bible`). When set, the
+    /// sermons root is `<org>/wikis/<wiki>/Resources/Sermons/` — the
+    /// resources are pages of that wiki (its explorer, editor, bases and
+    /// subscriptions see them). Empty: the org-wide
+    /// `<org>/resources/sermons/` tier.
+    #[serde(default)]
+    #[facet(default)]
+    pub wiki: String,
     /// YouTube video id (`YMypVgZXFIU`). The identity of the resource:
     /// the same id always maps to the same slug.
     pub video_id: String,
@@ -94,6 +102,10 @@ pub struct SermonSummary {
     pub slug: String,
     pub title: String,
     pub folder: String,
+    /// The named wiki holding this sermon; empty for the org-wide tier.
+    #[serde(default)]
+    #[facet(default)]
+    pub wiki: String,
     pub channel: String,
     pub video_id: String,
     pub video_url: String,
@@ -101,9 +113,12 @@ pub struct SermonSummary {
     pub duration_secs: u64,
     pub tags: Vec<String>,
     pub scripture: Vec<String>,
-    /// Resources-relative manifest path (`sermons/crossroads/<slug>.md`).
+    /// Manifest path: `sermons/crossroads/<slug>.md` under the org's
+    /// resources tier, or `wikis/<wiki>/Resources/Sermons/<folder>/<slug>.md`
+    /// for a wiki-hosted sermon. Either form resolves through
+    /// [`ResourcesService::transcript`].
     pub rel_path: String,
-    /// Resources-relative transcript sidecar path.
+    /// Transcript sidecar path, in the same form as `rel_path`.
     pub transcript_rel_path: String,
 }
 
@@ -140,6 +155,13 @@ pub trait ResourcesService {
 
     /// One sermon by slug.
     fn sermon(&self, slug: &str) -> Result<SermonSummary, ResourcesError>;
+
+    /// Move every file of `resources/sermons/<folder>/` into
+    /// `wikis/<wiki>/Resources/Sermons/<folder>/`, so sermons synced
+    /// into the org-wide tier become pages of that wiki. Slugs, links
+    /// and sidecars are untouched (links are keyed by slug). Returns
+    /// how many manifests moved.
+    fn relocate_sermons(&self, folder: &str, wiki: &str) -> Result<u32, ResourcesError>;
 }
 
 #[cfg(feature = "vox")]

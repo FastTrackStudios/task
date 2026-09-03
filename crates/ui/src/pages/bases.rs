@@ -54,7 +54,9 @@ pub fn BasesView() -> Element {
             Some(s) => s,
             None => bases.read().as_ref()?.as_ref().ok()?.first().cloned()?,
         };
-        let v = crate::feeds::fetch_base_views(&slug, &active).await.ok()?;
+        let v = crate::feeds::fetch_base_views(&slug, crate::document_session::VAULT_ID, &active)
+            .await
+            .ok()?;
         Some((active, v))
     });
 
@@ -310,17 +312,28 @@ fn BaseListBody(view: BaseView, on_open: EventHandler<String>) -> Element {
 /// embedded in the vault content pane when a `.base` file is open
 /// (Obsidian-style). `on_open` fires with a note's vault path on row click.
 #[component]
-pub fn BaseDoc(base_path: String, on_open: EventHandler<String>) -> Element {
+pub fn BaseDoc(
+    base_path: String,
+    on_open: EventHandler<String>,
+    /// The sync root the base belongs to: the vault (default) or a
+    /// wiki's `wiki:<slug>`, so a base inside a wiki queries that
+    /// wiki's pages rather than the vault's.
+    #[props(default = crate::document_session::VAULT_ID.to_string())]
+    vault_id: String,
+) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
     let bp = base_path.clone();
     let views = use_resource(move || {
         let bp = bp.clone();
+        let vault_id = vault_id.clone();
         async move {
             let slug = selected_slugs(&selection.read(), &org_list.read())
                 .first()
                 .cloned()?;
-            crate::feeds::fetch_base_views(&slug, &bp).await.ok()
+            crate::feeds::fetch_base_views(&slug, &vault_id, &bp)
+                .await
+                .ok()
         }
     });
     let snapshot = views.read().clone();
