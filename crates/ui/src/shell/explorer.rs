@@ -286,8 +286,12 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
     let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
     let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
     // A wiki belongs to one org — the route's — and under "All" the
-    // switcher has none; the vault follows the switcher.
-    let route_org = use_signal(|| org.clone());
+    // switcher has none; the vault follows the switcher. The shell
+    // keeps one explorer mounted across routes, so the org is a
+    // reactive prop, not a value captured at first mount: an explorer
+    // born on `/wiki` (no org) that later shows a wiki would otherwise
+    // route every row to `/wiki/w//<wiki>/...`.
+    let route_org = use_memo(use_reactive!(|org| org));
     let active = use_memo(move || {
         let fixed = route_org();
         if fixed.is_empty() {
@@ -296,7 +300,7 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
             fixed
         }
     });
-    let scope = use_memo(use_reactive!(|wiki| {
+    let scope = use_memo(use_reactive!(|wiki, org| {
         if wiki.is_empty() {
             ExplorerScope {
                 org: String::new(),
@@ -305,7 +309,7 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
             }
         } else {
             ExplorerScope {
-                org: route_org(),
+                org,
                 vault_id: wiki_vault_id(&wiki),
                 wiki: Some(wiki),
             }

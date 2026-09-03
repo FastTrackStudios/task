@@ -46,8 +46,14 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let path = path();
     // The org is the route's (a wiki belongs to one org; under "All" the
     // list spans several), so every read and write here goes to it.
-    let org_sig = use_signal(|| org.clone());
-    let home = use_memo(move || org_sig());
+    // Reactive on the prop: the route re-renders this component in
+    // place when a wikilink is followed, so a value captured once at
+    // mount would go stale (and an empty one breaks every route built
+    // from it).
+    let home = {
+        let org = org.clone();
+        use_memo(use_reactive!(|org| org))
+    };
     let vault_id = wiki_vault_id(&wiki);
     let vault_sig = use_signal(|| vault_id.clone());
     let nav = use_navigator();

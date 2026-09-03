@@ -107,8 +107,9 @@ pub struct SyncArgs {
     /// `resources/sermons/` tier. Also `TASK_WIKI`.
     #[arg(long, env = "TASK_WIKI")]
     pub wiki: Option<String>,
-    /// `tags:` for a new sermon (repeatable). Default: `sermon` plus
-    /// the folder name.
+    /// `tags:` for a new sermon (repeatable). Default: the hierarchical
+    /// `sermons/<folder>` (`sermons/crossroads`), so the explorer's
+    /// Tags view nests the channel under Sermons.
     #[arg(long = "tag")]
     pub tags: Vec<String>,
     /// Attribute the sermons to this name instead of the channel's
@@ -129,7 +130,9 @@ pub struct SyncArgs {
 impl SyncArgs {
     fn tags(&self) -> Vec<String> {
         if self.tags.is_empty() {
-            vec!["sermon".to_string(), self.folder.clone()]
+            // One hierarchical tag: the wiki explorer nests on `/`, so
+            // the channel sits under Sermons instead of beside it.
+            vec![format!("sermons/{}", self.folder)]
         } else {
             self.tags.clone()
         }
@@ -649,7 +652,7 @@ mod tests {
             yt_dlp: "yt-dlp".into(),
             pause: 0,
         };
-        assert_eq!(a.tags(), ["sermon", "crossroads"]);
+        assert_eq!(a.tags(), ["sermons/crossroads"]);
         let b = SyncArgs {
             tags: vec!["message".into()],
             ..a

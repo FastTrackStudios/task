@@ -63,7 +63,8 @@ pub struct SermonResource {
     pub title: String,
     /// The channel / speaker — becomes `writers: [<channel>]`.
     pub channel: String,
-    /// `tags:` frontmatter (`[sermon, crossroads]`).
+    /// `tags:` frontmatter (`[sermons/crossroads]` — hierarchical, so
+    /// a tag tree nests the channel under Sermons).
     pub tags: Vec<String>,
     /// `YYYY-MM-DD` upload date; empty when unknown.
     pub published: String,

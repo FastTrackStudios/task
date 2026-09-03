@@ -77,7 +77,12 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
 
     // The org is the route's, not the switcher's: under "All" the wiki
     // list spans every org, and this wiki belongs to exactly one.
-    let org_sig = use_signal(|| org.clone());
+    // Reactive on the prop (the route re-renders this view in place),
+    // never a value captured once at mount.
+    let org_sig = {
+        let org = org.clone();
+        use_memo(use_reactive!(|org| org))
+    };
     let org = use_memo(move || Some(org_sig()));
     let route_org = org_sig();
 
