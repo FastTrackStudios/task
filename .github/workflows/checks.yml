@@ -59,13 +59,13 @@ env:
   # host triple so the wasm32 rustflags in .cargo/config.toml are
   # untouched.
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
-  # One compiling job per PR, four slots. 16 gives a lone PR half the
-  # box, two PRs saturate it, and four oversubscribe 2x — which the
-  # kernel handles better than leaving cores idle when only one PR is in
-  # flight.
-  CARGO_BUILD_JOBS: "16"
   # Terse, stable logs — this is CI, not a terminal.
   CARGO_TERM_COLOR: never
+  # Incremental compilation helps repeated edits in one tree; a CI delta is
+  # a whole PR, and it cost 31 GB of the 102 GB a warm instance was holding.
+  # Swatinem/rust-cache sets this by default and dropping the action
+  # inherited cargo's default of ON, which is how it went unnoticed.
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   # GitHub applies `timeout-minutes` to EXECUTION, not to time spent
@@ -325,3 +325,17 @@ jobs:
       - name: Docs
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main' }}
         run: ${NIX_DEV} just ci-docs
+
+      # Cargo never collects stale artifacts: every rebuild leaves the old
+      # one in deps/ forever. On a throwaway VM that does not matter and on
+      # a persistent runner it is unbounded growth — measured at 70 GB of
+      # deps/ in one instance's dir. Sweep what has not been touched in a
+      # week, so the current build stays warm and the sediment goes.
+      #
+      # always(): a red run still has to give the disk back.
+      - name: Sweep stale artifacts
+        if: ${{ always() && needs.plan.outputs.skip != 'true' }}
+        run: |
+          ${NIX_DEV} cargo sweep --time 7 || true
+          du -sh "${CARGO_TARGET_DIR}" || true
+          df -h /var/lib | tail -1
