@@ -57,9 +57,19 @@ boundary of its own. Where each subsystem lives, and when it downloads:
 | chart fences (`editor-keyflow`: engraver + notation fonts) | `module_*_engrave_fence` | 4.4 MB / 1.86 MB | a ```` ```kf ```` fence is first rendered |
 | the global now-playing engine + setlist-row highlighter | `module_*_player_engine` | 0.49 MB / 0.18 MB | the first play request |
 | the agent dock panel | `module_*_agent_panel` | 0.74 MB / 0.25 MB | the dock is opened |
+| the note inspector's local graph (the knowledge-graph layout + SVG renderer, shared with `/graph`) | `module_*_local_graph` | not yet measured — see below | the inspector's Graph tab is first opened, on a vault note or a wiki page |
 | each plugin's screens | `module_*_<app>_screen` | 0.15–0.82 MB | the app is visited |
 | each plugin's store providers (7 apps) | `module_*_provide_stores` / `provide_all` | 3–144 KB each | at boot, after the shell paints |
 | `type: video` note widget | `module_*_video_note_widget` | 0.15 MB | a video note is opened |
+
+The local-graph chunk has no number yet: at the time it was added the
+split build (`just web-release`) died in dx's splitter (a walrus
+`!self.dead.contains(&id)` assertion while emitting the main module) on
+`main` itself, before and after the change, so nothing could be
+measured. It is behind `task_plugin_ui::lazy_element_with!` — the
+`lazy_element!` shape with an argument — reached only from the vault and
+wiki route chunks, so the main chunk cannot have grown; fill the sizes
+in from the next split build that completes.
 
 Before this, the main chunk carried the player, the engraver and every
 plugin's providers and panel — 18.3 MB — because the shell mounted them

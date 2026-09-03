@@ -13,24 +13,37 @@
 //! gone; the wiki `Pages` service still serves the CLI and MCP, and
 //! writes the same files.
 //!
-//! What stays wiki-shaped: the way back to the wiki, the provenance
-//! strip (`type:`, `ai_generated`), and the backlinks — the wiki's
-//! graph, not the vault's — under the note. Links inside the page
-//! route back here (`WikiDocRoute`), never to the vault
-//! (`crate::routes::note_route`).
+//! The same goes for the right sidebar: the
+//! [`NoteInspector`](crate::pages::note_inspector) the vault page
+//! mounts — Properties, Links, the local graph, Share — mounted here
+//! over the wiki's vault id, so every panel reads the wiki's graph
+//! and a share link minted here targets the wiki page. Nothing in it
+//! is wiki-shaped; only where a row click goes is this page's call
+//! (the page's route, through [`crate::routes::note_route`]).
+//!
+//! What stays wiki-shaped: the way back to the wiki and the provenance
+//! strip (`type:`, `ai_generated`). Links inside the page route back
+//! here (`WikiDocRoute`), never to the vault.
 
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use vault_proto::{PageMeta, TagCount};
 
 use crate::document_session::wiki_vault_id;
+use crate::pages::note_inspector::{InspectorTab, NoteInspector};
 use crate::pages::note_view::NoteView;
-use crate::pages::vault::{FileMeta, basename_of, fetch_backlinks, fetch_folder_index};
+use crate::pages::vault::{FileMeta, basename_of, fetch_folder_index};
 use crate::routes::Route;
+use crate::shell::mobile::{BottomSheet, MobileActionBar};
 use crate::vault_lookup;
 
 #[component]
-pub fn WikiPageView(org: String, wiki: String, path: String) -> Element {
+pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Element {
+    // The page path is a signal (the route re-renders this component
+    // with a new one when a wikilink is followed): the inspector
+    // follows it as a memo, the rest of the page reads it once.
+    let page_path = use_memo(move || Some(path()));
+    let path = path();
     // The org is the route's (a wiki belongs to one org; under "All" the
     // list spans several), so every read and write here goes to it.
     let org_sig = use_signal(|| org.clone());
@@ -57,7 +70,7 @@ pub fn WikiPageView(org: String, wiki: String, path: String) -> Element {
     // The `VaultSync` stream carries every vault id; keep this wiki's.
     // A save here, another client's, or a write through the wiki
     // pipeline re-pulls the index (a rename, a new page) and refreshes
-    // the backlinks. The open note itself is live through collab.
+    // the inspector. The open note itself is live through collab.
     let vault_tick = use_signal(|| 0u64);
     let focus_tick = use_signal(|| 0u64);
     let refresh_key = use_memo(move || *focus_tick.read() + *vault_tick.read());
@@ -117,30 +130,23 @@ pub fn WikiPageView(org: String, wiki: String, path: String) -> Element {
             }
         });
     });
-    // A wikilink, a `.base` row, a backlink: another page of this wiki.
+    // A wikilink, a `.base` row, a backlink, a graph node: another
+    // page of this wiki — its route, by the vault id.
     let on_open = use_callback(move |meta: FileMeta| {
-        let Some(wiki) =
-            crate::document_session::wiki_of_vault_id(&vault_sig.peek()).map(str::to_owned)
-        else {
-            return;
-        };
-        nav.push(Route::WikiDocRoute {
-            org: home(),
-            wiki,
-            path: meta.path,
-        });
+        nav.push(crate::routes::note_route(
+            &home(),
+            &vault_sig.peek(),
+            meta.path,
+        ));
     });
     let on_renamed = use_callback(move |()| files.restart());
 
-    // ── Backlinks: the wiki's graph ───────────────────────────
-    let bl_path = path.clone();
-    let backlinks = use_resource(move || {
-        let slug = home();
-        let vault = vault_sig();
-        let p = bl_path.clone();
-        let _refresh = refresh_key();
-        async move { fetch_backlinks(slug, vault, p).await }
-    });
+    // ── The inspector ─────────────────────────────────────────
+    // Open state is the shell's (the top-bar toggle), the tab is
+    // this page's — the desktop aside and the mobile sheet share it.
+    let shell_right = use_context::<Signal<crate::chrome::RightPanelOpen>>();
+    let panel_open = shell_right.read().0;
+    let right_tab = use_signal(InspectorTab::default);
 
     // ── Provenance strip ──────────────────────────────────────
     // `ai_generated` / `generated_by` are the wiki's own frontmatter
@@ -158,8 +164,8 @@ pub fn WikiPageView(org: String, wiki: String, path: String) -> Element {
         }
     });
 
-    // Clear the shell status line on leave (the focused NoteView
-    // writes it; nothing else here does).
+    // The status line (the focused NoteView writes it; the mobile
+    // action bar's Save reads it). Cleared on leave.
     let status_info = use_context::<crate::chrome::StatusBarInfo>().0;
     use_drop(move || {
         let mut info = status_info;
@@ -177,6 +183,7 @@ pub fn WikiPageView(org: String, wiki: String, path: String) -> Element {
         .and_then(|list| list.iter().find(|p| p.path == path))
         .map(|p| (p.ai_generated, p.generated_by.clone()))
         .unwrap_or_default();
+    let has_page = meta.is_some();
 
     let body = match (&*files.read_unchecked(), meta) {
         (Some(Ok(_)), Some(meta)) => rsx! {
@@ -238,82 +245,100 @@ pub fn WikiPageView(org: String, wiki: String, path: String) -> Element {
     };
 
     rsx! {
-        div { class: "flex h-full min-h-0 w-full flex-col overflow-y-auto",
-            div { class: "mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-4 sm:px-6 lg:px-8",
-                Link {
-                    to: Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
-                    class: "text-xs text-muted-foreground hover:text-foreground",
-                    "← {wiki}"
-                }
-                div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
-                    if ai_generated {
-                        span {
-                            class: "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-medium text-primary",
-                            title: if generated_by.is_empty() { "Machine-produced content".to_string() } else { format!("Machine-produced by {generated_by}") },
-                            if generated_by.is_empty() {
-                                "✨ AI generated"
-                            } else {
-                                "✨ AI generated · {generated_by}"
-                            }
-                        }
+        div { class: "flex h-full min-h-0 w-full",
+            div { class: "flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
+                div { class: "mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-4 sm:px-6 lg:px-8",
+                    Link {
+                        to: Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
+                        class: "text-xs text-muted-foreground hover:text-foreground",
+                        "← {wiki}"
                     }
-                    if !page_type.is_empty() {
-                        span { class: "rounded-full border border-border/70 bg-card/60 px-2 py-0.5 font-medium uppercase tracking-wide",
-                            "{page_type}"
-                        }
-                    }
-                    span { class: "font-mono", "{path}" }
-                }
-            }
-            div { class: "flex min-h-0 flex-1 flex-col", {body} }
-            // ── Backlinks (this wiki's graph) ─────────────────
-            div { class: "mx-auto w-full max-w-3xl px-4 pb-12 sm:px-6 lg:px-8",
-                match &*backlinks.read_unchecked() {
-                    Some(Ok(list)) if list.is_empty() => rsx! {
-                        div { class: "border-t border-border/60 pt-3 text-xs text-muted-foreground",
-                            "No backlinks yet. Link here with [[{basename_of(&path)}]]."
-                        }
-                    },
-                    Some(Ok(list)) => rsx! {
-                        div { class: "border-t border-border/60 pt-3",
-                            Heading { level: HeadingLevel::H3, class: "mb-1 text-sm", "Backlinks" }
-                            nav { class: "flex flex-col gap-0.5",
-                                for bl in list.iter().cloned() {
-                                    {
-                                        let title = pages_memo
-                                            .read()
-                                            .iter()
-                                            .find(|p| p.path == bl)
-                                            .map(|p| p.title.clone())
-                                            .unwrap_or_else(|| basename_of(&bl).to_owned());
-                                        let target = FileMeta { path: bl.clone(), sha256: String::new() };
-                                        rsx! {
-                                            button {
-                                                key: "{bl}",
-                                                "data-testid": "wiki-backlink",
-                                                "data-path": "{bl}",
-                                                r#type: "button",
-                                                class: "flex flex-col items-start gap-0.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent/50",
-                                                onclick: move |_| on_open.call(target.clone()),
-                                                span { class: "font-medium", "{title}" }
-                                                span { class: "text-xs text-muted-foreground", "{bl}" }
-                                            }
-                                        }
-                                    }
+                    div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
+                        if ai_generated {
+                            span {
+                                class: "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-medium text-primary",
+                                title: if generated_by.is_empty() { "Machine-produced content".to_string() } else { format!("Machine-produced by {generated_by}") },
+                                if generated_by.is_empty() {
+                                    "✨ AI generated"
+                                } else {
+                                    "✨ AI generated · {generated_by}"
                                 }
                             }
                         }
-                    },
-                    Some(Err(e)) => rsx! {
-                        div { class: "border-t border-border/60 pt-3",
-                            crate::states::InlineError { message: e.clone(), label: "Backlinks".to_string() }
+                        if !page_type.is_empty() {
+                            span { class: "rounded-full border border-border/70 bg-card/60 px-2 py-0.5 font-medium uppercase tracking-wide",
+                                "{page_type}"
+                            }
                         }
-                    },
-                    None => rsx! {},
+                        span { class: "font-mono", "{path}" }
+                    }
+                }
+                div { class: "flex min-h-0 flex-1 flex-col pb-12", {body} }
+                document::Link { rel: "stylesheet", href: editor::EDITOR_STYLE }
+                document::Style { {crate::collab::COLLAB_STYLE} }
+            }
+            // ── Right sidebar (md+): the same inspector as the vault ──
+            if has_page && panel_open {
+                aside {
+                    class: "hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-muted/30 md:flex",
+                    "data-testid": "note-inspector",
+                    NoteInspector {
+                        org: home,
+                        vault_id: vault_id.clone(),
+                        path: page_path,
+                        refresh_key,
+                        pages: pages_memo,
+                        on_open,
+                        tab: right_tab,
+                        on_hide: move |()| {
+                            let mut o = shell_right;
+                            o.set(crate::chrome::RightPanelOpen(false));
+                        },
+                    }
                 }
             }
-            document::Link { rel: "stylesheet", href: editor::EDITOR_STYLE }
-            document::Style { {crate::collab::COLLAB_STYLE} }
+        }
+        // ── Mobile chrome: Save + the inspector as a sheet ────
+        MobileActionBar {
+            button {
+                r#type: "button",
+                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85 disabled:opacity-50",
+                disabled: !has_page,
+                onclick: move |_| {
+                    if let Some(cb) = status_info.peek().as_ref().and_then(|d| d.on_save) {
+                        cb.call(());
+                    }
+                },
+                if status_info.read().as_ref().is_some_and(|d| d.dirty) { "Save •" } else { "Save" }
+            }
+            button {
+                r#type: "button",
+                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent disabled:opacity-50",
+                disabled: !has_page,
+                onclick: move |_| {
+                    let mut o = shell_right;
+                    let cur = o.peek().0;
+                    o.set(crate::chrome::RightPanelOpen(!cur));
+                },
+                "Backlinks"
+            }
+        }
+        BottomSheet {
+            open: has_page && panel_open,
+            on_close: move |_| {
+                let mut o = shell_right;
+                o.set(crate::chrome::RightPanelOpen(false));
+            },
+            title: right_tab().label().to_string(),
+            NoteInspector {
+                org: home,
+                vault_id: vault_id.clone(),
+                path: page_path,
+                refresh_key,
+                pages: pages_memo,
+                on_open,
+                tab: right_tab,
+            }
         }
     }
 }
