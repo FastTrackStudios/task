@@ -21323,6 +21323,7 @@ dependencies = [
  "futures-util",
  "js-sys",
  "media-proto",
+ "pollster 0.4.0",
  "serde",
  "serde_json",
  "task-plugin",

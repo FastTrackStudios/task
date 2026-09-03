@@ -81,6 +81,17 @@ pub fn SettingsView() -> Element {
                         "(app shortcuts win over browser defaults like Ctrl+P print)"
                     }
                 }
+                label { class: "flex items-center gap-2 text-sm text-foreground",
+                    input {
+                        r#type: "checkbox",
+                        checked: prefs.vim_mode,
+                        onchange: move |e| prefs_ctx.update(|p| p.vim_mode = e.checked()),
+                    }
+                    "Vim keybindings in the note editor"
+                    span { class: "text-xs text-muted-foreground",
+                        "(off by default — when on, notes open in NORMAL mode)"
+                    }
+                }
                 div { class: "overflow-x-auto rounded-lg border border-border",
                     table { class: "w-full min-w-[28rem] border-collapse text-sm",
                         thead {

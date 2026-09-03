@@ -84,5 +84,10 @@ architect = { workspace = true }
 # re-export wholesale.
 vox-types = { workspace = true }
 
+# Native-only test support for `feeds::single_flight` — `pollster` drives
+# the futures without pulling a full async runtime into this tiny crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pollster.workspace = true
+
 [lints]
 workspace = true

@@ -17,6 +17,17 @@
 #
 # Build, tests and quality are PARALLEL jobs — hosted runners are
 # isolated VMs, each with its own rust-cache.
+#
+# CACHE BUDGET: a repo gets 10 GB of Actions cache, and eviction is
+# global LRU. Only pushes to main save an entry (`save-if` on every
+# rust-cache step); PR runs restore and discard. Without that rule the
+# three jobs times every open PR overflowed the budget within an hour and
+# evicted each other, so most runs compiled 228 crates from cold — which
+# is the entire 30-40 minute wall clock, not the tests. The workspace's
+# 2655 tests execute in 3.3 seconds.
+#
+# .github/workflows/cache-cleanup.yml drops a merged/closed PR's leftover
+# entries so the budget stays main's.
 
 name: checks
 
@@ -32,6 +43,11 @@ concurrency:
 
 env:
   NIX_DEV: nix develop --accept-flake-config .#ci -c
+  # mold for the host target only -- 326 test binaries get linked on a
+  # `nextest run`, and GNU ld is the serial part of that. Scoped to the
+  # host triple so the wasm32 rustflags in .cargo/config.toml are
+  # untouched.
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
 jobs:
   plan:
@@ -118,31 +134,44 @@ jobs:
           echo "rail plan: $n_crates affected crate(s) — workspace=$workspace wasm=$wasm"
 
   build:
-    name: Build (workspace + wasm)
+    name: Build (wasm)
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 60
     needs: plan
     steps:
       - uses: actions/checkout@v4
+      # Every step here is gated on the WASM surface, not the workspace
+      # one. The native `cargo check --workspace --all-targets` this job
+      # used to run was a strict subset of the clippy run in `quality`
+      # (clippy-driver does the same check pass before it lints), so it
+      # cost 13 minutes to learn nothing. What is left is the one thing
+      # only this job does: prove the browser target still builds.
       - name: Free disk space
-        if: needs.plan.outputs.workspace == 'true'
+        if: needs.plan.outputs.wasm == 'true'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h / | tail -1
       - uses: DeterminateSystems/nix-installer-action@v22
-        if: needs.plan.outputs.workspace == 'true'
+        if: needs.plan.outputs.wasm == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: needs.plan.outputs.workspace == 'true'
+        if: needs.plan.outputs.wasm == 'true'
         with:
-          shared-key: build
+          shared-key: wasm
           cache-on-failure: "true"
+          # Only main WRITES the cache. PR runs read main's entry and
+          # throw their own away. Three jobs x every open PR each used to
+          # save 1.6-3.1 GB into a 10 GB repo-wide budget, so the budget
+          # sat permanently full and every new run evicted the entry the
+          # next one needed — "No cache found", then 30 minutes of cold
+          # compile on a workspace whose tests themselves run in 3.3s.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
       # committed, and asset!() resolves them at compile time — so they
       # have to exist before cargo runs. dx builds them during `dx
       # serve`/`dx build`, but CI drives plain cargo.
       - name: tailwind
-        if: needs.plan.outputs.workspace == 'true'
+        if: needs.plan.outputs.wasm == 'true'
         run: |
           # BOTH installs are required. -g puts the `tailwindcss` binary on
           # PATH; the local one puts the `tailwindcss` MODULE in node_modules
@@ -152,12 +181,6 @@ jobs:
           npm install --no-save tailwindcss
           ${NIX_DEV} just css
 
-      - name: Manifests + lockfile
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
-      - name: cargo check --workspace
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo check --workspace --all-targets
       # wasm32 target + ring's clang env come from the flake CI shell.
       #
       # Check via task-app-web, NOT `-p ui -p task-ui-core` directly.
@@ -192,6 +215,7 @@ jobs:
         with:
           shared-key: tests
           cache-on-failure: "true"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: tailwind
         if: needs.plan.outputs.workspace == 'true'
         run: |
@@ -200,7 +224,7 @@ jobs:
           ${NIX_DEV} just css
       - name: cargo nextest run --workspace
         if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo nextest run --workspace
+        run: ${NIX_DEV} cargo nextest run --profile ci --workspace
 
   quality:
     name: Quality (fmt + clippy + docs)
@@ -219,10 +243,14 @@ jobs:
         with:
           shared-key: quality
           cache-on-failure: "true"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # fmt is ungated: it compiles nothing, so change selection would
       # save nothing.
       - name: fmt
         run: ${NIX_DEV} cargo fmt --all -- --check
+      - name: Manifests + lockfile
+        if: needs.plan.outputs.workspace == 'true'
+        run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
       - name: tailwind
         if: needs.plan.outputs.workspace == 'true'
         run: |
@@ -233,7 +261,7 @@ jobs:
         if: needs.plan.outputs.workspace == 'true'
         run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings
       - name: Docs
-        if: needs.plan.outputs.workspace == 'true'
+        if: needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main'
         env:
           RUSTDOCFLAGS: -D warnings
         run: ${NIX_DEV} cargo doc --workspace --no-deps
