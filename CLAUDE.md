@@ -91,6 +91,40 @@ Committed audio is generated reproducibly by
 `python3 examples/studio/tools/gen_audio.py` (12 kHz mono WAVs, small
 enough for git). Add new songs there, never by hand.
 
+## The PR gate
+
+`checks` runs on THEBATTLESHIP (self-hosted, four slots), against a target
+dir that persists between runs. The check set lives in the `Justfile`, one
+recipe per check, and the workflow invokes those same recipes — so the two
+cannot drift:
+
+```bash
+just ci        # ci-fmt, ci-manifests, ci-tests, ci-clippy, ci-wasm
+```
+
+Run it before pushing. It is the gate's set in the gate's order, so a pass
+here is the gate's answer for the price of a local build.
+
+Do not wait on the gate — push and let it merge itself:
+
+```bash
+gh pr create --fill && gh pr merge --auto --squash
+```
+
+**`[skip checks]`** in a commit message turns the gate off for that PR, for
+when `just ci` already passed against that exact tree. Two limits, both real:
+
+- **Pull requests only.** A push to main runs the full gate whatever the
+  message says, because main is what deploys.
+- **It is a claim, not a proof.** A PR run builds the MERGE of the branch
+  with main; `just ci` built the branch alone. If main moved under you, a
+  local pass does not cover the merge. Use it for a follow-up commit on a
+  branch you just verified, not for the first push of a stale branch.
+
+Never use GitHub's own `[skip ci]` / `[ci skip]` / `[no ci]` tokens here:
+they are intercepted before any workflow starts and would suppress
+`deploy.yml` too.
+
 ## Specs and coverage
 
 Rules live in `docs/spec/`; coverage is tracked with `t[impl]`/`t[verify]`

@@ -115,6 +115,7 @@ jobs:
     outputs:
       workspace: ${{ steps.filter.outputs.workspace }}
       wasm: ${{ steps.filter.outputs.wasm }}
+      skip: ${{ steps.filter.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -135,6 +136,39 @@ jobs:
           }
 
           [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && run_all "manual dispatch"
+
+          # `[skip checks]` on the PR's head commit turns the gate off, for
+          # the case where `just ci` was already run locally against this
+          # exact tree.
+          #
+          # DELIBERATELY NOT one of GitHub's own tokens ([skip ci],
+          # [ci skip], [no ci], [skip actions], [actions skip]): those are
+          # intercepted before a workflow starts and would suppress EVERY
+          # workflow on the commit, deploy.yml included. This one is ours,
+          # so it can be scoped.
+          #
+          # PULL REQUESTS ONLY. A push to main runs the full gate whatever
+          # the message says — main is what deploys.
+          #
+          # What it cannot do: a PR run builds the MERGE of this branch
+          # with main, and `just ci` locally built the branch alone. If
+          # main has moved, a local pass does not cover the merge. This is
+          # a claim about a tree, not a proof about the merge.
+          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+            head_msg="$(git log -1 --pretty=%B \
+              "${{ github.event.pull_request.head.sha }}" 2>/dev/null || true)"
+            case "$head_msg" in
+              *"[skip checks]"*)
+                echo "plan: [skip checks] on the head commit — gate off"
+                {
+                  echo "skip=true"
+                  echo "workspace=false"
+                  echo "wasm=false"
+                } >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+            esac
+          fi
 
           if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
             base="$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD 2>/dev/null)" \
@@ -262,6 +296,7 @@ jobs:
       # fmt is ungated: it compiles nothing, so change selection would
       # save nothing.
       - name: fmt
+        if: ${{ needs.plan.outputs.skip != 'true' }}
         run: ${NIX_DEV} just ci-fmt
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
