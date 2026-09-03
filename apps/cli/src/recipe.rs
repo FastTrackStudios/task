@@ -42,6 +42,11 @@ pub(crate) enum RecipeCmd {
     /// LLM-synthesized, `--offline` for the deterministic converter,
     /// `--from-file` for bot-protected sites).
     Import(crate::recipe_import::RecipeImportArgs),
+    /// Import every recipe a listing page links to, as the cookbook's
+    /// *resources* tier (`Cookbook/<folder>/`, `curated: false`).
+    /// Idempotent by source URL; regenerates the collection's index
+    /// page in the wiki.
+    ImportCollection(crate::recipe_collection::RecipeImportCollectionArgs),
     /// Replace an existing recipe's cooklang source (validates
     /// by parsing first).
     Update(crate::mealprep::RecipeUpdateArgs),
@@ -155,6 +160,9 @@ pub(crate) async fn run_recipe(cmd: RecipeCmd) -> eyre::Result<()> {
         }
         RecipeCmd::Create(a) => return crate::mealprep::recipe_create(a).await,
         RecipeCmd::Import(a) => return crate::recipe_import::recipe_import(a).await,
+        RecipeCmd::ImportCollection(a) => {
+            return crate::recipe_collection::recipe_import_collection(a).await;
+        }
         RecipeCmd::Update(a) => return crate::mealprep::recipe_update(a).await,
         RecipeCmd::Show(a) => return crate::mealprep::recipe_show(a).await,
         RecipeCmd::CanCook(a) => return crate::mealprep::recipe_can_cook(a).await,

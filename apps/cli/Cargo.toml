@@ -198,6 +198,7 @@ finance-proto = { workspace = true, features = ["server", "vox"], optional = tru
 finance-db = { workspace = true, optional = true }
 finance = { workspace = true, optional = true }
 walkdir = { workspace = true }
+vault-entity = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 # Pull TASK_SERVER (and friends) from a `.env` file in CWD or any

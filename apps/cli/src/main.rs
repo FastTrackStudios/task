@@ -79,6 +79,8 @@ mod project;
 #[cfg(feature = "plugin-mealplan")]
 mod recipe;
 #[cfg(feature = "plugin-mealplan")]
+mod recipe_collection;
+#[cfg(feature = "plugin-mealplan")]
 mod recipe_import;
 mod runner;
 mod session_store;
