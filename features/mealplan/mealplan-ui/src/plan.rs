@@ -155,10 +155,15 @@ fn RecipesSection(slug: Memo<Option<String>>) -> Element {
 
     let rows: Vec<(Id<String>, Recipe)> = result.value().cloned().unwrap_or_default();
     let load_err = result.error().cloned();
+    let count = rows.len();
+    // Hand-written recipes (top level of `Cookbook/`) first, then each
+    // sub-folder — an imported collection's resource tier — as its own
+    // block, so sixty imports don't bury the ones the cook wrote.
+    let groups = group_by_folder(rows);
 
     rsx! {
         section { class: "flex flex-col gap-3",
-            SectionHeader { title: "Recipes".to_string(), count: rows.len() }
+            SectionHeader { title: "Recipes".to_string(), count }
 
             div { class: "flex flex-col gap-2 rounded-xl border border-border bg-card/40 p-3 sm:flex-row sm:items-center",
                 input {
@@ -202,16 +207,85 @@ fn RecipesSection(slug: Memo<Option<String>>) -> Element {
                 LoadError { what: "recipes".to_string(), err }
             }
 
-            if rows.is_empty() {
+            if count == 0 {
                 EmptyState { message: "No recipes yet — add one above.".to_string() }
             } else {
-                div { class: "flex flex-col gap-2",
-                    for (id, r) in rows {
-                        RecipeRow { key: "{id}", pending: id.is_temp(), recipe: r }
+                for (folder, rows) in groups {
+                    div { class: "flex flex-col gap-2",
+                        if !folder.is_empty() {
+                            div { class: "flex items-baseline gap-2 pt-2",
+                                Text { class: "text-xs font-semibold uppercase tracking-wide text-muted-foreground", "{folder}" }
+                                span { class: "text-[11px] text-muted-foreground", "{rows.len()}" }
+                            }
+                        }
+                        for (id, r) in rows {
+                            RecipeRow { key: "{id}", pending: id.is_temp(), recipe: r }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/// The sub-folder of `Cookbook/` a recipe sits in — `""` for the top
+/// level, `Food Wishes` for `Cookbook/Food Wishes/x.cook`. Anything
+/// outside the cookbook root groups under its own parent directory.
+fn recipe_folder(path: &str) -> String {
+    let rel = path.strip_prefix("Cookbook/").unwrap_or(path);
+    match rel.rsplit_once('/') {
+        Some((dir, _)) => dir.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Group rows by [`recipe_folder`]: the top level first (curated,
+/// hand-written), then folders in name order; row order within a
+/// group is the backend's.
+fn group_by_folder<K>(rows: Vec<(K, Recipe)>) -> Vec<(String, Vec<(K, Recipe)>)> {
+    let mut groups: Vec<(String, Vec<(K, Recipe)>)> = Vec::new();
+    for (id, r) in rows {
+        let folder = recipe_folder(&r.path);
+        match groups.iter_mut().find(|(f, _)| *f == folder) {
+            Some((_, v)) => v.push((id, r)),
+            None => groups.push((folder, vec![(id, r)])),
+        }
+    }
+    groups.sort_by(|a, b| {
+        b.0.is_empty()
+            .cmp(&a.0.is_empty())
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+    });
+    groups
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    #[test]
+    fn folder_of_a_recipe_path() {
+        assert_eq!(recipe_folder("Cookbook/Oatmeal.cook"), "");
+        assert_eq!(recipe_folder("Cookbook/Food Wishes/x.cook"), "Food Wishes");
+        assert_eq!(recipe_folder("Cookbook/A/B/x.cook"), "A/B");
+        assert_eq!(recipe_folder("Oatmeal.cook"), "");
+    }
+
+    #[test]
+    fn top_level_first_then_folders_by_name() {
+        let r = |p: &str| {
+            let mut r = crate::draft_recipe("x".into());
+            r.path = p.into();
+            ((), r)
+        };
+        let groups = group_by_folder(vec![
+            r("Cookbook/Zeta/a.cook"),
+            r("Cookbook/Oatmeal.cook"),
+            r("Cookbook/Food Wishes/b.cook"),
+            r("Cookbook/Food Wishes/c.cook"),
+        ]);
+        let names: Vec<(&str, usize)> = groups.iter().map(|(f, v)| (f.as_str(), v.len())).collect();
+        assert_eq!(names, vec![("", 1), ("Food Wishes", 2), ("Zeta", 1)]);
     }
 }
 

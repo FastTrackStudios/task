@@ -281,6 +281,48 @@ a default. Check `api_reference` for what the connected server exposes;
 until they land, `search_vault`/`read_note` reach the vault only and
 the CLI is the way into a wiki.
 
+## 9. Cooking: resources vs curated
+
+A `cooking` wiki holds the org's cookbook (`Cookbook/*.cook`, read by
+the cookbook and mealplan plugins; the server points the cookbook
+service at `<org>/wikis/cooking/Cookbook/` whenever a `cooking` wiki
+exists). Two tiers live there, told apart by cooklang metadata, not by
+where they sit:
+
+- **Resources** — whole collections imported in bulk so there is a
+  massive list to pull from. Each lands in a sub-folder of the
+  cookbook, stamped `>> source:` (canonical URL — the identity; a
+  re-run skips it), `>> source_site:`, `>> collection:`, `>> author:`,
+  `>> imported: YYYY-MM-DD`, `>> tags: resource, <collection-slug>`,
+  `>> curated: false`, plus the importer's usual servings / time /
+  image URL (the picture is *not* downloaded; attach one with
+  `task recipe image` if you want it in the reader).
+- **Curated** — the recipes actually cooked. Flip `>> curated: true`,
+  add `>> rating: <1-5>` and `>> made: <count>`, and keep the notes and
+  variations in a companion page beside the file:
+  `Cookbook/<folder>/<slug>.md` with `type: recipe-note`. `Favorites.md`
+  in the wiki lists them. A curated recipe is never rewritten by the
+  importer, not even with `--refresh`.
+
+```bash
+# The Food Wishes collection into Cookbook/Food Wishes/ — idempotent, cron-safe:
+task recipe import-collection "https://www.allrecipes.com/recipes/16791/everyday-cooking/special-collections/food-wishes/" \
+  --org <slug> --folder "Food Wishes" --author "Chef John" [--limit N] [--dry-run] [--since-file ~/.cache/task/food-wishes.json]
+# Bot-protected site: save the listing + pages, then
+task recipe import-collection --from-file listing.html --pages-dir pages/ --org <slug>
+# Curate one:
+task recipe get "Cookbook/Food Wishes/one-egg-shakshuka.cook" --org <slug>   # then edit curated/rating/made
+task wiki page write cooking "Cookbook/Food Wishes/one-egg-shakshuka.md" --from note.md
+```
+
+Every run ends by regenerating `<Collection>.md` in the wiki (`type:
+index`): one line per imported recipe with its source link, curated
+ones starred. Hand edits to that page are overwritten — curate in the
+companion note. The summary line is `imported N, skipped M present, F
+failed (listed)`; a per-recipe failure never aborts the run, a 403/429
+from the site stops it with a clear message (exit 1) so nobody gets
+hammered.
+
 ## Loop summary
 
 ```

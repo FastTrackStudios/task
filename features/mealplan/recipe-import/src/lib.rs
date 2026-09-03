@@ -35,6 +35,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+pub mod collection;
 pub mod error;
 pub mod extract;
 pub mod fetch;
