@@ -1,10 +1,16 @@
-# Task Checks — the one PR/push gate, on GitHub-hosted runners.
+# Task Checks — the one PR/push gate, on THEBATTLESHIP.
+#
+# Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB),
+# four instances so this workflow's parallel jobs do not queue behind
+# each other. Hosted `ubuntu-latest` is 4 vCPU with nothing warm, which
+# is what made a run take 35-40 minutes; see CACHE below.
 #
 # Toolchain comes from the repo flake: every step runs under
 # `nix develop .#ci -c` (rust 1.94 pin, wasm target, clang env for ring,
 # native headers, tailwindcss, cargo-rail). `--accept-flake-config` picks
-# up the fasttrackstudio.cachix.org substituter from flake.nix nixConfig,
-# so the toolchain is a download, not a build.
+# up the fasttrackstudio.cachix.org substituter from flake.nix nixConfig.
+# On this runner the store is already warm, so entering the shell is
+# instant and nothing installs nix per job.
 #
 # CHANGE SELECTION: the `plan` job asks `cargo rail plan` (patched flake
 # build — nix/modules/cargo-rail.nix) which workspace crates the range
@@ -15,19 +21,24 @@
 # .config/rail.toml [change-detection].infrastructure) or any rail
 # failure FAIL OPEN.
 #
-# Build, tests and quality are PARALLEL jobs — hosted runners are
-# isolated VMs, each with its own rust-cache.
+# CACHE: there is none, and that is the point. The old hosted setup ran
+# `Swatinem/rust-cache`, which tars a multi-GB target dir up to the
+# Actions cache at job end and untars it at job start. A repo gets 10 GB
+# of that cache, evicted global-LRU, and three jobs times every open PR
+# overflowed it within the hour — so most runs restored NOTHING and
+# recompiled 228 crates from cold. That was the entire 35-40 minute wall
+# clock. The workspace's 2655 tests execute in 3.3 seconds.
 #
-# CACHE BUDGET: a repo gets 10 GB of Actions cache, and eviction is
-# global LRU. Only pushes to main save an entry (`save-if` on every
-# rust-cache step); PR runs restore and discard. Without that rule the
-# three jobs times every open PR overflowed the budget within an hour and
-# evicted each other, so most runs compiled 228 crates from cold — which
-# is the entire 30-40 minute wall clock, not the tests. The workspace's
-# 2655 tests execute in 3.3 seconds.
+# A self-hosted runner needs no such round trip. Each instance keeps a
+# CARGO_TARGET_DIR under its own $HOME (a real directory on NVMe, set by
+# `workDir` in the fleet aspect — NOT the systemd RuntimeDirectory, which
+# is tmpfs and is deleted on restart). It survives jobs, restarts and
+# reboots, so an ordinary PR compiles only what it changed.
 #
-# .github/workflows/cache-cleanup.yml drops a merged/closed PR's leftover
-# entries so the budget stays main's.
+# It lives OUTSIDE $GITHUB_WORKSPACE on purpose: `actions/checkout`
+# defaults to `clean: true`, which runs `git clean -ffdx`, and /target is
+# gitignored — a target dir inside the checkout would be deleted at the
+# start of every run.
 
 name: checks
 
@@ -48,21 +59,68 @@ env:
   # host triple so the wasm32 rustflags in .cargo/config.toml are
   # untouched.
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+  # Terse, stable logs — this is CI, not a terminal.
+  CARGO_TERM_COLOR: never
+  # Incremental compilation helps repeated edits in one tree; a CI delta is
+  # a whole PR, and it cost 31 GB of the 102 GB a warm instance was holding.
+  # Swatinem/rust-cache sets this by default and dropping the action
+  # inherited cargo's default of ON, which is how it went unnoticed.
+  CARGO_INCREMENTAL: "0"
 
 jobs:
+  # GitHub applies `timeout-minutes` to EXECUTION, not to time spent
+  # queued — with every real job on one host, a stopped runner service
+  # would leave a PR sitting "Queued" rather than failing.
+  #
+  # This watches THIS RUN's own jobs (the `actions: read` the default
+  # token already has — the org runners endpoint needs `admin:org`, which
+  # no workflow token carries) and fails once anything has sat queued past
+  # the grace period. It exits the moment the jobs are picked up, so a
+  # healthy run pays a few seconds on a hosted runner.
+  queue-timeout:
+    name: Queue timeout
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fail if the self-hosted jobs never start
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRACE_SECONDS: "480"
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + GRACE_SECONDS ))
+          while :; do
+            queued="$(gh api \
+              "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+              -q '[.jobs[] | select(.name != "Queue timeout")
+                   | select(.status == "queued") | .name] | join(", ")' || true)"
+            if [ -z "${queued}" ]; then
+              echo "all jobs picked up"
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "${deadline}" ]; then
+              echo "::error::Still queued after ${GRACE_SECONDS}s: ${queued}"
+              echo "::error::No self-hosted nix-host runner took the work."
+              echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
+              exit 1
+            fi
+            echo "queued: ${queued}"
+            sleep 20
+          done
+
   plan:
     name: Plan affected crates
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: [self-hosted, nix-host]
+    timeout-minutes: 10
     outputs:
       workspace: ${{ steps.filter.outputs.workspace }}
       wasm: ${{ steps.filter.outputs.wasm }}
+      skip: ${{ steps.filter.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
         with:
           # Full history: the plan needs both diff endpoints' ancestry.
           fetch-depth: 0
-      - uses: DeterminateSystems/nix-installer-action@v22
       - name: Plan affected crates
         id: filter
         run: |
@@ -79,6 +137,39 @@ jobs:
 
           [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && run_all "manual dispatch"
 
+          # `[skip checks]` on the PR's head commit turns the gate off, for
+          # the case where `just ci` was already run locally against this
+          # exact tree.
+          #
+          # DELIBERATELY NOT one of GitHub's own tokens ([skip ci],
+          # [ci skip], [no ci], [skip actions], [actions skip]): those are
+          # intercepted before a workflow starts and would suppress EVERY
+          # workflow on the commit, deploy.yml included. This one is ours,
+          # so it can be scoped.
+          #
+          # PULL REQUESTS ONLY. A push to main runs the full gate whatever
+          # the message says — main is what deploys.
+          #
+          # What it cannot do: a PR run builds the MERGE of this branch
+          # with main, and `just ci` locally built the branch alone. If
+          # main has moved, a local pass does not cover the merge. This is
+          # a claim about a tree, not a proof about the merge.
+          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+            head_msg="$(git log -1 --pretty=%B \
+              "${{ github.event.pull_request.head.sha }}" 2>/dev/null || true)"
+            case "$head_msg" in
+              *"[skip checks]"*)
+                echo "plan: [skip checks] on the head commit — gate off"
+                {
+                  echo "skip=true"
+                  echo "workspace=false"
+                  echo "wasm=false"
+                } >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+            esac
+          fi
+
           if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
             base="$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD 2>/dev/null)" \
               || run_all "no merge-base"
@@ -93,7 +184,7 @@ jobs:
           plan="$(${NIX_DEV} cargo rail plan --quiet --from "$base" --to HEAD -f json)" \
             || run_all "cargo rail plan failed"
 
-          eval "$(printf '%s' "$plan" | python3 -c '
+          gates="$(printf '%s' "$plan" | ${NIX_DEV} python3 -c '
           import json, sys
 
           plan = json.load(sys.stdin)
@@ -121,6 +212,8 @@ jobs:
               print(f"{k}={str(v).lower()}")
           print(f"n_crates={len(crates)}")
           ')" || run_all "plan parse failed"
+          [ -n "$gates" ] || run_all "plan parse produced no gates"
+          eval "$gates"
 
           # Infra surface (toolchain / flake / CI inputs changed) is a
           # DELIBERATE full run, not a failure — everything's inputs
@@ -133,53 +226,88 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "rail plan: $n_crates affected crate(s) — workspace=$workspace wasm=$wasm"
 
-  build:
-    name: Build (wasm)
-    runs-on: ubuntu-latest
+  # ONE job, on ONE runner instance, against ONE target dir.
+  #
+  # These used to be three parallel jobs. On hosted runners that was free
+  # — three isolated VMs — but on a persistent runner it is waste twice
+  # over. The 228 dependency crates are the dominant cost of every one of
+  # these commands, and three jobs on three instances built them three
+  # times into three target dirs (measured mid-run: 2.0G + 2.8G + 438M).
+  # And a single PR occupied three of the four slots, so a second PR
+  # queued behind the first instead of running beside it.
+  #
+  # Serialised into one job they share a target dir, so the deps are
+  # built once and each later command pays only its own marginal cost.
+  # Four slots now mean four concurrent PRs.
+  #
+  # ORDER IS DELIBERATE:
+  #   fmt         — compiles nothing; fails in seconds on trivia.
+  #   nextest     — needs full CODEGEN of every dependency. The expensive
+  #                 one, so it goes first and everything after reuses the
+  #                 rlibs it leaves behind.
+  #   clippy      — needs only dependency METADATA, which the test build
+  #                 already produced. Reversing these two would pay for
+  #                 the codegen afterwards anyway.
+  #   wasm        — a different target triple, so a separate tree; it
+  #                 shares only build scripts and proc macros.
+  #   docs        — rustdoc, main only.
+  #
+  # Steps run under `!cancelled()` rather than stopping at the first
+  # failure: serialised, a bail-out would cost a whole extra run to learn
+  # the next thing wrong. One run still reports fmt AND tests AND clippy.
+  checks:
+    name: Checks (fmt + tests + clippy + wasm + docs)
+    runs-on: [self-hosted, nix-host]
     timeout-minutes: 60
     needs: plan
     steps:
       - uses: actions/checkout@v4
-      # Every step here is gated on the WASM surface, not the workspace
-      # one. The native `cargo check --workspace --all-targets` this job
-      # used to run was a strict subset of the clippy run in `quality`
-      # (clippy-driver does the same check pass before it lints), so it
-      # cost 13 minutes to learn nothing. What is left is the one thing
-      # only this job does: prove the browser target still builds.
-      - name: Free disk space
-        if: needs.plan.outputs.wasm == 'true'
+      - name: Persistent target dir
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h / | tail -1
-      - uses: DeterminateSystems/nix-installer-action@v22
-        if: needs.plan.outputs.wasm == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: needs.plan.outputs.wasm == 'true'
-        with:
-          shared-key: wasm
-          cache-on-failure: "true"
-          # Only main WRITES the cache. PR runs read main's entry and
-          # throw their own away. Three jobs x every open PR each used to
-          # save 1.6-3.1 GB into a 10 GB repo-wide budget, so the budget
-          # sat permanently full and every new run evicted the entry the
-          # next one needed — "No cache found", then 30 minutes of cold
-          # compile on a workspace whose tests themselves run in 3.3s.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Outside $GITHUB_WORKSPACE — actions/checkout runs
+          # `git clean -ffdx` and /target is gitignored, so a target dir
+          # inside the checkout would be deleted every run. $HOME is this
+          # runner INSTANCE's workDir, so two instances never share a
+          # cargo lock, and the dir outlives jobs, restarts and reboots.
+          dir="$HOME/cargo-target/checks"
+          # One-time migration off the old per-job dirs. `tests` is the
+          # one that held full codegen artifacts, which is exactly what
+          # the new step order reuses — adopting it saves this instance a
+          # cold build. The other two were duplicates of it and go back to
+          # the disk they were wasting.
+          if [ ! -d "$dir" ] && [ -d "$HOME/cargo-target/tests" ]; then
+            echo "adopting the old tests/ target dir"
+            mv "$HOME/cargo-target/tests" "$dir"
+          fi
+          rm -rf "$HOME/cargo-target/tests" "$HOME/cargo-target/quality" \
+                 "$HOME/cargo-target/wasm"
+          mkdir -p "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
 
-      # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
-      # committed, and asset!() resolves them at compile time — so they
-      # have to exist before cargo runs. dx builds them during `dx
-      # serve`/`dx build`, but CI drives plain cargo.
-      - name: tailwind
-        if: needs.plan.outputs.wasm == 'true'
-        run: |
-          # BOTH installs are required. -g puts the `tailwindcss` binary on
-          # PATH; the local one puts the `tailwindcss` MODULE in node_modules
-          # so `@import "tailwindcss"` inside the CSS can resolve it (node
-          # resolution walks up from the crate dir, so repo-root is enough).
-          npm install -g @tailwindcss/cli
-          npm install --no-save tailwindcss
-          ${NIX_DEV} just css
+      # Every step below is a `just ci-*` recipe, and the Justfile is the
+      # single source of truth for what each one runs. `just ci` runs the
+      # same set in the same order, so an agent verifying before a push
+      # gets the gate's answer without spending a round trip on it — the
+      # steps stay separate here only for per-step timing and for the
+      # plan's gating. (tailwind is a dependency of the recipes that need
+      # it, so it no longer needs a step of its own.)
+      #
+      # fmt is ungated: it compiles nothing, so change selection would
+      # save nothing.
+      - name: fmt
+        if: ${{ needs.plan.outputs.skip != 'true' }}
+        run: ${NIX_DEV} just ci-fmt
+      - name: Manifests + lockfile
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        run: ${NIX_DEV} just ci-manifests
+
+      - name: Tests
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        run: ${NIX_DEV} just ci-tests
+      - name: Clippy
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        run: ${NIX_DEV} just ci-clippy
 
       # wasm32 target + ring's clang env come from the flake CI shell.
       #
@@ -191,77 +319,32 @@ jobs:
       # with "the wasm_js backend requires the wasm_js feature". The web app
       # pulls both leaves in anyway, so coverage is unchanged.
       - name: wasm check (task-app-web)
-        if: needs.plan.outputs.wasm == 'true'
-        run: |
-          ${NIX_DEV} cargo check --target wasm32-unknown-unknown \
-            -p task-app-web
+        if: ${{ !cancelled() && needs.plan.outputs.wasm == 'true' }}
+        run: ${NIX_DEV} just ci-wasm
 
-  tests:
-    name: Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    needs: plan
-    steps:
-      - uses: actions/checkout@v4
-      - name: Free disk space
-        if: needs.plan.outputs.workspace == 'true'
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h / | tail -1
-      - uses: DeterminateSystems/nix-installer-action@v22
-        if: needs.plan.outputs.workspace == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: needs.plan.outputs.workspace == 'true'
-        with:
-          shared-key: tests
-          cache-on-failure: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: tailwind
-        if: needs.plan.outputs.workspace == 'true'
-        run: |
-          npm install -g @tailwindcss/cli
-          npm install --no-save tailwindcss
-          ${NIX_DEV} just css
-      - name: cargo nextest run --workspace
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo nextest run --profile ci --workspace
-
-  quality:
-    name: Quality (fmt + clippy + docs)
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    needs: plan
-    steps:
-      - uses: actions/checkout@v4
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h / | tail -1
-      - uses: DeterminateSystems/nix-installer-action@v22
-      - uses: Swatinem/rust-cache@v2
-        if: needs.plan.outputs.workspace == 'true'
-        with:
-          shared-key: quality
-          cache-on-failure: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # fmt is ungated: it compiles nothing, so change selection would
-      # save nothing.
-      - name: fmt
-        run: ${NIX_DEV} cargo fmt --all -- --check
-      - name: Manifests + lockfile
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
-      - name: tailwind
-        if: needs.plan.outputs.workspace == 'true'
-        run: |
-          npm install -g @tailwindcss/cli
-          npm install --no-save tailwindcss
-          ${NIX_DEV} just css
-      - name: Clippy
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings
       - name: Docs
-        if: needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main'
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: ${NIX_DEV} cargo doc --workspace --no-deps
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main' }}
+        run: ${NIX_DEV} just ci-docs
+
+      # Cargo never collects stale artifacts: every rebuild leaves the old
+      # one in deps/ forever. On a throwaway VM that is invisible; on a
+      # persistent runner it is unbounded — this dir reached 167 GB in two
+      # runs, because changing a flag (CARGO_INCREMENTAL) re-fingerprints
+      # everything and orphans the previous full set beside the new one.
+      #
+      # --maxsize, not --time: an age cutoff cleans nothing when every
+      # artifact is from today, which is exactly the CI case ("Cleaned
+      # nothing" from --time 7 against a 167 GB dir). This bounds the cache
+      # and evicts oldest-first, which is the behaviour we actually want —
+      # the current build stays warm, the sediment goes.
+      #
+      # always(): a red run has to give the disk back too.
+      - name: Bound the target dir
+        if: ${{ always() && needs.plan.outputs.skip != 'true' }}
+        run: |
+          # CARGO_INCREMENTAL=0 stops new incremental output but does not
+          # remove what earlier runs left; nothing regenerates this now.
+          rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
+          ${NIX_DEV} cargo sweep --maxsize 60GB || true
+          du -sh "${CARGO_TARGET_DIR}" || true
+          df -h /var/lib | tail -1

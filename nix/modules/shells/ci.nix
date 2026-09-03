@@ -30,6 +30,10 @@
         pkgs.nodejs_22
         # git — task-server tests and the snapshot engine shell out to it.
         pkgs.git
+        # python3 — the `plan` job parses `cargo rail plan --format json`
+        # with it. Hosted Ubuntu images ship one; the self-hosted NixOS
+        # runner does not, so the shell has to carry it.
+        pkgs.python3
         # mold — CI selects it for the host target via
         # CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS in
         # .github/workflows/checks.yml. A `nextest run --workspace` links
