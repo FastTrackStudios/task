@@ -153,7 +153,7 @@ pub(crate) async fn run_cycle(cmd: CycleCmd) -> eyre::Result<()> {
             let pages: wiki_proto::service::pages::PagesClient =
                 crate::establish_for_url(&url).await?;
             if pages
-                .read_page("default".to_owned(), rel.clone())
+                .read_page(org_proto::DEFAULT_WIKI.to_owned(), rel.clone())
                 .await
                 .is_ok()
             {
@@ -203,7 +203,12 @@ pub(crate) async fn run_cycle(cmd: CycleCmd) -> eyre::Result<()> {
                 created = now.to_rfc3339(),
             );
             pages
-                .write_page("default".to_owned(), rel.clone(), body, String::new())
+                .write_page(
+                    org_proto::DEFAULT_WIKI.to_owned(),
+                    rel.clone(),
+                    body,
+                    String::new(),
+                )
                 .await
                 .map_err(|e| eyre::eyre!("write {rel}: {e:?}"))?;
             println!("Created cycle reflection at:");
