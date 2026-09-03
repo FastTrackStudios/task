@@ -79,20 +79,28 @@ pub fn NoteHeader(
         let old_path = path.clone();
         let bytes = session.state.peek().doc.to_string().into_bytes();
         let slug = home.peek().clone();
+        let vault_id = session.vault_id();
         spawn(async move {
             // Save any pending edits to the OLD path first so nothing is
             // lost if the create fails and we stay put. Best-effort.
             session.save();
-            match put_file_create(slug.clone(), new_path.clone(), bytes).await {
+            match put_file_create(slug.clone(), vault_id.clone(), new_path.clone(), bytes).await {
                 Ok(_) => {
-                    nav.push(crate::routes::Route::VaultRoute {
-                        path: new_path.clone(),
-                        org: String::new(),
-                    });
+                    // A vault note stays on the vault route (org from
+                    // the switcher); a wiki page stays on its wiki's.
+                    nav.push(crate::routes::note_route(
+                        if crate::document_session::wiki_of_vault_id(&vault_id).is_some() {
+                            &slug
+                        } else {
+                            ""
+                        },
+                        &vault_id,
+                        new_path.clone(),
+                    ));
                     // The new file is committed and we've navigated; drop
                     // the old one. A delete failure only leaves a stale
                     // copy behind — surface it but don't block.
-                    if let Err(e) = delete_file(slug, old_path).await {
+                    if let Err(e) = delete_file(slug, vault_id, old_path).await {
                         if let Some(n) = notify {
                             n.error(format!("Renamed, but couldn't remove the old note: {e}"));
                         }
@@ -251,47 +259,43 @@ fn sanitize_filename(title: &str) -> String {
 /// Create-only write of `bytes` at `path` (the rename target). Fails if
 /// the target already exists — the caller surfaces that as a toast and
 /// keeps the old file.
-async fn put_file_create(slug: String, path: String, bytes: Vec<u8>) -> Result<String, String> {
+async fn put_file_create(
+    slug: String,
+    vault_id: String,
+    path: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
     #[cfg(target_arch = "wasm32")]
     {
         use vault_proto::IfMatch;
         let ack = client
-            .put_file(
-                crate::document_session::VAULT_ID.to_owned(),
-                path,
-                bytes,
-                IfMatch::CreateOnly,
-            )
+            .put_file(vault_id, path, bytes, IfMatch::CreateOnly)
             .await
             .map_err(|e| format!("put_file: {e:?}"))?;
         Ok(ack.sha256)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (client, path, bytes);
+        let _ = (client, vault_id, path, bytes);
         Err("native client not wired yet".to_owned())
     }
 }
 
 /// Delete `path` unconditionally (the old name after a rename).
-async fn delete_file(slug: String, path: String) -> Result<(), String> {
+async fn delete_file(slug: String, vault_id: String, path: String) -> Result<(), String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
     #[cfg(target_arch = "wasm32")]
     {
         use vault_proto::IfMatch;
         client
-            .delete_file(
-                crate::document_session::VAULT_ID.to_owned(),
-                path,
-                IfMatch::Force,
-            )
+            .delete_file(vault_id, path, IfMatch::Force)
             .await
             .map_err(|e| format!("delete_file: {e:?}"))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (client, path);
+        let _ = (client, vault_id, path);
         Err("native client not wired yet".to_owned())
     }
 }

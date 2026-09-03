@@ -177,7 +177,12 @@ pub fn SearchOverlay() -> Element {
             }
             let mut out = Vec::new();
             for slug in slugs {
-                if let Ok(pages) = crate::pages::vault::fetch_folder_index(slug.clone()).await {
+                if let Ok(pages) = crate::pages::vault::fetch_folder_index(
+                    slug.clone(),
+                    crate::document_session::VAULT_ID.to_owned(),
+                )
+                .await
+                {
                     for p in pages {
                         out.push((p, slug.clone()));
                     }
@@ -473,6 +478,8 @@ pub fn SearchOverlay() -> Element {
 async fn fetch_note_preview(slug: String, path: String) -> Option<String> {
     let client = crate::vox_clients::vault_client(&slug).await.ok()?;
     let bytes = client
+        // Search indexes the org's own vault; wiki pages have their
+        // own results and their own route.
         .get_file(crate::document_session::VAULT_ID.to_owned(), path)
         .await
         .ok()?;

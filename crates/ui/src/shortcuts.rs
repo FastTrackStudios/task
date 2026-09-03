@@ -664,11 +664,13 @@ pub fn spawn_new_note(
     mut pending_title: Signal<Option<String>>,
 ) {
     spawn(async move {
-        let taken: std::collections::HashSet<String> =
-            crate::pages::vault::fetch_folder_index(slug.clone())
-                .await
-                .map(|pages| pages.into_iter().map(|p| p.path.to_lowercase()).collect())
-                .unwrap_or_default();
+        let taken: std::collections::HashSet<String> = crate::pages::vault::fetch_folder_index(
+            slug.clone(),
+            crate::document_session::VAULT_ID.to_owned(),
+        )
+        .await
+        .map(|pages| pages.into_iter().map(|p| p.path.to_lowercase()).collect())
+        .unwrap_or_default();
         let name = (1..)
             .map(|i| {
                 if i == 1 {
@@ -679,7 +681,13 @@ pub fn spawn_new_note(
             })
             .find(|n| !taken.contains(&n.to_lowercase()))
             .expect("unbounded name search");
-        match crate::pages::vault::create_new_file(slug, name.clone()).await {
+        match crate::pages::vault::create_new_file(
+            slug,
+            crate::document_session::VAULT_ID.to_owned(),
+            name.clone(),
+        )
+        .await
+        {
             Ok(_) => {
                 pending_title.set(Some(name.clone()));
                 nav.push(crate::routes::Route::VaultRoute {

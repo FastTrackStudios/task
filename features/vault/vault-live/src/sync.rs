@@ -71,7 +71,12 @@ enum Layout {
     /// Unknown ids return [`VaultSyncError::NotFound`]. Right
     /// for a desktop app that opens a finite, user-chosen set
     /// of vaults.
-    Explicit(HashMap<String, PathBuf>),
+    ///
+    /// Behind a lock because the set can grow while the backend
+    /// serves ([`Backend::add_root`] — a wiki created at runtime
+    /// becomes a root without a restart), and every clone must
+    /// see the addition.
+    Explicit(Arc<std::sync::RwLock<HashMap<String, PathBuf>>>),
     /// All vaults live as subdirectories under one parent
     /// directory. Any `vault_id` is accepted; the directory is
     /// created on the first write. Right for a multi-tenant
@@ -143,7 +148,42 @@ impl Backend {
     /// Caller is responsible for creating the directories.
     #[must_use]
     pub fn with_roots(roots: HashMap<String, PathBuf>) -> Self {
-        Self::from_layout(Layout::Explicit(roots))
+        Self::from_layout(Layout::Explicit(Arc::new(std::sync::RwLock::new(roots))))
+    }
+
+    /// Register one more `vault_id → root` on an explicit-layout
+    /// backend, creating the directory if missing. Every clone sees
+    /// it at once — this is how a wiki created while the server runs
+    /// becomes editable through the vault path without a restart.
+    /// Replaces an existing entry of the same id. An `UnderParent`
+    /// backend needs no registration and ignores the call.
+    pub fn add_root(&self, vault_id: impl Into<String>, root: PathBuf) -> std::io::Result<()> {
+        if let Layout::Explicit(map) = &self.layout {
+            std::fs::create_dir_all(&root)?;
+            map.write()
+                .expect("vault::sync roots poisoned")
+                .insert(vault_id.into(), root);
+        }
+        Ok(())
+    }
+
+    /// The registered `vault_id`s (explicit layout only; an
+    /// `UnderParent` backend accepts any id and lists none).
+    #[must_use]
+    pub fn vault_ids(&self) -> Vec<String> {
+        match &self.layout {
+            Layout::Explicit(map) => {
+                let mut ids: Vec<String> = map
+                    .read()
+                    .expect("vault::sync roots poisoned")
+                    .keys()
+                    .cloned()
+                    .collect();
+                ids.sort();
+                ids
+            }
+            Layout::UnderParent(_) => Vec::new(),
+        }
     }
 
     /// Build a multi-tenant backend where every `vault_id`
@@ -210,7 +250,12 @@ impl Backend {
     /// succeeds.
     fn root(&self, vault_id: &str) -> Result<PathBuf, VaultSyncError> {
         match &self.layout {
-            Layout::Explicit(map) => map.get(vault_id).cloned().ok_or(VaultSyncError::NotFound),
+            Layout::Explicit(map) => map
+                .read()
+                .expect("vault::sync roots poisoned")
+                .get(vault_id)
+                .cloned()
+                .ok_or(VaultSyncError::NotFound),
             Layout::UnderParent(parent) => Ok(parent.join(vault_id)),
         }
     }

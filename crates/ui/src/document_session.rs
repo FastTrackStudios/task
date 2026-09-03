@@ -32,11 +32,21 @@ use architect::try_use_notifications;
 use dioxus::prelude::*;
 use editor::EditorState;
 
-/// The single vault id the server hosts per org. Referenced from
-/// the wasm client calls (native arms are stubs, same as the rest
-/// of the vault page's RPC helpers).
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+/// The org's own vault — the id the server registers its `vault/`
+/// under. Every other vault id the client meets is a wiki's
+/// ([`wiki_vault_id`]); the editor path is the same for both.
 pub(crate) const VAULT_ID: &str = "default";
+
+/// The vault id a wiki's pages are served under (`wiki:<slug>`) —
+/// mirrors the server's `wiki_vault::vault_id`.
+pub(crate) fn wiki_vault_id(wiki: &str) -> String {
+    format!("wiki:{wiki}")
+}
+
+/// The wiki a vault id names, if it names one.
+pub(crate) fn wiki_of_vault_id(vault_id: &str) -> Option<&str> {
+    vault_id.strip_prefix("wiki:").filter(|s| !s.is_empty())
+}
 
 /// The scope that should own a pane's editor buffer.
 ///
@@ -116,6 +126,10 @@ struct OpenFile {
 pub struct DocumentSession {
     /// Active org slug (the vault lives in the home org).
     home: Memo<String>,
+    /// Which of the org's vaults the file lives in: [`VAULT_ID`] for
+    /// the vault page, `wiki:<slug>` for a wiki page. Fixed for the
+    /// session's life (a different vault remounts the view).
+    vault_id: Signal<String>,
     /// The editor buffer. Pass straight to `editor::Editor`.
     pub state: Signal<EditorState>,
     open: Signal<Option<OpenFile>>,
@@ -146,7 +160,10 @@ pub struct DocumentSession {
 }
 
 /// Create the session and install the debounced-autosave effect.
-pub fn use_document_session(home: Memo<String>) -> DocumentSession {
+/// `vault_id` names which of the org's vaults the file lives in
+/// ([`VAULT_ID`] or a wiki's [`wiki_vault_id`]).
+pub fn use_document_session(home: Memo<String>, vault_id: String) -> DocumentSession {
+    let vault_id = use_signal(|| vault_id);
     // The buffer is the one piece of session state that leaves this
     // scope (see [`DocOwnerScope`]), so it is created in the page's
     // scope when the page offers one. Everything below stays local:
@@ -171,6 +188,7 @@ pub fn use_document_session(home: Memo<String>) -> DocumentSession {
 
     let session = DocumentSession {
         home,
+        vault_id,
         state,
         open,
         saved_text,
@@ -235,6 +253,11 @@ impl DocumentSession {
 
     // ── Reactive reads ────────────────────────────────────────
 
+    /// The vault the open file lives in. Fixed per session.
+    pub fn vault_id(&self) -> String {
+        self.vault_id.peek().clone()
+    }
+
     /// Path of the open file, or `None`. Reactive.
     pub fn current_path(&self) -> Option<String> {
         self.open.read().as_ref().map(|o| o.path.clone())
@@ -286,7 +309,7 @@ impl DocumentSession {
         let s = *self;
         let ep = s.bump_epoch();
         spawn(async move {
-            match fetch_file(s.home.peek().clone(), path.clone()).await {
+            match fetch_file(s.home.peek().clone(), s.vault_id(), path.clone()).await {
                 Ok(text) => {
                     if *s.epoch.peek() != ep {
                         return; // a newer open superseded this one
@@ -390,6 +413,7 @@ impl DocumentSession {
         }
         let result = save_file(
             self.home.peek().clone(),
+            self.vault_id(),
             of.path.clone(),
             text.clone(),
             of.sha.clone(),
@@ -448,19 +472,23 @@ impl DocumentSession {
 
 /// Read one file's bytes as UTF-8 text. Shared with the
 /// vault-lookup content cache.
-pub(crate) async fn fetch_file(slug: String, path: String) -> Result<String, String> {
+pub(crate) async fn fetch_file(
+    slug: String,
+    vault_id: String,
+    path: String,
+) -> Result<String, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
     #[cfg(target_arch = "wasm32")]
     {
         let bytes = client
-            .get_file(VAULT_ID.to_owned(), path)
+            .get_file(vault_id, path)
             .await
             .map_err(|e| format!("get_file: {e:?}"))?;
         Ok(String::from_utf8_lossy(&bytes.0).into_owned())
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (client, path);
+        let _ = (client, vault_id, path);
         Err("native client not wired yet".to_owned())
     }
 }
@@ -470,6 +498,7 @@ pub(crate) async fn fetch_file(slug: String, path: String) -> Result<String, Str
 /// unconditionally. Returns the freshly committed sha.
 async fn save_file(
     slug: String,
+    vault_id: String,
     path: String,
     text: String,
     prev_sha: Option<String>,
@@ -491,7 +520,7 @@ async fn save_file(
             }
         };
         match client
-            .put_file(VAULT_ID.to_owned(), path, text.into_bytes(), if_match)
+            .put_file(vault_id, path, text.into_bytes(), if_match)
             .await
         {
             Ok(ack) => Ok(ack.sha256),
@@ -510,7 +539,20 @@ async fn save_file(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (client, path, text, prev_sha, force);
+        let _ = (client, vault_id, path, text, prev_sha, force);
         Err(SaveError::Other("native client not wired yet".to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod vault_id_tests {
+    use super::{VAULT_ID, wiki_of_vault_id, wiki_vault_id};
+
+    #[test]
+    fn wiki_vault_ids_round_trip_and_the_vault_is_not_a_wiki() {
+        assert_eq!(wiki_vault_id("music-theory"), "wiki:music-theory");
+        assert_eq!(wiki_of_vault_id("wiki:music-theory"), Some("music-theory"));
+        assert_eq!(wiki_of_vault_id(VAULT_ID), None);
+        assert_eq!(wiki_of_vault_id("wiki:"), None);
     }
 }

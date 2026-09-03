@@ -537,19 +537,20 @@ pub const COLLAB_STYLE: &str = "
 /// the page stays in plain sha mode.
 pub(crate) async fn open_collab(
     slug: String,
+    vault_id: String,
     path: String,
 ) -> Result<vault_proto::CollabAck, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
     #[cfg(target_arch = "wasm32")]
     {
         client
-            .open_collab(crate::document_session::VAULT_ID.to_owned(), path)
+            .open_collab(vault_id, path)
             .await
             .map_err(|e| format!("open_collab: {e:?}"))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (client, path);
+        let _ = (client, vault_id, path);
         Err("native client not wired yet".to_owned())
     }
 }

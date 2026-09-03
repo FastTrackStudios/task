@@ -7,4 +7,3 @@ pub mod org_switcher;
 pub mod project_sidebar;
 pub mod rail;
 pub mod sidebar;
-pub mod wiki_sidebar;

@@ -138,7 +138,16 @@ pub struct WikiBackend {
     /// inside), so the service mount and the stream mount can each
     /// hold a backend clone.
     changes: architect::PubSub<WikiChange>,
+    /// Told `(slug, root)` after `create_wiki` commits — the server's
+    /// way of registering the new directory with the other services
+    /// that serve wiki pages (vault-sync, the link graph, collab).
+    on_created: Option<WikiCreatedHook>,
 }
+
+/// What [`WikiBackend::with_on_created`] is handed: a callback run
+/// with the new wiki's slug and root directory once it exists on
+/// disk and in the set.
+pub type WikiCreatedHook = Arc<dyn Fn(&str, &Path) + Send + Sync>;
 
 impl WikiBackend {
     /// Single-vault server. `wiki_id` resolves to
@@ -186,12 +195,23 @@ impl WikiBackend {
         self
     }
 
+    /// Run `hook` after every successful `create_wiki`, with the new
+    /// wiki's slug and root. The server uses it to register the
+    /// directory as a vault-sync root (`wiki:<slug>`) so the editor
+    /// can open its pages immediately.
+    #[must_use]
+    pub fn with_on_created(mut self, hook: WikiCreatedHook) -> Self {
+        self.on_created = Some(hook);
+        self
+    }
+
     fn from_layout(layout: Layout) -> Self {
         Self {
             layout,
             caller: Arc::new(GateCaller),
             watch_flags: Arc::new(std::sync::Mutex::new(HashMap::new())),
             changes: architect::PubSub::sliding(256),
+            on_created: None,
         }
     }
 
@@ -305,7 +325,7 @@ impl WikiBackend {
     /// Call only *after* the write landed — subscribers use these to
     /// decide what to re-fetch, so a speculative event costs a
     /// pointless round-trip (or worse, shows state that never was).
-    pub(crate) fn emit(&self, wiki_id: &str, event: WikiEvent) {
+    pub fn emit(&self, wiki_id: &str, event: WikiEvent) {
         self.changes.publish(WikiChange {
             wiki_id: wiki_id.to_string(),
             event,
@@ -465,6 +485,12 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
             .write()
             .map_err(|_| WikiError::Backend("roots lock".into()))?
             .insert(slug.clone(), root.clone());
+        // The wiki exists and is in the set; whoever else serves its
+        // directory (the vault-sync path the editor writes through)
+        // learns about it now, so it is editable without a restart.
+        if let Some(hook) = &self.on_created {
+            hook(&slug, &root);
+        }
         Ok(summarize_with(&slug, &root, &config))
     }
 
@@ -1031,6 +1057,15 @@ impl EventsStreamSource for WikiBackend {
 /// Subtrees that are not curated pages: the immutable raw
 /// layer, opaque agent state, and extracted media.
 const PAGE_SKIP_PREFIXES: &[&str] = &["raw/", "_state/", "media/", "."];
+
+/// Whether a wiki-root-relative path is a curated page — a `.md` file
+/// outside the raw / state / media subtrees. What a writer that
+/// bypasses `write_page` (the vault-sync editor path, a disk edit)
+/// should check before announcing a `PageWritten`.
+#[must_use]
+pub fn is_curated_page_path(rel: &str) -> bool {
+    sanitize_page_path(rel).is_ok()
+}
 
 /// Normalize + validate a wiki-root-relative page path: no
 /// absolute paths, no `..` escapes, `.md` only, never into the
