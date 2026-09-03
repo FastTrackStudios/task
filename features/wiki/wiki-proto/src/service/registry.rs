@@ -56,6 +56,16 @@ pub struct WikiSummary {
 pub struct WikiDescription {
     pub summary: WikiSummary,
     pub config: WikiConfig,
+    /// Where the wiki's tree lives, relative to the org root —
+    /// `wikis/<slug>` for a created wiki, `wiki/Knowledge` for the
+    /// default tier. A tool that runs beside the data (the CLI's
+    /// FS-only verbs against an embedded or local org) joins this to
+    /// the org root instead of guessing the layout; a remote client
+    /// has nothing to join it to and ignores it. Absolute only when
+    /// the backend has no org root to be relative to (a single-root
+    /// test); empty on a server older than this field.
+    #[serde(default)]
+    pub root: String,
 }
 
 #[architect::rpc]

@@ -115,8 +115,9 @@ Updated as slices land.
 
 These used to be written against `examples/vault`, a committed corpus
 that was the `--vault` default. It is gone: the wiki now lives in an org
-like everything else, and the commands that can reach one do so by
-default. So the first step is having an org with a wiki in it.
+like everything else, and an org holds a set of them, so every command
+names the wiki it reaches (`--wiki <slug>`, or `TASK_WIKI`). So the
+first step is having an org with a wiki in it.
 
 ```bash
 # A throwaway org to work against. `just demo` also works — its orgs
@@ -124,11 +125,12 @@ default. So the first step is having an org with a wiki in it.
 just dev-seed
 just dev-seed serve          # in another terminal
 
-task wiki schema bootstrap   # scaffold the wiki in the active org
+export TASK_WIKI=knowledge   # the org's default tier; `task wiki list` shows the rest
+task wiki schema bootstrap   # scaffold that wiki
 task wiki import --dir /path/to/notes
 ```
 
-Then, with no `--vault`, every flat command answers from that org over
+Then, with no `--vault`, every flat command answers from that wiki over
 vox — remote server or embedded backend alike, with plugin gating and
 permissions applied because it comes through the org router:
 
@@ -150,11 +152,20 @@ task wiki search "embedding" --hybrid   # downgrades to token
 `--vault <dir>` still points any of them at a tree on disk — offline
 inspection, or a vault no server hosts. The commands that only work that
 way (`ingest`, `lint`, `dedup`, `research`, `deepen`, `watch-sources`,
-`context`) now *require* it, since they have no lane to fall back to:
+`context`) have no lane to fall back to, so they take either the path
+or `--wiki <slug>`, which asks the server where the wiki lives
+(`describe` → `root`) and joins it to the org root under
+`TASK_DATA_ROOT` — embedded backend or a local server only; against a
+remote server they are refused and name the verbs that work over the
+wire:
 
 ```bash
-task wiki ingest -v /path/to/vault -s /path/to/vault/Wiki/raw/sources/some.md
-task wiki lint     -v /path/to/vault
+task wiki ingest   --wiki knowledge -s ./some.md
+task wiki lint     --wiki knowledge
 task wiki dedup    -v /path/to/vault
 task wiki research -v /path/to/vault --gap-title "PageRank"
 ```
+
+A new wiki with its contract in place is one command: `task wiki
+scaffold --title "Bible Study" --purpose "…" --types topic,question,person`
+(see `skills/llm-wiki.md`).

@@ -4,15 +4,34 @@
 
 use clap::Subcommand;
 
+mod scaffold;
+
 use crate::establish_for_url;
 use crate::resolve_active_org;
 use crate::resolve_org_vox_url;
 use crate::shared::confirm;
 
-/// Wiki id the flat (vault-path) wiki commands address when they
-/// route over vox — the one-wiki-per-org convention the server
-/// mounts (`WikiBackend::single("default", …)`).
-const ORG_WIKI_ID: &str = "default";
+/// The environment variable that names a wiki when `--wiki` is not
+/// typed. An org holds a set of wikis (`wiki.many.set`), so no verb
+/// may assume one; this is the only default there is, and it is the
+/// caller's.
+pub(crate) const WIKI_ENV: &str = "TASK_WIKI";
+
+/// The slug a wiki verb addresses, or the error that names the flag.
+///
+/// Clap has already folded [`WIKI_ENV`] into `wiki`, so `None` here
+/// means neither the flag nor the variable was set. There is no
+/// fallback: `"default"` used to be one, and an omitted flag silently
+/// edited the `knowledge` wiki whatever the caller meant.
+pub(crate) fn require_wiki(wiki: Option<String>) -> eyre::Result<String> {
+    match wiki.map(|w| w.trim().to_owned()).filter(|w| !w.is_empty()) {
+        Some(w) => Ok(w),
+        None => Err(eyre::eyre!(
+            "this command addresses one wiki — pass `--wiki <slug>` or set \
+             `{WIKI_ENV}`. `task wiki list` shows the org's wikis."
+        )),
+    }
+}
 
 /// How a flat wiki command reaches its data.
 ///
@@ -21,14 +40,15 @@ const ORG_WIKI_ID: &str = "default";
 /// address a wiki by filesystem path (`--vault`). Unification
 /// rule:
 ///
-/// - no `--vault` → the active org's wiki, over vox — remote
-///   server or embedded in-process backend alike — so the same
-///   command works wherever the session points, and plugin
-///   gating + permissions apply because the data comes through
-///   the org router. This is the ordinary case.
+/// - `--wiki <slug>` (or `TASK_WIKI`) → that wiki of the active
+///   org, over vox — remote server or embedded in-process backend
+///   alike — so the same command works wherever the session points,
+///   and plugin gating + permissions apply because the data comes
+///   through the org router. This is the ordinary case.
 /// - `--vault <dir>` → FS-native behaviour, unchanged from the
 ///   pre-vox code path. The local escape hatch: offline
 ///   inspection of a copied tree, or a vault no server hosts.
+/// - neither → an error naming both. Nothing is assumed.
 ///
 /// # An explicit path that does not exist is an error
 ///
@@ -45,41 +65,111 @@ const ORG_WIKI_ID: &str = "default";
 enum VaultRoute {
     /// Canonicalized local vault root.
     Local(std::path::PathBuf),
-    /// Per-org vox URL (`…/org/<slug>/vox`).
-    Vox(String),
+    /// Per-org vox URL (`…/org/<slug>/vox`) and the wiki on it.
+    Vox { url: String, wiki: String },
 }
 
-fn route_vault(vault: Option<&std::path::Path>) -> eyre::Result<VaultRoute> {
+fn route_vault(vault: Option<&std::path::Path>, wiki: Option<String>) -> eyre::Result<VaultRoute> {
     match vault {
-        Some(path) => Ok(VaultRoute::Local(local_vault(Some(path))?)),
+        Some(path) => Ok(VaultRoute::Local(canonical_vault(path)?)),
         None => {
+            let wiki = require_wiki(wiki)?;
             let slug = resolve_active_org(None)?;
-            Ok(VaultRoute::Vox(resolve_org_vox_url(None, &slug)))
+            Ok(VaultRoute::Vox {
+                url: resolve_org_vox_url(None, &slug),
+                wiki,
+            })
         }
     }
 }
 
-/// Resolve `--vault` for a command that has no vox path yet.
-///
-/// The FS-only commands (`context`, `code`, `lint`, `dedup`,
-/// `research`, `ingest`, `deepen`, `watch-sources`) read and write
-/// a tree directly and have no lane to route to, so for them the
-/// flag is not optional — it is required and simply had a default
-/// that happened to exist in this checkout.
-///
-/// Saying so is the point of this helper: "vault: No such file or
-/// directory" for a path the caller never typed is a worse message
-/// than naming the flag they need.
-fn local_vault(vault: Option<&std::path::Path>) -> eyre::Result<std::path::PathBuf> {
-    let path = vault.ok_or_else(|| {
-        eyre::eyre!(
-            "this command reads a vault directory — pass `--vault <dir>`. \
-             (Commands that can answer from the active org over vox default \
-             to it; this one has no such lane.)"
-        )
-    })?;
+fn canonical_vault(path: &std::path::Path) -> eyre::Result<std::path::PathBuf> {
     path.canonicalize()
         .map_err(|e| eyre::eyre!("vault {}: {e}", path.display()))
+}
+
+/// Resolve the tree a command that has no vox path reads.
+///
+/// The FS-only commands (`context`, `lint`, `dedup`, `research`,
+/// `ingest`, `deepen`, `watch-sources`) read and write a tree
+/// directly — they run the LLM here, or watch a local directory —
+/// and have no lane to route to. They take the wiki two ways:
+///
+/// - `--vault <dir>` names the tree outright.
+/// - `--wiki <slug>` names a wiki of the active org. The server is
+///   asked where that wiki lives (`describe_wiki` → `root`, relative
+///   to the org root) and the answer is joined to the org root on
+///   *this* machine. That only means anything when the org's data is
+///   on this machine — the embedded backend, or a server on the
+///   localhost default serving the data root `TASK_DATA_ROOT` names.
+///   Against a remote server the command is refused with the verbs
+///   that do work over the wire, rather than reading a tree that is
+///   not the wiki asked for.
+async fn local_wiki_root(
+    vault: Option<&std::path::Path>,
+    wiki: Option<String>,
+) -> eyre::Result<std::path::PathBuf> {
+    if let Some(path) = vault {
+        return canonical_vault(path);
+    }
+    let wiki = wiki
+        .map(|w| w.trim().to_owned())
+        .filter(|w| !w.is_empty())
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "this command reads a wiki's tree directly — pass `--wiki <slug>` \
+                 (or set `{WIKI_ENV}`) for a wiki of the active org on this \
+                 machine, or `--vault <dir>` for a tree by path."
+            )
+        })?;
+    let slug = resolve_active_org(None)?;
+    let url = resolve_org_vox_url(None, &slug);
+    let on_this_machine = crate::embed_enabled()
+        || (url.starts_with(crate::session_store::DEFAULT_LOCAL_VOX) && crate::org_on_disk(&slug));
+    if !on_this_machine {
+        return Err(eyre::eyre!(
+            "`--wiki {wiki}` names a wiki on `{url}`, which is not this machine's data \
+             root — this command reads the tree directly and cannot reach it. Use the \
+             verbs that work over the wire (`task wiki page|schema|catalog|raw|review|\
+             lint-findings|research-plans … --wiki {wiki}`), or run it beside the data."
+        ));
+    }
+    let described: wiki_proto::service::registry::WikiDescription = {
+        let c: wiki_proto::service::registry::RegistryClient = establish_for_url(&url).await?;
+        c.describe_wiki(wiki.clone())
+            .await
+            .map_err(|e| eyre::eyre!("describe wiki `{wiki}`: {e:?}"))?
+    };
+    let org_root = org_proto::DataRoot::from_env()
+        .map_err(|e| eyre::eyre!("no data root ({e}) — set TASK_DATA_ROOT"))?
+        .org(&slug)
+        .path()
+        .to_path_buf();
+    let root = wiki_root_on_disk(&org_root, &described.root).ok_or_else(|| {
+        eyre::eyre!(
+            "the server did not say where `{wiki}` lives (an older server?) — \
+             pass `--vault <dir>` instead"
+        )
+    })?;
+    root.canonicalize()
+        .map_err(|e| eyre::eyre!("wiki `{wiki}` at {}: {e}", root.display()))
+}
+
+/// Join `WikiDescription::root` to the org root on this machine. A
+/// relative answer (`wikis/<slug>`, `wiki/Knowledge`) is joined; an
+/// absolute one is taken as it is; an empty one — a server that
+/// predates the field — is `None`.
+fn wiki_root_on_disk(org_root: &std::path::Path, root: &str) -> Option<std::path::PathBuf> {
+    let root = root.trim();
+    if root.is_empty() {
+        return None;
+    }
+    let p = std::path::Path::new(root);
+    Some(if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        org_root.join(p)
+    })
 }
 
 // A clap command enum: constructed once per invocation, so the
@@ -95,6 +185,10 @@ pub(crate) enum WikiCmd {
     Graph {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         /// Filter by substring (matches title or path).
         #[arg(long, default_value = "")]
         query: String,
@@ -124,6 +218,10 @@ pub(crate) enum WikiCmd {
         query: String,
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         /// `concept` / `entity` / `source` filter on
         /// `type:` frontmatter.
         #[arg(long, default_value = "")]
@@ -187,6 +285,10 @@ pub(crate) enum WikiCmd {
     Gaps {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -195,6 +297,10 @@ pub(crate) enum WikiCmd {
     Clusters {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
     },
     /// Token search over `Wiki/`. TF-IDF over page bodies;
     /// `--hybrid` opts into vector retrieval where the
@@ -203,6 +309,10 @@ pub(crate) enum WikiCmd {
     Search {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         /// Query string.
         query: String,
         /// Filter by `type:` frontmatter.
@@ -228,6 +338,10 @@ pub(crate) enum WikiCmd {
     WatchSources {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         #[arg(long, default_value_t = 2)]
         debounce_secs: u64,
         /// Don't auto-enqueue diffs — just print them.
@@ -239,6 +353,10 @@ pub(crate) enum WikiCmd {
     Health {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
     },
     /// Recursively import a directory of files into
     /// `Wiki/raw/sources/`. Doesn't enqueue ingest tasks —
@@ -246,6 +364,10 @@ pub(crate) enum WikiCmd {
     Import {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         /// Directory to walk.
         #[arg(short, long)]
         dir: std::path::PathBuf,
@@ -264,6 +386,10 @@ pub(crate) enum WikiCmd {
     Rescan {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         #[arg(long)]
         enqueue: bool,
     },
@@ -272,6 +398,10 @@ pub(crate) enum WikiCmd {
     Lint {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         #[arg(short, long)]
         model: Option<String>,
         #[arg(long, default_value_t = 180)]
@@ -283,6 +413,10 @@ pub(crate) enum WikiCmd {
     Findings {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
     },
     /// Layered-access wikilink lint. Scans
     /// `<org_root>/wiki/Knowledge/` + `wiki/LLM/` for
@@ -302,6 +436,10 @@ pub(crate) enum WikiCmd {
     Dedup {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         #[arg(short, long)]
         model: Option<String>,
         #[arg(long, default_value_t = 180)]
@@ -312,6 +450,10 @@ pub(crate) enum WikiCmd {
     Research {
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         /// Gap kind (`Orphan`, `MissingPage`, `SparseCluster`, `Bridge`).
         #[arg(long, default_value = "MissingPage")]
         gap_kind: String,
@@ -344,6 +486,10 @@ pub(crate) enum WikiCmd {
         /// and has no vox lane to fall back to.
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         /// Path to the source file to ingest. Bytes get
         /// copied into `Wiki/raw/sources/<filename>`.
         #[arg(short, long)]
@@ -386,6 +532,10 @@ pub(crate) enum WikiCmd {
         /// Vault root (the `Wiki/Knowledge/` parent).
         #[arg(short, long)]
         vault: Option<std::path::PathBuf>,
+        /// The wiki's slug (or `TASK_WIKI`). `--vault` reads a tree
+        /// by path instead.
+        #[arg(long, env = WIKI_ENV, value_name = "SLUG")]
+        wiki: Option<String>,
         /// Page path relative to the wiki root, e.g.
         /// `wiki/concepts/borrowing-over-cloning.md`.
         #[arg(short, long)]
@@ -450,6 +600,36 @@ pub(crate) enum WikiCmd {
         /// Path inside the repository that becomes the wiki.
         #[arg(long, default_value = "")]
         path: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// A wiki from a purpose statement: create it if missing, then
+    /// write `purpose.md`, `schema.md` and `Goals.md` and rebuild the
+    /// catalog. Re-running fills only what is missing or still a stub.
+    Scaffold {
+        /// Display title; the slug derives from it unless `--slug`.
+        #[arg(long)]
+        title: String,
+        /// Explicit slug (lowercase words joined by hyphens).
+        #[arg(long, default_value = "")]
+        slug: String,
+        /// One sentence on what the wiki is for. `purpose.md` is
+        /// written around it.
+        #[arg(long)]
+        purpose: String,
+        /// `public`, `unlisted` or `private` (the default).
+        #[arg(long, default_value = "private")]
+        visibility: String,
+        /// Markdown for `Goals.md`, verbatim. Without it a short
+        /// starter list is written.
+        #[arg(long)]
+        goals_file: Option<std::path::PathBuf>,
+        /// Page types the schema declares, comma-separated
+        /// (`topic,question,person`). `source` is always included.
+        #[arg(long, default_value = scaffold::DEFAULT_TYPES)]
+        types: String,
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
@@ -739,8 +919,11 @@ pub(crate) struct WikiArchiveArgs {
     /// path only).
     #[arg(long, env = "TASK_FFMPEG", default_value = "ffmpeg")]
     ffmpeg: String,
-    #[arg(long, default_value = "default")]
-    wiki_id: String,
+    /// The wiki's slug (or `TASK_WIKI`). An `Option` only because the
+    /// subcommands negate it (`subcommand_negates_reqs`); on the
+    /// archive path itself it is required.
+    #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG", required = true)]
+    wiki_id: Option<String>,
     #[arg(long)]
     org: Option<String>,
     #[arg(long)]
@@ -777,7 +960,8 @@ pub(crate) enum WikiArchiveSub {
         /// Max stubs to attempt this run.
         #[arg(long)]
         limit: Option<usize>,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -858,7 +1042,8 @@ pub(crate) struct WikiArchiveImportCommon {
     /// `task wiki raw rescan` later to enqueue in bulk).
     #[arg(long)]
     no_enqueue: bool,
-    #[arg(long, default_value = "default")]
+    /// The wiki's slug (or `TASK_WIKI`).
+    #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
     wiki_id: String,
     #[arg(long)]
     org: Option<String>,
@@ -870,7 +1055,8 @@ pub(crate) struct WikiArchiveImportCommon {
 pub(crate) enum WikiReviewCmd {
     /// List every open review item.
     List {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -898,7 +1084,8 @@ pub(crate) enum WikiReviewCmd {
         /// append (`-` = stdin). Unused for `research`.
         #[arg(default_value = "")]
         body: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -911,7 +1098,8 @@ pub(crate) enum WikiReviewCmd {
 pub(crate) enum WikiResearchCmd {
     /// List every research plan and its status.
     List {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -925,7 +1113,8 @@ pub(crate) enum WikiResearchCmd {
     SetStatus {
         plan_id: String,
         status: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -939,7 +1128,8 @@ pub(crate) enum WikiWatchCmd {
     /// Enable filesystem watch on `Wiki/raw/sources/` so
     /// dropping a file there auto-enqueues an ingest.
     On {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -947,7 +1137,8 @@ pub(crate) enum WikiWatchCmd {
         server: Option<String>,
     },
     Off {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -955,7 +1146,8 @@ pub(crate) enum WikiWatchCmd {
         server: Option<String>,
     },
     Status {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -968,7 +1160,8 @@ pub(crate) enum WikiWatchCmd {
 pub(crate) enum WikiSchemaCmd {
     /// Print `Wiki/schema.md`.
     Show {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -979,7 +1172,8 @@ pub(crate) enum WikiSchemaCmd {
     },
     /// Print `Wiki/purpose.md`.
     Purpose {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -992,7 +1186,8 @@ pub(crate) enum WikiSchemaCmd {
     /// `-` for stdin.
     WriteSchema {
         path: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1002,7 +1197,8 @@ pub(crate) enum WikiSchemaCmd {
     /// Replace `Wiki/purpose.md`.
     WritePurpose {
         path: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1011,7 +1207,8 @@ pub(crate) enum WikiSchemaCmd {
     },
     /// Initialize `Wiki/` if missing. Idempotent.
     Bootstrap {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1021,7 +1218,8 @@ pub(crate) enum WikiSchemaCmd {
     /// Server-side health snapshot (orphan count, lint
     /// queue depth, last ingest mtime, …).
     Health {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1036,7 +1234,8 @@ pub(crate) enum WikiSchemaCmd {
 pub(crate) enum WikiCatalogCmd {
     /// Dump the catalog (`Wiki/index.md` parsed).
     Show {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1047,7 +1246,8 @@ pub(crate) enum WikiCatalogCmd {
     },
     /// Force-rebuild the catalog by re-scanning the vault.
     Rebuild {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1062,7 +1262,8 @@ pub(crate) enum WikiCatalogCmd {
 pub(crate) enum WikiRawCmd {
     /// List every raw source the wiki carries.
     List {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1074,7 +1275,8 @@ pub(crate) enum WikiRawCmd {
     /// Print the raw source bytes to stdout.
     Read {
         path: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1087,7 +1289,8 @@ pub(crate) enum WikiRawCmd {
         path: String,
         #[arg(long, short = 'y')]
         yes: bool,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1097,7 +1300,8 @@ pub(crate) enum WikiRawCmd {
     /// Rescan `Wiki/raw/sources/`; enqueues fresh ingest
     /// tasks for any new files since last scan.
     Rescan {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1109,7 +1313,8 @@ pub(crate) enum WikiRawCmd {
 #[derive(Subcommand)]
 pub(crate) enum WikiIngestCmd {
     List {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1121,7 +1326,8 @@ pub(crate) enum WikiIngestCmd {
     /// Retry a previously-failed ingest task.
     Retry {
         task_id: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1131,7 +1337,8 @@ pub(crate) enum WikiIngestCmd {
     /// Cancel a pending or running ingest task.
     Cancel {
         task_id: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1144,7 +1351,8 @@ pub(crate) enum WikiIngestCmd {
 pub(crate) enum WikiFindingsCmd {
     /// All open lint findings.
     List {
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1158,7 +1366,8 @@ pub(crate) enum WikiFindingsCmd {
         finding_id: String,
         /// `resolved` / `dismissed` / `deferred`.
         action: String,
-        #[arg(long, default_value = "default")]
+        /// The wiki's slug (or `TASK_WIKI`).
+        #[arg(long = "wiki", alias = "wiki-id", env = WIKI_ENV, value_name = "SLUG")]
         wiki_id: String,
         #[arg(long)]
         org: Option<String>,
@@ -1176,6 +1385,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
     match cmd {
         WikiCmd::Graph {
             vault,
+            wiki,
             query,
             node_type,
             limit,
@@ -1190,13 +1400,13 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             // Same `WikiGraph` shape either way — the server runs
             // the identical `wiki_graph::build_graph` over its
             // vault root.
-            let graph = match route_vault(vault.as_deref())? {
+            let graph = match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => wiki_graph::build_graph(&vault, opts)
                     .map_err(|e| eyre::eyre!("build_graph: {e}"))?,
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     let c: wiki_proto::service::graph::GraphClient =
                         establish_for_url(&url).await?;
-                    c.build_graph(ORG_WIKI_ID.to_string(), opts)
+                    c.build_graph(wiki.clone(), opts)
                         .await
                         .map_err(|e| eyre::eyre!("build_graph: {e:?}"))?
                 }
@@ -1243,6 +1453,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         WikiCmd::Context {
             query,
             vault,
+            wiki,
             node_type,
             budget_tokens,
             max_nodes,
@@ -1250,7 +1461,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             notes,
             links,
         } => {
-            let vault = local_vault(vault.as_deref())?;
+            let vault = local_wiki_root(vault.as_deref(), wiki).await?;
             // Typed-link overlay: note↔note links become
             // direct-link edges (verses aren't graph nodes;
             // endpoints missing from the graph are dropped
@@ -1415,15 +1626,15 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             }
             Ok(())
         }
-        WikiCmd::Gaps { vault, json } => {
-            let gaps = match route_vault(vault.as_deref())? {
+        WikiCmd::Gaps { vault, wiki, json } => {
+            let gaps = match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => {
                     wiki_graph::find_gaps(&vault).map_err(|e| eyre::eyre!("find_gaps: {e}"))?
                 }
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     let c: wiki_proto::service::graph::GraphClient =
                         establish_for_url(&url).await?;
-                    c.gaps(ORG_WIKI_ID.to_string())
+                    c.gaps(wiki.clone())
                         .await
                         .map_err(|e| eyre::eyre!("find_gaps: {e:?}"))?
                 }
@@ -1464,6 +1675,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         }
         WikiCmd::Search {
             vault,
+            wiki,
             query,
             node_type,
             top_k,
@@ -1481,14 +1693,14 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                 },
                 node_type,
             };
-            let hits = match route_vault(vault.as_deref())? {
+            let hits = match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => {
                     wiki_search::search(&vault, opts).map_err(|e| eyre::eyre!("search: {e}"))?
                 }
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     let c: wiki_proto::service::search::SearchClient =
                         establish_for_url(&url).await?;
-                    c.search(ORG_WIKI_ID.to_string(), opts)
+                    c.search(wiki.clone(), opts)
                         .await
                         .map_err(|e| eyre::eyre!("search: {e:?}"))?
                 }
@@ -1508,14 +1720,14 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             }
             Ok(())
         }
-        WikiCmd::Clusters { vault } => {
-            let clusters = match route_vault(vault.as_deref())? {
+        WikiCmd::Clusters { vault, wiki } => {
+            let clusters = match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => wiki_graph::build_clusters(&vault)
                     .map_err(|e| eyre::eyre!("build_clusters: {e}"))?,
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     let c: wiki_proto::service::graph::GraphClient =
                         establish_for_url(&url).await?;
-                    c.clusters(ORG_WIKI_ID.to_string())
+                    c.clusters(wiki.clone())
                         .await
                         .map_err(|e| eyre::eyre!("build_clusters: {e:?}"))?
                 }
@@ -1534,6 +1746,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         }
         WikiCmd::WatchSources {
             vault,
+            wiki,
             debounce_secs,
             dry_run,
         } => {
@@ -1543,7 +1756,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             // watcher (`task wiki watch on|off`), and no RPC
             // streams FS events — watching a remote org's disk
             // from here is not a thing.
-            let vault = local_vault(vault.as_deref())?;
+            let vault = local_wiki_root(vault.as_deref(), wiki).await?;
             let wiki = wiki_live::WikiLive::open(&vault);
             wiki.bootstrap()
                 .map_err(|e| eyre::eyre!("bootstrap: {e}"))?;
@@ -1580,8 +1793,8 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             }
             Ok(())
         }
-        WikiCmd::Health { vault } => {
-            match route_vault(vault.as_deref())? {
+        WikiCmd::Health { vault, wiki } => {
+            match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     let h = wiki.health().map_err(|e| eyre::eyre!("health: {e}"))?;
@@ -1599,7 +1812,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                         println!("last_rescan_at:  {t}");
                     }
                 }
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     // Same snapshot via the Schema service. The
                     // wire shape carries no `last_rescan_at`, so
                     // that (conditional) line is simply absent
@@ -1607,7 +1820,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                     let c: wiki_proto::service::schema::SchemaClient =
                         establish_for_url(&url).await?;
                     let h = c
-                        .health(ORG_WIKI_ID.to_string())
+                        .health(wiki.clone())
                         .await
                         .map_err(|e| eyre::eyre!("health: {e:?}"))?;
                     println!("bootstrapped:    {}", h.bootstrap_done);
@@ -1626,6 +1839,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         }
         WikiCmd::Import {
             vault,
+            wiki,
             dir,
             flatten,
             ext,
@@ -1633,7 +1847,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             let include_exts: Vec<String> =
                 ext.split(',').map(|s| s.trim().to_lowercase()).collect();
             let exclude_substrings = [".git/", "node_modules/", "target/"];
-            let refs = match route_vault(vault.as_deref())? {
+            let refs = match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     wiki.bootstrap()
@@ -1649,7 +1863,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                     wiki.import_folder(&dir, opts)
                         .map_err(|e| eyre::eyre!("import_folder: {e}"))?
                 }
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     // The directory being imported is local by
                     // definition; the WIKI is not. Mirror
                     // `WikiLive::import_folder`'s walk + filters
@@ -1667,7 +1881,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                     let schema: wiki_proto::service::schema::SchemaClient =
                         establish_for_url(&url).await?;
                     schema
-                        .bootstrap(ORG_WIKI_ID.to_string())
+                        .bootstrap(wiki.clone())
                         .await
                         .map_err(|e| eyre::eyre!("bootstrap: {e:?}"))?;
                     let raw: RawLayerClient = establish_for_url(&url).await?;
@@ -1711,7 +1925,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                         let mime = archive_mime_for_filename(name);
                         let r = raw
                             .import_raw_source(
-                                ORG_WIKI_ID.to_string(),
+                                wiki.clone(),
                                 wiki_proto::raw::ImportRawSource {
                                     filename,
                                     mime,
@@ -1736,8 +1950,12 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             }
             Ok(())
         }
-        WikiCmd::Rescan { vault, enqueue } => {
-            match route_vault(vault.as_deref())? {
+        WikiCmd::Rescan {
+            vault,
+            wiki,
+            enqueue,
+        } => {
+            match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     let diff = wiki
@@ -1775,7 +1993,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                         println!("enqueued {count} ingest task(s)");
                     }
                 }
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     // `rescan_diff` is the read-only sibling of
                     // the raw layer's `rescan_sources` RPC —
                     // added precisely so this command keeps its
@@ -1785,7 +2003,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                     use wiki_proto::service::raw_layer::RawLayerClient;
                     let raw: RawLayerClient = establish_for_url(&url).await?;
                     let diff = raw
-                        .rescan_diff(ORG_WIKI_ID.to_string())
+                        .rescan_diff(wiki.clone())
                         .await
                         .map_err(|e| eyre::eyre!("rescan: {e:?}"))?;
                     println!(
@@ -1812,7 +2030,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                             } else {
                                 wiki_proto::ingest::SourceChange::Modified
                             };
-                            ing.enqueue_ingest(ORG_WIKI_ID.to_string(), c.clone(), kind)
+                            ing.enqueue_ingest(wiki.clone(), c.clone(), kind)
                                 .await
                                 .map_err(|e| eyre::eyre!("enqueue {c}: {e:?}"))?;
                             count += 1;
@@ -1835,11 +2053,12 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         // `findings` / `ingest-queue` / `review`.
         WikiCmd::Lint {
             vault,
+            wiki,
             model,
             timeout_secs,
             language,
         } => {
-            let vault = local_vault(vault.as_deref())?;
+            let vault = local_wiki_root(vault.as_deref(), wiki).await?;
             let wiki = wiki_live::WikiLive::open(&vault);
             wiki.bootstrap()
                 .map_err(|e| eyre::eyre!("bootstrap: {e}"))?;
@@ -1858,8 +2077,8 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             }
             Ok(())
         }
-        WikiCmd::Findings { vault } => {
-            match route_vault(vault.as_deref())? {
+        WikiCmd::Findings { vault, wiki } => {
+            match route_vault(vault.as_deref(), wiki)? {
                 VaultRoute::Local(vault) => {
                     let wiki = wiki_live::WikiLive::open(&vault);
                     let open = wiki
@@ -1873,13 +2092,13 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                         }
                     }
                 }
-                VaultRoute::Vox(url) => {
+                VaultRoute::Vox { url, wiki } => {
                     // The wire shape names things differently
                     // (kind→scope, title→message, pages→subjects)
                     // but carries the same finding.
                     let c: wiki_proto::service::lint::LintClient = establish_for_url(&url).await?;
                     let open = c
-                        .list_findings(ORG_WIKI_ID.to_string())
+                        .list_findings(wiki.clone())
                         .await
                         .map_err(|e| eyre::eyre!("list_findings: {e:?}"))?;
                     println!("Open findings: {}", open.len());
@@ -1925,10 +2144,11 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         }
         WikiCmd::Dedup {
             vault,
+            wiki,
             model,
             timeout_secs,
         } => {
-            let vault = local_vault(vault.as_deref())?;
+            let vault = local_wiki_root(vault.as_deref(), wiki).await?;
             let wiki = wiki_live::WikiLive::open(&vault);
             let backend = agent_codex::CodexBackend::new();
             let groups = agent_wiki::bridge::run_dedup_detect(
@@ -1952,6 +2172,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         }
         WikiCmd::Research {
             vault,
+            wiki,
             gap_kind,
             gap_title,
             gap_description,
@@ -1959,7 +2180,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             timeout_secs,
             language,
         } => {
-            let vault = local_vault(vault.as_deref())?;
+            let vault = local_wiki_root(vault.as_deref(), wiki).await?;
             let wiki = wiki_live::WikiLive::open(&vault);
             let backend = agent_codex::CodexBackend::new();
             let plan = agent_wiki::bridge::run_propose_research(
@@ -1982,6 +2203,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         }
         WikiCmd::Ingest {
             vault,
+            wiki,
             source,
             filename,
             mime,
@@ -1990,7 +2212,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
             language,
             timeout_secs,
         } => {
-            let vault = local_vault(vault.as_deref())?;
+            let vault = local_wiki_root(vault.as_deref(), wiki).await?;
             let bytes = std::fs::read(&source)
                 .map_err(|e| eyre::eyre!("read source {}: {e}", source.display()))?;
             let fname = filename.unwrap_or_else(|| {
@@ -2036,12 +2258,13 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         }
         WikiCmd::Deepen {
             vault,
+            wiki,
             page,
             model,
             timeout_secs,
             language,
         } => {
-            let vault = local_vault(vault.as_deref())?;
+            let vault = local_wiki_root(vault.as_deref(), wiki).await?;
             let wiki = WikiLive::open(&vault);
             let backend = CodexBackend::new();
             eprintln!(
@@ -2079,6 +2302,28 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         WikiCmd::Watch(c) => run_wiki_watch(c).await,
         WikiCmd::Edits(c) => run_wiki_edits(c).await,
         WikiCmd::Page(c) => run_wiki_page(c).await,
+        WikiCmd::Scaffold {
+            title,
+            slug,
+            purpose,
+            visibility,
+            goals_file,
+            types,
+            org,
+            server,
+        } => {
+            let goals = match goals_file {
+                Some(p) => Some(
+                    std::fs::read_to_string(&p)
+                        .map_err(|e| eyre::eyre!("goals file {}: {e}", p.display()))?,
+                ),
+                None => None,
+            };
+            let blueprint = scaffold::Blueprint::new(&title, &slug, &purpose, &visibility, &types)?;
+            let org = resolve_active_org(org)?;
+            let url = resolve_org_vox_url(server, &org);
+            scaffold::run(&url, &blueprint, goals.as_deref()).await
+        }
         WikiCmd::Create { .. }
         | WikiCmd::List { .. }
         | WikiCmd::Describe { .. }
@@ -2547,6 +2792,9 @@ async fn run_wiki_archive(mut args: WikiArchiveArgs) -> eyre::Result<()> {
         .target
         .clone()
         .ok_or_else(|| eyre::eyre!("a URL or file path is required"))?;
+    // Negated by the subcommands above, so the field is an `Option`;
+    // on this path it is required.
+    let wiki_id = require_wiki(args.wiki_id.clone())?;
 
     let slug = resolve_active_org(args.org.clone())?;
     let vox_url = resolve_org_vox_url(args.server.clone(), &slug);
@@ -2619,7 +2867,7 @@ async fn run_wiki_archive(mut args: WikiArchiveArgs) -> eyre::Result<()> {
     let mut stale_stub: Option<String> = None;
     if let Some(c8) = &canon8 {
         let existing = raw
-            .list_raw_sources(args.wiki_id.clone())
+            .list_raw_sources(wiki_id.clone())
             .await
             .map_err(|e| eyre::eyre!("list_raw_sources: {e:?}"))?;
         let hit =
@@ -2658,7 +2906,7 @@ async fn run_wiki_archive(mut args: WikiArchiveArgs) -> eyre::Result<()> {
     // ── Import (server sha-dedups byte-identical content) ──
     let r = raw
         .import_raw_source(
-            args.wiki_id.clone(),
+            wiki_id.clone(),
             ImportRawSource {
                 filename,
                 mime,
@@ -2673,7 +2921,7 @@ async fn run_wiki_archive(mut args: WikiArchiveArgs) -> eyre::Result<()> {
     // The successful archive supersedes any unarchived stub.
     if let Some(stub) = stale_stub {
         if let Err(e) = raw
-            .delete_raw_source(args.wiki_id.clone(), format!("raw/sources/{stub}"))
+            .delete_raw_source(wiki_id.clone(), format!("raw/sources/{stub}"))
             .await
         {
             println!("note: could not delete stale stub {stub}: {e:?}");
@@ -2687,7 +2935,7 @@ async fn run_wiki_archive(mut args: WikiArchiveArgs) -> eyre::Result<()> {
         let ing: IngestClient = establish_for_url(&vox_url).await?;
         let task = ing
             .enqueue_ingest(
-                args.wiki_id.clone(),
+                wiki_id.clone(),
                 r.path.clone(),
                 wiki_proto::ingest::SourceChange::Created,
             )
@@ -2823,7 +3071,7 @@ async fn run_wiki_archive_retry(
         transcribe: "auto".into(),
         whisper_model: std::env::var("TASK_WHISPER_MODEL").unwrap_or_else(|_| "small".into()),
         ffmpeg: std::env::var("TASK_FFMPEG").unwrap_or_else(|_| "ffmpeg".into()),
-        wiki_id: wiki_id.clone(),
+        wiki_id: Some(wiki_id.clone()),
         org,
         server,
         json: false,
@@ -4255,11 +4503,187 @@ mod tests {
     #[test]
     fn route_vault_prefers_an_existing_local_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        match route_vault(Some(dir.path())).expect("route") {
+        match route_vault(Some(dir.path()), None).expect("route") {
             VaultRoute::Local(p) => {
                 assert_eq!(p, dir.path().canonicalize().unwrap());
             }
-            VaultRoute::Vox(url) => panic!("existing dir must route local, got {url}"),
+            VaultRoute::Vox { url, .. } => panic!("existing dir must route local, got {url}"),
+        }
+    }
+
+    /// Neither a path nor a wiki: the error names both flags rather
+    /// than answering from a wiki nobody asked for. This is what
+    /// replaced the hard-wired `"default"` id.
+    #[test]
+    fn route_vault_with_nothing_named_asks_for_a_wiki() {
+        // SAFETY: nextest runs each test in its own process; nothing
+        // else reads the environment concurrently.
+        unsafe { std::env::remove_var(WIKI_ENV) };
+        let err = route_vault(None, None).expect_err("nothing named must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("--wiki"), "{msg}");
+        assert!(msg.contains(WIKI_ENV), "{msg}");
+    }
+
+    #[test]
+    fn require_wiki_takes_a_slug_and_refuses_blank() {
+        assert_eq!(
+            require_wiki(Some(" bible-study ".into())).unwrap(),
+            "bible-study"
+        );
+        assert!(require_wiki(None).is_err());
+        assert!(require_wiki(Some("   ".into())).is_err());
+    }
+
+    /// The root a description reports joins to the org root on this
+    /// machine; an absolute one is taken whole; an empty one (an
+    /// older server) is `None` rather than the org root itself.
+    #[test]
+    fn wiki_root_on_disk_joins_relative_and_keeps_absolute() {
+        let org = std::path::Path::new("/data/orgs/t");
+        assert_eq!(
+            wiki_root_on_disk(org, "wikis/bible-study"),
+            Some(org.join("wikis/bible-study"))
+        );
+        assert_eq!(
+            wiki_root_on_disk(org, "wiki/Knowledge"),
+            Some(org.join("wiki/Knowledge"))
+        );
+        assert_eq!(
+            wiki_root_on_disk(org, "/elsewhere/solo"),
+            Some(std::path::PathBuf::from("/elsewhere/solo"))
+        );
+        assert_eq!(wiki_root_on_disk(org, ""), None);
+        assert_eq!(wiki_root_on_disk(org, "  "), None);
+    }
+
+    /// The flag surface: `--wiki` is how a verb names its wiki, the
+    /// RPC subtrees accept `--wiki-id` for one release as a hidden
+    /// alias, and no verb has a default.
+    mod flags {
+        use super::*;
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Probe {
+            #[command(subcommand)]
+            cmd: WikiCmd,
+        }
+
+        fn parse(args: &[&str]) -> Result<WikiCmd, clap::Error> {
+            // SAFETY: see `route_vault_with_nothing_named_asks_for_a_wiki`.
+            unsafe { std::env::remove_var(WIKI_ENV) };
+            Probe::try_parse_from(std::iter::once("wiki").chain(args.iter().copied()))
+                .map(|p| p.cmd)
+        }
+
+        /// `WikiCmd` is not `Debug` (clap enums here never are), so
+        /// an expected failure is unwrapped by hand.
+        fn fails(args: &[&str]) -> clap::Error {
+            match parse(args) {
+                Ok(_) => panic!("{args:?} must not parse"),
+                Err(e) => e,
+            }
+        }
+
+        #[test]
+        fn an_rpc_verb_without_a_wiki_is_a_usage_error() {
+            let err = fails(&["schema", "show"]);
+            assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+            assert!(err.to_string().contains("--wiki"), "{err}");
+        }
+
+        #[test]
+        fn wiki_and_the_hidden_wiki_id_alias_both_name_the_wiki() {
+            for flag in ["--wiki", "--wiki-id"] {
+                match parse(&["schema", "show", flag, "bible-study"]).expect("parse") {
+                    WikiCmd::Schema(WikiSchemaCmd::Show { wiki_id, .. }) => {
+                        assert_eq!(wiki_id, "bible-study", "{flag}");
+                    }
+                    _ => panic!("routed elsewhere"),
+                }
+            }
+            // Hidden: the alias is not advertised in help.
+            let help = fails(&["schema", "show", "--help"]).to_string();
+            assert!(help.contains("--wiki <SLUG>"), "{help}");
+            assert!(!help.contains("--wiki-id"), "{help}");
+        }
+
+        /// `archive` names its wiki, but its subcommands (`health`,
+        /// `retry`, `import …`) are their own commands and must not
+        /// demand the parent's flag. The parent field is an `Option`
+        /// for exactly this reason — a bare `String` fails in
+        /// `from_arg_matches` even though clap negated the requirement.
+        #[test]
+        fn archive_requires_a_wiki_but_its_subcommands_do_not() {
+            match parse(&["archive", "health"]).expect("health parses without --wiki") {
+                WikiCmd::Archive(args) => {
+                    assert!(matches!(args.cmd, Some(WikiArchiveSub::Health { .. })));
+                    assert!(args.wiki_id.is_none());
+                }
+                _ => panic!("routed elsewhere"),
+            }
+            let err = fails(&["archive", "https://example.org/essay"]);
+            assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+            match parse(&[
+                "archive",
+                "https://example.org/essay",
+                "--wiki",
+                "bible-study",
+            ])
+            .expect("parse")
+            {
+                WikiCmd::Archive(args) => assert_eq!(args.wiki_id.as_deref(), Some("bible-study")),
+                _ => panic!("routed elsewhere"),
+            }
+        }
+
+        #[test]
+        fn a_flat_verb_carries_the_wiki_beside_the_vault() {
+            match parse(&["graph", "--wiki", "bible-study"]).expect("parse") {
+                WikiCmd::Graph { wiki, vault, .. } => {
+                    assert_eq!(wiki.as_deref(), Some("bible-study"));
+                    assert!(vault.is_none());
+                }
+                _ => panic!("routed elsewhere"),
+            }
+            match parse(&["ingest", "--wiki", "bible-study", "--source", "x.md"]).expect("parse") {
+                WikiCmd::Ingest { wiki, .. } => assert_eq!(wiki.as_deref(), Some("bible-study")),
+                _ => panic!("routed elsewhere"),
+            }
+        }
+
+        #[test]
+        fn scaffold_parses_its_blueprint_flags() {
+            match parse(&[
+                "scaffold",
+                "--title",
+                "Bible Study",
+                "--purpose",
+                "Notes from a weekly study.",
+                "--visibility",
+                "unlisted",
+                "--types",
+                "topic,question,person",
+            ])
+            .expect("parse")
+            {
+                WikiCmd::Scaffold {
+                    title,
+                    purpose,
+                    visibility,
+                    types,
+                    goals_file,
+                    ..
+                } => {
+                    assert_eq!(title, "Bible Study");
+                    assert_eq!(purpose, "Notes from a weekly study.");
+                    assert_eq!(visibility, "unlisted");
+                    assert_eq!(types, "topic,question,person");
+                    assert!(goals_file.is_none());
+                }
+                _ => panic!("routed elsewhere"),
+            }
         }
     }
 
@@ -4276,7 +4700,8 @@ mod tests {
     fn an_explicit_vault_that_does_not_exist_is_an_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("no-such-vault");
-        let err = route_vault(Some(&missing)).expect_err("a named path that is absent must fail");
+        let err =
+            route_vault(Some(&missing), None).expect_err("a named path that is absent must fail");
         assert!(
             err.to_string().contains("no-such-vault"),
             "the error should name the path the caller typed: {err}"
