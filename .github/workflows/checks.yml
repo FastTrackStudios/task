@@ -150,7 +150,7 @@ jobs:
           plan="$(${NIX_DEV} cargo rail plan --quiet --from "$base" --to HEAD -f json)" \
             || run_all "cargo rail plan failed"
 
-          eval "$(printf '%s' "$plan" | python3 -c '
+          gates="$(printf '%s' "$plan" | ${NIX_DEV} python3 -c '
           import json, sys
 
           plan = json.load(sys.stdin)
@@ -178,6 +178,8 @@ jobs:
               print(f"{k}={str(v).lower()}")
           print(f"n_crates={len(crates)}")
           ')" || run_all "plan parse failed"
+          [ -n "$gates" ] || run_all "plan parse produced no gates"
+          eval "$gates"
 
           # Infra surface (toolchain / flake / CI inputs changed) is a
           # DELIBERATE full run, not a failure — everything's inputs
