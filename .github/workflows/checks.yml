@@ -1,10 +1,16 @@
-# Task Checks — the one PR/push gate, on GitHub-hosted runners.
+# Task Checks — the one PR/push gate, on THEBATTLESHIP.
+#
+# Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB),
+# four instances so this workflow's parallel jobs do not queue behind
+# each other. Hosted `ubuntu-latest` is 4 vCPU with nothing warm, which
+# is what made a run take 35-40 minutes; see CACHE below.
 #
 # Toolchain comes from the repo flake: every step runs under
 # `nix develop .#ci -c` (rust 1.94 pin, wasm target, clang env for ring,
 # native headers, tailwindcss, cargo-rail). `--accept-flake-config` picks
-# up the fasttrackstudio.cachix.org substituter from flake.nix nixConfig,
-# so the toolchain is a download, not a build.
+# up the fasttrackstudio.cachix.org substituter from flake.nix nixConfig.
+# On this runner the store is already warm, so entering the shell is
+# instant and nothing installs nix per job.
 #
 # CHANGE SELECTION: the `plan` job asks `cargo rail plan` (patched flake
 # build — nix/modules/cargo-rail.nix) which workspace crates the range
@@ -15,19 +21,24 @@
 # .config/rail.toml [change-detection].infrastructure) or any rail
 # failure FAIL OPEN.
 #
-# Build, tests and quality are PARALLEL jobs — hosted runners are
-# isolated VMs, each with its own rust-cache.
+# CACHE: there is none, and that is the point. The old hosted setup ran
+# `Swatinem/rust-cache`, which tars a multi-GB target dir up to the
+# Actions cache at job end and untars it at job start. A repo gets 10 GB
+# of that cache, evicted global-LRU, and three jobs times every open PR
+# overflowed it within the hour — so most runs restored NOTHING and
+# recompiled 228 crates from cold. That was the entire 35-40 minute wall
+# clock. The workspace's 2655 tests execute in 3.3 seconds.
 #
-# CACHE BUDGET: a repo gets 10 GB of Actions cache, and eviction is
-# global LRU. Only pushes to main save an entry (`save-if` on every
-# rust-cache step); PR runs restore and discard. Without that rule the
-# three jobs times every open PR overflowed the budget within an hour and
-# evicted each other, so most runs compiled 228 crates from cold — which
-# is the entire 30-40 minute wall clock, not the tests. The workspace's
-# 2655 tests execute in 3.3 seconds.
+# A self-hosted runner needs no such round trip. Each instance keeps a
+# CARGO_TARGET_DIR under its own $HOME (a real directory on NVMe, set by
+# `workDir` in the fleet aspect — NOT the systemd RuntimeDirectory, which
+# is tmpfs and is deleted on restart). It survives jobs, restarts and
+# reboots, so an ordinary PR compiles only what it changed.
 #
-# .github/workflows/cache-cleanup.yml drops a merged/closed PR's leftover
-# entries so the budget stays main's.
+# It lives OUTSIDE $GITHUB_WORKSPACE on purpose: `actions/checkout`
+# defaults to `clean: true`, which runs `git clean -ffdx`, and /target is
+# gitignored — a target dir inside the checkout would be deleted at the
+# start of every run.
 
 name: checks
 
@@ -48,12 +59,46 @@ env:
   # host triple so the wasm32 rustflags in .cargo/config.toml are
   # untouched.
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+  # Four runner instances share 32 cores. Capping each job keeps a full
+  # fan-out from thrashing; jobs are not all CPU-saturated at the same
+  # moment, so mild oversubscription (4 x 12 > 32) is a win rather than a
+  # cost.
+  CARGO_BUILD_JOBS: "12"
+  # Terse, stable logs — this is CI, not a terminal.
+  CARGO_TERM_COLOR: never
 
 jobs:
+  # GitHub applies `timeout-minutes` to EXECUTION, not to time spent
+  # queued — with every real job on one host, a stopped runner service
+  # would leave a PR sitting "Queued" rather than failing. This is the
+  # only hosted job left: it asks the API whether an online `nix-host`
+  # runner exists and fails in seconds if not, so a dead battleship shows
+  # up as a red check instead of silence.
+  runner-online:
+    name: Runner online
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert an online nix-host runner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          online="$(gh api orgs/${{ github.repository_owner }}/actions/runners \
+            -q '[.runners[] | select(.status == "online")
+                 | select([.labels[].name] | index("nix-host"))] | length')"
+          echo "online nix-host runners: ${online}"
+          if [ "${online}" -lt 1 ]; then
+            echo "::error::No online self-hosted runner carries the nix-host label."
+            echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
+            exit 1
+          fi
+
   plan:
     name: Plan affected crates
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: [self-hosted, nix-host]
+    needs: runner-online
+    timeout-minutes: 10
     outputs:
       workspace: ${{ steps.filter.outputs.workspace }}
       wasm: ${{ steps.filter.outputs.wasm }}
@@ -62,7 +107,6 @@ jobs:
         with:
           # Full history: the plan needs both diff endpoints' ancestry.
           fetch-depth: 0
-      - uses: DeterminateSystems/nix-installer-action@v22
       - name: Plan affected crates
         id: filter
         run: |
@@ -135,51 +179,37 @@ jobs:
 
   build:
     name: Build (wasm)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: [self-hosted, nix-host]
+    timeout-minutes: 30
     needs: plan
     steps:
       - uses: actions/checkout@v4
+      - name: Persistent target dir
+        run: |
+          # Outside $GITHUB_WORKSPACE — actions/checkout runs
+          # `git clean -ffdx` and /target is gitignored, so a target dir
+          # inside the checkout would be deleted every run. $HOME is this
+          # runner INSTANCE's workDir, so two instances never share a
+          # cargo lock, and the dir outlives jobs, restarts and reboots.
+          dir="$HOME/cargo-target/wasm"
+          mkdir -p "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
       # Every step here is gated on the WASM surface, not the workspace
       # one. The native `cargo check --workspace --all-targets` this job
       # used to run was a strict subset of the clippy run in `quality`
       # (clippy-driver does the same check pass before it lints), so it
       # cost 13 minutes to learn nothing. What is left is the one thing
       # only this job does: prove the browser target still builds.
-      - name: Free disk space
-        if: needs.plan.outputs.wasm == 'true'
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h / | tail -1
-      - uses: DeterminateSystems/nix-installer-action@v22
-        if: needs.plan.outputs.wasm == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: needs.plan.outputs.wasm == 'true'
-        with:
-          shared-key: wasm
-          cache-on-failure: "true"
-          # Only main WRITES the cache. PR runs read main's entry and
-          # throw their own away. Three jobs x every open PR each used to
-          # save 1.6-3.1 GB into a 10 GB repo-wide budget, so the budget
-          # sat permanently full and every new run evicted the entry the
-          # next one needed — "No cache found", then 30 minutes of cold
-          # compile on a workspace whose tests themselves run in 3.3s.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
       # committed, and asset!() resolves them at compile time — so they
-      # have to exist before cargo runs. dx builds them during `dx
-      # serve`/`dx build`, but CI drives plain cargo.
+      # have to exist before cargo runs. The CI shell carries the
+      # tailwindcss binary, which resolves `@import "tailwindcss"` on its
+      # own; the two npm installs this step used to do were a minute a job
+      # for nothing.
       - name: tailwind
         if: needs.plan.outputs.wasm == 'true'
-        run: |
-          # BOTH installs are required. -g puts the `tailwindcss` binary on
-          # PATH; the local one puts the `tailwindcss` MODULE in node_modules
-          # so `@import "tailwindcss"` inside the CSS can resolve it (node
-          # resolution walks up from the crate dir, so repo-root is enough).
-          npm install -g @tailwindcss/cli
-          npm install --no-save tailwindcss
-          ${NIX_DEV} just css
+        run: ${NIX_DEV} just css
 
       # wasm32 target + ring's clang env come from the flake CI shell.
       #
@@ -198,52 +228,53 @@ jobs:
 
   tests:
     name: Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+    runs-on: [self-hosted, nix-host]
+    timeout-minutes: 30
     needs: plan
     steps:
       - uses: actions/checkout@v4
-      - name: Free disk space
-        if: needs.plan.outputs.workspace == 'true'
+      - name: Persistent target dir
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h / | tail -1
-      - uses: DeterminateSystems/nix-installer-action@v22
-        if: needs.plan.outputs.workspace == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: needs.plan.outputs.workspace == 'true'
-        with:
-          shared-key: tests
-          cache-on-failure: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Outside $GITHUB_WORKSPACE — actions/checkout runs
+          # `git clean -ffdx` and /target is gitignored, so a target dir
+          # inside the checkout would be deleted every run. $HOME is this
+          # runner INSTANCE's workDir, so two instances never share a
+          # cargo lock, and the dir outlives jobs, restarts and reboots.
+          dir="$HOME/cargo-target/tests"
+          mkdir -p "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+      # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
+      # committed, and asset!() resolves them at compile time — so they
+      # have to exist before cargo runs. The CI shell carries the
+      # tailwindcss binary, which resolves `@import "tailwindcss"` on its
+      # own; the two npm installs this step used to do were a minute a job
+      # for nothing.
       - name: tailwind
         if: needs.plan.outputs.workspace == 'true'
-        run: |
-          npm install -g @tailwindcss/cli
-          npm install --no-save tailwindcss
-          ${NIX_DEV} just css
+        run: ${NIX_DEV} just css
       - name: cargo nextest run --workspace
         if: needs.plan.outputs.workspace == 'true'
         run: ${NIX_DEV} cargo nextest run --profile ci --workspace
 
   quality:
     name: Quality (fmt + clippy + docs)
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+    runs-on: [self-hosted, nix-host]
+    timeout-minutes: 30
     needs: plan
     steps:
       - uses: actions/checkout@v4
-      - name: Free disk space
+      - name: Persistent target dir
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h / | tail -1
-      - uses: DeterminateSystems/nix-installer-action@v22
-      - uses: Swatinem/rust-cache@v2
-        if: needs.plan.outputs.workspace == 'true'
-        with:
-          shared-key: quality
-          cache-on-failure: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Outside $GITHUB_WORKSPACE — actions/checkout runs
+          # `git clean -ffdx` and /target is gitignored, so a target dir
+          # inside the checkout would be deleted every run. $HOME is this
+          # runner INSTANCE's workDir, so two instances never share a
+          # cargo lock, and the dir outlives jobs, restarts and reboots.
+          dir="$HOME/cargo-target/quality"
+          mkdir -p "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
       # fmt is ungated: it compiles nothing, so change selection would
       # save nothing.
       - name: fmt
@@ -251,12 +282,15 @@ jobs:
       - name: Manifests + lockfile
         if: needs.plan.outputs.workspace == 'true'
         run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
+      # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
+      # committed, and asset!() resolves them at compile time — so they
+      # have to exist before cargo runs. The CI shell carries the
+      # tailwindcss binary, which resolves `@import "tailwindcss"` on its
+      # own; the two npm installs this step used to do were a minute a job
+      # for nothing.
       - name: tailwind
         if: needs.plan.outputs.workspace == 'true'
-        run: |
-          npm install -g @tailwindcss/cli
-          npm install --no-save tailwindcss
-          ${NIX_DEV} just css
+        run: ${NIX_DEV} just css
       - name: Clippy
         if: needs.plan.outputs.workspace == 'true'
         run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings
