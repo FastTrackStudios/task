@@ -69,20 +69,31 @@ jobs:
   # queued — with every real job on one host, a stopped runner service
   # would leave a PR sitting "Queued" rather than failing.
   #
-  # This watches THIS RUN's own jobs (the `actions: read` the default
-  # token already has — the org runners endpoint needs `admin:org`, which
-  # no workflow token carries) and fails once anything has sat queued past
-  # the grace period. It exits the moment the jobs are picked up, so a
-  # healthy run pays a few seconds on a hosted runner.
+  # This watches THIS RUN's own jobs, using the `actions: read` the
+  # default token already has. It exits the moment they are picked up, so
+  # a healthy run pays a few seconds on a hosted runner.
   queue-timeout:
     name: Queue timeout
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
+    # ADVISORY, not a gate. This cannot tell "no runner is alive" from
+    # "every runner is busy" — telling them apart needs the org runners
+    # endpoint, which requires admin:org and is exactly why this job polls
+    # its own run instead. With two slots and jobs of ten to twenty
+    # minutes, a long queue is ordinary: the first version of this failed
+    # a PR whose only problem was that one slot had a deploy and the other
+    # had the previous run. A false red on a healthy queue is worse than a
+    # slow warning on a dead one.
+    #
+    # To make it a real gate, give the repo a fine-grained org PAT with
+    # "self-hosted runners: read", ask that endpoint whether anything with
+    # the nix-host label is online, and drop continue-on-error.
+    continue-on-error: true
     steps:
-      - name: Fail if the self-hosted jobs never start
+      - name: Warn if the self-hosted jobs never start
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GRACE_SECONDS: "480"
+          GRACE_SECONDS: "1500"
         run: |
           set -euo pipefail
           deadline=$(( $(date +%s) + GRACE_SECONDS ))
@@ -96,9 +107,9 @@ jobs:
               exit 0
             fi
             if [ "$(date +%s)" -ge "${deadline}" ]; then
-              echo "::error::Still queued after ${GRACE_SECONDS}s: ${queued}"
-              echo "::error::No self-hosted nix-host runner took the work."
-              echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
+              echo "::warning::Still queued after ${GRACE_SECONDS}s: ${queued}"
+              echo "::warning::Either every nix-host runner is busy, or none is alive."
+              echo "::warning::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
               exit 1
             fi
             echo "queued: ${queued}"
@@ -331,9 +342,15 @@ jobs:
       #
       # --maxsize, not --time: an age cutoff cleans nothing when every
       # artifact is from today, which is exactly the CI case ("Cleaned
-      # nothing" from --time 7 against a 167 GB dir). This bounds the cache
-      # and evicts oldest-first, which is the behaviour we actually want —
-      # the current build stays warm, the sediment goes.
+      # nothing" from --time 7 against a 167 GB dir).
+      #
+      # But the cap has to sit ABOVE steady state, not at it. --maxsize
+      # evicts oldest-by-mtime, and in a cold build the oldest files are
+      # the dependency rlibs — the most reusable things in the tree. A
+      # 60 GB cap against a ~74 GB steady state trimmed 20.6 GiB of live
+      # dependencies every run and the next run rebuilt them: the "warm"
+      # run took 20m against the cold run's 10m. This is a safety valve
+      # against unbounded growth, not a routine reclaim.
       #
       # always(): a red run has to give the disk back too.
       - name: Bound the target dir
@@ -342,6 +359,6 @@ jobs:
           # CARGO_INCREMENTAL=0 stops new incremental output but does not
           # remove what earlier runs left; nothing regenerates this now.
           rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
-          ${NIX_DEV} cargo sweep --maxsize 60GB || true
+          ${NIX_DEV} cargo sweep --maxsize 150GB || true
           du -sh "${CARGO_TARGET_DIR}" || true
           df -h /var/lib | tail -1
