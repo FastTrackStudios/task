@@ -74,12 +74,17 @@ fn view(path: &str, query: &str) -> Option<Element> {
 fn studio_screen(path: &str, query: &str) -> Option<Element> {
     match path {
         // `v` is the YouTube id, `node` the NodeRef token the
-        // timestamped notes hang on. Both empty is the paste-a-URL
-        // landing, which is why neither is required.
+        // timestamped notes hang on, `t` the second to open at. Both
+        // `v` and `node` empty is the paste-a-URL landing, which is why
+        // neither is required; a `sermon:<slug>` node alone resolves
+        // its own video.
         "" => {
             let v = task_plugin_ui::query_param(query, "v").unwrap_or_default();
             let node = task_plugin_ui::query_param(query, "node").unwrap_or_default();
-            Some(rsx! { WatchView { v, node } })
+            let t = task_plugin_ui::query_param(query, "t")
+                .and_then(|t| t.parse::<u32>().ok())
+                .unwrap_or(0);
+            Some(rsx! { WatchView { v, node, t } })
         }
         _ => None,
     }

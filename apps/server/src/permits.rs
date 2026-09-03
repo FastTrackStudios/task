@@ -764,7 +764,9 @@ table!(LINKS, "links", "links/**", [
 table!(COLLECTION, "collection", "collections/**", [
     wr "create", rd "get", rd "list", wr "add_item", wr "remove_item", wr "reorder",
 ]);
-table!(RESOURCES, "resources", "resources/**", [rd "transcript"]);
+table!(RESOURCES, "resources", "resources/**", [
+    rd "transcript", wr "upsert_sermon", rd "list_sermons", rd "sermon",
+]);
 
 // ── Finance lane (every mutation audited) ────────────────────────────────
 

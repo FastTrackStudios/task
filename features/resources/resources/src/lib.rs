@@ -21,6 +21,8 @@ pub mod backend;
 pub mod build;
 pub mod manifest;
 pub mod resolve;
+pub mod scripture_refs;
+pub mod sermon;
 pub mod sidecar;
 pub mod transcript;
 pub mod types;

@@ -16,6 +16,9 @@ architect-ui.workspace = true
 # href builder that links a backlink to its vault note without naming
 # the shell's `Route` enum.
 task-ui-core.workspace = true
+# A sermon backlink opens the FastTrackStudio watch screen at the moment
+# the verse was named — `href` builds that app link.
+task-plugin-ui.workspace = true
 scripture-proto = { workspace = true, features = ["vox"] }
 
 [lints]

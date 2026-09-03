@@ -33,6 +33,37 @@ const CTRL_CLS: &str = "rounded-lg border border-input bg-input/30 px-3 py-2 tex
      focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] \
      focus-visible:ring-ring/50";
 
+/// Where a backlink goes: a vault note to its page; a media source
+/// (`sermon:<slug>`) to the FastTrackStudio watch screen, opened at the
+/// second the verse was named.
+fn backlink_href(
+    n: &scripture_proto::VerseBacklink,
+    note_href: &Callback<String, String>,
+) -> String {
+    if n.source_kind.is_empty() {
+        return note_href.call(n.note_path.clone());
+    }
+    task_plugin_ui::href(
+        "fasttrackstudio",
+        "",
+        &format!("node={}&t={}", task_plugin_ui::encode(&n.note_path), n.secs),
+    )
+}
+
+/// `Title` for a note; `Title · MM:SS` for a media source.
+fn backlink_label(n: &scripture_proto::VerseBacklink) -> String {
+    if n.source_kind.is_empty() {
+        return n.note_title.clone();
+    }
+    let (m, s) = (n.secs / 60, n.secs % 60);
+    let stamp = if m >= 60 {
+        format!("{}:{:02}:{s:02}", m / 60, m % 60)
+    } else {
+        format!("{m}:{s:02}")
+    };
+    format!("{} · {stamp}", n.note_title)
+}
+
 /// The study panel's tabs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StudyTab {
@@ -323,6 +354,24 @@ pub fn ScriptureView(reference: String) -> Element {
                                 Heading { level: HeadingLevel::H2, "{c.book_name} {c.chapter}" }
                                 Text { variant: TextVariant::Muted, class: "text-xs", "{c.translation}" }
                             }
+                            // Sources that name the whole chapter (a sermon's
+                            // "Romans 8", a note's `[[Romans 8]]`) — verse 0.
+                            if let Some(bl) = backlink_map.get(&0) {
+                                div { class: "mt-2 flex flex-col gap-0.5 border-l border-border pl-3",
+                                    span { class: "text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground",
+                                        "Mentions this chapter"
+                                    }
+                                    for n in bl.notes.iter() {
+                                        Link {
+                                            key: "{n.note_path}#t:{n.secs}",
+                                            to: backlink_href(n, &note_href),
+                                            class: "text-xs text-muted-foreground hover:text-foreground",
+                                            title: "{n.excerpt}",
+                                            "↳ {backlink_label(n)}"
+                                        }
+                                    }
+                                }
+                            }
                             div { class: "mt-3 flex flex-col gap-2 leading-relaxed",
                                 for v in c.verses.iter() {
                                     {
@@ -365,16 +414,17 @@ pub fn ScriptureView(reference: String) -> Element {
                                                         }
                                                     }
                                                 }
-                                                // Linked notes — click through to the note.
+                                                // Linked notes — click through to the note; a
+                                                // sermon opens at the moment it named the verse.
                                                 if let Some(bl) = backlink_map.get(&v.verse) {
                                                     div { class: "ml-6 mt-1 flex flex-col gap-0.5 border-l border-border pl-3",
                                                         for n in bl.notes.iter() {
                                                             Link {
-                                                                key: "{n.note_path}",
-                                                                to: note_href(n.note_path.clone()),
+                                                                key: "{n.note_path}#t:{n.secs}",
+                                                                to: backlink_href(n, &note_href),
                                                                 class: "text-xs text-muted-foreground hover:text-foreground",
                                                                 title: "{n.excerpt}",
-                                                                "↳ {n.note_title}"
+                                                                "↳ {backlink_label(n)}"
                                                             }
                                                         }
                                                     }

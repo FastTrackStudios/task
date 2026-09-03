@@ -282,6 +282,10 @@ vault-proto = { workspace = true, features = ["vox"] }
 project = { workspace = true, features = ["vox"] }
 collection-proto = { workspace = true, features = ["vox"] }
 media-proto = { workspace = true, features = ["vox"] }
+# `sermon_resources_e2e` reads the sermon sync's links and the
+# scripture reader's backlinks back over the wire.
+links-proto = { workspace = true, features = ["vox"] }
+scripture-proto = { workspace = true, features = ["vox"] }
 # The rendition-route e2e drives the deterministic `FakeTranscoder`
 # (no ffmpeg) and names wire `RenditionKind`s directly.
 files-proto = { workspace = true, features = ["vox"] }

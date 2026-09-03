@@ -34,6 +34,10 @@ pub struct MediaRef {
     #[serde(default)]
     pub provider: String,
     pub url: String,
+    /// The provider's own id for the media (a YouTube video id). The
+    /// sermon sync keys resource identity on it: one id, one slug.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
 }
 
 /// A resource manifest — the read-only Library entry. Mirrors the
@@ -52,6 +56,33 @@ pub struct Resource {
     pub media: Vec<MediaRef>,
     #[serde(default)]
     pub readonly: bool,
+    /// Free tags (`[sermon, crossroads]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// `YYYY-MM-DD` publication / upload date; empty when unknown.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub published: String,
+    /// Media length in seconds; `0` when unknown.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub duration_secs: u64,
+    /// Scripture the resource references, as OSIS ids in first-mention
+    /// order (`1Pet.5.7`, `John.21.15-John.21.17`, `1Pet.5`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripture: Vec<String>,
+    /// Where the content came from (`youtube-captions`, `manual`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// For caption-sourced transcripts: `manual` or `auto`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub caption_kind: String,
+    /// Caption / transcript language (`en`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub language: String,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Resource {

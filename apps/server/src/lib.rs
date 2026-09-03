@@ -1609,6 +1609,10 @@ pub(crate) async fn build_org_state(
             .map_err(|e| eyre::eyre!("open inventory vault: {e}"))?;
         #[cfg(feature = "plugin-home")]
         let inventory = inventory::Store::new(inventory_vault);
+        // Typed-link store (user-asserted verse/note/wiki links, plus
+        // the derived links the vault and sermon syncs mint). Opened
+        // before scripture: the reader's backlinks read it.
+        let links = links::Store::open(org_root.path().join("links.jsonl"));
         // Scripture — read-only Bible spine loaded from the resource
         // library (`<org>/resources/bible/<TX>/`). A missing root yields
         // an empty store, so orgs without an installed corpus just show
@@ -1653,6 +1657,10 @@ pub(crate) async fn build_org_state(
                 // The vault powers per-verse backlinks: notes that link
                 // `[[John 3:16]]` surface in the reader.
                 .with_vault(vault_root.clone())
+                // So do media sources: a sermon whose captions name a
+                // verse (`sermon:<slug>#t:<secs> → verse:<osis>`, minted
+                // by the sermon sync) is listed at the moment it said it.
+                .with_media_links(links.clone(), org_root.resources_dir())
                 .with_api(scripture_api)
                 .with_lexicon(scripture_lexicon)
                 // Original-language editions (TAGNT/TAHOT/SBLGNT/OSHB),
@@ -1680,8 +1688,6 @@ pub(crate) async fn build_org_state(
                         .join("topics")
                         .join("topic-votes.txt"),
                 );
-        // Typed-link store (user-asserted verse/note/wiki links).
-        let links = links::Store::open(org_root.path().join("links.jsonl"));
         // Ordered-collection store — Library / Setlist / Show / Playlist.
         // JSONL at `<org>/collections.jsonl` (override via
         // `TASK_SERVER_COLLECTIONS_PATH`, mirroring the vault-root override
@@ -1700,8 +1706,11 @@ pub(crate) async fn build_org_state(
             vault_graph.clone(),
             vault_sync_state.channel("default").await.subscribe(),
         );
-        // Resource Library reader (transcript sidecars under resources/).
-        let resources = resources::ResourcesBackend::new(org_root.resources_dir());
+        // Resource Library: transcript sidecars under resources/ for the
+        // watch view, and the sermon sync's write path — which mints the
+        // sermon's `→ verse` links into the same typed-link store.
+        let resources =
+            resources::ResourcesBackend::new(org_root.resources_dir()).with_links(links.clone());
         // Cookbook lives at `<wiki>/Cookbook/*.cook`, NOT the vault
         // root. Which wiki is now a real question: with named wikis an
         // org can hold a Cooking wiki, and recipes belong there rather

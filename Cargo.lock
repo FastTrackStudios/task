@@ -17883,6 +17883,7 @@ dependencies = [
  "links",
  "links-proto",
  "resources-proto",
+ "scripture-proto",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -18454,6 +18455,7 @@ version = "0.1.0"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.7.1)",
  "csv",
+ "links",
  "regex",
  "reqwest 0.12.28",
  "roxmltree 0.20.0",
@@ -18488,6 +18490,7 @@ dependencies = [
  "architect-ui 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.7.1)",
  "dioxus",
  "scripture-proto",
+ "task-plugin-ui",
  "task-ui-core",
 ]
 
@@ -20921,6 +20924,8 @@ dependencies = [
  "project",
  "recipe-import",
  "reqwest 0.12.28",
+ "resources",
+ "resources-proto",
  "rustls",
  "scheduling-proto",
  "sea-orm",
@@ -21224,6 +21229,7 @@ dependencies = [
  "intake",
  "inventory 0.1.0",
  "links",
+ "links-proto",
  "locations",
  "mealplan",
  "media-proto",
@@ -21248,6 +21254,7 @@ dependencies = [
  "scheduling",
  "scheduling-proto",
  "scripture",
+ "scripture-proto",
  "sea-orm",
  "sea-orm-migration",
  "serde",

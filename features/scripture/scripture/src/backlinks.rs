@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use scripture_proto::{VerseBacklink, VerseRange};
+use scripture_proto::{Book, VerseBacklink, VerseRange};
 
 use crate::refs::extract_verse_refs;
 
@@ -53,11 +53,132 @@ pub fn scan_vault(vault_root: &Path) -> Vec<RangeBacklink> {
                     note_path: note_path.clone(),
                     note_title: note_title.clone(),
                     excerpt: hit.excerpt,
+                    source_kind: String::new(),
+                    secs: 0,
                 },
             });
         }
     }
     out
+}
+
+/// A media source's reference: what it points at (a verse range, or a
+/// whole chapter) and the backlink row to show for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaBacklink {
+    /// `Some` for a verse or range; `None` when the whole chapter was
+    /// named (`Rom.8`).
+    pub range: Option<VerseRange>,
+    pub book: Book,
+    pub chapter: u16,
+    pub link: VerseBacklink,
+}
+
+/// Every `sermon:` / `song:` / `video:` → `verse:` link in the typed-link
+/// store, as backlink rows. Titles come from the resource manifests
+/// under `resources_root` (`sermons/**/<slug>.md`, `songs/…`); a source
+/// with no manifest shows its slug.
+#[must_use]
+pub fn scan_media_links(links: &links::Store, resources_root: &Path) -> Vec<MediaBacklink> {
+    use links::{LinksService as _, NodeKind};
+
+    let Ok(all) = links.graph(links::Confidence::Speculative, true) else {
+        return Vec::new();
+    };
+    let mut titles: Option<std::collections::HashMap<String, String>> = None;
+    let mut out = Vec::new();
+    for l in all {
+        let kind = match l.source.kind {
+            NodeKind::Sermon => "sermon",
+            NodeKind::Song => "song",
+            NodeKind::Video => "video",
+            _ => continue,
+        };
+        if l.target.kind != NodeKind::Verse {
+            continue;
+        }
+        let Some((book, chapter, range)) = parse_target(&l.target.id) else {
+            continue;
+        };
+        // `t:<secs>` or a clip `t:<start>-<end>`: the moment to open at.
+        let secs = l
+            .source
+            .anchor
+            .strip_prefix("t:")
+            .and_then(|t| t.split('-').next())
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(0);
+        let titles = titles.get_or_insert_with(|| manifest_titles(resources_root));
+        let title = titles
+            .get(&format!("{kind}:{}", l.source.id))
+            .cloned()
+            .unwrap_or_else(|| l.source.id.clone());
+        // The sync writes `Title · MM:SS — <what was said>`; keep the
+        // spoken part as the excerpt.
+        let excerpt = l
+            .note
+            .split_once(" — ")
+            .map_or(l.note.as_str(), |(_, said)| said)
+            .to_string();
+        out.push(MediaBacklink {
+            range,
+            book,
+            chapter,
+            link: VerseBacklink {
+                note_path: format!("{kind}:{}", l.source.id),
+                note_title: title,
+                excerpt,
+                source_kind: kind.to_string(),
+                secs,
+            },
+        });
+    }
+    out
+}
+
+/// A `verse:` node id: `John.3.16`, `John.3.16-John.3.18`, or the
+/// chapter-only `John.3`. Returns `(book, chapter, range)`.
+fn parse_target(id: &str) -> Option<(Book, u16, Option<VerseRange>)> {
+    if let Ok(range) = VerseRange::parse(id) {
+        return Some((range.start.book, range.start.chapter, Some(range)));
+    }
+    let (book, chapter) = id.rsplit_once('.')?;
+    let book = Book::lookup(book)?;
+    let chapter: u16 = chapter.parse().ok()?;
+    (chapter > 0).then_some((book, chapter, None))
+}
+
+/// `kind:slug → title` for every resource manifest under the root
+/// (`sermons/**/*.md` → `sermon:<slug>`, `songs/…` → `song:`).
+fn manifest_titles(resources_root: &Path) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for (dir, kind) in [
+        ("sermons", "sermon"),
+        ("songs", "song"),
+        ("videos", "video"),
+    ] {
+        let mut files = Vec::new();
+        collect_markdown(&resources_root.join(dir), &mut files);
+        for path in files {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let field = |key: &str| {
+                text.lines()
+                    .take_while(|l| !(l.trim() == "---" && !text.starts_with(l)))
+                    .find_map(|l| l.strip_prefix(key))
+                    .map(|v| v.trim().trim_matches(['"', '\'']).to_string())
+            };
+            let slug = field("slug:").unwrap_or_else(|| {
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            let title = field("title:").unwrap_or_else(|| title_of(&text, &path));
+            map.insert(format!("{kind}:{slug}"), title);
+        }
+    }
+    map
 }
 
 /// Recursively collect `*.md` paths, skipping hidden dirs (`.obsidian`,
