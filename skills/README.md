@@ -31,6 +31,11 @@ on the CLI for idempotence + audit.
   deployed server and the real issuer, signed in as the account in
   `.env` (`just live`); the CLI as that account; the traps that make
   it look broken.
+- [`llm-wiki.md`](llm-wiki.md) — set up and maintain one of an org's
+  named wikis: create from a purpose, declare the schema, write and
+  search pages, ingest and review. From the CLI (`task wiki …`) or
+  over MCP (`list_wikis`, `create_wiki`, `read_wiki_page`,
+  `write_wiki_page`, …).
 - [`email-triage.md`](email-triage.md) — curator sorts the agent@
   inbox, links to tasks/projects, applies Proton labels, marks
   processed.
