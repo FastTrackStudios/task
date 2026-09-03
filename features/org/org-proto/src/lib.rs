@@ -14,6 +14,7 @@
 
 pub mod issuer;
 pub mod manifest;
+pub mod mount;
 pub mod root;
 #[cfg(feature = "vox")]
 pub mod schema_stamp;
@@ -22,6 +23,7 @@ pub mod snapshot;
 
 pub use issuer::{IssuerError, IssuerProfile};
 pub use manifest::{OrgManifest, ParseError};
+pub use mount::{KnowledgeTree, TreePlace};
 pub use root::{DEFAULT_WIKI, DataRoot, OrgRoot, RootError, default_client_vault_root, wiki_slug};
 pub use service::{
     CreateOrgRequest, OrgManagementError, OrgManagementService, OrgManagementServiceRpc,

@@ -38,16 +38,59 @@ route's chunk.
 | dx's ad-hoc `wasm-release` (inherits release, `opt-level = "s"`) — what production shipped | 71.0 MB | 19.07 MB |
 | `[profile.wasm-release]` below (`z`, fat LTO, 1 CGU, `panic = "abort"`) | 54.6 MB | 16.72 MB |
 | + one engraver (the `[patch]` in the root `Cargo.toml`) | 53.5 MB | 16.67 MB |
-| + `--wasm-split` (main chunk 18.3 MB + Home route 0.15 MB) | **18.5 MB** | **5.4 MB** |
+| + `--wasm-split` (main chunk 18.3 MB + Home route 0.15 MB) | 18.5 MB | 5.4 MB |
+| + lazy player, engraver, widgets, panels and store providers (main 6.8 MB + Home route 0.15 MB + 7 provider chunks 0.26 MB) | **7.2 MB** | **1.93 MB** |
 | same profile with `opt-level = "s"` instead of `"z"`, unsplit, for the record | 58.7 MB | 17.69 MB |
 
-The split bundle is 41 lazy chunks next to the main one. The ones that
-matter: the vault/editor route (`module_*_routeVaultRoute*`, 30.6 MB /
-10.7 MB br — the markdown editor, tree-sitter grammars, the notation
-engraver and its fonts, the session player) downloads the first time a
-note is opened; the schedule route is 2.5 MB; every other route and
-plugin screen is 0.1–0.7 MB. Chunks are content-hashed, so they cache
+The split bundle is 54 lazy chunks next to the main one. The main chunk
+is the shell — router, nav, auth, the vault explorer, the home and task
+pages' shared code — and nothing plugin-shaped: everything an app
+contributes beyond its nav entries and link claims sits behind a
+boundary of its own. Where each subsystem lives, and when it downloads:
+
+| subsystem | chunk | raw / brotli | downloaded when |
+|---|---|---|---|
+| shell (router, nav, auth, explorer, stores machinery, fuzzy search) | `task-app-web_bg` (main) | 6.8 MB / 1.79 MB | first load |
+| each route page | `module_*_route<Name>Route*` | 0.003–2.5 MB | the route is visited |
+| the vault/editor route (markdown editor, tree-sitter, typst, mermaid, the chart pane's engraver copy) | `module_*_routeVaultRoute*` | 31.1 MB / 10.9 MB | a note is opened |
+| song / setlist note widgets (the multitrack player, daw worklet bytes, `daw-standalone` + `symphonia`, the in-tab session engine) | `module_*_player_note_widget` | 11.2 MB / 3.44 MB | a `type: song` / `type: setlist` note is opened |
+| chart fences (`editor-keyflow`: engraver + notation fonts) | `module_*_engrave_fence` | 4.4 MB / 1.86 MB | a ```` ```kf ```` fence is first rendered |
+| the global now-playing engine + setlist-row highlighter | `module_*_player_engine` | 0.49 MB / 0.18 MB | the first play request |
+| the agent dock panel | `module_*_agent_panel` | 0.74 MB / 0.25 MB | the dock is opened |
+| each plugin's screens | `module_*_<app>_screen` | 0.15–0.82 MB | the app is visited |
+| each plugin's store providers (7 apps) | `module_*_provide_stores` / `provide_all` | 3–144 KB each | at boot, after the shell paints |
+| `type: video` note widget | `module_*_video_note_widget` | 0.15 MB | a video note is opened |
+
+Before this, the main chunk carried the player, the engraver and every
+plugin's providers and panel — 18.3 MB — because the shell mounted them
+outside the router `Outlet` (the now-playing engine), or registered them
+at boot (widget renders, chart fences, `provide`), so no route boundary
+covered them. The boundaries that moved them are the SDK's
+`task_plugin_ui::lazy_element!` (a mounted surface), `lazy_render!` (a
+widget's block view; its *matches* stay in main), `lazy_provide!` (an
+app's store providers, installed at the root once their chunk arrives —
+`use_deferred_providers` in `App` runs them last, and every lazy
+surface waits on that before rendering, so no screen can ask for a
+store that is not there yet) and, for the chart fences, a
+`FenceRenderer` that declines while its chunk downloads and re-runs the
+editor's decoration pass when it lands. The `wasm-split` cargo feature
+gates all of it; desktop, mobile and `dx serve` call straight through.
+
+The splitter does not pool code that two split points share (only code
+shared with *main* stays in main), so two boundaries reaching the same
+big thing each carry a copy — which is why the song and setlist widgets
+are one boundary, and why the vault route still carries an engraver
+alongside the fence chunk's. Chunks are content-hashed, so they cache
 for as long as the static server lets them.
+
+What remains in main and why: the fuzzy matcher (`neo_frizbee`, ~1 MB,
+the command palette and search), the shell's own pages' shared code,
+`files-ui` (the explorer and the review player host, which the shell
+mounts), and the store/atom machinery every page uses. The 7 provider
+chunks (0.26 MB in all) still download at boot, because a store has to
+exist above the router before any page can read it; making them wait
+for their app's first screen would drop the live subscriptions the
+`stream:` stores exist for.
 
 The release bundle is governed by:
 

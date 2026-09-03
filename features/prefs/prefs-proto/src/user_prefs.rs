@@ -45,6 +45,15 @@ pub struct UserPrefs {
     /// behavior.
     #[serde(default = "default_shortcuts_priority")]
     pub shortcuts_priority: bool,
+
+    /// Modal (vim) editing in the note editor. Default **OFF**: with it
+    /// on, a note opens in NORMAL mode, so letters are commands rather
+    /// than text — typing "The qui…" runs `T`,`h` / `e` / `q`,`u` and
+    /// only the `i` starts inserting. That is a fine thing to opt into
+    /// and a bad thing to be handed. `serde` default is `false` so
+    /// pre-vim boot caches land on the new default too.
+    #[serde(default)]
+    pub vim_mode: bool,
 }
 
 /// Serde default for [`UserPrefs::shortcuts_priority`] — on.
@@ -56,7 +65,7 @@ impl UserPrefs {
     /// The defaults a user without a stored row gets — what
     /// [`crate::PrefsService::get`] returns before the first `set`.
     /// Both task-board filters default on; page + location + theme
-    /// unset.
+    /// unset; modal editing off.
     #[must_use]
     pub fn defaults_for(user_id: Uuid) -> Self {
         Self {
@@ -68,6 +77,7 @@ impl UserPrefs {
             theme_preset: String::new(),
             theme_mode: String::new(),
             shortcuts_priority: true,
+            vim_mode: false,
         }
     }
 }

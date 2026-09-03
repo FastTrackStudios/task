@@ -30,6 +30,13 @@
         pkgs.nodejs_22
         # git — task-server tests and the snapshot engine shell out to it.
         pkgs.git
+        # mold — CI selects it for the host target via
+        # CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS in
+        # .github/workflows/checks.yml. A `nextest run --workspace` links
+        # 326 test binaries and GNU ld does that serially; the flag is set
+        # in the workflow rather than .cargo/config.toml so a developer
+        # shell without mold still links.
+        pkgs.mold
       ];
 
       # Seeded cargo-home bins resolve from PATH — never installed from

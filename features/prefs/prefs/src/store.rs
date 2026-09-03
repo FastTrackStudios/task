@@ -44,6 +44,7 @@ impl Store {
             active.theme_preset = Set(prefs.theme_preset);
             active.theme_mode = Set(prefs.theme_mode);
             active.shortcuts_priority = Set(prefs.shortcuts_priority);
+            active.vim_mode = Set(prefs.vim_mode);
             active.update(&self.conn).await?
         } else {
             UserPrefsActive {
@@ -55,6 +56,7 @@ impl Store {
                 theme_preset: Set(prefs.theme_preset),
                 theme_mode: Set(prefs.theme_mode),
                 shortcuts_priority: Set(prefs.shortcuts_priority),
+                vim_mode: Set(prefs.vim_mode),
             }
             .insert(&self.conn)
             .await?
@@ -86,5 +88,6 @@ fn model_to_prefs(m: UserPrefsModel) -> UserPrefs {
         theme_preset: m.theme_preset,
         theme_mode: m.theme_mode,
         shortcuts_priority: m.shortcuts_priority,
+        vim_mode: m.vim_mode,
     }
 }

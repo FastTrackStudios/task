@@ -420,6 +420,11 @@ pub struct PluginApp {
     /// the root render, so work here is on the path to first paint for
     /// people who do not use this app at all. Subscriptions are fine —
     /// the store driver starts them lazily and heals them itself.
+    ///
+    /// On the web, the *code* behind it is on that path too — the store
+    /// types, their fetchers, their event fold — so write it as
+    /// [`lazy_provide!`], which puts all of that in a chunk of its own
+    /// and still installs the contexts at the root.
     pub provide: Option<fn()>,
     /// How this app's notes render *inside the editor*.
     ///
@@ -719,10 +724,12 @@ pub struct ViewArgs {
 /// a PDF engine, an IMAP stack. `dx build --wasm-split` cuts the binary
 /// along `wasm_split` boundaries and this macro puts one around an
 /// app's screens, so the shell downloads only itself and the chunks it
-/// actually navigates to. Only the *screens* move — an app's nav
-/// entries, widgets, fences and store providers are registered at
-/// startup and stay in the main chunk, because the shell consults them
-/// before anything is clicked.
+/// actually navigates to. The rest of what an app contributes has a
+/// boundary of its own shape: [`lazy_element!`] for a panel or any
+/// other mounted surface, [`lazy_render!`] for a widget's block view,
+/// [`lazy_provide!`] for its store providers. What stays in the main
+/// chunk is only what the shell consults before anything is clicked —
+/// nav entries, link claims, widget *matches*.
 ///
 /// Use it as the body of [`PluginApp::view`]:
 ///
@@ -778,16 +785,253 @@ macro_rules! lazy_view {
     };
 }
 
-/// The runtime half of [`lazy_view!`]: the loader type the macro's
-/// `static` has, and the component that suspends on it.
+/// Put a mounted surface — a docked panel, a global engine — in its own
+/// chunk, downloaded the first time it is actually rendered.
+///
+/// `body` is an ordinary `fn() -> Element`; the macro returns an
+/// `Element` that shows a small placeholder while the chunk downloads
+/// and then renders whatever `body` returns. Everything `body` reaches
+/// that the shell does not is what ends up in the chunk, so the
+/// heavier the surface, the more this saves the first load.
+///
+/// Use it as the body of [`PluginApp::panel`], or anywhere the shell
+/// mounts something that most sessions never look at:
+///
+/// ```ignore
+/// fn panel() -> Element {
+///     task_plugin_ui::lazy_element!("agent_panel", agent_panel)
+/// }
+///
+/// fn agent_panel() -> Element {
+///     rsx! { AgentPanel {} }
+/// }
+/// ```
+///
+/// The module name must be a valid identifier (dx puts it in the
+/// chunk's file name) and unique across the build. Outside a split
+/// build this is a plain call to `body`.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+#[macro_export]
+macro_rules! lazy_element {
+    ($module:literal, $body:ident) => {{
+        fn $body(_: ()) -> $crate::dioxus::prelude::Element {
+            self::$body()
+        }
+        static __LOADER: $crate::lazy::ElementLoader = {
+            use $crate::dioxus::wasm_split;
+            wasm_split::lazy_loader!(
+                extern $module fn $body(args: ()) -> $crate::dioxus::prelude::Element
+            )
+        };
+        $crate::lazy::lazy_element($crate::lazy::LazyElementFn(&__LOADER))
+    }};
+}
+
+/// See the documentation on the `wasm-split` variant of this macro.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-split")))]
+#[macro_export]
+macro_rules! lazy_element {
+    ($module:literal, $body:ident) => {
+        $body()
+    };
+}
+
+/// Put a note widget's block view in its own chunk.
+///
+/// A [`task_widgets::WidgetSpec`] is two halves: what it *matches*,
+/// which the shell must know the moment a note opens, and what it
+/// *renders*, which only matters once one has. The matches stay in
+/// the main chunk; this puts the render behind a boundary. `render` is
+/// an ordinary `fn(WidgetCtx) -> Element`, and the macro evaluates to
+/// something [`task_widgets::WidgetSpec::render`] accepts:
+///
+/// ```ignore
+/// WidgetSpec::new("player.song", vec![WidgetMatch::NoteType("song")])
+///     .render(task_plugin_ui::lazy_render!("player_song", song_note_widget))
+///
+/// fn song_note_widget(ctx: WidgetCtx) -> Element {
+///     rsx! { SongNoteWidget { ctx } }
+/// }
+/// ```
+///
+/// Outside a split build this is the render function itself.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+#[macro_export]
+macro_rules! lazy_render {
+    ($module:literal, $render:ident) => {{
+        static __LOADER: $crate::lazy::RenderLoader = {
+            use $crate::dioxus::wasm_split;
+            wasm_split::lazy_loader!(
+                extern $module fn $render(
+                    ctx: $crate::task_widgets::WidgetCtx,
+                ) -> $crate::dioxus::prelude::Element
+            )
+        };
+        move |ctx: $crate::task_widgets::WidgetCtx| {
+            $crate::lazy::lazy_render($crate::lazy::LazyRenderFn(&__LOADER), ctx)
+        }
+    }};
+}
+
+/// See the documentation on the `wasm-split` variant of this macro.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-split")))]
+#[macro_export]
+macro_rules! lazy_render {
+    ($module:literal, $render:ident) => {
+        $render
+    };
+}
+
+/// Put an app's store providers in their own chunk, installed at the
+/// app root once that chunk has arrived.
+///
+/// [`PluginApp::provide`] runs during the root render, for every app,
+/// whether or not anybody uses it — and a `provide` that names an
+/// app's store types names its proto crate, its fetchers and its
+/// event fold, which is exactly the code that should not be in the
+/// first load. Use this as the body of `provide`:
+///
+/// ```ignore
+/// fn provide() {
+///     task_plugin_ui::lazy_provide!("recall_stores", provide_stores)
+/// }
+/// ```
+///
+/// In a split build the root render records the loader instead of
+/// calling `provide_stores`; [`use_deferred_providers`], which the
+/// shell calls as the *last* thing in its root component, downloads
+/// every recorded chunk and then runs each app's providers in that same
+/// root scope — so the contexts land where they always did, above the
+/// router, and outlive every page. Until that has happened, every lazy
+/// surface in this crate ([`lazy_view!`], [`lazy_element!`],
+/// [`lazy_render!`]) shows its placeholder rather than rendering, so
+/// no app screen can ask for a store that is not there yet.
+///
+/// Outside a split build this is a plain call to `provide_stores`.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+#[macro_export]
+macro_rules! lazy_provide {
+    ($module:literal, $provide:ident) => {{
+        fn $provide(_: ()) {
+            self::$provide();
+        }
+        static __LOADER: $crate::lazy::ProvideLoader = {
+            use $crate::dioxus::wasm_split;
+        wasm_split::lazy_loader!(extern $module fn $provide(args: ()) -> ())
+        };
+        $crate::lazy::defer_provide(&__LOADER);
+    }};
+}
+
+/// See the documentation on the `wasm-split` variant of this macro.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-split")))]
+#[macro_export]
+macro_rules! lazy_provide {
+    ($module:literal, $provide:ident) => {
+        $provide()
+    };
+}
+
+/// Install every provider an app deferred with [`lazy_provide!`].
+///
+/// The shell calls this **last** in its root component — after every
+/// hook of its own — because the providers it runs are hooks too, and
+/// they are appended to the root's hook list only once their chunks
+/// have downloaded. Anything the root ran *after* them would then be
+/// read back from the wrong slot. Outside a split build there is
+/// nothing deferred and this does nothing.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-split")))]
+pub fn use_deferred_providers() {}
+
+/// See the `wasm-split` documentation on [`use_deferred_providers`].
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+pub fn use_deferred_providers() {
+    lazy::use_deferred_providers();
+}
+
+/// The runtime half of the `lazy_*!` macros: the loader types their
+/// `static`s have, and the components that suspend on them.
 #[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
 #[doc(hidden)]
 pub mod lazy {
     use super::ViewArgs;
     use dioxus::prelude::*;
+    use task_widgets::WidgetCtx;
 
     /// A screen function living in a not-yet-downloaded chunk.
     pub type Loader = dioxus::wasm_split::LazyLoader<ViewArgs, Option<Element>>;
+    /// A mounted surface (`fn() -> Element`) in a chunk of its own.
+    pub type ElementLoader = dioxus::wasm_split::LazyLoader<(), Element>;
+    /// A widget's block render in a chunk of its own.
+    pub type RenderLoader = dioxus::wasm_split::LazyLoader<WidgetCtx, Element>;
+    /// An app's `provide` in a chunk of its own.
+    pub type ProvideLoader = dioxus::wasm_split::LazyLoader<(), ()>;
+
+    /// Have every deferred provider been installed at the root?
+    ///
+    /// Read by every lazy surface before it renders, so a screen
+    /// cannot mount ahead of the stores it consumes. Flips exactly
+    /// once per page load, from [`use_deferred_providers`].
+    static PROVIDERS_READY: GlobalSignal<bool> = GlobalSignal::new(|| false);
+
+    /// The loaders `lazy_provide!` recorded during the root render, in
+    /// order. A `Vec` behind a lock rather than a signal: it is filled
+    /// synchronously during a render and read once, in that same
+    /// render, by [`use_deferred_providers`].
+    static DEFERRED: std::sync::RwLock<Vec<&'static ProvideLoader>> =
+        std::sync::RwLock::new(Vec::new());
+
+    /// Record a provider to install once its chunk is here. Idempotent
+    /// — the root renders many times and `provide` runs on each.
+    pub fn defer_provide(loader: &'static ProvideLoader) {
+        let mut list = DEFERRED.write().expect("deferred providers poisoned");
+        if !list.iter().any(|l| std::ptr::eq(*l, loader)) {
+            list.push(loader);
+        }
+    }
+
+    /// See the crate-level [`super::use_deferred_providers`].
+    pub fn use_deferred_providers() {
+        let loaders: Vec<&'static ProvideLoader> = DEFERRED
+            .read()
+            .expect("deferred providers poisoned")
+            .clone();
+        // One download for the lot: the chunks are small (a store
+        // type, a fetcher, a fold) and an app's first screen waits on
+        // this, so serialising them per app would only add latency.
+        let loaded = use_resource(move || {
+            let loaders = loaders.clone();
+            async move {
+                let mut all = true;
+                for loader in loaders {
+                    all &= loader.load().await;
+                }
+                all
+            }
+        });
+        // Effects run after the render below has installed the
+        // providers, which is what makes "ready" true when it says so.
+        use_effect(move || {
+            if loaded.read().is_some() && !PROVIDERS_READY() {
+                *PROVIDERS_READY.write() = true;
+            }
+        });
+        if loaded.read().is_some() {
+            // From here on the root runs these hooks on every render,
+            // appended after its own — the position they would have
+            // had in an eager build, where `provide` ran in this loop.
+            // A chunk that did not download is `Err` here; its app's
+            // surfaces then report the failure themselves, at the
+            // point somebody actually opens one.
+            let deferred: Vec<&'static ProvideLoader> = DEFERRED
+                .read()
+                .expect("deferred providers poisoned")
+                .clone();
+            for loader in deferred {
+                let _ = loader.call(());
+            }
+        }
+    }
 
     /// A `'static` loader as a prop. Two views are the same view when
     /// they are the same static.
@@ -795,6 +1039,26 @@ pub mod lazy {
     pub struct LazyView(pub &'static Loader);
 
     impl PartialEq for LazyView {
+        fn eq(&self, other: &Self) -> bool {
+            std::ptr::eq(self.0, other.0)
+        }
+    }
+
+    /// Same, for a mounted surface.
+    #[derive(Clone, Copy)]
+    pub struct LazyElementFn(pub &'static ElementLoader);
+
+    impl PartialEq for LazyElementFn {
+        fn eq(&self, other: &Self) -> bool {
+            std::ptr::eq(self.0, other.0)
+        }
+    }
+
+    /// Same, for a widget render.
+    #[derive(Clone, Copy)]
+    pub struct LazyRenderFn(pub &'static RenderLoader);
+
+    impl PartialEq for LazyRenderFn {
         fn eq(&self, other: &Self) -> bool {
             std::ptr::eq(self.0, other.0)
         }
@@ -814,17 +1078,50 @@ pub mod lazy {
         })
     }
 
+    /// What `lazy_element!` returns: the surface, once its chunk and
+    /// the app providers are here; a placeholder until then.
+    pub fn lazy_element(view: LazyElementFn) -> Element {
+        rsx! {
+            SuspenseBoundary {
+                fallback: |_| rsx! { LazyFallback {} },
+                LazyElement { view }
+            }
+        }
+    }
+
+    /// What a `lazy_render!` closure returns for one widget mount.
+    pub fn lazy_render(view: LazyRenderFn, ctx: WidgetCtx) -> Element {
+        rsx! {
+            SuspenseBoundary {
+                fallback: |_| rsx! { LazyFallback {} },
+                LazyRender { view, ctx }
+            }
+        }
+    }
+
+    /// The gate every lazy surface passes through: its own chunk
+    /// downloaded, and the deferred providers installed. `None` while
+    /// either is pending (the caller shows its placeholder), `Some`
+    /// once both hold.
+    fn use_ready<A, R>(
+        loader: &'static dioxus::wasm_split::LazyLoader<A, R>,
+    ) -> Result<Option<bool>, RenderError> {
+        let loaded = use_resource(move || async move { loader.load().await }).suspend()?;
+        if !*loaded.read() {
+            return Ok(Some(false));
+        }
+        // Reading the signal subscribes this component, so the flip
+        // to ready re-renders it into the real surface.
+        Ok(PROVIDERS_READY().then_some(true))
+    }
+
     #[component]
     fn LazyScreen(view: LazyView, path: String, query: String) -> Element {
         let loader = view.0;
-        let loaded = use_resource(move || async move { loader.load().await }).suspend()?;
-        if !*loaded.read() {
-            return rsx! {
-                LazyNotice {
-                    title: "This screen could not be loaded",
-                    detail: "Its code did not download. Check the connection and reload.",
-                }
-            };
+        match use_ready(loader)? {
+            None => return rsx! { LazyFallback {} },
+            Some(false) => return rsx! { LazyDidNotLoad {} },
+            Some(true) => {}
         }
         match loader.call(ViewArgs { path, query }) {
             Ok(Some(view)) => view,
@@ -836,12 +1133,35 @@ pub mod lazy {
                     detail: "This app has no page at that address.",
                 }
             },
-            Err(_) => rsx! {
-                LazyNotice {
-                    title: "This screen could not be loaded",
-                    detail: "Its code did not download. Check the connection and reload.",
-                }
-            },
+            Err(_) => rsx! { LazyDidNotLoad {} },
+        }
+    }
+
+    #[component]
+    fn LazyElement(view: LazyElementFn) -> Element {
+        let loader = view.0;
+        match use_ready(loader)? {
+            None => return rsx! { LazyFallback {} },
+            Some(false) => return rsx! { LazyDidNotLoad {} },
+            Some(true) => {}
+        }
+        match loader.call(()) {
+            Ok(element) => element,
+            Err(_) => rsx! { LazyDidNotLoad {} },
+        }
+    }
+
+    #[component]
+    fn LazyRender(view: LazyRenderFn, ctx: WidgetCtx) -> Element {
+        let loader = view.0;
+        match use_ready(loader)? {
+            None => return rsx! { LazyFallback {} },
+            Some(false) => return rsx! { LazyDidNotLoad {} },
+            Some(true) => {}
+        }
+        match loader.call(ctx) {
+            Ok(element) => element,
+            Err(_) => rsx! { LazyDidNotLoad {} },
         }
     }
 
@@ -852,6 +1172,16 @@ pub mod lazy {
         rsx! {
             div { class: "flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground",
                 "Loading…"
+            }
+        }
+    }
+
+    #[component]
+    fn LazyDidNotLoad() -> Element {
+        rsx! {
+            LazyNotice {
+                title: "This screen could not be loaded",
+                detail: "Its code did not download. Check the connection and reload.",
             }
         }
     }
@@ -1189,6 +1519,42 @@ mod tests {
             query_param(&unpack(q), "path").as_deref(),
             Some("Cookbook/Ragu & Chips.cook")
         );
+    }
+
+    // ── the lazy boundaries, outside a split build ──────────────────
+
+    /// Desktop, mobile and `dx serve` get the plain call: `provide`
+    /// installs its stores right there in the root render, and the
+    /// shell's deferred-provider hook has nothing to do. The split
+    /// build's behaviour is the browser's to verify.
+    #[test]
+    fn a_lazy_provide_outside_a_split_build_is_a_direct_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn provide_stores() {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+        fn provide() {
+            crate::lazy_provide!("test_stores", provide_stores)
+        }
+        provide();
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+        // No runtime here; a no-op must not need one.
+        use_deferred_providers();
+    }
+
+    /// The render arm evaluates to the render function itself, so the
+    /// spec holds exactly what an eager build would.
+    #[test]
+    fn a_lazy_render_outside_a_split_build_is_the_render_fn() {
+        fn render(_ctx: task_widgets::WidgetCtx) -> Element {
+            unreachable!("never rendered in this test")
+        }
+        let f: fn(task_widgets::WidgetCtx) -> Element = crate::lazy_render!("test_render", render);
+        assert!(std::ptr::fn_addr_eq(
+            f,
+            render as fn(task_widgets::WidgetCtx) -> Element
+        ));
     }
 
     #[test]

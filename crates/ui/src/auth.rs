@@ -28,6 +28,7 @@ use uuid::Uuid;
 use auth_proto::{AuthServiceClient, AuthUser, SignInEmailPassword, SignUpEmailPassword};
 use identity_proto::{IdentityServiceClient, LinkServerRequest};
 
+use crate::central_login::TokenSet;
 use crate::orgs::{OrgMeta, home_slug};
 use crate::presence::{ManualStatus, PresenceLocal, PresenceStatus};
 use crate::vox_clients::establish_for;
@@ -220,7 +221,7 @@ pub enum AuthAction {
     /// arrives on a fresh page load where discovery may not have
     /// resolved yet — see `central_login::ISSUER_KEY`.
     AdoptCentralToken {
-        token: String,
+        tokens: TokenSet,
         issuer: String,
     },
     SignOut,
@@ -281,9 +282,9 @@ impl AuthCtx {
     /// authorization code. Fire-and-forget like the rest: the work runs
     /// in the root coroutine, so the callback page is free to navigate
     /// away immediately.
-    pub fn adopt_central_token(self, token: impl Into<String>, issuer: impl Into<String>) {
+    pub fn adopt_central_token(self, tokens: TokenSet, issuer: impl Into<String>) {
         self.actions.send(AuthAction::AdoptCentralToken {
-            token: token.into(),
+            tokens,
             issuer: issuer.into(),
         });
     }
@@ -599,7 +600,7 @@ async fn run_credential_sign_in(
                 match crate::central_login::password_sign_in(&issuer, email, password).await {
                     Ok(session) => {
                         let account = issuer_account(session, email)?;
-                        save_cached_token(email, &account.token);
+                        save_session_token(email, &account.token);
                         return Ok::<ActiveAccount, String>(account);
                     }
                     Err(e) => {
@@ -617,7 +618,7 @@ async fn run_credential_sign_in(
                 .await
                 .map_err(|e| format!("sign in: {e}"))?
         };
-        save_cached_token(email, &bundle.token);
+        save_session_token(email, &bundle.token);
         Ok::<ActiveAccount, String>(account_from(bundle.user, email, bundle.token))
     }
     .await;
@@ -647,16 +648,16 @@ async fn run_credential_sign_in(
 /// `/auth/session` then `/oauth2/userinfo`), so everything downstream —
 /// vox dialing, the locker, cached-token switch-back — is identical to a
 /// credential sign-in and none of it needs to know which door was used.
-async fn run_central_token_sign_in(mut st: AuthState, token: String, issuer: String) {
+async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: String) {
     st.busy.set(true);
     st.error.set(None);
 
     let result = async {
-        let user = crate::central_login::user_info(&issuer, &token)
+        let user = crate::central_login::user_info(&issuer, &tokens.access)
             .await
             .map_err(|e| e.to_string())?;
-        let account = central_account(user, token)?;
-        save_cached_token(&account.email, &account.token);
+        let account = central_account(user, tokens.access.clone())?;
+        store_token_set(&account.email, &tokens, None);
         Ok::<ActiveAccount, String>(account)
     }
     .await;
@@ -715,6 +716,7 @@ async fn run_sign_out(mut st: AuthState) {
         return;
     };
     clear_cached_token(&account.email);
+    clear_refresh(&account.email);
     clear_active_email();
     sync_active_server_entry(st.registry, None);
     // Drop the authenticated sockets NOW, before the revoke round trip —
@@ -790,13 +792,17 @@ pub fn provide_auth() -> AuthCtx {
                 } => {
                     run_credential_sign_in(st, &email, &password, Some(&name)).await;
                 }
-                AuthAction::AdoptCentralToken { token, issuer } => {
-                    run_central_token_sign_in(st, token, issuer).await;
+                AuthAction::AdoptCentralToken { tokens, issuer } => {
+                    run_central_token_sign_in(st, tokens, issuer).await;
                 }
                 AuthAction::SignOut => run_sign_out(st).await,
             }
         }
     });
+
+    // A central sign-in's access token lives an hour; this is what keeps
+    // the session alive past it.
+    use_access_token_renewal(st);
 
     let ctx = AuthCtx {
         active,
@@ -1077,24 +1083,32 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
 
     // 1. Cached token → whoami validates it without a fresh sign-in.
     if let Some(token) = load_cached_token(email) {
-        match client.whoami(token.clone()).await {
-            Ok(user) => return Ok(account_from(user, email, token)),
-            // 1b. The org's auth store cannot validate a token it did
-            //     not mint, and a central sign-in leaves exactly that:
-            //     an OAuth access token from the issuer. Ask the issuer
-            //     before giving up — otherwise every reload throws a
-            //     centrally-signed-in person back to the login screen
-            //     holding a token that was never actually expired.
-            Err(_) => {
-                if let Some(issuer) = task_ui_core::central_auth::issuer() {
-                    if let Ok(user) = crate::central_login::user_info(&issuer, &token).await {
-                        if let Ok(account) = central_account(user, token) {
-                            return Ok(account);
-                        }
-                    }
-                }
-                clear_cached_token(email); // expired/revoked — fall through
+        let issuer = task_ui_core::central_auth::issuer();
+        // 1a. An access token known to be expired is not worth a
+        //     `whoami`: the org's store cannot validate it and the
+        //     issuer will only say 401. Straight to the refresh.
+        let due = issuer.is_some()
+            && load_refresh(email).is_some_and(|g| refresh_due(now_unix(), g.expires_at));
+        if !due {
+            match client.whoami(token.clone()).await {
+                Ok(user) => return Ok(account_from(user, email, token)),
+                Err(e) => tracing::info!(%e, "this server did not validate the cached token"),
             }
+        }
+        // 1b. The org's auth store cannot validate a token it did not
+        //     mint, and a central sign-in leaves exactly that: an OAuth
+        //     access token from the issuer. Ask the issuer — refreshing
+        //     first when the token is due, and once more when it is
+        //     refused — before giving up. Otherwise every reload, and
+        //     every hour, throws a centrally-signed-in person back to
+        //     the login screen holding a perfectly renewable session.
+        match issuer {
+            Some(issuer) => {
+                if let Some(account) = restore_central_session(&issuer, email, token).await? {
+                    return Ok(account);
+                }
+            }
+            None => clear_cached_token(email), // expired/revoked — fall through
         }
     }
 
@@ -1116,7 +1130,7 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
         match crate::central_login::password_sign_in(&issuer, email, dev.password).await {
             Ok(session) => {
                 let account = issuer_account(session, email)?;
-                save_cached_token(email, &account.token);
+                save_session_token(email, &account.token);
                 return Ok(account);
             }
             Err(e) => tracing::warn!(%e, "issuer sign-in over HTTP refused — trying the lane"),
@@ -1132,8 +1146,221 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
         })
         .await
         .map_err(|e| format!("sign in {email}: {e}"))?;
-    save_cached_token(email, &bundle.token);
+    save_session_token(email, &bundle.token);
     Ok(account_from(bundle.user, email, bundle.token))
+}
+
+/// Restore a central sign-in from what is cached: the access token and,
+/// when the redirect granted one, the refresh token beside it.
+///
+/// The order of operations is the whole point:
+///
+/// 1. An access token that is expired, or about to be, is not presented
+///    at all — it is refreshed first. Presenting it would only earn a
+///    401 and a round trip.
+/// 2. An access token that *looks* fine but is refused (the clock was
+///    wrong, the issuer revoked it) gets ONE refresh-and-retry.
+/// 3. Only when the issuer refuses the **refresh** itself is anything
+///    cleared. A network failure clears nothing: the tokens may well be
+///    fine, and throwing them away turns a blip into a sign-out.
+///
+/// `Ok(None)` means "nothing cached that this path can use" — the caller
+/// falls through to its other doors.
+async fn restore_central_session(
+    issuer: &str,
+    email: &str,
+    token: String,
+) -> Result<Option<ActiveAccount>, String> {
+    let grant = load_refresh(email);
+    let mut token = token;
+    let mut refreshed = false;
+
+    if let Some(grant) = &grant
+        && refresh_due(now_unix(), grant.expires_at)
+    {
+        match refresh_and_store(issuer, email, grant).await {
+            Ok(set) => {
+                token = set.access;
+                refreshed = true;
+            }
+            Err(crate::central_login::LoginError::Denied(status, body)) => {
+                tracing::warn!(status, %body, "issuer refused the refresh token — signing out");
+                clear_cached_token(email);
+                clear_refresh(email);
+                return Ok(None);
+            }
+            // Weather, not a verdict: keep what we hold and try it.
+            Err(e) => tracing::warn!(%e, "refresh failed — trying the cached access token"),
+        }
+    }
+
+    match crate::central_login::user_info(issuer, &token).await {
+        Ok(user) => return central_account(user, token).map(Some),
+        Err(e) => tracing::info!(%e, "issuer did not accept the cached access token"),
+    }
+
+    let Some(grant) = grant.filter(|_| !refreshed) else {
+        // No refresh token to fall back on (a password sign-in), or the
+        // one we have was already used this attempt — the cached access
+        // token is dead and there is nothing here to revive it with.
+        clear_cached_token(email);
+        return Ok(None);
+    };
+    match refresh_and_store(issuer, email, &grant).await {
+        Ok(set) => {
+            let user = crate::central_login::user_info(issuer, &set.access)
+                .await
+                .map_err(|e| e.to_string())?;
+            central_account(user, set.access).map(Some)
+        }
+        Err(crate::central_login::LoginError::Denied(status, body)) => {
+            tracing::warn!(status, %body, "issuer refused the refresh token — signing out");
+            clear_cached_token(email);
+            clear_refresh(email);
+            Ok(None)
+        }
+        Err(e) => Err(format!(
+            "couldn't reach the issuer to renew the session: {e}"
+        )),
+    }
+}
+
+/// Trade the refresh token for a new access token and persist the
+/// outcome: the new access token under the email, the new expiry, and
+/// the rotated refresh token if the issuer sent one (the old one stays
+/// otherwise).
+async fn refresh_and_store(
+    issuer: &str,
+    email: &str,
+    grant: &RefreshGrant,
+) -> Result<TokenSet, crate::central_login::LoginError> {
+    let set = crate::central_login::refresh(issuer, &grant.refresh_token).await?;
+    store_token_set(email, &set, Some(&grant.refresh_token));
+    Ok(set)
+}
+
+/// Persist a token set under `email`: the access token where every
+/// cached token lives, and the refresh token plus absolute expiry beside
+/// it. `previous_refresh` is what to keep when the answer rotated
+/// nothing — an issuer may answer a refresh with a new access token
+/// alone.
+fn store_token_set(email: &str, set: &TokenSet, previous_refresh: Option<&str>) {
+    save_cached_token(email, &set.access);
+    match set.refresh.as_deref().or(previous_refresh) {
+        Some(refresh) => save_refresh(email, refresh, set.expires_at(now_unix())),
+        None => clear_refresh(email),
+    }
+}
+
+/// Persist a token that is NOT an OAuth access token — a session token
+/// from a password sign-in — and drop any refresh grant a previous
+/// central sign-in left under the same email. A session token has no
+/// stated expiry and nothing to refresh it with; pairing it with a stale
+/// grant would have the renewal task swap it for an access token.
+fn save_session_token(email: &str, token: &str) {
+    save_cached_token(email, token);
+    clear_refresh(email);
+}
+
+/// Is the access token expired, or close enough to expiry that the next
+/// request would land after it? Sixty seconds covers the clock skew a
+/// laptop accumulates and the time a request takes to arrive.
+fn refresh_due(now: i64, expires_at: i64) -> bool {
+    expires_at - now <= REFRESH_DUE_MARGIN_SECS
+}
+
+/// How long the renewal task should sleep before refreshing: until five
+/// minutes before expiry, never less than a minute (so a token already
+/// near or past its expiry is not refreshed in a tight loop when the
+/// issuer keeps answering with a short-lived one).
+fn refresh_wait_secs(now: i64, expires_at: i64) -> u64 {
+    let until = expires_at - now - REFRESH_AHEAD_SECS;
+    u64::try_from(until.max(REFRESH_MIN_WAIT_SECS)).unwrap_or(REFRESH_MIN_WAIT_SECS as u64)
+}
+
+/// Presenting a token this close to its expiry is not worth the round
+/// trip — refresh first.
+const REFRESH_DUE_MARGIN_SECS: i64 = 60;
+/// The renewal task refreshes this far ahead of expiry.
+const REFRESH_AHEAD_SECS: i64 = 5 * 60;
+/// …but never sleeps less than this between attempts.
+const REFRESH_MIN_WAIT_SECS: i64 = 60;
+
+fn now_unix() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// Keep a central sign-in's access token fresh for as long as the app is
+/// open. Mounted once at the root next to the auth service.
+///
+/// Every time the active account changes the previous task is cancelled
+/// and, if the new account holds a refresh grant, a new one starts: it
+/// sleeps until shortly before the access token expires, refreshes,
+/// persists the result, and republishes the token as the vox identity —
+/// which drops cached connections and re-dials under the new token, once
+/// an hour, which is the cost of not being signed out once an hour.
+///
+/// Accounts without a refresh grant (password sign-ins, the dev roster)
+/// get no task at all: there is nothing to refresh them with, and their
+/// session tokens are long-lived at the server.
+fn use_access_token_renewal(mut st: AuthState) {
+    let mut task: Signal<Option<dioxus::dioxus_core::Task>> = use_signal(|| None);
+    use_effect(move || {
+        let account = st.active.read().clone();
+        if let Some(previous) = task.write().take() {
+            previous.cancel();
+        }
+        let Some(account) = account else {
+            return;
+        };
+        let Some(issuer) = task_ui_core::central_auth::issuer() else {
+            return;
+        };
+        let Some(grant) = load_refresh(&account.email) else {
+            return;
+        };
+        let handle = spawn(async move {
+            let mut expires_at = grant.expires_at;
+            loop {
+                let wait = refresh_wait_secs(now_unix(), expires_at);
+                architect::sleep(architect::Duration::from_secs(wait)).await;
+                // The grant may have rotated meanwhile (a refresh on
+                // another path); always present the one on disk.
+                let Some(grant) = load_refresh(&account.email) else {
+                    return;
+                };
+                match refresh_and_store(&issuer, &account.email, &grant).await {
+                    Ok(set) => {
+                        tracing::info!(email = %account.email, "renewed the issuer's access token");
+                        let renewed = ActiveAccount {
+                            token: set.access,
+                            ..account.clone()
+                        };
+                        sync_active_server_entry(st.registry, Some(&renewed));
+                        publish_session_token(st, Some(&renewed));
+                        // Last: this write re-runs the effect above,
+                        // which cancels this task and starts the next.
+                        st.active.set(Some(renewed));
+                        return;
+                    }
+                    Err(crate::central_login::LoginError::Denied(status, body)) => {
+                        tracing::warn!(status, %body, "issuer refused the refresh token");
+                        clear_cached_token(&account.email);
+                        clear_refresh(&account.email);
+                        // The access token still works until it expires;
+                        // the next boot will ask for a sign-in.
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%e, "renewing the access token failed — retrying");
+                        // Past expiry the wait floors at a minute.
+                        expires_at = now_unix();
+                    }
+                }
+            }
+        });
+        task.set(Some(handle));
+    });
 }
 
 /// Is this page load the central issuer redirecting back to us?
@@ -1253,7 +1480,7 @@ pub fn LoginForm() -> Element {
             if crate::central_login::native::available() {
                 spawn(async move {
                     match crate::central_login::native::sign_in().await {
-                        Ok(redeemed) => ctx.adopt_central_token(redeemed.token, redeemed.issuer),
+                        Ok(redeemed) => ctx.adopt_central_token(redeemed.tokens, redeemed.issuer),
                         Err(e) => error.set(Some(e.to_string())),
                     }
                 });
@@ -1895,9 +2122,66 @@ fn token_key(email: &str) -> String {
     format!("task.auth.token.{email}")
 }
 
+/// The refresh token a central sign-in left beside the access token.
+#[cfg(any(target_arch = "wasm32", test))]
+fn refresh_key(email: &str) -> String {
+    format!("task.auth.refresh.{email}")
+}
+
+/// When the cached access token expires, unix seconds.
+#[cfg(any(target_arch = "wasm32", test))]
+fn expires_key(email: &str) -> String {
+    format!("task.auth.expires.{email}")
+}
+
+/// The part of a central sign-in that outlives its access token: the
+/// refresh token, and when the access token it is paired with expires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RefreshGrant {
+    refresh_token: String,
+    /// Unix seconds. Always known: a token set with no stated lifetime
+    /// gets the issuer's default at store time (`TokenSet::expires_at`).
+    expires_at: i64,
+}
+
 #[cfg(target_arch = "wasm32")]
 fn storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_refresh(email: &str) -> Option<RefreshGrant> {
+    let s = storage()?;
+    let refresh_token = s
+        .get_item(&refresh_key(email))
+        .ok()
+        .flatten()
+        .filter(|t| !t.is_empty())?;
+    let expires_at = s
+        .get_item(&expires_key(email))
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<i64>().ok())?;
+    Some(RefreshGrant {
+        refresh_token,
+        expires_at,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
+    if let Some(s) = storage() {
+        let _ = s.set_item(&refresh_key(email), refresh_token);
+        let _ = s.set_item(&expires_key(email), &expires_at.to_string());
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn clear_refresh(email: &str) {
+    if let Some(s) = storage() {
+        let _ = s.remove_item(&refresh_key(email));
+        let _ = s.remove_item(&expires_key(email));
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2012,6 +2296,70 @@ fn clear_cached_token(email: &str) {
     }
 }
 
+/// The refresh token's own file, `<email>.refresh.json`, beside the
+/// access token's. Same store mechanism (atomic, 0600), a different
+/// `StoredSession` whose `token` is the refresh token; the access
+/// token's expiry rides on the main file's `expires_at_unix`.
+#[cfg(not(target_arch = "wasm32"))]
+fn refresh_store(email: &str) -> Option<architect_auth::client::FileTokenStore> {
+    let safe = email.replace(['/', '\\'], "_");
+    tokens_dir().map(|d| {
+        architect_auth::client::FileTokenStore::new(d.join(format!("{safe}.refresh.json")))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_refresh(email: &str) -> Option<RefreshGrant> {
+    use architect_auth::client::TokenStore as _;
+    let refresh_token = refresh_store(email)?
+        .load()
+        .ok()
+        .flatten()
+        .map(|s| s.token)
+        .filter(|t| !t.is_empty())?;
+    let expires_at = token_store(email)?
+        .load()
+        .ok()
+        .flatten()
+        .and_then(|s| s.expires_at_unix)?;
+    Some(RefreshGrant {
+        refresh_token,
+        expires_at,
+    })
+}
+
+/// Call after `save_cached_token`: the expiry is written onto the access
+/// token's entry, which has to exist to carry it.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
+    use architect_auth::client::{StoredSession, TokenStore as _};
+    if let Some(store) = refresh_store(email) {
+        let _ = store.save(&StoredSession::new(refresh_token).with_email(email));
+    }
+    if let Some(store) = token_store(email)
+        && let Ok(Some(session)) = store.load()
+    {
+        let _ = store.save(&session.with_expires_at_unix(expires_at));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_refresh(email: &str) {
+    use architect_auth::client::TokenStore as _;
+    if let Some(store) = refresh_store(email) {
+        let _ = store.clear();
+    }
+    // The expiry is meaningless without the grant; a session token
+    // saved over the access token has none anyway.
+    if let Some(store) = token_store(email)
+        && let Ok(Some(mut session)) = store.load()
+        && session.expires_at_unix.is_some()
+    {
+        session.expires_at_unix = None;
+        let _ = store.save(&session);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn active_path() -> Option<std::path::PathBuf> {
     tokens_dir().map(|d| d.join("active"))
@@ -2109,5 +2457,56 @@ mod tests {
             "task.auth.token.cody@fasttrackstudios.com"
         );
         assert_ne!(token_key("a@x"), token_key("b@x"));
+    }
+
+    #[test]
+    fn refresh_keys_are_per_email_and_distinct_from_the_token_key() {
+        assert_eq!(refresh_key("a@x"), "task.auth.refresh.a@x");
+        assert_eq!(expires_key("a@x"), "task.auth.expires.a@x");
+        assert_ne!(refresh_key("a@x"), refresh_key("b@x"));
+        assert_ne!(refresh_key("a@x"), token_key("a@x"));
+        assert_ne!(expires_key("a@x"), token_key("a@x"));
+    }
+
+    /// The decision that stops an expired token from being presented:
+    /// due once inside the 60 s margin, expired or not; not due with
+    /// more than a minute left.
+    #[test]
+    fn a_refresh_is_due_inside_the_margin() {
+        let now = 1_000_000;
+        assert!(refresh_due(now, now - 1), "expired");
+        assert!(refresh_due(now, now), "expiring now");
+        assert!(
+            refresh_due(now, now + REFRESH_DUE_MARGIN_SECS),
+            "on the margin"
+        );
+        assert!(!refresh_due(now, now + REFRESH_DUE_MARGIN_SECS + 1));
+        assert!(!refresh_due(now, now + 3600), "fresh");
+    }
+
+    /// The renewal task wakes five minutes ahead, and never sooner than
+    /// a minute from now — a token past expiry does not spin.
+    #[test]
+    fn the_renewal_wait_lands_ahead_of_expiry_with_a_floor() {
+        let now = 1_000_000;
+        assert_eq!(refresh_wait_secs(now, now + 3600), 3600 - 300);
+        assert_eq!(refresh_wait_secs(now, now + 300), 60, "exactly at the lead");
+        assert_eq!(refresh_wait_secs(now, now + 100), 60, "inside the lead");
+        assert_eq!(refresh_wait_secs(now, now - 5000), 60, "long expired");
+    }
+
+    /// A token set with no `expires_in` still schedules a renewal, off
+    /// the issuer's default lifetime, so "the issuer omitted a field"
+    /// does not degrade into "never refreshed, signed out in an hour".
+    #[test]
+    fn an_unstated_lifetime_still_schedules_a_renewal() {
+        let set = TokenSet {
+            access: "at".into(),
+            refresh: Some("rt".into()),
+            expires_in: None,
+        };
+        let now = 1_000_000;
+        assert!(!refresh_due(now, set.expires_at(now)));
+        assert_eq!(refresh_wait_secs(now, set.expires_at(now)), 3600 - 300);
     }
 }

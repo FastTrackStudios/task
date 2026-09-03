@@ -36,9 +36,17 @@ use crate::context::{NowPlaying, NowPlayingRequest};
 /// contribution, registered (per provider) at the app root.
 #[must_use]
 pub fn widgets() -> Vec<WidgetSpec> {
+    // The renders are lazy: what a song or setlist note *is* (the
+    // matches, the href handling) stays in the shell, but the player
+    // they mount — the multitrack Web Audio graph, the daw worklet,
+    // the engraved chart pane — downloads the first time one opens.
+    // ONE boundary for both specs — a second `lazy_render!` would be a
+    // second split point with its own copy of the player (see
+    // `player_note_widget`).
+    let player_render = task_plugin_ui::lazy_render!("player_widget", player_note_widget);
     vec![
         WidgetSpec::new("player.song", vec![WidgetMatch::NoteType("song")])
-            .render(|ctx| rsx! { SongNoteWidget { ctx } })
+            .render(player_render)
             .on_href(player_href)
             .fullscreen_owns_body()
             .plugin("fasttrackstudio"),
@@ -49,7 +57,7 @@ pub fn widgets() -> Vec<WidgetSpec> {
                 WidgetMatch::NoteExperience("setlist"),
             ],
         )
-        .render(|ctx| rsx! { SetlistNoteWidget { ctx } })
+        .render(player_render)
         .on_href(player_href)
         // The editor's typed setlist-title widget IS the title.
         .hide_note_header()
@@ -170,6 +178,23 @@ fn player_href(href: &str, ctx: &WidgetCtx) -> bool {
         return true;
     }
     false
+}
+
+/// The song and setlist block renders, as ONE chunk boundary.
+///
+/// One function for both specs, deliberately: the splitter puts what a
+/// split point reaches and the main module does not into that point's
+/// own module, and code two split points share is not pooled — a song
+/// render and a setlist render would each carry their own copy of the
+/// whole player (12 MB apiece, measured). Which experience to mount is
+/// the same question the specs' matches already answered, asked again
+/// of the note: setlist-shaped, or a song.
+fn player_note_widget(ctx: WidgetCtx) -> Element {
+    if is_setlist_note(&ctx, &(ctx.doc)()) {
+        rsx! { SetlistNoteWidget { ctx } }
+    } else {
+        rsx! { SongNoteWidget { ctx } }
+    }
 }
 
 /// The `type: song` note view. A song IS its player: on mount it drops
@@ -298,9 +323,141 @@ fn SongCard(title: String, on_play: EventHandler<()>, on_open: EventHandler<()>)
 ///
 /// Exposed here because `editor-keyflow` is this crate's business, not the
 /// shell's. Call once, at the app root, alongside the widget roster.
+///
+/// In the split web build what gets registered is [`lazy_fences::LazyFences`]:
+/// the engraver and its notation fonts download the first time a chart
+/// fence is actually rendered, not at boot.
 pub fn register_chart_fences() {
-    editor_state::fence_renderer::register_fence_renderer(
-        "kf",
-        std::sync::Arc::new(editor_keyflow::Fences),
-    );
+    editor_state::fence_renderer::register_fence_renderer("kf", std::sync::Arc::new(fences()));
+}
+
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-split")))]
+fn fences() -> editor_keyflow::Fences {
+    editor_keyflow::Fences
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+fn fences() -> lazy_fences::LazyFences {
+    lazy_fences::LazyFences
+}
+
+/// The chart engraver behind a chunk boundary.
+///
+/// `FenceRenderer` is synchronous — the editor asks for an SVG in the
+/// middle of its decoration pass and wants the answer now — so a
+/// renderer whose code has not downloaded yet can only decline. It
+/// does, and it does two more things: it starts the download, and it
+/// *reads a signal* while declining. The decoration pass runs inside a
+/// Dioxus effect, so that read subscribes the pass; when the chunk
+/// lands and the signal flips, the pass re-runs and this time the
+/// engraver answers. Between the two, the fence shows its source — the
+/// same thing an unknown fence language shows, and honest about what
+/// has happened.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+mod lazy_fences {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use dioxus::prelude::*;
+    use editor_state::fence_renderer::FenceRenderer;
+
+    /// One call into the chunk carries either question, so the engraver
+    /// is a single split point and one download.
+    pub enum FenceRequest {
+        Svg(String),
+        Highlight(String),
+    }
+
+    pub enum FenceReply {
+        Svg(Option<String>),
+        Html(String),
+    }
+
+    /// The engraver proper — everything `editor_keyflow::Fences`
+    /// reaches lives in this function's chunk.
+    fn engrave_fence(req: FenceRequest) -> FenceReply {
+        let fences = editor_keyflow::Fences;
+        match req {
+            FenceRequest::Svg(source) => FenceReply::Svg(fences.render_svg(&source)),
+            FenceRequest::Highlight(source) => FenceReply::Html(fences.highlight_html(&source)),
+        }
+    }
+
+    static ENGRAVER: dioxus::wasm_split::LazyLoader<FenceRequest, FenceReply> = {
+        use dioxus::wasm_split;
+        wasm_split::lazy_loader!(extern "engraver" fn engrave_fence(req: FenceRequest) -> FenceReply)
+    };
+
+    /// Flips once the chunk is here. Read by every declined render so
+    /// the pass that declined re-runs.
+    static ENGRAVER_READY: GlobalSignal<bool> = GlobalSignal::new(|| false);
+    /// The download is started once, by whichever fence asks first.
+    static STARTED: AtomicBool = AtomicBool::new(false);
+
+    /// Is the engraver callable? Starts the download the first time it
+    /// is not, and subscribes the asking reactive context to the flip.
+    fn ensure_engraver() -> bool {
+        // Outside a Dioxus runtime (nothing renders fences there, but a
+        // registry lookup could happen anywhere) there is no signal to
+        // read and nothing to spawn on: just decline.
+        if dioxus::core::Runtime::try_current().is_none() {
+            return false;
+        }
+        if ENGRAVER_READY() {
+            return true;
+        }
+        if !STARTED.swap(true, Ordering::AcqRel) {
+            // On the root scope, so the download outlives whichever
+            // note happened to hold the first chart.
+            dioxus::core::spawn_forever(async move {
+                if ENGRAVER.load().await {
+                    *ENGRAVER_READY.write() = true;
+                } else {
+                    tracing::warn!("chart fences: the engraver chunk did not download");
+                }
+            });
+        }
+        false
+    }
+
+    pub struct LazyFences;
+
+    impl FenceRenderer for LazyFences {
+        fn render_svg(&self, source: &str) -> Option<String> {
+            if !ensure_engraver() {
+                return None;
+            }
+            match ENGRAVER.call(FenceRequest::Svg(source.to_owned())) {
+                Ok(FenceReply::Svg(svg)) => svg,
+                _ => None,
+            }
+        }
+
+        fn highlight_html(&self, source: &str) -> String {
+            if ensure_engraver() {
+                if let Ok(FenceReply::Html(html)) =
+                    ENGRAVER.call(FenceRequest::Highlight(source.to_owned()))
+                {
+                    return html;
+                }
+            }
+            escape_html(source)
+        }
+    }
+
+    /// The editor's own fallback for a language it cannot highlight:
+    /// the source, escaped.
+    fn escape_html(source: &str) -> String {
+        let mut out = String::with_capacity(source.len());
+        for ch in source.chars() {
+            match ch {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                '\'' => out.push_str("&#39;"),
+                c => out.push(c),
+            }
+        }
+        out
+    }
 }

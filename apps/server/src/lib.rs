@@ -41,6 +41,7 @@ pub mod media;
 pub mod memberships;
 pub mod notifier;
 pub mod operator;
+pub mod org_roots;
 pub mod otlp;
 pub mod permits;
 pub mod presence;
@@ -133,6 +134,10 @@ pub struct OrgAppState {
     /// Org's slug — matches the `<data_root>/orgs/<slug>/`
     /// dir and the URL prefix the vox handler routes from.
     pub slug: String,
+    /// The org's directory on this server's data root — the layout
+    /// authority the replica lane asks where each root appears
+    /// (`org_roots::OrgPlacer`).
+    pub org_root: org_proto::OrgRoot,
     /// The org's effective enabled-plugin set, resolved from
     /// `OrgManifest.disabled_plugins` at boot. [`org_layer_router`]
     /// consults it before mounting a plugin's services, the permit gate
@@ -1470,6 +1475,17 @@ pub(crate) async fn build_org_state(
                 "files: vault adoption panicked; vault writes bypass Files"
             ),
         }
+        // And every other knowledge directory — the wiki tier, each named
+        // wiki, the resource library, each subscribed copy — so a machine
+        // syncing this org can show them all, not the vault alone. Read
+        // from disk here and again on every device-sync sweep, which is
+        // what lets a wiki created later appear without a restart.
+        match crate::org_roots::adopt_knowledge_roots(&files, &org_root).await {
+            0 => {}
+            n => {
+                tracing::info!(org = %org_root.slug(), adopted = n, "files: knowledge trees adopted as roots")
+            }
+        }
         let files_webdav = files_webdav::WebdavBridge::new(files.clone());
         // Placement lane. The coordinator is the deployment's, owned by
         // `AppState` and passed in — this is just this org's view of it.
@@ -1758,6 +1774,7 @@ pub(crate) async fn build_org_state(
 
         Ok(OrgAppState {
             slug: org_root.slug().to_owned(),
+            org_root: org_root.clone(),
             plugins,
             auth,
             permissions,
@@ -3295,9 +3312,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // (`files.peering.replication`). Mounted here rather than left
         // to whoever happened to be serving — a peer dials the org's
         // endpoint and expects the org's router.
-        .merge(files_sync::layer(files_sync::SyncHost::new(
-            org.files.clone(),
-        )))
+        // The org places each root it offers (`<org>/Wiki/<slug>`,
+        // read-only `Subscribed/` and `Resources/`), so a device's mount
+        // composes from what the layout says rather than from places
+        // typed per machine.
+        .merge(files_sync::layer(
+            files_sync::SyncHost::new(org.files.clone())
+                .placing(crate::org_roots::OrgPlacer::new(org.org_root.clone())),
+        ))
         // Vault file replication (manifest / get / put / delete).
         .with(
             vault_proto::descriptor(),

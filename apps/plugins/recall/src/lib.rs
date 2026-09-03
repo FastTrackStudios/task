@@ -29,7 +29,7 @@ pub const APP: PluginApp = PluginApp {
     view,
     panel: None,
     claim_file: None,
-    provide: Some(provide_stores),
+    provide: Some(provide),
     widgets: None,
     fences: None,
     // No claims. A card is authored *from* a note rather than linked
@@ -38,6 +38,12 @@ pub const APP: PluginApp = PluginApp {
     claim_link: None,
     claim_href: None,
 };
+
+/// The live card store, at the app root — its own wasm chunk on the
+/// web, installed (and subscribed) once it has downloaded.
+fn provide() {
+    task_plugin_ui::lazy_provide!("recall_stores", provide_stores)
+}
 
 fn icon() -> Element {
     rsx! { Brain { size: 16 } }

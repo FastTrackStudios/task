@@ -11,6 +11,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260702_000001_create_prefs::Migration),
             Box::new(m20260715_000002_add_theme::Migration),
             Box::new(m20260716_000003_add_shortcuts_priority::Migration),
+            Box::new(m20260902_000004_add_vim_mode::Migration),
         ]
     }
 }
@@ -199,5 +200,62 @@ mod m20260716_000003_add_shortcuts_priority {
     enum UserPrefs {
         Table,
         ShortcutsPriority,
+    }
+}
+
+mod m20260902_000004_add_vim_mode {
+    use sea_orm_migration::prelude::*;
+
+    pub struct Migration;
+
+    // Manual name for the same reason as the migrations above: every
+    // migration lives inline in migrations.rs, so the file-stem derive
+    // would collide.
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20260902_000004_add_vim_mode"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Default FALSE = modal editing off — matches
+            // `UserPrefs::defaults_for`. Existing rows adopt the new
+            // default, which is deliberate: vim was never opt-in
+            // before, so nobody chose it.
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(UserPrefs::Table)
+                        .add_column(
+                            ColumnDef::new(UserPrefs::VimMode)
+                                .boolean()
+                                .not_null()
+                                .default(false),
+                        )
+                        .to_owned(),
+                )
+                .await
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(UserPrefs::Table)
+                        .drop_column(UserPrefs::VimMode)
+                        .to_owned(),
+                )
+                .await
+        }
+    }
+
+    // ── Iden ──────────────────────────────────────────────────────────
+
+    #[derive(Iden)]
+    enum UserPrefs {
+        Table,
+        VimMode,
     }
 }

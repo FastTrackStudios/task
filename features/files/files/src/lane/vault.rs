@@ -132,6 +132,47 @@ impl FilesBackend {
         Ok(root_id)
     }
 
+    /// Make one of the org's own directories a File Root, in place.
+    ///
+    /// The adoption [`FilesBackend::adopt_vault`] performs, without the
+    /// page-write sink: a wiki, the resource library or a subscribed
+    /// copy becomes a root so replicas can pull it and a mount can show
+    /// it, and nothing about how it is written changes. Like the vault,
+    /// the directory is the org's outright and sits outside the files
+    /// boundary, which is why this registers rather than `create_root`s.
+    ///
+    /// Idempotent: a directory already registered — from a previous
+    /// boot, or by hand under another name — is returned as the root it
+    /// is, not renamed and not re-registered. The name only matters the
+    /// first time.
+    ///
+    /// # Errors
+    ///
+    /// The directory is not one, or overlaps a root registered elsewhere
+    /// (a `wiki/Knowledge` root already covering what `wiki/` would).
+    pub fn adopt_tree(&self, tree: &Path, name: &str) -> Result<RootId, FilesFault> {
+        let (tree, name) = (tree.to_path_buf(), name.to_string());
+        crate::backend::off_worker(move || {
+            let canonical = tree.canonicalize().map_err(FilesFault::io)?;
+            if !canonical.is_dir() {
+                return Err(FilesFault::io(std::io::Error::new(
+                    std::io::ErrorKind::NotADirectory,
+                    format!("{}: not a directory", canonical.display()),
+                )));
+            }
+            if let Some(known) = self
+                .registry_list()
+                .into_iter()
+                .find(|r| r.local_tree().is_some_and(|t| t == canonical))
+            {
+                return Ok(RootId::new(known.id));
+            }
+            let root = self.register_root(canonical.clone(), name, RootFlavor::Media)?;
+            tracing::info!(root_id = %root.id, tree = %canonical.display(), "files: org tree adopted as a root");
+            Ok(RootId::new(root.id))
+        })
+    }
+
     /// Undo [`FilesBackend::adopt_vault`]'s process-level half: unbind
     /// the sink and forget the adoption, so the next backend to open this
     /// vault — a restart in the same process — adopts it afresh. Called

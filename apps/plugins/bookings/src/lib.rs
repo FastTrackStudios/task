@@ -35,12 +35,18 @@ pub const APP: PluginApp = PluginApp {
     view,
     panel: None,
     claim_file: None,
-    provide: Some(provide_stores),
+    provide: Some(provide),
     widgets: None,
     fences: None,
     claim_link: None,
     claim_href: None,
 };
+
+/// Both live stores, at the app root — their own wasm chunk on the
+/// web, installed once it has downloaded.
+fn provide() {
+    task_plugin_ui::lazy_provide!("bookings_stores", provide_stores)
+}
 
 fn icon() -> Element {
     rsx! { CalendarClock { size: 16 } }

@@ -256,6 +256,34 @@ impl WikiBackend {
         }
     }
 
+    /// A wiki root as `WikiDescription::root` reports it: relative to
+    /// the org root when the backend knows one (the parent of the
+    /// `wikis/` directory it creates into), the absolute path otherwise.
+    ///
+    /// Slashes are normalised so the string means the same thing to a
+    /// client on any platform.
+    fn org_relative(&self, root: &Path) -> String {
+        let org_root = match &self.layout {
+            Layout::Explicit {
+                wikis_dir: Some(wikis_dir),
+                ..
+            } => wikis_dir.parent(),
+            Layout::Explicit {
+                wikis_dir: None, ..
+            } => None,
+            // `parent/<id>/`: the parent stands in for the org root.
+            Layout::UnderParent(parent) => Some(parent.as_path()),
+        };
+        match org_root.and_then(|org| root.strip_prefix(org).ok()) {
+            Some(rel) => rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
+            None => root.display().to_string(),
+        }
+    }
+
     /// A wiki's declaration (`_state/wiki.json`), implicit when it has
     /// never written one.
     pub fn config_of(&self, wiki_id: &str) -> Result<WikiConfig, WikiError> {
@@ -329,6 +357,7 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
         Ok(WikiDescription {
             summary: summarize_with(wiki_id, &root, &config),
             config,
+            root: self.org_relative(&root),
         })
     }
 
@@ -1527,6 +1556,39 @@ mod registry_tests {
         let wikis = dir.join("wikis");
         std::fs::create_dir_all(&wikis).unwrap();
         WikiBackend::with_roots_under(HashMap::new(), wikis).with_caller(Arc::new(Alice))
+    }
+
+    /// A description says where the wiki lives, relative to the org
+    /// root, for both shapes an org holds: the default tier under
+    /// `wiki/Knowledge` and a created wiki under `wikis/<slug>`.
+    #[test]
+    fn describe_reports_the_root_relative_to_the_org() {
+        let dir = tempfile::tempdir().unwrap();
+        let knowledge = dir.path().join("wiki").join("Knowledge");
+        std::fs::create_dir_all(&knowledge).unwrap();
+        let mut roots = HashMap::new();
+        roots.insert("knowledge".to_owned(), knowledge);
+        let b = WikiBackend::with_roots_under(roots, dir.path().join("wikis"))
+            .with_caller(Arc::new(Alice));
+        b.create_wiki(NewWiki {
+            title: "Bible Study".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(b.describe_wiki("knowledge").unwrap().root, "wiki/Knowledge");
+        assert_eq!(
+            b.describe_wiki("bible-study").unwrap().root,
+            "wikis/bible-study"
+        );
+
+        // With nowhere to be relative to, the path is given whole
+        // rather than invented.
+        let single = WikiBackend::single("solo", dir.path().join("solo")).unwrap();
+        assert_eq!(
+            single.describe_wiki("solo").unwrap().root,
+            dir.path().join("solo").display().to_string()
+        );
     }
 
     /// t[verify wiki.many.set] — an org with none is legal; creating

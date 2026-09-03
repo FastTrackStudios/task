@@ -237,11 +237,47 @@ fn wiki_bootstrap_and_health_over_embedded_vox() {
     let tmp = scratch_org();
 
     // Bootstrap the org wiki over vox (embedded server).
-    let out = task(tmp.path(), &["--org", "t", "wiki", "schema", "bootstrap"]);
-    assert!(ok(&out).contains("bootstrapped default"));
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "schema",
+            "bootstrap",
+            "--wiki",
+            "knowledge",
+        ],
+    );
+    assert!(ok(&out).contains("bootstrapped knowledge"));
+
+    // No verb assumes a wiki: without `--wiki` (or `TASK_WIKI`) the
+    // flat command is refused and names the flag, rather than
+    // answering from the `knowledge` tier as `"default"` used to.
+    let out = task(tmp.path(), &["--org", "t", "wiki", "health"]);
+    assert!(!out.status.success(), "a wiki must be named");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--wiki"), "{stderr}");
+    assert!(stderr.contains("TASK_WIKI"), "{stderr}");
+
+    // `TASK_WIKI` is the one default there is, and it is the caller's.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_task"))
+        .args(["--org", "t", "wiki", "health"])
+        .current_dir(tmp.path())
+        .env("TASK_DATA_ROOT", tmp.path())
+        .env("TASK_EMBED", "1")
+        .env("TASK_WIKI", "knowledge")
+        .env_remove("TASK_VOX_URL")
+        .env("TASK_SESSION_FILE", tmp.path().join("session.json"))
+        .output()
+        .expect("spawn task binary");
+    assert!(ok(&out).contains("bootstrapped:    true"));
 
     // The flat `wiki health`, with no `--vault`, answers over vox.
-    let out = task(tmp.path(), &["--org", "t", "wiki", "health"]);
+    let out = task(
+        tmp.path(),
+        &["--org", "t", "wiki", "health", "--wiki", "knowledge"],
+    );
     let stdout = ok(&out);
     assert!(
         stdout.contains("bootstrapped:    true"),
@@ -262,7 +298,15 @@ fn wiki_import_rescan_findings_over_embedded_vox() {
     let tmp = scratch_org();
     ok(&task(
         tmp.path(),
-        &["--org", "t", "wiki", "schema", "bootstrap"],
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "schema",
+            "bootstrap",
+            "--wiki",
+            "knowledge",
+        ],
     ));
 
     // Import a local folder INTO the org wiki over vox.
@@ -271,7 +315,16 @@ fn wiki_import_rescan_findings_over_embedded_vox() {
     std::fs::write(src.join("note.md"), "# A note\n\nhello\n").unwrap();
     let out = task(
         tmp.path(),
-        &["--org", "t", "wiki", "import", "--dir", "incoming"],
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "import",
+            "--dir",
+            "incoming",
+            "--wiki",
+            "knowledge",
+        ],
     );
     let stdout = ok(&out);
     assert!(stdout.contains("Imported 1 file(s)"), "{stdout}");
@@ -279,7 +332,10 @@ fn wiki_import_rescan_findings_over_embedded_vox() {
 
     // Diff-only rescan (no --enqueue): sees the import, enqueues
     // nothing — the `rescan_diff` RPC keeps the contract.
-    let out = task(tmp.path(), &["--org", "t", "wiki", "rescan"]);
+    let out = task(
+        tmp.path(),
+        &["--org", "t", "wiki", "rescan", "--wiki", "knowledge"],
+    );
     let stdout = ok(&out);
     assert!(stdout.contains("created=1"), "{stdout}");
     assert!(stdout.contains("+ raw/sources/note.md"), "{stdout}");
@@ -289,16 +345,202 @@ fn wiki_import_rescan_findings_over_embedded_vox() {
     // modified entry, one ingest task queued over vox.
     let on_disk = tmp.path().join("orgs/t/wiki/Knowledge/raw/sources/note.md");
     std::fs::write(&on_disk, "# A note\n\nhello again\n").unwrap();
-    let out = task(tmp.path(), &["--org", "t", "wiki", "rescan", "--enqueue"]);
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "rescan",
+            "--enqueue",
+            "--wiki",
+            "knowledge",
+        ],
+    );
     let stdout = ok(&out);
     assert!(stdout.contains("modified=1"), "{stdout}");
     assert!(stdout.contains("enqueued 1 ingest task(s)"), "{stdout}");
 
     // Health over vox reflects the queued task; findings listing
     // answers (empty) over vox as well.
-    let out = task(tmp.path(), &["--org", "t", "wiki", "health"]);
+    let out = task(
+        tmp.path(),
+        &["--org", "t", "wiki", "health", "--wiki", "knowledge"],
+    );
     let stdout = ok(&out);
     assert!(stdout.contains("queue_depth:     1"), "{stdout}");
-    let out = task(tmp.path(), &["--org", "t", "wiki", "findings"]);
+    let out = task(
+        tmp.path(),
+        &["--org", "t", "wiki", "findings", "--wiki", "knowledge"],
+    );
     assert!(ok(&out).contains("Open findings: 0"));
+}
+
+/// `task wiki scaffold` over vox: a wiki from a purpose statement,
+/// read back through the same services, idempotent on re-run, and its
+/// root known to the FS-only verbs through `describe`.
+#[test]
+fn wiki_scaffold_over_embedded_vox() {
+    let tmp = scratch_org();
+    let purpose = "Notes and questions from a weekly study of the Gospel of John.";
+
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "scaffold",
+            "--title",
+            "Bible Study",
+            "--purpose",
+            purpose,
+            "--visibility",
+            "unlisted",
+            "--types",
+            "topic,question,person",
+        ],
+    );
+    let stdout = ok(&out);
+    assert!(stdout.contains("created `bible-study`"), "{stdout}");
+    assert!(stdout.contains("wrote   purpose.md"), "{stdout}");
+    assert!(
+        stdout.contains("wrote   schema.md (topic, question, person, source)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("wrote   Goals.md"), "{stdout}");
+    assert!(stdout.contains("rebuilt index.md"), "{stdout}");
+
+    // The wiki is in the org's set, and `describe` says where it lives.
+    let out = task(tmp.path(), &["--org", "t", "wiki", "list"]);
+    let stdout = ok(&out);
+    assert!(stdout.contains("bible-study"), "{stdout}");
+    assert!(stdout.contains("unlisted"), "{stdout}");
+    let out = task(
+        tmp.path(),
+        &["--org", "t", "wiki", "describe", "bible-study", "--json"],
+    );
+    let described: serde_json::Value = serde_json::from_str(&ok(&out)).expect("json");
+    assert_eq!(described["root"], "wikis/bible-study");
+    assert!(
+        tmp.path()
+            .join("orgs/t/wikis/bible-study/purpose.md")
+            .is_file(),
+        "scaffolded on disk where describe says"
+    );
+
+    // Read back over vox: the purpose is a document, not a stub; the
+    // schema declares the named types; Goals.md is a page.
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "schema",
+            "purpose",
+            "--wiki",
+            "bible-study",
+        ],
+    );
+    let doc = ok(&out);
+    assert!(doc.contains(purpose), "{doc}");
+    assert!(doc.contains("## Who reads it"), "{doc}");
+    assert!(doc.contains("## Out of scope"), "{doc}");
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "schema",
+            "show",
+            "--wiki",
+            "bible-study",
+        ],
+    );
+    let doc = ok(&out);
+    assert!(doc.contains("| `person` | `People/` |"), "{doc}");
+    assert!(doc.contains("[[bible::John.3.16]]"), "{doc}");
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "page",
+            "read",
+            "bible-study",
+            "Goals.md",
+        ],
+    );
+    assert!(ok(&out).contains("# Goals — Bible Study"));
+
+    // The hidden alias still works for one release.
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "schema",
+            "health",
+            "--wiki-id",
+            "bible-study",
+        ],
+    );
+    assert!(ok(&out).contains("schema_present: true"));
+
+    // Re-running fills nothing: everything is kept.
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "scaffold",
+            "--title",
+            "Bible Study",
+            "--purpose",
+            purpose,
+        ],
+    );
+    let stdout = ok(&out);
+    assert!(stdout.contains("`bible-study` exists"), "{stdout}");
+    assert!(stdout.contains("kept    purpose.md"), "{stdout}");
+    assert!(stdout.contains("kept    schema.md"), "{stdout}");
+    assert!(stdout.contains("kept    Goals.md"), "{stdout}");
+    assert!(!stdout.contains("wrote"), "{stdout}");
+
+    // An FS-only verb resolves `--wiki` to the tree through the server
+    // (embedded here, so the data root is this machine's): `context`
+    // reads the scaffolded pages and reports what it saw.
+    let out = task(
+        tmp.path(),
+        &["--org", "t", "wiki", "context", "", "--wiki", "bible-study"],
+    );
+    let stdout = ok(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[wiki context]"), "{stderr}");
+    assert!(stdout.contains("Goals"), "{stdout}\n{stderr}");
+
+    // A wiki the org does not hold is refused by name.
+    let out = task(
+        tmp.path(),
+        &[
+            "--org",
+            "t",
+            "wiki",
+            "context",
+            "",
+            "--wiki",
+            "no-such-wiki",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no-such-wiki"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
