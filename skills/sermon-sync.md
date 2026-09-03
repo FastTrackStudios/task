@@ -50,7 +50,7 @@ Flags that matter:
 |---|---|
 | `--wiki <slug>` / `TASK_WIKI` | the named wiki the sermons belong to (`bible`): pages under `<wiki>/Resources/Sermons/<folder>/`, with `Sermons.base` beside the folders. Without it the org-wide `resources/sermons/` tier — only for resources no single wiki owns. |
 | `--folder <name>` | subfolder under the sermons root; also the default second tag. One per channel (`crossroads`). |
-| `--tag <t>` (repeatable) | `tags:` for new sermons; default `sermon` + the folder name |
+| `--tag <t>` (repeatable) | `tags:` for new sermons; default the hierarchical `sermons/<folder>` (`sermons/crossroads`), which the wiki explorer's Tags view nests as Sermons › Crossroads |
 | `--since YYYY-MM-DD` | stop at the first video older than this (the tab is newest-first) |
 | `--limit N` | at most N new videos this run — use it the first night on a big channel |
 | `--dry-run` | list what would be synced; fetch nothing, write nothing |
@@ -130,7 +130,7 @@ slug: god-restores-broken-people
 title: God Restores Broken People
 writers: [Crossroads Church]
 readonly: true
-tags: [sermon, crossroads]
+tags: [sermons/crossroads]
 published: 2026-06-14
 duration_secs: 2856
 media:
