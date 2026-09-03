@@ -3,7 +3,8 @@
 //! Cheap, no dependencies. Splits the query into terms;
 //! score = Σ over terms (tf × idf), where tf = occurrence
 //! count in the page (capped at 8 to bound long-doc bias)
-//! and idf = ln(N / (1 + df)). Snippet is the first
+//! and idf = ln(1 + N / (1 + df)), smoothed so a term found
+//! in the only page of a new wiki still scores. Snippet is the first
 //! sentence containing any term, capped at 200 chars.
 
 use std::collections::HashMap;
@@ -62,7 +63,12 @@ pub(crate) fn search_token(
             }
             matched.push(term.clone());
             let d = *df.get(term.as_str()).unwrap_or(&0) as f32;
-            let idf = (n_total / (1.0 + d)).ln().max(0.0);
+            // Smoothed: `ln(1 + N/(1+df))` stays positive however
+            // small the wiki. The plain form is ≤ 0 whenever
+            // `N ≤ 1 + df` — a one- or two-page wiki, or a term on
+            // every page — and a zero score dropped the hit, so a
+            // wiki's first page could never be found by search.
+            let idf = (1.0 + n_total / (1.0 + d)).ln();
             score += tf * idf;
         }
         if score <= 0.0 {

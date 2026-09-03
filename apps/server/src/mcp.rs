@@ -870,7 +870,248 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             },
         },
     ]);
+    #[cfg(feature = "plugin-wiki")]
+    v.extend(wiki_tool_catalog());
     v
+}
+
+/// The wiki tools. A wiki is one *subject* — a curated set of markdown
+/// pages with frontmatter, governed by two documents at its root:
+/// `purpose.md` (why it exists, who reads it, what questions it should
+/// answer) and `schema.md` (what a page looks like: page types,
+/// required frontmatter, linking conventions). An org holds a set of
+/// wikis, each addressed by slug.
+///
+/// The descriptions teach the loop: `list_wikis` before guessing a
+/// slug, `read_wiki_page` before editing (its sha guards the write),
+/// `read_wiki_schema` before writing a page so the frontmatter matches.
+#[cfg(feature = "plugin-wiki")]
+fn wiki_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_wikis",
+            plugin: "wiki",
+            description: "List the org's wikis: slug, title, visibility, purpose (first \
+                          paragraph), page count, and default/repo flags. A wiki is one \
+                          subject — a curated set of markdown pages. Call this FIRST: every \
+                          other wiki tool takes a `wiki` slug from here; never guess one.",
+            schema: || obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "describe_wiki",
+            plugin: "wiki",
+            description: "One wiki in full: its summary plus its config — visibility, editors \
+                          (who may write pages directly; everyone else goes through an Edit \
+                          Request), proposer gate, repo source if any. Use it to check \
+                          whether you may write before planning edits.",
+            schema: || {
+                obj(
+                    json!({ "wiki": s_("Wiki slug, from list_wikis.") }),
+                    &["wiki"],
+                )
+            },
+        },
+        ToolDef {
+            name: "create_wiki",
+            plugin: "wiki",
+            description: "Create a new wiki for ONE subject. Scaffolds purpose.md (from \
+                          `purpose`), a default schema.md, index.md and log.md. Private by \
+                          default — the caller may raise visibility later. The caller becomes \
+                          the first Editor. A slug is derived from the title unless given; \
+                          slugs are permanent (a deleted wiki's slug is never reused), so \
+                          check list_wikis first. Follow up with write_wiki_schema to say \
+                          what pages look like, then write_wiki_page.",
+            schema: || {
+                obj(
+                    json!({
+                        "title": s_("Display title, e.g. 'Music Theory'."),
+                        "purpose": s_("Why this wiki exists, who reads it, what questions it \
+                                       should answer. Becomes the body of purpose.md; \
+                                       markdown."),
+                        "visibility": s_("'private' (default), 'unlisted' (reachable by \
+                                          reference) or 'public' (listed for subscription)."),
+                        "slug": s_("Optional slug: lowercase words joined by single hyphens. \
+                                    Defaults to a slug of the title."),
+                    }),
+                    &["title", "purpose"],
+                )
+            },
+        },
+        ToolDef {
+            name: "list_wiki_pages",
+            plugin: "wiki",
+            description: "Every curated page in a wiki: path, title, `type:` frontmatter, \
+                          size, modified. Nothing is filtered — you decide what's relevant. \
+                          Paths are wiki-root-relative and go to read_wiki_page.",
+            schema: || {
+                obj(
+                    json!({ "wiki": s_("Wiki slug, from list_wikis.") }),
+                    &["wiki"],
+                )
+            },
+        },
+        ToolDef {
+            name: "read_wiki_page",
+            plugin: "wiki",
+            description: "Read one wiki page: its markdown (frontmatter included) and the \
+                          sha256 of its current content. Keep the sha — write_wiki_page \
+                          needs it as `base_sha256` to edit this page without clobbering \
+                          someone else's change.",
+            schema: || {
+                obj(
+                    json!({
+                        "wiki": s_("Wiki slug, from list_wikis."),
+                        "path": s_("Wiki-root-relative path, e.g. 'concepts/modes.md'."),
+                    }),
+                    &["wiki", "path"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_wiki_page",
+            plugin: "wiki",
+            description: "Create or replace one wiki page with full markdown. Pages carry \
+                          YAML frontmatter as schema.md prescribes (read_wiki_schema first; \
+                          at least `title:` and `type:`), and link with [[Page title]]. To \
+                          EDIT an existing page pass `base_sha256` from read_wiki_page — the \
+                          write is refused if the page changed since you read it. Omitting \
+                          `base_sha256` writes unconditionally: fine for a new page, \
+                          destructive on an existing one. Returns the new sha. Refused when \
+                          the wiki has Editors and you are not one (see describe_wiki).",
+            schema: || {
+                obj(
+                    json!({
+                        "wiki": s_("Wiki slug, from list_wikis."),
+                        "path": s_("Wiki-root-relative path ending in .md. Folders are \
+                                    created as needed."),
+                        "markdown": s_("The page's full content, frontmatter included."),
+                        "base_sha256": s_("The sha256 read_wiki_page returned. Required to \
+                                           edit an existing page safely; omit only for a \
+                                           new page."),
+                    }),
+                    &["wiki", "path", "markdown"],
+                )
+            },
+        },
+        ToolDef {
+            name: "read_wiki_schema",
+            plugin: "wiki",
+            description: "Read a wiki's schema.md — the contract for what a page looks like: \
+                          page types, required frontmatter, linking and catalog conventions. \
+                          Read it before writing pages so they fit the wiki.",
+            schema: || {
+                obj(
+                    json!({ "wiki": s_("Wiki slug, from list_wikis.") }),
+                    &["wiki"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_wiki_schema",
+            plugin: "wiki",
+            description: "Replace a wiki's schema.md wholesale. Do this right after \
+                          create_wiki to declare the page types and frontmatter this subject \
+                          needs; later changes should keep existing pages valid. Read it \
+                          first — this overwrites.",
+            schema: || {
+                obj(
+                    json!({
+                        "wiki": s_("Wiki slug, from list_wikis."),
+                        "markdown": s_("The full schema document, markdown."),
+                    }),
+                    &["wiki", "markdown"],
+                )
+            },
+        },
+        ToolDef {
+            name: "read_wiki_purpose",
+            plugin: "wiki",
+            description: "Read a wiki's purpose.md — why it exists, who reads it, the \
+                          questions it should answer, what's out of scope. The title rides \
+                          its frontmatter. Read it before adding pages so you emphasise what \
+                          the curator cares about.",
+            schema: || {
+                obj(
+                    json!({ "wiki": s_("Wiki slug, from list_wikis.") }),
+                    &["wiki"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_wiki_purpose",
+            plugin: "wiki",
+            description: "Replace a wiki's purpose.md wholesale. Keep the `title:` \
+                          frontmatter (it is where list_wikis reads the title) and the \
+                          sections a reader expects: what it's for, who reads it, key \
+                          questions, out of scope. Read it first — this overwrites.",
+            schema: || {
+                obj(
+                    json!({
+                        "wiki": s_("Wiki slug, from list_wikis."),
+                        "markdown": s_("The full purpose document, markdown with frontmatter."),
+                    }),
+                    &["wiki", "markdown"],
+                )
+            },
+        },
+        ToolDef {
+            name: "search_wiki",
+            plugin: "wiki",
+            description: "Token search over one wiki's pages (TF-IDF over bodies and titles). \
+                          Returns ranked paths, titles and snippets to pass to \
+                          read_wiki_page. Prefer this to reading every page when the wiki \
+                          is large; use list_wiki_pages when you need the whole map.",
+            schema: || {
+                obj(
+                    json!({
+                        "wiki": s_("Wiki slug, from list_wikis."),
+                        "query": s_("Free-text query; terms are matched against page \
+                                     bodies and titles."),
+                        "limit": i_("Max hits (default 20, max 200)."),
+                    }),
+                    &["wiki", "query"],
+                )
+            },
+        },
+        ToolDef {
+            name: "list_wiki_subscriptions",
+            plugin: "wiki",
+            description: "What the org's vault (or one of its wikis) subscribes to — other \
+                          wikis and resources such as scripture, each as `domain/slug` with \
+                          its local-copy state (files, local changes, conflicts). Subscribed \
+                          sources resolve `[[slug::Page]]` references.",
+            schema: || {
+                obj(
+                    json!({
+                        "wiki": s_("Optional wiki slug: list that wiki's subscriptions \
+                                    instead of the org vault's."),
+                    }),
+                    &[],
+                )
+            },
+        },
+        ToolDef {
+            name: "subscribe_wiki",
+            plugin: "wiki",
+            description: "Subscribe the org's vault (or one of its wikis) to a source by its \
+                          qualified id `domain/slug`, e.g. 'fasttrackstudio.app/bible'. Only \
+                          public or referenced-unlisted sources admit outsiders; a private \
+                          one is refused. Subscribing twice is an error — check \
+                          list_wiki_subscriptions first.",
+            schema: || {
+                obj(
+                    json!({
+                        "qualified_id": s_("`domain/slug` of the source."),
+                        "resource": b_("Subscribe as a read-only resource rather than an \
+                                        editable wiki copy (default false)."),
+                        "wiki": s_("Optional wiki slug: subscribe that wiki instead of the \
+                                    org vault."),
+                    }),
+                    &["qualified_id"],
+                )
+            },
+        },
+    ]
 }
 
 /// The catalog as MCP's `tools/list` payload, filtered to the org's
@@ -944,6 +1185,12 @@ agents can't collide on the same work.\n\
 user to send. There is no send tool; say so when the user asks you to \"send\".\n\
 - `api_reference` shows everything this org's server can do (every service and method, \
 including what has no dedicated tool here) — use it to answer \"can Task do X?\".\n\
+- Wikis are the org's curated knowledge: each wiki is ONE subject, a set of markdown \
+pages with frontmatter, governed by `purpose.md` (why it exists) and `schema.md` (what a \
+page looks like). `list_wikis` first — never guess a slug — then `read_wiki_purpose` and \
+`read_wiki_schema` before writing. `write_wiki_page` needs the sha256 from \
+`read_wiki_page` to edit an existing page; `create_wiki` scaffolds a new subject \
+(private by default).\n\
 - Confirm before destructive or wide-reaching changes (cancelling events you didn't just \
 create, bulk status changes, overwriting notes with `write_note`). Ordinary additions \
 don't need a confirmation round-trip.",
@@ -1179,9 +1426,20 @@ async fn mcp_dispatch(
             // `blocking_read` locks, which panics on an async worker.
             // Run the whole dispatch on the blocking pool, which also
             // keeps a vault-walking tool off the reactor.
+            // WHO is calling, for the backends that record or check a
+            // person (the wiki's Editor lane). Resolved by the org's
+            // own identity resolver — the same one the permissions
+            // gate runs in front of the vox router — so an MCP write
+            // is attributed exactly as the RPC would be. The gate's
+            // task-local can't be set from here (`spawn_blocking`
+            // would lose it anyway), so the principal rides as a
+            // value instead.
+            let principal = mcp_principal(&org, &headers).await;
             let called = name.to_string();
-            let dispatched =
-                tokio::task::spawn_blocking(move || call_tool(&org, &called, &args)).await;
+            let dispatched = tokio::task::spawn_blocking(move || {
+                call_tool(&org, principal.as_deref(), &called, &args)
+            })
+            .await;
             let outcome = match dispatched {
                 Ok(r) => r,
                 Err(e) => Err(ToolFailure::Message(format!("tool panicked: {e}"))),
@@ -1630,6 +1888,30 @@ async fn authenticate_for(
     ))
 }
 
+/// The account behind this call, when the bearer resolves to one.
+///
+/// `None` for the static `TASK_MCP_TOKEN` (the cluster agent acting
+/// as the server itself) and for anything the resolver can't name.
+/// Caller-sensitive backends treat that as "no person" — the wiki
+/// lane, for one, then writes as the server does when it plants a
+/// seed, and records no Editor on a wiki it creates.
+async fn mcp_principal(org: &crate::OrgAppState, headers: &HeaderMap) -> Option<String> {
+    let token = crate::watch_bridge::bearer(headers)?;
+    let static_token = std::env::var("TASK_MCP_TOKEN").unwrap_or_default();
+    if !static_token.is_empty() && token == static_token {
+        return None;
+    }
+    match org
+        .permissions
+        .identity_resolver()
+        .resolve(Some(&token))
+        .await
+    {
+        architect_permissions::Principal::User { user_id } => Some(user_id),
+        _ => None,
+    }
+}
+
 /// Add the account-lane `org` argument to a per-org tool's schema.
 ///
 /// The catalog is shared with `/org/{slug}/mcp`, where the org is in
@@ -1679,6 +1961,18 @@ fn arg_str(args: &Value, key: &str) -> Option<String> {
 
 fn required_str(args: &Value, key: &str) -> Result<String, ToolFailure> {
     arg_str(args, key).ok_or_else(|| ToolFailure::Message(format!("`{key}` is required")))
+}
+
+/// A required document body, kept verbatim: a markdown page's
+/// trailing newline is part of its content (and of the sha a later
+/// read reports), so it is not trimmed the way an id or a title is.
+/// Blank is still an error.
+fn required_text(args: &Value, key: &str) -> Result<String, ToolFailure> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| ToolFailure::Message(format!("`{key}` is required")))
 }
 
 fn arg_bool(args: &Value, key: &str) -> bool {
@@ -1835,7 +2129,16 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
 /// are architect's blocking-dispatcher trait impls; the caller runs
 /// this on `spawn_blocking`.
 #[allow(clippy::too_many_lines)]
-fn call_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value, ToolFailure> {
+fn call_tool(
+    org: &crate::OrgAppState,
+    principal: Option<&str>,
+    name: &str,
+    args: &Value,
+) -> Result<Value, ToolFailure> {
+    // Only the wiki lane is caller-sensitive today; a build without it
+    // still takes the principal so the dispatch site has one shape.
+    #[cfg(not(feature = "plugin-wiki"))]
+    let _ = principal;
     use contacts_proto::Contacts as _;
     use email_proto::EmailSync as _;
     use goal::GoalService as _;
@@ -3018,8 +3321,368 @@ fn call_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value
             }
         }
 
+        #[cfg(feature = "plugin-wiki")]
+        n if WIKI_TOOLS.contains(&n) => wiki_tool(org, principal, n, args),
+
         _ => Err(ToolFailure::Unknown),
     }
+}
+
+// ── Wiki tools ───────────────────────────────────────────────────
+
+/// The tools [`wiki_tool`] answers; must match [`wiki_tool_catalog`].
+#[cfg(feature = "plugin-wiki")]
+const WIKI_TOOLS: &[&str] = &[
+    "list_wikis",
+    "describe_wiki",
+    "create_wiki",
+    "list_wiki_pages",
+    "read_wiki_page",
+    "write_wiki_page",
+    "read_wiki_schema",
+    "write_wiki_schema",
+    "read_wiki_purpose",
+    "write_wiki_purpose",
+    "search_wiki",
+    "list_wiki_subscriptions",
+    "subscribe_wiki",
+];
+
+/// The account an MCP call carries, handed to the wiki backend in
+/// place of the gate's task-local (see [`mcp_principal`]).
+#[cfg(feature = "plugin-wiki")]
+struct McpCaller(Option<String>);
+
+#[cfg(feature = "plugin-wiki")]
+impl wiki_live::backend::Caller for McpCaller {
+    fn principal(&self) -> Option<String> {
+        self.0.clone()
+    }
+}
+
+/// One wiki tool call: a thin adapter over the org's wiki backends.
+///
+/// The backend is cloned per call with the MCP principal pinned as its
+/// caller, so `create_wiki` names the creator as first Editor and
+/// `write_wiki_page` runs the Editor check against the right person —
+/// the same checks the vox lane makes, from the same identity.
+#[cfg(feature = "plugin-wiki")]
+fn wiki_tool(
+    org: &crate::OrgAppState,
+    principal: Option<&str>,
+    name: &str,
+    args: &Value,
+) -> Result<Value, ToolFailure> {
+    use wiki_proto::service::Subscriptions as _;
+    use wiki_proto::service::{Pages as _, Registry as _, Schema as _, Search as _};
+
+    let wiki = org
+        .wiki
+        .clone()
+        .with_caller(std::sync::Arc::new(McpCaller(principal.map(str::to_owned))));
+    let wiki_err = |what: &str, subject: &str, e: &wiki_proto::WikiError| match e {
+        wiki_proto::WikiError::NotFound(s) => ToolFailure::Message(format!(
+            "no {what} matching `{s}`. Call list_wikis / list_wiki_pages first and use a \
+             value from its result."
+        )),
+        other => ToolFailure::Message(format!("couldn't {what} `{subject}`: {other}")),
+    };
+    let subscriber = |args: &Value| match arg_str(args, "wiki") {
+        Some(slug) => wiki_proto::Subscriber::Wiki(slug),
+        None => wiki_proto::Subscriber::Vault,
+    };
+
+    match name {
+        "list_wikis" => {
+            let wikis = wiki
+                .list_wikis()
+                .map_err(|e| wiki_err("list wikis", &org.slug, &e))?;
+            let out: Vec<Value> = wikis.iter().map(wiki_summary_json).collect();
+            Ok(json!({
+                "count": out.len(),
+                "wikis": out,
+                "note": "Pass `slug` as `wiki` to every other wiki tool. Each wiki is one \
+                         subject: read its purpose and schema before adding pages.",
+            }))
+        }
+
+        "describe_wiki" => {
+            let slug = required_str(args, "wiki")?;
+            let d = wiki
+                .describe_wiki(&slug)
+                .map_err(|e| wiki_err("wiki", &slug, &e))?;
+            let c = &d.config;
+            Ok(json!({
+                "summary": wiki_summary_json(&d.summary),
+                "config": {
+                    "slug": c.slug,
+                    "title": c.title,
+                    "visibility": c.visibility.as_str(),
+                    "editors": c.editors,
+                    "has_edit_lane": c.has_edit_lane(),
+                    "you_may_write_directly": !c.has_edit_lane()
+                        || principal.is_some_and(|p| c.is_editor(p)),
+                    "proposers": c.proposers.as_str(),
+                    "source": c.source.as_ref().map(|s| json!({
+                        "url": s.url,
+                        "branch": s.branch,
+                        "path": s.path,
+                        "commit": s.commit,
+                        "fetched_at": s.fetched_at,
+                        "last_error": s.last_error,
+                    })),
+                    "created_at": c.created_at,
+                },
+            }))
+        }
+
+        "create_wiki" => {
+            let title = required_str(args, "title")?;
+            let purpose = required_str(args, "purpose")?;
+            let visibility = match arg_str(args, "visibility") {
+                None => wiki_proto::Visibility::Private,
+                Some(v) => wiki_proto::Visibility::parse(&v).ok_or_else(|| {
+                    ToolFailure::Message(format!(
+                        "`visibility` must be private, unlisted or public (got `{v}`)"
+                    ))
+                })?,
+            };
+            let new = wiki_proto::NewWiki {
+                title: title.clone(),
+                slug: arg_str(args, "slug").unwrap_or_default(),
+                purpose,
+                visibility,
+                source: None,
+            };
+            let created = wiki
+                .create_wiki(new)
+                .map_err(|e| wiki_err("create wiki", &title, &e))?;
+            let mut out = wiki_summary_json(&created);
+            out["created"] = json!(true);
+            out["next"] = json!(
+                "Call write_wiki_schema to declare this wiki's page types and \
+                 frontmatter, then write_wiki_page for each page."
+            );
+            Ok(out)
+        }
+
+        "list_wiki_pages" => {
+            let slug = required_str(args, "wiki")?;
+            let pages = wiki
+                .list_pages(&slug)
+                .map_err(|e| wiki_err("wiki", &slug, &e))?;
+            let out: Vec<Value> = pages
+                .iter()
+                .map(|p| {
+                    json!({
+                        "path": p.path,
+                        "title": p.title,
+                        "type": p.page_type,
+                        "size": p.size,
+                        "modified": p.modified.to_rfc3339(),
+                        "ai_generated": p.ai_generated,
+                    })
+                })
+                .collect();
+            Ok(json!({ "wiki": slug, "count": out.len(), "pages": out }))
+        }
+
+        "read_wiki_page" => {
+            let slug = required_str(args, "wiki")?;
+            let path = required_str(args, "path")?;
+            let doc = wiki
+                .read_page(&slug, &path)
+                .map_err(|e| wiki_err("wiki page", &path, &e))?;
+            Ok(json!({
+                "wiki": slug,
+                "path": doc.path,
+                "sha256": doc.sha256,
+                "modified": doc.modified.to_rfc3339(),
+                "markdown": doc.markdown,
+            }))
+        }
+
+        "write_wiki_page" => {
+            let slug = required_str(args, "wiki")?;
+            let path = required_str(args, "path")?;
+            let markdown = required_text(args, "markdown")?;
+            let base = arg_str(args, "base_sha256").unwrap_or_default();
+            let existed = wiki.read_page(&slug, &path).is_ok();
+            let doc = wiki
+                .write_page(&slug, &path, &markdown, &base)
+                .map_err(|e| match e {
+                    wiki_proto::WikiError::IllegalState(msg) => ToolFailure::Message(format!(
+                        "{msg}. Call read_wiki_page again, merge your change onto the \
+                         current content, and pass its sha256."
+                    )),
+                    other => wiki_err("write wiki page", &path, &other),
+                })?;
+            Ok(json!({
+                "wiki": slug,
+                "path": doc.path,
+                "sha256": doc.sha256,
+                "written": true,
+                "replaced_existing": existed,
+            }))
+        }
+
+        "read_wiki_schema" => {
+            let slug = required_str(args, "wiki")?;
+            let doc = wiki
+                .read_schema(&slug)
+                .map_err(|e| wiki_err("wiki schema", &slug, &e))?;
+            Ok(json!({ "wiki": slug, "modified": doc.modified, "markdown": doc.markdown }))
+        }
+
+        "write_wiki_schema" => {
+            let slug = required_str(args, "wiki")?;
+            let markdown = required_text(args, "markdown")?;
+            wiki.write_schema(&slug, &markdown)
+                .map_err(|e| wiki_err("write wiki schema", &slug, &e))?;
+            Ok(json!({ "wiki": slug, "written": true }))
+        }
+
+        "read_wiki_purpose" => {
+            let slug = required_str(args, "wiki")?;
+            let doc = wiki
+                .read_purpose(&slug)
+                .map_err(|e| wiki_err("wiki purpose", &slug, &e))?;
+            Ok(json!({ "wiki": slug, "modified": doc.modified, "markdown": doc.markdown }))
+        }
+
+        "write_wiki_purpose" => {
+            let slug = required_str(args, "wiki")?;
+            let markdown = required_text(args, "markdown")?;
+            wiki.write_purpose(&slug, &markdown)
+                .map_err(|e| wiki_err("write wiki purpose", &slug, &e))?;
+            Ok(json!({ "wiki": slug, "written": true }))
+        }
+
+        "search_wiki" => {
+            let slug = required_str(args, "wiki")?;
+            let query = required_str(args, "query")?;
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map_or(20, |n| n.clamp(1, MAX_LIMIT as u64));
+            let hits = wiki
+                .search(
+                    &slug,
+                    wiki_proto::search::SearchOpts {
+                        query: query.clone(),
+                        top_k: u32::try_from(limit).unwrap_or(20),
+                        include_content: false,
+                        mode: wiki_proto::search::SearchMode::Token,
+                        node_type: String::new(),
+                    },
+                )
+                .map_err(|e| wiki_err("search wiki", &slug, &e))?;
+            let out: Vec<Value> = hits
+                .hits
+                .iter()
+                .map(|h| {
+                    json!({
+                        "path": h.path,
+                        "title": h.title,
+                        "score": h.score,
+                        "snippet": h.snippet,
+                        "matched_terms": h.matched_terms,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "wiki": slug,
+                "query": query,
+                "count": out.len(),
+                "hits": out,
+            }))
+        }
+
+        "list_wiki_subscriptions" => {
+            let who = subscriber(args);
+            let held = org
+                .subscriptions
+                .list_subscriptions(who.clone())
+                .map_err(|e| wiki_err("list subscriptions", &who.key(), &e))?;
+            let out: Vec<Value> = held
+                .iter()
+                .map(|h| {
+                    let s = &h.subscription;
+                    json!({
+                        "qualified_id": s.qualified(),
+                        "domain": s.domain,
+                        "slug": s.slug,
+                        "kind": match s.kind {
+                            wiki_proto::SourceKind::Wiki => "wiki",
+                            wiki_proto::SourceKind::Resource => "resource",
+                        },
+                        "title": s.title,
+                        "core": s.core,
+                        "declined": s.declined,
+                        "files": h.files,
+                        "local_changes": h.local_changes,
+                        "conflicts": h.conflicts,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "subscriber": who.key(),
+                "count": out.len(),
+                "subscriptions": out,
+            }))
+        }
+
+        "subscribe_wiki" => {
+            let qualified = required_str(args, "qualified_id")?;
+            let Some((domain, source_slug)) = qualified.split_once('/') else {
+                return Err(ToolFailure::Message(format!(
+                    "`qualified_id` must be `domain/slug` (got `{qualified}`)"
+                )));
+            };
+            if domain.is_empty() || source_slug.is_empty() || source_slug.contains('/') {
+                return Err(ToolFailure::Message(format!(
+                    "`qualified_id` must be `domain/slug` (got `{qualified}`)"
+                )));
+            }
+            let who = subscriber(args);
+            let kind = if arg_bool(args, "resource") {
+                wiki_proto::SourceKind::Resource
+            } else {
+                wiki_proto::SourceKind::Wiki
+            };
+            let subscription = wiki_proto::Subscription {
+                domain: domain.to_owned(),
+                slug: source_slug.to_owned(),
+                kind,
+                title: source_slug.replace('-', " "),
+                core: false,
+                declined: false,
+            };
+            org.subscriptions
+                .subscribe(who.clone(), subscription)
+                .map_err(|e| wiki_err("subscribe", &qualified, &e))?;
+            Ok(json!({
+                "subscriber": who.key(),
+                "qualified_id": qualified,
+                "subscribed": true,
+            }))
+        }
+
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+#[cfg(feature = "plugin-wiki")]
+fn wiki_summary_json(w: &wiki_proto::WikiSummary) -> Value {
+    json!({
+        "slug": w.slug,
+        "title": w.title,
+        "purpose": w.purpose,
+        "visibility": w.visibility.as_str(),
+        "pages": w.pages,
+        "default": w.default,
+        "repo_sourced": w.repo_sourced,
+    })
 }
 
 /// The sender identity for a draft: the account's own address.
@@ -3307,6 +3970,21 @@ mod tests {
             let desc = tool["description"].as_str().expect("description");
             assert!(desc.contains("Operator-only"), "{desc}");
         }
+    }
+
+    /// The wiki dispatch list and the wiki catalog must agree: a tool
+    /// listed but not dispatched is a method-not-found the model can't
+    /// explain, and one dispatched but not listed is unreachable.
+    #[cfg(feature = "plugin-wiki")]
+    #[test]
+    fn wiki_tools_match_their_dispatch_list() {
+        let listed: Vec<&str> = wiki_tool_catalog().iter().map(|t| t.name).collect();
+        assert_eq!(listed, WIKI_TOOLS);
+        assert!(wiki_tool_catalog().iter().all(|t| t.plugin == "wiki"));
+        // The orientation text teaches the loop the tools rely on.
+        let text = server_instructions("acme", chrono::Local::now());
+        assert!(text.contains("list_wikis"));
+        assert!(text.contains("read_wiki_page"));
     }
 
     #[test]
