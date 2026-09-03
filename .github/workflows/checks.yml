@@ -70,34 +70,47 @@ env:
 jobs:
   # GitHub applies `timeout-minutes` to EXECUTION, not to time spent
   # queued — with every real job on one host, a stopped runner service
-  # would leave a PR sitting "Queued" rather than failing. This is the
-  # only hosted job left: it asks the API whether an online `nix-host`
-  # runner exists and fails in seconds if not, so a dead battleship shows
-  # up as a red check instead of silence.
-  runner-online:
-    name: Runner online
+  # would leave a PR sitting "Queued" rather than failing.
+  #
+  # This watches THIS RUN's own jobs (the `actions: read` the default
+  # token already has — the org runners endpoint needs `admin:org`, which
+  # no workflow token carries) and fails once anything has sat queued past
+  # the grace period. It exits the moment the jobs are picked up, so a
+  # healthy run pays a few seconds on a hosted runner.
+  queue-timeout:
+    name: Queue timeout
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
-      - name: Assert an online nix-host runner
+      - name: Fail if the self-hosted jobs never start
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRACE_SECONDS: "480"
         run: |
           set -euo pipefail
-          online="$(gh api orgs/${{ github.repository_owner }}/actions/runners \
-            -q '[.runners[] | select(.status == "online")
-                 | select([.labels[].name] | index("nix-host"))] | length')"
-          echo "online nix-host runners: ${online}"
-          if [ "${online}" -lt 1 ]; then
-            echo "::error::No online self-hosted runner carries the nix-host label."
-            echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
-            exit 1
-          fi
+          deadline=$(( $(date +%s) + GRACE_SECONDS ))
+          while :; do
+            queued="$(gh api \
+              "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+              -q '[.jobs[] | select(.name != "Queue timeout")
+                   | select(.status == "queued") | .name] | join(", ")' || true)"
+            if [ -z "${queued}" ]; then
+              echo "all jobs picked up"
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "${deadline}" ]; then
+              echo "::error::Still queued after ${GRACE_SECONDS}s: ${queued}"
+              echo "::error::No self-hosted nix-host runner took the work."
+              echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
+              exit 1
+            fi
+            echo "queued: ${queued}"
+            sleep 20
+          done
 
   plan:
     name: Plan affected crates
     runs-on: [self-hosted, nix-host]
-    needs: runner-online
     timeout-minutes: 10
     outputs:
       workspace: ${{ steps.filter.outputs.workspace }}
