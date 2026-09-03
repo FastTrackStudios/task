@@ -100,10 +100,14 @@ pub(crate) use rpc::{create_new_file, fetch_backlinks, fetch_folder_index, fetch
 use crate::document_session::VAULT_ID;
 
 /// Minimal payload to open a file: its path + last-known sha.
+///
+/// `pub`, not `pub(crate)`: `#[component]` generates a PUBLIC props struct,
+/// so `NoteInspector`'s `on_open: Callback<FileMeta>` field would expose a
+/// crate-private type and trip `private_interfaces` under `-D warnings`.
 #[derive(Clone, PartialEq)]
-pub(crate) struct FileMeta {
-    pub(crate) path: String,
-    pub(crate) sha256: String,
+pub struct FileMeta {
+    pub path: String,
+    pub sha256: String,
 }
 
 #[component]

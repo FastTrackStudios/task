@@ -16,6 +16,7 @@
 
 use vault_proto::{IfMatch, VaultGraphClient, VaultSyncClient};
 
+#[allow(dead_code)]
 mod support;
 
 async fn boot_server() -> eyre::Result<(String, tempfile::TempDir)> {

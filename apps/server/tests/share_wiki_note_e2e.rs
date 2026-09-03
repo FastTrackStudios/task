@@ -9,6 +9,10 @@
 
 use share_proto::{NewShareLink, ShareServiceClient, ShareTarget};
 
+// `support` compiles into each test binary separately, so whatever this
+// one does not touch reads as dead code here. Same attribute the other
+// binaries carry.
+#[allow(dead_code)]
 mod support;
 
 const WIKI_VAULT: &str = "wiki:music-theory";

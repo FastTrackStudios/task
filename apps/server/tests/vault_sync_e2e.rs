@@ -19,6 +19,7 @@ use std::time::Duration;
 use vault_proto::{IfMatch, VaultChange, VaultEvent, VaultSyncClient, VaultSyncError};
 use vox::VoxError;
 
+#[allow(dead_code)]
 mod support;
 
 /// Boot over the example studio — see `support`. The vault the tests
