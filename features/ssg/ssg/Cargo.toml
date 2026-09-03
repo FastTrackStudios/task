@@ -1,0 +1,28 @@
+[package]
+name = "ssg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Facade for the static-site feature. A site depends on this and on
+# `ssg-build` (as a build-dependency) and needs nothing else.
+#
+# Feature flags:
+# - `ui` (default) — the Dioxus components. Turn it off for a consumer
+#   that only wants the page model (a search indexer, a feed generator,
+#   a link checker) and should not pull Dioxus.
+
+[dependencies]
+ssg-vault = { workspace = true }
+ssg-ui = { workspace = true, optional = true }
+
+[features]
+default = ["ui"]
+ui = ["dep:ssg-ui"]
+# Draw the vault's link graph as static SVG. Implies `ui`; costs the
+# knowledge-graph crate and its dependency chain.
+graph = ["ui", "ssg-ui?/graph"]
+
+[lints]
+workspace = true

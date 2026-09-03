@@ -163,6 +163,11 @@ members = [
     "features/scripture/scripture-proto",
     "features/scripture/scripture-ui",
     "features/share/share-proto",
+    "features/ssg/ssg",
+    "features/ssg/ssg-bake",
+    "features/ssg/ssg-build",
+    "features/ssg/ssg-ui",
+    "features/ssg/ssg-vault",
     "features/tag/tag",
     "features/tag/tag-proto",
     "features/task/task",
@@ -427,6 +432,17 @@ editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v
 editor-keyflow-lang = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
+
+# ── features/ssg — vaults as static sites ─────────────────────────────
+# Consumed from OTHER repos (keyflow, signal, ignition, session) as a git
+# dependency: `ssg-build` from their build scripts, `ssg`/`ssg-ui` from
+# the site crate itself. Nothing here depends on the rest of Task, which
+# is what keeps that dependency cheap for them.
+ssg = { path = "features/ssg/ssg" }
+ssg-bake = { path = "features/ssg/ssg-bake" }
+ssg-build = { path = "features/ssg/ssg-build" }
+ssg-ui = { path = "features/ssg/ssg-ui" }
+ssg-vault = { path = "features/ssg/ssg-vault" }
 
 # ── architect — the entity/RPC framework, its own repo ────────────────
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the

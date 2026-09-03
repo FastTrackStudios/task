@@ -1,0 +1,20 @@
+[package]
+name = "ssg-bake"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Render routes to `index.html` files on disk.
+#
+# Host-only: a site depends on this behind a `bake` feature so that the
+# server renderer never enters its wasm build.
+
+[dependencies]
+# `ssr` is the whole dependency: render a component tree to a string.
+# Explicitly NOT `fullstack`/`server` — see the crate docs for why this
+# bakes directly instead of driving `dx build --ssg`.
+dioxus = { workspace = true, features = ["ssr"] }
+
+[lints]
+workspace = true

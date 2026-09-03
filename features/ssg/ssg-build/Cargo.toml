@@ -1,0 +1,21 @@
+[package]
+name = "ssg-build"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# The build-script half of the static-site feature. A consuming site adds
+# this as a *build-dependency* and its whole build.rs becomes one call.
+#
+# `ssg-vault` is the only dependency, on purpose: this compiles before
+# every build of every site that uses it, so anything added here is paid
+# for four times over on a cold build. In particular it does NOT pull the
+# knowledge-graph crate — that would drag Dioxus into a build script.
+# The graph is built where it is drawn, in `ssg-ui`, at render time.
+
+[dependencies]
+ssg-vault = { workspace = true }
+
+[lints]
+workspace = true

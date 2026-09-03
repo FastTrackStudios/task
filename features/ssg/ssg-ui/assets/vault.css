@@ -1,0 +1,179 @@
+/*
+ * Layout for the vault components. Deliberately minimal.
+ *
+ * Every colour is a custom property with an inherited fallback, so a
+ * site's theme wins by default and this sheet only decides spacing,
+ * grouping and the handful of marks (a broken cross-reference, the
+ * current chapter) that carry meaning rather than taste. A site that
+ * would rather own the `ssg-*` classes outright just does not link it.
+ */
+
+.ssg-prose {
+  max-width: var(--ssg-measure, 68ch);
+  line-height: var(--ssg-line-height, 1.65);
+}
+
+.ssg-prose > * + * {
+  margin-block-start: 1em;
+}
+
+.ssg-prose pre {
+  overflow-x: auto;
+  padding: 0.75rem 1rem;
+  border-radius: 0.375rem;
+  background: var(--ssg-code-bg, rgb(0 0 0 / 5%));
+}
+
+/* Wide content must scroll inside itself; the page never scrolls
+ * sideways. */
+.ssg-prose table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.ssg-prose th,
+.ssg-prose td {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--ssg-rule, currentColor);
+}
+
+/* A `[[wikilink]]` whose target does not exist. Not a link — clicking it
+ * would 404 — but marked, because the author meant it to go somewhere
+ * and a silent plain-text fallback hides that. */
+.ssg-broken-link {
+  border-block-end: 1px dashed var(--ssg-broken, currentColor);
+  opacity: 0.7;
+  cursor: help;
+}
+
+/* ── Table of contents ─────────────────────────────────────────────── */
+
+.ssg-toc {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ssg-toc-stage {
+  margin-block: 1rem 0.35rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.ssg-toc-stage:first-child {
+  margin-block-start: 0;
+}
+
+.ssg-toc-link {
+  padding: 0.2rem 0;
+  text-decoration: none;
+}
+
+.ssg-toc-current {
+  font-weight: 600;
+  color: var(--ssg-accent, currentColor);
+}
+
+/* ── Chapter navigation ────────────────────────────────────────────── */
+
+.ssg-chapter-nav {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-block: 2rem;
+}
+
+/* With only a `next`, it belongs on the right where `next` always sits —
+ * otherwise the last chapter's link jumps to the left edge. */
+.ssg-chapter-next:only-child {
+  margin-inline-start: auto;
+}
+
+.ssg-chapter-nav a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-decoration: none;
+}
+
+.ssg-chapter-next {
+  text-align: end;
+}
+
+.ssg-chapter-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+/* ── Backlinks ─────────────────────────────────────────────────────── */
+
+.ssg-backlinks {
+  margin-block-start: 2.5rem;
+  padding-block-start: 1rem;
+  border-block-start: 1px solid var(--ssg-rule, currentColor);
+}
+
+.ssg-backlinks-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.ssg-backlinks ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ssg-backlinks-summary {
+  opacity: 0.7;
+}
+
+/* ── Graph ─────────────────────────────────────────────────────────── */
+
+.ssg-graph {
+  width: 100%;
+  height: auto;
+}
+
+.ssg-graph-edge {
+  stroke: var(--ssg-graph-edge, currentColor);
+  stroke-width: 1;
+  opacity: 0.25;
+}
+
+.ssg-graph-label {
+  font-size: 9px;
+  fill: var(--ssg-graph-label, currentColor);
+}
+
+.ssg-graph-node circle {
+  stroke: var(--ssg-graph-node-stroke, transparent);
+  stroke-width: 1.5;
+}
+
+.ssg-graph-node-current circle {
+  stroke: var(--ssg-accent, currentColor);
+}
+
+.ssg-graph-node-current .ssg-graph-label {
+  font-weight: 600;
+}
+
+/* Hover is the one interaction a static page still gets for free, and
+ * it is the one that matters on a graph: which node is this. */
+.ssg-graph-node:hover circle {
+  stroke: var(--ssg-accent, currentColor);
+}
+
+.ssg-graph-node:focus-visible circle {
+  stroke: var(--ssg-accent, currentColor);
+  stroke-width: 2.5;
+}
