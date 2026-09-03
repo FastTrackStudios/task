@@ -10,7 +10,12 @@ repository.workspace = true
 
 [dependencies]
 links-proto = { workspace = true }
+# The server-side sermon upsert replaces the sermon's `sermon-sync`
+# links in the org's typed-link store.
+links = { workspace = true }
 resources-proto = { workspace = true }
+# Book table + OSIS ids for the caption scripture-reference extractor.
+scripture-proto = { workspace = true }
 architect = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

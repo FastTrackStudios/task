@@ -31,6 +31,10 @@ on the CLI for idempotence + audit.
   deployed server and the real issuer, signed in as the account in
   `.env` (`just live`); the CLI as that account; the traps that make
   it look broken.
+- [`sermon-sync.md`](sermon-sync.md) — a YouTube channel's message
+  videos as sermon resources (video + captions, scripture backlinks),
+  synced nightly by `task resources sermons sync`; how a sermon is
+  opened at a timestamp, annotated, and referenced. No model.
 - [`llm-wiki.md`](llm-wiki.md) — one named wiki end to end: scaffold
   it from a purpose (`task wiki scaffold`), write pages, ingest
   sources, drain the review queue, lint/gaps/research, Edit Requests,

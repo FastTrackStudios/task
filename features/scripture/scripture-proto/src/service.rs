@@ -64,21 +64,37 @@ pub struct ChapterView {
     pub verses: Vec<VerseLine>,
 }
 
-/// One vault note that links to a verse, with context.
+/// One thing that links to a verse, with context: a vault note (a
+/// `[[John 3:16]]` wikilink), or a media resource — a sermon whose
+/// captions name the verse at a moment (`sermon:<slug>#t:<secs>`).
 #[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
 pub struct VerseBacklink {
-    /// Vault-relative path of the linking note.
+    /// Vault-relative path of the linking note; for a media source, the
+    /// node token (`sermon:god-restores-broken-people`).
     pub note_path: String,
-    /// Display title (first heading, else file stem).
+    /// Display title (first heading, else file stem; a sermon's title).
     pub note_title: String,
-    /// The line the link appears on, trimmed — the "inline thesis".
+    /// The line the link appears on, trimmed — the "inline thesis"; for
+    /// a sermon, what was being said.
     pub excerpt: String,
+    /// The linking node's kind when it is not a vault note (`sermon`,
+    /// `song`, `video`). Empty for a note.
+    #[serde(default)]
+    pub source_kind: String,
+    /// For a media source, the second the reference was made at — the
+    /// `#t:<secs>` anchor the reader opens the resource to.
+    #[serde(default)]
+    pub secs: u32,
 }
 
 /// Backlinks for one verse — every vault note that references it.
 ///
 /// Translation-independent: keyed by the verse address, so a note that
 /// links `John 3:16` shows up no matter which edition you're reading.
+///
+/// `verse == 0` is the chapter itself: sources that name the chapter
+/// without a verse (`Romans 8`, `John chapter 3`) land there, with the
+/// chapter's OSIS (`Rom.8`).
 #[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
 pub struct VerseBacklinks {
     pub verse: u16,

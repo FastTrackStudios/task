@@ -180,6 +180,24 @@ dev-seed *ARGS="seed":
 demo *ARGS="plant":
     scripts/demo.sh {{ARGS}}
 
+# Sync a YouTube channel's message videos into the deployed org as
+# sermon resources (video + captions + scripture backlinks). Reads
+# TASK_LIVE_SERVER from .env; the CLI session must already be signed in
+# there (skills/live-dev.md §3). Extra args pass through
+# (`--limit 5`, `--since 2026-01-01`, `--dry-run`). Channel / org /
+# folder come from SERMON_CHANNEL / SERMON_ORG / SERMON_FOLDER, which
+# default to Crossroads. Cron-friendly: exits 0 once the listing worked.
+# skills/sermon-sync.md has the systemd timer.
+sermon-sync *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -f .env ] && set -a && . ./.env && set +a
+    : "${TASK_LIVE_SERVER:?set TASK_LIVE_SERVER in .env (https://task.example.com)}"
+    export TASK_YTDLP="${TASK_YTDLP:-$(nix shell nixpkgs#yt-dlp -c which yt-dlp)}"
+    exec cargo run --quiet -p task-cli -- --server "$TASK_LIVE_SERVER" \
+        resources sermons sync "${SERMON_CHANNEL:-https://www.youtube.com/@CrossroadsCA}" \
+        --org "${SERMON_ORG:-codywright}" --folder "${SERMON_FOLDER:-crossroads}" {{ARGS}}
+
 # ── Build & Test ─────────────────────────────────────────────────────────
 
 # All recipes assume the dev shell is already loaded (`.envrc` does

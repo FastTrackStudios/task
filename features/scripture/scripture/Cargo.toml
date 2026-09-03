@@ -14,6 +14,10 @@ repository.workspace = true
 [dependencies]
 scripture-proto = { workspace = true }
 architect = { workspace = true }
+# Media backlinks: the org's typed-link store holds the
+# `sermon:<slug>#t:<secs> → verse:<osis>` links the sermon sync mints,
+# and the reader shows them beside the vault's wikilink backlinks.
+links = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
 # API-backed editions (ESV / NIV) fetch over HTTP.

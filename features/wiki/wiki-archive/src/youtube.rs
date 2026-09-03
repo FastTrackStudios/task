@@ -68,6 +68,10 @@ pub struct VideoMeta {
     /// Best timestamped-subtitle track: `(lang, url)` for a
     /// `json3` format, manual captions preferred over ASR.
     pub json3_track: Option<(String, String)>,
+    /// Whether [`Self::json3_track`] is an uploader-provided
+    /// (`subtitles`) track rather than YouTube ASR
+    /// (`automatic_captions`). `false` when there is no track.
+    pub json3_manual: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,13 +205,15 @@ pub fn parse_probe_json(json: &str) -> Result<VideoMeta, ArchiveError> {
         upload_date: str_of("upload_date"),
         description: str_of("description").unwrap_or_default(),
         chapters,
-        json3_track: pick_json3_track(&v),
+        json3_track: pick_json3_track(&v).map(|(lang, url, _)| (lang, url)),
+        json3_manual: pick_json3_track(&v).is_some_and(|(_, _, manual)| manual),
     })
 }
 
 /// Prefer manual `subtitles` over `automatic_captions`;
 /// within each, prefer English-family tracks, then anything.
-fn pick_json3_track(v: &Value) -> Option<(String, String)> {
+/// The third element says which of the two the track came from.
+fn pick_json3_track(v: &Value) -> Option<(String, String, bool)> {
     for key in ["subtitles", "automatic_captions"] {
         let Some(map) = v.get(key).and_then(Value::as_object) else {
             continue;
@@ -222,7 +228,7 @@ fn pick_json3_track(v: &Value) -> Option<(String, String)> {
             for t in tracks {
                 if t.get("ext").and_then(Value::as_str) == Some("json3") {
                     if let Some(url) = t.get("url").and_then(Value::as_str) {
-                        return Some((lang.clone(), url.to_string()));
+                        return Some((lang.clone(), url.to_string(), key == "subtitles"));
                     }
                 }
             }
@@ -405,6 +411,7 @@ mod tests {
             m.json3_track,
             Some(("en".to_string(), "https://example.com/en.json3".to_string()))
         );
+        assert!(m.json3_manual, "uploader captions are the manual kind");
     }
 
     #[test]
@@ -420,6 +427,7 @@ mod tests {
                 "https://example.com/asr.json3".to_string()
             ))
         );
+        assert!(!m.json3_manual, "ASR is the auto kind");
     }
 
     #[test]

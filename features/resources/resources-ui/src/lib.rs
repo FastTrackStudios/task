@@ -7,6 +7,12 @@
 //! from `LinksService.links_for`, so this works for any `video:` /
 //! `sermon:` / `song:` node.
 //!
+//! A synced sermon (`sermon:<slug>`, laid down by `task resources
+//! sermons sync`) opens from its node alone: the screen looks the
+//! resource up, embeds its video, lists its cues, and — given `t` —
+//! starts at that second, which is how a scripture backlink
+//! (`Sermon title · 1:49`) lands here.
+//!
 //! Mounted by `task-plugin-studio`.
 
 use architect_ui::prelude::*;
@@ -97,6 +103,15 @@ feeds! {
             = create(link) as "create link";
 
     }
+    resources_proto::ResourcesServiceClient {
+        /// One synced sermon by slug — its video id, title, and where
+        /// its transcript sidecar lives.
+        fetch_sermon(slug_: &str) -> resources_proto::SermonSummary
+            = sermon(slug_.to_owned()) as format!("sermon {slug_}");
+        /// Every synced sermon in the org's library.
+        fetch_sermons() -> Vec<resources_proto::SermonSummary>
+            = list_sermons() as "list sermons";
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -107,7 +122,8 @@ const EMBED_ID: &str = "watch-embed";
 
 /// The transcript sidecar path (resources-relative) for a media node —
 /// `sermon:slug` → `sermons/slug.transcript.json`. `None` for kinds that
-/// don't carry a transcript.
+/// don't carry a transcript. (The server also looks one folder down,
+/// so a sermon synced into `sermons/<channel>/` resolves too.)
 fn transcript_rel_path(node_token: &str) -> Option<String> {
     let node = NodeRef::parse(node_token)?;
     let kind = node.kind.as_str();
@@ -151,16 +167,42 @@ fn youtube_id(input: &str) -> Option<String> {
     (id.len() >= 6).then_some(id)
 }
 
-/// Seek (and play) the embedded player via the IFrame postMessage API.
-fn seek_embed(sec: u32) {
-    let js = format!(
+/// The app link that opens a sermon resource (optionally at a second).
+#[must_use]
+pub fn sermon_href(slug: &str, t: u32) -> String {
+    let node = task_plugin_ui::encode(&format!("sermon:{slug}"));
+    let q = if t > 0 {
+        format!("node={node}&t={t}")
+    } else {
+        format!("node={node}")
+    };
+    task_plugin_ui::href(APP_ID, "", &q)
+}
+
+/// The JS that seeks (and plays) the embedded player via the IFrame
+/// postMessage API.
+fn seek_js(sec: u32) -> String {
+    format!(
         "const f=document.getElementById('{EMBED_ID}');\
 if(f&&f.contentWindow){{\
 f.contentWindow.postMessage(JSON.stringify({{event:'listening',id:'{EMBED_ID}'}}),'*');\
 f.contentWindow.postMessage(JSON.stringify({{event:'command',func:'seekTo',args:[{sec},true]}}),'*');\
 f.contentWindow.postMessage(JSON.stringify({{event:'command',func:'playVideo',args:[]}}),'*');\
 }}"
-    );
+    )
+}
+
+/// Seek (and play) the embedded player.
+fn seek_embed(sec: u32) {
+    let _ = dioxus::document::eval(&seek_js(sec));
+}
+
+/// Seek once the player has had a moment to come up — for a deep link
+/// (`?t=109`) that lands before the iframe is listening.
+fn seek_embed_on_load(sec: u32) {
+    let seek = seek_js(sec);
+    let js =
+        format!("setTimeout(function(){{{seek}}},1500);setTimeout(function(){{{seek}}},3500);");
     let _ = dioxus::document::eval(&js);
 }
 
@@ -216,25 +258,99 @@ fn moment(link: &TypedLink, node: &NodeRef) -> Option<Moment> {
     })
 }
 
+/// What the screen knows about a synced resource beyond its video id.
+#[derive(Clone, PartialEq, Default)]
+struct ResourceInfo {
+    title: String,
+    /// `Channel · 47:36 · 2026-06-14`, whichever parts are known.
+    lede: String,
+    /// Where the transcript sidecar lives (resources-relative).
+    transcript_rel: Option<String>,
+}
+
+impl ResourceInfo {
+    fn from_sermon(s: &resources_proto::SermonSummary) -> Self {
+        let mut lede: Vec<String> = Vec::new();
+        if !s.channel.is_empty() {
+            lede.push(s.channel.clone());
+        }
+        if s.duration_secs > 0 {
+            lede.push(format_timecode(s.duration_secs as u32));
+        }
+        if !s.published.is_empty() {
+            lede.push(s.published.clone());
+        }
+        Self {
+            title: s.title.clone(),
+            lede: lede.join(" · "),
+            transcript_rel: (!s.transcript_rel_path.is_empty())
+                .then(|| s.transcript_rel_path.clone()),
+        }
+    }
+}
+
+/// The watch screen's entry: an explicit video (`v`), a synced sermon
+/// (`node=sermon:<slug>`, video looked up), or the paste-a-URL landing.
 #[component]
-pub fn WatchView(v: String, node: String) -> Element {
+pub fn WatchView(v: String, node: String, #[props(default)] t: u32) -> Element {
+    let node_ref = NodeRef::parse(&node);
+    if v.is_empty() {
+        if let Some(n) = node_ref.filter(|n| n.kind == NodeKind::Sermon) {
+            return rsx! { SermonWatch { slug: n.id, node, t } };
+        }
+        // No video → a paste-a-URL landing plus the synced library.
+        return rsx! { Landing {} };
+    }
+    // The node these notes hang on: explicit `node`, else `video:<v>`.
+    let node_token = if node.is_empty() {
+        format!("video:{v}")
+    } else {
+        node
+    };
+    rsx! { WatchScreen { v, node_token, t, info: ResourceInfo::default() } }
+}
+
+/// Resolve a `sermon:<slug>` node to its video, then watch it.
+#[component]
+fn SermonWatch(slug: String, node: String, t: u32) -> Element {
+    let selection = use_context::<Signal<OrgSelection>>();
+    let org_list = use_context::<Signal<Vec<OrgMeta>>>();
+    let s = slug.clone();
+    let sermon = use_resource(move || {
+        let s = s.clone();
+        async move {
+            let org = selected_slugs(&selection.read(), &org_list.read())
+                .first()
+                .cloned()?;
+            self::fetch_sermon(&org, &s).await.ok()
+        }
+    });
+    match &*sermon.read() {
+        Some(Some(sm)) if !sm.video_id.is_empty() => rsx! {
+            WatchScreen {
+                v: sm.video_id.clone(),
+                node_token: node.clone(),
+                t,
+                info: ResourceInfo::from_sermon(sm),
+            }
+        },
+        Some(_) => rsx! {
+            div { class: "mx-auto flex w-full max-w-xl flex-col gap-3 p-6",
+                Heading { level: HeadingLevel::H1, class: "tracking-tight", "Sermon not found" }
+                Text { variant: TextVariant::Muted,
+                    "No synced sermon has the slug `{slug}`. Sync it with `task resources sermons sync-one <video-url>`."
+                }
+            }
+        },
+        None => rsx! { task_ui_core::states::LoadingState {} },
+    }
+}
+
+#[component]
+fn WatchScreen(v: String, node_token: String, t: u32, info: ResourceInfo) -> Element {
     let nav = use_navigator();
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
-
-    // The node these notes hang on: explicit `node`, else `video:<v>`.
-    let node_token = if !node.is_empty() {
-        node.clone()
-    } else if !v.is_empty() {
-        format!("video:{v}")
-    } else {
-        String::new()
-    };
-
-    // No video → a paste-a-URL landing.
-    if v.is_empty() {
-        return rsx! { UrlPrompt {} };
-    }
 
     let mut note_text = use_signal(String::new);
     let mut target_text = use_signal(String::new);
@@ -243,10 +359,14 @@ pub fn WatchView(v: String, node: String) -> Element {
     let mut refresh = use_signal(|| 0u32);
     let vid = v.clone();
 
-    // Wire the player message channel once the embed is in the DOM.
+    // Wire the player message channel once the embed is in the DOM, and
+    // land on the requested second for a deep link.
     use_effect(move || {
         let _ = vid.clone();
         install_time_listener();
+        if t > 0 {
+            seek_embed_on_load(t);
+        }
     });
 
     let nt = node_token.clone();
@@ -272,23 +392,25 @@ pub fn WatchView(v: String, node: String) -> Element {
         });
     });
 
-    // Add a note at the current moment — a clip (`#t:in-out`) when an
-    // in-point is marked, else a point (`#t:secs`). Targets the typed
-    // node in "link to" if given (relation `alludes-to`), else the video
-    // itself (`mentions`).
     // Synced transcript (sermons today; videos/songs when present).
     let tnt = node_token.clone();
+    let trel = info.transcript_rel.clone();
     let transcript = use_resource(move || {
         let tnt = tnt.clone();
+        let trel = trel.clone();
         async move {
             let slug = selected_slugs(&selection.read(), &org_list.read())
                 .first()
                 .cloned()?;
-            let rel = transcript_rel_path(&tnt)?;
+            let rel = trel.or_else(|| transcript_rel_path(&tnt))?;
             self::fetch_transcript(&slug, &rel).await.ok()
         }
     });
 
+    // Add a note at the current moment — a clip (`#t:in-out`) when an
+    // in-point is marked, else a point (`#t:secs`). Targets the typed
+    // node in "link to" if given (relation `alludes-to`), else the video
+    // itself (`mentions`).
     let add_token = node_token.clone();
     let add_note = use_callback(move |()| {
         let slug = selected_slugs(&selection.read(), &org_list.read())
@@ -416,11 +538,22 @@ pub fn WatchView(v: String, node: String) -> Element {
         _ => rsx! {},
     };
 
+    let heading = if info.title.is_empty() {
+        "Watch".to_string()
+    } else {
+        info.title.clone()
+    };
+
     rsx! {
         div { class: "mx-auto flex h-full w-full max-w-4xl flex-col gap-4 p-4 sm:p-6 lg:p-8",
             header { class: "flex items-baseline justify-between gap-3",
-                Heading { level: HeadingLevel::H1, class: "tracking-tight", "Watch" }
-                div { class: "flex items-center gap-3",
+                div { class: "flex min-w-0 flex-col",
+                    Heading { level: HeadingLevel::H1, class: "truncate tracking-tight", "{heading}" }
+                    if !info.lede.is_empty() {
+                        Text { variant: TextVariant::Muted, class: "text-xs", "{info.lede}" }
+                    }
+                }
+                div { class: "flex shrink-0 items-center gap-3",
                     button {
                         r#type: "button",
                         class: "text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground",
@@ -497,10 +630,13 @@ pub fn WatchView(v: String, node: String) -> Element {
     }
 }
 
-/// The no-video landing: paste a YouTube URL to start.
+/// The no-video landing: paste a YouTube URL to start, or open one of
+/// the sermons the sync has laid down.
 #[component]
-fn UrlPrompt() -> Element {
+fn Landing() -> Element {
     let nav = use_navigator();
+    let selection = use_context::<Signal<OrgSelection>>();
+    let org_list = use_context::<Signal<Vec<OrgMeta>>>();
     let mut url = use_signal(String::new);
     let go = use_callback(move |()| {
         if let Some(id) = youtube_id(&url()) {
@@ -517,6 +653,38 @@ fn UrlPrompt() -> Element {
             ));
         }
     });
+    let sermons = use_resource(move || async move {
+        let org = selected_slugs(&selection.read(), &org_list.read())
+            .first()
+            .cloned()?;
+        let mut list = self::fetch_sermons(&org).await.ok()?;
+        // Newest first; undated last.
+        list.sort_by(|a, b| b.published.cmp(&a.published).then(a.title.cmp(&b.title)));
+        Some(list)
+    });
+    let library = match &*sermons.read() {
+        Some(Some(list)) if !list.is_empty() => rsx! {
+            section { class: "flex flex-col gap-1",
+                div { class: "text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground",
+                    "Sermons · {list.len()}"
+                }
+                div { class: "flex flex-col divide-y divide-border/40 rounded-xl border border-border/70 bg-card/20",
+                    for s in list.iter() {
+                        Link {
+                            key: "{s.slug}",
+                            to: sermon_href(&s.slug, 0),
+                            class: "flex items-baseline justify-between gap-3 px-3 py-2 hover:bg-accent/30",
+                            span { class: "min-w-0 truncate text-sm text-foreground", "{s.title}" }
+                            span { class: "shrink-0 font-mono text-[0.7rem] text-muted-foreground",
+                                if s.published.is_empty() { "{s.channel}" } else { "{s.published}" }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        _ => rsx! {},
+    };
     rsx! {
         div { class: "mx-auto flex h-full w-full max-w-xl flex-col gap-4 p-6 sm:p-8",
             Heading { level: HeadingLevel::H1, class: "tracking-tight", "Watch" }
@@ -534,6 +702,7 @@ fn UrlPrompt() -> Element {
                 }
                 Button { on_click: move |_| go.call(()), "Watch" }
             }
+            {library}
         }
     }
 }

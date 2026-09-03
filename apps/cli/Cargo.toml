@@ -136,6 +136,11 @@ media-proto = { workspace = true, features = ["vox"] }
 # `task-cli wiki context --links` — overlay typed-link-store
 # edges onto the context subgraph.
 links.workspace = true
+# `task-cli resources sermons sync` — the sermon sync's wire types and
+# the json3 caption parser (cues with durations, as the transcript
+# sidecar stores them).
+resources-proto = { workspace = true, features = ["vox"] }
+resources = { workspace = true }
 wiki-proto = { workspace = true, optional = true }
 wiki-search = { workspace = true, optional = true }
 # `task-cli wiki archive <url|file>` — URL router + content

@@ -53,6 +53,11 @@ pub struct Store {
     topics: Arc<Mutex<Option<Arc<Topics>>>>,
     /// Vault to scan for `[[John 3:16]]` backlinks. `None` ⇒ no backlinks.
     vault_root: Option<PathBuf>,
+    /// The typed-link store plus the resources root its media sources
+    /// (`sermon:` / `song:` / `video:`) are described in — so a sermon
+    /// whose captions name a verse backlinks it at the moment it was
+    /// said. `None` ⇒ note backlinks only.
+    media_links: Option<(links::Store, PathBuf)>,
 }
 
 impl Store {
@@ -76,7 +81,21 @@ impl Store {
             topics_path: None,
             topics: Arc::new(Mutex::new(None)),
             vault_root: None,
+            media_links: None,
         }
+    }
+
+    /// Attach the org's typed-link store (and the resources root that
+    /// names its media sources) so [`ScriptureService::chapter_backlinks`]
+    /// surfaces sermons / songs / videos that reference a verse.
+    #[must_use]
+    pub fn with_media_links(
+        mut self,
+        links: links::Store,
+        resources_root: impl Into<PathBuf>,
+    ) -> Self {
+        self.media_links = Some((links, resources_root.into()));
+        self
     }
 
     /// Attach versification mappings (English↔Hebrew numbering).
@@ -421,21 +440,49 @@ impl ScriptureService for Store {
     ) -> Result<Vec<VerseBacklinks>, ScriptureError> {
         let book = Book::lookup(book)
             .ok_or_else(|| ScriptureError::BadRequest(format!("unknown book {book:?}")))?;
-        let Some(vault_root) = self.vault_root.as_deref() else {
+        if self.vault_root.is_none() && self.media_links.is_none() {
             return Ok(Vec::new());
-        };
+        }
         let base = u32::from(book.ordinal()) * 1_000_000 + u32::from(chapter) * 1_000;
 
+        // Verse 0 is the chapter itself (chapter-only references).
         let mut per_verse: BTreeMap<u16, (Vec<VerseBacklink>, BTreeSet<String>)> = BTreeMap::new();
-        for rb in crate::backlinks::scan_vault(vault_root) {
-            let lo = rb.range.start.numeric().max(base + 1);
-            let hi = rb.range.end.numeric().min(base + 999);
+        let mut add = |range: Option<VerseRange>, link: &VerseBacklink| {
+            // A note dedupes per verse by path; a media source by
+            // moment, since each `#t:<secs>` is its own backlink.
+            let key = if link.source_kind.is_empty() {
+                link.note_path.clone()
+            } else {
+                format!("{}#t:{}", link.note_path, link.secs)
+            };
+            let Some(range) = range else {
+                let entry = per_verse.entry(0).or_default();
+                if entry.1.insert(key) {
+                    entry.0.push(link.clone());
+                }
+                return;
+            };
+            let lo = range.start.numeric().max(base + 1);
+            let hi = range.end.numeric().min(base + 999);
             for n in lo..=hi {
                 let verse = (n - base) as u16;
                 let entry = per_verse.entry(verse).or_default();
-                if entry.1.insert(rb.link.note_path.clone()) {
-                    entry.0.push(rb.link.clone());
+                if entry.1.insert(key.clone()) {
+                    entry.0.push(link.clone());
                 }
+            }
+        };
+        if let Some(vault_root) = self.vault_root.as_deref() {
+            for rb in crate::backlinks::scan_vault(vault_root) {
+                add(Some(rb.range), &rb.link);
+            }
+        }
+        if let Some((links, resources_root)) = &self.media_links {
+            let mut media = crate::backlinks::scan_media_links(links, resources_root);
+            media.retain(|m| m.book == book && m.chapter == chapter);
+            media.sort_by_key(|m| (m.link.note_path.clone(), m.link.secs));
+            for m in media {
+                add(m.range, &m.link);
             }
         }
 
@@ -443,7 +490,11 @@ impl ScriptureService for Store {
             .into_iter()
             .map(|(verse, (notes, _))| VerseBacklinks {
                 verse,
-                osis: VerseId::new(book, chapter, verse).osis(),
+                osis: if verse == 0 {
+                    format!("{}.{chapter}", book.osis())
+                } else {
+                    VerseId::new(book, chapter, verse).osis()
+                },
                 notes,
             })
             .collect())
@@ -981,6 +1032,55 @@ mod tests {
         assert_eq!(bl.iter().map(|b| b.verse).collect::<Vec<_>>(), vec![16, 17]);
         assert_eq!(bl[0].osis, "John.3.16");
         assert_eq!(bl[0].notes[0].note_title, "Grace");
+        assert!(s.chapter_backlinks("John", 4).unwrap().is_empty());
+    }
+
+    #[test]
+    fn chapter_backlinks_include_media_links_at_their_moment() {
+        use links::{Confidence, LinksService as _, NodeRef, Relation, TypedLink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("resources");
+        std::fs::create_dir_all(resources.join("sermons/crossroads")).unwrap();
+        std::fs::write(
+            resources.join("sermons/crossroads/god-restores.md"),
+            "---\ntype: resource\nresource_kind: sermon\nslug: god-restores\ntitle: God Restores Broken People\n---\n# God Restores Broken People\n",
+        )
+        .unwrap();
+        let store = links::Store::open(dir.path().join("links.jsonl"));
+        let mut verse_link = TypedLink::new(
+            NodeRef::sermon("god-restores").at(109),
+            NodeRef::verse("John.3.16"),
+            Relation::Mentions,
+            Confidence::Possible,
+        );
+        verse_link.note = "God Restores Broken People · 1:49 — for God so loved".into();
+        store.create(verse_link).unwrap();
+        store
+            .create(TypedLink::new(
+                NodeRef::sermon("god-restores").at(300),
+                NodeRef::verse("John.3"),
+                Relation::Mentions,
+                Confidence::Speculative,
+            ))
+            .unwrap();
+
+        let mut web = Bible::new("WEB");
+        web.insert_usfm_book(crate::usfm::tests::SAMPLE).unwrap();
+        let s = Store::from_bibles([web]).with_media_links(store, resources);
+
+        let bl = s.chapter_backlinks("John", 3).unwrap();
+        assert_eq!(bl.iter().map(|b| b.verse).collect::<Vec<_>>(), vec![0, 16]);
+        assert_eq!(
+            bl[0].osis, "John.3",
+            "chapter-only reference lands on verse 0"
+        );
+        let v16 = &bl[1].notes[0];
+        assert_eq!(v16.note_path, "sermon:god-restores");
+        assert_eq!(v16.note_title, "God Restores Broken People");
+        assert_eq!(v16.source_kind, "sermon");
+        assert_eq!(v16.secs, 109);
+        assert_eq!(v16.excerpt, "for God so loved");
         assert!(s.chapter_backlinks("John", 4).unwrap().is_empty());
     }
 

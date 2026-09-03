@@ -80,6 +80,10 @@ mod project;
 mod recipe;
 #[cfg(feature = "plugin-mealplan")]
 mod recipe_import;
+// The sermon sync rides `wiki-archive`'s yt-dlp glue, which the wiki
+// plugin brings in.
+#[cfg(feature = "plugin-wiki")]
+mod resources;
 mod runner;
 mod session_store;
 mod setup;
@@ -248,6 +252,15 @@ enum Commands {
     /// checkpoint on demand, and curate Named / Project Versions.
     #[command(subcommand)]
     Files(FilesCmd),
+    /// The Resource Library — `sermons sync` turns a YouTube channel's
+    /// message videos into sermon resources (video + captions) with
+    /// scripture backlinks. Cron-friendly; no model involved.
+    #[cfg(feature = "plugin-wiki")]
+    #[command(subcommand)]
+    Resources(resources::ResourcesCmd),
+    #[cfg(not(feature = "plugin-wiki"))]
+    #[command(hide = true)]
+    Resources(NotCompiled),
     /// Finance — reports + invoice generation from billable
     /// sessions, PDF rendering via fulgur.
     #[cfg(feature = "plugin-finance")]
@@ -799,6 +812,14 @@ async fn run(cli: Cli) -> eyre::Result<()> {
         }
         Commands::Files(cmd) => {
             return run_files(cmd, cli.org.as_deref()).await;
+        }
+        #[cfg(feature = "plugin-wiki")]
+        Commands::Resources(cmd) => {
+            return resources::run_resources(cmd, cli.org.as_deref()).await;
+        }
+        #[cfg(not(feature = "plugin-wiki"))]
+        Commands::Resources(_) => {
+            return Err(not_compiled("wiki"));
         }
         #[cfg(feature = "plugin-finance")]
         Commands::Finance(cmd) => {
