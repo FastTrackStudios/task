@@ -121,9 +121,16 @@ when `just ci` already passed against that exact tree. Two limits, both real:
   local pass does not cover the merge. Use it for a follow-up commit on a
   branch you just verified, not for the first push of a stale branch.
 
-Never use GitHub's own `[skip ci]` / `[ci skip]` / `[no ci]` tokens here:
-they are intercepted before any workflow starts and would suppress
-`deploy.yml` too.
+Never use GitHub's own skip tokens here — the bracketed `skip ci`,
+`ci skip`, `no ci`, `skip actions` and `actions skip` forms. They are
+intercepted before any workflow starts and would suppress `deploy.yml`
+too.
+
+And never write one of those tokens in a commit message *at all*, even to
+say not to use it: GitHub scans the whole message, subject and body, so a
+line explaining the trap springs it. (This is not hypothetical — the
+commit that added this section did exactly that and silently produced no
+CI run.) Refer to them unbracketed, as above.
 
 ## Specs and coverage
 
