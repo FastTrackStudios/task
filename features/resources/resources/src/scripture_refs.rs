@@ -65,7 +65,7 @@ pub fn extract(segments: &[TranscriptSegment]) -> Vec<RefHit> {
     let mut ctx: Option<(Book, u16)> = None;
     let mut i = 0;
     while i < toks.len() {
-        let mut push = |p: Parsed, i: usize, out: &mut Vec<RefHit>| {
+        let push = |p: Parsed, i: usize, out: &mut Vec<RefHit>| {
             let cue = &segments[toks[i].cue];
             out.push(RefHit {
                 osis: p.osis,
