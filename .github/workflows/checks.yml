@@ -1,9 +1,10 @@
 # Task Checks — the one PR/push gate, on THEBATTLESHIP.
 #
-# Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB),
-# four instances so this workflow's parallel jobs do not queue behind
-# each other. Hosted `ubuntu-latest` is 4 vCPU with nothing warm, which
-# is what made a run take 35-40 minutes; see CACHE below.
+# Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB), two
+# instances — enough that a quick PR is not stuck behind a long one, and
+# few enough that each slot's cache is worth warming. Hosted
+# `ubuntu-latest` is 4 vCPU with nothing warm, which is what made a run
+# take 35-40 minutes; see CACHE below.
 #
 # Toolchain comes from the repo flake: every step runs under
 # `nix develop .#ci -c` (rust 1.94 pin, wasm target, clang env for ring,
@@ -30,15 +31,11 @@
 # clock. The workspace's 2655 tests execute in 3.3 seconds.
 #
 # A self-hosted runner needs no such round trip. Each instance keeps a
-# CARGO_TARGET_DIR under its own $HOME (a real directory on NVMe, set by
-# `workDir` in the fleet aspect — NOT the systemd RuntimeDirectory, which
-# is tmpfs and is deleted on restart). It survives jobs, restarts and
-# reboots, so an ordinary PR compiles only what it changed.
-#
-# It lives OUTSIDE $GITHUB_WORKSPACE on purpose: `actions/checkout`
-# defaults to `clean: true`, which runs `git clean -ffdx`, and /target is
-# gitignored — a target dir inside the checkout would be deleted at the
-# start of every run.
+# CARGO_TARGET_DIR in the runner unit's systemd CacheDirectory
+# (/var/cache/github-runner-cargo/<instance>), which survives jobs,
+# restarts and reboots — so an ordinary PR compiles only what it changed.
+# See the "Persistent target dir" step for the two nearby locations that
+# look right and silently lose the cache instead.
 
 name: checks
 
@@ -264,23 +261,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Persistent target dir
         run: |
-          # Outside $GITHUB_WORKSPACE — actions/checkout runs
-          # `git clean -ffdx` and /target is gitignored, so a target dir
-          # inside the checkout would be deleted every run. $HOME is this
-          # runner INSTANCE's workDir, so two instances never share a
-          # cargo lock, and the dir outlives jobs, restarts and reboots.
-          dir="$HOME/cargo-target/checks"
-          # One-time migration off the old per-job dirs. `tests` is the
-          # one that held full codegen artifacts, which is exactly what
-          # the new step order reuses — adopting it saves this instance a
-          # cold build. The other two were duplicates of it and go back to
-          # the disk they were wasting.
-          if [ ! -d "$dir" ] && [ -d "$HOME/cargo-target/tests" ]; then
-            echo "adopting the old tests/ target dir"
-            mv "$HOME/cargo-target/tests" "$dir"
-          fi
-          rm -rf "$HOME/cargo-target/tests" "$HOME/cargo-target/quality" \
-                 "$HOME/cargo-target/wasm"
+          # TWO places this must NOT be, both of which look like they work
+          # and then silently throw the cache away:
+          #
+          #   $GITHUB_WORKSPACE — actions/checkout runs `git clean -ffdx`
+          #     and /target is gitignored, so it goes on every run.
+          #   $HOME (the runner's workDir) — the nixpkgs runner module ends
+          #     its pre-start hook with
+          #     `find -H "$WORK_DIRECTORY" -mindepth 1 -delete`,
+          #     unconditionally, on EVERY service start. A cache there
+          #     survives between jobs and dies on any restart or reboot.
+          #
+          # /var/cache/github-runner-cargo/<instance> is the unit's systemd
+          # CacheDirectory: created for us, writable despite
+          # ProtectSystem=strict, kept across restarts and reboots, and
+          # removed only by `systemctl clean --what=cache`. Per instance,
+          # so two runners never contend on cargo's target-dir lock.
+          dir="/var/cache/github-runner-cargo/${RUNNER_NAME}/checks"
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"

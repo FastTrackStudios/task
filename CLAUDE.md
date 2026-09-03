@@ -93,10 +93,13 @@ enough for git). Add new songs there, never by hand.
 
 ## The PR gate
 
-`checks` runs on THEBATTLESHIP (self-hosted, four slots), against a target
-dir that persists between runs. The check set lives in the `Justfile`, one
-recipe per check, and the workflow invokes those same recipes — so the two
-cannot drift:
+`checks` runs on THEBATTLESHIP (self-hosted, two slots), against a target
+dir under the runner unit's systemd `CacheDirectory`
+(`/var/cache/github-runner-cargo/<instance>`) — the only place on that host
+a build cache survives, since the runner module empties its own work
+directory on every service start. The check set lives in the `Justfile`,
+one recipe per check, and the workflow invokes those same recipes — so the
+two cannot drift:
 
 ```bash
 just ci        # ci-fmt, ci-manifests, ci-tests, ci-clippy, ci-wasm
