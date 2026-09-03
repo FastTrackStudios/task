@@ -228,8 +228,10 @@ where
             slugs.join(","),
         );
         let what = what.to_owned();
-        single_flight::dedupe(key, move || fan_out_inner::<C, T, E, F, Fut>(slugs, what, call))
-            .await
+        single_flight::dedupe(key, move || {
+            fan_out_inner::<C, T, E, F, Fut>(slugs, what, call)
+        })
+        .await
     }
     #[cfg(not(target_arch = "wasm32"))]
     fan_out_inner::<C, T, E, F, Fut>(slugs, what.to_owned(), call).await
