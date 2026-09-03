@@ -250,13 +250,39 @@ mp-test *ARGS:
 fmt:
     cargo fmt --all
 
-clippy:
+clippy: ci-clippy
+
+# The `ci-*` recipes ARE the PR gate's check set — checks.yml invokes
+# these same recipes, one per step, so what you run before pushing and
+# what the gate runs cannot drift.
+#
+# The order is the gate's order and it is deliberate: nextest needs full
+# CODEGEN of every dependency, clippy needs only their METADATA, so the
+# test build leaves behind the rlibs everything after it reuses. Running
+# clippy first would leave the codegen to pay for anyway.
+
+ci-fmt:
+    cargo fmt --all -- --check
+
+ci-manifests:
+    cargo metadata --locked --format-version 1 > /dev/null
+
+ci-tests: css
+    cargo nextest run --profile ci --workspace
+
+ci-clippy: css
     cargo clippy --workspace --all-targets -- -D warnings
 
-ci:
-    cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo nextest run --workspace --profile ci
+ci-wasm: css
+    cargo check --target wasm32-unknown-unknown -p task-app-web
+
+ci-docs:
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+# Everything the PR gate runs, in the gate's order. Run it before pushing:
+# a failure here costs seconds, the same failure on the gate costs a round
+# trip. (`ci-docs` is main-only on the gate, so it is not included here.)
+ci: ci-fmt ci-manifests ci-tests ci-clippy ci-wasm
 
 # ── Git hooks (capn) ─────────────────────────────────────────────────────
 

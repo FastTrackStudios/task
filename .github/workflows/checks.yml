@@ -251,30 +251,28 @@ jobs:
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
 
+      # Every step below is a `just ci-*` recipe, and the Justfile is the
+      # single source of truth for what each one runs. `just ci` runs the
+      # same set in the same order, so an agent verifying before a push
+      # gets the gate's answer without spending a round trip on it — the
+      # steps stay separate here only for per-step timing and for the
+      # plan's gating. (tailwind is a dependency of the recipes that need
+      # it, so it no longer needs a step of its own.)
+      #
       # fmt is ungated: it compiles nothing, so change selection would
       # save nothing.
       - name: fmt
-        run: ${NIX_DEV} cargo fmt --all -- --check
+        run: ${NIX_DEV} just ci-fmt
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
-        run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
-
-      # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
-      # committed, and asset!() resolves them at compile time — so they
-      # have to exist before cargo runs. The CI shell carries the
-      # tailwindcss binary, which resolves `@import "tailwindcss"` on its
-      # own; the two npm installs this step used to do were a minute a job
-      # for nothing.
-      - name: tailwind
-        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
-        run: ${NIX_DEV} just css
+        run: ${NIX_DEV} just ci-manifests
 
       - name: Tests
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
-        run: ${NIX_DEV} cargo nextest run --profile ci --workspace
+        run: ${NIX_DEV} just ci-tests
       - name: Clippy
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
-        run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings
+        run: ${NIX_DEV} just ci-clippy
 
       # wasm32 target + ring's clang env come from the flake CI shell.
       #
@@ -287,12 +285,8 @@ jobs:
       # pulls both leaves in anyway, so coverage is unchanged.
       - name: wasm check (task-app-web)
         if: ${{ !cancelled() && needs.plan.outputs.wasm == 'true' }}
-        run: |
-          ${NIX_DEV} cargo check --target wasm32-unknown-unknown \
-            -p task-app-web
+        run: ${NIX_DEV} just ci-wasm
 
       - name: Docs
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main' }}
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: ${NIX_DEV} cargo doc --workspace --no-deps
+        run: ${NIX_DEV} just ci-docs
