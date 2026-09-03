@@ -264,23 +264,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Persistent target dir
         run: |
-          # Outside $GITHUB_WORKSPACE — actions/checkout runs
-          # `git clean -ffdx` and /target is gitignored, so a target dir
-          # inside the checkout would be deleted every run. $HOME is this
-          # runner INSTANCE's workDir, so two instances never share a
-          # cargo lock, and the dir outlives jobs, restarts and reboots.
-          dir="$HOME/cargo-target/checks"
-          # One-time migration off the old per-job dirs. `tests` is the
-          # one that held full codegen artifacts, which is exactly what
-          # the new step order reuses — adopting it saves this instance a
-          # cold build. The other two were duplicates of it and go back to
-          # the disk they were wasting.
-          if [ ! -d "$dir" ] && [ -d "$HOME/cargo-target/tests" ]; then
-            echo "adopting the old tests/ target dir"
-            mv "$HOME/cargo-target/tests" "$dir"
-          fi
-          rm -rf "$HOME/cargo-target/tests" "$HOME/cargo-target/quality" \
-                 "$HOME/cargo-target/wasm"
+          # TWO places this must NOT be, both of which look like they work
+          # and then silently throw the cache away:
+          #
+          #   $GITHUB_WORKSPACE — actions/checkout runs `git clean -ffdx`
+          #     and /target is gitignored, so it goes on every run.
+          #   $HOME (the runner's workDir) — the nixpkgs runner module ends
+          #     its pre-start hook with
+          #     `find -H "$WORK_DIRECTORY" -mindepth 1 -delete`,
+          #     unconditionally, on EVERY service start. A cache there
+          #     survives between jobs and dies on any restart or reboot.
+          #
+          # /var/cache/github-runner-cargo/<instance> is the unit's
+          # systemd CacheDirectory: created for us, writable despite
+          # ProtectSystem=strict, kept across restarts and reboots, and
+          # removed only by `systemctl clean --what=cache`. Per instance,
+          # so two runners never contend on cargo's target-dir lock.
+          dir="/var/cache/github-runner-cargo/${RUNNER_NAME}/checks"
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
