@@ -147,13 +147,13 @@ pub async fn run_resources(cmd: ResourcesCmd, global_org: Option<&str>) -> eyre:
             let id = video_id(&video)
                 .ok_or_else(|| eyre::eyre!("`{video}` is not a YouTube URL or id"))?;
             let org = common.org.clone().or_else(|| global_org.map(str::to_owned));
-            let client = client(org, common.server.clone()).await?;
+            let mut client = client(org.clone(), common.server.clone()).await?;
             let known = known_ids(&client).await?;
             if known.contains_key(&id) {
                 println!("{id}: already synced as `{}` — re-syncing", known[&id]);
             }
             let mut tally = Tally::default();
-            sync_video(&client, &common, &id, None, &mut tally).await;
+            sync_video(&mut client, &org, &common, &id, None, &mut tally).await;
             println!("{}", tally.summary());
             Ok(())
         }
@@ -164,7 +164,7 @@ pub async fn run_resources(cmd: ResourcesCmd, global_org: Option<&str>) -> eyre:
             limit,
         }) => {
             let org = common.org.clone().or_else(|| global_org.map(str::to_owned));
-            let client = client(org, common.server.clone()).await?;
+            let mut client = client(org.clone(), common.server.clone()).await?;
             let url = channel_videos_url(&channel);
             println!("listing {url}");
             // A listing failure is the one fatal error: nothing else can
@@ -198,7 +198,15 @@ pub async fn run_resources(cmd: ResourcesCmd, global_org: Option<&str>) -> eyre:
                     tokio::time::sleep(Duration::from_secs(common.pause)).await;
                 }
                 first = false;
-                let stop = sync_video(&client, &common, &v.id, since.as_deref(), &mut tally).await;
+                let stop = sync_video(
+                    &mut client,
+                    &org,
+                    &common,
+                    &v.id,
+                    since.as_deref(),
+                    &mut tally,
+                )
+                .await;
                 if stop {
                     println!(
                         "reached a video older than {} — stopping",
@@ -264,8 +272,15 @@ impl Tally {
 
 /// Probe one video, fetch its captions, upsert. Returns `true` when the
 /// video is older than `since` (the channel walk should stop).
+///
+/// `org` is the resolved org slug the client was built for: the vox
+/// connection can drop while a slow caption download runs between two
+/// upserts, and once it has every later upsert on the same client fails,
+/// so a failed upsert reconnects once and retries before counting an
+/// error.
 async fn sync_video(
-    client: &ResourcesServiceClient,
+    client: &mut ResourcesServiceClient,
+    org: &Option<String>,
     args: &SyncArgs,
     id: &str,
     since: Option<&str>,
@@ -338,7 +353,18 @@ async fn sync_video(
         return false;
     }
     let cues = sermon.segments.len();
-    match client.upsert_sermon(sermon).await {
+    let mut result = client.upsert_sermon(sermon.clone()).await;
+    if let Err(e) = &result {
+        println!("  {id}: upsert_sermon: {e:?} — reconnecting and retrying once");
+        match self::client(org.clone(), args.server.clone()).await {
+            Ok(fresh) => {
+                *client = fresh;
+                result = client.upsert_sermon(sermon).await;
+            }
+            Err(e) => println!("  {id}: reconnect failed: {e}"),
+        }
+    }
+    match result {
         Ok(out) => {
             println!(
                 "  {id}: {} {} ({cues} cues, {} scripture refs, {} links{})",
