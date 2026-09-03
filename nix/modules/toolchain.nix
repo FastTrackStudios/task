@@ -18,8 +18,9 @@
 #   onnxruntime — no `ort` (Chatterbox TTS lives in the FTS session
 #     guide, not here).
 #   avahi — vox-discover is not in this tree.
-#   mold — this repo's `.cargo/config.toml` does not select an
-#     alternative linker, so nothing on PATH has to provide one.
+#   mold — present in the CI shell only (shells/ci.nix); the workflow
+#     selects it per-target, and .cargo/config.toml stays neutral so a
+#     developer shell without mold still links.
 { ... }:
 {
   perSystem = { pkgs, lib, config, ... }:
