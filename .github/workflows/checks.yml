@@ -59,11 +59,11 @@ env:
   # host triple so the wasm32 rustflags in .cargo/config.toml are
   # untouched.
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
-  # Four runner instances share 32 cores. Capping each job keeps a full
-  # fan-out from thrashing; jobs are not all CPU-saturated at the same
-  # moment, so mild oversubscription (4 x 12 > 32) is a win rather than a
-  # cost.
-  CARGO_BUILD_JOBS: "12"
+  # One compiling job per PR, four slots. 16 gives a lone PR half the
+  # box, two PRs saturate it, and four oversubscribe 2x — which the
+  # kernel handles better than leaving cores idle when only one PR is in
+  # flight.
+  CARGO_BUILD_JOBS: "16"
   # Terse, stable logs — this is CI, not a terminal.
   CARGO_TERM_COLOR: never
 
@@ -192,10 +192,39 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "rail plan: $n_crates affected crate(s) — workspace=$workspace wasm=$wasm"
 
-  build:
-    name: Build (wasm)
+  # ONE job, on ONE runner instance, against ONE target dir.
+  #
+  # These used to be three parallel jobs. On hosted runners that was free
+  # — three isolated VMs — but on a persistent runner it is waste twice
+  # over. The 228 dependency crates are the dominant cost of every one of
+  # these commands, and three jobs on three instances built them three
+  # times into three target dirs (measured mid-run: 2.0G + 2.8G + 438M).
+  # And a single PR occupied three of the four slots, so a second PR
+  # queued behind the first instead of running beside it.
+  #
+  # Serialised into one job they share a target dir, so the deps are
+  # built once and each later command pays only its own marginal cost.
+  # Four slots now mean four concurrent PRs.
+  #
+  # ORDER IS DELIBERATE:
+  #   fmt         — compiles nothing; fails in seconds on trivia.
+  #   nextest     — needs full CODEGEN of every dependency. The expensive
+  #                 one, so it goes first and everything after reuses the
+  #                 rlibs it leaves behind.
+  #   clippy      — needs only dependency METADATA, which the test build
+  #                 already produced. Reversing these two would pay for
+  #                 the codegen afterwards anyway.
+  #   wasm        — a different target triple, so a separate tree; it
+  #                 shares only build scripts and proc macros.
+  #   docs        — rustdoc, main only.
+  #
+  # Steps run under `!cancelled()` rather than stopping at the first
+  # failure: serialised, a bail-out would cost a whole extra run to learn
+  # the next thing wrong. One run still reports fmt AND tests AND clippy.
+  checks:
+    name: Checks (fmt + tests + clippy + wasm + docs)
     runs-on: [self-hosted, nix-host]
-    timeout-minutes: 30
+    timeout-minutes: 60
     needs: plan
     steps:
       - uses: actions/checkout@v4
@@ -206,16 +235,30 @@ jobs:
           # inside the checkout would be deleted every run. $HOME is this
           # runner INSTANCE's workDir, so two instances never share a
           # cargo lock, and the dir outlives jobs, restarts and reboots.
-          dir="$HOME/cargo-target/wasm"
+          dir="$HOME/cargo-target/checks"
+          # One-time migration off the old per-job dirs. `tests` is the
+          # one that held full codegen artifacts, which is exactly what
+          # the new step order reuses — adopting it saves this instance a
+          # cold build. The other two were duplicates of it and go back to
+          # the disk they were wasting.
+          if [ ! -d "$dir" ] && [ -d "$HOME/cargo-target/tests" ]; then
+            echo "adopting the old tests/ target dir"
+            mv "$HOME/cargo-target/tests" "$dir"
+          fi
+          rm -rf "$HOME/cargo-target/tests" "$HOME/cargo-target/quality" \
+                 "$HOME/cargo-target/wasm"
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
-      # Every step here is gated on the WASM surface, not the workspace
-      # one. The native `cargo check --workspace --all-targets` this job
-      # used to run was a strict subset of the clippy run in `quality`
-      # (clippy-driver does the same check pass before it lints), so it
-      # cost 13 minutes to learn nothing. What is left is the one thing
-      # only this job does: prove the browser target still builds.
+
+      # fmt is ungated: it compiles nothing, so change selection would
+      # save nothing.
+      - name: fmt
+        run: ${NIX_DEV} cargo fmt --all -- --check
+      - name: Manifests + lockfile
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
+
       # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
       # committed, and asset!() resolves them at compile time — so they
       # have to exist before cargo runs. The CI shell carries the
@@ -223,8 +266,15 @@ jobs:
       # own; the two npm installs this step used to do were a minute a job
       # for nothing.
       - name: tailwind
-        if: needs.plan.outputs.wasm == 'true'
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
         run: ${NIX_DEV} just css
+
+      - name: Tests
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        run: ${NIX_DEV} cargo nextest run --profile ci --workspace
+      - name: Clippy
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
+        run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings
 
       # wasm32 target + ring's clang env come from the flake CI shell.
       #
@@ -236,81 +286,13 @@ jobs:
       # with "the wasm_js backend requires the wasm_js feature". The web app
       # pulls both leaves in anyway, so coverage is unchanged.
       - name: wasm check (task-app-web)
-        if: needs.plan.outputs.wasm == 'true'
+        if: ${{ !cancelled() && needs.plan.outputs.wasm == 'true' }}
         run: |
           ${NIX_DEV} cargo check --target wasm32-unknown-unknown \
             -p task-app-web
 
-  tests:
-    name: Tests
-    runs-on: [self-hosted, nix-host]
-    timeout-minutes: 30
-    needs: plan
-    steps:
-      - uses: actions/checkout@v4
-      - name: Persistent target dir
-        run: |
-          # Outside $GITHUB_WORKSPACE — actions/checkout runs
-          # `git clean -ffdx` and /target is gitignored, so a target dir
-          # inside the checkout would be deleted every run. $HOME is this
-          # runner INSTANCE's workDir, so two instances never share a
-          # cargo lock, and the dir outlives jobs, restarts and reboots.
-          dir="$HOME/cargo-target/tests"
-          mkdir -p "$dir"
-          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
-          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
-      # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
-      # committed, and asset!() resolves them at compile time — so they
-      # have to exist before cargo runs. The CI shell carries the
-      # tailwindcss binary, which resolves `@import "tailwindcss"` on its
-      # own; the two npm installs this step used to do were a minute a job
-      # for nothing.
-      - name: tailwind
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} just css
-      - name: cargo nextest run --workspace
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo nextest run --profile ci --workspace
-
-  quality:
-    name: Quality (fmt + clippy + docs)
-    runs-on: [self-hosted, nix-host]
-    timeout-minutes: 30
-    needs: plan
-    steps:
-      - uses: actions/checkout@v4
-      - name: Persistent target dir
-        run: |
-          # Outside $GITHUB_WORKSPACE — actions/checkout runs
-          # `git clean -ffdx` and /target is gitignored, so a target dir
-          # inside the checkout would be deleted every run. $HOME is this
-          # runner INSTANCE's workDir, so two instances never share a
-          # cargo lock, and the dir outlives jobs, restarts and reboots.
-          dir="$HOME/cargo-target/quality"
-          mkdir -p "$dir"
-          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
-          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
-      # fmt is ungated: it compiles nothing, so change selection would
-      # save nothing.
-      - name: fmt
-        run: ${NIX_DEV} cargo fmt --all -- --check
-      - name: Manifests + lockfile
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo metadata --locked --format-version 1 > /dev/null
-      # apps/{web,desktop,mobile}/assets/tailwind.css are GENERATED, not
-      # committed, and asset!() resolves them at compile time — so they
-      # have to exist before cargo runs. The CI shell carries the
-      # tailwindcss binary, which resolves `@import "tailwindcss"` on its
-      # own; the two npm installs this step used to do were a minute a job
-      # for nothing.
-      - name: tailwind
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} just css
-      - name: Clippy
-        if: needs.plan.outputs.workspace == 'true'
-        run: ${NIX_DEV} cargo clippy --workspace --all-targets -- -D warnings
       - name: Docs
-        if: needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main'
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main' }}
         env:
           RUSTDOCFLAGS: -D warnings
         run: ${NIX_DEV} cargo doc --workspace --no-deps
