@@ -298,6 +298,8 @@ impl files_fuse::Composer for MakeProject {
                     .map(|(org, _)| org.to_string()),
                 tree: dir,
             }),
+            // Somebody just made it to work in it.
+            read_only: false,
         })
     }
 }
@@ -365,7 +367,7 @@ fn user_name(uid: u32) -> String {
 pub(crate) fn mount_composed(
     daemon: &SyncDaemon,
     skeleton: &Path,
-    roots: Vec<(Uuid, PathBuf, String)>,
+    roots: Vec<(Uuid, PathBuf, String, bool)>,
     mountpoint: &Path,
 ) -> Result<fuser_session::Session> {
     clear_stale(mountpoint);
@@ -378,7 +380,7 @@ pub(crate) fn mount_composed(
     let _ = std::fs::remove_dir_all(skeleton);
     let runtime = tokio::runtime::Handle::current();
     let mut placed = Vec::new();
-    for (root_id, tree, place) in roots {
+    for (root_id, tree, place, read_only) in roots {
         std::fs::create_dir_all(skeleton.join(&place))
             .map_err(|e| DaemonError::Io(format!("laying out {place}: {e}")))?;
         placed.push(files_fuse::Placed {
@@ -393,6 +395,7 @@ pub(crate) fn mount_composed(
                 org: place.split_once('/').map(|(org, _)| org.to_string()),
                 tree,
             }),
+            read_only,
         });
     }
 
@@ -421,7 +424,7 @@ pub(crate) fn mount_composed(
 pub(crate) fn mount_composed(
     _daemon: &SyncDaemon,
     _skeleton: &Path,
-    _roots: Vec<(Uuid, PathBuf, String)>,
+    _roots: Vec<(Uuid, PathBuf, String, bool)>,
     _mountpoint: &Path,
 ) -> Result<fuser_session::Session> {
     Err(DaemonError::BadRequest(format!(
