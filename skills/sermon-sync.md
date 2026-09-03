@@ -1,6 +1,6 @@
 ---
 name: sermon-sync
-description: Keep a YouTube channel's message videos synced into an org's Resource Library as sermon resources — the video link plus its captions — so every sermon can be opened at a timestamp, annotated, referenced from wiki pages, and found from the scripture it quotes. No model anywhere; a cron job runs it.
+description: Keep a YouTube channel's message videos synced into a wiki (the Bible Study wiki's `Resources/Sermons/`) as sermon resources — the video link plus its captions, with a `Sermons.base` over them — so every sermon can be opened at a timestamp, annotated, referenced from wiki pages, and found from the scripture it quotes. No model anywhere; a cron job runs it.
 runs_as: any writer of the org (the account whose CLI session runs the cron)
 trigger: "sync the Crossroads sermons", "add the church's YouTube channel", "why doesn't this sermon show up on 1 Peter 5", "set up the nightly sermon sync"
 ---
@@ -27,13 +27,18 @@ Nothing in the loop calls a model. It is a grammar over the cues
 export TASK_SESSION_FILE=$SCRATCH/session.json
 export TASK_YTDLP="$(nix shell nixpkgs#yt-dlp -c which yt-dlp)"   # or a yt-dlp on PATH
 
-# the whole channel (skips ids already synced; exits 0 once the listing worked)
+# the whole channel into the Bible Study wiki (skips ids already synced;
+# exits 0 once the listing worked)
 task --server https://task.fasttrackstudio.app resources sermons sync \
-  https://www.youtube.com/@CrossroadsCA --org codywright --folder crossroads
+  https://www.youtube.com/@CrossroadsCA --org codywright --wiki bible --folder crossroads
 
 # one video
 task --server https://task.fasttrackstudio.app resources sermons sync-one \
-  https://youtu.be/YMypVgZXFIU --org codywright --folder crossroads
+  https://youtu.be/YMypVgZXFIU --org codywright --wiki bible --folder crossroads
+
+# a folder that was synced into the org-wide tier, moved into the wiki
+task --server https://task.fasttrackstudio.app resources sermons move \
+  --org codywright --folder crossroads --wiki bible
 
 # what the server holds
 task --server https://task.fasttrackstudio.app resources sermons list --org codywright
@@ -43,7 +48,8 @@ Flags that matter:
 
 | flag | meaning |
 |---|---|
-| `--folder <name>` | subfolder under `resources/sermons/`; also the default second tag. One per channel (`crossroads`). |
+| `--wiki <slug>` / `TASK_WIKI` | the named wiki the sermons belong to (`bible`): pages under `<wiki>/Resources/Sermons/<folder>/`, with `Sermons.base` beside the folders. Without it the org-wide `resources/sermons/` tier — only for resources no single wiki owns. |
+| `--folder <name>` | subfolder under the sermons root; also the default second tag. One per channel (`crossroads`). |
 | `--tag <t>` (repeatable) | `tags:` for new sermons; default `sermon` + the folder name |
 | `--since YYYY-MM-DD` | stop at the first video older than this (the tab is newest-first) |
 | `--limit N` | at most N new videos this run — use it the first night on a big channel |
@@ -103,7 +109,11 @@ is the thing to read in `journalctl --user -u sermon-sync`.
 
 ## 3. What it writes
 
-Under `<org>/resources/sermons/<folder>/`:
+Under `<org>/wikis/<wiki>/Resources/Sermons/<folder>/` (or, without
+`--wiki`, `<org>/resources/sermons/<folder>/`). The first sermon into a
+wiki also lays down `Resources/Sermons/Sermons.base` — a table of every
+sermon newest-first and a board by channel — which is never rewritten,
+so reshape its views freely. Per sermon:
 
 | file | owner |
 |---|---|
@@ -177,13 +187,21 @@ sermon are other links and are left alone.
 
 ## 5. The Bible Study wiki
 
-Sermons are resources, not wiki pages: the wiki links *to* them. A
-`Sermons/` index page in the Bible Study wiki can list each synced
-sermon with its passage and the `sermon:<slug>` node, and per-passage
-pages can carry `sermon:<slug>#t:<secs>` anchors next to the verse
-they discuss. The sync does not generate that page — it is curated,
-like the rest of the wiki — but `task resources sermons list --json`
-gives it everything it needs (slug, title, published, `scripture`).
+Synced with `--wiki bible`, the sermons *are* pages of the Bible Study
+wiki: `Resources/Sermons/crossroads/<slug>.md` shows in the wiki's
+explorer (folder view) and under its `sermon` / `crossroads` tags, opens
+in the wiki editor with the same right sidebar (Properties, Links,
+Graph, Share), and travels with the wiki's subscriptions. The
+`Resources/Sermons/Sermons.base` table is the collection view. The
+resource tier is scoped to the wiki on purpose: a sermon collection is
+not a continuously updated org-wide feed, it is study material that
+belongs to this one subject — the same way the cooking wiki keeps its
+recipes under `Cookbook/`.
+
+Per-passage pages can carry `sermon:<slug>#t:<secs>` anchors next to
+the verse they discuss, and `task resources sermons list --json` gives a
+curated index page everything it needs (slug, title, published,
+`scripture`, `wiki`).
 
 ## 6. When it looks wrong
 

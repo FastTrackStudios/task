@@ -1709,8 +1709,9 @@ pub(crate) async fn build_org_state(
         // Resource Library: transcript sidecars under resources/ for the
         // watch view, and the sermon sync's write path — which mints the
         // sermon's `→ verse` links into the same typed-link store.
-        let resources =
-            resources::ResourcesBackend::new(org_root.resources_dir()).with_links(links.clone());
+        let resources = resources::ResourcesBackend::new(org_root.resources_dir())
+            .with_wikis(org_root.wikis_dir())
+            .with_links(links.clone());
         // Cookbook lives at `<wiki>/Cookbook/*.cook`, NOT the vault
         // root. Which wiki is now a real question: with named wikis an
         // org can hold a Cooking wiki, and recipes belong there rather

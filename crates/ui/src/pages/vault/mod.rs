@@ -101,7 +101,7 @@ use crate::document_session::VAULT_ID;
 
 /// Minimal payload to open a file: its path + last-known sha.
 #[derive(Clone, PartialEq)]
-pub(crate) struct FileMeta {
+pub struct FileMeta {
     pub(crate) path: String,
     pub(crate) sha256: String,
 }
