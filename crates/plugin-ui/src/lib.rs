@@ -836,6 +836,53 @@ macro_rules! lazy_element {
     };
 }
 
+/// [`lazy_element!`] for a surface that takes an argument — a panel
+/// mounted with the note it inspects, a graph mounted with its focus.
+///
+/// `body` is an ordinary `fn(Args) -> Element` where `Args: Clone +
+/// PartialEq + 'static` (a props struct, in practice — named in the
+/// macro, since the loader's `static` has to spell its type); the
+/// macro returns an `Element` that shows a placeholder while the chunk
+/// downloads and then renders `body(args)`. The surface re-renders
+/// when `args` change, as a component's props would.
+///
+/// ```ignore
+/// fn local_graph(args: LocalGraphArgs) -> Element {
+///     rsx! { LocalGraphPanel { args } }
+/// }
+///
+/// rsx! { {task_plugin_ui::lazy_element_with!("local_graph", local_graph, LocalGraphArgs, args)} }
+/// ```
+///
+/// Same rules as [`lazy_element!`]: the module name must be a valid
+/// identifier and unique across the build; outside a split build this
+/// is a plain call to `body`.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-split"))]
+#[macro_export]
+macro_rules! lazy_element_with {
+    ($module:literal, $body:ident, $args_ty:ty, $args:expr) => {{
+        static __LOADER: $crate::dioxus::wasm_split::LazyLoader<
+            $args_ty,
+            $crate::dioxus::prelude::Element,
+        > = {
+            use $crate::dioxus::wasm_split;
+            wasm_split::lazy_loader!(
+                extern $module fn $body(args: $args_ty) -> $crate::dioxus::prelude::Element
+            )
+        };
+        $crate::lazy::lazy_element_with($crate::lazy::LazyArgsFn(&__LOADER), $args)
+    }};
+}
+
+/// See the documentation on the `wasm-split` variant of this macro.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-split")))]
+#[macro_export]
+macro_rules! lazy_element_with {
+    ($module:literal, $body:ident, $args_ty:ty, $args:expr) => {
+        $body($args)
+    };
+}
+
 /// Put a note widget's block view in its own chunk.
 ///
 /// A [`task_widgets::WidgetSpec`] is two halves: what it *matches*,
@@ -1064,6 +1111,23 @@ pub mod lazy {
         }
     }
 
+    /// Same, for a surface mounted with an argument (`lazy_element_with!`).
+    pub struct LazyArgsFn<A: 'static>(pub &'static dioxus::wasm_split::LazyLoader<A, Element>);
+
+    impl<A: 'static> Clone for LazyArgsFn<A> {
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    impl<A: 'static> Copy for LazyArgsFn<A> {}
+
+    impl<A: 'static> PartialEq for LazyArgsFn<A> {
+        fn eq(&self, other: &Self) -> bool {
+            std::ptr::eq(self.0, other.0)
+        }
+    }
+
     /// What `lazy_view!` returns to the shell: a screen that suspends
     /// until its chunk is here, then renders whatever the app's own
     /// view function says.
@@ -1095,6 +1159,20 @@ pub mod lazy {
             SuspenseBoundary {
                 fallback: |_| rsx! { LazyFallback {} },
                 LazyRender { view, ctx }
+            }
+        }
+    }
+
+    /// What `lazy_element_with!` returns: the surface rendered with its
+    /// argument once its chunk and the app providers are here.
+    pub fn lazy_element_with<A: Clone + PartialEq + 'static>(
+        view: LazyArgsFn<A>,
+        args: A,
+    ) -> Element {
+        rsx! {
+            SuspenseBoundary {
+                fallback: |_| rsx! { LazyFallback {} },
+                LazyElementWith::<A> { view, args }
             }
         }
     }
@@ -1160,6 +1238,20 @@ pub mod lazy {
             Some(true) => {}
         }
         match loader.call(ctx) {
+            Ok(element) => element,
+            Err(_) => rsx! { LazyDidNotLoad {} },
+        }
+    }
+
+    #[component]
+    fn LazyElementWith<A: Clone + PartialEq + 'static>(view: LazyArgsFn<A>, args: A) -> Element {
+        let loader = view.0;
+        match use_ready(loader)? {
+            None => return rsx! { LazyFallback {} },
+            Some(false) => return rsx! { LazyDidNotLoad {} },
+            Some(true) => {}
+        }
+        match loader.call(args) {
             Ok(element) => element,
             Err(_) => rsx! { LazyDidNotLoad {} },
         }

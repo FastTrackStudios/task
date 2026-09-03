@@ -5,13 +5,29 @@
 //! sidebar shows while you are inside this wiki. Opening a page goes to
 //! `WikiDocRoute`; the graph over this wiki is one click away and no
 //! longer the first thing you see.
+//!
+//! The right sidebar is the same
+//! [`NoteInspector`](crate::pages::note_inspector) a page of this wiki
+//! shows, centred on the wiki's index (`index.md`) — its links, its
+//! local graph, its share links — so the home is not a third layout.
+//! No note is open here, so Properties has nothing to edit and says
+//! so; the Graph tab is the one shown first.
 
 use std::collections::BTreeMap;
 
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 
+use crate::document_session::wiki_vault_id;
+use crate::pages::note_inspector::{InspectorTab, NoteInspector};
+use crate::pages::vault::{FileMeta, fetch_folder_index};
 use crate::routes::Route;
+
+/// The pages the wiki home's inspector centres on, first present wins:
+/// the index, else the overview, else the purpose, else the log —
+/// the wiki's own front matter, in order of how much of the wiki
+/// each one reaches.
+const INDEX_PAGES: [&str; 4] = ["index.md", "overview.md", "purpose.md", "log.md"];
 
 /// A directory in a wiki's tree: subdirectories and the pages at this
 /// level. Physical layout, which is what an outside editor sees too
@@ -86,6 +102,42 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
         crate::feeds::fetch_wiki_pages_of(&slug, &wiki_id2).await
     }));
 
+    // ── The inspector, centred on the index ───────────────────
+    // The vault view of this wiki (`wiki:<slug>`): the folder index
+    // the inspector's rows take their titles from, and the index page
+    // it centres on — `None` until the index says the page exists.
+    let vault_id = wiki_vault_id(&wiki);
+    let vault_sig = use_signal(|| vault_id.clone());
+    let index_org = route_org.clone();
+    let folder_index = use_resource(move || {
+        let _session = account.read().as_ref().map(|a| a.user_id);
+        let slug = index_org.clone();
+        let vault = vault_sig();
+        async move { fetch_folder_index(slug, vault).await }
+    });
+    let index_pages = use_memo(move || match &*folder_index.read_unchecked() {
+        Some(Ok(pages)) => pages.clone(),
+        _ => Vec::new(),
+    });
+    let index_path = use_memo(move || {
+        let pages = index_pages.read();
+        INDEX_PAGES
+            .iter()
+            .find(|want| pages.iter().any(|p| p.path == **want))
+            .map(|p| (*p).to_owned())
+    });
+    // The inspector's Links/Graph tabs re-pull on this; the wiki
+    // stream below bumps it when a page is written.
+    let wiki_tick = use_signal(|| 0u64);
+    let refresh_key = use_memo(move || wiki_tick());
+    // No note is open on the home, so the Properties tab has no doc;
+    // the panel reads this context and says so.
+    use_context_provider(|| Signal::new(None::<crate::pages::note_properties::FocusedDoc>));
+    let shell_right = use_context::<Signal<crate::chrome::RightPanelOpen>>();
+    let panel_open = shell_right.read().0;
+    let right_tab = use_signal(|| InspectorTab::Graph);
+    let home_org = use_memo(move || org_sig());
+
     // Live: a page written or removed in this wiki re-lists.
     let live_wiki = wiki.clone();
     architect::use_stream(
@@ -119,6 +171,9 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
                     | wiki_proto::WikiEvent::Resync
             ) {
                 pages.restart();
+                let (mut folder_index, mut wiki_tick) = (folder_index, wiki_tick);
+                folder_index.restart();
+                wiki_tick += 1;
             }
         },
     );
@@ -128,6 +183,14 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
     let mut new_page = use_signal(String::new);
     let mut page_error = use_signal(|| Option::<String>::None);
     let nav = use_navigator();
+    // A row or node in the inspector: that page's route, by vault id.
+    let on_open = use_callback(move |meta: FileMeta| {
+        nav.push(crate::routes::note_route(
+            &org_sig.peek(),
+            &vault_sig.peek(),
+            meta.path,
+        ));
+    });
     let wiki_for_new = wiki.clone();
     let org_for_nav = route_org.clone();
     let on_new_page = move |e: Event<FormData>| {
@@ -319,9 +382,31 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
     };
 
     rsx! {
-        div { class: "mx-auto flex h-full w-full max-w-5xl flex-col gap-5 overflow-y-auto p-4 sm:p-6 lg:p-8",
-            {header}
-            {body}
+        div { class: "flex h-full min-h-0 w-full",
+            div { class: "mx-auto flex h-full min-w-0 w-full max-w-5xl flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-6 lg:p-8",
+                {header}
+                {body}
+            }
+            // ── Right sidebar (md+): the inspector, on the index ──
+            if panel_open {
+                aside {
+                    class: "hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-muted/30 md:flex",
+                    "data-testid": "note-inspector",
+                    NoteInspector {
+                        org: home_org,
+                        vault_id: vault_id.clone(),
+                        path: index_path,
+                        refresh_key,
+                        pages: index_pages,
+                        on_open,
+                        tab: right_tab,
+                        on_hide: move |()| {
+                            let mut o = shell_right;
+                            o.set(crate::chrome::RightPanelOpen(false));
+                        },
+                    }
+                }
+            }
         }
     }
 }

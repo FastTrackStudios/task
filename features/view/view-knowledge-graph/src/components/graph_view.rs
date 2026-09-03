@@ -58,6 +58,11 @@ pub struct KnowledgeGraphViewProps {
     /// Unlike `highlighted` it does NOT dim the rest of the graph.
     #[props(default)]
     pub active: Option<String>,
+    /// Node ids drawn faded, with a dashed outline — a link to a page
+    /// nobody has written yet, in a local graph. Their edges fade with
+    /// them. Independent of hover/highlight dimming.
+    #[props(default)]
+    pub dimmed: Vec<String>,
     /// Fired with the node id when a node is clicked.
     pub on_node_click: EventHandler<String>,
 }
@@ -120,10 +125,28 @@ pub fn KnowledgeGraphView(props: KnowledgeGraphViewProps) -> Element {
     // `zoom = 1.0, pan = (0, 0)` this is exactly zoom-to-fit: the
     // padded bounding box of every node, centered (and
     // `preserveAspectRatio: meet` letterboxes it into the container).
+    // Scale factors mapping the node-size model into layout units.
+    let k = (1_000_000.0_f32 * spacing.max(0.2) / graph.nodes.len() as f32).sqrt();
+    let radius_unit = k / 48.0;
+    let edge_unit = k / 90.0;
+
+    let max_links = graph.nodes.iter().map(|n| n.link_count).max().unwrap_or(1);
+
     let (min_x, min_y, max_x, max_y) = bounds(&pmap);
     let raw_w = (max_x - min_x).max(1.0);
     let raw_h = (max_y - min_y).max(1.0);
-    let pad = raw_w.max(raw_h) * 0.12;
+    // The bounds are node CENTRES; a graph of one or two nodes (a
+    // note's local graph) is all radius and label, so the padding
+    // must cover the biggest node (the current one, ×1.35) and the
+    // label under it, or the fit shows the inside of a circle.
+    let biggest = graph
+        .nodes
+        .iter()
+        .map(|n| node_radius(n.link_count, max_links, graph.nodes.len(), node_scale))
+        .fold(0.0_f32, f32::max)
+        * radius_unit
+        * 1.35;
+    let pad = (raw_w.max(raw_h) * 0.12).max(biggest * 4.0);
     let base_w = raw_w + pad * 2.0;
     let base_h = raw_h + pad * 2.0;
     let cx = f32::midpoint(min_x, max_x);
@@ -135,14 +158,7 @@ pub fn KnowledgeGraphView(props: KnowledgeGraphViewProps) -> Element {
     let vx = cx - vw / 2.0 + px;
     let vy = cy - vh / 2.0 + py;
     let view_box = format!("{vx} {vy} {vw} {vh}");
-
-    // Scale factors mapping the node-size model into layout units.
-    let k = (1_000_000.0_f32 * spacing.max(0.2) / graph.nodes.len() as f32).sqrt();
-    let radius_unit = k / 48.0;
-    let edge_unit = k / 90.0;
     let pan_px_factor = vw / 800.0; // approx layout-units per screen px
-
-    let max_links = graph.nodes.iter().map(|n| n.link_count).max().unwrap_or(1);
     let max_weight = graph.edges.iter().map(|e| e.weight).fold(1.0_f32, f32::max);
 
     // Active set: search highlight wins, else hovered + neighbors.
@@ -162,6 +178,7 @@ pub fn KnowledgeGraphView(props: KnowledgeGraphViewProps) -> Element {
         None
     };
     let has_active = active.is_some();
+    let dimmed: HashSet<&str> = props.dimmed.iter().map(String::as_str).collect();
 
     rsx! {
         div { class: "relative h-full w-full overflow-hidden bg-background",
@@ -215,7 +232,13 @@ pub fn KnowledgeGraphView(props: KnowledgeGraphViewProps) -> Element {
                             let edge_active = active
                                 .as_ref()
                                 .is_none_or(|s| s.contains(&edge.source) && s.contains(&edge.target));
-                            let opacity = if !has_active || edge_active { 0.5 } else { 0.08 };
+                            let faded = dimmed.contains(edge.source.as_str())
+                                || dimmed.contains(edge.target.as_str());
+                            let opacity = if !has_active || edge_active {
+                                if faded { 0.25 } else { 0.5 }
+                            } else {
+                                0.08
+                            };
                             rsx! {
                                 line {
                                     key: "e{i}",
@@ -223,6 +246,7 @@ pub fn KnowledgeGraphView(props: KnowledgeGraphViewProps) -> Element {
                                     style: "stroke: var(--border, #52525b);",
                                     stroke_width: "{width}",
                                     stroke_opacity: "{opacity}",
+                                    stroke_dasharray: if faded { "{edge_unit * 3.0} {edge_unit * 3.0}" } else { "none" },
                                 }
                             }
                         }
@@ -259,8 +283,11 @@ pub fn KnowledgeGraphView(props: KnowledgeGraphViewProps) -> Element {
                                 format!("fill: {hue}; fill-opacity: 0.85;")
                             };
                             let is_active = active.as_ref().is_none_or(|s| s.contains(&node.id));
+                            let is_faded = dimmed.contains(node.id.as_str());
                             let dim_class = if has_active && !is_active && !is_current {
                                 "opacity-20"
+                            } else if is_faded {
+                                "opacity-40"
                             } else {
                                 "opacity-100"
                             };
@@ -307,9 +334,10 @@ pub fn KnowledgeGraphView(props: KnowledgeGraphViewProps) -> Element {
                                     circle {
                                         cx: "{p.x}", cy: "{p.y}", r: "{r}",
                                         style: "{fill_style}",
-                                        stroke: if is_current { "var(--primary, #a78bfa)" } else { "var(--background, #0e0f12)" },
+                                        stroke: if is_current { "var(--primary, #a78bfa)" } else if is_faded { "var(--muted-foreground, #a1a1aa)" } else { "var(--background, #0e0f12)" },
                                         stroke_width: if is_current { "{edge_unit * 1.5}" } else { "{edge_unit}" },
                                         stroke_opacity: if is_current { "0.5" } else { "0.6" },
+                                        stroke_dasharray: if is_faded { "{edge_unit * 2.0} {edge_unit * 2.0}" } else { "none" },
                                     }
                                     if show_label {
                                         text {

@@ -22,8 +22,18 @@ use uuid::Uuid;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(u8)]
 pub enum ShareTarget {
-    /// A vault note (the original target).
-    Note { path: String },
+    /// A vault note (the original target) — a page of the org's own
+    /// vault or of one of its wikis, told apart by `vault_id`.
+    Note {
+        path: String,
+        /// The vault the note lives in: the org's own
+        /// ([`DEFAULT_VAULT`]) or a wiki's (`wiki:<slug>`). Empty on
+        /// links minted before wikis were vaults, which the server
+        /// reads as the org's own — see [`ShareTarget::note`].
+        #[serde(default)]
+        #[facet(default)]
+        vault_id: String,
+    },
     /// A File Root slice — `(root, subpath)`; empty subpath shares the
     /// whole root. The link browses exactly this subtree, nothing above
     /// or beside it (issue #271 AC 1).
@@ -35,6 +45,40 @@ pub enum ShareTarget {
     /// puts an anonymous visitor in the review — playback, comments,
     /// drawings — scoped to exactly that review's file.
     Review { id: Uuid },
+}
+
+/// The vault id of an org's own vault — what a note link with an empty
+/// `vault_id` means.
+pub const DEFAULT_VAULT: &str = "default";
+
+impl ShareTarget {
+    /// A note target in canonical form: an empty or default `vault_id`
+    /// becomes [`DEFAULT_VAULT`], so links minted before wikis were
+    /// vaults compare equal to the same note addressed today. Every
+    /// mint, lookup and stored-link read goes through this, which is
+    /// what lets `links_for_target` match by plain equality.
+    #[must_use]
+    pub fn note(vault_id: impl Into<String>, path: impl Into<String>) -> Self {
+        let vault_id: String = vault_id.into();
+        ShareTarget::Note {
+            path: path.into(),
+            vault_id: if vault_id.is_empty() {
+                DEFAULT_VAULT.to_owned()
+            } else {
+                vault_id
+            },
+        }
+    }
+
+    /// The same target with a note's `vault_id` in canonical form;
+    /// every other variant unchanged.
+    #[must_use]
+    pub fn canonical(self) -> Self {
+        match self {
+            ShareTarget::Note { path, vault_id } => ShareTarget::note(vault_id, path),
+            other => other,
+        }
+    }
 }
 
 /// Capability axes on a link. `view` is what a link IS — the axes are

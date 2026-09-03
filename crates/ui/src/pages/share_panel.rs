@@ -21,8 +21,12 @@ fn copy_to_clipboard(text: &str) {
     let _ = text;
 }
 
+/// `vault_id` is the vault the note lives in — the org's own
+/// ([`crate::document_session::VAULT_ID`]) or a wiki's (`wiki:<slug>`):
+/// a link minted here targets the note *in that vault*, and the
+/// server's landing page opens it on the matching route.
 #[component]
-pub fn SharePanel(slug: String, path: Option<String>) -> Element {
+pub fn SharePanel(slug: String, vault_id: String, path: Option<String>) -> Element {
     let Some(path) = path else {
         return rsx! {
             div { class: "p-4 text-sm text-muted-foreground",
@@ -35,14 +39,13 @@ pub fn SharePanel(slug: String, path: Option<String>) -> Element {
     let refresh = use_signal(|| 0u32);
     let slug2 = slug.clone();
     let path2 = path.clone();
-    let links = use_resource(use_reactive!(|(slug2, path2)| {
+    let vault2 = vault_id.clone();
+    let links = use_resource(use_reactive!(|(slug2, vault2, path2)| {
         let _ = refresh();
         async move {
             let client = share_client(&slug2).await?;
             client
-                .links_for_target(ShareTarget::Note {
-                    path: path2.clone(),
-                })
+                .links_for_target(ShareTarget::note(vault2.clone(), path2.clone()))
                 .await
                 .map_err(|e| format!("{e:?}"))
         }
@@ -51,16 +54,18 @@ pub fn SharePanel(slug: String, path: Option<String>) -> Element {
     let create = use_callback({
         let slug = slug.clone();
         let path = path.clone();
+        let vault_id = vault_id.clone();
         let mut refresh = refresh;
         move |()| {
             let slug = slug.clone();
             let path = path.clone();
+            let vault_id = vault_id.clone();
             spawn(async move {
                 match share_client(&slug).await {
                     Ok(client) => {
                         if let Err(e) = client
                             .create_link(
-                                ShareTarget::Note { path },
+                                ShareTarget::note(vault_id, path),
                                 NewShareLink {
                                     label: "share link".into(),
                                     capabilities: None,

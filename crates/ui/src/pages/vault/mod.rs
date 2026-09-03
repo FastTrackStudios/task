@@ -57,31 +57,32 @@
 //!   [`build_tree`]) and its recursive renderer.
 //! - [`tabs`] — document tabs and split panes ([`Pane`],
 //!   [`MAX_PANES`], the tab strip).
-//! - [`graph`] — pure builders for the Links tab's local graph and
-//!   verse references.
+//!
+//! The right sidebar — Properties, Links, the local graph, Share —
+//! is [`NoteInspector`](crate::pages::note_inspector), shared with
+//! the wiki page over its vault id; this page only decides when it
+//! shows and where a row click goes (a tab in the focused pane).
 //!
 //! [`folder_index`]: vault_proto::VaultSync::folder_index
 //! [`set_folder`]: vault_proto::VaultSync::set_folder
 //! [`PageMeta`]: vault_proto::PageMeta
 
-mod graph;
 mod rpc;
 mod tabs;
 mod tree;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use architect_ui::lucide_dioxus::Folder;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use vault_proto::TagCount;
-use view_knowledge_graph::KnowledgeGraphView;
 
+use crate::pages::note_inspector::{InspectorTab, NoteInspector};
 use crate::pages::note_view::NoteView;
 use crate::shell::mobile::{BottomSheet, MobileActionBar};
 
-use graph::{build_local_graph, osis_to_ref};
 use tabs::{MAX_PANES, OpenTab, Pane, render_tab_bar};
 // `build_tree` / `basename_of` / `TreeNode` were free items on this
 // module before the split; other pages still import them by those paths.
@@ -103,16 +104,6 @@ use crate::document_session::VAULT_ID;
 pub(crate) struct FileMeta {
     pub(crate) path: String,
     pub(crate) sha256: String,
-}
-
-/// The right sidebar's active tab. Properties (the focused note's
-/// frontmatter, edited live) and Links (backlinks + outgoing links +
-/// local graph).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RightTab {
-    Properties,
-    Links,
-    Share,
 }
 
 #[component]
@@ -264,9 +255,10 @@ pub fn VaultView(
     use_context_provider(|| {
         crate::document_session::DocOwnerScope(dioxus::core::current_scope_id())
     });
-    // Which right-sidebar tab is showing. Properties first — it's the
-    // one used most while writing.
-    let mut right_tab = use_signal(|| RightTab::Properties);
+    // Which inspector tab is showing (Properties first — it's the one
+    // used most while writing). Held here so the desktop aside and
+    // the mobile sheet show the same one.
+    let right_tab = use_signal(InspectorTab::default);
     let nav = use_navigator();
 
     // Focused pane's active-tab path — drives the tree highlight, the
@@ -507,74 +499,13 @@ pub fn VaultView(
         _ => Vec::new(),
     });
 
-    // path → (title, sha) for the backlinks panel rows.
-    let page_lookup = use_memo(move || match &*files.read_unchecked() {
-        Some(Ok(pages)) => pages
-            .iter()
-            .map(|p| (p.path.clone(), (p.title.clone(), p.sha256.clone())))
-            .collect::<HashMap<String, (String, String)>>(),
-        _ => HashMap::new(),
-    });
-
-    // Backlinks for the focused note, re-pulled when the selection
-    // changes and after every committed save (`focus_tick`).
+    // The right panel's open state is the shell's (the top-bar
+    // toggle); what it shows is the inspector's business — it fetches
+    // backlinks, links, the local graph and share links for the
+    // focused note itself, over the vault id, and re-pulls on
+    // `refresh_key`.
     let shell_right = use_context::<Signal<crate::chrome::RightPanelOpen>>();
     let backlinks_open = use_memo(move || shell_right.read().0);
-    let backlinks = use_resource(move || {
-        let slug = active();
-        let path = selected();
-        let _refresh = refresh_key();
-        async move {
-            match path {
-                Some(p) => fetch_backlinks(slug, VAULT_ID.to_owned(), p).await,
-                None => Ok(Vec::new()),
-            }
-        }
-    });
-
-    // Outgoing wikilinks of the focused note.
-    let outlinks = use_resource(move || {
-        let slug = active();
-        let path = selected();
-        let _refresh = refresh_key();
-        async move {
-            match path {
-                Some(p) => fetch_links(slug, VAULT_ID.to_owned(), p).await,
-                None => Ok(Vec::new()),
-            }
-        }
-    });
-
-    // Verses the focused note references (from synced note→verse
-    // links), with their text — the inline scripture reader.
-    let verses = use_resource(move || {
-        let slug = active();
-        let path = selected();
-        let _refresh = refresh_key();
-        async move {
-            let Some(p) = path else { return Vec::new() };
-            let links = crate::feeds::fetch_links_for(&slug, &format!("note:{p}"))
-                .await
-                .unwrap_or_default();
-            let mut refs: Vec<String> = links
-                .iter()
-                .filter(|l| l.target.kind == links_proto::NodeKind::Verse)
-                .map(|l| l.target.id.clone())
-                .collect();
-            refs.sort();
-            refs.dedup();
-            refs.truncate(16);
-            let mut out = Vec::new();
-            for osis in refs {
-                let human = osis_to_ref(&osis);
-                let text = crate::feeds::fetch_verse_text(&slug, "WEB", &human)
-                    .await
-                    .ok();
-                out.push((osis, human, text));
-            }
-            out
-        }
-    });
 
     let sidebar_body = match &*files.read_unchecked() {
         Some(Ok(_)) => {
@@ -618,8 +549,6 @@ pub fn VaultView(
         .unwrap_or_default();
 
     let has_file = selected.read().is_some();
-    let current = selected.read().clone().unwrap_or_default();
-    let verse_list = verses.read().clone();
     let moving = move_target.read().clone();
     let create_under = create_parent.read().clone();
     let panel_open = *backlinks_open.read();
@@ -703,169 +632,6 @@ pub fn VaultView(
         {sidebar_body}
     };
 
-    // ── Backlinks + verses content ────────────────────────
-    let backlinks_body = rsx! {
-        if let Some(vs) = verse_list.as_ref().filter(|v| !v.is_empty()) {
-            div { class: "border-b border-border/60 px-3 py-3",
-                Heading { level: HeadingLevel::H3, class: "mb-2", "Referenced verses" }
-                div { class: "flex flex-col gap-2",
-                    for (osis, human, text) in vs.clone() {
-                        div { key: "{osis}", class: "rounded-md bg-background/60 p-2",
-                            span { class: "text-xs font-semibold text-primary", "{human}" }
-                            if let Some(t) = text {
-                                p { class: "mt-0.5 text-xs leading-snug text-muted-foreground", "{t}" }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        match &*backlinks.read_unchecked() {
-            Some(Ok(list)) if list.is_empty() => rsx! {
-                div { class: "px-3 py-2 text-sm text-muted-foreground",
-                    "No backlinks yet. Link to this note with [[{basename_of(&current)}]]."
-                }
-            },
-            Some(Ok(list)) => rsx! {
-                nav { class: "flex flex-col gap-0.5 px-2 pb-4",
-                    for path in list.iter().cloned() {
-                        {
-                            let (title, sha) = page_lookup
-                                .read()
-                                .get(&path)
-                                .cloned()
-                                .unwrap_or_else(|| (basename_of(&path).to_owned(), String::new()));
-                            let target = FileMeta { path: path.clone(), sha256: sha };
-                            rsx! {
-                                button {
-                                    key: "{path}",
-                                    class: "group flex flex-col items-start gap-0.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent/50",
-                                    onclick: move |_| on_open.call(target.clone()),
-                                    span { class: "font-medium", "{title}" }
-                                    span { class: "text-xs text-muted-foreground", "{path}" }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            Some(Err(e)) => rsx! {
-                div { class: "px-2 py-2",
-                    crate::states::InlineError {
-                        message: e.clone(),
-                        label: "Backlinks".to_string(),
-                    }
-                }
-            },
-            None => rsx! {
-                div { class: "flex flex-col gap-2 px-3 py-2",
-                    Skeleton { class: "h-4 w-3/4" }
-                    Skeleton { class: "h-4 w-1/2" }
-                    Skeleton { class: "h-4 w-2/3" }
-                }
-            },
-        }
-        div { class: "border-t border-border/60 px-3 pb-1 pt-3",
-            Heading { level: HeadingLevel::H3, "Links" }
-        }
-        match &*outlinks.read_unchecked() {
-            Some(Ok(links)) if links.is_empty() => rsx! {
-                div { class: "px-3 py-2 text-sm text-muted-foreground", "No outgoing links." }
-            },
-            Some(Ok(links)) => rsx! {
-                nav { class: "flex flex-col gap-0.5 px-2 pb-4",
-                    for link in links.iter().cloned() {
-                        {
-                            let label = link.alias.clone().unwrap_or_else(|| link.linkpath.clone());
-                            match link.resolved.clone() {
-                                Some(target_path) => {
-                                    let (_, sha) = page_lookup
-                                        .read()
-                                        .get(&target_path)
-                                        .cloned()
-                                        .unwrap_or_default();
-                                    let target = FileMeta { path: target_path.clone(), sha256: sha };
-                                    rsx! {
-                                        button {
-                                            key: "{link.linkpath}",
-                                            class: "flex flex-col items-start gap-0.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent/50",
-                                            onclick: move |_| on_open.call(target.clone()),
-                                            span { class: "font-medium", "{label}" }
-                                            span { class: "text-xs text-muted-foreground", "{target_path}" }
-                                        }
-                                    }
-                                }
-                                None => rsx! {
-                                    div {
-                                        key: "{link.linkpath}",
-                                        class: "px-2 py-1.5 text-sm text-muted-foreground/70",
-                                        title: "Unresolved link",
-                                        "{label}"
-                                    }
-                                },
-                            }
-                        }
-                    }
-                }
-            },
-            Some(Err(e)) => rsx! {
-                div { class: "px-2 py-2",
-                    crate::states::InlineError {
-                        message: e.clone(),
-                        label: "Links".to_string(),
-                    }
-                }
-            },
-            None => rsx! {
-                div { class: "flex flex-col gap-2 px-3 py-2",
-                    Skeleton { class: "h-4 w-2/3" }
-                    Skeleton { class: "h-4 w-1/2" }
-                }
-            },
-        }
-        if has_file {
-            div { class: "mt-auto border-t border-border/60 px-3 pb-1 pt-3",
-                Heading { level: HeadingLevel::H3, "Local graph" }
-            }
-            match (&*backlinks.read_unchecked(), &*outlinks.read_unchecked()) {
-                (Some(Ok(bl)), Some(Ok(ol))) => {
-                    let graph = build_local_graph(&current, bl, ol, &page_lookup.read());
-                    let cur = current.clone();
-                    rsx! {
-                        div { class: "mx-2 mb-3 h-64 shrink-0 overflow-hidden rounded-lg border border-border/70",
-                            KnowledgeGraphView {
-                                graph,
-                                node_scale: 0.3,
-                                spacing: 1.5,
-                                active: Some(current.clone()),
-                                on_node_click: move |id: String| {
-                                    if id == cur {
-                                        return;
-                                    }
-                                    let (_, sha) = page_lookup.peek().get(&id).cloned().unwrap_or_default();
-                                    on_open.call(FileMeta { path: id, sha256: sha });
-                                },
-                            }
-                        }
-                    }
-                }
-                (Some(Err(e)), _) | (_, Some(Err(e))) => rsx! {
-                    div { class: "px-2 py-2",
-                        crate::states::InlineError {
-                            message: e.clone(),
-                            label: "Graph".to_string(),
-                        }
-                    }
-                },
-                _ => rsx! {
-                    div { class: "mx-2 mb-3",
-                        Skeleton { class: "h-64 w-full rounded-lg" }
-                    }
-                },
-            }
-        }
-    };
-
     // Snapshot of the panes for this render pass (the mount loop).
     let pane_list = panes.read().clone();
     let n_panes = pane_list.len();
@@ -920,52 +686,34 @@ pub fn VaultView(
                         }
                     }
                 }
-                // ── Right sidebar (md+, focused note): Properties | Links ──
+                // ── Right sidebar (md+, focused note): the inspector ──
                 if has_file && panel_open {
-                    aside { class: "hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-muted/30 md:flex",
-                        // Tab header: Properties / Links + a Hide control.
-                        div { class: "flex items-center gap-1 border-b border-border/60 px-2 py-1.5",
-                            for (tab, label) in [
-                                (RightTab::Properties, "Properties"),
-                                (RightTab::Links, "Links"),
-                                (RightTab::Share, "Share"),
-                            ] {
-                                button {
-                                    key: "{label}",
-                                    class: if right_tab() == tab {
-                                        "rounded px-2 py-1 text-xs font-medium text-foreground bg-accent"
-                                    } else {
-                                        "rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-                                    },
-                                    onclick: move |_| right_tab.set(tab),
-                                    "{label}"
-                                }
-                            }
-                            div { class: "ml-auto flex items-center gap-1.5",
+                    aside {
+                        class: "hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-muted/30 md:flex",
+                        "data-testid": "note-inspector",
+                        NoteInspector {
+                            org: active,
+                            vault_id: VAULT_ID.to_owned(),
+                            path: selected,
+                            refresh_key,
+                            pages: pages_memo,
+                            on_open,
+                            tab: right_tab,
+                            on_hide: move |()| {
+                                let mut o = shell_right;
+                                o.set(crate::chrome::RightPanelOpen(false));
+                            },
+                            extra: rsx! {
                                 if n_panes < MAX_PANES {
                                     button {
+                                        r#type: "button",
                                         class: "rounded px-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground",
                                         title: "Split right",
                                         onclick: move |_| split.call(()),
                                         "⇥"
                                     }
                                 }
-                                button {
-                                    class: "text-xs text-muted-foreground hover:text-foreground",
-                                    onclick: move |_| {
-                                        let mut o = shell_right;
-                                        o.set(crate::chrome::RightPanelOpen(false));
-                                    },
-                                    "Hide"
-                                }
-                            }
-                        }
-                        if right_tab() == RightTab::Properties {
-                            crate::pages::note_properties::NoteProperties {}
-                        } else if right_tab() == RightTab::Share {
-                            crate::pages::share_panel::SharePanel { slug: active(), path: selected() }
-                        } else {
-                            {backlinks_body.clone()}
+                            },
                         }
                     }
                 }
@@ -1015,35 +763,15 @@ pub fn VaultView(
                 let mut o = shell_right;
                 o.set(crate::chrome::RightPanelOpen(false));
             },
-            title: match right_tab() {
-                RightTab::Properties => "Properties",
-                RightTab::Links => "Links",
-                RightTab::Share => "Share",
-            },
-            div { class: "flex items-center gap-1 border-b border-border/60 px-2 py-1.5",
-                for (tab, label) in [
-                                (RightTab::Properties, "Properties"),
-                                (RightTab::Links, "Links"),
-                                (RightTab::Share, "Share"),
-                            ] {
-                    button {
-                        key: "{label}",
-                        class: if right_tab() == tab {
-                            "rounded px-2 py-1 text-xs font-medium text-foreground bg-accent"
-                        } else {
-                            "rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-                        },
-                        onclick: move |_| right_tab.set(tab),
-                        "{label}"
-                    }
-                }
-            }
-            if right_tab() == RightTab::Properties {
-                crate::pages::note_properties::NoteProperties {}
-            } else if right_tab() == RightTab::Share {
-                crate::pages::share_panel::SharePanel { slug: active(), path: selected() }
-            } else {
-                {backlinks_body}
+            title: right_tab().label().to_string(),
+            NoteInspector {
+                org: active,
+                vault_id: VAULT_ID.to_owned(),
+                path: selected,
+                refresh_key,
+                pages: pages_memo,
+                on_open,
+                tab: right_tab,
             }
         }
         document::Link { rel: "stylesheet", href: editor::EDITOR_STYLE }

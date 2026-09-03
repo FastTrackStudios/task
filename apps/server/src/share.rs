@@ -73,10 +73,16 @@ pub struct StoredLink {
 }
 
 impl StoredLink {
+    /// The link's target in canonical form: a pre-`target` row is a
+    /// note of the org's own vault, and a note row's empty `vault_id`
+    /// (minted before wikis were vaults) reads as that same vault —
+    /// so `links_for_target` matches by equality across the format
+    /// generations.
     pub fn target(&self) -> ShareTarget {
-        self.target.clone().unwrap_or_else(|| ShareTarget::Note {
-            path: self.note_path.clone(),
-        })
+        self.target
+            .clone()
+            .unwrap_or_else(|| ShareTarget::note(String::new(), self.note_path.clone()))
+            .canonical()
     }
 
     pub fn capabilities(&self) -> ShareCapabilities {
@@ -352,8 +358,16 @@ impl ShareServiceImpl {
 
 fn validate_target(target: &ShareTarget) -> Result<(), ShareError> {
     match target {
-        ShareTarget::Note { path } if path.is_empty() => {
+        ShareTarget::Note { path, .. } if path.is_empty() => {
             Err(ShareError::Invalid("empty note path".into()))
+        }
+        // A note lives in the org's own vault or in one of its wikis;
+        // any other vault id is a client bug, not a link to mint.
+        ShareTarget::Note { vault_id, .. }
+            if vault_id != share_proto::DEFAULT_VAULT
+                && crate::wiki_vault::wiki_of(vault_id).is_none() =>
+        {
+            Err(ShareError::Invalid(format!("bad note vault: {vault_id}")))
         }
         ShareTarget::Slice { subpath, .. }
             if subpath.starts_with('/') || subpath.split('/').any(|s| s == "..") =>
@@ -416,6 +430,9 @@ impl ShareService for ShareServiceImpl {
         if self.store.sharing_disabled() {
             return Err(ShareError::SharingDisabled);
         }
+        // Stored in canonical form (a note names its vault), so the
+        // row compares equal to what the panel later asks for.
+        let target = target.canonical();
         validate_target(&target)?;
         // A Slice link's byte-serving paths (rendition + download) only
         // exist on Media roots — minting one for a software root would
@@ -503,6 +520,7 @@ impl ShareService for ShareServiceImpl {
         &self,
         target: ShareTarget,
     ) -> Result<Vec<ShareLinkInfo>, ShareError> {
+        let target = target.canonical();
         Ok(self.store.with_state(|s| {
             s.links
                 .iter()
@@ -854,7 +872,7 @@ pub async fn share_landing_handler(
         Err(resp) => resp,
         Ok(None) => {
             let app_origin = std::env::var("TASK_SHARE_APP_ORIGIN").unwrap_or_default();
-            Html(landing_html(&link, &app_origin)).into_response()
+            Html(landing_html(&slug, &link, &app_origin)).into_response()
         }
         Ok(Some(scope)) => render_browse(&org, &slug, &token, &link, &scope, "", &q).await,
     }
@@ -1452,16 +1470,16 @@ fn password_html(label: &str, wrong: bool) -> String {
 /// (revocation is immediate), then a minimal page that opens the shared
 /// note in the app. `app_origin` = where the web app lives
 /// (`TASK_SHARE_APP_ORIGIN`; empty = same origin).
-pub fn landing_html(link: &StoredLink, app_origin: &str) -> String {
-    let note = match link.target() {
-        ShareTarget::Note { path } => path,
-        _ => String::new(),
+pub fn landing_html(slug: &str, link: &StoredLink, app_origin: &str) -> String {
+    let (note, vault_id) = match link.target() {
+        ShareTarget::Note { path, vault_id } => (path, vault_id),
+        _ => (String::new(), String::new()),
     };
     let label = html_escape(&link.label);
     let open = format!(
-        "{}/vault?path={}&share=1",
+        "{}{}&share=1",
         app_origin.trim_end_matches('/'),
-        urlencoding_encode(&note)
+        note_open_path(slug, &vault_id, &note)
     );
     let body = format!(
         r#"<h1>{label}</h1>{caps}
@@ -1471,6 +1489,23 @@ pub fn landing_html(link: &StoredLink, app_origin: &str) -> String {
         note = html_escape(&note),
     );
     page(&link.label, &body)
+}
+
+/// The web app path that opens a shared note, by the vault it lives
+/// in: the org's own vault opens on the vault route, a wiki's page on
+/// that wiki's page route (the client's `routes::note_route`, mirrored
+/// — a share link to a wiki page must land in the wiki, not the vault).
+/// Query-shaped so the caller can append `&share=1`.
+pub fn note_open_path(slug: &str, vault_id: &str, note: &str) -> String {
+    match crate::wiki_vault::wiki_of(vault_id) {
+        Some(wiki) => format!(
+            "/wiki/w/{}/{}/page?path={}",
+            urlencoding_encode(slug),
+            urlencoding_encode(wiki),
+            urlencoding_encode(note)
+        ),
+        None => format!("/vault?path={}", urlencoding_encode(note)),
+    }
 }
 
 /// Gone page for a disabled link.
@@ -1500,4 +1535,85 @@ fn urlencoding_encode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod note_target_tests {
+    use super::*;
+
+    fn stored(target: Option<ShareTarget>, note_path: &str) -> StoredLink {
+        StoredLink {
+            token: "t".into(),
+            label: "l".into(),
+            target,
+            note_path: note_path.into(),
+            capability: String::new(),
+            capabilities: None,
+            password_sha256: None,
+            expires_unix: 0,
+            disabled: false,
+            review_root_id: None,
+            review_file_path: None,
+            created_at: String::new(),
+        }
+    }
+
+    /// Every generation of stored note link reads as the same canonical
+    /// target, so a panel query matches rows minted before wikis were
+    /// vaults.
+    #[test]
+    fn stored_note_links_canonicalise_to_the_default_vault() {
+        let legacy_row = stored(None, "Plans.md");
+        let empty_vault = stored(
+            Some(ShareTarget::Note {
+                path: "Plans.md".into(),
+                vault_id: String::new(),
+            }),
+            "",
+        );
+        let today = stored(
+            Some(ShareTarget::note(share_proto::DEFAULT_VAULT, "Plans.md")),
+            "",
+        );
+        let want = ShareTarget::note("default", "Plans.md");
+        assert_eq!(legacy_row.target(), want);
+        assert_eq!(empty_vault.target(), want);
+        assert_eq!(today.target(), want);
+        // A wiki page keeps its vault — it is a different note.
+        let wiki = stored(Some(ShareTarget::note("wiki:music-theory", "Plans.md")), "");
+        assert_ne!(wiki.target(), want);
+    }
+
+    #[test]
+    fn note_targets_validate_their_vault() {
+        assert!(validate_target(&ShareTarget::note("default", "A.md")).is_ok());
+        assert!(validate_target(&ShareTarget::note("wiki:music-theory", "A.md")).is_ok());
+        assert!(validate_target(&ShareTarget::note("wiki:music-theory", "")).is_err());
+        assert!(validate_target(&ShareTarget::note("shares", "A.md")).is_err());
+    }
+
+    /// The landing page opens a wiki page on the wiki route and a vault
+    /// note on the vault route — the client's `note_route`, mirrored.
+    #[test]
+    fn landing_opens_the_note_where_it_lives() {
+        assert_eq!(
+            note_open_path("acme", "default", "Plans.md"),
+            "/vault?path=Plans.md"
+        );
+        assert_eq!(
+            note_open_path("acme", "wiki:music-theory", "Concepts/Modes.md"),
+            "/wiki/w/acme/music-theory/page?path=Concepts/Modes.md"
+        );
+        let link = stored(
+            Some(ShareTarget::note("wiki:music-theory", "Concepts/Modes.md")),
+            "",
+        );
+        let html = landing_html("acme", &link, "https://app.example");
+        assert!(
+            html.contains(
+                "https://app.example/wiki/w/acme/music-theory/page?path=Concepts/Modes.md&share=1"
+            ),
+            "{html}"
+        );
+    }
 }
