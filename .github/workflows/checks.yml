@@ -1,9 +1,10 @@
 # Task Checks — the one PR/push gate, on THEBATTLESHIP.
 #
-# Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB),
-# four instances so this workflow's parallel jobs do not queue behind
-# each other. Hosted `ubuntu-latest` is 4 vCPU with nothing warm, which
-# is what made a run take 35-40 minutes; see CACHE below.
+# Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB), two
+# instances — enough that a quick PR is not stuck behind a long one, and
+# few enough that each slot's cache is worth warming. Hosted
+# `ubuntu-latest` is 4 vCPU with nothing warm, which is what made a run
+# take 35-40 minutes; see CACHE below.
 #
 # Toolchain comes from the repo flake: every step runs under
 # `nix develop .#ci -c` (rust 1.94 pin, wasm target, clang env for ring,
@@ -30,15 +31,11 @@
 # clock. The workspace's 2655 tests execute in 3.3 seconds.
 #
 # A self-hosted runner needs no such round trip. Each instance keeps a
-# CARGO_TARGET_DIR under its own $HOME (a real directory on NVMe, set by
-# `workDir` in the fleet aspect — NOT the systemd RuntimeDirectory, which
-# is tmpfs and is deleted on restart). It survives jobs, restarts and
-# reboots, so an ordinary PR compiles only what it changed.
-#
-# It lives OUTSIDE $GITHUB_WORKSPACE on purpose: `actions/checkout`
-# defaults to `clean: true`, which runs `git clean -ffdx`, and /target is
-# gitignored — a target dir inside the checkout would be deleted at the
-# start of every run.
+# CARGO_TARGET_DIR in the runner unit's systemd CacheDirectory
+# (/var/cache/github-runner-cargo/<instance>), which survives jobs,
+# restarts and reboots — so an ordinary PR compiles only what it changed.
+# See the "Persistent target dir" step for the two nearby locations that
+# look right and silently lose the cache instead.
 
 name: checks
 
@@ -72,20 +69,31 @@ jobs:
   # queued — with every real job on one host, a stopped runner service
   # would leave a PR sitting "Queued" rather than failing.
   #
-  # This watches THIS RUN's own jobs (the `actions: read` the default
-  # token already has — the org runners endpoint needs `admin:org`, which
-  # no workflow token carries) and fails once anything has sat queued past
-  # the grace period. It exits the moment the jobs are picked up, so a
-  # healthy run pays a few seconds on a hosted runner.
+  # This watches THIS RUN's own jobs, using the `actions: read` the
+  # default token already has. It exits the moment they are picked up, so
+  # a healthy run pays a few seconds on a hosted runner.
   queue-timeout:
     name: Queue timeout
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
+    # ADVISORY, not a gate. This cannot tell "no runner is alive" from
+    # "every runner is busy" — telling them apart needs the org runners
+    # endpoint, which requires admin:org and is exactly why this job polls
+    # its own run instead. With two slots and jobs of ten to twenty
+    # minutes, a long queue is ordinary: the first version of this failed
+    # a PR whose only problem was that one slot had a deploy and the other
+    # had the previous run. A false red on a healthy queue is worse than a
+    # slow warning on a dead one.
+    #
+    # To make it a real gate, give the repo a fine-grained org PAT with
+    # "self-hosted runners: read", ask that endpoint whether anything with
+    # the nix-host label is online, and drop continue-on-error.
+    continue-on-error: true
     steps:
-      - name: Fail if the self-hosted jobs never start
+      - name: Warn if the self-hosted jobs never start
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GRACE_SECONDS: "480"
+          GRACE_SECONDS: "1500"
         run: |
           set -euo pipefail
           deadline=$(( $(date +%s) + GRACE_SECONDS ))
@@ -99,9 +107,9 @@ jobs:
               exit 0
             fi
             if [ "$(date +%s)" -ge "${deadline}" ]; then
-              echo "::error::Still queued after ${GRACE_SECONDS}s: ${queued}"
-              echo "::error::No self-hosted nix-host runner took the work."
-              echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
+              echo "::warning::Still queued after ${GRACE_SECONDS}s: ${queued}"
+              echo "::warning::Either every nix-host runner is busy, or none is alive."
+              echo "::warning::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
               exit 1
             fi
             echo "queued: ${queued}"
@@ -264,23 +272,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Persistent target dir
         run: |
-          # Outside $GITHUB_WORKSPACE — actions/checkout runs
-          # `git clean -ffdx` and /target is gitignored, so a target dir
-          # inside the checkout would be deleted every run. $HOME is this
-          # runner INSTANCE's workDir, so two instances never share a
-          # cargo lock, and the dir outlives jobs, restarts and reboots.
-          dir="$HOME/cargo-target/checks"
-          # One-time migration off the old per-job dirs. `tests` is the
-          # one that held full codegen artifacts, which is exactly what
-          # the new step order reuses — adopting it saves this instance a
-          # cold build. The other two were duplicates of it and go back to
-          # the disk they were wasting.
-          if [ ! -d "$dir" ] && [ -d "$HOME/cargo-target/tests" ]; then
-            echo "adopting the old tests/ target dir"
-            mv "$HOME/cargo-target/tests" "$dir"
-          fi
-          rm -rf "$HOME/cargo-target/tests" "$HOME/cargo-target/quality" \
-                 "$HOME/cargo-target/wasm"
+          # TWO places this must NOT be, both of which look like they work
+          # and then silently throw the cache away:
+          #
+          #   $GITHUB_WORKSPACE — actions/checkout runs `git clean -ffdx`
+          #     and /target is gitignored, so it goes on every run.
+          #   $HOME (the runner's workDir) — the nixpkgs runner module ends
+          #     its pre-start hook with
+          #     `find -H "$WORK_DIRECTORY" -mindepth 1 -delete`,
+          #     unconditionally, on EVERY service start. A cache there
+          #     survives between jobs and dies on any restart or reboot.
+          #
+          # /var/cache/github-runner-cargo/<instance> is the unit's systemd
+          # CacheDirectory: created for us, writable despite
+          # ProtectSystem=strict, kept across restarts and reboots, and
+          # removed only by `systemctl clean --what=cache`. Per instance,
+          # so two runners never contend on cargo's target-dir lock.
+          dir="/var/cache/github-runner-cargo/${RUNNER_NAME}/checks"
           mkdir -p "$dir"
           echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
           echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
@@ -334,9 +342,15 @@ jobs:
       #
       # --maxsize, not --time: an age cutoff cleans nothing when every
       # artifact is from today, which is exactly the CI case ("Cleaned
-      # nothing" from --time 7 against a 167 GB dir). This bounds the cache
-      # and evicts oldest-first, which is the behaviour we actually want —
-      # the current build stays warm, the sediment goes.
+      # nothing" from --time 7 against a 167 GB dir).
+      #
+      # But the cap has to sit ABOVE steady state, not at it. --maxsize
+      # evicts oldest-by-mtime, and in a cold build the oldest files are
+      # the dependency rlibs — the most reusable things in the tree. A
+      # 60 GB cap against a ~74 GB steady state trimmed 20.6 GiB of live
+      # dependencies every run and the next run rebuilt them: the "warm"
+      # run took 20m against the cold run's 10m. This is a safety valve
+      # against unbounded growth, not a routine reclaim.
       #
       # always(): a red run has to give the disk back too.
       - name: Bound the target dir
@@ -345,6 +359,6 @@ jobs:
           # CARGO_INCREMENTAL=0 stops new incremental output but does not
           # remove what earlier runs left; nothing regenerates this now.
           rm -rf "${CARGO_TARGET_DIR}/debug/incremental"
-          ${NIX_DEV} cargo sweep --maxsize 60GB || true
+          ${NIX_DEV} cargo sweep --maxsize 150GB || true
           du -sh "${CARGO_TARGET_DIR}" || true
           df -h /var/lib | tail -1

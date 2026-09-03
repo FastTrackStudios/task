@@ -21,6 +21,7 @@ use wiki_proto::service::pages::PagesClient;
 use wiki_proto::service::registry::RegistryClient;
 use wiki_proto::{WikiChange, WikiEvent};
 
+#[allow(dead_code)]
 mod support;
 
 const WIKI: &str = "music-theory";
