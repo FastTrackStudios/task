@@ -103,8 +103,8 @@ pub(crate) fn NoteView(
     // instead of text. Still gated on a physical keyboard — vim on a
     // touch keyboard is unusable whatever the preference says.
     let vim_pref = use_context::<crate::prefs::PrefsCtx>().prefs;
-    let vim = (vim_pref.read().vim_mode && !use_hook(editor::editor_view::coarse_pointer))
-        .then_some(vim);
+    let vim =
+        (vim_pref.read().vim_mode && !use_hook(editor::editor_view::coarse_pointer)).then_some(vim);
     let slash = use_signal(|| None::<SlashState>);
 
     // ── Cross-file lookup + lazy fetch worker ─────────────────
