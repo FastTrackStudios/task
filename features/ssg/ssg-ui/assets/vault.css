@@ -214,6 +214,81 @@
 
 .ssg-page-toc a:hover { opacity: 1; }
 
+/* ── Search ────────────────────────────────────────────────────────── */
+
+.ssg-search { position: relative; }
+
+.ssg-search-input {
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--ssg-rule, currentColor);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.ssg-search-input:focus-visible {
+  outline: 2px solid var(--ssg-accent, currentColor);
+  outline-offset: 1px;
+}
+
+.ssg-search-results {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--ssg-rule, currentColor);
+  border-radius: 0.375rem;
+  overflow: hidden;
+  /* The results sit over the page rather than pushing it down — a list
+   * that reflows the article on every keystroke is unreadable while you
+   * type. `--ssg-surface` because a floating panel needs an opaque
+   * ground; without one the prose shows through it. */
+  position: absolute;
+  inset-inline: 0;
+  z-index: 10;
+  background: var(--ssg-surface, Canvas);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.ssg-search-results li + li {
+  border-block-start: 1px solid var(--ssg-rule, currentColor);
+}
+
+.ssg-search-results a {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.5rem 0.7rem;
+  text-decoration: none;
+}
+
+.ssg-search-results a:hover {
+  background: var(--ssg-code-bg, rgb(0 0 0 / 5%));
+}
+
+.ssg-search-title { font-weight: 600; }
+.ssg-search-section { opacity: 0.7; font-size: 0.85rem; }
+
+.ssg-search-excerpt {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  /* Two lines at most: an excerpt is a hint about which result this is,
+   * not the result itself. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ssg-search-empty {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+
 /* ── Tags ──────────────────────────────────────────────────────────── */
 
 .ssg-tags,
