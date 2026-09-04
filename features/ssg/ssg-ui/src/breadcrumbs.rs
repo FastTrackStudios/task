@@ -34,7 +34,13 @@ pub fn Breadcrumbs(
                 // The stage is not a page, so it is not a link — there
                 // is nothing to navigate to. A crumb that looks
                 // clickable and is not is worse than plain text.
-                if !page.stage.is_empty() {
+                //
+                // Skipped when it repeats the page's own name, which a
+                // one-note stage almost always does: Ignition's guide
+                // has a chapter called "The song" under a stage called
+                // "The song", and "Guide / The song / The song" tells a
+                // reader nothing twice.
+                if !page.stage.is_empty() && page.stage != page.title {
                     li { span { "{page.stage}" } }
                 }
                 li {
