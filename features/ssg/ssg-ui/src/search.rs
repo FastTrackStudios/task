@@ -137,16 +137,49 @@ fn excerpt(text: &str, at: usize, len: usize) -> String {
     }
     // Collapsed, because markdown's newlines and list markers make an
     // excerpt read as broken text when they survive into one line.
-    out.push_str(
-        &text[start..end]
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" "),
-    );
+    out.push_str(&plain(&text[start..end]));
     if end < text.len() {
         out.push('…');
     }
     out
+}
+
+/// Markdown reduced to the words in it.
+///
+/// An excerpt is a hint about which result this is, and a reader
+/// scanning four of them should not have to see `**bold**`,
+/// `[[a-slug|the label]]` and a row of backticks to do it. This is not a
+/// markdown parser and does not want to be: it strips the punctuation
+/// that carries no meaning once the text is out of its document, and
+/// keeps everything else.
+fn plain(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut chars = markdown.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            // `[[target|label]]` reads as the label; `[[target]]` as the
+            // target with its dashes opened out.
+            '[' if chars.peek() == Some(&'[') => {
+                chars.next();
+                let mut inner = String::new();
+                while let Some(c) = chars.next() {
+                    if c == ']' && chars.peek() == Some(&']') {
+                        chars.next();
+                        break;
+                    }
+                    inner.push(c);
+                }
+                let shown = inner.split_once('|').map_or(inner.as_str(), |(_, l)| l);
+                out.push_str(&shown.replace('-', " "));
+            }
+            // Emphasis, code and heading markers carry nothing here.
+            '*' | '_' | '`' | '#' | '>' => {}
+            _ => out.push(ch),
+        }
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn floor_boundary(text: &str, mut at: usize) -> usize {
@@ -253,6 +286,24 @@ mod tests {
         let excerpt = &hits[0].excerpt;
         assert!(!excerpt.contains('\n'), "an excerpt must read as one line");
         assert!(excerpt.contains("arrives"));
+    }
+
+    #[test]
+    fn an_excerpt_reads_as_prose_not_as_markdown() {
+        static MD: &[StaticPage] = &[page(
+            "m",
+            "M",
+            "The **song map** is a `chart` — see [[the-song|the song]] and [[key-changes]].",
+            &[],
+        )];
+        let hits = search(StaticVault::new(MD), "chart", 8);
+        let excerpt = &hits[0].excerpt;
+        assert!(excerpt.contains("song map"), "{excerpt}");
+        assert!(excerpt.contains("the song"), "an alias shows its label");
+        assert!(excerpt.contains("key changes"), "a bare target opens out");
+        for noise in ['*', '`', '[', ']', '|'] {
+            assert!(!excerpt.contains(noise), "`{noise}` survived: {excerpt}");
+        }
     }
 
     #[test]
