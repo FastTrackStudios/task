@@ -11,6 +11,17 @@
 //! collapsing them would mean either allocating at runtime or making the
 //! scanner generic over ownership for no gain.
 
+/// One heading in a built page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StaticHeading {
+    /// `1` for `#`, `2` for `##`, and so on.
+    pub level: u8,
+    /// The heading's text, markup flattened away.
+    pub text: &'static str,
+    /// Its `id` in the rendered HTML — what `#fragment` addresses it.
+    pub id: &'static str,
+}
+
 /// One page of a built vault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticPage {
@@ -39,6 +50,25 @@ pub struct StaticPage {
     pub html: &'static str,
     /// Outbound wikilink targets that resolved, in document order.
     pub links: &'static [&'static str],
+    /// The page's headings, in document order.
+    pub headings: &'static [StaticHeading],
+    /// Frontmatter `tags:`, lowercased.
+    pub tags: &'static [&'static str],
+    /// Words of prose.
+    pub words: u32,
+}
+
+impl StaticPage {
+    /// Minutes to read, at 220 words a minute, never less than one.
+    ///
+    /// 220 is a middling estimate for adult reading of technical prose;
+    /// the number is a courtesy, not a measurement, and rounding a
+    /// 40-word note to "0 min" would be a worse lie than rounding it up.
+    #[must_use]
+    pub const fn reading_minutes(&self) -> u32 {
+        let minutes = self.words / 220;
+        if minutes == 0 { 1 } else { minutes }
+    }
 }
 
 /// A built vault: its pages in reading order.
@@ -129,6 +159,36 @@ impl StaticVault {
         groups
     }
 
+    // t[impl ssg.order.tags]
+    /// Every tag in the vault, alphabetical, with how many pages carry
+    /// it.
+    ///
+    /// The vault's other axis. Reading order is one path through it —
+    /// the one the author chose — and tags are the cross-cutting one: a
+    /// reader who wants "everything about tempo" is not asking for a
+    /// chapter range.
+    #[must_use]
+    pub fn tags(&self) -> Vec<(&'static str, usize)> {
+        let mut counts: Vec<(&'static str, usize)> = Vec::new();
+        for tag in self.pages.iter().flat_map(|p| p.tags) {
+            match counts.iter_mut().find(|(name, _)| name == tag) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((tag, 1)),
+            }
+        }
+        counts.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        counts
+    }
+
+    /// The pages carrying `tag`, in reading order.
+    #[must_use]
+    pub fn tagged(&self, tag: &str) -> Vec<&'static StaticPage> {
+        self.pages
+            .iter()
+            .filter(|p| p.tags.contains(&tag))
+            .collect()
+    }
+
     // t[impl ssg.output.routes]
     /// Every route this vault publishes, as URL paths under `base`.
     ///
@@ -166,6 +226,9 @@ mod tests {
             source: "",
             body: "",
             html: "",
+            headings: &[],
+            tags: &[],
+            words: 0,
             links,
         }
     }
@@ -186,6 +249,46 @@ mod tests {
         assert_eq!(vault().previous("chords").expect("prev").slug, "intro");
         assert!(vault().previous("intro").is_none());
         assert!(vault().next("rhythm").is_none());
+    }
+
+    static TAGGED: &[StaticPage] = &[
+        StaticPage {
+            tags: &["tempo", "rig"],
+            ..page("intro", "", &[])
+        },
+        StaticPage {
+            tags: &["tempo"],
+            ..page("chords", "", &[])
+        },
+        StaticPage {
+            words: 660,
+            ..page("rhythm", "", &[])
+        },
+    ];
+
+    // t[verify ssg.order.tags]
+    #[test]
+    fn tags_are_counted_across_the_vault_and_sorted() {
+        let vault = StaticVault::new(TAGGED);
+        assert_eq!(vault.tags(), vec![("rig", 1), ("tempo", 2)]);
+    }
+
+    #[test]
+    fn a_tag_lists_the_pages_carrying_it_in_reading_order() {
+        let vault = StaticVault::new(TAGGED);
+        let slugs: Vec<_> = vault.tagged("tempo").iter().map(|p| p.slug).collect();
+        assert_eq!(slugs, ["intro", "chords"]);
+        assert!(vault.tagged("nothing").is_empty());
+    }
+
+    #[test]
+    fn a_reading_estimate_never_rounds_to_nothing() {
+        let vault = StaticVault::new(TAGGED);
+        // 660 words at 220 a minute.
+        assert_eq!(vault.page("rhythm").expect("page").reading_minutes(), 3);
+        // A note of no words is still a one-minute read, not a
+        // zero-minute one.
+        assert_eq!(vault.page("intro").expect("page").reading_minutes(), 1);
     }
 
     #[test]

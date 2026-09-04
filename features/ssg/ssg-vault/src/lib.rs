@@ -56,9 +56,9 @@ mod static_model;
 mod wikilink;
 
 pub use frontmatter::Frontmatter;
-pub use render::{FenceRenderer, RenderedPage, Renderer};
+pub use render::{FenceRenderer, Heading, RenderedPage, Renderer};
 pub use scan::{Note, ScanError, scan, scan_with};
-pub use static_model::{StaticPage, StaticVault};
+pub use static_model::{StaticHeading, StaticPage, StaticVault};
 pub use wikilink::{Wikilink, wikilinks};
 
 /// A page as it exists in a built site: the finished HTML plus the
@@ -99,6 +99,13 @@ pub struct Page {
     /// The note rendered for a reader: no frontmatter, no nav footer,
     /// wikilinks resolved, fences expanded.
     pub html: String,
+    /// The note's headings, in document order — its own shape, for an
+    /// in-page contents list and for a search index to point into.
+    pub headings: Vec<Heading>,
+    /// Frontmatter `tags:`, lowercased.
+    pub tags: Vec<String>,
+    /// Words of prose, for a reading estimate.
+    pub words: u32,
     /// Outbound wikilink targets that resolved to a page in this vault,
     /// in document order and deduplicated. Backlinks are the reverse of
     /// this, computed over the whole vault.

@@ -47,12 +47,30 @@ pub struct Renderer<'a> {
     broken_link_class: String,
 }
 
+/// One heading in a note.
+///
+/// The note's own shape, which a page uses for its in-page contents and
+/// a search index uses to say *where* in a page a hit is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heading {
+    /// `1` for `#`, `2` for `##`, and so on.
+    pub level: u8,
+    /// The heading's text, with any markup flattened away.
+    pub text: String,
+    /// Its `id` in the rendered HTML — what `#fragment` addresses it.
+    pub id: String,
+}
+
 /// What [`Renderer::render`] produces: the HTML plus what the render
-/// learned about the note's links.
+/// learned about the note.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenderedPage {
     /// The finished HTML.
     pub html: String,
+    /// The note's headings, in document order.
+    pub headings: Vec<Heading>,
+    /// How many words of prose the note carries.
+    pub words: u32,
     /// Wikilink targets that resolved, in document order, deduplicated.
     pub links: Vec<String>,
     /// Wikilink targets that matched no known slug.
@@ -170,8 +188,11 @@ impl<'a> Renderer<'a> {
         };
 
         let (markdown, links, broken_links) = self.resolve_wikilinks(body);
+        let (html, headings) = self.to_html(&markdown);
         RenderedPage {
-            html: self.to_html(&markdown),
+            html,
+            headings,
+            words: word_count(body),
             links,
             broken_links,
         }
@@ -231,8 +252,14 @@ impl<'a> Renderer<'a> {
     }
 
     /// Parse markdown to HTML, giving the fence renderers first refusal
-    /// on every fenced block.
-    fn to_html(&self, markdown: &str) -> String {
+    /// on every fenced block, and give every heading an `id`.
+    ///
+    /// The ids are what make a heading addressable — `#the-song-map` in
+    /// a URL, a table of contents that can link into the page, a search
+    /// result that lands on a section rather than at the top. They are
+    /// derived from the heading text the way GitHub derives them, so a
+    /// link written by hand against the rendered page keeps working.
+    fn to_html(&self, markdown: &str) -> (String, Vec<Heading>) {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_FOOTNOTES);
@@ -245,9 +272,41 @@ impl<'a> Renderer<'a> {
         // the body has to be collected before a renderer can be asked
         // about it.
         let mut open: Option<(String, String)> = None;
+        // The heading currently open, as (level, its events, its text).
+        // Same reason: the text arrives in pieces, and the `id` cannot
+        // be computed until all of it has.
+        let mut heading: Option<(u8, Vec<Event<'_>>, String)> = None;
+        let mut headings: Vec<Heading> = Vec::new();
+        let mut used_ids: BTreeMap<String, u32> = BTreeMap::new();
 
         for event in Parser::new_ext(markdown, options) {
             match event {
+                Event::Start(Tag::Heading { level, .. }) => {
+                    heading = Some((level as u8, Vec::new(), String::new()));
+                }
+                // t[impl ssg.order.headings]
+                Event::End(TagEnd::Heading(_)) if heading.is_some() => {
+                    let Some((level, inner, text)) = heading.take() else {
+                        continue;
+                    };
+                    let id = unique_id(&slugify(&text), &mut used_ids);
+                    events.push(Event::Html(
+                        format!("<h{level} id=\"{}\">", escape_html(&id)).into(),
+                    ));
+                    events.extend(inner);
+                    events.push(Event::Html(format!("</h{level}>").into()));
+                    headings.push(Heading { level, text, id });
+                }
+                // Inside a heading everything is buffered, including the
+                // text, so the id can be built from it.
+                event if heading.is_some() => {
+                    if let Some((_, inner, text)) = heading.as_mut() {
+                        if let Event::Text(t) | Event::Code(t) = &event {
+                            text.push_str(t);
+                        }
+                        inner.push(event);
+                    }
+                }
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
                     open = Some((info.into_string(), String::new()));
                 }
@@ -280,7 +339,7 @@ impl<'a> Renderer<'a> {
 
         let mut html = String::with_capacity(markdown.len().saturating_mul(2));
         html::push_html(&mut html, events.into_iter());
-        html
+        (html, headings)
     }
 
     /// First renderer to claim `info` wins.
@@ -309,6 +368,60 @@ fn strip_nav_footer(body: &str) -> &str {
     }
     let cut = above.trim_end();
     cut.strip_suffix("---").map_or(cut, str::trim_end)
+}
+
+/// A heading's text as an HTML `id`.
+///
+/// GitHub's rules, because they are the ones a person writing
+/// `[see below](#the-song-map)` by hand will have in mind: lowercase,
+/// spaces to dashes, and everything that is not a letter, number, dash
+/// or underscore dropped.
+fn slugify(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.trim().chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+            out.extend(ch.to_lowercase());
+        } else if ch.is_whitespace() {
+            if !out.ends_with('-') && !out.is_empty() {
+                out.push('-');
+            }
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    // A heading of nothing but punctuation would otherwise get an empty
+    // id, and `#` addresses the top of the page rather than that
+    // heading.
+    if out.is_empty() {
+        out.push_str("section");
+    }
+    out
+}
+
+/// `id`, made unique within the page.
+///
+/// Two `## Notes` headings in one note are ordinary, and duplicate ids
+/// are not: the second one would be unaddressable, because a fragment
+/// always finds the first. Suffixed the way GitHub does it.
+fn unique_id(id: &str, used: &mut BTreeMap<String, u32>) -> String {
+    let count = used.entry(id.to_owned()).or_insert(0);
+    *count += 1;
+    if *count == 1 {
+        id.to_owned()
+    } else {
+        format!("{id}-{}", *count - 1)
+    }
+}
+
+/// Words of prose in a note.
+///
+/// Deliberately rough — it counts whitespace-separated runs over the
+/// markdown, so a fenced code block counts and so does a link's URL.
+/// The number exists to say "this is a five-minute read, not a
+/// forty-minute one", and no reader has ever needed that to be exact.
+fn word_count(body: &str) -> u32 {
+    u32::try_from(body.split_whitespace().count()).unwrap_or(u32::MAX)
 }
 
 /// A link target reduced to what it names, ignoring how it was spelled.
@@ -449,7 +562,7 @@ mod tests {
     fn frontmatter_never_reaches_the_html() {
         let out = renderer().render(&note("---\ntitle: Chords\n---\n\n# Chords\n"));
         assert!(!out.html.contains("title:"));
-        assert!(out.html.contains("<h1>Chords</h1>"));
+        assert!(out.html.contains(r#"<h1 id="chords">Chords</h1>"#));
     }
 
     #[test]
@@ -495,6 +608,56 @@ mod tests {
         let out = renderer().render(&note("```\n[[chords]]\n```\n"));
         assert!(!out.html.contains("<a href"));
         assert!(out.links.is_empty());
+    }
+
+    // t[verify ssg.order.headings]
+    #[test]
+    fn headings_get_addressable_ids() {
+        let out = renderer().render(&note("# The Song Map\n\n## Why it works\n"));
+        assert!(
+            out.html
+                .contains(r#"<h1 id="the-song-map">The Song Map</h1>"#)
+        );
+        assert!(
+            out.html
+                .contains(r#"<h2 id="why-it-works">Why it works</h2>"#)
+        );
+
+        let ids: Vec<&str> = out.headings.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, ["the-song-map", "why-it-works"]);
+        assert_eq!(out.headings[0].level, 1);
+        assert_eq!(out.headings[1].level, 2);
+        assert_eq!(out.headings[1].text, "Why it works");
+    }
+
+    #[test]
+    fn a_repeated_heading_still_gets_its_own_id() {
+        // A fragment always finds the first match, so a duplicate id
+        // would make the second heading unaddressable.
+        let out = renderer().render(&note("## Notes\n\ntext\n\n## Notes\n"));
+        let ids: Vec<&str> = out.headings.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, ["notes", "notes-1"]);
+    }
+
+    #[test]
+    fn heading_markup_is_flattened_for_the_id_and_kept_in_the_html() {
+        let out = renderer().render(&note("## The `kf` fence, explained\n"));
+        assert_eq!(out.headings[0].text, "The kf fence, explained");
+        assert_eq!(out.headings[0].id, "the-kf-fence-explained");
+        // The rendered heading keeps its `<code>`.
+        assert!(out.html.contains("<code>kf</code>"));
+    }
+
+    #[test]
+    fn a_heading_of_only_punctuation_still_gets_an_id() {
+        let out = renderer().render(&note("## ???\n"));
+        assert_eq!(out.headings[0].id, "section");
+    }
+
+    #[test]
+    fn words_are_counted_for_a_reading_estimate() {
+        let out = renderer().render(&note("---\ntitle: x\n---\n\none two three four\n"));
+        assert_eq!(out.words, 4);
     }
 
     #[test]

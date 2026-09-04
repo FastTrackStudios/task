@@ -151,6 +151,17 @@ pub fn scan_with<'a>(
                 source: note.source.clone(),
                 body: body.to_owned(),
                 html: rendered.html,
+                headings: rendered.headings,
+                // Tags are a vault-wide axis, so they are lowercased
+                // here: `#Rig` and `#rig` are one tag, and a tag page
+                // that split them would be lying about the vault.
+                tags: fm
+                    .list("tags")
+                    .into_iter()
+                    .map(|t| t.trim_start_matches('#').to_lowercase())
+                    .filter(|t| !t.is_empty())
+                    .collect(),
+                words: rendered.words,
                 links: rendered.links,
                 broken_links: rendered.broken_links,
             }
