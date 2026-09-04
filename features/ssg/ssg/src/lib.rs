@@ -64,6 +64,21 @@
 //! }
 //! ```
 //!
+//! Build it with **both** flags:
+//!
+//! ```text
+//! dx build --platform web --ssg --force-sequential
+//! ```
+//!
+//! `--force-sequential` is not about build speed. The pre-render uses
+//! `public/index.html` as its page shell, and that file is written by
+//! the *client* build; run in parallel — the default — the server can
+//! reach the render before the client has produced it, and every page
+//! comes out wrapped in Dioxus's bare fallback shell instead: no
+//! `<title>`, no `<meta charset>` (so smart punctuation arrives as
+//! mojibake), and no bundle script, so nothing hydrates. The build still
+//! reports success. Sequential runs the client first. (dioxus#3518.)
+//!
 //! [`StaticVault::routes`] is the interesting half. `Routable::static_routes()`
 //! gives the router's *fully static* paths, and a vault's pages are not
 //! among them: `/guide/:slug` is one route with a parameter, and only the
