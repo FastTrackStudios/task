@@ -1,0 +1,23 @@
+[package]
+name = "ssg-vault"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# The host-side half of the static-site feature: read a vault of markdown
+# notes off disk and turn it into finished HTML.
+#
+# Deliberately tiny in dependencies. Every FTS site consumes this from a
+# *build script* in another repo, so anything heavy here is paid for by
+# four workspaces on every cold build. std + a markdown parser is the
+# whole budget; the graph, the Dioxus components and the codegen live in
+# sibling crates so a consumer that only wants HTML pays for only that.
+
+[dependencies]
+# Markdown → HTML. `html` is the renderer; the parser alone would leave
+# us writing one.
+pulldown-cmark = { workspace = true, features = ["html"] }
+
+[lints]
+workspace = true

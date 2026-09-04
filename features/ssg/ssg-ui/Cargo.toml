@@ -1,0 +1,40 @@
+[package]
+name = "ssg-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Dioxus components that render a built vault. Every one of them is a
+# pure function of `&'static` data — no signals, no effects, no hooks
+# that need a browser — because these components' whole job is to render
+# once, on the host, during `dx build --ssg`, and never run again.
+#
+# Deliberately NOT the knowledge-graph view: that one pans, zooms and
+# hovers, so it needs wasm in the page. `graph::VaultGraph` here draws
+# the same layout as plain SVG with `<a>` nodes, which is the version a
+# static page can serve.
+
+[dependencies]
+ssg-vault = { workspace = true }
+
+dioxus = { workspace = true }
+
+# Graph layout, community detection and the node palette. The crate is
+# pure and FS-free by design, so its layout runs just as well in a
+# server render as in a browser — which is the whole reason a static
+# page can carry a real graph.
+#
+# Optional, and off by default, because it reaches architect-ui and from
+# there the whole architect/vox/iroh chain. Keyflow and Ignition draw a
+# graph beside their guides and already carry that; Signal and Session
+# publish prose and should not inherit a p2p stack to do it.
+view-knowledge-graph = { workspace = true, optional = true }
+
+[features]
+default = []
+# Draw the vault's link graph as static SVG (`VaultGraph`).
+graph = ["dep:view-knowledge-graph"]
+
+[lints]
+workspace = true
