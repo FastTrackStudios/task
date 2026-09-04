@@ -49,6 +49,10 @@
         type = lib.types.raw;
         description = "static-web-server OCI image factory: { name, tag ?, siteRoot }.";
       };
+      mkServerImage = lib.mkOption {
+        type = lib.types.raw;
+        description = "task-server OCI image factory: { server } — the package holding bin/task-server.";
+      };
       cargoRail = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
         description = "cargo-rail release binary (null where upstream ships no asset).";
