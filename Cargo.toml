@@ -164,7 +164,6 @@ members = [
     "features/scripture/scripture-ui",
     "features/share/share-proto",
     "features/ssg/ssg",
-    "features/ssg/ssg-bake",
     "features/ssg/ssg-build",
     "features/ssg/ssg-ui",
     "features/ssg/ssg-vault",
@@ -439,7 +438,6 @@ spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 # the site crate itself. Nothing here depends on the rest of Task, which
 # is what keeps that dependency cheap for them.
 ssg = { path = "features/ssg/ssg" }
-ssg-bake = { path = "features/ssg/ssg-bake" }
 ssg-build = { path = "features/ssg/ssg-build" }
 ssg-ui = { path = "features/ssg/ssg-ui" }
 ssg-vault = { path = "features/ssg/ssg-vault" }

@@ -1,17 +1,20 @@
 //! The link graph, drawn as static SVG.
 //!
 //! `view-knowledge-graph`'s own `KnowledgeGraphView` pans, zooms, hovers
-//! and dims — all of which need wasm in the page, which a statically
-//! generated guide does not have. What it *does* have is that crate's
-//! layout: Fruchterman–Reingold, deterministic, no RNG, no worker. So
-//! the layout is shared and only the rendering differs — here every node
-//! is an `<a>` and every edge a `<line>`, and the whole thing is a few
-//! kilobytes of markup that a browser paints before it has asked for
-//! anything else.
+//! and dims, all through hooks and signals — so it renders differently
+//! on its first frame than after a wheel event, which is exactly what a
+//! hydrated pre-render must not do. What that crate *also* has is a
+//! layout: Fruchterman–Reingold, deterministic, no RNG, no worker.
+//!
+//! So the layout is shared and only the rendering differs. Here every
+//! node is an `<a>` and every edge a `<line>`: a few kilobytes of markup
+//! that paint with the rest of the page, before the bundle has arrived.
 //!
 //! What is lost is hover-to-highlight and drag-to-pan. What is kept is
-//! the thing the graph is actually for on a guide page: seeing what a
-//! concept touches, and clicking through to it.
+//! what the graph is for on a guide page: seeing what a concept touches,
+//! and clicking through to it. A site that wants the full interactive
+//! map can still put `KnowledgeGraphView` on a route of its own — that
+//! route just should not be in the pre-rendered set.
 
 use dioxus::prelude::*;
 use ssg_vault::StaticVault;
