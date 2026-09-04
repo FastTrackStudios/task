@@ -51,3 +51,18 @@ use dioxus::prelude::*;
 /// the sheet slots into a site's theme rather than fighting it. A site
 /// that would rather style `ssg-*` itself simply does not link this.
 pub const VAULT_STYLE: Asset = asset!("/assets/vault.css");
+
+/// The same stylesheet, as bytes.
+///
+/// [`VAULT_STYLE`] is the right thing for a site that links its CSS.
+/// This is for the two cases where that does not work:
+///
+/// - **Crossing a repo boundary.** Every consumer of this crate is a
+///   different repository, and `include_str!` into a git dependency has
+///   no stable path on disk. Exporting the bytes is the established
+///   answer here — `architect_ui::THEME_CSS` exists for the same reason.
+/// - **A baked page.** `ssg-bake` writes files with no scripts, and an
+///   `Asset` is resolved by the asset pipeline at runtime. A site that
+///   inlines this into its shell gets styled static pages with one
+///   fewer round trip.
+pub const VAULT_CSS: &str = include_str!("../assets/vault.css");

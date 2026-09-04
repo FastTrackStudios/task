@@ -1,15 +1,16 @@
 //! `ssg-bake` — routes to `index.html` files.
 //!
-//! Point it at the directory `dx build` produced, hand it a route and a
-//! component, and it writes `<root>/<route>/index.html` containing that
-//! component already rendered.
+//! Point it at the directory `dx build` produced, hand it the site's
+//! root component and a list of routes, and it writes
+//! `<root>/<route>/index.html` for each — the app as it renders at that
+//! URL, with no scripts.
 //!
 //! ```no_run
 //! # use dioxus::prelude::*;
+//! # fn App() -> Element { rsx! { p { "hi" } } }
 //! # fn main() -> Result<(), ssg_bake::BakeError> {
-//! # let article = rsx! { p { "hi" } };
-//! ssg_bake::Site::at("target/dx/signal-web/release/web/public")?
-//!     .page(ssg_bake::Page::new("/guide/running-it", article).title("Running it — Signal"))
+//! ssg_bake::Site::at("target/dx/signal-web/release/web/public", App)?
+//!     .page(ssg_bake::Page::new("/guide/running-it").title("Running it — Signal"))
 //!     .bake()?;
 //! # Ok(()) }
 //! ```
@@ -47,27 +48,36 @@
 //! between baked pages is ordinary link-following.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use dioxus::prelude::Element;
+use dioxus::prelude::{Element, History, VirtualDom};
+
+mod history;
+
+use history::BakedHistory;
 
 /// A page to bake.
 pub struct Page {
     route: String,
     title: Option<String>,
     description: Option<String>,
-    element: Element,
 }
 
 impl Page {
-    /// A page at `route` (a URL path such as `/guide/chords`) rendering
-    /// `element`.
+    /// A page at `route` — a URL path such as `/guide/chords`.
+    ///
+    /// The route is what gets rendered: the baker seeds the app's
+    /// history with it and renders the app, so what lands in the file is
+    /// what a browser at that URL would have shown. That matters more
+    /// than it sounds — rendering a bare component instead would drop
+    /// everything the app puts *around* a page, and a router `Link` in
+    /// that chrome would panic for want of a router above it.
     #[must_use]
-    pub fn new(route: impl Into<String>, element: Element) -> Self {
+    pub fn new(route: impl Into<String>) -> Self {
         Self {
             route: route.into(),
             title: None,
             description: None,
-            element,
         }
     }
 
@@ -120,7 +130,7 @@ impl Shell {
         let split = at + open_end + 1;
 
         Ok(Self {
-            before_body: strip_scripts(&html[..split]),
+            before_body: ensure_charset(&strip_scripts(&html[..split])),
             after_body: strip_scripts(&html[split..]),
         })
     }
@@ -150,6 +160,32 @@ impl Shell {
         }
     }
 
+    /// Append markup to the `<head>` of every page this shell wraps.
+    ///
+    /// Needed more often than it looks. A Dioxus app can put its
+    /// stylesheet in the document with `document::Style` or
+    /// `document::Link` from inside a component, and those are
+    /// side-effecting document nodes: `dioxus-ssr` renders the component
+    /// tree, not the document, so they leave no trace in a baked page.
+    /// A site that styles itself that way passes the same `<style>` or
+    /// `<link>` here, and its baked pages look like its live ones.
+    #[must_use]
+    pub fn head(mut self, html: &str) -> Self {
+        self.before_body = match self.before_body.find("</head>") {
+            Some(at) => format!(
+                "{}{html}{}",
+                &self.before_body[..at],
+                &self.before_body[at..]
+            ),
+            // No `</head>` to insert before means this is not a document
+            // shell at all. Appending would put the markup in the body,
+            // where a `<style>` still applies and a `<link>` still loads
+            // — wrong, but visibly wrong rather than silently dropped.
+            None => format!("{}{html}", self.before_body),
+        };
+        self
+    }
+
     /// Wrap rendered markup, applying a page's title and description.
     fn wrap(&self, body: &str, page: &Page) -> String {
         let mut head = self.before_body.clone();
@@ -167,29 +203,34 @@ impl Shell {
 pub struct Site {
     root: PathBuf,
     shell: Shell,
+    app: fn() -> Element,
     pages: Vec<Page>,
 }
 
 impl Site {
-    /// Bake into `root`, taking the shell from `root/index.html`.
+    /// Bake `app` into `root`, taking the shell from `root/index.html`.
     ///
-    /// `root` is what `dx build` produced — its `public` directory.
-    pub fn at(root: impl Into<PathBuf>) -> Result<Self, BakeError> {
+    /// `root` is what `dx build` produced — its `public` directory. `app`
+    /// is the site's root component, the same one it launches with: each
+    /// page is that component rendered at one route.
+    pub fn at(root: impl Into<PathBuf>, app: fn() -> Element) -> Result<Self, BakeError> {
         let root = root.into();
         let shell = Shell::from_index_file(root.join("index.html"), "main")?;
         Ok(Self {
             root,
             shell,
+            app,
             pages: Vec::new(),
         })
     }
 
     /// Bake into `root` with a shell of your own.
     #[must_use]
-    pub fn with_shell(root: impl Into<PathBuf>, shell: Shell) -> Self {
+    pub fn with_shell(root: impl Into<PathBuf>, app: fn() -> Element, shell: Shell) -> Self {
         Self {
             root: root.into(),
             shell,
+            app,
             pages: Vec::new(),
         }
     }
@@ -229,7 +270,7 @@ impl Site {
             // without rewrite rules and without a trailing-slash
             // redirect.
             let path = dir.join("index.html");
-            let body = dioxus::ssr::render_element(page.element.clone());
+            let body = self.render(&page.route);
             std::fs::write(&path, self.shell.wrap(&body, page)).map_err(|source| {
                 BakeError::Io {
                     path: path.clone(),
@@ -240,6 +281,24 @@ impl Site {
         }
 
         Ok(written)
+    }
+
+    /// Render the app as it would appear at `route`.
+    ///
+    /// The route reaches the app as a [`History`] in root context, which
+    /// is where the router looks for it — so the render goes through the
+    /// real router and produces the real page, chrome included.
+    ///
+    /// `rebuild_in_place` is a synchronous rebuild: it resolves the
+    /// component tree and does not wait on futures. That is exactly
+    /// right for a page whose content is `&'static` and exactly wrong
+    /// for one that fetches — which is the line between a page that
+    /// should be baked and one that should not.
+    fn render(&self, route: &str) -> String {
+        let mut dom = VirtualDom::new(self.app)
+            .with_root_context::<Rc<dyn History>>(Rc::new(BakedHistory::at(route)));
+        dom.rebuild_in_place();
+        dioxus::ssr::render(&dom)
     }
 }
 
@@ -326,6 +385,31 @@ fn strip_script_preloads(html: &str) -> String {
     out
 }
 
+/// Guarantee a `<meta charset>` in the head, adding UTF-8 if there is
+/// none.
+///
+/// Not paranoia. A browser served HTML without a charset — and a plain
+/// file server sends no `Content-Type` charset either — falls back to a
+/// locale default, and prose full of em dashes and curly quotes comes
+/// out as mojibake. Markdown's smart punctuation makes every baked page
+/// full of exactly those characters, so this is the difference between
+/// readable and not.
+fn ensure_charset(head: &str) -> String {
+    if head.contains("charset") {
+        return head.to_owned();
+    }
+    const META: &str = r#"<meta charset="utf-8">"#;
+    // Directly after `<head>`, because the declaration has to appear in
+    // the first 1024 bytes of the document to be honoured.
+    match head.find("<head>") {
+        Some(at) => {
+            let after = at + "<head>".len();
+            format!("{}{META}{}", &head[..after], &head[after..])
+        }
+        None => format!("{META}{head}"),
+    }
+}
+
 /// Replace the shell's title, or add one if it has none.
 fn replace_title(head: &str, title: &str) -> String {
     let escaped = escape(title);
@@ -398,15 +482,14 @@ mod tests {
 
     #[test]
     fn the_body_lands_inside_the_mount_element() {
-        let page = Page::new("/guide", Ok(dioxus::prelude::VNode::placeholder()));
+        let page = Page::new("/guide");
         let html = shell().wrap("<p>prose</p>", &page);
         assert!(html.contains(r#"<div id="main"><p>prose</p></div>"#));
     }
 
     #[test]
     fn a_page_title_replaces_the_shells() {
-        let page = Page::new("/guide", Ok(dioxus::prelude::VNode::placeholder()))
-            .title("Running it — Signal");
+        let page = Page::new("/guide").title("Running it — Signal");
         let html = shell().wrap("", &page);
         assert!(html.contains("<title>Running it — Signal</title>"));
         assert!(!html.contains("<title>Signal</title>"));
@@ -414,10 +497,41 @@ mod tests {
 
     #[test]
     fn a_description_is_added_and_escaped() {
-        let page = Page::new("/guide", Ok(dioxus::prelude::VNode::placeholder()))
-            .description(r#"Rigs & "racks""#);
+        let page = Page::new("/guide").description(r#"Rigs & "racks""#);
         let html = shell().wrap("", &page);
         assert!(html.contains(r#"content="Rigs &amp; &quot;racks&quot;""#));
+    }
+
+    #[test]
+    fn a_shell_without_a_charset_gets_one() {
+        let shell = Shell::from_index(
+            "<html><head></head><body><div id=\"main\"></div></body></html>",
+            "main",
+        )
+        .expect("shell");
+        assert!(shell.before_body.contains(r#"<meta charset="utf-8">"#));
+        // Inside the first 1024 bytes, which is the rule that makes it
+        // count.
+        let at = shell.before_body.find("charset").expect("charset");
+        assert!(at < 1024);
+    }
+
+    #[test]
+    fn an_existing_charset_is_left_alone() {
+        let html = r#"<html><head><meta charset="iso-8859-1"></head><body><div id="main"></div></body></html>"#;
+        let shell = Shell::from_index(html, "main").expect("shell");
+        assert!(shell.before_body.contains("iso-8859-1"));
+        assert_eq!(shell.before_body.matches("charset").count(), 1);
+    }
+
+    #[test]
+    fn extra_head_markup_lands_inside_the_head() {
+        let shell = shell().head("<style>body{color:red}</style>");
+        let page = Page::new("/guide");
+        let html = shell.wrap("", &page);
+        let head_end = html.find("</head>").expect("has a head");
+        let style = html.find("<style>").expect("style was added");
+        assert!(style < head_end, "style should sit inside the head");
     }
 
     #[test]

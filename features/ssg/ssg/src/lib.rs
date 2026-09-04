@@ -61,7 +61,7 @@ pub use ssg_vault::{
 };
 
 #[cfg(feature = "ui")]
-pub use ssg_ui::{Backlinks, ChapterNav, VAULT_STYLE, VaultArticle, VaultToc};
+pub use ssg_ui::{Backlinks, ChapterNav, VAULT_CSS, VAULT_STYLE, VaultArticle, VaultToc};
 
 #[cfg(feature = "graph")]
 pub use ssg_ui::{VaultGraph, local_graph, vault_graph};
