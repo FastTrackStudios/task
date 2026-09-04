@@ -100,7 +100,42 @@ pub struct CentralAuth {
     /// person* — reading their linked GitHub token to land a change
     /// they accepted — finds the credential they already presented
     /// here, and nowhere else.
-    by_user: Mutex<HashMap<String, (String, Instant)>>,
+    by_user: Mutex<HashMap<String, Credentials>>,
+}
+
+/// The credentials one user has presented lately, by kind.
+///
+/// A person often holds two at once: the web app's OIDC access token
+/// (a JWT, minted by `/oauth2/token`, the only kind the issuer's
+/// `/oauth2/linked-token` accepts) and a CLI's plain session token. The
+/// last one seen is not the right one to act with — a CLI call must not
+/// shadow the web token — so each kind is kept, and the access token is
+/// preferred whenever it is still fresh.
+#[derive(Default)]
+struct Credentials {
+    access: Option<(String, Instant)>,
+    session: Option<(String, Instant)>,
+}
+
+/// How long a presented credential is kept for acting at the issuer. The
+/// issuer's access tokens live an hour; a token this old is re-checked by
+/// the issuer anyway, so keeping it longer would only add a failed call.
+const CREDENTIAL_TTL: Duration = Duration::from_secs(50 * 60);
+
+/// Whether a token is a JWT — three base64url segments — which is what
+/// the issuer's OIDC access tokens are, and what its session tokens are
+/// not.
+fn looks_like_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'=')
+    };
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(h), Some(p), Some(s), None) if ok(h) && ok(p) && ok(s)
+    )
 }
 
 /// A GitHub account the issuer holds linked to a user, with the token
@@ -188,16 +223,28 @@ impl CentralAuth {
         }
     }
 
-    /// The live token `user_id` most recently presented, if any.
+    /// A live credential `user_id` presented lately: their OIDC access
+    /// token when there is a fresh one (the kind the issuer acts on),
+    /// else their session token.
     #[must_use]
     pub fn token_for(&self, user_id: &str) -> Option<String> {
         let mut map = self.by_user.lock().ok()?;
-        let (token, until) = map.get(user_id)?;
-        if *until <= Instant::now() {
-            map.remove(user_id);
-            return None;
+        let creds = map.get_mut(user_id)?;
+        let now = Instant::now();
+        for slot in [&mut creds.access, &mut creds.session] {
+            if slot.as_ref().is_some_and(|(_, until)| *until <= now) {
+                *slot = None;
+            }
         }
-        Some(token.clone())
+        let found = creds
+            .access
+            .as_ref()
+            .or(creds.session.as_ref())
+            .map(|(t, _)| t.clone());
+        if found.is_none() {
+            map.remove(user_id);
+        }
+        found
     }
 
     /// The GitHub account the issuer holds linked to `user_id`, fetched
@@ -339,9 +386,19 @@ impl CentralAuth {
         if let Some(p) = &profile {
             if let Ok(mut by_user) = self.by_user.lock() {
                 if by_user.len() > 4096 {
-                    by_user.retain(|_, (_, until)| *until > Instant::now());
+                    let now = Instant::now();
+                    by_user.retain(|_, c| {
+                        c.access.as_ref().is_some_and(|(_, u)| *u > now)
+                            || c.session.as_ref().is_some_and(|(_, u)| *u > now)
+                    });
                 }
-                by_user.insert(p.user_id.clone(), (token.to_owned(), Instant::now() + ttl));
+                let entry = by_user.entry(p.user_id.clone()).or_default();
+                let kept = (token.to_owned(), Instant::now() + CREDENTIAL_TTL);
+                if looks_like_jwt(token) {
+                    entry.access = Some(kept);
+                } else {
+                    entry.session = Some(kept);
+                }
             }
         }
         cache.insert(
@@ -608,7 +665,26 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CACHE_TTL, CentralAuth, CentralProfile, NEGATIVE_TTL};
+    use super::{CACHE_TTL, CentralAuth, CentralProfile, NEGATIVE_TTL, looks_like_jwt};
+
+    /// A person's web access token is what the issuer acts on; a CLI's
+    /// session token presented afterwards must not shadow it.
+    #[test]
+    fn the_access_token_is_preferred_over_a_later_session_token() {
+        let central = CentralAuth::new("https://issuer.test");
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2ln";
+        assert!(looks_like_jwt(jwt));
+        assert!(!looks_like_jwt("plain-session-token-with-no-dots"));
+        central.remember_for_test(jwt, Some("u-1".into()));
+        central.remember_for_test("cli-session-token", Some("u-1".into()));
+        assert_eq!(central.token_for("u-1").as_deref(), Some(jwt));
+        // Only a session token: it is what there is.
+        central.remember_for_test("other-session", Some("u-2".into()));
+        assert_eq!(central.token_for("u-2").as_deref(), Some("other-session"));
+        // A rejection remembers nothing for the user.
+        central.remember_for_test("bad", None);
+        assert_eq!(central.token_for("nobody"), None);
+    }
 
     /// A rejection is remembered for a shorter time than an acceptance,
     /// because a refresh is exactly the thing that changes it.
