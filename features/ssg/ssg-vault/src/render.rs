@@ -12,7 +12,7 @@
 //! substituted *during* the parse because that is the only place their
 //! language tag and their body arrive together.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
@@ -40,6 +40,8 @@ pub type FenceRenderer<'a> = dyn Fn(&str, &str) -> Option<String> + 'a;
 pub struct Renderer<'a> {
     link_base: String,
     known_slugs: BTreeSet<String>,
+    /// Normalised link target → canonical slug. See [`Renderer::alias`].
+    aliases: BTreeMap<String, String>,
     fences: Vec<Box<FenceRenderer<'a>>>,
     strip_nav_footer: bool,
     broken_link_class: String,
@@ -66,13 +68,65 @@ impl<'a> Renderer<'a> {
     /// link and a typo would ship as a 404 instead of failing the build.
     #[must_use]
     pub fn new(link_base: impl Into<String>, slugs: impl IntoIterator<Item = String>) -> Self {
+        let known_slugs: BTreeSet<String> = slugs.into_iter().collect();
+        // Every slug resolves case-insensitively, and with spaces where
+        // it has dashes. `[[Key Meter Changes]]` is how a person writing
+        // prose refers to `key-meter-changes.md`, and Obsidian resolves
+        // it, so a vault authored in Obsidian is full of them.
+        let aliases = known_slugs
+            .iter()
+            .map(|slug| (normalise(slug), slug.clone()))
+            .collect();
+
         Self {
             link_base: link_base.into().trim_end_matches('/').to_owned(),
-            known_slugs: slugs.into_iter().collect(),
+            known_slugs,
+            aliases,
             fences: Vec::new(),
             strip_nav_footer: true,
             broken_link_class: "ssg-broken-link".to_owned(),
         }
+    }
+
+    /// Let `alias` resolve to `slug`.
+    ///
+    /// A vault's links are written by a person, and a person writes the
+    /// page's *name*: `[[Recording]]`, not `[[recording]]`. Titles are
+    /// registered here so those resolve — which is what Obsidian and
+    /// Quartz do, and what stops a real vault arriving with dozens of
+    /// "broken" references that are nothing of the kind.
+    ///
+    /// Matching ignores case, and treats spaces and dashes alike. An
+    /// alias that collides with an existing one loses: a slug is always
+    /// the more specific claim on its own name.
+    #[must_use]
+    pub fn alias(mut self, alias: &str, slug: impl Into<String>) -> Self {
+        self.aliases
+            .entry(normalise(alias))
+            .or_insert_with(|| slug.into());
+        self
+    }
+
+    /// Register several aliases — typically every page's title.
+    #[must_use]
+    pub fn aliases<K: AsRef<str>, V: Into<String>>(
+        mut self,
+        pairs: impl IntoIterator<Item = (K, V)>,
+    ) -> Self {
+        for (alias, slug) in pairs {
+            self = self.alias(alias.as_ref(), slug);
+        }
+        self
+    }
+
+    /// The slug a wikilink target names, if the vault has one.
+    fn resolve(&self, target: &str) -> Option<&str> {
+        if self.known_slugs.contains(target) {
+            // Borrowed from the set so the exact spelling wins without a
+            // lookup in the alias table.
+            return self.known_slugs.get(target).map(String::as_str);
+        }
+        self.aliases.get(&normalise(target)).map(String::as_str)
     }
 
     /// Add a fence renderer. Renderers are tried in the order added, and
@@ -137,7 +191,7 @@ impl<'a> Renderer<'a> {
             out.push_str(&body[cursor..link.span.0]);
             cursor = link.span.1;
 
-            if self.known_slugs.contains(&link.target) {
+            if let Some(slug) = self.resolve(&link.target).map(ToOwned::to_owned) {
                 // Escape the label as markdown link text: a `]` in an
                 // alias would otherwise close the link early and spill
                 // the URL into the prose.
@@ -146,10 +200,13 @@ impl<'a> Renderer<'a> {
                 out.push_str("](");
                 out.push_str(&self.link_base);
                 out.push('/');
-                out.push_str(&link.target);
+                // The resolved slug, not what was written: `[[Recording]]`
+                // has to become `/guide/recording` or the link 404s on a
+                // case-sensitive host.
+                out.push_str(&slug);
                 out.push(')');
-                if !links.contains(&link.target) {
-                    links.push(link.target);
+                if !links.contains(&slug) {
+                    links.push(slug);
                 }
             } else {
                 // Not a link. A dead `<a href>` invites a click that
@@ -254,6 +311,33 @@ fn strip_nav_footer(body: &str) -> &str {
     cut.strip_suffix("---").map_or(cut, str::trim_end)
 }
 
+/// A link target reduced to what it names, ignoring how it was spelled.
+///
+/// Lowercased, with runs of spaces, dashes and underscores collapsed to
+/// a single dash. So `Key Meter Changes`, `key-meter-changes` and
+/// `Key_Meter__Changes` are one target.
+fn normalise(target: &str) -> String {
+    let mut out = String::with_capacity(target.len());
+    let mut last_was_sep = false;
+    for ch in target.trim().chars() {
+        if ch.is_whitespace() || ch == '-' || ch == '_' {
+            if !last_was_sep && !out.is_empty() {
+                out.push('-');
+            }
+            last_was_sep = true;
+        } else {
+            out.extend(ch.to_lowercase());
+            last_was_sep = false;
+        }
+    }
+    // A trailing separator would make `foo-` a different target from
+    // `foo`, which no author means.
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
 /// Escape the characters that would end a markdown link's text early.
 fn escape_link_text(text: &str) -> String {
     text.replace('\\', r"\\")
@@ -299,6 +383,47 @@ mod tests {
             out.html
                 .contains(r#"<a href="/guide/chords">the chord page</a>"#)
         );
+    }
+
+    #[test]
+    fn a_target_resolves_whatever_its_case() {
+        let out = renderer().render(&note("see [[Chords]] and [[CHORDS]]"));
+        assert_eq!(out.links, vec!["chords"]);
+        // The canonical slug, not what was written — a case-sensitive
+        // host would 404 on `/guide/Chords`.
+        assert!(out.html.contains(r#"href="/guide/chords""#));
+        assert!(!out.html.contains("/guide/Chords"));
+    }
+
+    #[test]
+    fn spaces_dashes_and_underscores_name_the_same_page() {
+        let r = Renderer::new("/guide", ["key-meter-changes".to_owned()]);
+        for written in [
+            "key meter changes",
+            "Key Meter Changes",
+            "key_meter__changes",
+        ] {
+            let out = r.render(&note(&format!("see [[{written}]]")));
+            assert_eq!(out.links, vec!["key-meter-changes"], "for `{written}`");
+        }
+    }
+
+    #[test]
+    fn a_title_resolves_to_its_page() {
+        let out = renderer()
+            .alias("The Rhythm Page", "rhythm")
+            .render(&note("see [[The Rhythm Page]]"));
+        assert_eq!(out.links, vec!["rhythm"]);
+    }
+
+    #[test]
+    fn a_slug_beats_an_alias_that_collides_with_it() {
+        // `chords` is a real page; an alias claiming that name must not
+        // take it, or a link to the page would land somewhere else.
+        let out = renderer()
+            .alias("chords", "rhythm")
+            .render(&note("see [[chords]]"));
+        assert_eq!(out.links, vec!["chords"]);
     }
 
     // t[verify ssg.render.links]

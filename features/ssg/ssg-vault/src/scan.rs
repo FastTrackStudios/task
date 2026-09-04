@@ -118,7 +118,17 @@ pub fn scan_with<'a>(
     build: impl FnOnce(Vec<String>) -> Renderer<'a>,
 ) -> Result<Vault, ScanError> {
     let notes = scan(dir)?;
-    let renderer = build(notes.iter().map(|n| n.slug.clone()).collect());
+
+    // Titles are registered as link aliases, so `[[Recording]]` finds
+    // `recording.md`. That is how a person writes a cross-reference —
+    // by the page's name, not its filename — and it is what Obsidian
+    // resolves, so a vault authored there is full of them.
+    let titles: Vec<(String, String)> = notes
+        .iter()
+        .map(|note| (title_of(note), note.slug.clone()))
+        .collect();
+
+    let renderer = build(notes.iter().map(|n| n.slug.clone()).collect()).aliases(titles);
 
     let mut pages: Vec<Page> = notes
         .iter()
@@ -127,11 +137,7 @@ pub fn scan_with<'a>(
             let rendered = renderer.render(note);
             Page {
                 slug: note.slug.clone(),
-                title: fm
-                    .get("title")
-                    .map(str::to_owned)
-                    .or_else(|| first_heading(body))
-                    .unwrap_or_else(|| note.slug.replace('-', " ")),
+                title: title_of(note),
                 summary: fm
                     .any(&["summary", "blurb", "description"])
                     .unwrap_or_default()
@@ -155,6 +161,20 @@ pub fn scan_with<'a>(
     // `scan` already sorted the notes, so this is stable across machines.
     pages.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.slug.cmp(&b.slug)));
     Ok(Vault { pages })
+}
+
+/// A note's display title: frontmatter `title:`, else its first `#`
+/// heading, else the de-slugged file name.
+///
+/// One function because the title is used twice and the two must agree:
+/// it names the page in a table of contents, and it is what a
+/// `[[wikilink]]` written by a person is most likely to say.
+fn title_of(note: &Note) -> String {
+    let (fm, body) = Frontmatter::split(&note.source);
+    fm.get("title")
+        .map(str::to_owned)
+        .or_else(|| first_heading(body))
+        .unwrap_or_else(|| note.slug.replace('-', " "))
 }
 
 /// The first ATX heading in a body, as a title fallback.
