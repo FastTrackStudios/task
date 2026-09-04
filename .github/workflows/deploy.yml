@@ -92,9 +92,9 @@ jobs:
             cd apps/web
             dx build --release --platform web --debug-symbols false \
               --wasm-split --features wasm-split'
-          web="$(find "$dir" "$PWD/target" -maxdepth 6 -type d \
-            -path '*dx/task-app-web/release/web/public' 2>/dev/null | head -n 1)"
-          test -n "$web" || { echo "::error::dx wrote no web bundle"; exit 1; }
+          # dx writes under the cargo target dir: <target>/dx/<app>/release/web/public.
+          web="$dir/dx/task-app-web/release/web/public"
+          test -f "$web/index.html" || { echo "::error::dx wrote no web bundle at $web"; exit 1; }
           echo "server=$dir/release/task-server" >> "$GITHUB_OUTPUT"
           echo "web=$web" >> "$GITHUB_OUTPUT"
           ls -la "$dir/release/task-server"; du -sh "$web"
