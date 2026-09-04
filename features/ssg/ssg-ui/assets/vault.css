@@ -428,3 +428,30 @@
   stroke: var(--ssg-accent, currentColor);
   stroke-width: 2.5;
 }
+
+/* ── Breadcrumbs ───────────────────────────────────────────────────── */
+
+.ssg-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+/* The separator is generated rather than written into the markup, so it
+ * is not read out as content by a screen reader and not selected when
+ * someone copies the trail. */
+.ssg-breadcrumbs li + li::before {
+  content: "/";
+  margin-inline-end: 0.4rem;
+  opacity: 0.5;
+}
+
+.ssg-breadcrumbs a { text-decoration: none; }
+.ssg-breadcrumbs a:hover { text-decoration: underline; }
+.ssg-breadcrumbs [aria-current="page"] { opacity: 0.85; }

@@ -104,8 +104,8 @@ pub use ssg_vault::{
 
 #[cfg(feature = "ui")]
 pub use ssg_ui::{
-    Backlinks, ChapterNav, Hit, LinkPreviews, PageTags, PageToc, TagIndex, TaggedPages, VAULT_CSS,
-    VAULT_STYLE, VaultArticle, VaultSearch, VaultToc, search,
+    Backlinks, Breadcrumbs, ChapterNav, Hit, LinkPreviews, PageTags, PageToc, TagIndex,
+    TaggedPages, VAULT_CSS, VAULT_STYLE, VaultArticle, VaultSearch, VaultToc, search,
 };
 
 #[cfg(feature = "graph")]

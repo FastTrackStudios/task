@@ -108,6 +108,10 @@ pub struct Page {
     pub tags: Vec<String>,
     /// Words of prose, for a reading estimate.
     pub words: u32,
+    /// When the note last changed, as an RFC 3339 date, or empty when
+    /// nothing established it. Filled in by `ssg-build` from git
+    /// history, which is opt-in — see its `dates` method.
+    pub updated: String,
     /// Outbound wikilink targets that resolved to a page in this vault,
     /// in document order and deduplicated. Backlinks are the reverse of
     /// this, computed over the whole vault.

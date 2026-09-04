@@ -17,9 +17,10 @@ use crate::Vault;
 /// `site` is the origin with no trailing slash (`https://keyflow.example`)
 /// and `base` the vault's path under it (`/guide`).
 ///
-/// No `lastmod`, `changefreq` or `priority`. The first needs a date this
-/// crate does not have — a caller with git history can add it — and
-/// search engines have said for years that the other two are ignored.
+/// `lastmod` is emitted for a page whose `updated` the build filled in,
+/// and omitted otherwise — an invented date is worse than none. No
+/// `changefreq` or `priority`: search engines have said for years that
+/// both are ignored.
 #[must_use]
 pub fn sitemap(vault: &Vault, site: &str, base: &str) -> String {
     let site = site.trim_end_matches('/');
@@ -32,7 +33,15 @@ pub fn sitemap(vault: &Vault, site: &str, base: &str) -> String {
     for page in &vault.pages {
         out.push_str("  <url><loc>");
         out.push_str(&escape_xml(&format!("{site}{base}/{}", page.slug)));
-        out.push_str("</loc></url>\n");
+        out.push_str("</loc>");
+        // Only when the build established one. An invented `lastmod` is
+        // worse than none: it teaches a crawler to distrust the file.
+        if !page.updated.is_empty() {
+            out.push_str("<lastmod>");
+            out.push_str(&escape_xml(&page.updated));
+            out.push_str("</lastmod>");
+        }
+        out.push_str("</url>\n");
     }
     out.push_str("</urlset>\n");
     out
@@ -119,6 +128,7 @@ mod tests {
             headings: Vec::new(),
             tags: Vec::new(),
             words: 0,
+            updated: String::new(),
             links: Vec::new(),
             broken_links: Vec::new(),
         }

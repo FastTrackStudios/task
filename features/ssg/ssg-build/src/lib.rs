@@ -65,6 +65,7 @@ pub struct Vault<'a> {
     keep_nav_footer: bool,
     allow_broken_links: bool,
     feeds: Option<(String, PathBuf)>,
+    dates: bool,
 }
 
 impl<'a> Vault<'a> {
@@ -94,7 +95,26 @@ impl<'a> Vault<'a> {
             keep_nav_footer: false,
             allow_broken_links: false,
             feeds: None,
+            dates: false,
         }
+    }
+
+    /// Date each page from git — when the note last changed.
+    ///
+    /// One `git log` per note, at build time, which is cheap for a vault
+    /// of a few dozen and is why this is opt-in rather than automatic.
+    ///
+    /// Degrades to nothing. A build with no git on `PATH`, or from a
+    /// source tree with no history — which is exactly what a nix
+    /// derivation hands you, since it copies the files and not the
+    /// repository — leaves every date empty, and every consumer of a
+    /// date already has to handle that. A build that half-works is the
+    /// right outcome here: a missing "last updated" line is a smaller
+    /// problem than a build that will not run outside a git checkout.
+    #[must_use]
+    pub fn dates(mut self) -> Self {
+        self.dates = true;
+        self
     }
 
     /// Also write `sitemap.xml` and `rss.xml` for the vault, given the
@@ -207,7 +227,7 @@ impl<'a> Vault<'a> {
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-changed={}", self.dir.display());
 
-        let vault = ssg_vault::scan_with(&self.dir, |slugs| {
+        let mut vault = ssg_vault::scan_with(&self.dir, |slugs| {
             let mut renderer = Renderer::new(&self.link_base, slugs);
             if self.keep_nav_footer {
                 renderer = renderer.keep_nav_footer();
@@ -228,6 +248,12 @@ impl<'a> Vault<'a> {
                 "cargo:rerun-if-changed={}",
                 self.dir.join(format!("{}.md", page.slug)).display()
             );
+        }
+
+        if self.dates {
+            for page in &mut vault.pages {
+                page.updated = git_date(&self.dir.join(format!("{}.md", page.slug)));
+            }
         }
 
         let broken = vault.broken_links();
@@ -326,7 +352,8 @@ impl<'a> Vault<'a> {
                  slug: {:?},\n        title: {:?},\n        summary: {:?},\n        \
                  order: {},\n        stage: {:?},\n        kind: {:?},\n        \
                  source: {:?},\n        body: {:?},\n        html: {:?},\n        links: &[{links}],\n        \
-                 headings: &[{headings}],\n        tags: &[{tags}],\n        words: {},\n    }},\n",
+                 headings: &[{headings}],\n        tags: &[{tags}],\n        words: {},\n        \
+                 updated: {:?},\n    }},\n",
                 page.slug,
                 page.title,
                 page.summary,
@@ -337,6 +364,7 @@ impl<'a> Vault<'a> {
                 page.body,
                 page.html,
                 page.words,
+                page.updated,
             );
         }
         out.push_str("];\n\n");
@@ -350,6 +378,28 @@ impl<'a> Vault<'a> {
         );
         out
     }
+}
+
+/// When a file last changed, as an RFC 3339 date, or empty.
+///
+/// The committer date rather than the author date: it is when the change
+/// landed on this branch, which is what "last updated" means to a
+/// reader. Any failure — no git, no history, an untracked file — is
+/// empty rather than an error, because none of them is a reason to fail
+/// a build.
+fn git_date(path: &Path) -> String {
+    let Ok(output) = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%cI", "--"])
+        .arg(path)
+        .current_dir(path.parent().unwrap_or(Path::new(".")))
+        .output()
+    else {
+        return String::new();
+    };
+    if !output.status.success() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 /// Write a generated file, only when its contents changed.

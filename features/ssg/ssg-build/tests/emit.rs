@@ -204,3 +204,21 @@ fn no_site_url_means_no_feeds() {
     fixture.vault().emit();
     assert!(!fixture.out.join("feeds").exists());
 }
+
+#[test]
+fn a_page_is_undated_unless_dating_is_asked_for() {
+    let fixture = Fixture::new("undated", &[("intro", "# Intro")]);
+    fixture.vault().emit();
+    assert!(fixture.generated().contains(r#"updated: """#));
+}
+
+#[test]
+fn dating_a_vault_outside_a_git_checkout_is_not_an_error() {
+    // The fixture lives in a temp directory with no repository, which
+    // is also the shape a nix derivation builds in: it copies the files
+    // and not the history. Every date comes back empty and the build
+    // still succeeds.
+    let fixture = Fixture::new("dated", &[("intro", "# Intro")]);
+    fixture.vault().dates().emit();
+    assert!(fixture.generated().contains(r#"updated: """#));
+}

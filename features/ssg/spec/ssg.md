@@ -37,6 +37,16 @@ but never silently emits a link that leads nowhere.
 
 ---
 
+### A link into the vault is marked as one
+
+t[ssg.render.internal-links]
+A resolved `[[wikilink]]` renders as an anchor carrying the slug it points at,
+so a page can tell a cross-reference from a link that leaves the site — which
+is what a hover preview needs, and what lets a stylesheet distinguish the two.
+The label's own markup is preserved.
+
+---
+
 ### Wikilink syntax inside code is text
 
 t[ssg.render.code-verbatim]
@@ -117,16 +127,6 @@ successful build.
 t[ssg.build.rerun]
 Every note read is declared to cargo, individually. Editing, adding or deleting
 one triggers a rebuild of the site that publishes it.
-
----
-
-### A link into the vault is marked as one
-
-t[ssg.render.internal-links]
-A resolved `[[wikilink]]` renders as an anchor carrying the slug it points at,
-so a page can tell a cross-reference from a link that leaves the site — which
-is what a hover preview needs, and what lets a stylesheet distinguish the two.
-The label's own markup is preserved.
 
 ---
 
