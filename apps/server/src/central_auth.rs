@@ -94,6 +94,54 @@ pub struct CentralAuth {
     /// exposure as holding it to make the request; it never leaves this
     /// process and is never logged.
     cache: Mutex<HashMap<String, Cached>>,
+    /// The most recent token each user presented, for as long as its
+    /// cache entry lives. The permissions gate hands a handler only the
+    /// principal; a handler that must act at the issuer *as that
+    /// person* — reading their linked GitHub token to land a change
+    /// they accepted — finds the credential they already presented
+    /// here, and nowhere else.
+    by_user: Mutex<HashMap<String, (String, Instant)>>,
+}
+
+/// A GitHub account the issuer holds linked to a user, with the token
+/// the person granted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedGithub {
+    /// GitHub login (`octocat`).
+    pub login: String,
+    /// Their GitHub access token — used for one push and one pull
+    /// request, never stored here.
+    pub access_token: String,
+}
+
+/// Why the issuer did not hand over a linked GitHub token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkedTokenError {
+    /// The person has not linked a GitHub account on the issuer.
+    NotLinked,
+    /// Task's own grant lacks the `forge:github` scope — the person
+    /// signed in before the client requested it, or the issuer does not
+    /// grant it to this client. A fresh sign-in fixes the first.
+    InsufficientScope,
+    /// This server holds no live credential for the user (they came in
+    /// on a path that never passed a central token, or it expired).
+    NoCredential,
+    /// The issuer could not be asked, or answered something else.
+    Unavailable(String),
+}
+
+impl std::fmt::Display for LinkedTokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotLinked => write!(f, "no GitHub account is linked to your account"),
+            Self::InsufficientScope => write!(
+                f,
+                "your sign-in did not grant Task access to your linked GitHub account — sign out and back in"
+            ),
+            Self::NoCredential => write!(f, "no live sign-in credential for this account"),
+            Self::Unavailable(why) => write!(f, "the auth server could not be asked: {why}"),
+        }
+    }
 }
 
 struct Cached {
@@ -136,6 +184,84 @@ impl CentralAuth {
             base_url: base_url.into(),
             http: reqwest::Client::new(),
             cache: Mutex::new(HashMap::new()),
+            by_user: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The live token `user_id` most recently presented, if any.
+    #[must_use]
+    pub fn token_for(&self, user_id: &str) -> Option<String> {
+        let mut map = self.by_user.lock().ok()?;
+        let (token, until) = map.get(user_id)?;
+        if *until <= Instant::now() {
+            map.remove(user_id);
+            return None;
+        }
+        Some(token.clone())
+    }
+
+    /// The GitHub account the issuer holds linked to `user_id`, fetched
+    /// with the credential that person presented to this server —
+    /// `GET /oauth2/linked-token?provider=github`, bearer their access
+    /// token. The issuer answers only when the grant carries
+    /// `forge:github`, so a token minted for Task cannot read what the
+    /// person never let Task see.
+    pub async fn linked_github(&self, user_id: &str) -> Result<LinkedGithub, LinkedTokenError> {
+        use architect_telemetry::wide;
+
+        let Some(token) = self.token_for(user_id) else {
+            wide::set("auth.linked_github", "no_credential");
+            return Err(LinkedTokenError::NoCredential);
+        };
+        let url = format!("{}/oauth2/linked-token?provider=github", self.base_url);
+        let res = self
+            .http
+            .get(&url)
+            .bearer_auth(&token)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| {
+                wide::set("auth.linked_github", "unreachable");
+                LinkedTokenError::Unavailable(e.to_string())
+            })?;
+        let status = res.status();
+        let body: serde_json::Value = res.json().await.unwrap_or(serde_json::Value::Null);
+        match status.as_u16() {
+            200 => {
+                let login = body["login"].as_str().unwrap_or_default().to_owned();
+                let access_token = body["access_token"].as_str().unwrap_or_default().to_owned();
+                if access_token.is_empty() {
+                    wide::set("auth.linked_github", "malformed");
+                    return Err(LinkedTokenError::Unavailable(
+                        "linked-token answered without a token".into(),
+                    ));
+                }
+                wide::set("auth.linked_github", "ok");
+                Ok(LinkedGithub {
+                    login,
+                    access_token,
+                })
+            }
+            404 => {
+                wide::set("auth.linked_github", "not_linked");
+                Err(LinkedTokenError::NotLinked)
+            }
+            403 => {
+                wide::set("auth.linked_github", "insufficient_scope");
+                Err(LinkedTokenError::InsufficientScope)
+            }
+            401 => {
+                wide::set("auth.linked_github", "no_credential");
+                Err(LinkedTokenError::NoCredential)
+            }
+            code => {
+                wide::set("auth.linked_github", "error");
+                Err(LinkedTokenError::Unavailable(format!(
+                    "linked-token answered {code}: {}",
+                    body["error"].as_str().unwrap_or_default()
+                )))
+            }
         }
     }
 
@@ -208,6 +334,14 @@ impl CentralAuth {
             cache.retain(|_, c| c.until > Instant::now());
             if cache.len() > 4096 {
                 cache.clear();
+            }
+        }
+        if let Some(p) = &profile {
+            if let Ok(mut by_user) = self.by_user.lock() {
+                if by_user.len() > 4096 {
+                    by_user.retain(|_, (_, until)| *until > Instant::now());
+                }
+                by_user.insert(p.user_id.clone(), (token.to_owned(), Instant::now() + ttl));
             }
         }
         cache.insert(

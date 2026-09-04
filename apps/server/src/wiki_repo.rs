@@ -18,7 +18,7 @@
 
 use std::time::Duration;
 
-use wiki_live::edits_backend::{EditsBackend, Lander};
+use wiki_live::edits_backend::{EditsBackend, ForgeIdentity, Lander};
 use wiki_live::repo_source::Landing;
 use wiki_proto::config::RepoSource;
 use wiki_proto::error::WikiError;
@@ -26,18 +26,95 @@ use wiki_proto::service::registry::Registry as _;
 
 /// The server's [`Lander`]: a pushed landing branch becomes a pull
 /// request on the repository's forge through [`open_pull_request`].
+///
+/// On GitHub the identity is the accepting Editor's own: the issuer
+/// hands over the GitHub token they linked to their account
+/// ([`crate::central_auth::CentralAuth::linked_github`]), the push and
+/// the pull request are made with it, and an Editor who has linked no
+/// GitHub account is refused before anything is pushed — so the
+/// repository's history is truthful about *which person* landed the
+/// change (`wiki.source.editable`). Other forges still land as the
+/// deployment, with the deployment's token.
 pub struct ForgeLander;
 
 impl Lander for ForgeLander {
+    fn identity_for(&self, source: &RepoSource, editor: &str) -> Result<ForgeIdentity, WikiError> {
+        identity_for(source, editor)
+    }
+
     fn open_pull_request(
         &self,
         source: &RepoSource,
         landing: &Landing,
         title: &str,
         body: &str,
+        identity: &ForgeIdentity,
     ) -> Result<Option<String>, WikiError> {
-        open_pull_request(source, landing, title, body)
+        open_pull_request(source, landing, title, body, identity)
     }
+}
+
+/// The accepting Editor's forge identity for `source`.
+///
+/// GitHub repositories need the person's linked account: no central
+/// issuer, no live credential, or no linked GitHub account is a
+/// `Refused` that names the fix. Everything else lands as the
+/// deployment. Runs on the blocking pool inside the runtime (the issuer
+/// round trip is async).
+pub fn identity_for(source: &RepoSource, editor: &str) -> Result<ForgeIdentity, WikiError> {
+    let Some((host, owner, repo)) = parse_forge_url(&source.url) else {
+        return Ok(ForgeIdentity::deployment(editor));
+    };
+    if host != "github.com" {
+        return Ok(ForgeIdentity::deployment(editor));
+    }
+    let Some(central) = crate::central_auth::configured() else {
+        return Err(WikiError::Refused(
+            "this server has no central account issuer, so it cannot land on GitHub as you".into(),
+        ));
+    };
+    let linked = tokio::runtime::Handle::current()
+        .block_on(central.linked_github(editor))
+        .map_err(|e| {
+            let hint = match e {
+                crate::central_auth::LinkedTokenError::NotLinked
+                | crate::central_auth::LinkedTokenError::NoCredential
+                | crate::central_auth::LinkedTokenError::InsufficientScope => format!(
+                    " — link GitHub at {}/account, then accept again",
+                    central.issuer().trim_end_matches('/')
+                ),
+                crate::central_auth::LinkedTokenError::Unavailable(_) => String::new(),
+            };
+            WikiError::Refused(format!("cannot land on GitHub as you: {e}{hint}"))
+        })?;
+    let login = linked.login.trim().to_owned();
+    let display = if login.is_empty() {
+        editor.to_owned()
+    } else {
+        format!("@{login}")
+    };
+    let committer_name = if login.is_empty() {
+        editor.to_owned()
+    } else {
+        login.clone()
+    };
+    // GitHub's no-reply address attributes the commit to the account
+    // without publishing a mailbox.
+    let committer_email = if login.is_empty() {
+        format!("{editor}@task.invalid")
+    } else {
+        format!("{login}@users.noreply.github.com")
+    };
+    Ok(ForgeIdentity {
+        display,
+        committer_name,
+        committer_email,
+        push_url: Some(format!(
+            "https://x-access-token:{}@github.com/{owner}/{repo}.git",
+            linked.access_token
+        )),
+        token: Some(linked.access_token),
+    })
 }
 
 /// How often the loop runs, unless `TASK_WIKI_REPO_SYNC_SECS` says.
@@ -190,6 +267,7 @@ pub fn open_pull_request(
     landing: &wiki_live::repo_source::Landing,
     title: &str,
     body: &str,
+    identity: &ForgeIdentity,
 ) -> Result<Option<String>, WikiError> {
     let Some((host, owner, repo)) = parse_forge_url(&source.url) else {
         return Ok(None);
@@ -199,7 +277,7 @@ pub fn open_pull_request(
     } else {
         source.branch.trim().to_owned()
     };
-    let _ = (&host, &owner, &repo, &base, landing, title, body);
+    let _ = (&host, &owner, &repo, &base, landing, title, body, identity);
     #[cfg(feature = "plugin-git")]
     {
         use git_proto::reviews::ReviewSurface as _;
@@ -213,7 +291,14 @@ pub fn open_pull_request(
             draft: false,
         };
         if host == "github.com" {
-            let Some(token) = env_token("TASK_GITHUB_TOKEN") else {
+            // The person's own token — `identity_for` refused already
+            // when there was none, so the deployment token is only a
+            // fallback for a lander that landed as the deployment.
+            let Some(token) = identity
+                .token
+                .clone()
+                .or_else(|| env_token("TASK_GITHUB_TOKEN"))
+            else {
                 return Ok(None);
             };
             let client = git_github::Backend::from_token(token)
@@ -316,8 +401,32 @@ mod tests {
             pull_request: None,
         };
         assert_eq!(
-            open_pull_request(&source, &landing, "t", "b").unwrap(),
+            open_pull_request(&source, &landing, "t", "b", &ForgeIdentity::deployment("u"))
+                .unwrap(),
             None
+        );
+        // ...and lands as the deployment: no linked account is needed.
+        assert_eq!(
+            identity_for(&source, "u").unwrap(),
+            ForgeIdentity::deployment("u")
+        );
+    }
+
+    /// A GitHub repository lands only as the accepting person. With no
+    /// central issuer configured there is nobody to ask, so the landing
+    /// is refused — before anything is pushed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn github_without_a_linked_identity_is_refused() {
+        let source = RepoSource {
+            url: "https://github.com/acme/docs.git".into(),
+            ..Default::default()
+        };
+        // `configured()` reads the env once per process; in the test
+        // binary no issuer is set, so the refusal names that.
+        let err = tokio::task::block_in_place(|| identity_for(&source, "u")).unwrap_err();
+        assert!(
+            matches!(&err, WikiError::Refused(m) if m.contains("as you")),
+            "{err:?}"
         );
     }
 
