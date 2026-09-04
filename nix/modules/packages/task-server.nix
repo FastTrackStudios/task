@@ -13,11 +13,12 @@
         cargoExtraArgs = "--package task-server";
         doCheck = false;
       });
-    in
-    {
-      packages = { inherit task-server; }
-      // lib.optionalAttrs pkgs.stdenv.isLinux {
-        task-server-image = pkgs.dockerTools.streamLayeredImage {
+      # The image around any package that provides bin/task-server — the
+      # pure build here, or the runner-built binary of the deploy's fast
+      # path (packages/prebuilt-images.nix). One definition, so the two
+      # images cannot drift in contents or config.
+      mkServerImage = { server }:
+        pkgs.dockerTools.streamLayeredImage {
           name = "task-server";
           tag = "latest";
           # git + curl: the snapshot engine shells out to them, and so
@@ -27,7 +28,7 @@
           # to git for https clones; yt-dlp for the watch-view
           # transcript ingest. /data is the TASK_DATA_ROOT volume.
           contents = with pkgs; [
-            task-server
+            server
             git
             curl
             cacert
@@ -54,6 +55,12 @@
             WorkingDir = "/data";
           };
         };
+    in
+    {
+      fts.mkServerImage = mkServerImage;
+      packages = { inherit task-server; }
+      // lib.optionalAttrs pkgs.stdenv.isLinux {
+        task-server-image = mkServerImage { server = task-server; };
       };
     };
 }

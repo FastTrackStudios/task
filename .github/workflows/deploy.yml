@@ -50,7 +50,11 @@ jobs:
   # cluster to roll happens on a hosted runner (below), so a slot here is
   # held for the minutes the build takes, not the minutes Argo takes.
   deploy:
-    runs-on: [self-hosted, task]
+    # Task's deploy runner, separate from its two checks runners: a
+    # deploy queued behind two PRs' checks sat 45 minutes on 2026-09-04
+    # while both slots compiled tests. Its release target dir is its
+    # own, which is also what keeps it warm between deploys.
+    runs-on: [self-hosted, task-deploy]
     steps:
       # A plain checkout, unlike the monorepo's local-first clone. That
       # existed because the monorepo is ~200 MB and the runner held a
@@ -62,12 +66,48 @@ jobs:
         id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      # The release binary and the web bundle are built HERE, in the dev
+      # shell, against a target dir that persists on the runner's disk —
+      # so a deploy recompiles what changed since the last one, not the
+      # workspace. The pure `.#task-server-image` rebuilt everything inside
+      # the Nix sandbox on every commit (crane's deps split is off for this
+      # workspace), which is where the 20–30 minutes went however warm the
+      # runner was. Nix now only assembles the images from these outputs
+      # (packages/prebuilt-images.nix); the pure attributes remain for a
+      # cold machine.
+      - name: Build release artifacts
+        id: build
+        run: |
+          set -euo pipefail
+          dir="${CI_CACHE_DIR:-$HOME/cargo-target}/release"
+          mkdir -p "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          export CARGO_TARGET_DIR="$dir"
+          echo "target dir: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+          nix develop --accept-flake-config .#ci -c cargo build --release -p task-server
+          # tailwind first: dx reads assets/ before cargo runs.
+          nix develop --accept-flake-config .#default -c bash -c '
+            set -e
+            (cd apps && tailwindcss -i tailwind.css -o web/assets/tailwind.css)
+            cd apps/web
+            dx build --release --platform web --debug-symbols false \
+              --wasm-split --features wasm-split'
+          web="$(find "$dir" "$PWD/target" -maxdepth 6 -type d \
+            -path '*dx/task-app-web/release/web/public' 2>/dev/null | head -n 1)"
+          test -n "$web" || { echo "::error::dx wrote no web bundle"; exit 1; }
+          echo "server=$dir/release/task-server" >> "$GITHUB_OUTPUT"
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          ls -la "$dir/release/task-server"; du -sh "$web"
+
       - name: Push images
+        env:
+          TASK_PREBUILT_SERVER_BIN: ${{ steps.build.outputs.server }}
+          TASK_PREBUILT_WEB_ROOT: ${{ steps.build.outputs.web }}
         run: |
           set -euo pipefail
           for img in task-server task-web; do
             echo "── $img ──"
-            streamer="$(nix build .#${img}-image --no-link --print-out-paths)"
+            streamer="$(nix build --impure .#${img}-image-prebuilt --no-link --print-out-paths)"
             "$streamer" | nix run nixpkgs#skopeo -- --insecure-policy copy \
               --dest-tls-verify=false --dest-no-creds docker-archive:/dev/stdin \
               "docker://${REGISTRY}/${img}:latest"
@@ -79,6 +119,16 @@ jobs:
                 "docker://${REGISTRY}/${img}:${tag}"
             done
           done
+
+      # Same discipline as checks: a persistent release target dir grows
+      # without bound otherwise. Oldest artifacts go first; the current
+      # build stays warm.
+      - name: Bound the target dir
+        if: ${{ always() }}
+        run: |
+          rm -rf "${CARGO_TARGET_DIR}/release/incremental"
+          nix develop --accept-flake-config .#ci -c cargo sweep --maxsize 40GB || true
+          du -sh "${CARGO_TARGET_DIR}" || true
 
   # The GitHub Deployment goes Active only when the cluster serves this
   # commit — both halves, web and server — so "Active" keeps meaning
