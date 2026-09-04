@@ -1,17 +1,28 @@
 //! `ssg-ui` — the components that render a built vault.
 //!
-//! Every component here is a pure function of `&'static` data. There are
-//! no signals, no effects, no hooks, and no event handlers: a guide page
-//! is rendered once, on the host, by `dx build --ssg`, and what ships is
-//! the HTML that came out. Navigation is ordinary `<a href>`, which is
-//! why these pages work with JavaScript off and why a site can serve
-//! them without putting its wasm bundle in front of a reader.
+//! Every component here is a pure function of `&'static` data: no
+//! signals, no effects, no hooks, no event handlers, no futures.
 //!
-//! That constraint is the point, not an accident of the port. Keyflow's
-//! guide previously rendered through the editor in read-only mode: to
-//! read a paragraph you waited on the editor crate, its state machine,
-//! its decoration pipeline and a WebGL2 chart surface. Nothing in that
-//! chain was needed to show text that had not changed since the build.
+//! That is what makes them safe to pre-render. `dx build --ssg` renders
+//! each route on the server and writes the HTML to disk; the browser
+//! paints that, then the wasm bundle hydrates it. Hydration only works
+//! if the client's first render matches the server's exactly, and a
+//! component with no state and no I/O cannot disagree with itself.
+//!
+//! It is also the point of the exercise. Keyflow's guide used to render
+//! through the editor in read-only mode: to read a paragraph you waited
+//! on the editor crate, its state machine, its decoration pipeline and a
+//! WebGL2 chart surface — none of which was needed to show text that had
+//! not changed since the build. Now that text is in the HTML, and the
+//! bundle arrives afterwards to make the site interactive again.
+//!
+//! Navigation is ordinary `<a href>` rather than the router's `Link`,
+//! for a duller reason: `Link` is generic over the site's own `Routable`
+//! enum, which this crate cannot know. The cost is a page load between
+//! chapters instead of a client-side transition — and every one of those
+//! pages is pre-rendered, so it is a cheap one. A site that wants the
+//! transition can lay out its own contents rail with `Link` and use the
+//! rest of these components as they are.
 //!
 //! ## The pieces
 //!
@@ -61,8 +72,8 @@ pub const VAULT_STYLE: Asset = asset!("/assets/vault.css");
 ///   different repository, and `include_str!` into a git dependency has
 ///   no stable path on disk. Exporting the bytes is the established
 ///   answer here — `architect_ui::THEME_CSS` exists for the same reason.
-/// - **A baked page.** `ssg-bake` writes files with no scripts, and an
-///   `Asset` is resolved by the asset pipeline at runtime. A site that
-///   inlines this into its shell gets styled static pages with one
-///   fewer round trip.
+/// - **A pre-rendered page.** Inlining the sheet means the HTML that
+///   `dx build --ssg` writes is styled on its own, with no second round
+///   trip before the text is readable — which is most of the point of
+///   pre-rendering it.
 pub const VAULT_CSS: &str = include_str!("../assets/vault.css");

@@ -1,10 +1,10 @@
 //! Getting around a vault: contents, chapter order, backlinks.
 //!
 //! All three navigate with plain `<a href>` rather than the router's
-//! `Link`. On a statically generated page there is no router — no wasm
-//! is loaded — so a `Link` would render an anchor whose click handler
-//! never attaches, and the reader would get the same full page load
-//! anyway, minus the guarantee that it works.
+//! `Link`: `Link` is generic over the site's own `Routable` enum, and a
+//! crate shared across four sites cannot name it. The anchors work
+//! identically before and after hydration, which is the property that
+//! matters for a pre-rendered page — see the crate docs.
 
 use dioxus::prelude::*;
 use ssg_vault::{StaticPage, StaticVault};

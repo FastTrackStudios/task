@@ -103,27 +103,32 @@ one triggers a rebuild of the site that publishes it.
 
 ## Output
 
-### A baked page carries no script
+### A pre-rendered page is complete before its bundle arrives
 
-t[ssg.output.no-script]
-A statically generated page is written with the site's own `<head>` — its
-stylesheets, fonts and meta tags — and no scripts, including the wasm
-bootstrap and any preload hint for it. The page renders with JavaScript
-disabled, and navigation between baked pages is ordinary link-following.
+t[ssg.output.prerendered]
+A pre-rendered route's HTML carries the finished page — prose, resolved
+cross-references, expanded fences — so a browser paints it without executing
+anything. The wasm bundle then hydrates it into the running app. Static
+generation is Dioxus's own (`dx build --ssg` against a `static_routes` server
+function); nothing here reimplements it.
 
 ---
 
-### A route is a directory with an index
+### Pre-rendered components are pure
 
-t[ssg.output.route-shape]
-Each baked route is written as `<route>/index.html`, so it serves at its own URL
-on any static file server without rewrite rules or a trailing-slash redirect.
+t[ssg.output.hydratable]
+A component that renders into a pre-rendered route is a function of `&'static`
+data alone — no hooks, no state, no I/O. The client's first render is therefore
+identical to the server's, which is the condition hydration requires; a
+component that cannot promise that belongs on a route that is not pre-rendered.
 
 ---
 
 ### The vault enumerates its own routes
 
 t[ssg.output.routes]
-A vault can list every URL it publishes. A dynamic route cannot be enumerated
-from a router's table — only the vault knows its slugs — and this list is what a
-static build renders, leaving every other route in the site live.
+A vault can list every URL it publishes, and that list is what the site returns
+from its `static_routes` server function. A parameterised route is absent from
+the router's own `static_routes()` — only the vault knows its slugs — so
+supplying them is what makes the generation *partial*: those paths are
+pre-rendered, every other route in the app is untouched.

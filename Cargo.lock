@@ -1201,12 +1201,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "askama_escape"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3df27b8d5ddb458c5fb1bbc1ce172d4a38c614a97d550b0ac89003897fb01de4"
-
-[[package]]
 name = "astral-tokio-tar"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5095,7 +5089,6 @@ dependencies = [
  "dioxus-logger",
  "dioxus-router",
  "dioxus-signals",
- "dioxus-ssr",
  "dioxus-stores",
  "dioxus-web",
  "manganis",
@@ -5579,17 +5572,6 @@ dependencies = [
  "rustc-hash 2.1.3",
  "tracing",
  "warnings",
-]
-
-[[package]]
-name = "dioxus-ssr"
-version = "0.8.0-alpha.0"
-source = "git+https://github.com/DioxusLabs/dioxus?rev=f717a8e184a522d078b70bb4b4d62a5f9a99ddfc#f717a8e184a522d078b70bb4b4d62a5f9a99ddfc"
-dependencies = [
- "askama_escape",
- "dioxus-core",
- "dioxus-core-types",
- "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -19996,13 +19978,6 @@ version = "0.1.0"
 dependencies = [
  "ssg-ui",
  "ssg-vault",
-]
-
-[[package]]
-name = "ssg-bake"
-version = "0.1.0"
-dependencies = [
- "dioxus",
 ]
 
 [[package]]
