@@ -264,7 +264,7 @@ impl<'a> Vault<'a> {
                 "    {crate_path}::StaticPage {{\n        \
                  slug: {:?},\n        title: {:?},\n        summary: {:?},\n        \
                  order: {},\n        stage: {:?},\n        kind: {:?},\n        \
-                 source: {:?},\n        html: {:?},\n        links: &[{links}],\n    }},\n",
+                 source: {:?},\n        body: {:?},\n        html: {:?},\n        links: &[{links}],\n    }},\n",
                 page.slug,
                 page.title,
                 page.summary,
@@ -272,6 +272,7 @@ impl<'a> Vault<'a> {
                 page.stage,
                 page.kind,
                 page.source,
+                page.body,
                 page.html,
             );
         }

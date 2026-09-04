@@ -143,6 +143,7 @@ pub fn scan_with<'a>(
                 stage: fm.get("stage").unwrap_or_default().to_owned(),
                 kind: fm.any(&["type", "kind"]).unwrap_or("other").to_lowercase(),
                 source: note.source.clone(),
+                body: body.to_owned(),
                 html: rendered.html,
                 links: rendered.links,
                 broken_links: rendered.broken_links,

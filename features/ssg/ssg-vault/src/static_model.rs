@@ -30,6 +30,10 @@ pub struct StaticPage {
     /// The note verbatim. The knowledge graph reads this; a reader does
     /// not.
     pub source: &'static str,
+    /// The note's markdown without its frontmatter — the prose as text,
+    /// for a consumer that wants to edit or re-render it rather than
+    /// display it.
+    pub body: &'static str,
     /// The note as finished HTML — no frontmatter, no nav footer,
     /// wikilinks resolved, fences expanded.
     pub html: &'static str,
@@ -160,6 +164,7 @@ mod tests {
             stage,
             kind: "other",
             source: "",
+            body: "",
             html: "",
             links,
         }

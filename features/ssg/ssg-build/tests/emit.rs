@@ -155,3 +155,20 @@ fn the_link_base_and_static_name_are_configurable() {
     assert!(out.contains("pub static DOCS: ::ssg::StaticVault"));
     assert!(out.contains(r#"href=\"/docs/b\""#));
 }
+
+// t[verify ssg.render.metadata]
+#[test]
+fn the_body_is_the_note_without_its_frontmatter() {
+    let fixture = Fixture::new(
+        "body",
+        &[("chords", "---\ntitle: Chords\n---\n\n# Chords\n\nprose\n")],
+    );
+    fixture.vault().emit();
+    let out = fixture.generated();
+
+    // `body` carries the prose as markdown — no frontmatter, and not
+    // the rendered HTML either. Hashed delimiters because the expected
+    // text contains `"#`, which would close a plain `r#"…"#`.
+    assert!(out.contains(r##"body: "# Chords\n\nprose\n""##));
+    assert!(!out.contains(r##"body: "---"##));
+}

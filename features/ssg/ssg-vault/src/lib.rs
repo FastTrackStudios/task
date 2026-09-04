@@ -88,6 +88,14 @@ pub struct Page {
     /// The note verbatim, frontmatter and footer included. The graph
     /// reads this; a reader never sees it.
     pub source: String,
+    /// The note's markdown without its frontmatter.
+    ///
+    /// Neither of the other two: [`Self::source`] carries the metadata
+    /// block, and [`Self::html`] is no longer markdown. This is for a
+    /// consumer that wants the prose *as text* — Keyflow's workbench
+    /// opens a chapter in a live editor, and an editor showing a
+    /// `---` block is showing the reader plumbing.
+    pub body: String,
     /// The note rendered for a reader: no frontmatter, no nav footer,
     /// wikilinks resolved, fences expanded.
     pub html: String,
