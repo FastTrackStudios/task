@@ -50,6 +50,11 @@ pub enum ConnectError {
     PlaintextRefused,
 }
 
+/// How long a TCP connect to an IMAP host may take before it is reported
+/// as unreachable. Long enough for a slow mobile link, short enough that
+/// a dead host does not stall the mailbox.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub async fn connect_and_login(
     host: &str,
     port: u16,
@@ -57,8 +62,17 @@ pub async fn connect_and_login(
     username: &str,
     password: &SecretValue,
 ) -> Result<ImapSession, ConnectError> {
-    let tcp = TcpStream::connect((host, port))
+    // Bounded: a host that black-holes the SYN (a firewall, a dead
+    // address) would otherwise hold the caller for the OS's connect
+    // timeout — minutes on Linux — and every account listing behind it.
+    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
         .await
+        .map_err(|_| {
+            ConnectError::Tcp(format!(
+                "{host}:{port}: no answer within {}s",
+                CONNECT_TIMEOUT.as_secs()
+            ))
+        })?
         .map_err(|e| ConnectError::Tcp(e.to_string()))?;
 
     let client = build_client(host, tcp, tls).await?;
