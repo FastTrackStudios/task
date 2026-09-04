@@ -100,8 +100,8 @@ jobs:
             fi
             if [ "$(date +%s)" -ge "${deadline}" ]; then
               echo "::error::Still queued after ${GRACE_SECONDS}s: ${queued}"
-              echo "::error::No self-hosted nix-host runner took the work."
-              echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-*'"
+              echo "::error::No self-hosted \`task\` runner took the work."
+              echo "::error::On THEBATTLESHIP: systemctl status 'github-runner-github-fts-task-*'"
               exit 1
             fi
             echo "queued: ${queued}"
@@ -110,7 +110,7 @@ jobs:
 
   plan:
     name: Plan affected crates
-    runs-on: [self-hosted, nix-host]
+    runs-on: [self-hosted, task]
     timeout-minutes: 10
     outputs:
       workspace: ${{ steps.filter.outputs.workspace }}
@@ -257,7 +257,7 @@ jobs:
   # the next thing wrong. One run still reports fmt AND tests AND clippy.
   checks:
     name: Checks (fmt + tests + clippy + wasm + docs)
-    runs-on: [self-hosted, nix-host]
+    runs-on: [self-hosted, task]
     timeout-minutes: 60
     needs: plan
     steps:
@@ -269,7 +269,11 @@ jobs:
           # inside the checkout would be deleted every run. $HOME is this
           # runner INSTANCE's workDir, so two instances never share a
           # cargo lock, and the dir outlives jobs, restarts and reboots.
-          dir="$HOME/cargo-target/checks"
+          # The runner hands each job its own durable cache dir on the
+          # big disk ($CI_CACHE_DIR, one per runner instance — see the
+          # fleet's github-runner module); older runners without it fall
+          # back to the instance's $HOME.
+          dir="${CI_CACHE_DIR:-$HOME/cargo-target}/checks"
           # One-time migration off the old per-job dirs. `tests` is the
           # one that held full codegen artifacts, which is exactly what
           # the new step order reuses — adopting it saves this instance a

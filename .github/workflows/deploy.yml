@@ -5,9 +5,9 @@
 #   task-web     -> registry.starcommand.live:30050/task-web
 #
 # The in-cluster registry is NOT reachable from GitHub-hosted runners, so
-# this runs on a SELF-HOSTED runner labelled `nix-host` — THEBATTLESHIP.
-# Register it once: repo → Settings → Actions → Runners → self-hosted,
-# label `nix-host`.
+# this runs on Task's own SELF-HOSTED runners (label `task`) on
+# THEBATTLESHIP — declared in the fleet's github-runner module, one pool
+# per project so a deploy here never queues another project's checks.
 #
 # GitHub Deployments: the `environment:` block registers a real Deployment,
 # so runs appear under the repo's Deployments panel and Environments tab
@@ -15,15 +15,23 @@
 # "Verify live" passes — so "Active" in GitHub means the cluster is
 # actually SERVING this sha, not merely that images were pushed.
 #
-# No change-gating. In the monorepo this job diffed paths to decide whether
-# Task was affected; in Task's own repo every commit is a Task commit, so
-# the filter was a tautology with a maintenance cost.
+# Change-gating is the push `paths-ignore` above: docs, skills and the
+# checks workflow are the only things on main that are not part of an
+# image; everything else deploys.
 
 name: deploy
 
 on:
   push:
     branches: [main]
+    # A commit that touches only prose, skills or the CI itself changes
+    # nothing the images are built from; a 30-minute deploy for it only
+    # holds a runner. Everything else on main still deploys.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "skills/**"
+      - ".github/workflows/checks.yml"
   workflow_dispatch:
 
 # Never cancel a deploy mid-push; queue instead.
@@ -39,7 +47,7 @@ env:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, nix-host]
+    runs-on: [self-hosted, task]
     environment:
       name: task-production
       url: https://task.starcommand.live
