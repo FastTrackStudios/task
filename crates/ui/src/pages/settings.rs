@@ -45,6 +45,28 @@ pub fn SettingsView() -> Element {
                 ThemeSwitcher { state: theme_state, class: "max-w-md" }
             }
 
+            // Linked accounts live with the account, on the issuer:
+            // one place to link GitHub and Google for every app. An
+            // accepted Edit Request on a repo-sourced wiki lands as the
+            // linked GitHub account, so this is where a wiki Editor
+            // goes first.
+            if let Some(issuer) = task_ui_core::central_auth::issuer() {
+                section { class: "flex flex-col gap-3",
+                    Heading { level: HeadingLevel::H3, "Account" }
+                    Text {
+                        variant: TextVariant::Muted,
+                        "Link your GitHub and Google accounts to your FastTrackStudio account. Changes you accept on a repository-backed wiki are pushed and proposed as your GitHub account."
+                    }
+                    a {
+                        class: "text-sm font-medium text-primary underline-offset-4 hover:underline",
+                        href: "{issuer.trim_end_matches('/')}/account",
+                        target: "_blank",
+                        rel: "noopener",
+                        "Manage linked accounts ↗"
+                    }
+                }
+            }
+
             section { class: "flex flex-col gap-3",
                 Heading { level: HeadingLevel::H3, "Start page" }
                 Text {

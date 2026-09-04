@@ -66,7 +66,11 @@ pub const CLIENT_ID: &str = "task";
 /// the hour ends on the sign-in screen — every hour. With it the access
 /// token is renewed in the background for as long as the refresh token
 /// lasts (seven days at the issuer, extended on every use).
-pub const SCOPE: &str = "openid email profile offline_access";
+/// `forge:github` lets the server read the person's linked GitHub token
+/// from the issuer (`/oauth2/linked-token`), so an accepted Edit Request
+/// on a repo-sourced wiki lands as them — their commit, their pull
+/// request. The issuer grants it only to clients registered with it.
+pub const SCOPE: &str = "openid email profile offline_access forge:github";
 
 /// How much longer the issuer says an access token lives when it does
 /// not say — the issuer's actual default, so the schedule is right even

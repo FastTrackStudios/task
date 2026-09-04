@@ -374,12 +374,54 @@ pub fn land(
     changes: &[(String, Option<String>)],
     message: &str,
     author: (&str, &str),
+    pusher: &Pusher,
 ) -> Result<Landing, WikiError> {
     let _held = git_lock();
-    land_inner(wikis_dir, slug, source, branch, changes, message, author)
-        .map_err(|reason| WikiError::Io(format!("land on {}: {reason}", source.url)))
+    land_inner(
+        wikis_dir, slug, source, branch, changes, message, author, pusher,
+    )
+    .map_err(|reason| {
+        // A push URL carries the pusher's credential; git echoes the
+        // URL in its errors, so the reason is scrubbed before it can
+        // reach a log line or a person.
+        let reason = pusher
+            .push_url
+            .as_deref()
+            .map_or(reason.clone(), |url| reason.replace(url, "<push url>"));
+        WikiError::Io(format!("land on {}: {reason}", source.url))
+    })
 }
 
+/// Who lands a change, and with what.
+///
+/// The commit's *author* is the proposer (see [`land`]); the *committer*
+/// is the person who accepted it — the two the repository's history
+/// should name. `push_url` is that person's own credential for the
+/// push (`https://x-access-token:<token>@github.com/o/r.git`): used for
+/// this one push and never written into the clone's remote config, so
+/// nothing on disk outlives the call. `None` pushes to `origin` as the
+/// mirror was cloned, for a repository that needs no credential (a
+/// `file://` source) or one the deployment itself is allowed to push.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pusher {
+    pub committer_name: String,
+    pub committer_email: String,
+    pub push_url: Option<String>,
+}
+
+impl Pusher {
+    /// Push to `origin`, committing as `name <email>`.
+    #[must_use]
+    pub fn origin(name: &str, email: &str) -> Self {
+        Self {
+            committer_name: name.to_owned(),
+            committer_email: email.to_owned(),
+            push_url: None,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn land_inner(
     wikis_dir: &Path,
     slug: &str,
@@ -388,6 +430,7 @@ fn land_inner(
     changes: &[(String, Option<String>)],
     message: &str,
     (name, email): (&str, &str),
+    pusher: &Pusher,
 ) -> Result<Landing, String> {
     let branch = branch.trim();
     if branch.is_empty() {
@@ -434,8 +477,21 @@ fn land_inner(
     let mut add = vec!["add", "-A", "--"];
     add.push(if subpath.is_empty() { "." } else { subpath });
     git(&clone, &add)?;
-    let ident_name = format!("user.name={name}");
-    let ident_email = format!("user.email={email}");
+    // The committer is whoever accepted the change; the author stays the
+    // proposer. A pusher with no name falls back to the author, so a
+    // caller that has not resolved an identity still lands truthfully.
+    let committer_name = if pusher.committer_name.trim().is_empty() {
+        name
+    } else {
+        pusher.committer_name.trim()
+    };
+    let committer_email = if pusher.committer_email.trim().is_empty() {
+        email
+    } else {
+        pusher.committer_email.trim()
+    };
+    let ident_name = format!("user.name={committer_name}");
+    let ident_email = format!("user.email={committer_email}");
     let author_line = format!("{name} <{email}>");
     git(
         &clone,
@@ -452,7 +508,11 @@ fn land_inner(
         ],
     )?;
     let commit = git(&clone, &["rev-parse", "HEAD"])?.trim().to_owned();
-    git(&clone, &["push", "origin", &format!("{branch}:{branch}")])?;
+    // The push goes to the pusher's own URL when they brought one — the
+    // credential rides the command line for this push only, never the
+    // clone's config — else to `origin`.
+    let target = pusher.push_url.as_deref().unwrap_or("origin");
+    git(&clone, &["push", target, &format!("{branch}:{branch}")])?;
     // Leave the clone detached at the base again so a later sync
     // finds the shape it expects and the branch is not left checked
     // out with the landing's tree over the mirror's.
@@ -718,6 +778,7 @@ mod tests {
             ],
             "Clarify setup; drop old page",
             ("Alice Owner", "alice@acme.test"),
+            &Pusher::origin("Eve Editor", "eve@acme.test"),
         )
         .unwrap();
         assert_eq!(landing.branch, "wiki/edit-42");

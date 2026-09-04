@@ -113,14 +113,19 @@ grouped:
   pushed as a branch, reads `Landing`, becomes a pull request when a
   forge token is configured, and turns `Accepted` only once a sync sees
   the repository holding it (`edits_backend::reconcile_landings`). What
-  `wiki.source.editable` still asks for and this does not do: the
-  commit and pull request are made with the *deployment's* forge token
-  (`TASK_GITHUB_TOKEN` / `TASK_FORGEJO_TOKEN`), with the proposer as
-  git author and the accepting Editor named in the message — not from
-  the Editor's own linked forge account, because no per-user forge link
-  exists yet. The repository's history is truthful about the author and
-  about the fact that Task pushed; it is not yet truthful about *which
-  person* pushed.
+  On GitHub the landing is now the accepting Editor's own: the server
+  asks the central issuer for the GitHub account linked to that person
+  (`GET /oauth2/linked-token?provider=github`, bearer the credential
+  they presented, granted under the `forge:github` scope), pushes the
+  branch with their token as committer (`<login>@users.noreply.github.
+  com`, the proposer still the author) and opens the pull request as
+  them; an Editor with no linked account is refused before anything is
+  pushed (`wiki_repo::identity_for`). What still stands between this
+  and the rule: the issuer side — `auth-server`'s social sign-in,
+  account linking and `linked-token` endpoint — must be deployed, and
+  Forgejo repositories still land with the deployment's
+  `TASK_FORGEJO_TOKEN`, as the deployment, because no per-user Forgejo
+  link exists.
 
 Remove entries as their rules gain markers; the section goes when the
 last does.
