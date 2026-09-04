@@ -82,6 +82,25 @@ from the notes. An author writes a cross-reference once, in one direction.
 
 ---
 
+### A heading is addressable
+
+t[ssg.order.headings]
+Every heading in a rendered note carries an `id` derived from its text, unique
+within the page, so a URL fragment addresses it. A page's headings are also
+available as data, in document order, for an in-page contents list and for a
+search result to point into rather than at.
+
+---
+
+### Tags are a second axis
+
+t[ssg.order.tags]
+A note's `tags:` are read, lowercased and made available per page and across
+the vault, with the pages carrying each. Reading order is one path through a
+vault; tags are the crossing one, and neither is derived from the other.
+
+---
+
 ## Build
 
 ### An empty vault fails the build

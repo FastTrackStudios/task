@@ -30,6 +30,10 @@
 //! - [`VaultToc`] — the table of contents, grouped by stage.
 //! - [`ChapterNav`] — previous / next in reading order.
 //! - [`Backlinks`] — what points here.
+//! - [`PageToc`] — the headings *inside* one page, as `#fragment`
+//!   links. The other table of contents.
+//! - [`PageTags`], [`TagIndex`], [`TaggedPages`] — the vault's
+//!   cross-cutting axis, for a vault whose notes carry `tags:`.
 //! - `VaultGraph` — the local or whole-vault link graph, as static SVG
 //!   with clickable nodes. Behind the `graph` feature: it reaches the
 //!   knowledge-graph crate, and a site publishing prose should not pay
@@ -44,13 +48,17 @@ mod article;
 #[cfg(feature = "graph")]
 mod graph;
 mod nav;
+mod page_toc;
+mod tags;
 
 pub use article::VaultArticle;
 #[cfg(feature = "graph")]
 pub use graph::{VaultGraph, local_graph, vault_graph};
 pub use nav::{Backlinks, ChapterNav, VaultToc};
+pub use page_toc::PageToc;
+pub use tags::{PageTags, TagIndex, TaggedPages};
 
-pub use ssg_vault::{StaticPage, StaticVault};
+pub use ssg_vault::{StaticHeading, StaticPage, StaticVault};
 
 use dioxus::prelude::Asset;
 use dioxus::prelude::*;

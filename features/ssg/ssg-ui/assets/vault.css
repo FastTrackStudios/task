@@ -177,6 +177,75 @@
   opacity: 0.6;
 }
 
+/* ── In-page contents ──────────────────────────────────────────────── */
+
+.ssg-page-toc {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.ssg-page-toc-heading {
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.ssg-page-toc ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ssg-page-toc li { padding-block: 0.15rem; }
+
+/* Depth from a data attribute rather than nested lists — the markup is
+ * flat because a document can skip from `##` to `####` and a nested list
+ * would have to invent the level in between. */
+.ssg-page-toc li[data-level="3"] { padding-inline-start: 0.75rem; }
+.ssg-page-toc li[data-level="4"] { padding-inline-start: 1.5rem; }
+
+.ssg-page-toc a {
+  text-decoration: none;
+  opacity: 0.75;
+}
+
+.ssg-page-toc a:hover { opacity: 1; }
+
+/* ── Tags ──────────────────────────────────────────────────────────── */
+
+.ssg-tags,
+.ssg-tag-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ssg-tag > * {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--ssg-rule, currentColor);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.ssg-tag > a:hover { border-color: var(--ssg-accent, currentColor); }
+
+.ssg-tag-count { opacity: 0.6; }
+
+.ssg-tagged,
+.ssg-tagged-empty { margin-block-start: 1rem; }
+
+.ssg-tagged { padding: 0; list-style: none; }
+
+.ssg-tagged-summary { opacity: 0.7; }
+
 /* ── Backlinks ─────────────────────────────────────────────────────── */
 
 .ssg-backlinks {

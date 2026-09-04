@@ -256,6 +256,23 @@ impl<'a> Vault<'a> {
                 .map(|l| format!("{l:?}"))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let tags = page
+                .tags
+                .iter()
+                .map(|t| format!("{t:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let headings = page
+                .headings
+                .iter()
+                .map(|h| {
+                    format!(
+                        "{crate_path}::StaticHeading {{ level: {}, text: {:?}, id: {:?} }}",
+                        h.level, h.text, h.id
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             // `{:?}` on a &str is a valid Rust string literal — escapes,
             // quotes and all — which is what makes emitting source out of
             // arbitrary note text safe rather than a quoting minefield.
@@ -264,7 +281,8 @@ impl<'a> Vault<'a> {
                 "    {crate_path}::StaticPage {{\n        \
                  slug: {:?},\n        title: {:?},\n        summary: {:?},\n        \
                  order: {},\n        stage: {:?},\n        kind: {:?},\n        \
-                 source: {:?},\n        body: {:?},\n        html: {:?},\n        links: &[{links}],\n    }},\n",
+                 source: {:?},\n        body: {:?},\n        html: {:?},\n        links: &[{links}],\n        \
+                 headings: &[{headings}],\n        tags: &[{tags}],\n        words: {},\n    }},\n",
                 page.slug,
                 page.title,
                 page.summary,
@@ -274,6 +292,7 @@ impl<'a> Vault<'a> {
                 page.source,
                 page.body,
                 page.html,
+                page.words,
             );
         }
         out.push_str("];\n\n");

@@ -98,12 +98,15 @@
 //! servable by anything — no server process, no rewrite rules.
 
 pub use ssg_vault::{
-    Frontmatter, Note, Page, RenderedPage, Renderer, ScanError, StaticPage, StaticVault, Vault,
-    scan, scan_with,
+    Frontmatter, Heading, Note, Page, RenderedPage, Renderer, ScanError, StaticHeading, StaticPage,
+    StaticVault, Vault, scan, scan_with,
 };
 
 #[cfg(feature = "ui")]
-pub use ssg_ui::{Backlinks, ChapterNav, VAULT_CSS, VAULT_STYLE, VaultArticle, VaultToc};
+pub use ssg_ui::{
+    Backlinks, ChapterNav, PageTags, PageToc, TagIndex, TaggedPages, VAULT_CSS, VAULT_STYLE,
+    VaultArticle, VaultToc,
+};
 
 #[cfg(feature = "graph")]
 pub use ssg_ui::{VaultGraph, local_graph, vault_graph};
