@@ -819,7 +819,10 @@ table!(WIKI_REGISTRY, "wiki-registry", "wiki/registry/**", [
     // and a visibility change is what publishes private writing
     // (`wiki.promote.vault`).
     wa "create_wiki", wa "set_visibility", wr "set_title", wa "delete_wiki",
-    wr "refresh_source",
+    // A repo-sourced wiki's working copy: reading what it holds against
+    // its base is a read; pushing it is what reaches the repository as
+    // the caller, and is audited (`wiki.source.editable`).
+    wr "refresh_source", rd "local_changes", wa "push_changes",
 ]);
 // The Edit lane (`wiki.edit.*`). Opening a request is a write to the
 // *request*, never to the wiki — the wiki only changes on `accept`,

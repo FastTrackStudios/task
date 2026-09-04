@@ -1,40 +1,41 @@
 //! The server's half of repo-sourced wikis (`wiki.source.*`).
 //!
-//! `wiki_live::repo_source` knows how to sync a mirror and push a
-//! branch; it does not know when, and it cannot open a pull request
-//! because the forge clients live above it in the dependency graph.
-//! Both of those are here:
+//! `wiki_live::repo_source` knows how to sync a working copy from its
+//! repository and push it back as a branch; it does not know when, and
+//! it cannot open a pull request because the forge clients live above
+//! it in the dependency graph. Both of those are here:
 //!
 //! - [`spawn_sync_loop`] — one task per org that keeps every
 //!   repo-sourced wiki current on a schedule, so a commit upstream
 //!   becomes wiki content without a person re-importing anything
-//!   (`wiki.source.sync`). The first pass runs at boot, off the boot
-//!   path.
-//! - [`open_pull_request`] — turns a pushed landing branch into a pull
-//!   request on whichever forge the repository's URL names, with the
-//!   token the deployment holds for it. No token means no pull request
-//!   — the branch is still pushed, and the caller says so
-//!   (`wiki.source.editable`).
+//!   (`wiki.source.sync`), and a pushed working copy that upstream has
+//!   merged stops being pending. The first pass runs at boot, off the
+//!   boot path.
+//! - [`open_pull_request`] — turns a pushed branch into a pull request
+//!   on whichever forge the repository's URL names, with the pusher's
+//!   own token where they have one and the deployment's otherwise. No
+//!   token means no pull request — the branch is still pushed, and the
+//!   caller says so (`wiki.source.editable`).
 
 use std::time::Duration;
 
-use wiki_live::edits_backend::{EditsBackend, ForgeIdentity, Lander};
-use wiki_live::repo_source::Landing;
+use wiki_live::edits_backend::EditsBackend;
+use wiki_live::repo_source::{ForgeIdentity, Lander, Landing};
 use wiki_proto::config::RepoSource;
 use wiki_proto::error::WikiError;
 use wiki_proto::service::registry::Registry as _;
 
-/// The server's [`Lander`]: a pushed landing branch becomes a pull
+/// The server's [`Lander`]: a pushed working copy becomes a pull
 /// request on the repository's forge through [`open_pull_request`].
 ///
-/// On GitHub the identity is the accepting Editor's own: the issuer
-/// hands over the GitHub token they linked to their account
+/// On GitHub the identity is the pushing Editor's own: the issuer hands
+/// over the GitHub token they linked to their account
 /// ([`crate::central_auth::CentralAuth::linked_github`]), the push and
 /// the pull request are made with it, and an Editor who has linked no
 /// GitHub account is refused before anything is pushed — so the
-/// repository's history is truthful about *which person* landed the
-/// change (`wiki.source.editable`). Other forges still land as the
-/// deployment, with the deployment's token.
+/// repository's history is truthful about *which person* pushed
+/// (`wiki.source.editable`). Other forges still land as the deployment,
+/// with the deployment's token.
 pub struct ForgeLander;
 
 impl Lander for ForgeLander {
@@ -54,7 +55,7 @@ impl Lander for ForgeLander {
     }
 }
 
-/// The accepting Editor's forge identity for `source`.
+/// The pushing Editor's forge identity for `source`.
 ///
 /// GitHub repositories need the person's linked account: no central
 /// issuer, no live credential, or no linked GitHub account is a
@@ -80,7 +81,7 @@ pub fn identity_for(source: &RepoSource, editor: &str) -> Result<ForgeIdentity, 
                 crate::central_auth::LinkedTokenError::NotLinked
                 | crate::central_auth::LinkedTokenError::NoCredential
                 | crate::central_auth::LinkedTokenError::InsufficientScope => format!(
-                    " — link GitHub at {}/account, then accept again",
+                    " — link GitHub at {}/account, then push again",
                     central.issuer().trim_end_matches('/')
                 ),
                 crate::central_auth::LinkedTokenError::Unavailable(_) => String::new(),
@@ -148,11 +149,12 @@ pub fn spawn_sync_loop(org_slug: String, edits: EditsBackend) {
 
 /// One pass over the org's wikis.
 ///
-/// After a sync that moved the mirror, the Edit lane is asked which of
-/// its `Landing` requests the repository now holds
-/// (`wiki.source.editable`): those become `Accepted` and close their
-/// tracker rows, so "landed" means the repository has it and nothing
-/// less.
+/// The sync itself keeps every local edit and settles the pending push
+/// (`wiki.source.editable`): a pushed working copy the followed branch
+/// now contains stops being pending, and the change list empties on
+/// its own because the base has caught up. After a sync that moved the
+/// base, the Edit lane is also asked about any request still `Landing`
+/// from an older server, so nothing is left reading as in flight.
 async fn sync_all(org_slug: &str, edits: &EditsBackend) {
     let backend = edits.wiki().clone();
     for (slug, _) in backend.roots() {
@@ -171,6 +173,8 @@ async fn sync_all(org_slug: &str, edits: &EditsBackend) {
                     org.slug = %org_slug,
                     wiki.slug = %slug,
                     wiki.source.commit = %after.commit,
+                    wiki.source.conflicts = after.conflicts.len(),
+                    wiki.source.merged = before.pending.is_some() && after.pending.is_none(),
                     "repo-sourced wiki synced"
                 );
                 let e = edits.clone();

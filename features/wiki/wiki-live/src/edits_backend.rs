@@ -35,102 +35,13 @@ use wiki_proto::service::{Catalog, Pages};
 
 use crate::WikiBackend;
 use crate::edits as store;
-use crate::repo_source::{self, Landing};
+use crate::repo_source;
 
-// ────────────────────── Lander ──────────────────────
-
-/// The forge half of landing into a repo-sourced wiki
-/// (`wiki.source.editable`).
-///
-/// `repo_source::land` pushes the accepted change as a branch; turning
-/// that branch into a pull request needs a forge client, which lives
-/// above this crate. The server supplies one through this hook; the
-/// default opens nothing, so a wiki over a repository with no forge
-/// configured still lands as a pushed branch a person can merge.
-pub trait Lander: Send + Sync + 'static {
-    /// Who the accepting Editor is on this repository's forge, and the
-    /// credential the push and the pull request are made with — so the
-    /// repository's history names the person, not the deployment
-    /// (`wiki.source.editable`). Called before anything is pushed: an
-    /// `Err` (no linked forge account) refuses the landing with the
-    /// wiki untouched. The default lands as the deployment: the editor's
-    /// account id as committer, `origin` as the push target.
-    fn identity_for(
-        &self,
-        source: &wiki_proto::config::RepoSource,
-        editor: &str,
-    ) -> Result<ForgeIdentity, WikiError> {
-        let _ = source;
-        Ok(ForgeIdentity::deployment(editor))
-    }
-
-    /// Open a pull request for `landing`, as `identity`. `Ok(None)` when
-    /// no forge client applies to this repository; the branch is still
-    /// pushed.
-    fn open_pull_request(
-        &self,
-        source: &wiki_proto::config::RepoSource,
-        landing: &Landing,
-        title: &str,
-        body: &str,
-        identity: &ForgeIdentity,
-    ) -> Result<Option<String>, WikiError>;
-}
-
-/// The accepting Editor as the forge knows them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ForgeIdentity {
-    /// How the landing message and log name them (`@octocat`, or the
-    /// account id when the deployment lands).
-    pub display: String,
-    /// Committer of the landing commit (the author stays the proposer).
-    pub committer_name: String,
-    pub committer_email: String,
-    /// The person's own forge access token, when they have linked one.
-    /// `None` means the deployment pushes and opens the request itself.
-    pub token: Option<String>,
-    /// Where the push goes (see [`repo_source::Pusher::push_url`]).
-    pub push_url: Option<String>,
-}
-
-impl ForgeIdentity {
-    /// The deployment lands on the editor's behalf: their account id is
-    /// the committer, `origin` the target.
-    #[must_use]
-    pub fn deployment(editor: &str) -> Self {
-        Self {
-            display: editor.to_owned(),
-            committer_name: editor.to_owned(),
-            committer_email: format!("{editor}@task.invalid"),
-            token: None,
-            push_url: None,
-        }
-    }
-
-    fn pusher(&self) -> repo_source::Pusher {
-        repo_source::Pusher {
-            committer_name: self.committer_name.clone(),
-            committer_email: self.committer_email.clone(),
-            push_url: self.push_url.clone(),
-        }
-    }
-}
-
-/// The default [`Lander`]: pushes only, as the deployment.
-pub struct NoForge;
-
-impl Lander for NoForge {
-    fn open_pull_request(
-        &self,
-        _source: &wiki_proto::config::RepoSource,
-        _landing: &Landing,
-        _title: &str,
-        _body: &str,
-        _identity: &ForgeIdentity,
-    ) -> Result<Option<String>, WikiError> {
-        Ok(None)
-    }
-}
+// The forge hook used to live here, when accepting a request on a
+// repo-sourced wiki pushed it. Accepting now writes the working copy
+// like any other wiki and pushing is the Registry's `push_changes`, so
+// the hook moved beside the git code; these names stay for callers.
+pub use crate::repo_source::{ForgeIdentity, Lander, NoForge};
 
 // ────────────────────── Tracker ──────────────────────
 
@@ -253,7 +164,6 @@ pub const DEFAULT_CLAIM_TTL: Duration = Duration::from_secs(60 * 60);
 pub struct EditsBackend {
     wiki: WikiBackend,
     tracker: Arc<dyn Tracker>,
-    lander: Arc<dyn Lander>,
     claim_ttl: Duration,
     clock: Clock,
     /// Serialises state transitions: two Editors claiming at once must
@@ -268,19 +178,10 @@ impl EditsBackend {
         Self {
             wiki,
             tracker,
-            lander: Arc::new(NoForge),
             claim_ttl: DEFAULT_CLAIM_TTL,
             clock: Arc::new(Utc::now),
             lock: Arc::new(Mutex::new(())),
         }
-    }
-
-    /// How a landing branch becomes a pull request on a repo-sourced
-    /// wiki's forge.
-    #[must_use]
-    pub fn with_lander(mut self, lander: Arc<dyn Lander>) -> Self {
-        self.lander = lander;
-        self
     }
 
     /// How long a claim stands.
@@ -467,117 +368,12 @@ impl EditsBackend {
         let root = self.wiki.root_of(wiki_id)?;
         let now = self.now();
 
-        // t[impl wiki.source.editable] — a repo-sourced wiki lands
-        // through its repository, never into the mirror: the accepted
-        // change goes up as a branch (and a pull request when a forge
-        // is configured), the request reads `Landing`, and the pages
-        // change here only when a sync sees the repository has taken
-        // it. A push the repository refuses is reported as refused and
-        // the request stays open — the wiki never shows as landed what
-        // the repository does not hold.
-        let config = self.wiki.config_of(wiki_id)?;
-        if let Some(source) = config.source.as_ref() {
-            let Some(wikis_dir) = root.parent() else {
-                return Err(WikiError::Backend("wiki root has no parent".into()));
-            };
-            // Who lands it, before anything moves: an Editor with no
-            // forge identity for this repository is refused here, with
-            // the request still open and the wiki untouched.
-            let identity = self
-                .lander
-                .identity_for(source, editor)
-                .inspect_err(|_| wide::set("wiki.edit.outcome", "refused"))?;
-            // Paths are wiki-relative, which is repository-relative
-            // under `source.path`; `land` puts the prefix on.
-            let changes: Vec<(String, Option<String>)> = request
-                .changes
-                .iter()
-                .zip(&diffs)
-                .map(|(change, diff)| {
-                    (
-                        change.path.clone(),
-                        (!change.delete).then(|| diff.merged.clone()),
-                    )
-                })
-                .collect();
-            let short: String = request.id.simple().to_string().chars().take(12).collect();
-            let branch = format!("wiki/edit-{short}");
-            let message = format!(
-                "{}\n\nEdit Request {} proposed by {}, accepted by {}.{}",
-                request.title.trim(),
-                request.id,
-                request.proposer,
-                identity.display,
-                if request.summary.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!("\n\n{}", request.summary.trim())
-                }
-            );
-            // The proposer is the author: the repository's own history
-            // stays truthful about whose change this is. The address is
-            // synthetic — an account id is not a mailbox.
-            let author_email = format!("{}@task.invalid", request.proposer);
-            // Git and a forge round trip: off the runtime worker, on
-            // the same task (see `backend::blocking`).
-            let landing = crate::backend::blocking(|| {
-                repo_source::land(
-                    wikis_dir,
-                    wiki_id,
-                    source,
-                    &branch,
-                    &changes,
-                    &message,
-                    (&request.proposer, &author_email),
-                    &identity.pusher(),
-                )
-            })
-            .map_err(|e| {
-                wide::set("wiki.edit.outcome", "refused");
-                WikiError::Refused(format!("the repository refused the change: {e}"))
-            })?;
-            let pr = crate::backend::blocking(|| {
-                self.lander.open_pull_request(
-                    source,
-                    &landing,
-                    request.title.trim(),
-                    &message,
-                    &identity,
-                )
-            })?;
-            request.landing = pr
-                .clone()
-                .unwrap_or_else(|| format!("branch {} at {}", landing.branch, landing.commit));
-            self.wiki.append_log(
-                wiki_id,
-                ctypes::LogEntry {
-                    id: uuid::Uuid::new_v4(),
-                    at: now,
-                    op: ctypes::LogOp::Review,
-                    title: format!("Edit Request landing: {}", request.title),
-                    body: format!(
-                        "Edit Request {} proposed by {}, accepted by {}; pushed to the \
-                         repository as {}{}. The wiki shows it once the repository does.",
-                        request.id,
-                        request.proposer,
-                        identity.display,
-                        landing.branch,
-                        pr.as_deref().map(|u| format!(" ({u})")).unwrap_or_default()
-                    ),
-                    pages_touched: ctypes::WikilinkList(
-                        request.changes.iter().map(|c| c.path.clone()).collect(),
-                    ),
-                },
-            )?;
-            request.status = EditStatus::Landing;
-            request.resolved_by = editor.to_owned();
-            request.resolved_at = now.to_rfc3339();
-            request.resolution = format!("accepted; landing as {}", landing.commit);
-            request.claimed_by.clear();
-            request.claimed_until.clear();
-            return Ok(());
-        }
-
+        // t[impl wiki.source.editable] — a repo-sourced wiki is no
+        // different here: the accepted change lands in the working copy
+        // (the live, collaboratively edited version of the repository's
+        // pages) and nothing is pushed. The working copy reaches the
+        // repository when an Editor pushes it — one branch, one commit,
+        // one pull request — through the Registry's `push_changes`.
         for (change, diff) in request.changes.iter().zip(&diffs) {
             if change.delete {
                 let abs = root.join(&change.path);
@@ -637,12 +433,14 @@ impl EditsBackend {
         Ok(())
     }
 
-    /// Settle every `Landing` request of a repo-sourced wiki against
-    /// what its repository now holds (`wiki.source.editable`): a
-    /// landing commit the mirror's current commit reaches becomes
-    /// `Accepted` and closes its tracker row. Called after each sync;
-    /// returns the ids that landed. Nothing to do for a wiki that is
-    /// not repo-sourced.
+    /// Settle any request still `Landing` from before accepting wrote
+    /// the working copy — one pushed on its own branch by an older
+    /// server — against what the repository now holds: a commit the
+    /// base reaches becomes `Accepted` and closes its tracker row.
+    /// Called after each sync; returns the ids that landed. Nothing
+    /// enters `Landing` any more, so on a current deployment this is a
+    /// no-op; the pending *push* is settled by the sync itself
+    /// (`repo_source::sync` clears `RepoSource::pending`).
     pub fn reconcile_landings(&self, wiki_id: &str) -> Result<Vec<uuid::Uuid>, WikiError> {
         let config = self.wiki.config_of(wiki_id)?;
         let Some(source) = config.source.as_ref() else {
@@ -981,14 +779,8 @@ impl Edits for EditsBackend {
         }
         self.land(wiki_id, &mut request, &editor)?;
         store::save(&root, &request)?;
-        if request.status == EditStatus::Landing {
-            // The row stays open until the repository has the change;
-            // `reconcile_landings` closes it then.
-            wide::set("wiki.edit.outcome", "landing");
-        } else {
-            self.close_row(&request, ISSUE_DONE)?;
-            wide::set("wiki.edit.outcome", "accepted");
-        }
+        self.close_row(&request, ISSUE_DONE)?;
+        wide::set("wiki.edit.outcome", "accepted");
         Ok(request)
     }
 
@@ -1209,15 +1001,14 @@ mod tests {
     }
 
     /// t[verify wiki.source.editable] — on a repo-sourced wiki an
-    /// accepted request is pushed as a branch, reads `Landing`, and the
-    /// mirror does not change; once the repository has merged it a sync
-    /// and a reconcile make it `Accepted`, close the row, and the page
-    /// arrives through the mirror. A push the repository refuses leaves
-    /// the request open and reports the refusal.
+    /// accepted request writes the working copy like anywhere else and
+    /// reads `Accepted` at once; nothing reaches the repository, and the
+    /// change shows up as a local change waiting for a push. An Editor's
+    /// auto-approved edit does the same.
     #[test]
-    fn a_repo_sourced_wiki_lands_through_its_repository() {
-        use wiki_proto::service::registry::Registry as _;
-        fn g(dir: &Path, args: &[&str]) {
+    fn accepting_on_a_repo_sourced_wiki_writes_the_working_copy_and_pushes_nothing() {
+        use wiki_proto::service::registry::{ChangeKind, Registry as _};
+        fn g(dir: &Path, args: &[&str]) -> String {
             let out = std::process::Command::new("git")
                 .args(["-c", "user.email=t@example.com", "-c", "user.name=T"])
                 .args(args)
@@ -1229,6 +1020,7 @@ mod tests {
                 "git {args:?}: {}",
                 String::from_utf8_lossy(&out.stderr)
             );
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
         }
         let dir = tempfile::tempdir().unwrap();
         let bare = dir.path().join("remote.git");
@@ -1242,6 +1034,7 @@ mod tests {
         g(&work, &["commit", "-m", "docs"]);
         g(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
         g(&work, &["push", "-u", "origin", "main"]);
+        let main_before = g(&bare, &["rev-parse", "main"]);
 
         let wikis = dir.path().join("wikis");
         std::fs::create_dir_all(&wikis).unwrap();
@@ -1265,7 +1058,6 @@ mod tests {
         .unwrap();
         let tracker = Arc::new(MemoryTracker::default());
         let edits = EditsBackend::new(wiki.clone(), tracker.clone());
-        let root = wikis.join("docs");
         let before = wiki.read_page("docs", "Guide.md").unwrap();
 
         // Sam proposes; Alice (the creator, hence Editor) accepts.
@@ -1288,259 +1080,64 @@ mod tests {
             )
             .unwrap();
         *switch.who.lock().unwrap() = Some("alice".into());
-        let landing = edits.accept_edit_request("docs", req.id).unwrap();
-        assert_eq!(landing.status, EditStatus::Landing, "{landing:?}");
-        assert!(
-            landing.landing.starts_with("branch wiki/edit-"),
-            "{}",
-            landing.landing
-        );
+        let accepted = edits.accept_edit_request("docs", req.id).unwrap();
+        assert_eq!(accepted.status, EditStatus::Accepted, "{accepted:?}");
+        assert!(accepted.landing.is_empty());
         assert_eq!(
             wiki.read_page("docs", "Guide.md").unwrap().markdown,
-            before.markdown,
-            "the mirror does not show what the repository has not taken"
+            "# Guide\n\nNew text.\n",
+            "the working copy has the change"
         );
-        assert_eq!(
-            tracker.issue_status(req.id).unwrap().as_deref(),
-            Some("open"),
-            "the row stays open while landing"
-        );
-        let branch = landing.landing.split(' ').nth(1).unwrap().to_owned();
-        assert!(
-            std::fs::read_to_string(bare.join("refs/heads").join(&branch)).is_ok()
-                || g_ok(&bare, &["rev-parse", "--verify", &branch]),
-            "the branch reached the remote"
-        );
-        assert!(
-            edits.reconcile_landings("docs").unwrap().is_empty(),
-            "not merged yet"
-        );
-
-        // The repository takes it.
-        g(&work, &["fetch", "origin"]);
-        g(&work, &["merge", "--no-edit", &format!("origin/{branch}")]);
-        g(&work, &["push", "origin", "main"]);
-        wiki.refresh_source("docs").unwrap();
-        let landed = edits.reconcile_landings("docs").unwrap();
-        assert_eq!(landed, vec![req.id]);
-        let after = edits.get_edit_request("docs", req.id).unwrap();
-        assert_eq!(after.status, EditStatus::Accepted);
         assert_eq!(
             tracker.issue_status(req.id).unwrap().as_deref(),
             Some("done")
         );
-        assert_eq!(
-            wiki.read_page("docs", "Guide.md").unwrap().markdown,
-            "# Guide\n\nNew text.\n"
-        );
-        assert!(root.join("Guide.md").is_file());
+        assert_eq!(g(&bare, &["branch", "--list"]), "* main", "nothing pushed");
+        assert_eq!(g(&bare, &["rev-parse", "main"]), main_before);
+        assert!(edits.reconcile_landings("docs").unwrap().is_empty());
 
-        // A repository that refuses: point the source at a URL that is
-        // gone, and the push is reported as refused with the request
-        // still open.
-        std::fs::remove_dir_all(&bare).unwrap();
-        *switch.who.lock().unwrap() = Some("sam".into());
+        // Alice's own edit, auto-approved, lands the same way.
         let current = wiki.read_page("docs", "Guide.md").unwrap();
-        let req2 = edits
+        let mine = edits
             .open_edit_request(
                 "docs",
                 NewEditRequest {
-                    title: "Again".into(),
+                    title: "Add a page".into(),
                     summary: String::new(),
                     changes: vec![PageChange {
-                        path: "Guide.md".into(),
-                        base_sha256: current.sha256,
-                        base_markdown: current.markdown,
-                        markdown: "# Guide\n\nThird text.\n".into(),
+                        path: "Deploy.md".into(),
+                        base_sha256: String::new(),
+                        base_markdown: String::new(),
+                        markdown: "# Deploy\n".into(),
                         delete: false,
                     }],
                     request_review: false,
                 },
             )
             .unwrap();
-        *switch.who.lock().unwrap() = Some("alice".into());
-        let err = edits.accept_edit_request("docs", req2.id).unwrap_err();
-        assert!(
-            matches!(&err, WikiError::Refused(m) if m.contains("repository refused")),
-            "{err:?}"
-        );
+        assert_eq!(mine.status, EditStatus::Accepted);
+        assert!(mine.auto_approved);
+        assert_eq!(current.markdown, "# Guide\n\nNew text.\n");
+
+        // Both are local changes now, waiting for a push.
+        let changes = wiki.local_changes("docs").unwrap();
+        let kinds: Vec<(&str, ChangeKind)> = changes
+            .changes
+            .iter()
+            .map(|c| (c.path.as_str(), c.kind))
+            .collect();
         assert_eq!(
-            edits.get_edit_request("docs", req2.id).unwrap().status,
-            EditStatus::Open
+            kinds,
+            vec![
+                ("Deploy.md", ChangeKind::Added),
+                ("Guide.md", ChangeKind::Modified)
+            ]
         );
-
-        fn g_ok(dir: &Path, args: &[&str]) -> bool {
-            std::process::Command::new("git")
-                .args(args)
-                .current_dir(dir)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-    }
-
-    /// The landing is the accepting Editor's, as the forge knows them
-    /// (`wiki.source.editable`): the [`Lander`] names the identity, the
-    /// commit's committer is that person while the author stays the
-    /// proposer, and an Editor the forge does not know is refused with
-    /// nothing pushed and the request still open.
-    #[test]
-    fn a_landing_is_the_editors_own_or_is_refused_before_any_push() {
-        use wiki_proto::service::registry::Registry as _;
-        fn git_out(dir: &Path, args: &[&str]) -> String {
-            let out = std::process::Command::new("git")
-                .args(["-c", "user.email=t@example.com", "-c", "user.name=T"])
-                .args(args)
-                .current_dir(dir)
-                .output()
-                .expect("git");
-            assert!(
-                out.status.success(),
-                "git {args:?}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
-        }
-        /// Knows one Editor ("alice" is `@alice-gh`); everyone else has
-        /// linked nothing.
-        struct OneLinked;
-        impl Lander for OneLinked {
-            fn identity_for(
-                &self,
-                _source: &wiki_proto::config::RepoSource,
-                editor: &str,
-            ) -> Result<ForgeIdentity, WikiError> {
-                if editor == "alice" {
-                    Ok(ForgeIdentity {
-                        display: "@alice-gh".into(),
-                        committer_name: "alice-gh".into(),
-                        committer_email: "alice-gh@users.noreply.github.com".into(),
-                        token: Some("gho_test".into()),
-                        push_url: None,
-                    })
-                } else {
-                    Err(WikiError::Refused(format!(
-                        "cannot land on GitHub as you: {editor} has linked no GitHub account"
-                    )))
-                }
-            }
-            fn open_pull_request(
-                &self,
-                _source: &wiki_proto::config::RepoSource,
-                _landing: &Landing,
-                _title: &str,
-                body: &str,
-                identity: &ForgeIdentity,
-            ) -> Result<Option<String>, WikiError> {
-                assert_eq!(identity.token.as_deref(), Some("gho_test"));
-                assert!(body.contains("accepted by @alice-gh"), "{body}");
-                Ok(Some("https://github.com/acme/docs/pull/7".into()))
-            }
-        }
-
-        let dir = tempfile::tempdir().unwrap();
-        let bare = dir.path().join("remote.git");
-        let work = dir.path().join("work");
-        std::fs::create_dir_all(&bare).unwrap();
-        std::fs::create_dir_all(work.join("docs")).unwrap();
-        git_out(&bare, &["init", "--bare", "--initial-branch=main"]);
-        git_out(&work, &["init", "--initial-branch=main"]);
-        std::fs::write(work.join("docs/Guide.md"), "# Guide\n\nOld text.\n").unwrap();
-        git_out(&work, &["add", "-A"]);
-        git_out(&work, &["commit", "-m", "docs"]);
-        git_out(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
-        git_out(&work, &["push", "-u", "origin", "main"]);
-
-        let wikis = dir.path().join("wikis");
-        std::fs::create_dir_all(&wikis).unwrap();
-        let switch = Arc::new(Switch {
-            who: Mutex::new(Some("alice".into())),
-            admin: Mutex::new(false),
-            member: Mutex::new(true),
-        });
-        let wiki = WikiBackend::with_roots_under(HashMap::new(), wikis.clone())
-            .with_caller(switch.clone());
-        wiki.create_wiki(wiki_proto::config::NewWiki {
-            title: "Docs".into(),
-            source: Some(wiki_proto::config::RepoSource {
-                url: format!("file://{}", bare.display()),
-                branch: "main".into(),
-                path: "docs".into(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
-        .unwrap();
-        let edits = EditsBackend::new(wiki.clone(), Arc::new(MemoryTracker::default()))
-            .with_lander(Arc::new(OneLinked));
-        // Bob is an Editor too, but has linked no forge account.
-        edits.grant_editor("docs", "bob").unwrap();
-        let before = wiki.read_page("docs", "Guide.md").unwrap();
-        let propose = |title: &str, text: &str| {
-            *switch.who.lock().unwrap() = Some("sam".into());
-            let current = wiki.read_page("docs", "Guide.md").unwrap();
-            edits
-                .open_edit_request(
-                    "docs",
-                    NewEditRequest {
-                        title: title.into(),
-                        summary: String::new(),
-                        changes: vec![PageChange {
-                            path: "Guide.md".into(),
-                            base_sha256: current.sha256,
-                            base_markdown: current.markdown,
-                            markdown: text.into(),
-                            delete: false,
-                        }],
-                        request_review: false,
-                    },
-                )
-                .unwrap()
-        };
-
-        // Bob accepts: refused before any push, request still open.
-        let req = propose("Clarify", "# Guide\n\nNew text.\n");
-        *switch.who.lock().unwrap() = Some("bob".into());
-        let err = edits.accept_edit_request("docs", req.id).unwrap_err();
-        assert!(
-            matches!(&err, WikiError::Refused(m) if m.contains("linked no GitHub account")),
-            "{err:?}"
-        );
+        assert!(changes.pending.is_none());
         assert_eq!(
-            edits.get_edit_request("docs", req.id).unwrap().status,
-            EditStatus::Open
-        );
-        assert_eq!(
-            git_out(&bare, &["branch", "--list", "wiki/*"]),
-            "",
-            "nothing was pushed"
-        );
-        assert_eq!(
-            wiki.read_page("docs", "Guide.md").unwrap().markdown,
-            before.markdown
-        );
-
-        // Alice accepts: lands as @alice-gh, the proposer still the author.
-        *switch.who.lock().unwrap() = Some("alice".into());
-        let landing = edits.accept_edit_request("docs", req.id).unwrap();
-        assert_eq!(landing.status, EditStatus::Landing, "{landing:?}");
-        assert_eq!(landing.landing, "https://github.com/acme/docs/pull/7");
-        let branch = git_out(&bare, &["branch", "--list", "wiki/*"])
-            .trim_start_matches(['*', ' '])
-            .to_owned();
-        assert!(branch.starts_with("wiki/edit-"), "{branch}");
-        let who = git_out(
-            &bare,
-            &["log", "-1", "--format=%an <%ae>|%cn <%ce>", &branch],
-        );
-        assert_eq!(
-            who,
-            "sam <sam@task.invalid>|alice-gh <alice-gh@users.noreply.github.com>"
-        );
-        let msg = git_out(&bare, &["log", "-1", "--format=%B", &branch]);
-        assert!(
-            msg.contains("proposed by sam, accepted by @alice-gh"),
-            "{msg}"
+            g(&bare, &["branch", "--list"]),
+            "* main",
+            "still nothing pushed"
         );
     }
 

@@ -85,6 +85,8 @@ const WIKI_TOOLS: &[&str] = &[
     "list_wikis",
     "describe_wiki",
     "create_wiki",
+    "wiki_local_changes",
+    "wiki_push_changes",
     "list_wiki_pages",
     "read_wiki_page",
     "write_wiki_page",

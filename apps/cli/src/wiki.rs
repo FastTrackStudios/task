@@ -663,6 +663,36 @@ pub(crate) enum WikiCmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// What a repo-sourced wiki's working copy holds that its
+    /// repository does not: every page added, changed or deleted since
+    /// the base commit, the pending pull request, and any page a sync
+    /// left in conflict (`wiki.source.editable`).
+    Changes {
+        slug: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Push a repo-sourced wiki's working copy to its repository: one
+    /// commit with every local change on one branch, and a pull request
+    /// for it — updated in place by a later push until it merges.
+    /// Editor only, made as your own forge identity.
+    Push {
+        slug: String,
+        /// The commit subject and the pull request's title.
+        #[arg(long)]
+        title: String,
+        /// The rest of the commit message and the request's body.
+        #[arg(long, default_value = "")]
+        body: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Pages of one wiki: list, read, write. The authoring surface an
     /// agent scaffolds a wiki with (`wiki.many.set`).
     #[command(subcommand)]
@@ -2328,6 +2358,8 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         | WikiCmd::List { .. }
         | WikiCmd::Describe { .. }
         | WikiCmd::RefreshSource { .. }
+        | WikiCmd::Changes { .. }
+        | WikiCmd::Push { .. }
         | WikiCmd::SetTitle { .. }
         | WikiCmd::SetVisibility { .. } => run_wiki_registry(cmd).await,
     }
@@ -2367,6 +2399,23 @@ async fn run_wiki_registry(cmd: WikiCmd) -> eyre::Result<()> {
         }
         if !source.last_error.is_empty() {
             println!("STALE:        {}", source.last_error);
+        }
+        if let Some(p) = &source.pending {
+            print_pending(p);
+        }
+        if !source.conflicts.is_empty() {
+            println!("CONFLICTS:    {}", source.conflicts.join(", "));
+        }
+    }
+
+    fn print_pending(p: &wiki_proto::config::PendingPush) {
+        println!(
+            "pending:      {} at {}",
+            p.branch,
+            &p.commit[..p.commit.len().min(12)]
+        );
+        if !p.pull_request.is_empty() {
+            println!("pull request: {}", p.pull_request);
         }
     }
 
@@ -2485,6 +2534,78 @@ async fn run_wiki_registry(cmd: WikiCmd) -> eyre::Result<()> {
                 .await
                 .map_err(|e| eyre::eyre!("refresh source: {e:?}"))?;
             print_source(&source);
+            Ok(())
+        }
+        WikiCmd::Changes {
+            slug,
+            org,
+            server,
+            json,
+        } => {
+            let c = client(org, server).await?;
+            let changes = c
+                .local_changes(slug.clone())
+                .await
+                .map_err(|e| eyre::eyre!("local changes: {e:?}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&changes)?);
+                return Ok(());
+            }
+            println!(
+                "base:         {}",
+                if changes.base_commit.is_empty() {
+                    "(never synced)"
+                } else {
+                    &changes.base_commit
+                }
+            );
+            if let Some(p) = &changes.pending {
+                print_pending(p);
+            }
+            if !changes.conflicts.is_empty() {
+                println!(
+                    "CONFLICTS:    {}  (open each, decide, save — then push)",
+                    changes.conflicts.join(", ")
+                );
+            }
+            if changes.changes.is_empty() {
+                println!("(no local changes)");
+            } else {
+                println!();
+                for ch in &changes.changes {
+                    println!("{:<9} {}", ch.kind.as_str(), ch.path);
+                }
+                println!();
+                println!(
+                    "{} change{}; push with: task wiki push {slug} --title \"…\"",
+                    changes.changes.len(),
+                    if changes.changes.len() == 1 { "" } else { "s" }
+                );
+            }
+            Ok(())
+        }
+        WikiCmd::Push {
+            slug,
+            title,
+            body,
+            org,
+            server,
+        } => {
+            let c = client(org, server).await?;
+            let pending = c
+                .push_changes(slug.clone(), title, body)
+                .await
+                .map_err(|e| eyre::eyre!("push: {e:?}"))?;
+            if pending.pull_request.is_empty() {
+                println!(
+                    "pushed `{slug}` as {} at {} — no forge client here; open the pull request \
+                     from that branch",
+                    pending.branch,
+                    &pending.commit[..pending.commit.len().min(12)]
+                );
+            } else {
+                println!("{}", pending.pull_request);
+            }
             Ok(())
         }
         WikiCmd::SetTitle {

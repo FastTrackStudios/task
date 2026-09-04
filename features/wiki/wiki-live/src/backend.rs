@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
-use wiki_proto::config::{NewWiki, Visibility, WikiConfig};
+use wiki_proto::config::{NewWiki, PendingPush, Visibility, WikiConfig};
 use wiki_proto::error::WikiError;
 use wiki_proto::graph as gtypes;
 use wiki_proto::health::WikiHealth as ProtoHealth;
@@ -25,7 +25,7 @@ use wiki_proto::review::ReviewItem;
 use wiki_proto::schema as stypes;
 use wiki_proto::search::{SearchHits, SearchOpts};
 use wiki_proto::service::events::EventsStreamSource;
-use wiki_proto::service::registry::{WikiDescription, WikiSummary};
+use wiki_proto::service::registry::{LocalChanges, WikiDescription, WikiSummary};
 use wiki_proto::service::{
     Catalog, Graph, Ingest, Lint, Multimodal, Pages, RawLayer, Review, Schema, Search, Watcher,
 };
@@ -142,6 +142,11 @@ pub struct WikiBackend {
     /// way of registering the new directory with the other services
     /// that serve wiki pages (vault-sync, the link graph, collab).
     on_created: Option<WikiCreatedHook>,
+    /// How a push of a repo-sourced wiki's working copy is made as the
+    /// pusher's own forge identity and becomes a pull request
+    /// (`wiki.source.editable`). The default pushes as the deployment
+    /// and opens nothing.
+    lander: Arc<dyn crate::repo_source::Lander>,
 }
 
 /// What [`WikiBackend::with_on_created`] is handed: a callback run
@@ -205,6 +210,14 @@ impl WikiBackend {
         self
     }
 
+    /// How a working copy's push is made as the pusher and becomes a
+    /// pull request on a repo-sourced wiki's forge.
+    #[must_use]
+    pub fn with_lander(mut self, lander: Arc<dyn crate::repo_source::Lander>) -> Self {
+        self.lander = lander;
+        self
+    }
+
     fn from_layout(layout: Layout) -> Self {
         Self {
             layout,
@@ -212,7 +225,30 @@ impl WikiBackend {
             watch_flags: Arc::new(std::sync::Mutex::new(HashMap::new())),
             changes: architect::PubSub::sliding(256),
             on_created: None,
+            lander: Arc::new(crate::repo_source::NoForge),
         }
+    }
+
+    /// A repo-sourced wiki's root, source and the directory its clone
+    /// lives beside, or the refusal that names what is missing.
+    fn repo_parts(&self, wiki_id: &str) -> Result<(PathBuf, WikiConfig, &Path), WikiError> {
+        let root = self.root_of(wiki_id)?;
+        let config = crate::config::load(&root, wiki_id)?;
+        if config.source.is_none() {
+            return Err(WikiError::Refused(format!(
+                "`{wiki_id}` has no repository behind it"
+            )));
+        }
+        let Layout::Explicit {
+            wikis_dir: Some(wikis_dir),
+            ..
+        } = &self.layout
+        else {
+            return Err(WikiError::Refused(
+                "this backend has no directory to keep a repository clone in".into(),
+            ));
+        };
+        Ok((root, config, wikis_dir.as_path()))
     }
 
     /// The account making this call, when the gate knows one.
@@ -592,6 +628,181 @@ impl wiki_proto::service::registry::Registry for WikiBackend {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// t[impl wiki.source.editable] — what the working copy holds that
+    /// the repository does not, derived from the pages against the
+    /// base the last sync exported. Readable by anyone who may read
+    /// the wiki; it is the answer to "what would a push send?".
+    fn local_changes(&self, wiki_id: &str) -> Result<LocalChanges, WikiError> {
+        let (root, config, _) = self.repo_parts(wiki_id)?;
+        let source = config.source.as_ref().expect("checked by repo_parts");
+        let changes = crate::repo_source::local_changes(&root, source)?;
+        architect_telemetry::wide::set("wiki.source.changes", changes.changes.len().to_string());
+        Ok(changes)
+    }
+
+    /// t[impl wiki.source.editable] — the working copy reaches the
+    /// repository only here: one branch per wiki, one commit holding
+    /// every local change, one pull request, all as the pushing
+    /// Editor's own forge identity. A later push while the first is
+    /// unmerged rewrites the same branch, so the reviewer sees one
+    /// request grow. Refused before anything moves when the caller may
+    /// not write here, has no forge identity for this repository, has
+    /// nothing to push, or a sync left a conflict standing.
+    fn push_changes(
+        &self,
+        wiki_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<PendingPush, WikiError> {
+        let refuse = |why: &'static str, msg: String| {
+            architect_telemetry::wide::set("wiki.source.outcome", why);
+            WikiError::Refused(msg)
+        };
+        let Some(principal) = self.calling_principal() else {
+            return Err(refuse(
+                "refused",
+                "a push needs a signed-in caller: the repository's history names who pushed".into(),
+            ));
+        };
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(WikiError::IllegalState("a push needs a title".into()));
+        }
+        let (root, config, wikis_dir) = self.repo_parts(wiki_id)?;
+        // The same rule a direct write meets: once the wiki has Editors,
+        // only they change it — and pushing is changing the repository.
+        if config.has_edit_lane() && !config.is_editor(&principal) {
+            return Err(refuse(
+                "refused",
+                format!("not an Editor of `{wiki_id}`; only Editors push its working copy"),
+            ));
+        }
+        let source = config.source.clone().expect("checked by repo_parts");
+        let changes = crate::repo_source::local_changes(&root, &source)?;
+        if !changes.conflicts.is_empty() {
+            return Err(refuse(
+                "conflict",
+                format!(
+                    "{} changed both here and in the repository since the base: {}. Open each, \
+                     decide what it should say, and save it — then push.",
+                    if changes.conflicts.len() == 1 {
+                        "a page"
+                    } else {
+                        "pages"
+                    },
+                    changes.conflicts.join(", ")
+                ),
+            ));
+        }
+        if changes.changes.is_empty() {
+            return Err(refuse(
+                "nothing",
+                format!(
+                    "`{wiki_id}` has no local changes against {}; nothing to push",
+                    short_sha(&source.commit)
+                ),
+            ));
+        }
+        architect_telemetry::wide::set("wiki.source.changes", changes.changes.len().to_string());
+        // Who pushes, before anything moves: an Editor the forge does
+        // not know is refused here with nothing sent.
+        let identity = self
+            .lander
+            .identity_for(&source, &principal)
+            .inspect_err(|_| architect_telemetry::wide::set("wiki.source.outcome", "refused"))?;
+        // One branch per wiki while a push is pending; a fresh one
+        // names the pusher so two wikis' branches never collide and a
+        // reviewer can read who it came from.
+        let branch = source.pending.as_ref().map_or_else(
+            || format!("wiki/{wiki_id}/{}", branch_word(&identity.committer_name)),
+            |p| p.branch.clone(),
+        );
+        let message = if body.trim().is_empty() {
+            title.to_owned()
+        } else {
+            format!("{title}\n\n{}", body.trim())
+        };
+        let landing = blocking(|| {
+            crate::repo_source::push_working_copy(
+                wikis_dir,
+                &root,
+                wiki_id,
+                &source,
+                &branch,
+                &changes.changes,
+                &message,
+                &identity.pusher(),
+            )
+        })
+        .map_err(|e| {
+            architect_telemetry::wide::set("wiki.source.outcome", "push_failed");
+            WikiError::Refused(format!("the repository refused the push: {e}"))
+        })?;
+        // The request is opened once; a later push rides the same one.
+        let pull_request = match source.pending.as_ref() {
+            Some(p) if !p.pull_request.is_empty() => p.pull_request.clone(),
+            _ => blocking(|| {
+                self.lander
+                    .open_pull_request(&source, &landing, title, &message, &identity)
+            })?
+            .unwrap_or_default(),
+        };
+        let pending = PendingPush {
+            branch: landing.branch,
+            commit: landing.commit,
+            pull_request,
+        };
+        let recorded = pending.clone();
+        crate::config::update(&root, wiki_id, move |c| {
+            if let Some(s) = c.source.as_mut() {
+                s.pending = Some(recorded);
+            }
+        })?;
+        self.append_log(
+            wiki_id,
+            ctypes::LogEntry {
+                id: uuid::Uuid::new_v4(),
+                at: Utc::now(),
+                op: ctypes::LogOp::Review,
+                title: format!("Pushed to the repository: {title}"),
+                body: format!(
+                    "{} pushed {} change{} as {}{}. The repository shows it once merged.",
+                    identity.display,
+                    changes.changes.len(),
+                    if changes.changes.len() == 1 { "" } else { "s" },
+                    pending.branch,
+                    if pending.pull_request.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", pending.pull_request)
+                    }
+                ),
+                pages_touched: ctypes::WikilinkList(
+                    changes.changes.iter().map(|c| c.path.clone()).collect(),
+                ),
+            },
+        )?;
+        architect_telemetry::wide::set("wiki.source.outcome", "pushed");
+        Ok(pending)
+    }
+}
+
+/// The first twelve characters of a sha, for a sentence.
+fn short_sha(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
+}
+
+/// A person's name as a branch segment: lowercase, alphanumerics and
+/// hyphens only, at most twenty characters, never empty.
+fn branch_word(name: &str) -> String {
+    let word: String = wiki_proto::config::slugify(name).chars().take(20).collect();
+    let word = word.trim_end_matches('-');
+    if word.is_empty() {
+        "edits".to_owned()
+    } else {
+        word.to_owned()
     }
 }
 
@@ -1854,6 +2065,277 @@ mod registry_tests {
         assert!(broken.commit.is_empty());
         assert!(!broken.last_error.is_empty(), "{broken:?}");
         assert!(matches!(b.refresh_source("broken"), Err(WikiError::Io(_))));
+    }
+
+    /// t[verify wiki.source.editable] — the working copy reaches the
+    /// repository only through `push_changes`: as the Editor's own
+    /// forge identity (an Editor the forge does not know is refused
+    /// with nothing pushed), one branch and one pull request per wiki
+    /// that a later push updates in place, `pending` recorded on the
+    /// source until a sync sees the merge and the change list empties.
+    #[test]
+    fn a_working_copy_is_pushed_as_the_editor_once_and_settles_on_merge() {
+        use crate::repo_source::{ForgeIdentity, Lander, Landing};
+        use std::sync::Mutex;
+        use wiki_proto::config::RepoSource;
+        use wiki_proto::service::registry::ChangeKind;
+
+        fn g(dir: &Path, args: &[&str]) -> String {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.email=t@example.com", "-c", "user.name=T"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .expect("git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        }
+        /// Knows alice (`@alice-gh`) and nobody else; counts the pull
+        /// requests it opened.
+        struct OneLinked(Mutex<u32>);
+        impl Lander for OneLinked {
+            fn identity_for(
+                &self,
+                _source: &RepoSource,
+                editor: &str,
+            ) -> Result<ForgeIdentity, WikiError> {
+                if editor == "alice" {
+                    Ok(ForgeIdentity {
+                        display: "@alice-gh".into(),
+                        committer_name: "alice-gh".into(),
+                        committer_email: "alice-gh@users.noreply.github.com".into(),
+                        token: Some("gho_test".into()),
+                        push_url: None,
+                    })
+                } else {
+                    Err(WikiError::Refused(format!(
+                        "cannot push to GitHub as you: {editor} has linked no GitHub account"
+                    )))
+                }
+            }
+            fn open_pull_request(
+                &self,
+                _source: &RepoSource,
+                landing: &Landing,
+                title: &str,
+                body: &str,
+                identity: &ForgeIdentity,
+            ) -> Result<Option<String>, WikiError> {
+                assert_eq!(identity.token.as_deref(), Some("gho_test"));
+                assert_eq!(title, "Clarify the guide");
+                assert!(body.starts_with("Clarify the guide"), "{body}");
+                assert!(
+                    landing.branch.starts_with("wiki/docs/"),
+                    "{}",
+                    landing.branch
+                );
+                *self.0.lock().unwrap() += 1;
+                Ok(Some("https://github.com/acme/docs/pull/7".into()))
+            }
+        }
+        struct Who(Mutex<String>);
+        impl Caller for Who {
+            fn principal(&self) -> Option<String> {
+                Some(self.0.lock().unwrap().clone())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("remote.git");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(work.join("docs")).unwrap();
+        g(&bare, &["init", "--bare", "--initial-branch=main"]);
+        g(&work, &["init", "--initial-branch=main"]);
+        std::fs::write(work.join("docs/Guide.md"), "# Guide\n\nOld text.\n").unwrap();
+        std::fs::write(work.join("docs/Intro.md"), "# Intro\n").unwrap();
+        g(&work, &["add", "-A"]);
+        g(&work, &["commit", "-m", "docs"]);
+        g(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        g(&work, &["push", "-u", "origin", "main"]);
+
+        let who = Arc::new(Who(Mutex::new("alice".into())));
+        let lander = Arc::new(OneLinked(Mutex::new(0)));
+        let wikis = dir.path().join("wikis");
+        std::fs::create_dir_all(&wikis).unwrap();
+        let b = WikiBackend::with_roots_under(HashMap::new(), wikis)
+            .with_caller(who.clone())
+            .with_lander(lander.clone());
+        b.create_wiki(NewWiki {
+            title: "Docs".into(),
+            source: Some(RepoSource {
+                url: format!("file://{}", bare.display()),
+                branch: "main".into(),
+                path: "docs".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        // Bob is an Editor too, with no forge account.
+        b.update_config("docs", |c| c.editors.push("bob".into()))
+            .unwrap();
+
+        // Nothing to push yet.
+        let err = b.push_changes("docs", "Clarify the guide", "").unwrap_err();
+        assert!(
+            matches!(&err, WikiError::Refused(m) if m.contains("no local changes")),
+            "{err:?}"
+        );
+
+        // Two people edit two pages through the ordinary write path.
+        let guide = b.read_page("docs", "Guide.md").unwrap();
+        b.write_page("docs", "Guide.md", "# Guide\n\nNew text.\n", &guide.sha256)
+            .unwrap();
+        *who.0.lock().unwrap() = "bob".into();
+        b.write_page("docs", "Deploy.md", "# Deploy\n", "").unwrap();
+        let changes = b.local_changes("docs").unwrap();
+        assert_eq!(changes.changes.len(), 2);
+        assert!(changes.pending.is_none());
+
+        // Sam is not an Editor; Bob is, but the forge does not know him.
+        *who.0.lock().unwrap() = "sam".into();
+        let err = b.push_changes("docs", "Clarify the guide", "").unwrap_err();
+        assert!(
+            matches!(&err, WikiError::Refused(m) if m.contains("not an Editor")),
+            "{err:?}"
+        );
+        *who.0.lock().unwrap() = "bob".into();
+        let err = b.push_changes("docs", "Clarify the guide", "").unwrap_err();
+        assert!(
+            matches!(&err, WikiError::Refused(m) if m.contains("linked no GitHub")),
+            "{err:?}"
+        );
+        assert_eq!(
+            g(&bare, &["branch", "--list", "wiki/*"]),
+            "",
+            "nothing pushed"
+        );
+        assert!(
+            b.config_of("docs")
+                .unwrap()
+                .source
+                .unwrap()
+                .pending
+                .is_none()
+        );
+
+        // Alice pushes: one branch, one commit with both changes, as her.
+        *who.0.lock().unwrap() = "alice".into();
+        let first = b
+            .push_changes("docs", "Clarify the guide", "Two pages, one push.")
+            .unwrap();
+        assert_eq!(first.branch, "wiki/docs/alice-gh");
+        assert_eq!(first.pull_request, "https://github.com/acme/docs/pull/7");
+        assert_eq!(*lander.0.lock().unwrap(), 1);
+        let who_pushed = g(
+            &bare,
+            &["log", "-1", "--format=%an <%ae>|%cn <%ce>", &first.commit],
+        );
+        assert_eq!(
+            who_pushed,
+            "alice-gh <alice-gh@users.noreply.github.com>|alice-gh <alice-gh@users.noreply.github.com>"
+        );
+        let msg = g(&bare, &["log", "-1", "--format=%B", &first.commit]);
+        assert_eq!(msg, "Clarify the guide\n\nTwo pages, one push.");
+        let files = g(
+            &bare,
+            &["show", "--name-status", "--format=", &first.commit],
+        );
+        assert!(files.contains("M\tdocs/Guide.md"), "{files}");
+        assert!(files.contains("A\tdocs/Deploy.md"), "{files}");
+        let recorded = b
+            .config_of("docs")
+            .unwrap()
+            .source
+            .unwrap()
+            .pending
+            .unwrap();
+        assert_eq!(recorded, first);
+        assert_eq!(
+            b.local_changes("docs").unwrap().pending,
+            Some(first.clone())
+        );
+        let log = std::fs::read_to_string(dir.path().join("wikis/docs/log.md")).unwrap();
+        assert!(log.contains("@alice-gh pushed 2 changes"), "{log}");
+
+        // Another edit and a second push: same branch, same request,
+        // no second pull request, pending moves to the new commit.
+        let cur = b.read_page("docs", "Intro.md").unwrap();
+        b.write_page("docs", "Intro.md", "# Intro\n\nHello.\n", &cur.sha256)
+            .unwrap();
+        let second = b.push_changes("docs", "Clarify the guide", "").unwrap();
+        assert_eq!(second.branch, first.branch);
+        assert_eq!(second.pull_request, first.pull_request);
+        assert_ne!(second.commit, first.commit);
+        assert_eq!(*lander.0.lock().unwrap(), 1, "the request is opened once");
+        assert_eq!(g(&bare, &["branch", "--list", "wiki/*"]).lines().count(), 1);
+        let files = g(
+            &bare,
+            &["show", "--name-status", "--format=", &second.commit],
+        );
+        assert!(files.contains("M\tdocs/Intro.md"), "{files}");
+        assert!(
+            files.contains("A\tdocs/Deploy.md"),
+            "still one commit: {files}"
+        );
+
+        // Upstream merges; the sync sees it, pending clears, the
+        // working copy and the repository agree.
+        g(&work, &["fetch", "origin"]);
+        g(
+            &work,
+            &["merge", "--no-edit", &format!("origin/{}", second.branch)],
+        );
+        g(&work, &["push", "origin", "main"]);
+        let after = b.refresh_source("docs").unwrap();
+        assert!(after.pending.is_none(), "{after:?}");
+        assert!(after.conflicts.is_empty());
+        let changes = b.local_changes("docs").unwrap();
+        assert!(changes.changes.is_empty(), "{changes:?}");
+        assert!(changes.pending.is_none());
+        assert_eq!(
+            b.read_page("docs", "Intro.md").unwrap().markdown,
+            "# Intro\n\nHello.\n"
+        );
+
+        // A page changed on both sides is a conflict a push refuses.
+        let cur = b.read_page("docs", "Guide.md").unwrap();
+        b.write_page("docs", "Guide.md", "# Guide\n\nOurs.\n", &cur.sha256)
+            .unwrap();
+        std::fs::write(work.join("docs/Guide.md"), "# Guide\n\nTheirs.\n").unwrap();
+        g(&work, &["add", "-A"]);
+        g(&work, &["commit", "-m", "theirs"]);
+        g(&work, &["push", "origin", "main"]);
+        let synced = b.refresh_source("docs").unwrap();
+        assert_eq!(synced.conflicts, vec!["Guide.md".to_owned()]);
+        assert_eq!(
+            b.read_page("docs", "Guide.md").unwrap().markdown,
+            "# Guide\n\nOurs.\n",
+            "a sync never overwrites a local edit"
+        );
+        let err = b.push_changes("docs", "Again", "").unwrap_err();
+        assert!(
+            matches!(&err, WikiError::Refused(m) if m.contains("Guide.md")),
+            "{err:?}"
+        );
+        // Saving the page again is the person deciding; then it pushes.
+        let cur = b.read_page("docs", "Guide.md").unwrap();
+        b.write_page(
+            "docs",
+            "Guide.md",
+            "# Guide\n\nOurs, and theirs.\n",
+            &cur.sha256,
+        )
+        .unwrap();
+        let changes = b.local_changes("docs").unwrap();
+        assert!(changes.conflicts.is_empty());
+        assert_eq!(changes.changes[0].kind, ChangeKind::Modified);
+        b.push_changes("docs", "Clarify the guide", "").unwrap();
     }
 
     fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
