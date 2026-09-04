@@ -64,6 +64,7 @@ pub struct Vault<'a> {
     fences: Vec<Box<FenceRenderer<'a>>>,
     keep_nav_footer: bool,
     allow_broken_links: bool,
+    feeds: Option<(String, PathBuf)>,
 }
 
 impl<'a> Vault<'a> {
@@ -92,7 +93,31 @@ impl<'a> Vault<'a> {
             fences: Vec::new(),
             keep_nav_footer: false,
             allow_broken_links: false,
+            feeds: None,
         }
+    }
+
+    /// Also write `sitemap.xml` and `rss.xml` for the vault, given the
+    /// site's origin (`https://ignition.fasttrackstudio.app`).
+    ///
+    /// `dir` is relative to the crate being built, and is a *source*
+    /// directory rather than `OUT_DIR` on purpose: these two files have
+    /// to be served from fixed URLs — `/sitemap.xml` is the one every
+    /// crawler looks for — so they cannot go through the asset pipeline,
+    /// which content-hashes what it touches. The site's build recipe
+    /// copies them into the output alongside the pre-rendered pages.
+    ///
+    /// Both are generated, so the directory belongs in `.gitignore`.
+    #[must_use]
+    pub fn feeds(mut self, site_url: impl Into<String>, dir: impl AsRef<Path>) -> Self {
+        let dir = dir.as_ref();
+        let dir = if dir.is_absolute() {
+            dir.to_owned()
+        } else {
+            manifest_dir().join(dir)
+        };
+        self.feeds = Some((site_url.into(), dir));
+        self
     }
 
     /// The URL prefix `[[wikilinks]]` resolve under. Default `/guide`.
@@ -222,6 +247,25 @@ impl<'a> Vault<'a> {
             println!("cargo:warning=broken cross-references in the vault:\n{detail}");
         }
 
+        if let Some((site, dir)) = &self.feeds {
+            std::fs::create_dir_all(dir)
+                .unwrap_or_else(|e| panic!("cannot create {}: {e}", dir.display()));
+            write(
+                &dir.join("sitemap.xml"),
+                &ssg_vault::sitemap(&vault, site, &self.link_base),
+            );
+            // The channel is named for the vault's front door, which is
+            // the closest thing a guide has to a title of its own.
+            let title = vault
+                .pages
+                .first()
+                .map_or_else(String::new, |p| p.title.clone());
+            write(
+                &dir.join("rss.xml"),
+                &ssg_vault::rss(&vault, site, &self.link_base, &title, ""),
+            );
+        }
+
         let dest = self
             .out_dir
             .clone()
@@ -306,6 +350,19 @@ impl<'a> Vault<'a> {
         );
         out
     }
+}
+
+/// Write a generated file, only when its contents changed.
+///
+/// Rewriting identical bytes still bumps the mtime, and a build script
+/// whose output looks new every time makes everything downstream of it
+/// look new every time.
+fn write(path: &Path, contents: &str) {
+    if std::fs::read_to_string(path).is_ok_and(|old| old == contents) {
+        return;
+    }
+    std::fs::write(path, contents)
+        .unwrap_or_else(|e| panic!("cannot write {}: {e}", path.display()));
 }
 
 /// The crate being built.

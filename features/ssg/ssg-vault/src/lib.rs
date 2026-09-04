@@ -49,12 +49,14 @@
 //! thing that touches the filesystem — so the renderer is testable
 //! against string literals and builds anywhere.
 
+mod feed;
 mod frontmatter;
 mod render;
 mod scan;
 mod static_model;
 mod wikilink;
 
+pub use feed::{rss, sitemap};
 pub use frontmatter::Frontmatter;
 pub use render::{FenceRenderer, Heading, RenderedPage, Renderer};
 pub use scan::{Note, ScanError, scan, scan_with};

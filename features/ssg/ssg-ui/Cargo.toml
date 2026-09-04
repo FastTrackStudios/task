@@ -36,5 +36,12 @@ default = []
 # Draw the vault's link graph as static SVG (`VaultGraph`).
 graph = ["dep:view-knowledge-graph"]
 
+# Only for the hover preview, and only in the browser: walking up from
+# the hovered node to the nearest link needs `Element::closest`, and the
+# host build has no DOM to walk.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = ["Element", "MouseEvent", "EventTarget"] }
+
 [lints]
 workspace = true

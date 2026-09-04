@@ -278,9 +278,46 @@ impl<'a> Renderer<'a> {
         let mut heading: Option<(u8, Vec<Event<'_>>, String)> = None;
         let mut headings: Vec<Heading> = Vec::new();
         let mut used_ids: BTreeMap<String, u32> = BTreeMap::new();
+        // Markdown has no nested links, but a counter rather than a bool
+        // keeps the close from firing on an *external* link's `End`.
+        let mut internal_link_depth = 0u32;
 
         for event in Parser::new_ext(markdown, options) {
             match event {
+                // t[impl ssg.render.internal-links]
+                // A link into this vault is marked, so the page can tell
+                // "somewhere else in the guide" from "off the site" —
+                // which is what a preview on hover needs to know, and
+                // what lets a stylesheet distinguish the two.
+                //
+                // Rewritten as raw HTML rather than left as a link event
+                // so the attribute can be added; the label's own markup
+                // passes through untouched between the two halves,
+                // because only the tags are replaced.
+                Event::Start(Tag::Link { ref dest_url, .. })
+                    if dest_url.starts_with(&format!("{}/", self.link_base)) =>
+                {
+                    let slug = dest_url
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or_default()
+                        .split('#')
+                        .next()
+                        .unwrap_or_default();
+                    events.push(Event::Html(
+                        format!(
+                            "<a href=\"{}\" data-ssg-link=\"{}\">",
+                            escape_html(dest_url),
+                            escape_html(slug)
+                        )
+                        .into(),
+                    ));
+                    internal_link_depth += 1;
+                }
+                Event::End(TagEnd::Link) if internal_link_depth > 0 => {
+                    internal_link_depth -= 1;
+                    events.push(Event::Html("</a>".into()));
+                }
                 Event::Start(Tag::Heading { level, .. }) => {
                     heading = Some((level as u8, Vec::new(), String::new()));
                 }
@@ -484,7 +521,10 @@ mod tests {
     #[test]
     fn resolves_a_wikilink_to_a_route() {
         let out = renderer().render(&note("see [[chords]]"));
-        assert!(out.html.contains(r#"<a href="/guide/chords">chords</a>"#));
+        assert!(
+            out.html
+                .contains(r#"<a href="/guide/chords" data-ssg-link="chords">chords</a>"#)
+        );
         assert_eq!(out.links, vec!["chords"]);
         assert!(out.broken_links.is_empty());
     }
@@ -494,8 +534,28 @@ mod tests {
         let out = renderer().render(&note("see [[chords|the chord page]]"));
         assert!(
             out.html
-                .contains(r#"<a href="/guide/chords">the chord page</a>"#)
+                .contains(r#"data-ssg-link="chords">the chord page</a>"#)
         );
+    }
+
+    // t[verify ssg.render.internal-links]
+    #[test]
+    fn an_external_link_is_not_marked_as_a_vault_link() {
+        let out = renderer().render(&note("[docs](https://example.com) and [[chords]]"));
+        // The marker says "somewhere else in this guide", which is what
+        // a hover preview and a stylesheet both need to know.
+        assert!(
+            out.html
+                .contains(r#"<a href="https://example.com">docs</a>"#)
+        );
+        assert_eq!(out.html.matches("data-ssg-link").count(), 1);
+    }
+
+    #[test]
+    fn a_marked_link_keeps_the_markup_in_its_label() {
+        let out = renderer().render(&note("see [[chords|the **chord** page]]"));
+        assert!(out.html.contains("data-ssg-link=\"chords\""));
+        assert!(out.html.contains("<strong>chord</strong>"), "{}", out.html);
     }
 
     #[test]

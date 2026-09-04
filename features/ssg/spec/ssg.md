@@ -120,6 +120,16 @@ one triggers a rebuild of the site that publishes it.
 
 ---
 
+### A link into the vault is marked as one
+
+t[ssg.render.internal-links]
+A resolved `[[wikilink]]` renders as an anchor carrying the slug it points at,
+so a page can tell a cross-reference from a link that leaves the site — which
+is what a hover preview needs, and what lets a stylesheet distinguish the two.
+The label's own markup is preserved.
+
+---
+
 ## Output
 
 ### A pre-rendered page is complete before its bundle arrives
@@ -140,6 +150,15 @@ A component that renders into a pre-rendered route is a function of `&'static`
 data alone — no hooks, no state, no I/O. The client's first render is therefore
 identical to the server's, which is the condition hydration requires; a
 component that cannot promise that belongs on a route that is not pre-rendered.
+
+---
+
+### A site can publish what it contains
+
+t[ssg.output.feeds]
+A vault can produce a sitemap and a feed naming every page at its absolute
+URL, escaped as XML. Both are generated from the same list the pre-render
+uses, so a published page and a listed page cannot disagree.
 
 ---
 
