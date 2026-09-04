@@ -17,6 +17,73 @@
   margin-block-start: 1em;
 }
 
+/* Headings.
+ *
+ * Sized here rather than left to the browser because a site built on a
+ * CSS reset — Tailwind's preflight, say — has no heading sizes at all,
+ * and a document whose `<h1>` looks exactly like its body text is not a
+ * document. Sites with their own prose styles load them after this and
+ * win on source order at equal specificity. */
+.ssg-prose h1,
+.ssg-prose h2,
+.ssg-prose h3,
+.ssg-prose h4 {
+  font-weight: 600;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.ssg-prose h1 { font-size: 2rem; letter-spacing: -0.02em; }
+.ssg-prose h2 { font-size: 1.35rem; letter-spacing: -0.01em; }
+.ssg-prose h3 { font-size: 1.1rem; }
+.ssg-prose h4 { font-size: 1rem; }
+
+/* More air above a new section than below its heading — the heading
+ * belongs to what follows it, and equal margins make it float between
+ * two blocks instead. */
+.ssg-prose h2 { margin-block-start: 2.2em; }
+.ssg-prose h3 { margin-block-start: 1.8em; }
+.ssg-prose :is(h1, h2, h3, h4) + * { margin-block-start: 0.5em; }
+
+.ssg-prose ul,
+.ssg-prose ol {
+  padding-inline-start: 1.5rem;
+}
+
+.ssg-prose ul { list-style: disc; }
+.ssg-prose ol { list-style: decimal; }
+.ssg-prose li + li { margin-block-start: 0.25em; }
+
+.ssg-prose a { color: var(--ssg-accent, currentColor); }
+
+.ssg-prose code {
+  padding: 0.1em 0.35em;
+  border-radius: 0.25rem;
+  background: var(--ssg-code-bg, rgb(0 0 0 / 5%));
+  font-size: 0.9em;
+}
+
+/* A code block's own `<code>` is inside a `<pre>` that already carries
+ * the background and the padding; doubling both boxes it twice. */
+.ssg-prose pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.ssg-prose blockquote {
+  margin-inline: 0;
+  padding-inline-start: 1rem;
+  border-inline-start: 2px solid var(--ssg-rule, currentColor);
+  opacity: 0.85;
+}
+
+.ssg-prose hr {
+  border: 0;
+  border-block-start: 1px solid var(--ssg-rule, currentColor);
+  margin-block: 2rem;
+}
+
 .ssg-prose pre {
   overflow-x: auto;
   padding: 0.75rem 1rem;
