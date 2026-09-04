@@ -388,6 +388,20 @@ impl email_proto::EmailSyncStreamSource for Backend {
 mod tests {
     use super::*;
 
+    /// A loopback port nothing listens on, so a dial is refused at once.
+    ///
+    /// The fixture used to name `imap.example.com:993`, a real address
+    /// that black-holes the SYN: every test that reached the network sat
+    /// through the whole connect timeout — in CI, until nextest killed
+    /// it. The tests here assert *routing*, never reachability, so the
+    /// cheapest failing endpoint is the right one.
+    fn closed_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+            .expect("bind an ephemeral loopback port")
+    }
+
     fn imap_cfg(id: &str) -> email_config::AccountConfig {
         email_config::AccountConfig {
             id: email_proto::AccountId(id.to_owned()),
@@ -395,8 +409,8 @@ mod tests {
             address: format!("{id}@example.com"),
             display_name: None,
             backend: email_config::BackendKind::Imap {
-                host: "imap.example.com".into(),
-                port: 993,
+                host: "127.0.0.1".into(),
+                port: closed_port(),
                 tls: email_config::TlsMode::Implicit,
                 username: id.to_owned(),
                 password: email_secret::Secret::raw("pw"),
