@@ -46,11 +46,11 @@ env:
   CONTAINERS_REGISTRIES_CONF: /dev/null
 
 jobs:
+  # Build + push on Task's runner, then let go of it: the wait for the
+  # cluster to roll happens on a hosted runner (below), so a slot here is
+  # held for the minutes the build takes, not the minutes Argo takes.
   deploy:
     runs-on: [self-hosted, task]
-    environment:
-      name: task-production
-      url: https://task.starcommand.live
     steps:
       # A plain checkout, unlike the monorepo's local-first clone. That
       # existed because the monorepo is ~200 MB and the runner held a
@@ -80,6 +80,19 @@ jobs:
             done
           done
 
+  # The GitHub Deployment goes Active only when the cluster serves this
+  # commit — both halves, web and server — so "Active" keeps meaning
+  # "serving", not "images pushed". Polling the public URL needs nothing
+  # from the LAN, so it runs on a hosted runner and costs us no slot.
+  verify:
+    name: Verify live
+    runs-on: ubuntu-latest
+    needs: deploy
+    timeout-minutes: 30
+    environment:
+      name: task-production
+      url: https://task.starcommand.live
+    steps:
       # A green run must mean the cluster serves THIS commit. Both the web
       # bundle and the server report their build, and both must match —
       # otherwise a half-rolled-out pair looks like success.
