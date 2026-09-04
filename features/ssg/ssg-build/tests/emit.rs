@@ -78,8 +78,9 @@ fn emits_a_static_vault_in_reading_order() {
     assert!(out.contains(r#"title: "Chords""#));
     assert!(out.contains(r#"stage: "The music""#));
     assert!(out.contains(r#"links: &["rhythm"]"#));
-    // The wikilink resolved to a real anchor, at build time.
-    assert!(out.contains(r#"<a href=\"/guide/rhythm\">rhythm</a>"#));
+    // The wikilink resolved to a real anchor, at build time, marked as
+    // pointing back into the vault.
+    assert!(out.contains(r#"<a href=\"/guide/rhythm\" data-ssg-link=\"rhythm\">rhythm</a>"#));
 }
 
 #[test]
@@ -171,4 +172,53 @@ fn the_body_is_the_note_without_its_frontmatter() {
     // text contains `"#`, which would close a plain `r#"…"#`.
     assert!(out.contains(r##"body: "# Chords\n\nprose\n""##));
     assert!(!out.contains(r##"body: "---"##));
+}
+
+#[test]
+fn feeds_are_written_when_a_site_url_is_given() {
+    let fixture = Fixture::new(
+        "feeds",
+        &[(
+            "intro",
+            "---\ntitle: Intro\nsummary: Start here\norder: 1\n---\n\n# Intro\n",
+        )],
+    );
+    let feeds = fixture.out.join("feeds");
+
+    fixture
+        .vault()
+        .feeds("https://example.test/", &feeds)
+        .emit();
+
+    let sitemap = std::fs::read_to_string(feeds.join("sitemap.xml")).expect("sitemap");
+    assert!(sitemap.contains("<loc>https://example.test/guide/intro</loc>"));
+
+    let rss = std::fs::read_to_string(feeds.join("rss.xml")).expect("rss");
+    assert!(rss.contains("<title>Intro</title>"));
+    assert!(rss.contains("<guid>https://example.test/guide/intro</guid>"));
+}
+
+#[test]
+fn no_site_url_means_no_feeds() {
+    let fixture = Fixture::new("no-feeds", &[("intro", "# Intro")]);
+    fixture.vault().emit();
+    assert!(!fixture.out.join("feeds").exists());
+}
+
+#[test]
+fn a_page_is_undated_unless_dating_is_asked_for() {
+    let fixture = Fixture::new("undated", &[("intro", "# Intro")]);
+    fixture.vault().emit();
+    assert!(fixture.generated().contains(r#"updated: """#));
+}
+
+#[test]
+fn dating_a_vault_outside_a_git_checkout_is_not_an_error() {
+    // The fixture lives in a temp directory with no repository, which
+    // is also the shape a nix derivation builds in: it copies the files
+    // and not the history. Every date comes back empty and the build
+    // still succeeds.
+    let fixture = Fixture::new("dated", &[("intro", "# Intro")]);
+    fixture.vault().dates().emit();
+    assert!(fixture.generated().contains(r#"updated: """#));
 }

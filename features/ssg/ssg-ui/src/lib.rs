@@ -36,6 +36,11 @@
 //!   cross-cutting axis, for a vault whose notes carry `tags:`.
 //! - [`VaultSearch`] — search over the whole vault, with no index to
 //!   build and nothing to fetch: the pages are already in the binary.
+//! - [`LinkPreviews`] — hover a cross-reference, see where it goes,
+//!   without losing your place.
+//! - [`Breadcrumbs`] — where you are, from the stage rather than from a
+//!   path: a vault is flat on disk, and the reading order is the only
+//!   structure it actually declares.
 //! - `VaultGraph` — the local or whole-vault link graph, as static SVG
 //!   with clickable nodes. Behind the `graph` feature: it reaches the
 //!   knowledge-graph crate, and a site publishing prose should not pay
@@ -47,18 +52,22 @@
 //! either use [`VAULT_STYLE`] or style them entirely itself.
 
 mod article;
+mod breadcrumbs;
 #[cfg(feature = "graph")]
 mod graph;
 mod nav;
 mod page_toc;
+mod preview;
 mod search;
 mod tags;
 
 pub use article::VaultArticle;
+pub use breadcrumbs::Breadcrumbs;
 #[cfg(feature = "graph")]
 pub use graph::{VaultGraph, local_graph, vault_graph};
 pub use nav::{Backlinks, ChapterNav, VaultToc};
 pub use page_toc::PageToc;
+pub use preview::LinkPreviews;
 pub use search::{Hit, VaultSearch, search};
 pub use tags::{PageTags, TagIndex, TaggedPages};
 

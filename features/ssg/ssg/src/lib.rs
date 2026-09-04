@@ -99,13 +99,13 @@
 
 pub use ssg_vault::{
     Frontmatter, Heading, Note, Page, RenderedPage, Renderer, ScanError, StaticHeading, StaticPage,
-    StaticVault, Vault, scan, scan_with,
+    StaticVault, Vault, rss, scan, scan_with, sitemap,
 };
 
 #[cfg(feature = "ui")]
 pub use ssg_ui::{
-    Backlinks, ChapterNav, Hit, PageTags, PageToc, TagIndex, TaggedPages, VAULT_CSS, VAULT_STYLE,
-    VaultArticle, VaultSearch, VaultToc, search,
+    Backlinks, Breadcrumbs, ChapterNav, Hit, LinkPreviews, PageTags, PageToc, TagIndex,
+    TaggedPages, VAULT_CSS, VAULT_STYLE, VaultArticle, VaultSearch, VaultToc, search,
 };
 
 #[cfg(feature = "graph")]

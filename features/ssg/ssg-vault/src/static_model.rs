@@ -56,6 +56,9 @@ pub struct StaticPage {
     pub tags: &'static [&'static str],
     /// Words of prose.
     pub words: u32,
+    /// When the note last changed, as an RFC 3339 date. Empty when the
+    /// build did not establish one.
+    pub updated: &'static str,
 }
 
 impl StaticPage {
@@ -229,6 +232,7 @@ mod tests {
             headings: &[],
             tags: &[],
             words: 0,
+            updated: "",
             links,
         }
     }

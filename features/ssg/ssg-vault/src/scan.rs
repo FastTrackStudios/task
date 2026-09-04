@@ -162,6 +162,9 @@ pub fn scan_with<'a>(
                     .filter(|t| !t.is_empty())
                     .collect(),
                 words: rendered.words,
+                // Left empty here: this crate does not read git, and a
+                // caller that can is the one to fill it in.
+                updated: String::new(),
                 links: rendered.links,
                 broken_links: rendered.broken_links,
             }

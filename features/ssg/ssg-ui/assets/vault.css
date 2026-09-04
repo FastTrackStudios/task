@@ -214,6 +214,46 @@
 
 .ssg-page-toc a:hover { opacity: 1; }
 
+/* ── Link previews ─────────────────────────────────────────────────── */
+
+/* A link into the vault, as distinct from one that leaves it. The
+ * marker is put there at build time, so this styles cross-references
+ * without the prose knowing anything about it. */
+.ssg-prose a[data-ssg-link] {
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 0.15em;
+}
+
+.ssg-preview {
+  position: fixed;
+  z-index: 20;
+  /* Offset from the pointer rather than under it: a card that opens
+   * beneath the cursor covers the word being hovered. */
+  transform: translate(0.75rem, 1rem);
+  max-width: 22rem;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--ssg-rule, currentColor);
+  border-radius: 0.375rem;
+  background: var(--ssg-surface, Canvas);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
+  font-size: 0.85rem;
+  /* The card is a glance, not a target — a hoverable card under the
+   * pointer fights the link it describes. */
+  pointer-events: none;
+}
+
+.ssg-preview-title { font-weight: 600; }
+.ssg-preview-summary { opacity: 0.8; }
+
+.ssg-preview-meta {
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
 /* ── Search ────────────────────────────────────────────────────────── */
 
 .ssg-search { position: relative; }
@@ -388,3 +428,30 @@
   stroke: var(--ssg-accent, currentColor);
   stroke-width: 2.5;
 }
+
+/* ── Breadcrumbs ───────────────────────────────────────────────────── */
+
+.ssg-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+/* The separator is generated rather than written into the markup, so it
+ * is not read out as content by a screen reader and not selected when
+ * someone copies the trail. */
+.ssg-breadcrumbs li + li::before {
+  content: "/";
+  margin-inline-end: 0.4rem;
+  opacity: 0.5;
+}
+
+.ssg-breadcrumbs a { text-decoration: none; }
+.ssg-breadcrumbs a:hover { text-decoration: underline; }
+.ssg-breadcrumbs [aria-current="page"] { opacity: 0.85; }

@@ -19994,6 +19994,8 @@ dependencies = [
  "dioxus",
  "ssg-vault",
  "view-knowledge-graph",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

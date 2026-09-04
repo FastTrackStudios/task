@@ -227,6 +227,7 @@ mod tests {
             headings,
             tags: &[],
             words: 0,
+            updated: "",
         }
     }
 

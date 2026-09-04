@@ -49,12 +49,14 @@
 //! thing that touches the filesystem — so the renderer is testable
 //! against string literals and builds anywhere.
 
+mod feed;
 mod frontmatter;
 mod render;
 mod scan;
 mod static_model;
 mod wikilink;
 
+pub use feed::{rss, sitemap};
 pub use frontmatter::Frontmatter;
 pub use render::{FenceRenderer, Heading, RenderedPage, Renderer};
 pub use scan::{Note, ScanError, scan, scan_with};
@@ -106,6 +108,10 @@ pub struct Page {
     pub tags: Vec<String>,
     /// Words of prose, for a reading estimate.
     pub words: u32,
+    /// When the note last changed, as an RFC 3339 date, or empty when
+    /// nothing established it. Filled in by `ssg-build` from git
+    /// history, which is opt-in — see its `dates` method.
+    pub updated: String,
     /// Outbound wikilink targets that resolved to a page in this vault,
     /// in document order and deduplicated. Backlinks are the reverse of
     /// this, computed over the whole vault.
