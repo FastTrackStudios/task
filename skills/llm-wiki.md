@@ -19,8 +19,8 @@ on any of them is `task wiki <verb> --wiki <slug>`.
 The old `--wiki-id` spelling is a hidden alias for one release. A wiki
 verb that does not take `--wiki` is one that takes the slug as its
 first positional (`page`, `describe`, `set-title`, `set-visibility`,
-`refresh-source`) or one that is about the set (`list`, `create`,
-`scaffold`).
+`refresh-source`, `changes`, `push`) or one that is about the set
+(`list`, `create`, `scaffold`).
 
 ```bash
 export TASK_WIKI=bible-study        # or pass --wiki bible-study on every verb
@@ -250,6 +250,43 @@ task wiki edits grant-editor <account> --wiki <slug>    # org admin
 task wiki edits gate readers|members|closed --wiki <slug>
 ```
 
+## 6a. Repo-sourced wikis — the working copy and the push
+
+A wiki created with `--repo <url> [--branch b] [--path docs]` is a
+**working copy** of that path in the repository (`describe` shows
+`repository:`, `commit:`, and `pending:`/`CONFLICTS:` when they apply).
+Edit it exactly like any other wiki — `page write`, accepted Edit
+Requests, the app's collaborative editor, a mounted folder — and every
+save lands in the wiki, never in the repository. Accepting an Edit
+Request writes the working copy and reads `accepted` at once; nothing
+is pushed by accepting.
+
+The server re-syncs from upstream on a schedule (`refresh-source` does
+it now). A sync updates only pages nobody has touched here; a page
+edited here is never overwritten. If upstream changed the same page,
+the local version is kept and the page is listed as a **conflict** —
+open it, decide what it should say, save it (that clears the conflict),
+then push.
+
+When the batch is ready, push it — one branch, one commit with every
+local change, one pull request, as *your* forge identity (on GitHub,
+your linked account; refused before anything is pushed if you have
+none):
+
+```bash
+task wiki changes <slug>                       # kind + path per change, base commit, pending PR, conflicts
+task wiki push <slug> --title "Clarify setup" [--body "why"]   # prints the PR URL (or the branch)
+task wiki changes <slug> --json
+```
+
+Pushing again while the first push is unmerged rewrites the same branch
+and the same pull request with the fuller change set — there is never a
+queue of requests. Once the repository merges it, the next sync sees
+the commit, `pending` clears and `changes` is empty: the wiki and the
+repository agree. `task wiki push` is refused, with nothing pushed,
+when there are no changes, when a conflict stands, or when you are not
+an Editor.
+
 ## 7. Subscriptions and references
 
 A wiki (or the vault) subscribes to other wikis and resolves references
@@ -275,7 +312,8 @@ outsiders. `task wiki set-visibility <slug> unlisted` changes it.
 
 The MCP server (`/mcp`, account-scoped) is growing wiki tools that
 mirror the verbs above: `list_wikis`, `describe_wiki`, `create_wiki`,
-`list_wiki_pages`, `read_wiki_page`, `write_wiki_page`, and the ingest
+`list_wiki_pages`, `read_wiki_page`, `write_wiki_page`,
+`wiki_local_changes` and `wiki_push_changes` (§6a), and the ingest
 and review calls after them. Every one takes the wiki's slug; none has
 a default. Check `api_reference` for what the connected server exposes;
 until they land, `search_vault`/`read_note` reach the vault only and
@@ -344,5 +382,9 @@ state, `scaffold` fills only what is missing.
   decide unilaterally.
 - Change visibility to `public`, grant Editor, delete a wiki (its slug
   is retired forever): ask the owner first.
+- Push a repo-sourced wiki's working copy (`task wiki push`): it opens
+  a pull request in someone's repository under your identity — check
+  `task wiki changes` first and push when the batch is coherent, not
+  after every edit.
 - Rewrite `purpose.md` on a wiki you did not scaffold: propose it as an
   Edit Request rather than writing it.

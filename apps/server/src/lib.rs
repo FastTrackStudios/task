@@ -997,7 +997,12 @@ pub(crate) async fn build_org_state(
             // so the map the backend holds is the set at boot plus
             // whatever `create_wiki` adds while the server runs.
             let backend =
-                wiki_live::WikiBackend::with_roots_under(roots.clone(), org_root.wikis_dir());
+                wiki_live::WikiBackend::with_roots_under(roots.clone(), org_root.wikis_dir())
+                    // A repo-sourced wiki's working copy is pushed as
+                    // the Editor's own forge identity and becomes a
+                    // pull request (`wiki.source.editable`); the
+                    // server holds the forge clients.
+                    .with_lander(std::sync::Arc::new(crate::wiki_repo::ForgeLander));
             // Each wiki root is a vault root too (`wiki:<slug>`): the
             // editor's sync / collab / graph / live-changes path over
             // the same files the `Pages` service writes. Registered
@@ -1571,10 +1576,7 @@ pub(crate) async fn build_org_state(
             let mut edits = wiki_live::edits_backend::EditsBackend::new(
                 wiki.clone(),
                 std::sync::Arc::new(crate::wiki_tracker::TaskTracker::new(tasks.clone())),
-            )
-            // A repo-sourced wiki lands through its forge
-            // (`wiki.source.editable`); the server holds the clients.
-            .with_lander(std::sync::Arc::new(crate::wiki_repo::ForgeLander));
+            );
             if let Some(secs) = std::env::var("TASK_WIKI_CLAIM_TTL_SECS")
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())

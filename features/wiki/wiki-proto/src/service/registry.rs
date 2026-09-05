@@ -14,8 +14,66 @@
 //! Deliberately not per-wiki in its listing call, unlike every other
 //! trait here: this is the call you make *before* you have a wiki id.
 
-use crate::config::{NewWiki, RepoSource, Visibility, WikiConfig};
+use crate::config::{NewWiki, PendingPush, RepoSource, Visibility, WikiConfig};
 use crate::error::WikiError;
+
+/// How a page of a repo-sourced wiki differs from its base commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "vox", derive(facet::Facet))]
+#[serde(rename_all = "lowercase")]
+#[repr(u8)]
+pub enum ChangeKind {
+    /// Not in the repository at the base; here now.
+    Added,
+    /// In both; the content differs.
+    Modified,
+    /// In the repository at the base; gone here.
+    Deleted,
+}
+
+impl ChangeKind {
+    /// The word a person reads.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Modified => "modified",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
+/// One page the working copy has changed since its base.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "vox", derive(facet::Facet))]
+#[repr(C)]
+pub struct LocalChange {
+    /// Wiki-relative path, `guide/setup.md`.
+    pub path: String,
+    pub kind: ChangeKind,
+}
+
+/// What a repo-sourced wiki holds that its repository does not yet
+/// (`wiki.source.editable`). Derived from the pages on disk against the
+/// tree exported at `base_commit`, never tracked by hand — so an edit
+/// made through any door (the app, the CLI, a mounted folder) counts.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "vox", derive(facet::Facet))]
+#[repr(C)]
+pub struct LocalChanges {
+    /// The commit the working copy was exported from.
+    pub base_commit: String,
+    /// Sorted by path.
+    pub changes: Vec<LocalChange>,
+    /// The push awaiting merge, if any — the branch these changes will
+    /// be pushed onto next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<PendingPush>,
+    /// Pages a sync could not update because both sides changed them.
+    /// A push is refused while any stand.
+    #[serde(default)]
+    pub conflicts: Vec<String>,
+}
 
 /// One wiki, as a list a person reads.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -109,4 +167,27 @@ pub trait Registry {
     /// reflected, or the error the fetch reported. Refused for a wiki
     /// that has no repository behind it.
     fn refresh_source(&self, wiki_id: &str) -> Result<RepoSource, WikiError>;
+
+    /// What a repo-sourced wiki's working copy holds that the
+    /// repository does not: every page added, changed or removed since
+    /// the base commit, the push awaiting merge if any, and the pages
+    /// a sync left in conflict (`wiki.source.editable`). Refused for a
+    /// wiki with no repository behind it.
+    fn local_changes(&self, wiki_id: &str) -> Result<LocalChanges, WikiError>;
+
+    /// Send the working copy's changes to the repository as one commit
+    /// on one branch, and open a pull request for it when the forge
+    /// allows; a push while one is pending rewrites that branch and its
+    /// request rather than opening another. Editor only, and made as
+    /// the caller's own forge identity — an Editor the forge does not
+    /// know is refused before anything is pushed. Refused with nothing
+    /// pushed when there are no changes or any conflict stands.
+    /// `title` is the commit's subject and the request's title; `body`
+    /// the rest of both.
+    fn push_changes(
+        &self,
+        wiki_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<PendingPush, WikiError>;
 }

@@ -715,11 +715,16 @@ rather than serving stale content as current.
 t[wiki.source.editable]
 Pages of a repo-sourced wiki are editable from the app, and changes arrive as
 Edit Requests like anywhere else — a contributor needs an account here, not one
-on the forge. Landing a change in the repository is done by someone whose forge
-account is linked: they forward an accepted request as a commit or a pull
-request from that account, so the repository's own history and review remain
-truthful about who pushed. A change the repository refuses is reported as
-refused, and the wiki does not show it as landed.
+on the forge. The wiki is the working copy: accepted changes land in it and
+accumulate, a sync from upstream never overwrites a page changed here (a page
+changed on both sides is kept and named as a conflict), and what the working
+copy holds against the repository is derived from the pages, not tracked by
+hand. Landing in the repository is done by an Editor whose forge account is
+linked: they forward the working copy's changes as one commit on one branch and
+one pull request from that account — updated in place by a later push until it
+merges — so the repository's own history and review remain truthful about who
+pushed. A change the repository refuses is reported as refused, and the wiki
+does not show it as landed.
 
 ---
 

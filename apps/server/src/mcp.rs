@@ -938,6 +938,48 @@ fn wiki_tool_catalog() -> Vec<ToolDef> {
             },
         },
         ToolDef {
+            name: "wiki_local_changes",
+            plugin: "wiki",
+            description: "For a wiki that mirrors a git repository (describe_wiki shows \
+                          `source`): every page added, modified or deleted in the wiki since \
+                          the base commit it was synced from — the working copy's diff, \
+                          derived from the pages themselves — plus the pending pull request \
+                          if a push is awaiting merge, and any page a sync left in conflict \
+                          (changed both here and upstream). Edits through write_wiki_page \
+                          and accepted Edit Requests accumulate here; nothing reaches the \
+                          repository until wiki_push_changes.",
+            schema: || {
+                obj(
+                    json!({ "wiki": s_("Wiki slug, from list_wikis.") }),
+                    &["wiki"],
+                )
+            },
+        },
+        ToolDef {
+            name: "wiki_push_changes",
+            plugin: "wiki",
+            description: "Push a repo-sourced wiki's local changes to its repository as ONE \
+                          commit on ONE branch and open a pull request for it, as the caller's \
+                          own forge identity (on GitHub, their linked account — refused if none \
+                          is linked). A push while one is pending updates the same branch and \
+                          request rather than opening another. Editor only. Refused with \
+                          nothing pushed when there are no changes or a conflict stands — call \
+                          wiki_local_changes first and resolve conflicts by rewriting each \
+                          conflicting page with write_wiki_page.",
+            schema: || {
+                obj(
+                    json!({
+                        "wiki": s_("Wiki slug, from list_wikis."),
+                        "title": s_("Commit subject and pull request title: what this batch \
+                                     of edits does, in one line."),
+                        "body": s_("Optional. The rest of the commit message and the request \
+                                    body: why, and anything a reviewer should know."),
+                    }),
+                    &["wiki", "title"],
+                )
+            },
+        },
+        ToolDef {
             name: "list_wiki_pages",
             plugin: "wiki",
             description: "Every curated page in a wiki: path, title, `type:` frontmatter, \
@@ -3336,6 +3378,8 @@ const WIKI_TOOLS: &[&str] = &[
     "list_wikis",
     "describe_wiki",
     "create_wiki",
+    "wiki_local_changes",
+    "wiki_push_changes",
     "list_wiki_pages",
     "read_wiki_page",
     "write_wiki_page",
@@ -3430,10 +3474,60 @@ fn wiki_tool(
                         "commit": s.commit,
                         "fetched_at": s.fetched_at,
                         "last_error": s.last_error,
+                        "conflicts": s.conflicts,
+                        "pending": s.pending.as_ref().map(pending_json),
                     })),
                     "created_at": c.created_at,
                 },
             }))
+        }
+
+        "wiki_local_changes" => {
+            let slug = required_str(args, "wiki")?;
+            let changes = wiki
+                .local_changes(&slug)
+                .map_err(|e| wiki_err("read local changes of", &slug, &e))?;
+            Ok(json!({
+                "wiki": slug,
+                "base_commit": changes.base_commit,
+                "count": changes.changes.len(),
+                "changes": changes.changes.iter().map(|c| json!({
+                    "path": c.path,
+                    "kind": c.kind.as_str(),
+                })).collect::<Vec<_>>(),
+                "pending": changes.pending.as_ref().map(pending_json),
+                "conflicts": changes.conflicts,
+                "note": if !changes.conflicts.is_empty() {
+                    "Conflicts block a push: read each conflicting page, decide what it \
+                     should say, and write it with write_wiki_page — that clears it."
+                } else if changes.changes.is_empty() {
+                    "The wiki matches its repository; nothing to push."
+                } else if changes.pending.is_some() {
+                    "A push is pending; wiki_push_changes updates the same branch and \
+                     pull request."
+                } else {
+                    "wiki_push_changes sends these as one commit and opens a pull request."
+                },
+            }))
+        }
+
+        "wiki_push_changes" => {
+            let slug = required_str(args, "wiki")?;
+            let title = required_str(args, "title")?;
+            let body = arg_str(args, "body").unwrap_or_default();
+            let pending = wiki
+                .push_changes(&slug, &title, &body)
+                .map_err(|e| wiki_err("push", &slug, &e))?;
+            let mut out = pending_json(&pending);
+            out["wiki"] = json!(slug);
+            out["note"] = json!(if pending.pull_request.is_empty() {
+                "Pushed as a branch; no forge client applies to this repository, so a \
+                 person opens the pull request from that branch."
+            } else {
+                "Pushed and the pull request is open. Further edits accumulate as local \
+                 changes; pushing again updates this same request until it merges."
+            });
+            Ok(out)
         }
 
         "create_wiki" => {
@@ -3670,6 +3764,15 @@ fn wiki_tool(
 
         _ => Err(ToolFailure::Unknown),
     }
+}
+
+#[cfg(feature = "plugin-wiki")]
+fn pending_json(p: &wiki_proto::config::PendingPush) -> Value {
+    json!({
+        "branch": p.branch,
+        "commit": p.commit,
+        "pull_request": p.pull_request,
+    })
 }
 
 #[cfg(feature = "plugin-wiki")]

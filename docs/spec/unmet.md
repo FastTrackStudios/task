@@ -107,25 +107,40 @@ grouped:
   subject is `scripture`'s read-only verse spine. Brings the licence and
   per-passage availability posture that `Translation` already models.
 - **Repo-sourced wikis, the linked-account half** — `wiki.source.*` is
-  built and verified: `wiki_live::repo_source` mirrors a path in a
-  repository, the server fetches on a schedule, the seed plants `Docs`
-  over `Repos/task-docs`, and an accepted Edit Request on such a wiki is
-  pushed as a branch, reads `Landing`, becomes a pull request when a
-  forge token is configured, and turns `Accepted` only once a sync sees
-  the repository holding it (`edits_backend::reconcile_landings`). What
-  On GitHub the landing is now the accepting Editor's own: the server
-  asks the central issuer for the GitHub account linked to that person
+  built and verified. `wiki_live::repo_source` exports a path in a
+  repository into the wiki root as a **working copy**: the live,
+  collaboratively edited version, which every save (a direct
+  `write_page`, an accepted Edit Request, an Editor's auto-approved
+  edit, a mounted-folder edit) lands in and nothing pushes. The server
+  fetches on a schedule and the seed plants `Docs` over
+  `Repos/task-docs`. A sync updates only pages the working copy has
+  not touched; a page changed on both sides is kept as it is here and
+  named in `RepoSource::conflicts` (cleared by saving the page again or
+  by its coming to match upstream). The set of local changes is derived
+  from the pages against the exported base (`_state/repo_mirror.json`
+  keeps a content hash per path; `Registry::local_changes`, `task wiki
+  changes`, MCP `wiki_local_changes`). The repository is reached only
+  by `Registry::push_changes` (`task wiki push --title …`, MCP
+  `wiki_push_changes`): Editor only, one branch per wiki
+  (`wiki/<slug>/<pusher>`), one commit holding every local change, one
+  pull request, recorded as `RepoSource::pending`; a later push rewrites
+  the same branch and request, and the sync that first sees the commit
+  merged clears `pending`, after which the change list is empty on its
+  own. Nothing enters `EditStatus::Landing` any more
+  (`reconcile_landings` only settles rows an older server left there).
+  On GitHub the push is the pushing Editor's own: the server asks the
+  central issuer for the GitHub account linked to that person
   (`GET /oauth2/linked-token?provider=github`, bearer the credential
-  they presented, granted under the `forge:github` scope), pushes the
-  branch with their token as committer (`<login>@users.noreply.github.
-  com`, the proposer still the author) and opens the pull request as
-  them; an Editor with no linked account is refused before anything is
-  pushed (`wiki_repo::identity_for`). What still stands between this
-  and the rule: the issuer side — `auth-server`'s social sign-in,
-  account linking and `linked-token` endpoint — must be deployed, and
-  Forgejo repositories still land with the deployment's
-  `TASK_FORGEJO_TOKEN`, as the deployment, because no per-user Forgejo
-  link exists.
+  they presented, granted under the `forge:github` scope), pushes with
+  their token as author and committer (`<login>@users.noreply.github.
+  com`) and opens the pull request as them; an Editor with no linked
+  account is refused before anything is pushed
+  (`wiki_repo::identity_for`). What still stands between this and the
+  rule: the issuer side — `auth-server`'s social sign-in, account
+  linking and `linked-token` endpoint — must be deployed, and Forgejo
+  repositories still land with the deployment's `TASK_FORGEJO_TOKEN`,
+  as the deployment, because no per-user Forgejo link exists. The web
+  app has no changes/push surface yet; the CLI and MCP do.
 
 Remove entries as their rules gain markers; the section goes when the
 last does.

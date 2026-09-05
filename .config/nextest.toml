@@ -48,6 +48,15 @@ slow-timeout = { period = "15s", terminate-after = 3 }
 filter = 'package(task-server)'
 slow-timeout = { period = "10s", terminate-after = 3 }
 
+# `wiki-live`'s repo-sourced tests drive the real `git` binary against a
+# bare remote: a sync, a push, a merge and another sync is thirty-odd
+# process spawns, each a disk round trip. Alone that is a second or
+# three; ten of them starting cold on a slow disk read as a hang under
+# the default 2s/×2 and get killed mid-push.
+[[profile.default.overrides]]
+filter = 'package(wiki-live) and test(/repo_source|repo_sourced|working_copy/)'
+slow-timeout = { period = "15s", terminate-after = 3 }
+
 # Tests that measure PHYSICAL disk usage — "did storing this file consume
 # a second copy", "did linking it consume no space".
 #
@@ -95,6 +104,10 @@ slow-timeout = { period = "40s", terminate-after = 3 }
 [[profile.ci.overrides]]
 filter = 'package(integration)'
 slow-timeout = { period = "20s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'package(wiki-live) and test(/repo_source|repo_sourced|working_copy/)'
+slow-timeout = { period = "15s", terminate-after = 3 }
 
 [profile.patient]
 slow-timeout = { period = "30s", terminate-after = 4 }

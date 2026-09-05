@@ -127,12 +127,35 @@ impl ProposerGate {
     }
 }
 
+/// A push of the working copy that the repository has not merged yet
+/// (`wiki.source.editable`).
+///
+/// One branch and one pull request per wiki while anything is pending:
+/// a later push rewrites the same branch rather than opening another,
+/// so the reviewer sees one request grow instead of a queue of them.
+/// Cleared by the sync that first sees `commit` reachable from the
+/// followed branch — that is what "merged" means here.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct PendingPush {
+    /// The branch on `origin` that holds the working copy.
+    pub branch: String,
+    /// Full sha of the commit last pushed to it.
+    pub commit: String,
+    /// The pull request opened for it. Empty when no forge client
+    /// applied and a person opens one by hand from the branch.
+    #[serde(default)]
+    pub pull_request: String,
+}
+
 /// A git repository this wiki mirrors (`wiki.source.repo`).
 ///
-/// The repository is the source of truth and the wiki is a mirror of
-/// it: `commit` is what the pages currently reflect, and a fetch that
-/// fails leaves `last_error` set rather than serving stale content as
-/// current (`wiki.source.sync`).
+/// The repository is the source of truth and the wiki root is a
+/// **working copy** of one path in it: `commit` is the base the pages
+/// were exported from, edits accumulate on top of that base, and a
+/// push sends them back as one branch (`wiki.source.editable`). A
+/// fetch that fails leaves `last_error` set rather than serving stale
+/// content as current (`wiki.source.sync`).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Facet)]
 #[repr(C)]
 pub struct RepoSource {
@@ -157,6 +180,16 @@ pub struct RepoSource {
     /// fetch succeeded; a wiki with this set is stale and says so.
     #[serde(default)]
     pub last_error: String,
+    /// Pages changed on both sides since the base: the repository
+    /// moved them and so did somebody here. A sync keeps the local
+    /// page and names it here rather than choosing; a push is refused
+    /// while any stand. A conflict clears when the page is written
+    /// again — the person has seen it — or comes to match upstream.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<String>,
+    /// The push awaiting merge, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<PendingPush>,
 }
 
 /// One wiki's declaration.
