@@ -257,11 +257,21 @@ impl<'a> Renderer<'a> {
                 // expected to fail on these anyway — see
                 // `Vault::broken_links` — so this is what a `--no-fail`
                 // preview looks like, not what ships.
-                out.push_str("<span class=\"");
-                out.push_str(&self.broken_link_class);
-                out.push_str("\">");
-                out.push_str(&escape_html(&link.alias));
-                out.push_str("</span>");
+                //
+                // Unless a host renderer owns the body: it would escape
+                // that span and the reader would see the markup as text.
+                // Same reasoning as the callout rewrite below — the host
+                // knows wikilink syntax itself and styles an unresolved
+                // one its own way, so hand it back the source.
+                if self.body.is_some() {
+                    out.push_str(&body[link.span.0..link.span.1]);
+                } else {
+                    out.push_str("<span class=\"");
+                    out.push_str(&self.broken_link_class);
+                    out.push_str("\">");
+                    out.push_str(&escape_html(&link.alias));
+                    out.push_str("</span>");
+                }
                 if !broken.contains(&link.target) {
                     broken.push(link.target);
                 }
@@ -928,6 +938,26 @@ mod body_renderer_tests {
             path: std::path::PathBuf::from("n.md"),
             source: source.to_owned(),
         }
+    }
+
+    #[test]
+    fn a_body_renderer_sees_wikilink_syntax_not_broken_link_html() {
+        // Same reasoning as the callout case below: a host renderer
+        // escapes HTML it did not ask for, so the reader would see
+        // `<span class="ssg-broken-link">` as literal text on the page.
+        let seen = std::cell::RefCell::new(String::new());
+        let page = {
+            let r = Renderer::new("/guide", Vec::new()).body_renderer(|md| {
+                seen.borrow_mut().push_str(md);
+                String::new()
+            });
+            r.render(&note("see [[nowhere]]"))
+        };
+        let seen = seen.into_inner();
+        assert!(seen.contains("[[nowhere]]"), "{seen}");
+        assert!(!seen.contains("ssg-broken-link"), "{seen}");
+        // Passing the syntax through must not stop the vault counting it.
+        assert_eq!(page.broken_links, vec!["nowhere".to_owned()]);
     }
 
     #[test]
