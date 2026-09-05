@@ -192,7 +192,17 @@ impl<'a> Renderer<'a> {
         };
 
         let (markdown, links, broken_links) = self.resolve_wikilinks(body);
-        let markdown = rewrite_callouts(&markdown);
+        // Callouts are rewritten to HTML for the BUILT-IN pass only. A
+        // host renderer gets the markdown as written, `> [!note]` and
+        // all, because it very likely knows the syntax itself — the
+        // editor renders all twelve as decorations — and handing it HTML
+        // it did not ask for means it escapes the markup and the reader
+        // sees `<div class="ssg-callout">` as text.
+        let markdown = if self.body.is_some() {
+            markdown
+        } else {
+            rewrite_callouts(&markdown)
+        };
         let (built_in, headings) = self.to_html(&markdown);
         // Headings come from the markdown either way — see
         // `body_renderer`. Only the HTML is the host's to replace.
@@ -918,6 +928,22 @@ mod body_renderer_tests {
             path: std::path::PathBuf::from("n.md"),
             source: source.to_owned(),
         }
+    }
+
+    #[test]
+    fn a_body_renderer_sees_callout_syntax_not_callout_html() {
+        // The host renders callouts itself; pre-rewriting them means it
+        // escapes our markup and the reader sees the div as text.
+        let seen = std::cell::RefCell::new(String::new());
+        {
+            let r = Renderer::new("/guide", Vec::new()).body_renderer(|md| {
+                seen.borrow_mut().push_str(md);
+                String::new()
+            });
+            let _ = r.render(&note("> [!note] Hi\n> body\n"));
+        }
+        assert!(seen.borrow().contains("[!note]"), "{}", seen.borrow());
+        assert!(!seen.borrow().contains("ssg-callout"), "{}", seen.borrow());
     }
 
     #[test]
