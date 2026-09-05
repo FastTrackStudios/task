@@ -43,6 +43,9 @@ pub struct Renderer<'a> {
     /// Normalised link target → canonical slug. See [`Renderer::alias`].
     aliases: BTreeMap<String, String>,
     fences: Vec<Box<FenceRenderer<'a>>>,
+    /// Renders a note's body to HTML, replacing the built-in markdown
+    /// pass. See [`Renderer::body_renderer`].
+    body: Option<Box<dyn Fn(&str) -> String + 'a>>,
     strip_nav_footer: bool,
     broken_link_class: String,
 }
@@ -97,6 +100,7 @@ impl<'a> Renderer<'a> {
             .collect();
 
         Self {
+            body: None,
             link_base: link_base.into().trim_end_matches('/').to_owned(),
             known_slugs,
             aliases,
@@ -189,7 +193,13 @@ impl<'a> Renderer<'a> {
 
         let (markdown, links, broken_links) = self.resolve_wikilinks(body);
         let markdown = rewrite_callouts(&markdown);
-        let (html, headings) = self.to_html(&markdown);
+        let (built_in, headings) = self.to_html(&markdown);
+        // Headings come from the markdown either way — see
+        // `body_renderer`. Only the HTML is the host's to replace.
+        let html = self
+            .body
+            .as_ref()
+            .map_or(built_in, |render| render(&markdown));
         RenderedPage {
             html,
             headings,
@@ -250,6 +260,24 @@ impl<'a> Renderer<'a> {
         out.push_str(&body[cursor..]);
 
         (out, links, broken)
+    }
+
+    /// Render each note's body with `f` instead of the built-in markdown
+    /// pass.
+    ///
+    /// For a host that already has a markdown renderer it would rather
+    /// use — the editor's, so that a note looks the same published as it
+    /// does being written, callouts and task lists and all.
+    ///
+    /// Headings are still parsed out of the markdown here, because the
+    /// table of contents, the deep links and the search index are built
+    /// from them and a replacement renderer has no reason to know about
+    /// any of that. Wikilinks are still resolved before `f` sees the
+    /// text, so what arrives is ordinary markdown with real links in it.
+    #[must_use]
+    pub fn body_renderer(mut self, f: impl Fn(&str) -> String + 'a) -> Self {
+        self.body = Some(Box::new(f));
+        self
     }
 
     /// Parse markdown to HTML, giving the fence renderers first refusal
@@ -877,5 +905,58 @@ mod callout_render_tests {
         assert!(page.html.contains("ssg-callout-tip"), "{}", page.html);
         assert!(page.html.contains("<strong>bold</strong>"), "{}", page.html);
         assert!(page.html.contains("/guide/other"), "{}", page.html);
+    }
+}
+
+#[cfg(test)]
+mod body_renderer_tests {
+    use super::*;
+
+    fn note(source: &str) -> Note {
+        Note {
+            slug: "n".to_owned(),
+            path: std::path::PathBuf::from("n.md"),
+            source: source.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_body_renderer_replaces_the_html() {
+        let r = Renderer::new("/guide", Vec::new()).body_renderer(|md| format!("<!--{md}-->"));
+        let page = r.render(&note("# Title\n\nbody\n"));
+        assert!(page.html.starts_with("<!--"), "{}", page.html);
+        assert!(!page.html.contains("<h1"), "{}", page.html);
+    }
+
+    #[test]
+    fn headings_still_come_from_the_markdown() {
+        // The table of contents, deep links and search are built from
+        // these, and a replacement renderer has no reason to know that.
+        let r = Renderer::new("/guide", Vec::new()).body_renderer(|_| "<p>x</p>".to_owned());
+        let page = r.render(&note("# Title\n\n## Second\n"));
+        assert_eq!(page.headings.len(), 2, "{:?}", page.headings);
+    }
+
+    #[test]
+    fn wikilinks_are_resolved_before_the_renderer_sees_them() {
+        // What arrives is ordinary markdown with real links in it, so a
+        // host renderer needs to know nothing about `[[…]]`.
+        let seen = std::cell::RefCell::new(String::new());
+        {
+            let r = Renderer::new("/guide", vec!["other".to_owned()]).body_renderer(|md| {
+                seen.borrow_mut().push_str(md);
+                String::new()
+            });
+            let _ = r.render(&note("see [[other]]\n"));
+        }
+        assert!(seen.borrow().contains("/guide/other"), "{}", seen.borrow());
+        assert!(!seen.borrow().contains("[["), "{}", seen.borrow());
+    }
+
+    #[test]
+    fn without_one_the_built_in_pass_is_used() {
+        let r = Renderer::new("/guide", Vec::new());
+        let page = r.render(&note("# Title\n"));
+        assert!(page.html.contains("<h1"), "{}", page.html);
     }
 }

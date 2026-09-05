@@ -62,6 +62,7 @@ pub struct Vault<'a> {
     out_dir: Option<PathBuf>,
     crate_path: String,
     fences: Vec<Box<FenceRenderer<'a>>>,
+    body: Option<Box<dyn Fn(&str) -> String + 'a>>,
     keep_nav_footer: bool,
     allow_broken_links: bool,
     feeds: Option<(String, PathBuf)>,
@@ -92,6 +93,7 @@ impl<'a> Vault<'a> {
             out_dir: None,
             crate_path: "::ssg".to_owned(),
             fences: Vec::new(),
+            body: None,
             keep_nav_footer: false,
             allow_broken_links: false,
             feeds: None,
@@ -198,6 +200,14 @@ impl<'a> Vault<'a> {
         self
     }
 
+    /// Render each note's body with `f` instead of the built-in markdown
+    /// pass — see [`ssg_vault::Renderer::body_renderer`].
+    #[must_use]
+    pub fn body_renderer(mut self, f: impl Fn(&str) -> String + 'a) -> Self {
+        self.body = Some(Box::new(f));
+        self
+    }
+
     /// Keep each note's trailing `Previous: … · Up: …` line, which is
     /// dropped by default.
     #[must_use]
@@ -234,6 +244,9 @@ impl<'a> Vault<'a> {
             }
             for fence in &self.fences {
                 renderer = renderer.fence(move |info, body| fence(info, body));
+            }
+            if let Some(body) = &self.body {
+                renderer = renderer.body_renderer(move |md| body(md));
             }
             renderer
         })
