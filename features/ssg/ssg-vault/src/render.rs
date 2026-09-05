@@ -233,7 +233,38 @@ impl<'a> Renderer<'a> {
             out.push_str(&body[cursor..link.span.0]);
             cursor = link.span.1;
 
-            if let Some(slug) = self.resolve(&link.target).map(ToOwned::to_owned) {
+            // `![[target]]` is an EMBED, not a link. Rewriting the inner
+            // `[[target]]` to `[text](url)` leaves the `!` in front of it,
+            // which is markdown for an image — so a page embed came out as
+            // a broken `<img>`. A host renderer owns embeds (the editor
+            // renders page, section and block embeds as cards), so give it
+            // the source. The built-in path keeps the old behaviour, where
+            // `![[pic.png]]` becoming an image link is the point.
+            let is_embed = link.span.0 > 0 && body.as_bytes()[link.span.0 - 1] == b'!';
+            if is_embed && self.body.is_some() {
+                out.push_str(&body[link.span.0..link.span.1]);
+                // Still an outbound edge for the graph when it resolves.
+                let page = link.target.split('#').next().unwrap_or(&link.target).trim();
+                if let Some(slug) = self.resolve(page).map(ToOwned::to_owned) {
+                    if !links.contains(&slug) {
+                        links.push(slug);
+                    }
+                } else if !page.is_empty() && !broken.contains(&link.target) {
+                    broken.push(link.target);
+                }
+                continue;
+            }
+
+            // `[[Page#Heading]]` points at a heading *within* a page. The
+            // page is what resolves; the fragment becomes the anchor. Left
+            // whole, the lookup was for a page literally named
+            // "Page#Heading", which never exists — so every heading-anchored
+            // link in the vault reported broken and rendered red.
+            let (page_part, fragment) = match link.target.split_once('#') {
+                Some((p, f)) => (p.trim(), Some(f.trim())),
+                None => (link.target.as_str(), None),
+            };
+            if let Some(slug) = self.resolve(page_part).map(ToOwned::to_owned) {
                 // Escape the label as markdown link text: a `]` in an
                 // alias would otherwise close the link early and spill
                 // the URL into the prose.
@@ -246,6 +277,12 @@ impl<'a> Renderer<'a> {
                 // has to become `/guide/recording` or the link 404s on a
                 // case-sensitive host.
                 out.push_str(&slug);
+                // The anchor is slugged the same way heading ids are, so
+                // the link lands where the heading actually is.
+                if let Some(frag) = fragment.filter(|f| !f.is_empty()) {
+                    out.push('#');
+                    out.push_str(&slugify(frag));
+                }
                 out.push(')');
                 if !links.contains(&slug) {
                     links.push(slug);
@@ -938,6 +975,45 @@ mod body_renderer_tests {
             path: std::path::PathBuf::from("n.md"),
             source: source.to_owned(),
         }
+    }
+
+    #[test]
+    fn a_heading_anchored_wikilink_resolves_the_page() {
+        // `[[Page#Heading]]` points at a heading within a page. Looked up
+        // whole it asked for a page named "Page#Heading", so every one of
+        // these reported broken and rendered red.
+        let seen = std::cell::RefCell::new(String::new());
+        let page = {
+            let r = Renderer::new("/guide", vec!["introduction".to_owned()])
+                .alias("An Introduction", "introduction")
+                .body_renderer(|md| {
+                    seen.borrow_mut().push_str(md);
+                    String::new()
+                });
+            r.render(&note("see [[An Introduction#Two goals]]"))
+        };
+        let seen = seen.into_inner();
+        assert!(seen.contains("/guide/introduction#two-goals"), "{seen}");
+        assert!(page.broken_links.is_empty(), "{:?}", page.broken_links);
+    }
+
+    #[test]
+    fn a_page_embed_is_left_for_the_host() {
+        // `![[Page]]` is an embed. Rewriting the inner `[[Page]]` leaves
+        // the `!` in front of a markdown link — an image — so a page
+        // embed rendered as a broken `<img>`.
+        let seen = std::cell::RefCell::new(String::new());
+        {
+            let r = Renderer::new("/guide", vec!["chords".to_owned()])
+                .body_renderer(|md| {
+                    seen.borrow_mut().push_str(md);
+                    String::new()
+                });
+            r.render(&note("![[chords]]"));
+        }
+        let seen = seen.into_inner();
+        assert!(seen.contains("![[chords]]"), "{seen}");
+        assert!(!seen.contains("](/guide/chords)"), "{seen}");
     }
 
     #[test]
