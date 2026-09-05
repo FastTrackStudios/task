@@ -35,6 +35,15 @@ pub enum ScanError {
     /// pass silently: a site whose guide directory moved builds fine and
     /// ships an empty guide, and nobody notices until a reader does.
     Empty { path: PathBuf },
+    /// Two notes in the vault share a file name.
+    ///
+    /// Slugs are flat whatever the folder layout, so this would be two
+    /// pages at one URL and one of them would win by directory order.
+    DuplicateSlug {
+        slug: String,
+        first: PathBuf,
+        second: PathBuf,
+    },
 }
 
 impl std::fmt::Display for ScanError {
@@ -46,6 +55,17 @@ impl std::fmt::Display for ScanError {
             Self::Note { path, source } => {
                 write!(f, "cannot read {}: {source}", path.display())
             }
+            Self::DuplicateSlug {
+                slug,
+                first,
+                second,
+            } => write!(
+                f,
+                "two notes are both `{slug}`: {} and {}. Slugs are flat whatever \
+                 the folder layout, so these are one URL — rename one.",
+                first.display(),
+                second.display()
+            ),
             Self::Empty { path } => write!(
                 f,
                 "no markdown notes under {} — the site would ship an empty vault",
@@ -59,29 +79,67 @@ impl std::error::Error for ScanError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Directory { source, .. } | Self::Note { source, .. } => Some(source),
-            Self::Empty { .. } => None,
+            Self::Empty { .. } | Self::DuplicateSlug { .. } => None,
         }
     }
 }
 
-/// Read every `.md` note directly under `dir`.
+/// Read every `.md` note under `dir`, at any depth.
 ///
-/// Not recursive. A vault's slugs are flat because they are also its
-/// wikilink targets and its URL segments, so a nested tree would need a
-/// naming scheme for collisions that no FTS vault has wanted yet.
+/// **Slugs stay flat.** A slug is also a wikilink target and a URL
+/// segment, so `chords/root.md` is the page `root`, not `chords/root`.
+/// Folders are for whoever browses the repository; they change nothing
+/// a reader sees, which is what lets a vault be reorganised without
+/// breaking a single link.
+///
+/// The cost is that two notes cannot share a file name. That is a real
+/// constraint, so it is an error rather than a silent last-writer-wins
+/// — see [`ScanError::DuplicateSlug`].
 ///
 /// Notes come back sorted by slug; ordering for display is the
 /// frontmatter's job and happens in [`scan_with`].
 pub fn scan(dir: impl AsRef<Path>) -> Result<Vec<Note>, ScanError> {
     let dir = dir.as_ref();
+    let mut notes = Vec::new();
+    collect(dir, &mut notes)?;
+
+    // t[impl ssg.build.non-empty]
+    if notes.is_empty() {
+        return Err(ScanError::Empty {
+            path: dir.to_owned(),
+        });
+    }
+
+    // Directory order is whatever the filesystem says, which differs
+    // between machines. Sorting here is what makes a build reproducible.
+    notes.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+    // Two notes with one slug would be two pages at one URL. Whichever
+    // won would depend on directory order, so neither does.
+    if let Some(pair) = notes.windows(2).find(|w| w[0].slug == w[1].slug) {
+        return Err(ScanError::DuplicateSlug {
+            slug: pair[0].slug.clone(),
+            first: pair[0].path.clone(),
+            second: pair[1].path.clone(),
+        });
+    }
+
+    Ok(notes)
+}
+
+/// Walk `dir`, appending every `.md` note found at any depth.
+fn collect(dir: &Path, notes: &mut Vec<Note>) -> Result<(), ScanError> {
     let entries = std::fs::read_dir(dir).map_err(|source| ScanError::Directory {
         path: dir.to_owned(),
         source,
     })?;
 
-    let mut notes = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
+        if path.is_dir() {
+            collect(&path, notes)?;
+            continue;
+        }
         if path.extension().is_none_or(|ext| ext != "md") {
             continue;
         }
@@ -94,18 +152,7 @@ pub fn scan(dir: impl AsRef<Path>) -> Result<Vec<Note>, ScanError> {
         })?;
         notes.push(Note { slug, path, source });
     }
-
-    // t[impl ssg.build.non-empty]
-    if notes.is_empty() {
-        return Err(ScanError::Empty {
-            path: dir.to_owned(),
-        });
-    }
-
-    // read_dir order is whatever the filesystem says, which differs
-    // between machines. Sorting here is what makes a build reproducible.
-    notes.sort_by(|a, b| a.slug.cmp(&b.slug));
-    Ok(notes)
+    Ok(())
 }
 
 /// Read `dir` and render it into a [`Vault`].
@@ -197,6 +244,48 @@ fn first_heading(body: &str) -> Option<String> {
         line.strip_prefix("# ")
             .map(|heading| heading.trim().to_owned())
     })
+}
+
+#[cfg(test)]
+mod recursive_tests {
+    use super::*;
+
+    fn write(dir: &std::path::Path, rel: &str, body: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(path, body).expect("write");
+    }
+
+    #[test]
+    fn notes_are_found_at_any_depth_with_flat_slugs() {
+        // Folders are for whoever browses the repository. A slug is a
+        // URL segment and a wikilink target, so it stays the file name —
+        // which is what lets a vault be reorganised without breaking a
+        // single link.
+        let dir = std::env::temp_dir().join(format!("ssg-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "top.md", "# Top");
+        write(&dir, "chords/root.md", "# Root");
+        write(&dir, "chords/deeper/quality.md", "# Quality");
+
+        let notes = scan(&dir).expect("scan");
+        let slugs: Vec<&str> = notes.iter().map(|n| n.slug.as_str()).collect();
+        assert_eq!(slugs, ["quality", "root", "top"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_notes_with_one_name_are_an_error() {
+        let dir = std::env::temp_dir().join(format!("ssg-dupe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "a/root.md", "# One");
+        write(&dir, "b/root.md", "# Two");
+
+        let err = scan(&dir).expect_err("a duplicate slug is an error");
+        assert!(matches!(err, ScanError::DuplicateSlug { .. }), "{err}");
+        assert!(err.to_string().contains("root"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

@@ -72,6 +72,29 @@ pub struct Vault<'a> {
     dates: bool,
 }
 
+/// Emit `cargo:rerun-if-changed` for every note under `dir`, at any depth.
+///
+/// Per note, not just the directory: on most filesystems a directory's
+/// mtime does not change when a file inside it is edited, so watching the
+/// directory alone catches an added or deleted note and misses every edit
+/// to an existing one. Recursive since a vault can be organised into
+/// folders.
+fn watch_notes(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    // The directory itself as well, so a note added to it is noticed.
+    println!("cargo:rerun-if-changed={}", dir.display());
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            watch_notes(&path);
+        } else if path.extension().is_some_and(|e| e == "md") {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}
+
 impl<'a> Vault<'a> {
     /// A vault at `dir`, relative to the crate being built.
     ///
@@ -244,12 +267,7 @@ impl<'a> Vault<'a> {
         // it is edited, so watching the directory alone catches an added or
         // deleted note and misses every edit to an existing one. Listed
         // before the render so a note that fails to render is still watched.
-        for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md") {
-                println!("cargo:rerun-if-changed={}", path.display());
-            }
-        }
+        watch_notes(&self.dir);
 
         let vault = self.render();
         if let Some((site, dir)) = &self.feeds {
