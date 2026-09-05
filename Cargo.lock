@@ -19984,6 +19984,7 @@ dependencies = [
 name = "ssg-build"
 version = "0.1.0"
 dependencies = [
+ "notify 8.2.0",
  "ssg-vault",
 ]
 

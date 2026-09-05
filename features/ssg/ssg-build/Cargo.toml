@@ -17,5 +17,15 @@ license.workspace = true
 [dependencies]
 ssg-vault = { workspace = true }
 
+# Filesystem watching for `Vault::render`-on-save. Optional because this
+# crate is consumed from build scripts in four workspaces, and a build
+# script never watches anything — see `watch`.
+notify-fs = { workspace = true, optional = true }
+
+[features]
+default = []
+# A dev server that re-renders the vault when a note is saved.
+watch = ["dep:notify-fs"]
+
 [lints]
 workspace = true

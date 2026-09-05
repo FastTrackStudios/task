@@ -54,6 +54,9 @@ use std::path::{Path, PathBuf};
 use ssg_vault::{FenceRenderer, Renderer};
 
 /// A vault to compile into the current crate.
+#[cfg(feature = "watch")]
+pub mod watch;
+
 pub struct Vault<'a> {
     dir: PathBuf,
     link_base: String,
@@ -236,56 +239,19 @@ impl<'a> Vault<'a> {
     pub fn emit(self) {
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-changed={}", self.dir.display());
-
-        let mut vault = ssg_vault::scan_with(&self.dir, |slugs| {
-            let mut renderer = Renderer::new(&self.link_base, slugs);
-            if self.keep_nav_footer {
-                renderer = renderer.keep_nav_footer();
-            }
-            for fence in &self.fences {
-                renderer = renderer.fence(move |info, body| fence(info, body));
-            }
-            if let Some(body) = &self.body {
-                renderer = renderer.body_renderer(move |md| body(md));
-            }
-            renderer
-        })
-        .unwrap_or_else(|e| panic!("{e}"));
-
-        // t[impl ssg.build.rerun] — per-note, not just the directory: on most filesystems a
-        // directory's mtime does not change when a file inside it is
-        // edited, so watching the directory alone catches an added or
-        // deleted note and misses every edit to an existing one.
-        for page in &vault.pages {
-            println!(
-                "cargo:rerun-if-changed={}",
-                self.dir.join(format!("{}.md", page.slug)).display()
-            );
-        }
-
-        if self.dates {
-            for page in &mut vault.pages {
-                page.updated = git_date(&self.dir.join(format!("{}.md", page.slug)));
+        // t[impl ssg.build.rerun] — per-note, not just the directory: on most
+        // filesystems a directory's mtime does not change when a file inside
+        // it is edited, so watching the directory alone catches an added or
+        // deleted note and misses every edit to an existing one. Listed
+        // before the render so a note that fails to render is still watched.
+        for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                println!("cargo:rerun-if-changed={}", path.display());
             }
         }
 
-        let broken = vault.broken_links();
-        if !broken.is_empty() {
-            let detail = broken
-                .iter()
-                .map(|(from, to)| format!("  {from}.md → [[{to}]]"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(
-                self.allow_broken_links,
-                "{} broken cross-reference(s) in {}:\n{detail}\n\
-                 Fix the target, or call .allow_broken_links() to downgrade this to a warning.",
-                broken.len(),
-                self.dir.display(),
-            );
-            println!("cargo:warning=broken cross-references in the vault:\n{detail}");
-        }
-
+        let vault = self.render();
         if let Some((site, dir)) = &self.feeds {
             std::fs::create_dir_all(dir)
                 .unwrap_or_else(|e| panic!("cannot create {}: {e}", dir.display()));
@@ -312,6 +278,61 @@ impl<'a> Vault<'a> {
             .join(&self.out_file);
         std::fs::write(&dest, self.codegen(&vault))
             .unwrap_or_else(|e| panic!("cannot write {}: {e}", dest.display()));
+    }
+
+    /// Render the vault in-process, without writing anything or emitting
+    /// cargo directives.
+    ///
+    /// [`Self::emit`] is this plus codegen, and that is the point: a dev
+    /// server that re-renders a note on save has to configure the render
+    /// *identically* to the build, or the page a writer previews is not
+    /// the page that ships. Sharing this method is what makes that true
+    /// by construction rather than by two call sites agreeing.
+    ///
+    /// # Panics
+    /// If the directory cannot be scanned, or a cross-reference is broken
+    /// and [`Self::allow_broken_links`] was not set.
+    #[must_use]
+    pub fn render(&self) -> ssg_vault::Vault {
+        let mut vault = ssg_vault::scan_with(&self.dir, |slugs| {
+            let mut renderer = Renderer::new(&self.link_base, slugs);
+            if self.keep_nav_footer {
+                renderer = renderer.keep_nav_footer();
+            }
+            for fence in &self.fences {
+                renderer = renderer.fence(move |info, body| fence(info, body));
+            }
+            if let Some(body) = &self.body {
+                renderer = renderer.body_renderer(move |md| body(md));
+            }
+            renderer
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        if self.dates {
+            for page in &mut vault.pages {
+                page.updated = git_date(&self.dir.join(format!("{}.md", page.slug)));
+            }
+        }
+
+        let broken = vault.broken_links();
+        if !broken.is_empty() {
+            let detail = broken
+                .iter()
+                .map(|(from, to)| format!("  {from}.md → [[{to}]]"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                self.allow_broken_links,
+                "{} broken cross-reference(s) in {}:\n{detail}\n\
+                 Fix the target, or call .allow_broken_links() to downgrade this to a warning.",
+                broken.len(),
+                self.dir.display(),
+            );
+            println!("cargo:warning=broken cross-references in the vault:\n{detail}");
+        }
+
+        vault
     }
 
     /// The generated source: one `StaticPage` per note, plus the
