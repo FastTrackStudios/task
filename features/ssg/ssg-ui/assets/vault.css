@@ -455,3 +455,47 @@
 .ssg-breadcrumbs a { text-decoration: none; }
 .ssg-breadcrumbs a:hover { text-decoration: underline; }
 .ssg-breadcrumbs [aria-current="page"] { opacity: 0.85; }
+
+/* ── Callouts ─────────────────────────────────────────────────────
+ *
+ * `> [!note] Title`, the syntax the editor speaks. Twelve types, not
+ * GitHub's five, because these notes are written in the editor and a
+ * chapter drafted with `> [!question]` should render as a question
+ * once published rather than fall back to a plain quote.
+ *
+ * One rule and a colour per type: the accent bar and the title take
+ * `--ssg-callout`, and each type does nothing but set it. */
+.ssg-callout {
+  --ssg-callout: var(--ssg-muted, #8a8a94);
+  margin: 1.2rem 0;
+  border: 1px solid var(--ssg-line, #26262f);
+  border-left: 3px solid var(--ssg-callout);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--ssg-callout) 7%, transparent);
+}
+
+.ssg-callout-title {
+  padding: 0.6rem 0.9rem;
+  color: var(--ssg-callout);
+  font-weight: 600;
+  font-size: 0.95em;
+}
+
+/* The body carries the note's own prose, so its first and last blocks
+ * lose their margins — otherwise every callout is padded twice. */
+.ssg-callout-body { padding: 0 0.9rem 0.15rem; }
+.ssg-callout-body > :first-child { margin-top: 0; }
+.ssg-callout-body > :last-child { margin-bottom: 0; }
+
+.ssg-callout-note     { --ssg-callout: #6ea8fe; }
+.ssg-callout-abstract { --ssg-callout: #6ea8fe; }
+.ssg-callout-info     { --ssg-callout: #6ea8fe; }
+.ssg-callout-tip      { --ssg-callout: #2dd4bf; }
+.ssg-callout-success  { --ssg-callout: #34d399; }
+.ssg-callout-question { --ssg-callout: #fbbf24; }
+.ssg-callout-warning  { --ssg-callout: #fb923c; }
+.ssg-callout-failure  { --ssg-callout: #f87171; }
+.ssg-callout-danger   { --ssg-callout: #f87171; }
+.ssg-callout-bug      { --ssg-callout: #f87171; }
+.ssg-callout-example  { --ssg-callout: #a78bfa; }
+.ssg-callout-quote    { --ssg-callout: #9997a6; }
