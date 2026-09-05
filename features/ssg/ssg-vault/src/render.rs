@@ -188,6 +188,7 @@ impl<'a> Renderer<'a> {
         };
 
         let (markdown, links, broken_links) = self.resolve_wikilinks(body);
+        let markdown = rewrite_callouts(&markdown);
         let (html, headings) = self.to_html(&markdown);
         RenderedPage {
             html,
@@ -502,6 +503,82 @@ fn escape_html(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// The callout types, in the order the editor's slash menu offers them.
+///
+/// Twelve, not GitHub's five. The syntax is Obsidian's and so is the set,
+/// because these notes are written in the editor — a chapter drafted with
+/// `> [!question]` has to render as a question here, not fall back to a
+/// plain quote because the published renderer only knew about alerts.
+const CALLOUTS: [&str; 12] = [
+    "note", "abstract", "info", "tip", "success", "question", "warning", "failure", "danger",
+    "bug", "example", "quote",
+];
+
+/// Rewrite `> [!type] Title` blockquotes into callout markup.
+///
+/// A pre-pass over the markdown rather than a transform of the event
+/// stream: the wikilink rewrite above is already a pre-pass, the callout
+/// body has to stay markdown (it holds links, code, charts), and an HTML
+/// block followed by a blank line lets CommonMark parse the inside of it
+/// normally. Doing it in the event stream would mean buffering a whole
+/// blockquote to find out what it was.
+///
+/// `pulldown-cmark` 0.10 has no `BlockQuoteKind`, and the version that
+/// does only knows GitHub's five alerts, so this is hand-rolled either
+/// way.
+fn rewrite_callouts(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut lines = markdown.lines().peekable();
+
+    while let Some(line) = lines.next() {
+        let Some((kind, title)) = callout_header(line) else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+
+        out.push_str(&format!(
+            "<div class=\"ssg-callout ssg-callout-{kind}\">\n<div class=\"ssg-callout-title\">{}</div>\n<div class=\"ssg-callout-body\">\n\n",
+            escape_html(&title),
+        ));
+        // The rest of the quote, with one level of `> ` removed, is
+        // ordinary markdown and is emitted as such.
+        while let Some(next) = lines.peek() {
+            let Some(rest) = next.strip_prefix('>') else {
+                break;
+            };
+            out.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+            out.push('\n');
+            lines.next();
+        }
+        out.push_str("\n</div>\n</div>\n\n");
+    }
+    out
+}
+
+/// `> [!type]` or `> [!type] Title`, if the line is one.
+///
+/// The title defaults to the type, capitalised, which is what Obsidian
+/// shows and what makes a bare `> [!warning]` useful on its own.
+fn callout_header(line: &str) -> Option<(&'static str, String)> {
+    let rest = line.trim_start().strip_prefix('>')?.trim_start();
+    let rest = rest.strip_prefix("[!")?;
+    let (kind, rest) = rest.split_once(']')?;
+    let kind = CALLOUTS
+        .iter()
+        .find(|k| k.eq_ignore_ascii_case(kind.trim()))?;
+    let title = rest.trim();
+    let title = if title.is_empty() {
+        let mut c = kind.chars();
+        c.next().map_or_else(String::new, |f| {
+            f.to_uppercase().collect::<String>() + c.as_str()
+        })
+    } else {
+        title.to_owned()
+    };
+    Some((kind, title))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,5 +801,81 @@ mod tests {
     fn tables_and_footnotes_render() {
         let out = renderer().render(&note("| a | b |\n|---|---|\n| 1 | 2 |\n"));
         assert!(out.html.contains("<table>"));
+    }
+}
+
+#[cfg(test)]
+mod callout_tests {
+    use super::*;
+
+    #[test]
+    fn a_callout_becomes_its_own_block() {
+        let out = rewrite_callouts("> [!warning] Careful\n> body text\n");
+        assert!(out.contains("ssg-callout-warning"), "{out}");
+        assert!(out.contains("Careful"), "{out}");
+        assert!(out.contains("body text"), "{out}");
+    }
+
+    #[test]
+    fn a_bare_callout_titles_itself() {
+        let out = rewrite_callouts("> [!tip]\n> do this\n");
+        assert!(out.contains(">Tip</div>"), "{out}");
+    }
+
+    #[test]
+    fn every_editor_callout_type_is_known() {
+        // The set has to match the editor's slash menu, or a chapter
+        // written there renders as a plain quote once published.
+        for kind in CALLOUTS {
+            let src = format!("> [!{kind}] t\n> b\n");
+            let out = rewrite_callouts(&src);
+            assert!(
+                out.contains(&format!("ssg-callout-{kind}")),
+                "{kind}: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_quote_is_left_alone() {
+        let out = rewrite_callouts("> just a quote\n");
+        assert!(!out.contains("ssg-callout"), "{out}");
+        assert!(out.contains("> just a quote"), "{out}");
+    }
+
+    #[test]
+    fn an_unknown_type_is_left_as_a_quote() {
+        let out = rewrite_callouts("> [!nosuchtype] x\n> y\n");
+        assert!(!out.contains("ssg-callout"), "{out}");
+    }
+
+    #[test]
+    fn the_body_stays_markdown() {
+        // The inside of a callout holds links, code and charts, so it
+        // must reach the parser as markdown rather than as escaped text.
+        let out = rewrite_callouts("> [!note] N\n> see **this**\n");
+        assert!(out.contains("**this**"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod callout_render_tests {
+    use super::*;
+
+    #[test]
+    fn a_callout_survives_the_whole_render() {
+        // Through `Renderer::render`, not just the pre-pass: the HTML
+        // block has to reach the parser intact and its body has to come
+        // out parsed rather than escaped.
+        let r = Renderer::new("/guide", vec!["other".to_owned()]);
+        let note = Note {
+            slug: "n".to_owned(),
+            path: std::path::PathBuf::from("n.md"),
+            source: "> [!tip] Try it\n> see **bold** and [[other]]\n".to_owned(),
+        };
+        let page = r.render(&note);
+        assert!(page.html.contains("ssg-callout-tip"), "{}", page.html);
+        assert!(page.html.contains("<strong>bold</strong>"), "{}", page.html);
+        assert!(page.html.contains("/guide/other"), "{}", page.html);
     }
 }
