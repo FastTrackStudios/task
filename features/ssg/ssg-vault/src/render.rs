@@ -1008,7 +1008,10 @@ mod body_renderer_tests {
                 seen.borrow_mut().push_str(md);
                 String::new()
             });
-            r.render(&note("![[chords]]"));
+            // The rendered page is not the assertion here — what the
+            // body renderer was *handed* is, and that arrives through
+            // `seen`.
+            let _ = r.render(&note("![[chords]]"));
         }
         let seen = seen.into_inner();
         assert!(seen.contains("![[chords]]"), "{seen}");
