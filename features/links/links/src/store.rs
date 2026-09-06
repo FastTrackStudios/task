@@ -11,11 +11,43 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use links_proto::{Confidence, LinksError, LinksService, NodeRef, TypedLink, Visibility};
+use links_proto::{
+    Confidence, LinksError, LinksService, NodeRef, Reach, ResolvedNode, TypedLink, Visibility,
+};
+
+/// Who can say where another org's node lives, and whether this reader
+/// may see it (ADR 0003).
+///
+/// A hook rather than something this crate does, because answering it
+/// needs three things a link store has no business holding: the map from
+/// federation domain to org, the reader's membership rows, and the
+/// subscription set. All three are the server's, so the server supplies
+/// them — the same shape as `EditsBackend::with_lander` and
+/// `ResourcesBackend::with_wikis`.
+pub trait NodeHomes: Send + Sync + 'static {
+    /// Resolve one reference that names another org. Called only for
+    /// references carrying a domain; a local one never reaches here.
+    fn resolve(&self, node: &NodeRef) -> ResolvedNode;
+}
+
+/// The default: this deployment knows of no org but the caller's own, so
+/// every qualified reference is an unknown domain.
+///
+/// Not a refusal and not an error — a single-org server that has never
+/// federated should say "I do not know that name", which is exactly
+/// true, rather than pretend the node is missing.
+pub struct NoFederation;
+
+impl NodeHomes for NoFederation {
+    fn resolve(&self, node: &NodeRef) -> ResolvedNode {
+        ResolvedNode::refused(node.clone(), Reach::UnknownDomain)
+    }
+}
 
 #[derive(Clone, architect::HasDispatcher)]
 pub struct Store {
     inner: Arc<Mutex<Inner>>,
+    homes: Arc<dyn NodeHomes>,
 }
 
 struct Inner {
@@ -40,7 +72,15 @@ impl Store {
             .unwrap_or_default();
         Self {
             inner: Arc::new(Mutex::new(Inner { path, links })),
+            homes: Arc::new(NoFederation),
         }
+    }
+
+    /// Attach the resolver that answers for other orgs.
+    #[must_use]
+    pub fn with_homes(mut self, homes: Arc<dyn NodeHomes>) -> Self {
+        self.homes = homes;
+        self
     }
 }
 
@@ -116,6 +156,22 @@ impl LinksService for Store {
             .filter(|l| l.confidence >= min_confidence)
             .filter(|l| include_private || l.visibility != Visibility::Private)
             .cloned()
+            .collect())
+    }
+
+    fn resolve_nodes(&self, nodes: Vec<NodeRef>) -> Result<Vec<ResolvedNode>, LinksError> {
+        // Local references never leave this process: the caller is
+        // already inside the org that holds them, so the answer is the
+        // reference itself. Only a domain sends the question outward.
+        Ok(nodes
+            .into_iter()
+            .map(|node| {
+                if node.is_local() {
+                    ResolvedNode::refused(node, Reach::Local)
+                } else {
+                    self.homes.resolve(&node)
+                }
+            })
             .collect())
     }
 }

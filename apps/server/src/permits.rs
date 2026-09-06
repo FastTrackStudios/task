@@ -758,7 +758,7 @@ table!(SCRIPTURE, "scripture", "scripture/**", [
     rd "study", rd "cross_refs", rd "topics_of", rd "verses_for_topic",
 ]);
 table!(LINKS, "links", "links/**", [
-    wr "create", wa "delete", rd "get", rd "links_for", rd "graph",
+    wr "create", wa "delete", rd "get", rd "links_for", rd "graph", rd "resolve_nodes",
 ]);
 #[cfg(feature = "plugin-fasttrackstudio")]
 table!(COLLECTION, "collection", "collections/**", [
