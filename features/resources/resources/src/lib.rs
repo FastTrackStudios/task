@@ -19,6 +19,7 @@
 
 pub mod backend;
 pub mod build;
+pub mod chart;
 pub mod manifest;
 pub mod resolve;
 pub mod scripture_refs;

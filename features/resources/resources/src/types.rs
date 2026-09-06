@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 pub enum ResourceKind {
     Song,
     Sermon,
+    /// A Keyflow chart — the manifest sits beside a `<slug>.kf` holding
+    /// the chart source verbatim.
+    Chart,
     Pdf,
     Book,
     Video,
@@ -78,6 +81,19 @@ pub struct Resource {
     /// Caption / transcript language (`en`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub language: String,
+    /// Musical key as written (`A`, `Bb`, `f#m`) — charts and songs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    /// Notation dialect of a chart's source (`keyflow`, `chordpro`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notation: String,
+    /// Section names in chart order (`verse-1`, `chorus`) — the anchors
+    /// a `chart:<slug>#chorus` reference addresses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<String>,
+    /// When the owning app last changed the resource (`RFC 3339`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub updated_at: String,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]

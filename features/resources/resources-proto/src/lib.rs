@@ -11,6 +11,13 @@
 //! extracts the scripture references the preacher spoke, and mints the
 //! `sermon:<slug>#t:<secs> → verse:<osis>` links that make the sermon
 //! show up as a backlink in the scripture reader.
+//!
+//! The **chart lane** ([`ChartDoc`] and friends) is the second writer
+//! on the same tier: Keyflow keeps a person's charts under
+//! `<org>/resources/charts/` through these RPCs, and a *library* of
+//! them is an ordinary `Collection` of kind `Library` over
+//! `chart:<slug>` node references — ADR 0003, which builds nothing new
+//! for libraries on purpose.
 
 use facet::Facet;
 use serde::{Deserialize, Serialize};
@@ -123,6 +130,86 @@ pub struct SermonSummary {
     pub transcript_rel_path: String,
 }
 
+/// A Keyflow chart as Keyflow hands it to the server, and as the server
+/// hands it back.
+///
+/// The identity is the `slug`: pass one to update a chart, leave it
+/// empty and the server derives it from the title the same way sermon
+/// slugs are derived (`resources::sermon::slugify`), suffixing a
+/// collision so two charts titled the same never overwrite each other.
+///
+/// The `source` is the chart text, stored verbatim in
+/// `<org>/resources/charts/<slug>.kf` — an outside editor sees a plain
+/// chart file, not an encoding of one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
+pub struct ChartDoc {
+    /// Chart slug — the `chart:<slug>` node id. Empty on a create:
+    /// the server derives it from the title.
+    #[serde(default)]
+    #[facet(default)]
+    pub slug: String,
+    pub title: String,
+    /// The Keyflow source, verbatim.
+    #[serde(default)]
+    #[facet(default)]
+    pub source: String,
+    /// Musical key as written (`A`, `Bb`, `f#m`); empty when unset.
+    #[serde(default)]
+    #[facet(default)]
+    pub key: String,
+    /// Notation dialect the source is written in (`keyflow`,
+    /// `chordpro`, `nashville`); empty means Keyflow's own.
+    #[serde(default)]
+    #[facet(default)]
+    pub notation: String,
+    /// Section names in chart order (`verse-1`, `chorus`) — the
+    /// anchors a `chart:<slug>#chorus` reference addresses. Supplied by
+    /// the caller: the server does not parse Keyflow source (see
+    /// [`ResourcesService::upsert_chart`]).
+    #[serde(default)]
+    #[facet(default)]
+    pub sections: Vec<String>,
+    /// When the caller last changed the chart (`RFC 3339`); empty when
+    /// the caller does not track it. Caller-owned — the server stores
+    /// what it is given and stamps nothing.
+    #[serde(default)]
+    #[facet(default)]
+    pub updated_at: String,
+}
+
+/// What the server laid down for one chart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
+pub struct ChartUpsert {
+    pub slug: String,
+    /// Resources-relative path of the manifest (`charts/<slug>.md`).
+    pub rel_path: String,
+    /// `true` when the chart did not exist before this call.
+    pub created: bool,
+}
+
+/// One chart, as `list_charts` reports it — everything but the source,
+/// which `chart` fetches.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
+pub struct ChartSummary {
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    #[facet(default)]
+    pub key: String,
+    #[serde(default)]
+    #[facet(default)]
+    pub notation: String,
+    #[serde(default)]
+    #[facet(default)]
+    pub sections: Vec<String>,
+    /// Manifest path (`charts/<slug>.md`) under the org's resources
+    /// tier. The source sits beside it as `charts/<slug>.kf`.
+    pub rel_path: String,
+    #[serde(default)]
+    #[facet(default)]
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Error)]
 #[repr(u8)]
 pub enum ResourcesError {
@@ -163,12 +250,41 @@ pub trait ResourcesService {
     /// and sidecars are untouched (links are keyed by slug). Returns
     /// how many manifests moved.
     fn relocate_sermons(&self, folder: &str, wiki: &str) -> Result<u32, ResourcesError>;
+
+    /// Create or replace a chart under `<org>/resources/charts/`:
+    /// `<slug>.kf` holds [`ChartDoc::source`] verbatim and `<slug>.md`
+    /// is the `type: resource`, `resource_kind: chart` manifest. An
+    /// existing manifest keeps its hand-edited body — only the
+    /// chart-owned frontmatter is rewritten, exactly as a sermon
+    /// re-sync keeps its body.
+    ///
+    /// `sections` is taken from the caller, not parsed: the Keyflow
+    /// parser is a UI-side git dependency, and the resources tier is not
+    /// the place to pull it into the server.
+    ///
+    /// An empty title is a `BadRequest`.
+    fn upsert_chart(&self, chart: ChartDoc) -> Result<ChartUpsert, ResourcesError>;
+
+    /// One chart by slug, source included.
+    fn chart(&self, slug: &str) -> Result<ChartDoc, ResourcesError>;
+
+    /// Every chart under `resources/charts/`, by slug.
+    fn list_charts(&self) -> Result<Vec<ChartSummary>, ResourcesError>;
+
+    /// Delete a chart's manifest and its `.kf` source. `false` when
+    /// there was nothing there. A `chart:<slug>` reference held by a
+    /// collection is left alone: a dangling reference is a legible
+    /// state, not an error (ADR 0003).
+    fn delete_chart(&self, slug: &str) -> Result<bool, ResourcesError>;
 }
 
 #[cfg(feature = "vox")]
 #[allow(unsafe_code)]
 mod reborrow_impls {
-    use super::{SermonResource, SermonSummary, SermonUpsert, TranscriptDoc, TranscriptSegment};
+    use super::{
+        ChartDoc, ChartSummary, ChartUpsert, SermonResource, SermonSummary, SermonUpsert,
+        TranscriptDoc, TranscriptSegment,
+    };
     unsafe impl vox_types::Reborrow for TranscriptSegment {
         type Ref<'a> = TranscriptSegment;
     }
@@ -183,5 +299,14 @@ mod reborrow_impls {
     }
     unsafe impl vox_types::Reborrow for SermonSummary {
         type Ref<'a> = SermonSummary;
+    }
+    unsafe impl vox_types::Reborrow for ChartDoc {
+        type Ref<'a> = ChartDoc;
+    }
+    unsafe impl vox_types::Reborrow for ChartUpsert {
+        type Ref<'a> = ChartUpsert;
+    }
+    unsafe impl vox_types::Reborrow for ChartSummary {
+        type Ref<'a> = ChartSummary;
     }
 }

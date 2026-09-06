@@ -33,6 +33,7 @@ mod auth;
 mod body;
 mod brief;
 mod bulk_journal;
+mod chart;
 mod code;
 #[cfg(feature = "plugin-fasttrackstudio")]
 mod collection;
@@ -254,6 +255,11 @@ enum Commands {
     /// checkpoint on demand, and curate Named / Project Versions.
     #[command(subcommand)]
     Files(FilesCmd),
+    /// Keyflow charts kept in the org's resources tier
+    /// (`resources/charts/<slug>.kf`) — save, read, list, delete. The
+    /// same four RPCs Keyflow itself calls (ADR 0003).
+    #[command(subcommand)]
+    Chart(chart::ChartCmd),
     /// The Resource Library — `sermons sync` turns a YouTube channel's
     /// message videos into sermon resources (video + captions) with
     /// scripture backlinks. Cron-friendly; no model involved.
@@ -814,6 +820,9 @@ async fn run(cli: Cli) -> eyre::Result<()> {
         }
         Commands::Files(cmd) => {
             return run_files(cmd, cli.org.as_deref()).await;
+        }
+        Commands::Chart(cmd) => {
+            return chart::run_chart(cmd, cli.org.as_deref()).await;
         }
         #[cfg(feature = "plugin-wiki")]
         Commands::Resources(cmd) => {

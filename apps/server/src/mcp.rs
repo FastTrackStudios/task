@@ -870,9 +870,76 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             },
         },
     ]);
+    v.extend(chart_tool_catalog());
     #[cfg(feature = "plugin-wiki")]
     v.extend(wiki_tool_catalog());
     v
+}
+
+/// The chart tools. A chart is Keyflow's document, kept in the org's
+/// resources tier (`resources/charts/<slug>.kf` plus a manifest), and
+/// addressable from anywhere in the graph as `chart:<slug>` — which is
+/// what lets a `Library` collection hold one (ADR 0003).
+///
+/// The descriptions teach the loop: `list_charts` before guessing a
+/// slug, `read_chart` before rewriting one, and sections declared
+/// explicitly because nothing on the server parses chart source.
+fn chart_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_charts",
+            plugin: "core",
+            description: "List the org's Keyflow charts: slug, title, key, notation, section \
+                          names and when each was last written. Call this FIRST — read_chart \
+                          and write_chart take a `slug` from here, and a chart is referenced \
+                          elsewhere in the graph as `chart:<slug>`.",
+            schema: || obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "read_chart",
+            plugin: "core",
+            description: "Read one chart in full: its Keyflow source plus title, key, notation \
+                          and sections. Read before writing — write_chart replaces the source \
+                          outright, so an edit means fetching the current text first.",
+            schema: || {
+                obj(
+                    json!({ "slug": s_("Chart slug, from list_charts.") }),
+                    &["slug"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_chart",
+            plugin: "core",
+            description: "Create or replace a chart. Pass `slug` to update an existing chart \
+                          (from list_charts); omit it to create one, and the slug is derived \
+                          from the title. The `source` is stored verbatim as \
+                          `resources/charts/<slug>.kf`. `sections` must be listed here — the \
+                          server does not parse chart source, and an unlisted section is not \
+                          addressable as `chart:<slug>#<section>`.",
+            schema: || {
+                obj(
+                    json!({
+                        "title": s_("Chart title, e.g. 'Great Are You Lord'."),
+                        "source": s_("The chart text, stored byte for byte."),
+                        "slug": s_("Existing chart to replace, from list_charts. Omit to \
+                                    create a new chart."),
+                        "key": s_("Musical key as written ('A', 'Bb', 'f#m')."),
+                        "notation": s_("Notation dialect: 'keyflow' (default), 'chordpro', \
+                                        'nashville'."),
+                        "sections": json!({
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Section names in chart order ('verse-1', \
+                                            'chorus') — the anchors a chart:<slug>#<section> \
+                                            reference addresses.",
+                        }),
+                    }),
+                    &["title", "source"],
+                )
+            },
+        },
+    ]
 }
 
 /// The wiki tools. A wiki is one *subject* — a curated set of markdown
@@ -3363,11 +3430,115 @@ fn call_tool(
             }
         }
 
+        n if CHART_TOOLS.contains(&n) => chart_tool(org, n, args),
+
         #[cfg(feature = "plugin-wiki")]
         n if WIKI_TOOLS.contains(&n) => wiki_tool(org, principal, n, args),
 
         _ => Err(ToolFailure::Unknown),
     }
+}
+
+// ── Chart tools ──────────────────────────────────────────────────
+
+/// The tools [`chart_tool`] answers; must match [`chart_tool_catalog`].
+const CHART_TOOLS: &[&str] = &["list_charts", "read_chart", "write_chart"];
+
+/// One chart tool call, straight onto the org's resources backend —
+/// the same `ResourcesService` the vox lane mounts, so a chart written
+/// here is the chart Keyflow reads.
+fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value, ToolFailure> {
+    use resources_proto::{ChartDoc, ResourcesService as _};
+
+    let charts = &org.resources;
+    let chart_err = |what: &str, subject: &str, e: &resources_proto::ResourcesError| match e {
+        resources_proto::ResourcesError::NotFound(s) => ToolFailure::Message(format!(
+            "no chart matching `{s}`. Call list_charts and use a slug from its result."
+        )),
+        other => ToolFailure::Message(format!("couldn't {what} `{subject}`: {other}")),
+    };
+
+    match name {
+        "list_charts" => {
+            let list = charts
+                .list_charts()
+                .map_err(|e| chart_err("list charts", &org.slug, &e))?;
+            let out: Vec<Value> = list
+                .iter()
+                .map(|c| {
+                    json!({
+                        "slug": c.slug,
+                        "title": c.title,
+                        "key": c.key,
+                        "notation": c.notation,
+                        "sections": c.sections,
+                        "rel_path": c.rel_path,
+                        "updated_at": c.updated_at,
+                        "node": format!("chart:{}", c.slug),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "count": out.len(),
+                "charts": out,
+                "note": "Pass `slug` to read_chart / write_chart. `node` is how a collection \
+                         or a link references the chart.",
+            }))
+        }
+
+        "read_chart" => {
+            let slug = required_str(args, "slug")?;
+            let doc = charts
+                .chart(&slug)
+                .map_err(|e| chart_err("read chart", &slug, &e))?;
+            Ok(json!({
+                "slug": doc.slug,
+                "title": doc.title,
+                "source": doc.source,
+                "key": doc.key,
+                "notation": doc.notation,
+                "sections": doc.sections,
+                "updated_at": doc.updated_at,
+            }))
+        }
+
+        "write_chart" => {
+            let title = required_str(args, "title")?;
+            let source = args
+                .get("source")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolFailure::Message("`source` is required".into()))?
+                .to_string();
+            let doc = ChartDoc {
+                slug: arg_str(args, "slug").unwrap_or_default(),
+                title,
+                source,
+                key: arg_str(args, "key").unwrap_or_default(),
+                notation: arg_str(args, "notation").unwrap_or_else(|| "keyflow".into()),
+                sections: arg_str_list(args, "sections")?.unwrap_or_default(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let out = charts
+                .upsert_chart(doc)
+                .map_err(|e| chart_err("write chart", &out_slug(args), &e))?;
+            Ok(json!({
+                "slug": out.slug,
+                "rel_path": out.rel_path,
+                "created": out.created,
+                "node": format!("chart:{}", out.slug),
+            }))
+        }
+
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+/// What the caller called the chart, for an error message before the
+/// server has assigned a slug.
+fn out_slug(args: &Value) -> String {
+    arg_str(args, "slug")
+        .or_else(|| arg_str(args, "title"))
+        .unwrap_or_default()
 }
 
 // ── Wiki tools ───────────────────────────────────────────────────
@@ -4072,6 +4243,21 @@ mod tests {
             }
             let desc = tool["description"].as_str().expect("description");
             assert!(desc.contains("Operator-only"), "{desc}");
+        }
+    }
+
+    /// The chart dispatch list and the chart catalog must agree, for
+    /// the same reason the wiki pair must: a tool listed but not
+    /// dispatched is a method-not-found the model can't explain.
+    #[test]
+    fn chart_tools_match_their_dispatch_list() {
+        let listed: Vec<&str> = chart_tool_catalog().iter().map(|t| t.name).collect();
+        assert_eq!(listed, CHART_TOOLS);
+        // Charts ride the core resources lane — no plugin gates them.
+        assert!(chart_tool_catalog().iter().all(|t| t.plugin == "core"));
+        let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
+        for tool in CHART_TOOLS {
+            assert!(names.contains(tool), "`{tool}` missing from the catalog");
         }
     }
 

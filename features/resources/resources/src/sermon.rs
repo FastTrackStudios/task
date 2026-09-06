@@ -187,7 +187,7 @@ pub fn refresh_manifest(
 }
 
 /// `(frontmatter yaml, body after the closing fence)`.
-fn split(markdown: &str) -> Option<(&str, &str)> {
+pub(crate) fn split(markdown: &str) -> Option<(&str, &str)> {
     let rest = markdown.strip_prefix("---")?;
     let rest = rest
         .strip_prefix('\n')

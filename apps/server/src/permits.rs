@@ -766,6 +766,7 @@ table!(COLLECTION, "collection", "collections/**", [
 ]);
 table!(RESOURCES, "resources", "resources/**", [
     rd "transcript", wr "upsert_sermon", rd "list_sermons", rd "sermon", wa "relocate_sermons",
+    wr "upsert_chart", rd "chart", rd "list_charts", wa "delete_chart",
 ]);
 
 // ── Finance lane (every mutation audited) ────────────────────────────────

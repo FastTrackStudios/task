@@ -16,13 +16,14 @@ use links_proto::{
     Confidence, LinksService as _, NodeKind, NodeRef, Relation, TypedLink, Visibility,
 };
 use resources_proto::{
-    ResourcesError, ResourcesService, SermonResource, SermonSummary, SermonUpsert, TranscriptDoc,
+    ChartDoc, ChartSummary, ChartUpsert, ResourcesError, ResourcesService, SermonResource,
+    SermonSummary, SermonUpsert, TranscriptDoc,
 };
 
 use crate::scripture_refs::{self, RefHit};
 use crate::types::AnnotationFile;
 use crate::walker::{LoadedResource, walk};
-use crate::{ResourceError, sermon, sidecar, transcript};
+use crate::{ResourceError, chart, sermon, sidecar, transcript};
 
 /// `provenance.source_ref` on every link the sync mints — so a re-sync
 /// replaces only its own links, never a reader's annotations.
@@ -30,6 +31,10 @@ pub const SOURCE_REF: &str = "sermon-sync";
 
 /// The subtree sermons live in, under the org-wide resources root.
 const SERMONS_DIR: &str = "sermons";
+
+/// The subtree charts live in, under the org-wide resources root
+/// (ADR 0003: `resources/charts/<slug>.kf`).
+const CHARTS_DIR: &str = "charts";
 
 /// The subtree sermons live in inside a named wiki
 /// (`<org>/wikis/<wiki>/Resources/Sermons/`).
@@ -81,6 +86,31 @@ impl ResourcesBackend {
 
     fn sermons_root(&self) -> PathBuf {
         self.root.join(SERMONS_DIR)
+    }
+
+    /// `<org>/resources/charts` — Keyflow's tier, flat by slug.
+    fn charts_root(&self) -> PathBuf {
+        self.root.join(CHARTS_DIR)
+    }
+
+    /// Every chart manifest, slug-sorted (that is [`walk`]'s order).
+    fn charts(&self) -> Vec<LoadedResource> {
+        walk(self.charts_root())
+            .into_iter()
+            .filter(|r| r.resource.kind == crate::types::ResourceKind::Chart)
+            .collect()
+    }
+
+    fn chart_summary(&self, r: &LoadedResource) -> ChartSummary {
+        ChartSummary {
+            slug: r.resource.slug.clone(),
+            title: r.resource.title.clone(),
+            key: r.resource.key.clone(),
+            notation: r.resource.notation.clone(),
+            sections: r.resource.sections.clone(),
+            rel_path: self.rel(&r.path),
+            updated_at: r.resource.updated_at.clone(),
+        }
     }
 
     /// Where sermons of `wiki` live; the org-wide tier for `""`.
@@ -467,6 +497,98 @@ impl ResourcesService for ResourcesBackend {
         let _ = std::fs::remove_dir(&src);
         Ok(moved)
     }
+
+    fn upsert_chart(&self, chart_doc: ChartDoc) -> Result<ChartUpsert, ResourcesError> {
+        if chart_doc.title.trim().is_empty() {
+            return Err(ResourcesError::BadRequest("title is empty".into()));
+        }
+        let existing = self.charts();
+        let taken: Vec<String> = existing.iter().map(|r| r.resource.slug.clone()).collect();
+        let slug = chart::slug_for(&taken, &chart_doc);
+        // `slugify` strips every separator, so the slug can never climb
+        // out of the tier — but an all-punctuation title yields nothing
+        // to name a file with.
+        if slug.is_empty() {
+            return Err(ResourcesError::BadRequest(format!(
+                "title {:?} has no sluggable characters",
+                chart_doc.title
+            )));
+        }
+
+        let root = self.charts_root();
+        // A known slug keeps the file it is already in.
+        let md_path = existing
+            .iter()
+            .find(|r| r.resource.slug == slug)
+            .map_or_else(|| root.join(format!("{slug}.md")), |r| r.path.clone());
+        let (md, created) = match std::fs::read_to_string(&md_path) {
+            Ok(old) => (
+                chart::refresh_manifest(&old, &chart_doc).map_err(|e| io_err(&e))?,
+                false,
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+                chart::render_manifest(&chart_doc, &slug).map_err(|e| io_err(&e))?,
+                true,
+            ),
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        std::fs::create_dir_all(&root).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        std::fs::write(&md_path, md).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        // The source is the chart: stored verbatim, never re-rendered.
+        std::fs::write(chart::source_path(&md_path), &chart_doc.source)
+            .map_err(|e| ResourcesError::Io(e.to_string()))?;
+
+        Ok(ChartUpsert {
+            slug,
+            rel_path: self.rel(&md_path),
+            created,
+        })
+    }
+
+    fn chart(&self, slug: &str) -> Result<ChartDoc, ResourcesError> {
+        let found = self
+            .charts()
+            .into_iter()
+            .find(|r| r.resource.slug == slug)
+            .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))?;
+        let source = match std::fs::read_to_string(chart::source_path(&found.path)) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        Ok(ChartDoc {
+            slug: found.resource.slug,
+            title: found.resource.title,
+            source,
+            key: found.resource.key,
+            notation: found.resource.notation,
+            sections: found.resource.sections,
+            updated_at: found.resource.updated_at,
+        })
+    }
+
+    fn list_charts(&self) -> Result<Vec<ChartSummary>, ResourcesError> {
+        Ok(self
+            .charts()
+            .iter()
+            .map(|r| self.chart_summary(r))
+            .collect())
+    }
+
+    fn delete_chart(&self, slug: &str) -> Result<bool, ResourcesError> {
+        safe_segment(slug, "slug")?;
+        let Some(found) = self.charts().into_iter().find(|r| r.resource.slug == slug) else {
+            return Ok(false);
+        };
+        for path in [chart::source_path(&found.path), found.path] {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(ResourcesError::Io(e.to_string())),
+            }
+        }
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -691,6 +813,123 @@ mod tests {
         let out = be.upsert_sermon(sermon("BBB", "Hope", "")).unwrap();
         assert_eq!(out.slug, "hope-bbb");
         assert_eq!(be.list_sermons().unwrap().len(), 2);
+    }
+
+    fn chart_doc(title: &str, source: &str) -> ChartDoc {
+        ChartDoc {
+            slug: String::new(),
+            title: title.into(),
+            source: source.into(),
+            key: "A".into(),
+            notation: "keyflow".into(),
+            sections: vec!["verse-1".into(), "chorus".into()],
+            updated_at: "2026-09-05T10:00:00Z".into(),
+        }
+    }
+
+    /// The two files, the round trip, and the delete — the whole chart
+    /// lane against one temp resources tier.
+    #[test]
+    fn chart_upsert_lays_down_source_and_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        let out = be
+            .upsert_chart(chart_doc("Great Are You Lord", "[Verse 1]\n| A | E |\n"))
+            .unwrap();
+        assert_eq!(out.slug, "great-are-you-lord");
+        assert_eq!(out.rel_path, "charts/great-are-you-lord.md");
+        assert!(out.created);
+
+        let base = dir.path().join("resources/charts");
+        assert!(base.join("great-are-you-lord.md").is_file());
+        assert_eq!(
+            std::fs::read_to_string(base.join("great-are-you-lord.kf")).unwrap(),
+            "[Verse 1]\n| A | E |\n",
+            "the .kf is the source, verbatim"
+        );
+
+        let back = be.chart("great-are-you-lord").unwrap();
+        assert_eq!(back.source, "[Verse 1]\n| A | E |\n");
+        assert_eq!(back.key, "A");
+        assert_eq!(back.sections, ["verse-1", "chorus"]);
+
+        let list = be.list_charts().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].slug, "great-are-you-lord");
+        assert_eq!(list[0].notation, "keyflow");
+
+        assert!(be.delete_chart("great-are-you-lord").unwrap());
+        assert!(!base.join("great-are-you-lord.md").exists());
+        assert!(!base.join("great-are-you-lord.kf").exists());
+        assert!(
+            !be.delete_chart("great-are-you-lord").unwrap(),
+            "deleting twice is `false`, not an error"
+        );
+        assert!(matches!(
+            be.chart("great-are-you-lord"),
+            Err(ResourcesError::NotFound(_))
+        ));
+    }
+
+    /// Two charts titled the same are two charts; naming a slug is how
+    /// an app says "the same one again".
+    #[test]
+    fn chart_slug_collision_makes_a_second_chart() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let first = be.upsert_chart(chart_doc("Hosanna", "| A |")).unwrap();
+        let second = be.upsert_chart(chart_doc("Hosanna", "| E |")).unwrap();
+        assert_eq!(first.slug, "hosanna");
+        assert_eq!(second.slug, "hosanna-2");
+        assert!(second.created);
+        assert_eq!(be.list_charts().unwrap().len(), 2);
+
+        let mut again = chart_doc("Hosanna (Live)", "| D |");
+        again.slug = "hosanna".into();
+        let update = be.upsert_chart(again).unwrap();
+        assert_eq!(update.slug, "hosanna");
+        assert!(!update.created, "a named slug updates rather than forks");
+        assert_eq!(be.chart("hosanna").unwrap().source, "| D |");
+        assert_eq!(be.list_charts().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn chart_re_upsert_keeps_the_manifest_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        be.upsert_chart(chart_doc("Hosanna", "| A |")).unwrap();
+        let md = dir.path().join("resources/charts/hosanna.md");
+        let hand = std::fs::read_to_string(&md)
+            .unwrap()
+            .replace("## Notes", "## Notes\n- capo 2, drop the bridge\n");
+        std::fs::write(&md, hand).unwrap();
+
+        let mut next = chart_doc("Hosanna", "| A | E |");
+        next.slug = "hosanna".into();
+        next.key = "E".into();
+        be.upsert_chart(next).unwrap();
+
+        let text = std::fs::read_to_string(&md).unwrap();
+        assert!(text.contains("- capo 2, drop the bridge"), "{text}");
+        assert!(text.contains("key: E"), "app-owned key rewritten: {text}");
+        assert_eq!(be.chart("hosanna").unwrap().source, "| A | E |");
+    }
+
+    #[test]
+    fn chart_without_a_title_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        assert!(matches!(
+            be.upsert_chart(chart_doc("   ", "| A |")),
+            Err(ResourcesError::BadRequest(_))
+        ));
+        // A title that kebabs to nothing has no file to be, either.
+        assert!(matches!(
+            be.upsert_chart(chart_doc("—", "| A |")),
+            Err(ResourcesError::BadRequest(_))
+        ));
+        assert!(be.list_charts().unwrap().is_empty());
     }
 
     #[test]
