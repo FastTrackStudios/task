@@ -19,7 +19,7 @@ use resources_proto::ChartDoc;
 use serde_yaml::{Mapping, Value};
 
 use crate::ResourceError;
-use crate::sermon::{slugify, split};
+use crate::sermon::split;
 
 /// Frontmatter keys the chart's owning app rewrites on every upsert.
 /// Unlike a sermon, `title` is among them: a chart's title is the
@@ -43,18 +43,7 @@ pub fn source_path(md_path: &std::path::Path) -> std::path::PathBuf {
 /// `taken` is every slug already on disk.
 #[must_use]
 pub fn slug_for(taken: &[String], chart: &ChartDoc) -> String {
-    if !chart.slug.trim().is_empty() {
-        return slugify(&chart.slug);
-    }
-    let base = slugify(&chart.title);
-    if !taken.contains(&base) {
-        return base;
-    }
-    // `hosanna`, `hosanna-2`, `hosanna-3` …
-    (2u32..)
-        .map(|n| format!("{base}-{n}"))
-        .find(|c| !taken.contains(c))
-        .unwrap_or(base)
+    crate::asset::slug_for(taken, &chart.slug, &chart.title)
 }
 
 /// The app-owned frontmatter as YAML, in the order it is written.

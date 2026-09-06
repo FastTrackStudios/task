@@ -70,10 +70,18 @@ async fn charts_round_trip_and_a_library_collects_them() {
     assert!(manifest.contains("resource_kind: chart"), "{manifest}");
     assert!(manifest.contains("- chorus"), "sections: {manifest}");
 
-    // Both list, and the source round-trips byte for byte.
+    // Both list, and the source round-trips byte for byte. The seed
+    // plants a chart of its own (`chart:track-one`), so this asserts
+    // what it wrote is present and in slug order — not that nothing
+    // else is there.
     let list = charts.list_charts().await.unwrap();
     let slugs: Vec<&str> = list.iter().map(|c| c.slug.as_str()).collect();
-    assert_eq!(slugs, ["doxology", "hosanna"], "slug order");
+    assert!(
+        slugs.contains(&"hosanna") && slugs.contains(&"doxology"),
+        "{slugs:?}"
+    );
+    let pos = |s: &str| slugs.iter().position(|c| *c == s).unwrap();
+    assert!(pos("doxology") < pos("hosanna"), "slug order: {slugs:?}");
     let one = charts.chart("hosanna".to_owned()).await.unwrap();
     assert_eq!(one.source, HOSANNA);
     assert_eq!(one.key, "A");
@@ -132,11 +140,15 @@ async fn charts_round_trip_and_a_library_collects_them() {
             charts.chart("hosanna".to_owned()).await.is_err(),
             "the chart is gone"
         );
-        assert_eq!(
-            charts.list_charts().await.unwrap().len(),
-            1,
-            "only doxology remains"
-        );
+        let after: Vec<String> = charts
+            .list_charts()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.slug)
+            .collect();
+        assert!(!after.contains(&"hosanna".to_owned()), "{after:?}");
+        assert!(after.contains(&"doxology".to_owned()), "{after:?}");
 
         let dangling = collections
             .get(library.id.clone())
@@ -198,6 +210,23 @@ async fn re_saving_a_chart_keeps_the_manifest_body() {
     assert_eq!(doc.sections, ["verse-1", "chorus"]);
 
     // An empty title is refused, and writes nothing.
+    let before = charts.list_charts().await.unwrap().len();
     assert!(charts.upsert_chart(chart("", "| A |", &[])).await.is_err());
-    assert_eq!(charts.list_charts().await.unwrap().len(), 1);
+    assert_eq!(charts.list_charts().await.unwrap().len(), before);
+}
+
+/// The seed's own chart, planted from the committed example tree and
+/// read back through the RPC a client would use. The repo's policy is
+/// that a feature lives in the suite *and* the seed; this is the half
+/// that proves the second.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_seeded_chart_is_readable_through_the_lane() {
+    let (url, _tmp) = support::boot_ws().await.unwrap();
+    let charts: ResourcesServiceClient = vox::connect_lane(&url).establish().await.unwrap();
+
+    let doc = charts.chart("track-one".to_owned()).await.unwrap();
+    assert_eq!(doc.title, "Track One");
+    assert_eq!(doc.key, "A");
+    assert_eq!(doc.sections, ["verse-1", "chorus", "bridge"]);
+    assert!(doc.source.contains("[Chorus]"), "the .kf came with it");
 }

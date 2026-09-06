@@ -638,6 +638,93 @@ pub fn wikis_of(slug: &str) -> impl Iterator<Item = &'static DeclaredWiki> + '_ 
     DECLARED_WIKIS.iter().filter(move |w| w.org == slug)
 }
 
+// ── The resource-tier assets (ADR 0003) ──────────────────────────────
+
+/// One asset the example plants under `<org>/resources/`.
+///
+/// ADR 0003 gives four kinds a home there — a Keyflow chart, a Signal
+/// patch, a Signal sample, an Ignition lighting document — and says a
+/// *library* of any of them is an ordinary `Collection` of kind
+/// `Library` over `<kind>:<slug>` references. That claim is only
+/// checkable from a planted world if the planted world actually holds
+/// one of each, so it does.
+///
+/// Planting needs no code: [`plant`] copies `Resources/**` into the
+/// org's `resources/` tier verbatim. What this declaration buys is the
+/// contract — [`declared_tests`] fails if a declared asset has no
+/// committed tree, or if its directory name drifts from the one
+/// `node_homes::library_of` resolves cross-org references through.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredAsset {
+    /// The org that holds it.
+    pub org: &'static str,
+    /// The directory under `resources/` — and therefore the
+    /// subscription slug a cross-org reader names. Fixed by
+    /// `node_homes::library_of`: `charts`, `patches`, `samples`,
+    /// `lighting`.
+    pub library: &'static str,
+    /// The node id: `chart:<slug>`, `patch:<slug>`, and so on.
+    pub slug: &'static str,
+    /// Path of the manifest under `<org>/Resources/<library>/` in the
+    /// committed tree. A chart is flat (`<slug>.md`); the other kinds
+    /// own a directory (`<slug>/patch.md`).
+    pub manifest: &'static str,
+    /// The file holding the asset's own document, beside the manifest.
+    pub body: &'static str,
+    /// One line on what this asset exists in the seed to prove.
+    pub demonstrates: &'static str,
+}
+
+/// Every resource-tier asset the example plants. One of each kind, in
+/// the studio org, tied to the album the rest of the seed is about.
+pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "charts",
+        slug: "track-one",
+        manifest: "track-one.md",
+        body: "track-one.kf",
+        demonstrates: "a Keyflow chart kept in Task between sessions — the `.kf` is the \
+                       chart, an outside editor opens it, and `chart:track-one#chorus` \
+                       addresses a section",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "patches",
+        slug: "warm-analog-pad",
+        manifest: "warm-analog-pad/patch.md",
+        body: "warm-analog-pad/patch.json",
+        demonstrates: "a Signal patch as a directory, because a patch grows sidecars — and \
+                       one with nothing bound to a File Root, which is the ordinary state \
+                       of a declared asset",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "samples",
+        slug: "room-kick-48k",
+        manifest: "room-kick-48k/sample.md",
+        body: "room-kick-48k/sample.json",
+        demonstrates: "a sample whose audio is deliberately NOT here: the manifest says what \
+                       the sample is, and the bytes belong in a File Root — which is what \
+                       keeps subscribing to a sample library cheap",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "lighting",
+        slug: "album-launch-show",
+        manifest: "album-launch-show/show.md",
+        body: "album-launch-show/show.json",
+        demonstrates: "an Ignition show, scoped `show` rather than `song` or `setlist`, \
+                       whose declared cues are the only things \
+                       `lighting:album-launch-show#cue:12` can address",
+    },
+];
+
+/// The resource-tier assets this org declares.
+pub fn assets_of(slug: &str) -> impl Iterator<Item = &'static DeclaredAsset> + '_ {
+    DECLARED_ASSETS.iter().filter(move |a| a.org == slug)
+}
+
 // ── The repo-sourced wikis ───────────────────────────────────────────
 
 /// A wiki the seed declares over a repository (`wiki.source.repo`).
@@ -1007,6 +1094,77 @@ mod declared_tests {
                 !wikis_of(w.org).any(|other| wiki_slug(other.title) == slug),
                 "{}: slug `{slug}` collides with a committed wiki",
                 w.title
+            );
+        }
+    }
+
+    /// Every declared asset has its committed tree — the manifest and
+    /// the document beside it — under the library directory ADR 0003
+    /// names.
+    #[test]
+    fn every_declared_asset_has_its_committed_files() {
+        for a in DECLARED_ASSETS {
+            assert!(
+                ORGS.iter().any(|(slug, _)| *slug == a.org),
+                "{}: org `{}` is not one the example plants",
+                a.slug,
+                a.org
+            );
+            for file in [a.manifest, a.body] {
+                let path = format!("{}/Resources/{}/{}", a.org, a.library, file);
+                assert!(
+                    STUDIO.get_file(&path).is_some(),
+                    "{}: `{path}` is not committed — {}",
+                    a.slug,
+                    a.demonstrates
+                );
+            }
+        }
+    }
+
+    /// The library directory is not decoration: it is the subscription
+    /// slug a cross-org reader names, and `node_homes::library_of` is
+    /// what maps a node kind onto it. A drift here is a cross-org
+    /// reference that silently stops resolving, so the two are pinned
+    /// against each other rather than kept in step by hand.
+    #[test]
+    fn every_asset_library_is_a_home_some_node_kind_resolves_through() {
+        use links::NodeKind;
+        for a in DECLARED_ASSETS {
+            let known = [
+                NodeKind::Song,
+                NodeKind::Sermon,
+                NodeKind::Video,
+                NodeKind::Chart,
+                NodeKind::Patch,
+                NodeKind::Sample,
+                NodeKind::Lighting,
+            ]
+            .into_iter()
+            .any(|k| crate::node_homes::library_of(k) == Some(a.library));
+            assert!(
+                known,
+                "{}: `resources/{}/` is not any node kind's home",
+                a.slug, a.library
+            );
+        }
+    }
+
+    /// A declared asset's slug is its node id, so two of one kind may
+    /// not share it — `patch:lead` must mean one patch.
+    #[test]
+    fn asset_slugs_are_distinct_within_a_library() {
+        for a in DECLARED_ASSETS {
+            assert_eq!(
+                DECLARED_ASSETS
+                    .iter()
+                    .filter(|o| o.org == a.org && o.library == a.library && o.slug == a.slug)
+                    .count(),
+                1,
+                "{}: two assets claim `{}:{}`",
+                a.slug,
+                a.library,
+                a.slug
             );
         }
     }

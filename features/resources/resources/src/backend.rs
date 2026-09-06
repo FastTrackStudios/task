@@ -16,14 +16,15 @@ use links_proto::{
     Confidence, LinksService as _, NodeKind, NodeRef, Relation, TypedLink, Visibility,
 };
 use resources_proto::{
-    ChartDoc, ChartSummary, ChartUpsert, ResourcesError, ResourcesService, SermonResource,
-    SermonSummary, SermonUpsert, TranscriptDoc,
+    ChartDoc, ChartSummary, ChartUpsert, ContentRef, LightingDoc, LightingSummary, LightingUpsert,
+    PatchDoc, PatchSummary, PatchUpsert, ResourcesError, ResourcesService, SampleDoc,
+    SampleSummary, SampleUpsert, SermonResource, SermonSummary, SermonUpsert, TranscriptDoc,
 };
 
 use crate::scripture_refs::{self, RefHit};
-use crate::types::AnnotationFile;
+use crate::types::{AnnotationFile, ResourceKind};
 use crate::walker::{LoadedResource, walk};
-use crate::{ResourceError, chart, sermon, sidecar, transcript};
+use crate::{ResourceError, chart, lighting, patch, sample, sermon, sidecar, transcript};
 
 /// `provenance.source_ref` on every link the sync mints — so a re-sync
 /// replaces only its own links, never a reader's annotations.
@@ -35,6 +36,20 @@ const SERMONS_DIR: &str = "sermons";
 /// The subtree charts live in, under the org-wide resources root
 /// (ADR 0003: `resources/charts/<slug>.kf`).
 const CHARTS_DIR: &str = "charts";
+
+/// The subtree Signal's patches live in (ADR 0003:
+/// `resources/patches/<slug>/`). The directory names in this block are
+/// fixed by `node_homes::library_of` on the server as well as by the
+/// ADR — they are the subscription slug a cross-org reader names, so
+/// renaming one silently stops cross-org resolution.
+const PATCHES_DIR: &str = "patches";
+
+/// The subtree Signal's samples live in — manifests only; the audio is
+/// in a File Root (see [`crate::sample`]).
+const SAMPLES_DIR: &str = "samples";
+
+/// The subtree Ignition's lighting documents live in.
+const LIGHTING_DIR: &str = "lighting";
 
 /// The subtree sermons live in inside a named wiki
 /// (`<org>/wikis/<wiki>/Resources/Sermons/`).
@@ -110,6 +125,139 @@ impl ResourcesBackend {
             sections: r.resource.sections.clone(),
             rel_path: self.rel(&r.path),
             updated_at: r.resource.updated_at.clone(),
+        }
+    }
+
+    // ── The directory-shaped asset lanes ─────────────────────────
+    //
+    // Patches, samples and lighting differ only in what their
+    // frontmatter says, so everything about *where a file goes* is
+    // answered once here and the three lanes below supply the fields.
+    // A directory per asset (rather than a chart's flat pair) because
+    // ADR 0003's `locate()` looks for the directory, and because these
+    // kinds grow sidecars.
+
+    /// Every manifest of one asset kind, slug-sorted.
+    fn assets(&self, dir: &str, kind: ResourceKind) -> Vec<LoadedResource> {
+        walk(self.root.join(dir))
+            .into_iter()
+            .filter(|r| r.resource.kind == kind)
+            .collect()
+    }
+
+    /// The slug an upsert lands on, and the manifest path it writes.
+    ///
+    /// A known slug keeps the file it is already in — including one a
+    /// person moved — so re-saving never forks an asset into a second
+    /// directory.
+    fn asset_slot(
+        &self,
+        dir: &str,
+        kind: ResourceKind,
+        manifest: &str,
+        slug_in: &str,
+        title: &str,
+    ) -> Result<(String, PathBuf), ResourcesError> {
+        if title.trim().is_empty() {
+            return Err(ResourcesError::BadRequest("title is empty".into()));
+        }
+        let existing = self.assets(dir, kind);
+        let taken: Vec<String> = existing.iter().map(|r| r.resource.slug.clone()).collect();
+        let slug = crate::asset::slug_for(&taken, slug_in, title);
+        // `slugify` strips every separator, so the slug can never climb
+        // out of the tier — but an all-punctuation title yields nothing
+        // to name a directory with.
+        if slug.is_empty() {
+            return Err(ResourcesError::BadRequest(format!(
+                "title {title:?} has no sluggable characters"
+            )));
+        }
+        let md_path = existing
+            .iter()
+            .find(|r| r.resource.slug == slug)
+            .map_or_else(
+                || self.root.join(dir).join(&slug).join(manifest),
+                |r| r.path.clone(),
+            );
+        Ok((slug, md_path))
+    }
+
+    /// Write a manifest and its body sidecar into the asset's
+    /// directory. The body is stored verbatim — it is the app's
+    /// document, and the server never re-renders it.
+    fn lay_down(
+        md_path: &Path,
+        md: &str,
+        body_name: &str,
+        body: &str,
+    ) -> Result<(), ResourcesError> {
+        let dir = md_path
+            .parent()
+            .ok_or_else(|| ResourcesError::Io("manifest has no directory".into()))?;
+        std::fs::create_dir_all(dir).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        std::fs::write(md_path, md).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        std::fs::write(dir.join(body_name), body).map_err(|e| ResourcesError::Io(e.to_string()))
+    }
+
+    /// One asset's body sidecar. A missing one reads as empty rather
+    /// than an error: the manifest is the asset, the body is beside it.
+    fn read_body(path: &Path) -> Result<String, ResourcesError> {
+        match std::fs::read_to_string(path) {
+            Ok(s) => Ok(s),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(ResourcesError::Io(e.to_string())),
+        }
+    }
+
+    /// The asset carrying `slug`, or `None`.
+    fn asset(&self, dir: &str, kind: ResourceKind, slug: &str) -> Option<LoadedResource> {
+        self.assets(dir, kind)
+            .into_iter()
+            .find(|r| r.resource.slug == slug)
+    }
+
+    /// The [`ContentRef`] a manifest carries — where the asset's bytes
+    /// are, in a File Root. Never followed here: this lane records the
+    /// binding and the Files lane owns what it points at.
+    fn content_of(r: &LoadedResource) -> ContentRef {
+        ContentRef {
+            root_id: r.resource.content_root.clone(),
+            path: r.resource.content_path.clone(),
+        }
+    }
+
+    /// Delete an asset's whole directory. `false` when there was
+    /// nothing there.
+    ///
+    /// Content in a File Root is untouched — this lane never owned it,
+    /// and un-declaring a sample is not the same act as destroying the
+    /// audio. References from collections are untouched too: a dangling
+    /// reference is a legible state (ADR 0003).
+    fn delete_asset(
+        &self,
+        dir: &str,
+        kind: ResourceKind,
+        slug: &str,
+    ) -> Result<bool, ResourcesError> {
+        safe_segment(slug, "slug")?;
+        let Some(found) = self.asset(dir, kind, slug) else {
+            return Ok(false);
+        };
+        let root = self.root.join(dir);
+        let removed = match found.path.parent() {
+            // The ordinary shape: the manifest owns its directory, and
+            // the directory is what goes.
+            Some(parent) if parent != root && parent.starts_with(&root) => {
+                std::fs::remove_dir_all(parent)
+            }
+            // A manifest somebody flattened into the lane root. Take
+            // the file and leave the neighbours alone.
+            _ => std::fs::remove_file(&found.path),
+        };
+        match removed {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(ResourcesError::Io(e.to_string())),
         }
     }
 
@@ -589,6 +737,210 @@ impl ResourcesService for ResourcesBackend {
         }
         Ok(true)
     }
+
+    // ── Signal: patches ──────────────────────────────────────────
+
+    fn upsert_patch(&self, doc: PatchDoc) -> Result<PatchUpsert, ResourcesError> {
+        let (slug, md_path) = self.asset_slot(
+            PATCHES_DIR,
+            ResourceKind::Patch,
+            patch::MANIFEST,
+            &doc.slug,
+            &doc.title,
+        )?;
+        let (md, created) = match std::fs::read_to_string(&md_path) {
+            Ok(old) => (
+                patch::refresh_manifest(&old, &doc).map_err(|e| io_err(&e))?,
+                false,
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+                patch::render_manifest(&doc, &slug).map_err(|e| io_err(&e))?,
+                true,
+            ),
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        Self::lay_down(&md_path, &md, patch::BODY, &doc.body)?;
+        Ok(PatchUpsert {
+            slug,
+            rel_path: self.rel(&md_path),
+            created,
+        })
+    }
+
+    fn patch(&self, slug: &str) -> Result<PatchDoc, ResourcesError> {
+        let found = self
+            .asset(PATCHES_DIR, ResourceKind::Patch, slug)
+            .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))?;
+        Ok(PatchDoc {
+            body: Self::read_body(&patch::body_path(&found.path))?,
+            content: Self::content_of(&found),
+            slug: found.resource.slug,
+            title: found.resource.title,
+            rig: found.resource.rig,
+            tags: found.resource.tags,
+            updated_at: found.resource.updated_at,
+        })
+    }
+
+    fn list_patches(&self) -> Result<Vec<PatchSummary>, ResourcesError> {
+        Ok(self
+            .assets(PATCHES_DIR, ResourceKind::Patch)
+            .iter()
+            .map(|r| PatchSummary {
+                slug: r.resource.slug.clone(),
+                title: r.resource.title.clone(),
+                rig: r.resource.rig.clone(),
+                tags: r.resource.tags.clone(),
+                rel_path: self.rel(&r.path),
+                content: Self::content_of(r),
+                updated_at: r.resource.updated_at.clone(),
+            })
+            .collect())
+    }
+
+    fn delete_patch(&self, slug: &str) -> Result<bool, ResourcesError> {
+        self.delete_asset(PATCHES_DIR, ResourceKind::Patch, slug)
+    }
+
+    // ── Signal: samples ──────────────────────────────────────────
+
+    fn upsert_sample(&self, doc: SampleDoc) -> Result<SampleUpsert, ResourcesError> {
+        let (slug, md_path) = self.asset_slot(
+            SAMPLES_DIR,
+            ResourceKind::Sample,
+            sample::MANIFEST,
+            &doc.slug,
+            &doc.title,
+        )?;
+        let (md, created) = match std::fs::read_to_string(&md_path) {
+            Ok(old) => (
+                sample::refresh_manifest(&old, &doc).map_err(|e| io_err(&e))?,
+                false,
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+                sample::render_manifest(&doc, &slug).map_err(|e| io_err(&e))?,
+                true,
+            ),
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        // Only the metadata is written. The audio was never here.
+        Self::lay_down(&md_path, &md, sample::BODY, &doc.body)?;
+        Ok(SampleUpsert {
+            slug,
+            rel_path: self.rel(&md_path),
+            created,
+        })
+    }
+
+    fn sample(&self, slug: &str) -> Result<SampleDoc, ResourcesError> {
+        let found = self
+            .asset(SAMPLES_DIR, ResourceKind::Sample, slug)
+            .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))?;
+        Ok(SampleDoc {
+            body: Self::read_body(&sample::body_path(&found.path))?,
+            content: Self::content_of(&found),
+            slug: found.resource.slug,
+            title: found.resource.title,
+            tags: found.resource.tags,
+            duration_secs: found.resource.duration_secs,
+            sample_rate: found.resource.sample_rate,
+            updated_at: found.resource.updated_at,
+        })
+    }
+
+    fn list_samples(&self) -> Result<Vec<SampleSummary>, ResourcesError> {
+        Ok(self
+            .assets(SAMPLES_DIR, ResourceKind::Sample)
+            .iter()
+            .map(|r| SampleSummary {
+                slug: r.resource.slug.clone(),
+                title: r.resource.title.clone(),
+                tags: r.resource.tags.clone(),
+                duration_secs: r.resource.duration_secs,
+                sample_rate: r.resource.sample_rate,
+                rel_path: self.rel(&r.path),
+                content: Self::content_of(r),
+                updated_at: r.resource.updated_at.clone(),
+            })
+            .collect())
+    }
+
+    fn delete_sample(&self, slug: &str) -> Result<bool, ResourcesError> {
+        self.delete_asset(SAMPLES_DIR, ResourceKind::Sample, slug)
+    }
+
+    // ── Ignition: lighting ───────────────────────────────────────
+
+    fn upsert_lighting(&self, doc: LightingDoc) -> Result<LightingUpsert, ResourcesError> {
+        // The scope is checked before anything is laid down: a word
+        // nobody can act on is refused rather than stored.
+        if !lighting::is_scope(&doc.scope) {
+            return Err(ResourcesError::BadRequest(format!(
+                "scope {:?} is not one of {}",
+                doc.scope,
+                lighting::SCOPES.join(", ")
+            )));
+        }
+        let (slug, md_path) = self.asset_slot(
+            LIGHTING_DIR,
+            ResourceKind::Lighting,
+            lighting::MANIFEST,
+            &doc.slug,
+            &doc.title,
+        )?;
+        let (md, created) = match std::fs::read_to_string(&md_path) {
+            Ok(old) => (
+                lighting::refresh_manifest(&old, &doc).map_err(|e| io_err(&e))?,
+                false,
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+                lighting::render_manifest(&doc, &slug).map_err(|e| io_err(&e))?,
+                true,
+            ),
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        Self::lay_down(&md_path, &md, lighting::BODY, &doc.body)?;
+        Ok(LightingUpsert {
+            slug,
+            rel_path: self.rel(&md_path),
+            created,
+        })
+    }
+
+    fn lighting(&self, slug: &str) -> Result<LightingDoc, ResourcesError> {
+        let found = self
+            .asset(LIGHTING_DIR, ResourceKind::Lighting, slug)
+            .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))?;
+        Ok(LightingDoc {
+            body: Self::read_body(&lighting::body_path(&found.path))?,
+            content: Self::content_of(&found),
+            slug: found.resource.slug,
+            title: found.resource.title,
+            scope: found.resource.scope,
+            cues: found.resource.cues,
+            updated_at: found.resource.updated_at,
+        })
+    }
+
+    fn list_lighting(&self) -> Result<Vec<LightingSummary>, ResourcesError> {
+        Ok(self
+            .assets(LIGHTING_DIR, ResourceKind::Lighting)
+            .iter()
+            .map(|r| LightingSummary {
+                slug: r.resource.slug.clone(),
+                title: r.resource.title.clone(),
+                scope: r.resource.scope.clone(),
+                cues: r.resource.cues.clone(),
+                rel_path: self.rel(&r.path),
+                content: Self::content_of(r),
+                updated_at: r.resource.updated_at.clone(),
+            })
+            .collect())
+    }
+
+    fn delete_lighting(&self, slug: &str) -> Result<bool, ResourcesError> {
+        self.delete_asset(LIGHTING_DIR, ResourceKind::Lighting, slug)
+    }
 }
 
 #[cfg(test)]
@@ -930,6 +1282,303 @@ mod tests {
             Err(ResourcesError::BadRequest(_))
         ));
         assert!(be.list_charts().unwrap().is_empty());
+    }
+
+    // ── The three asset lanes ────────────────────────────────────
+
+    fn patch_doc(title: &str, body: &str) -> PatchDoc {
+        PatchDoc {
+            slug: String::new(),
+            title: title.into(),
+            rig: "helix".into(),
+            tags: vec!["pad".into()],
+            body: body.into(),
+            content: ContentRef::default(),
+            updated_at: "2026-09-05T10:00:00Z".into(),
+        }
+    }
+
+    fn sample_doc(title: &str, body: &str) -> SampleDoc {
+        SampleDoc {
+            slug: String::new(),
+            title: title.into(),
+            tags: vec!["kick".into()],
+            duration_secs: 2,
+            sample_rate: 48_000,
+            body: body.into(),
+            content: ContentRef {
+                root_id: "acme-library".into(),
+                path: "Samples/Kicks/Room Kick.wav".into(),
+            },
+            updated_at: "2026-09-05T10:00:00Z".into(),
+        }
+    }
+
+    fn lighting_doc(title: &str, body: &str) -> LightingDoc {
+        LightingDoc {
+            slug: String::new(),
+            title: title.into(),
+            scope: "setlist".into(),
+            cues: vec!["12".into(), "13".into()],
+            body: body.into(),
+            content: ContentRef::default(),
+            updated_at: "2026-09-05T10:00:00Z".into(),
+        }
+    }
+
+    /// The whole patch lane against one temp tier: a directory per
+    /// patch, the body verbatim, the round trip, and the delete.
+    #[test]
+    fn patch_upsert_lays_down_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        let out = be
+            .upsert_patch(patch_doc("Warm Analog Pad", "{\"blocks\":[\"reverb\"]}"))
+            .unwrap();
+        assert_eq!(out.slug, "warm-analog-pad");
+        assert_eq!(out.rel_path, "patches/warm-analog-pad/patch.md");
+        assert!(out.created);
+
+        let base = dir.path().join("resources/patches/warm-analog-pad");
+        assert!(base.join("patch.md").is_file());
+        assert_eq!(
+            std::fs::read_to_string(base.join("patch.json")).unwrap(),
+            "{\"blocks\":[\"reverb\"]}",
+            "the definition is stored verbatim"
+        );
+
+        let back = be.patch("warm-analog-pad").unwrap();
+        assert_eq!(back.body, "{\"blocks\":[\"reverb\"]}");
+        assert_eq!(back.rig, "helix");
+        assert_eq!(back.tags, ["pad"]);
+
+        let list = be.list_patches().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].slug, "warm-analog-pad");
+
+        // A sidecar a person dropped beside the patch goes with it.
+        std::fs::write(base.join("pedalboard.jpg"), b"jpeg").unwrap();
+        assert!(be.delete_patch("warm-analog-pad").unwrap());
+        assert!(!base.exists(), "the directory is the unit");
+        assert!(
+            !be.delete_patch("warm-analog-pad").unwrap(),
+            "deleting twice is `false`, not an error"
+        );
+    }
+
+    /// Two patches titled the same are two patches; naming a slug is
+    /// how an app says "the same one again". Same rule as the chart
+    /// lane, because it is the same rule.
+    #[test]
+    fn patch_slug_collision_makes_a_second_patch() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        assert_eq!(
+            be.upsert_patch(patch_doc("Lead", "{}")).unwrap().slug,
+            "lead"
+        );
+        let second = be.upsert_patch(patch_doc("Lead", "{\"gain\":1}")).unwrap();
+        assert_eq!(second.slug, "lead-2");
+        assert_eq!(be.list_patches().unwrap().len(), 2);
+
+        let mut again = patch_doc("Lead (Bright)", "{\"gain\":2}");
+        again.slug = "lead".into();
+        let update = be.upsert_patch(again).unwrap();
+        assert_eq!(update.slug, "lead");
+        assert!(!update.created, "a named slug updates rather than forks");
+        assert_eq!(be.patch("lead").unwrap().body, "{\"gain\":2}");
+        assert_eq!(be.list_patches().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn patch_re_upsert_keeps_the_manifest_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        be.upsert_patch(patch_doc("Lead", "{}")).unwrap();
+        let md = dir.path().join("resources/patches/lead/patch.md");
+        let hand = std::fs::read_to_string(&md)
+            .unwrap()
+            .replace("## Notes", "## Notes\n- bridge pickup only\n");
+        std::fs::write(&md, hand).unwrap();
+
+        let mut next = patch_doc("Lead", "{\"gain\":3}");
+        next.slug = "lead".into();
+        next.rig = "kemper".into();
+        be.upsert_patch(next).unwrap();
+
+        let text = std::fs::read_to_string(&md).unwrap();
+        assert!(text.contains("- bridge pickup only"), "{text}");
+        assert!(
+            text.contains("rig: kemper"),
+            "app-owned rig rewritten: {text}"
+        );
+        assert_eq!(be.patch("lead").unwrap().body, "{\"gain\":3}");
+    }
+
+    /// The sample lane's whole point: the manifest is the sample, and
+    /// the audio is somewhere else entirely.
+    #[test]
+    fn sample_upsert_records_where_the_audio_is_without_touching_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        let out = be
+            .upsert_sample(sample_doc("Room Kick 48k", "{\"mic\":\"D112\"}"))
+            .unwrap();
+        assert_eq!(out.slug, "room-kick-48k");
+        assert_eq!(out.rel_path, "samples/room-kick-48k/sample.md");
+
+        let base = dir.path().join("resources/samples/room-kick-48k");
+        // Two files, and neither of them is audio.
+        let mut names: Vec<String> = std::fs::read_dir(&base)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["sample.json", "sample.md"]);
+
+        let back = be.sample("room-kick-48k").unwrap();
+        assert_eq!(back.duration_secs, 2);
+        assert_eq!(back.sample_rate, 48_000);
+        assert_eq!(back.body, "{\"mic\":\"D112\"}");
+        assert_eq!(back.content.root_id, "acme-library");
+        assert_eq!(back.content.path, "Samples/Kicks/Room Kick.wav");
+        assert!(back.content.is_bound());
+
+        // The list carries the binding too, so a library view can say
+        // which rows are playable without a read per row.
+        let list = be.list_samples().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].content.root_id, "acme-library");
+
+        assert!(be.delete_sample("room-kick-48k").unwrap());
+        assert!(!base.exists());
+    }
+
+    /// A declared sample with no bytes yet is the ordinary state, not
+    /// an error.
+    #[test]
+    fn a_sample_may_have_no_bytes_bound_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let mut doc = sample_doc("Unbound", "");
+        doc.content = ContentRef::default();
+        be.upsert_sample(doc).unwrap();
+        let back = be.sample("unbound").unwrap();
+        assert!(!back.content.is_bound());
+        assert_eq!(back.content.root_id, "");
+    }
+
+    #[test]
+    fn lighting_upsert_lays_down_a_directory_and_validates_its_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        let out = be
+            .upsert_lighting(lighting_doc("Sunday Set", "{\"cues\":[]}"))
+            .unwrap();
+        assert_eq!(out.slug, "sunday-set");
+        assert_eq!(out.rel_path, "lighting/sunday-set/show.md");
+
+        let base = dir.path().join("resources/lighting/sunday-set");
+        assert_eq!(
+            std::fs::read_to_string(base.join("show.json")).unwrap(),
+            "{\"cues\":[]}"
+        );
+
+        let back = be.lighting("sunday-set").unwrap();
+        assert_eq!(back.scope, "setlist");
+        assert_eq!(back.cues, ["12", "13"], "the cues an anchor may address");
+
+        assert_eq!(be.list_lighting().unwrap().len(), 1);
+        assert!(be.delete_lighting("sunday-set").unwrap());
+        assert!(!base.exists());
+    }
+
+    /// A scope outside the vocabulary is refused, and nothing is
+    /// written — a word nobody can act on is worse than no word.
+    #[test]
+    fn an_unknown_lighting_scope_is_refused_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        for scope in ["", "evening", "Show", "tour"] {
+            let mut doc = lighting_doc("Sunday Set", "{}");
+            doc.scope = scope.into();
+            assert!(
+                matches!(be.upsert_lighting(doc), Err(ResourcesError::BadRequest(_))),
+                "scope {scope:?} must be refused"
+            );
+        }
+        assert!(be.list_lighting().unwrap().is_empty());
+        assert!(!dir.path().join("resources/lighting").exists());
+
+        // And each of the three is accepted.
+        for scope in lighting::SCOPES {
+            let mut doc = lighting_doc(&format!("Set {scope}"), "{}");
+            doc.scope = (*scope).into();
+            assert!(be.upsert_lighting(doc).is_ok(), "{scope} is a scope");
+        }
+        assert_eq!(be.list_lighting().unwrap().len(), 3);
+    }
+
+    /// The same refusal in all three lanes: an empty title, and a title
+    /// with nothing sluggable in it, name no file.
+    #[test]
+    fn an_asset_without_a_usable_title_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        for title in ["   ", "—"] {
+            assert!(matches!(
+                be.upsert_patch(patch_doc(title, "{}")),
+                Err(ResourcesError::BadRequest(_))
+            ));
+            assert!(matches!(
+                be.upsert_sample(sample_doc(title, "{}")),
+                Err(ResourcesError::BadRequest(_))
+            ));
+            assert!(matches!(
+                be.upsert_lighting(lighting_doc(title, "{}")),
+                Err(ResourcesError::BadRequest(_))
+            ));
+        }
+        assert!(be.list_patches().unwrap().is_empty());
+        assert!(be.list_samples().unwrap().is_empty());
+        assert!(be.list_lighting().unwrap().is_empty());
+    }
+
+    /// The lanes do not see each other: three kinds under one tier,
+    /// each listing only its own.
+    #[test]
+    fn the_lanes_do_not_see_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        be.upsert_patch(patch_doc("Lead", "{}")).unwrap();
+        be.upsert_sample(sample_doc("Room Kick", "{}")).unwrap();
+        be.upsert_lighting(lighting_doc("Sunday Set", "{}"))
+            .unwrap();
+        be.upsert_chart(chart_doc("Hosanna", "| A |")).unwrap();
+
+        assert_eq!(be.list_patches().unwrap().len(), 1);
+        assert_eq!(be.list_samples().unwrap().len(), 1);
+        assert_eq!(be.list_lighting().unwrap().len(), 1);
+        assert_eq!(be.list_charts().unwrap().len(), 1);
+        assert!(matches!(
+            be.patch("room-kick"),
+            Err(ResourcesError::NotFound(_))
+        ));
+    }
+
+    /// A slug that tries to climb out of its lane is refused before
+    /// anything is removed.
+    #[test]
+    fn delete_refuses_a_traversing_slug() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        assert!(matches!(
+            be.delete_patch("../charts"),
+            Err(ResourcesError::BadRequest(_))
+        ));
     }
 
     #[test]

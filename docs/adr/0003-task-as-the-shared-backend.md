@@ -139,6 +139,23 @@ machinery that is built, rather than through machinery that would have to be.
 A sample *library* is not a fifth kind — it is a `Collection` of kind
 `Library` over `Sample` nodes, which is the point of having the collection.
 
+**The manifest is under `resources/`; the bytes are in a File Root.** An
+asset's home holds what it *is* — the identity a `patch:` or `sample:`
+reference addresses, its metadata, and a `ContentRef` naming where its
+content sits. The content itself belongs to the Files layer, which is the
+only layer that has large-content versioning, selective sync by facet with
+dehydrated stubs that hydrate on access, renditions (Peaks waveforms, audio
+proxies) and flow-controlled chunked streaming. `files.sync.selective`
+makes the case for exactly these lanes — "Atomic facets bring their
+dependencies — a session arrives with the media it references, because one
+that streams in on first play will glitch" — which is a patch and the
+samples it plays.
+
+This is the split `Deliverable` already makes, and it is what keeps a
+cross-organisation sample library usable: subscribing to one moves
+manifests, not gigabytes. Putting the audio in `resources/` would make
+every subscriber pull all of it to read a list of names.
+
 ### 4. The apps are clients, not backends
 
 An app reaches Task the way Task's own web client does, and gains nothing

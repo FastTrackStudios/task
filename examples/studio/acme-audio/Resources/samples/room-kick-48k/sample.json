@@ -1,0 +1,7 @@
+{
+  "captured": "2026-08-14",
+  "room": "ACME Live Room",
+  "mic": "AKG D112",
+  "preamp": "API 512c",
+  "notes": "One hit, no processing. The audio is not in this directory — see content_root / content_path in sample.md."
+}

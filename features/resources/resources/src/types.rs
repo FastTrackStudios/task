@@ -20,6 +20,15 @@ pub enum ResourceKind {
     /// A Keyflow chart — the manifest sits beside a `<slug>.kf` holding
     /// the chart source verbatim.
     Chart,
+    /// A Signal patch — `patches/<slug>/patch.md`, with the definition
+    /// beside it as `patch.json` (ADR 0003).
+    Patch,
+    /// A Signal sample — `samples/<slug>/sample.md`. The manifest is
+    /// the sample; the audio lives in a File Root.
+    Sample,
+    /// An Ignition lighting document — `lighting/<slug>/show.md`, whose
+    /// cues are the anchors a `lighting:<slug>#cue:12` reference names.
+    Lighting,
     Pdf,
     Book,
     Video,
@@ -91,6 +100,27 @@ pub struct Resource {
     /// a `chart:<slug>#chorus` reference addresses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
+    /// The rig a patch is written for (`helix`, `kemper`, `serum`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rig: String,
+    /// A sample's rate in Hz (`48000`); `0` when unknown.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub sample_rate: u32,
+    /// What a lighting document covers: `song`, `setlist` or `show`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+    /// Cue labels in show order — the anchors a
+    /// `lighting:<slug>#cue:<label>` reference addresses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cues: Vec<String>,
+    /// File Root the asset's bytes live in, when any are bound. The
+    /// manifest declares what a thing is; the Files layer owns its
+    /// content (`resources_proto::ContentRef`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_root: String,
+    /// Root-relative path of those bytes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_path: String,
     /// When the owning app last changed the resource (`RFC 3339`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub updated_at: String,
@@ -98,6 +128,11 @@ pub struct Resource {
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 

@@ -28,6 +28,7 @@
 mod admin;
 mod agent;
 mod api;
+mod asset;
 mod auth;
 #[cfg(feature = "plugin-fitness")]
 mod body;
@@ -53,6 +54,7 @@ mod intake;
 mod issue;
 mod json_out;
 mod label;
+mod lighting;
 // pantry/intake reuse location's client helpers, so the module
 // compiles whenever any of the three owners is in.
 #[cfg(any(
@@ -75,6 +77,7 @@ mod org_ctx;
 mod files;
 #[cfg(any(feature = "plugin-mealplan", feature = "plugin-fitness"))]
 mod pantry;
+mod patch;
 mod plan;
 mod project;
 #[cfg(feature = "plugin-mealplan")]
@@ -88,6 +91,7 @@ mod recipe_import;
 #[cfg(feature = "plugin-wiki")]
 mod resources;
 mod runner;
+mod sample;
 mod session_store;
 mod setup;
 mod shared;
@@ -260,6 +264,21 @@ enum Commands {
     /// same four RPCs Keyflow itself calls (ADR 0003).
     #[command(subcommand)]
     Chart(chart::ChartCmd),
+    /// Signal patches kept in the org's resources tier
+    /// (`resources/patches/<slug>/`) — save, read, list, delete
+    /// (ADR 0003).
+    #[command(subcommand)]
+    Patch(patch::PatchCmd),
+    /// Signal samples — the manifests, not the audio. A sample's bytes
+    /// live in a File Root and the manifest names them
+    /// (`resources/samples/<slug>/`, ADR 0003).
+    #[command(subcommand)]
+    Sample(sample::SampleCmd),
+    /// Ignition lighting for a song, a setlist or a show
+    /// (`resources/lighting/<slug>/`) — save, read, list, delete
+    /// (ADR 0003).
+    #[command(subcommand)]
+    Lighting(lighting::LightingCmd),
     /// The Resource Library — `sermons sync` turns a YouTube channel's
     /// message videos into sermon resources (video + captions) with
     /// scripture backlinks. Cron-friendly; no model involved.
@@ -823,6 +842,15 @@ async fn run(cli: Cli) -> eyre::Result<()> {
         }
         Commands::Chart(cmd) => {
             return chart::run_chart(cmd, cli.org.as_deref()).await;
+        }
+        Commands::Patch(cmd) => {
+            return patch::run_patch(cmd, cli.org.as_deref()).await;
+        }
+        Commands::Sample(cmd) => {
+            return sample::run_sample(cmd, cli.org.as_deref()).await;
+        }
+        Commands::Lighting(cmd) => {
+            return lighting::run_lighting(cmd, cli.org.as_deref()).await;
         }
         #[cfg(feature = "plugin-wiki")]
         Commands::Resources(cmd) => {
