@@ -1004,11 +1004,10 @@ mod body_renderer_tests {
         // embed rendered as a broken `<img>`.
         let seen = std::cell::RefCell::new(String::new());
         {
-            let r = Renderer::new("/guide", vec!["chords".to_owned()])
-                .body_renderer(|md| {
-                    seen.borrow_mut().push_str(md);
-                    String::new()
-                });
+            let r = Renderer::new("/guide", vec!["chords".to_owned()]).body_renderer(|md| {
+                seen.borrow_mut().push_str(md);
+                String::new()
+            });
             r.render(&note("![[chords]]"));
         }
         let seen = seen.into_inner();

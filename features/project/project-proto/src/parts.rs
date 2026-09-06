@@ -185,6 +185,14 @@ pub enum Capability {
     MusicProduction,
     /// Footage, proxies, cuts, renders. Resolve and Premiere layouts.
     VideoProduction,
+    /// Setlists, songs, playback — the Session surface.
+    Session,
+    /// Rigs, patches, sample libraries — the Signal surface.
+    Signal,
+    /// Lighting for a song, a setlist or a show — the Ignition surface.
+    Ignition,
+    /// Charts — the Keyflow surface.
+    Keyflow,
 }
 
 impl Capability {
@@ -194,6 +202,10 @@ impl Capability {
         match self {
             Self::MusicProduction => "music-production",
             Self::VideoProduction => "video-production",
+            Self::Session => "session",
+            Self::Signal => "signal",
+            Self::Ignition => "ignition",
+            Self::Keyflow => "keyflow",
         }
     }
 
@@ -204,6 +216,10 @@ impl Capability {
         match s.trim().to_ascii_lowercase().as_str() {
             "music-production" | "music_production" => Some(Self::MusicProduction),
             "video-production" | "video_production" => Some(Self::VideoProduction),
+            "session" => Some(Self::Session),
+            "signal" => Some(Self::Signal),
+            "ignition" => Some(Self::Ignition),
+            "keyflow" => Some(Self::Keyflow),
             _ => None,
         }
     }
