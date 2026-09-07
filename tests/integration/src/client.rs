@@ -198,6 +198,33 @@ impl Session {
         self.establish().await
     }
 
+    /// The resources tier — sermons, and ADR 0003's four asset lanes
+    /// (`resources/charts/`, `patches/`, `samples/`, `lighting/`).
+    ///
+    /// This is the lane a sibling app is a client of: Keyflow saving a
+    /// chart calls exactly this, with an ordinary token, through the
+    /// same permits as everything else. Which is why the chapters that
+    /// use it establish it here rather than touching
+    /// `org.resources` — "an app gains nothing extra by being
+    /// first-party" is a claim about the wire.
+    pub async fn resources(&self) -> resources_proto::ResourcesServiceClient {
+        self.establish().await
+    }
+
+    /// The ordered collections — a `Library`, a `Setlist`, a `Show`.
+    ///
+    /// ADR 0003 builds nothing new for libraries, so a library of
+    /// charts is this lane and no other.
+    pub async fn collections(&self) -> collection_proto::CollectionServiceClient {
+        self.establish().await
+    }
+
+    /// The typed-link store, and with it `resolve_nodes` — whether a
+    /// reference naming another org may be followed.
+    pub async fn links(&self) -> links_proto::LinksServiceClient {
+        self.establish().await
+    }
+
     /// The replica lane: the commit graph and the chunks under it.
     ///
     /// A peer host calls this, not a person — but it is signed with a
@@ -290,4 +317,7 @@ signable!(
     wiki_proto::service::pages::PagesClient,
     wiki_proto::service::subscriptions::SubscriptionsClient,
     wiki_proto::service::edits::EditsClient,
+    resources_proto::ResourcesServiceClient,
+    collection_proto::CollectionServiceClient,
+    links_proto::LinksServiceClient,
 );

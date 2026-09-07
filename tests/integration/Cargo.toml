@@ -24,6 +24,13 @@ task-proto = { workspace = true }
 # The wiki lane: registry, pages, subscriptions and Edit Requests, all
 # reached as a signed-in person on the org router.
 wiki-proto = { workspace = true }
+# ADR 0003's three halves, reached over the wire like everything else:
+# the asset tier (`resources/charts/…`), the collections that gather it
+# into a Library or a Setlist, and the resolver that says whether a
+# reference naming another org may be followed.
+resources-proto = { workspace = true, features = ["vox"] }
+collection-proto = { workspace = true, features = ["vox"] }
+links-proto = { workspace = true, features = ["vox"] }
 task = { workspace = true }
 project = { workspace = true }
 pollster = { workspace = true }
