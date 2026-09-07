@@ -23,11 +23,19 @@
 //! static `TASK_MCP_TOKEN` or a real architect-auth session token
 //! (same rule as [`crate::watch_bridge`]).
 //!
-//! **Safety**: v1 exposes no deletion. Tasks are completed by status
-//! change, events are cancelled explicitly, and captures land as
-//! `suggested` for one-tap acceptance unless the caller opts out —
+//! **Safety**: the vault lane exposes no deletion. Tasks are completed
+//! by status change, events are cancelled explicitly, and captures land
+//! as `suggested` for one-tap acceptance unless the caller opts out —
 //! an agent should be able to propose freely without polluting a
 //! trusted queue.
+//!
+//! The one deletion here is `delete_chart`, and it is deliberate: a
+//! chart is an app's own document rather than a commitment in the
+//! user's vault, and the app that owns it (Keyflow) needs the full
+//! CRUD its UI offers. It is also the recoverable kind of delete — the
+//! `chart:<slug>` references pointing at it survive, unresolved (ADR
+//! 0003). See [`chart_tool_catalog`] for why that lane is on HTTP at
+//! all when vox is the transport ADR 0003 names.
 
 use axum::{
     Json,
@@ -885,16 +893,40 @@ pub fn tool_catalog() -> Vec<ToolDef> {
 /// what lets a `Library` collection hold one (ADR 0003).
 ///
 /// The descriptions teach the loop: `list_charts` before guessing a
-/// slug, `read_chart` before rewriting one, and sections declared
-/// explicitly because nothing on the server parses chart source.
+/// slug, `read_chart` before rewriting one, `delete_chart` when a chart
+/// is retired, and sections declared explicitly because nothing on the
+/// server parses chart source.
+///
+/// **Why these four tools also exist on plain HTTP.** ADR 0003 makes
+/// the sibling apps ordinary clients of Task, and the transport it
+/// names is vox over a WebSocket — the same lane Task's own web client
+/// rides, typed end to end. Keyflow cannot take that lane *yet*: it
+/// pins architect v0.0.2 while Task is on v0.7.1, and two architect
+/// majors in one wasm binary means two reqwest majors, which fails at
+/// link time with duplicate `intounderlyingsource_*` symbols out of
+/// rust-lld (Keyflow's own `apps/web/Cargo.toml` documents the
+/// failure). Until that pin moves, a browser app that can only reach
+/// Task with `fetch` and a bearer token needs a surface that is
+/// `fetch` and a bearer token — and MCP over Streamable HTTP already
+/// is one, authenticated and org-resolved for every other tool here.
+///
+/// So this is a bridge, not a second API. The tools are thin wrappers
+/// over the very same `ResourcesService` methods (`upsert_chart`,
+/// `chart`, `list_charts`, `delete_chart`) the vox lane mounts: a
+/// chart written through MCP is byte-for-byte the chart the vox lane
+/// reads, because there is only one chart store and neither lane owns
+/// it. When Keyflow's architect pin moves, it should move to vox and
+/// these tools stay for what they were built for — agents.
 fn chart_tool_catalog() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "list_charts",
             plugin: "core",
             description: "List the org's Keyflow charts: slug, title, key, notation, section \
-                          names and when each was last written. Call this FIRST — read_chart \
-                          and write_chart take a `slug` from here, and a chart is referenced \
+                          names and when each was last written. The chart SOURCE is not here \
+                          — a listing must not carry every chart's full text; read_chart \
+                          fetches one. Call this FIRST: read_chart, write_chart and \
+                          delete_chart take a `slug` from here, and a chart is referenced \
                           elsewhere in the graph as `chart:<slug>`.",
             schema: || obj(json!({}), &[]),
         },
@@ -939,6 +971,23 @@ fn chart_tool_catalog() -> Vec<ToolDef> {
                         }),
                     }),
                     &["title", "source"],
+                )
+            },
+        },
+        ToolDef {
+            name: "delete_chart",
+            plugin: "core",
+            description: "Delete one chart: its manifest and its `.kf` source both go. \
+                          Returns `deleted: false` when there was nothing there — deleting \
+                          twice is not an error, because a second tab hitting delete should \
+                          not see a failure. A `chart:<slug>` reference held by a collection \
+                          is left alone: the reference outlives the chart and reads as \
+                          unresolved, which is a legible state, not an error (ADR 0003). \
+                          Take the `slug` from list_charts.",
+            schema: || {
+                obj(
+                    json!({ "slug": s_("Chart slug to delete, from list_charts.") }),
+                    &["slug"],
                 )
             },
         },
@@ -3636,11 +3685,18 @@ fn call_tool(
 // ── Chart tools ──────────────────────────────────────────────────
 
 /// The tools [`chart_tool`] answers; must match [`chart_tool_catalog`].
-const CHART_TOOLS: &[&str] = &["list_charts", "read_chart", "write_chart"];
+const CHART_TOOLS: &[&str] = &["list_charts", "read_chart", "write_chart", "delete_chart"];
 
 /// One chart tool call, straight onto the org's resources backend —
 /// the same `ResourcesService` the vox lane mounts, so a chart written
 /// here is the chart Keyflow reads.
+///
+/// Nothing is reimplemented here: each arm is argument decoding, one
+/// RPC, and a JSON shape. That is the whole point of the lane (see
+/// [`chart_tool_catalog`]) — the HTTP surface exists because Keyflow
+/// cannot link a vox client yet, not because charts need a second
+/// implementation. `org` never appears in these arms: the account lane
+/// resolved it before dispatch and handed us the `OrgAppState`.
 fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value, ToolFailure> {
     use resources_proto::{ChartDoc, ResourcesService as _};
 
@@ -3675,8 +3731,9 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
             Ok(json!({
                 "count": out.len(),
                 "charts": out,
-                "note": "Pass `slug` to read_chart / write_chart. `node` is how a collection \
-                         or a link references the chart.",
+                "note": "No `source` here — read_chart fetches one chart's text. Pass `slug` \
+                         to read_chart / write_chart / delete_chart. `node` is how a \
+                         collection or a link references the chart.",
             }))
         }
 
@@ -3720,6 +3777,28 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 "rel_path": out.rel_path,
                 "created": out.created,
                 "node": format!("chart:{}", out.slug),
+            }))
+        }
+
+        "delete_chart" => {
+            let slug = required_str(args, "slug")?;
+            // `false` is the honest answer for "there was nothing
+            // there", not a NotFound: delete is idempotent, and a
+            // second delete from a second tab is a normal race, not a
+            // failure the model should try to recover from.
+            let deleted = charts
+                .delete_chart(&slug)
+                .map_err(|e| chart_err("delete chart", &slug, &e))?;
+            Ok(json!({
+                "slug": slug,
+                "deleted": deleted,
+                "note": if deleted {
+                    "The manifest and its .kf source are gone. Any chart:<slug> reference a \
+                     collection still holds is kept and now reads as unresolved."
+                } else {
+                    "No chart had that slug — nothing was deleted. Call list_charts to see \
+                     what is there."
+                },
             }))
         }
 
