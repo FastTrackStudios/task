@@ -73,9 +73,47 @@ pub struct CreateOrgRequest {
     pub is_home: bool,
 }
 
+/// Ask the server for the caller's own personal org.
+///
+/// Carries only the token: the slug is derived from the principal, never
+/// chosen by the caller. That is the whole difference between this and
+/// [`CreateOrgRequest`] — a caller who could name the org could claim any
+/// slug on the server, which is why `create_org` is fenced to home-org
+/// users and this is not.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[repr(C)]
+pub struct PersonalOrgRequest {
+    /// A session token from the home org, or an access token from the
+    /// central issuer. Never empty — there is no bootstrap path here.
+    pub session_token: String,
+}
+
 /// Server-management surface. Mounted at `/server/vox`.
 #[architect::rpc]
 pub trait OrgManagementService {
+    /// The caller's personal org, creating it on first call.
+    ///
+    /// A person who signs into any sibling app with a fresh
+    /// FastTrackStudio account belongs to no org, and so has nowhere to
+    /// save anything — `memberships::role_for` returns `None` everywhere
+    /// and every lane refuses, correctly. This is the one call that
+    /// answers that state: it scaffolds an org whose slug is derived
+    /// from the principal, writes the owner membership row, and returns
+    /// it.
+    ///
+    /// Idempotent. Calling it twice returns the same org, because the
+    /// slug is a function of the principal rather than of the request.
+    /// A caller that already has a personal org pays a membership
+    /// lookup and nothing else.
+    ///
+    /// It grants exactly one org, to the account that asked, and cannot
+    /// be pointed at anyone else's slug — so unlike `create_org` it is
+    /// safe to expose to any valid token.
+    fn ensure_personal_org(
+        &self,
+        req: PersonalOrgRequest,
+    ) -> Result<OrgManifest, OrgManagementError>;
+
     /// Scaffold a new org under `<data_root>/orgs/<slug>/`,
     /// create + migrate its per-org SQLite DBs, and hot-add it
     /// to the live dispatcher so the next request to

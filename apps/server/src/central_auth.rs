@@ -365,6 +365,21 @@ impl CentralAuth {
         );
     }
 
+    /// [`Self::remember_for_test`], carrying the email too — for the
+    /// personal-org suite, where the email is what the org slug is
+    /// named after and so cannot be left out of the fixture.
+    #[doc(hidden)]
+    pub fn remember_profile_for_test(&self, token: &str, user_id: &str, email: Option<&str>) {
+        self.remember(
+            token,
+            Some(CentralProfile {
+                user_id: user_id.to_owned(),
+                email: email.map(ToOwned::to_owned),
+                name: None,
+            }),
+        );
+    }
+
     fn remember(&self, token: &str, profile: Option<CentralProfile>) {
         let Ok(mut cache) = self.cache.lock() else {
             return;
@@ -568,6 +583,43 @@ pub async fn home_principal(state: &crate::AppState, token: &str) -> Option<uuid
             None
         }
     }
+}
+
+/// Who this token belongs to, with no membership fence.
+///
+/// The one caller is personal-org provisioning, which exists precisely
+/// for the principal [`home_principal`] refuses: a valid account holding
+/// no membership row anywhere. Asking "who are you" without also asking
+/// "do you belong here" is safe only because the single caller grants
+/// the asker an org of their own and can reach nothing else — do not
+/// reuse it as an authorization check, which is what `home_principal`
+/// and `role_for` are for.
+///
+/// Same order as [`home_principal`]: the local store first, so a token
+/// minted here never costs a round trip, then the issuer. The email is
+/// a naming hint for the org slug and may be absent; the id is what
+/// the membership row keys on.
+pub async fn identify_unfenced(
+    state: &crate::AppState,
+    token: &str,
+) -> Option<(uuid::Uuid, Option<String>)> {
+    if token.is_empty() {
+        return None;
+    }
+    let home = state.home_identity.as_ref()?;
+    if let Ok(bundle) = home
+        .auth
+        .auth
+        .current_session(architect_auth::commands::CurrentSession {
+            token: token.to_owned(),
+        })
+        .await
+    {
+        return Some((bundle.user.id, bundle.user.email));
+    }
+    let profile = configured()?.profile_for(token).await?;
+    let user_id = profile.user_id.parse::<uuid::Uuid>().ok()?;
+    Some((user_id, profile.email))
 }
 
 /// Ask the issuer when nothing local knows the token.
