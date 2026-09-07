@@ -1720,11 +1720,12 @@ pub(crate) async fn build_org_state(
         // JSONL at `<org>/collections.jsonl` (override via
         // `TASK_SERVER_COLLECTIONS_PATH`, mirroring the vault-root override
         // so tests can isolate it). A missing file is an empty store.
+        // The path itself is `example_org::collections_path` — the
+        // seeder writes the planted Library and Setlist there, and a
+        // second spelling here would serve an empty store over a world
+        // that had been planted correctly.
         #[cfg(feature = "plugin-fasttrackstudio")]
-        let collections_path = std::env::var("TASK_SERVER_COLLECTIONS_PATH")
-            .map_or_else(|_| org_root.path().join("collections.jsonl"), PathBuf::from);
-        #[cfg(feature = "plugin-fasttrackstudio")]
-        let collections = collection::Store::open(collections_path);
+        let collections = collection::Store::open(example_org::collections_path(&org_root));
         // Keep `note → verse` + `note → note` links live as notes are
         // saved: a background task syncs each changed note's
         // `[[wikilinks]]` into the store.

@@ -174,6 +174,195 @@ async fn demo_plants_adopted_roots_with_video_deliverables() -> eyre::Result<()>
     Ok(())
 }
 
+/// ADR 0003's resource tier, after a real plant.
+///
+/// `example_org::declared_tests` proves the committed tree holds every
+/// declared asset. That is a statement about the *repository*, and the
+/// gap it leaves is the one that actually bites: `plant` maps
+/// `Resources/**` onto the org's `resources/` tier by a rule written
+/// somewhere else, so a change to that mapping — or to the directory a
+/// lane reads — leaves the seed passing its own tests while a demo user
+/// finds an empty library.
+///
+/// So this asserts the three things that must agree, against a plant
+/// that really ran:
+///
+/// - the files are **on disk** where `resources/<library>/…` says;
+/// - the manifest **parses through the lane's own read RPC**, which is
+///   what the app and the CLI call — a file that exists and does not
+///   deserialise is worse than a missing one, because nothing reports
+///   it;
+/// - the library directory is exactly `node_homes::library_of(kind)`,
+///   the string a cross-org reader subscribes to. Drift there is a
+///   reference that silently stops resolving, which is the failure ADR
+///   0003 is most careful about.
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
+    use links_proto::NodeKind;
+    use resources_proto::ResourcesService;
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(tmp.path(), slug)?;
+
+    let org = org_proto::DataRoot::new(tmp.path().to_owned()).org(slug);
+    let resources = org.resources_dir();
+    let lane = resources::ResourcesBackend::new(&resources);
+
+    let declared: Vec<_> = task_server::example_org::assets_of(slug).collect();
+    eyre::ensure!(
+        !declared.is_empty(),
+        "the example declares assets for {slug}"
+    );
+
+    for a in declared {
+        // The directory is the subscription slug, so it is derived from
+        // the node kind rather than trusted from the declaration.
+        let kind = [
+            NodeKind::Chart,
+            NodeKind::Patch,
+            NodeKind::Sample,
+            NodeKind::Lighting,
+        ]
+        .into_iter()
+        .find(|k| task_server::node_homes::library_of(*k) == Some(a.library))
+        .unwrap_or_else(|| panic!("{}: `{}` is no asset kind's home", a.slug, a.library));
+
+        let home = resources.join(a.library);
+        for file in [a.manifest, a.body] {
+            let path = home.join(file);
+            assert!(
+                path.is_file(),
+                "{}: not planted at {} — {}",
+                a.slug,
+                path.display(),
+                a.demonstrates
+            );
+        }
+
+        // The shape each lane writes: a chart is flat beside its `.kf`
+        // source, everything else owns a directory because it grows
+        // sidecars.
+        match kind {
+            NodeKind::Chart => assert!(
+                home.join(format!("{}.kf", a.slug)).is_file(),
+                "{}: the chart source is not `charts/{}.kf`",
+                a.slug,
+                a.slug
+            ),
+            _ => assert!(
+                home.join(a.slug).is_dir(),
+                "{}: `{}/{}` is not a directory",
+                a.slug,
+                a.library,
+                a.slug
+            ),
+        }
+
+        // And it reads back through the RPC the apps call.
+        let read = match kind {
+            NodeKind::Chart => lane.chart(a.slug).map(|c| (c.slug, c.title)),
+            NodeKind::Patch => lane.patch(a.slug).map(|p| (p.slug, p.title)),
+            NodeKind::Sample => lane.sample(a.slug).map(|s| (s.slug, s.title)),
+            NodeKind::Lighting => lane.lighting(a.slug).map(|l| (l.slug, l.title)),
+            other => panic!("{}: {other:?} has no read lane", a.slug),
+        };
+        let (read_slug, title) =
+            read.unwrap_or_else(|e| panic!("{}: planted and unreadable: {e}", a.slug));
+        assert_eq!(read_slug, a.slug, "the manifest disagrees about its slug");
+        assert!(!title.is_empty(), "{}: planted without a title", a.slug);
+    }
+
+    // And each lane's listing finds every one of its own, which is what
+    // a library screen opens with.
+    for (library, listed) in [
+        ("charts", lane.list_charts()?.len()),
+        ("patches", lane.list_patches()?.len()),
+        ("samples", lane.list_samples()?.len()),
+        ("lighting", lane.list_lighting()?.len()),
+    ] {
+        let declared = task_server::example_org::assets_of(slug)
+            .filter(|a| a.library == library)
+            .count();
+        assert!(
+            listed >= declared,
+            "resources/{library}/: {declared} declared, {listed} listed"
+        );
+    }
+    Ok(())
+}
+
+/// The seeded collections — a `Library` and a `Setlist` that a demo
+/// user can open, holding the assets above.
+///
+/// Four assets and no collection would leave ADR 0003's third decision
+/// ("a library is a collection; an asset is a node") planted as four
+/// orphans. These are written at plant time through the real store, so
+/// what is asserted here is what the `CollectionService` serves.
+#[cfg(feature = "plugin-fasttrackstudio")]
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_the_collections_that_gather_the_assets() -> eyre::Result<()> {
+    use collection_proto::CollectionService as _;
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    // SAFETY: nextest runs one process per test.
+    unsafe {
+        std::env::set_var("TASK_DEMO_NO_BIBLE", "1");
+        // The seeder and the server agree on this path through
+        // `example_org::collections_path`; leave it to the default so
+        // the test reads whatever that agreement produces.
+        std::env::remove_var("TASK_SERVER_COLLECTIONS_PATH");
+    }
+    plant(tmp.path(), slug)?;
+
+    let org = org_proto::DataRoot::new(tmp.path().to_owned()).org(slug);
+    let store = collection::Store::open(task_server::example_org::collections_path(&org));
+    let held = store
+        .list(slug.to_owned(), None)
+        .map_err(|e| eyre::eyre!("list collections: {e}"))?;
+
+    for d in task_server::example_org::collections_of(slug) {
+        let found = held
+            .iter()
+            .find(|c| c.title == d.title)
+            .unwrap_or_else(|| panic!("`{}` was not planted — {}", d.title, d.demonstrates));
+        assert_eq!(found.kind.as_str(), d.kind);
+        let items: Vec<(String, String)> = found
+            .items
+            .iter()
+            .map(|i| (i.node.kind.as_str().to_owned(), i.node.id.clone()))
+            .collect();
+        let declared: Vec<(String, String)> = d
+            .items
+            .iter()
+            .map(|(k, id)| ((*k).to_owned(), (*id).to_owned()))
+            .collect();
+        assert_eq!(
+            items, declared,
+            "`{}`: the planted order is not the declared one",
+            d.title
+        );
+        // Every item is local — a planted collection names this org's
+        // own nodes, and the cross-org half is the suite's chapter.
+        assert!(found.items.iter().all(|i| i.node.is_local()));
+    }
+
+    // A replant tops up rather than planting a second copy.
+    plant(tmp.path(), slug)?;
+    let again = collection::Store::open(task_server::example_org::collections_path(&org))
+        .list(slug.to_owned(), None)
+        .map_err(|e| eyre::eyre!("list collections: {e}"))?;
+    assert_eq!(
+        again.len(),
+        held.len(),
+        "a replant duplicated the planted collections"
+    );
+    Ok(())
+}
+
 /// The seeded booking the finance integration is written against.
 ///
 /// The repo's policy is that a feature lives in the suite *and* in the
