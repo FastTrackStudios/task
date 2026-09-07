@@ -1,0 +1,9 @@
+{
+  "console": "grandMA3",
+  "cues": [
+    { "label": "1", "at": "house", "note": "House at 60%, haze up." },
+    { "label": "12", "at": "track-one/chorus", "note": "Warm wash, key light on the singer." },
+    { "label": "13", "at": "track-one/bridge", "note": "Strobe out, backlight only." },
+    { "label": "27", "at": "walkout", "note": "House up full." }
+  ]
+}

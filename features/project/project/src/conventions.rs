@@ -43,6 +43,10 @@ pub fn convention_of(capability: Capability) -> Convention {
     match capability {
         Capability::MusicProduction => Convention::MusicProduction,
         Capability::VideoProduction => Convention::VideoProduction,
+        Capability::Session => Convention::Session,
+        Capability::Signal => Convention::Signal,
+        Capability::Ignition => Convention::Ignition,
+        Capability::Keyflow => Convention::Keyflow,
     }
 }
 

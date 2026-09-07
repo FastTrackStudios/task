@@ -1,0 +1,10 @@
+{
+  "console": "grandMA3",
+  "song": "track-one",
+  "cues": [
+    { "label": "1", "at": "verse-1", "note": "Blue wash, singer in a tight special." },
+    { "label": "2", "at": "chorus", "note": "Full front wash, warm; haze holds." },
+    { "label": "3", "at": "bridge", "note": "Backlight only, chase on the drum riser." },
+    { "label": "4", "at": "out", "note": "Snap to black on the last hit." }
+  ]
+}

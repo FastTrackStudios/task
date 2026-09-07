@@ -27,6 +27,14 @@ use std::collections::BTreeMap;
 pub enum Capability {
     MusicProduction,
     VideoProduction,
+    /// Session — setlists, songs, playback.
+    Session,
+    /// Signal — rigs, patches, sample libraries.
+    Signal,
+    /// Ignition — lighting for a song, a setlist or a show.
+    Ignition,
+    /// Keyflow — charts.
+    Keyflow,
 }
 
 /// A named class of content.
@@ -223,6 +231,14 @@ fn layouts_for(capability: Capability) -> &'static [&'static [ToolDir]] {
     match capability {
         Capability::MusicProduction => &[PRO_TOOLS, REAPER, LOGIC],
         Capability::VideoProduction => &[RESOLVE],
+        // The four sibling apps declare no tool-directory layouts: none
+        // of them writes a session folder into a project tree the way a
+        // DAW or Resolve does. Their material is addressed as nodes
+        // under `resources/` instead (ADR 0003). When one of them grows
+        // a scratch layout, it is declared here.
+        Capability::Session | Capability::Signal | Capability::Ignition | Capability::Keyflow => {
+            &[]
+        }
     }
 }
 

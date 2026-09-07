@@ -60,14 +60,23 @@ use task_server::{AppState, AuthState, capability::ServerKeypair};
 /// in `apps/server` rather than here.
 static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Open this data root's auth store, creating it on first call.
+/// Open this org's auth store on `data`, creating it on first call.
 ///
 /// A file rather than `sqlite::memory:`, so a restart comes back to the
 /// same accounts. A test that has to re-hire everybody after a restart
 /// cannot ask whether a token still works, and "does a session survive
 /// the server" is a question about the product.
-async fn open_auth(data: &Path) -> AuthState {
-    let url = format!("sqlite://{}?mode=rwc", data.join("auth.sqlite").display());
+///
+/// One file **per org**, as a deployment has (`OrgRoot::auth_db`), which
+/// only starts to matter once two orgs share a data root
+/// ([`Server::start_beside`]): a shared store would make everyone signed
+/// in anywhere a validated user everywhere, and the whole point of the
+/// org next door is that its people are not this org's people.
+async fn open_auth(data: &Path, slug: &str) -> AuthState {
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        data.join(format!("auth-{slug}.sqlite")).display()
+    );
     AuthState::open(&url, SECRET).await.expect("auth db")
 }
 
@@ -93,7 +102,11 @@ pub struct Server {
     /// Where accounts live. `People` signs users up against this.
     pub auth: AuthState,
     pub state: AppState,
-    _data: tempfile::TempDir,
+    /// The data root this server's org sits under. An `Arc` because a
+    /// data root may hold **several** orgs — [`Server::start_beside`]
+    /// boots a second one on this same disk — and the directory has to
+    /// outlive whichever of them is dropped last.
+    _data: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl Server {
@@ -114,8 +127,43 @@ impl Server {
     /// world that had only the first could not test transfer, and one
     /// with only the second is not a world anybody could be shown.
     pub async fn start(name: &'static str, slug: &str, fixture: impl Fn(&Path)) -> Self {
-        let data = tempfile::tempdir().expect("data dir");
-        let auth = open_auth(data.path()).await;
+        let data = std::sync::Arc::new(tempfile::tempdir().expect("data dir"));
+        Self::start_on(data, name, slug, fixture).await
+    }
+
+    /// Boot a **second** org on this server's disk, on its own endpoint.
+    ///
+    /// Two orgs, one data root, two routers — the arrangement `admin
+    /// seed` produces and the only one in which anything federates
+    /// today. `LocalOrgs` resolves a subscription to a source published
+    /// by a sibling org on the same data root, and ADR 0003's
+    /// `LocalHomes` resolves a qualified node reference through exactly
+    /// that subscription. A reference to an org on *another* server
+    /// parses and does not resolve, which the ADR records as the
+    /// boundary rather than hiding: [`crate::orgs::Orgs`]'s two
+    /// companies are two disks, so a chapter about cross-org resolution
+    /// needs this instead.
+    ///
+    /// Its own endpoint and its own auth store, so the second org is a
+    /// server a person signs into and not a directory this one writes:
+    /// a chapter asserting that a reader without a subscription is
+    /// refused would prove nothing if the reader were a member of both.
+    pub async fn start_beside(
+        &self,
+        name: &'static str,
+        slug: &str,
+        fixture: impl Fn(&Path),
+    ) -> Self {
+        Self::start_on(self._data.clone(), name, slug, fixture).await
+    }
+
+    async fn start_on(
+        data: std::sync::Arc<tempfile::TempDir>,
+        name: &'static str,
+        slug: &str,
+        fixture: impl Fn(&Path),
+    ) -> Self {
+        let auth = open_auth(data.path(), slug).await;
 
         let state = {
             let _guard = ENV.lock().await;
@@ -124,6 +172,12 @@ impl Server {
             unsafe {
                 std::env::set_var("TASK_DATA_ROOT", data.path());
                 std::env::set_var("TASK_ENFORCE_PERMISSIONS", "1");
+                // Which of the data root's orgs *this* server hosts.
+                // With one org the scan picks it anyway; with two it
+                // picks whichever the filesystem listed last, and a
+                // suite whose servers swap orgs by directory order is
+                // not a suite.
+                std::env::set_var("TASK_SERVER_ORG", slug);
             }
             let data_root = org_proto::DataRoot::from_env().expect("data root");
             data_root
@@ -245,7 +299,7 @@ impl Server {
         before_boot(data.path());
 
         // The same file the first boot opened — see `open_auth`.
-        let auth = open_auth(data.path()).await;
+        let auth = open_auth(data.path(), &slug).await;
         let state = {
             let _guard = ENV.lock().await;
             // SAFETY: held under `ENV` for the whole window in which
@@ -253,6 +307,7 @@ impl Server {
             unsafe {
                 std::env::set_var("TASK_DATA_ROOT", data.path());
                 std::env::set_var("TASK_ENFORCE_PERMISSIONS", "1");
+                std::env::set_var("TASK_SERVER_ORG", &slug);
             }
             AppState::new_with_auth(auth.clone(), ServerKeypair::generate_ephemeral())
                 .await

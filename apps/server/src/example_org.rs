@@ -112,6 +112,8 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
         &repos,
         &mut planted,
     )?;
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    plant_collections(org_root, slug);
     #[cfg(feature = "plugin-wiki")]
     plant_repo_wikis(org_root, slug);
     #[cfg(feature = "plugin-wiki")]
@@ -638,6 +640,253 @@ pub fn wikis_of(slug: &str) -> impl Iterator<Item = &'static DeclaredWiki> + '_ 
     DECLARED_WIKIS.iter().filter(move |w| w.org == slug)
 }
 
+// ── The resource-tier assets (ADR 0003) ──────────────────────────────
+
+/// One asset the example plants under `<org>/resources/`.
+///
+/// ADR 0003 gives four kinds a home there — a Keyflow chart, a Signal
+/// patch, a Signal sample, an Ignition lighting document — and says a
+/// *library* of any of them is an ordinary `Collection` of kind
+/// `Library` over `<kind>:<slug>` references. That claim is only
+/// checkable from a planted world if the planted world actually holds
+/// one of each, so it does.
+///
+/// Planting needs no code: [`plant`] copies `Resources/**` into the
+/// org's `resources/` tier verbatim. What this declaration buys is the
+/// contract — [`declared_tests`] fails if a declared asset has no
+/// committed tree, or if its directory name drifts from the one
+/// `node_homes::library_of` resolves cross-org references through.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredAsset {
+    /// The org that holds it.
+    pub org: &'static str,
+    /// The directory under `resources/` — and therefore the
+    /// subscription slug a cross-org reader names. Fixed by
+    /// `node_homes::library_of`: `charts`, `patches`, `samples`,
+    /// `lighting`.
+    pub library: &'static str,
+    /// The node id: `chart:<slug>`, `patch:<slug>`, and so on.
+    pub slug: &'static str,
+    /// Path of the manifest under `<org>/Resources/<library>/` in the
+    /// committed tree. A chart is flat (`<slug>.md`); the other kinds
+    /// own a directory (`<slug>/patch.md`).
+    pub manifest: &'static str,
+    /// The file holding the asset's own document, beside the manifest.
+    pub body: &'static str,
+    /// One line on what this asset exists in the seed to prove.
+    pub demonstrates: &'static str,
+}
+
+/// Every resource-tier asset the example plants. One of each kind, in
+/// the studio org, tied to the album the rest of the seed is about.
+pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "charts",
+        slug: "track-one",
+        manifest: "track-one.md",
+        body: "track-one.kf",
+        demonstrates: "a Keyflow chart kept in Task between sessions — the `.kf` is the \
+                       chart, an outside editor opens it, and `chart:track-one#chorus` \
+                       addresses a section",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "charts",
+        slug: "track-two",
+        manifest: "track-two.md",
+        body: "track-two.kf",
+        demonstrates: "the second chart, because one chart is a file and two are a \
+                       library — `Chart Library` in the seed collects both, and a demo \
+                       user opening the planted org finds a list rather than an orphan",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "lighting",
+        slug: "track-one-lights",
+        manifest: "track-one-lights/show.md",
+        body: "track-one-lights/show.json",
+        demonstrates: "lighting scoped to a single song, whose cues follow that song's \
+                       chart sections — the ADR's join, planted: `song:track-one` carries \
+                       `chart:track-one` and `lighting:track-one-lights`, and neither app \
+                       knows the other exists",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "patches",
+        slug: "warm-analog-pad",
+        manifest: "warm-analog-pad/patch.md",
+        body: "warm-analog-pad/patch.json",
+        demonstrates: "a Signal patch as a directory, because a patch grows sidecars — and \
+                       one with nothing bound to a File Root, which is the ordinary state \
+                       of a declared asset",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "samples",
+        slug: "room-kick-48k",
+        manifest: "room-kick-48k/sample.md",
+        body: "room-kick-48k/sample.json",
+        demonstrates: "a sample whose audio is deliberately NOT here: the manifest says what \
+                       the sample is, and the bytes belong in a File Root — which is what \
+                       keeps subscribing to a sample library cheap",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "lighting",
+        slug: "album-launch-show",
+        manifest: "album-launch-show/show.md",
+        body: "album-launch-show/show.json",
+        demonstrates: "an Ignition show, scoped `show` rather than `song` or `setlist`, \
+                       whose declared cues are the only things \
+                       `lighting:album-launch-show#cue:12` can address",
+    },
+];
+
+/// The resource-tier assets this org declares.
+pub fn assets_of(slug: &str) -> impl Iterator<Item = &'static DeclaredAsset> + '_ {
+    DECLARED_ASSETS.iter().filter(move |a| a.org == slug)
+}
+
+// ── The collections that gather them (ADR 0003) ──────────────────────
+
+/// One ordered collection the example plants.
+///
+/// ADR 0003's third decision is that *nothing new is built for
+/// libraries*: a library is a `Collection` of kind `Library` over node
+/// references, and a setlist is the same primitive with a different
+/// kind. A seed that planted four assets and no collection would leave
+/// that claim unillustrated — a demo user would find four orphans and
+/// no way to see them as a library — so the planted world holds both.
+///
+/// Unlike the assets, these are not files in the committed tree: a
+/// collection lives in the org's `collections.jsonl`, written through
+/// the real store at plant time by [`plant_collections`], which is also
+/// what keeps a replant from planting a second copy.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredCollection {
+    /// The org that holds it.
+    pub org: &'static str,
+    /// Display title, and the identity a replant matches on.
+    pub title: &'static str,
+    /// `library`, `setlist`, `show` or `playlist` —
+    /// `CollectionKind::as_str`'s own spelling.
+    pub kind: &'static str,
+    /// The nodes it holds, in order: `(kind, id)` — the two halves of a
+    /// `kind:id` reference. No domain: every item here is this org's
+    /// own, and a cross-org item is what the suite's `setlist` chapter
+    /// builds rather than something a single planted org can show.
+    pub items: &'static [(&'static str, &'static str)],
+    /// One line on what this collection exists in the seed to prove.
+    pub demonstrates: &'static str,
+}
+
+/// Every collection the example plants.
+pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
+    DeclaredCollection {
+        org: "acme-audio",
+        title: "Chart Library",
+        kind: "library",
+        items: &[("chart", "track-one"), ("chart", "track-two")],
+        demonstrates: "a chart library is a `Collection` of kind `Library` over \
+                       `chart:<slug>` references and nothing else — no chart service, \
+                       no chart store, no second vocabulary",
+    },
+    DeclaredCollection {
+        org: "acme-audio",
+        title: "Album Launch Set",
+        kind: "setlist",
+        items: &[
+            ("song", "track-one"),
+            ("chart", "track-one"),
+            ("lighting", "track-one-lights"),
+            ("song", "track-two"),
+            ("chart", "track-two"),
+            ("lighting", "album-launch-show"),
+        ],
+        demonstrates: "the sentence the whole decision exists for: a performance \
+                       assembled by reference out of several libraries at once — the \
+                       song, the chart it is played from, and the cues that run over it \
+                       — with no app knowing the others are there",
+    },
+];
+
+/// The collections this org declares.
+pub fn collections_of(slug: &str) -> impl Iterator<Item = &'static DeclaredCollection> + '_ {
+    DECLARED_COLLECTIONS.iter().filter(move |c| c.org == slug)
+}
+
+/// Where an org's ordered collections are stored.
+///
+/// **The one definition.** `AppState` opens the store here and the
+/// seeder writes it here; two spellings of the same path would plant a
+/// world the server then does not read, and the failure would be an
+/// empty library rather than an error.
+#[must_use]
+pub fn collections_path(org_root: &org_proto::OrgRoot) -> std::path::PathBuf {
+    std::env::var("TASK_SERVER_COLLECTIONS_PATH").map_or_else(
+        |_| org_root.path().join("collections.jsonl"),
+        std::path::PathBuf::from,
+    )
+}
+
+/// Plant the declared collections, matching an existing one by title.
+///
+/// Idempotent the way the rest of the plant is: a collection already
+/// there is left exactly as it is, items and order included, because
+/// somebody may have reordered it since. Missing ones are created
+/// through the real store, so what a demo opens is what the lane
+/// serves.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn plant_collections(org_root: &org_proto::OrgRoot, slug: &str) {
+    use collection::{CollectionKind, CollectionService as _, NodeKind, NodeRef, Placement};
+
+    let declared: Vec<&DeclaredCollection> = collections_of(slug).collect();
+    if declared.is_empty() {
+        return;
+    }
+    let store = collection::Store::open(collections_path(org_root));
+    let held = match store.list(slug.to_owned(), None) {
+        Ok(held) => held,
+        Err(e) => {
+            tracing::warn!(org.slug = %slug, "collections not planted: {e}");
+            return;
+        }
+    };
+    for d in declared {
+        if held.iter().any(|c| c.title == d.title) {
+            continue;
+        }
+        let kind = match d.kind {
+            "library" => CollectionKind::Library,
+            "setlist" => CollectionKind::Setlist,
+            "show" => CollectionKind::Show,
+            "playlist" => CollectionKind::Playlist,
+            other => CollectionKind::Other(other.to_owned()),
+        };
+        let made = match store.create(slug.to_owned(), d.title.to_owned(), kind) {
+            Ok(made) => made,
+            Err(e) => {
+                tracing::warn!(org.slug = %slug, collection = d.title, "not created: {e}");
+                continue;
+            }
+        };
+        for (kind, id) in d.items {
+            let Some(kind) = NodeKind::parse(kind) else {
+                tracing::warn!(collection = d.title, "`{kind}` is not a node kind");
+                continue;
+            };
+            if let Err(e) = store.add_item(Placement {
+                collection_id: made.id.clone(),
+                node: NodeRef::new(kind, *id),
+                after: None,
+            }) {
+                tracing::warn!(collection = d.title, item = id, "not collected: {e}");
+            }
+        }
+    }
+}
+
 // ── The repo-sourced wikis ───────────────────────────────────────────
 
 /// A wiki the seed declares over a repository (`wiki.source.repo`).
@@ -1007,6 +1256,146 @@ mod declared_tests {
                 !wikis_of(w.org).any(|other| wiki_slug(other.title) == slug),
                 "{}: slug `{slug}` collides with a committed wiki",
                 w.title
+            );
+        }
+    }
+
+    /// Every declared asset has its committed tree — the manifest and
+    /// the document beside it — under the library directory ADR 0003
+    /// names.
+    #[test]
+    fn every_declared_asset_has_its_committed_files() {
+        for a in DECLARED_ASSETS {
+            assert!(
+                ORGS.iter().any(|(slug, _)| *slug == a.org),
+                "{}: org `{}` is not one the example plants",
+                a.slug,
+                a.org
+            );
+            for file in [a.manifest, a.body] {
+                let path = format!("{}/Resources/{}/{}", a.org, a.library, file);
+                assert!(
+                    STUDIO.get_file(&path).is_some(),
+                    "{}: `{path}` is not committed — {}",
+                    a.slug,
+                    a.demonstrates
+                );
+            }
+        }
+    }
+
+    /// The library directory is not decoration: it is the subscription
+    /// slug a cross-org reader names, and `node_homes::library_of` is
+    /// what maps a node kind onto it. A drift here is a cross-org
+    /// reference that silently stops resolving, so the two are pinned
+    /// against each other rather than kept in step by hand.
+    #[test]
+    fn every_asset_library_is_a_home_some_node_kind_resolves_through() {
+        use links::NodeKind;
+        for a in DECLARED_ASSETS {
+            let known = [
+                NodeKind::Song,
+                NodeKind::Sermon,
+                NodeKind::Video,
+                NodeKind::Chart,
+                NodeKind::Patch,
+                NodeKind::Sample,
+                NodeKind::Lighting,
+            ]
+            .into_iter()
+            .any(|k| crate::node_homes::library_of(k) == Some(a.library));
+            assert!(
+                known,
+                "{}: `resources/{}/` is not any node kind's home",
+                a.slug, a.library
+            );
+        }
+    }
+
+    /// A declared asset's slug is its node id, so two of one kind may
+    /// not share it — `patch:lead` must mean one patch.
+    #[test]
+    fn asset_slugs_are_distinct_within_a_library() {
+        for a in DECLARED_ASSETS {
+            assert_eq!(
+                DECLARED_ASSETS
+                    .iter()
+                    .filter(|o| o.org == a.org && o.library == a.library && o.slug == a.slug)
+                    .count(),
+                1,
+                "{}: two assets claim `{}:{}`",
+                a.slug,
+                a.library,
+                a.slug
+            );
+        }
+    }
+
+    /// A declared collection may only hold references the planted world
+    /// can answer: an asset this seed commits, or a song it commits.
+    ///
+    /// This is the assertion that keeps the seed from demonstrating the
+    /// wrong thing. A `Setlist` full of references to nothing still
+    /// plants, still lists, and still opens — as a list of unresolved
+    /// rows, which is exactly the state ADR 0003 says is *legible* and
+    /// therefore exactly the state a demo cannot be made of.
+    #[test]
+    fn every_declared_collection_references_something_the_seed_plants() {
+        use links::NodeKind;
+        for c in DECLARED_COLLECTIONS {
+            assert!(
+                ORGS.iter().any(|(slug, _)| *slug == c.org),
+                "{}: org `{}` is not one the example plants",
+                c.title,
+                c.org
+            );
+            assert!(
+                matches!(c.kind, "library" | "setlist" | "show" | "playlist"),
+                "{}: `{}` is not a collection kind",
+                c.title,
+                c.kind
+            );
+            assert!(!c.items.is_empty(), "{}: an empty collection", c.title);
+            for (kind, id) in c.items {
+                let kind = NodeKind::parse(kind)
+                    .unwrap_or_else(|| panic!("{}: `{kind}` is not a node kind", c.title));
+                let library = crate::node_homes::library_of(kind).unwrap_or_else(|| {
+                    panic!("{}: `{kind:?}` has no home under resources/", c.title)
+                });
+                // A song is a folder with a manifest; an asset is a
+                // `DECLARED_ASSETS` row, which the test above proves is
+                // committed.
+                let planted = if kind == NodeKind::Song {
+                    STUDIO
+                        .get_file(format!("{}/Resources/songs/{id}/manifest.json", c.org))
+                        .is_some()
+                } else {
+                    assets_of(c.org).any(|a| a.library == library && a.slug == *id)
+                };
+                assert!(
+                    planted,
+                    "{}: `{kind:?}:{id}` is not planted — {}",
+                    c.title, c.demonstrates
+                );
+            }
+        }
+    }
+
+    /// Titles are how a replant recognises a collection it already
+    /// planted, so two of them sharing one would plant the second only
+    /// once and then never again.
+    #[test]
+    fn collection_titles_are_distinct_within_an_org() {
+        for c in DECLARED_COLLECTIONS {
+            assert_eq!(
+                DECLARED_COLLECTIONS
+                    .iter()
+                    .filter(|o| o.org == c.org && o.title == c.title)
+                    .count(),
+                1,
+                "{}: two collections share this title in `{}`",
+                c.title,
+                c.org
             );
         }
     }

@@ -95,6 +95,9 @@
 //! | `peer_to_peer.rs`  | two clients, no server in the middle |
 //! | `studio.rs`        | a studio's disk, read as a tree |
 //! | `archive.rs`       | the same, against a real 6 TB archive |
+//! | `charts.rs`        | another app keeps its work here, and a library is a collection |
+//! | `setlist.rs`       | a performance that draws on somebody else's library |
+//! | `content_ref.rs`   | the manifest is in `resources/`, the bytes are in a root |
 //!
 //! These are tests rather than a script that prints `ok`, because a
 //! printed `ok` is only as honest as the eye reading it. A test that

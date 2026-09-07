@@ -870,9 +870,267 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             },
         },
     ]);
+    v.extend(chart_tool_catalog());
+    v.extend(patch_tool_catalog());
+    v.extend(sample_tool_catalog());
+    v.extend(lighting_tool_catalog());
     #[cfg(feature = "plugin-wiki")]
     v.extend(wiki_tool_catalog());
     v
+}
+
+/// The chart tools. A chart is Keyflow's document, kept in the org's
+/// resources tier (`resources/charts/<slug>.kf` plus a manifest), and
+/// addressable from anywhere in the graph as `chart:<slug>` — which is
+/// what lets a `Library` collection hold one (ADR 0003).
+///
+/// The descriptions teach the loop: `list_charts` before guessing a
+/// slug, `read_chart` before rewriting one, and sections declared
+/// explicitly because nothing on the server parses chart source.
+fn chart_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_charts",
+            plugin: "core",
+            description: "List the org's Keyflow charts: slug, title, key, notation, section \
+                          names and when each was last written. Call this FIRST — read_chart \
+                          and write_chart take a `slug` from here, and a chart is referenced \
+                          elsewhere in the graph as `chart:<slug>`.",
+            schema: || obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "read_chart",
+            plugin: "core",
+            description: "Read one chart in full: its Keyflow source plus title, key, notation \
+                          and sections. Read before writing — write_chart replaces the source \
+                          outright, so an edit means fetching the current text first.",
+            schema: || {
+                obj(
+                    json!({ "slug": s_("Chart slug, from list_charts.") }),
+                    &["slug"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_chart",
+            plugin: "core",
+            description: "Create or replace a chart. Pass `slug` to update an existing chart \
+                          (from list_charts); omit it to create one, and the slug is derived \
+                          from the title. The `source` is stored verbatim as \
+                          `resources/charts/<slug>.kf`. `sections` must be listed here — the \
+                          server does not parse chart source, and an unlisted section is not \
+                          addressable as `chart:<slug>#<section>`.",
+            schema: || {
+                obj(
+                    json!({
+                        "title": s_("Chart title, e.g. 'Great Are You Lord'."),
+                        "source": s_("The chart text, stored byte for byte."),
+                        "slug": s_("Existing chart to replace, from list_charts. Omit to \
+                                    create a new chart."),
+                        "key": s_("Musical key as written ('A', 'Bb', 'f#m')."),
+                        "notation": s_("Notation dialect: 'keyflow' (default), 'chordpro', \
+                                        'nashville'."),
+                        "sections": json!({
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Section names in chart order ('verse-1', \
+                                            'chorus') — the anchors a chart:<slug>#<section> \
+                                            reference addresses.",
+                        }),
+                    }),
+                    &["title", "source"],
+                )
+            },
+        },
+    ]
+}
+
+/// The patch tools. A patch is Signal's document, kept in the org's
+/// resources tier (`resources/patches/<slug>/patch.json` plus a
+/// manifest) and addressable from anywhere in the graph as
+/// `patch:<slug>` — which is what lets a `Library` collection hold one,
+/// or a song reference the tone it is played with (ADR 0003).
+fn patch_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_patches",
+            plugin: "core",
+            description: "List the org's Signal patches: slug, title, rig, tags, where the \
+                          patch's bytes are bound, and when each was last written. Call this \
+                          FIRST — read_patch and write_patch take a `slug` from here, and a \
+                          patch is referenced elsewhere in the graph as `patch:<slug>`.",
+            schema: || obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "read_patch",
+            plugin: "core",
+            description: "Read one patch in full: its definition plus title, rig and tags. \
+                          Read before writing — write_patch replaces the definition outright, \
+                          so an edit means fetching the current text first.",
+            schema: || {
+                obj(
+                    json!({ "slug": s_("Patch slug, from list_patches.") }),
+                    &["slug"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_patch",
+            plugin: "core",
+            description: "Create or replace a patch. Pass `slug` to update an existing patch \
+                          (from list_patches); omit it to create one, and the slug is derived \
+                          from the title. The `body` is stored byte for byte as \
+                          `resources/patches/<slug>/patch.json`. This tool does NOT move \
+                          content: large files the patch needs live in a File Root, and \
+                          `content_root` / `content_path` only record where they already are.",
+            schema: || {
+                obj(
+                    json!({
+                        "title": s_("Patch title, e.g. 'Warm Analog Pad'."),
+                        "body": s_("The patch definition, stored byte for byte."),
+                        "slug": s_("Existing patch to replace, from list_patches. Omit to \
+                                    create a new patch."),
+                        "rig": s_("The rig this patch is for: 'helix', 'kemper', 'serum'."),
+                        "tags": a_("Free tags ('pad', 'ambient') — how a person finds this \
+                                    among hundreds."),
+                        "content_root": s_("File Root id holding the patch's bytes, if any \
+                                            are bound. Leave both content fields out when \
+                                            nothing is bound yet."),
+                        "content_path": s_("Root-relative path of those bytes."),
+                    }),
+                    &["title", "body"],
+                )
+            },
+        },
+    ]
+}
+
+/// The sample tools. The manifest is what these read and write; the
+/// audio is never here. A sample's bytes live in a File Root — which is
+/// what makes a sample *library* (a `Collection` of kind `Library` over
+/// `sample:<slug>`) cheap to hold and cheap to subscribe to.
+fn sample_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_samples",
+            plugin: "core",
+            description: "List the org's samples: slug, title, tags, duration, sample rate, \
+                          and where each one's audio is bound in a File Root. Call this FIRST \
+                          — read_sample and write_sample take a `slug` from here, and a \
+                          sample is referenced elsewhere as `sample:<slug>` (a region as \
+                          `sample:<slug>#t:0-2:400`).",
+            schema: || obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "read_sample",
+            plugin: "core",
+            description: "Read one sample's manifest: its metadata notes, duration, rate, \
+                          tags, and the File Root path its audio sits at. This returns no \
+                          audio — take `content_root` / `content_path` to the files tools \
+                          for that.",
+            schema: || {
+                obj(
+                    json!({ "slug": s_("Sample slug, from list_samples.") }),
+                    &["slug"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_sample",
+            plugin: "core",
+            description: "Create or replace a sample's manifest — what the sample IS. The \
+                          audio does not go through this tool: put the file in a File Root \
+                          and name it with `content_root` / `content_path`, which is where \
+                          versioning, waveform renditions and selective sync live. Pass \
+                          `slug` to update (from list_samples); omit it to create, and the \
+                          slug is derived from the title.",
+            schema: || {
+                obj(
+                    json!({
+                        "title": s_("Sample title, e.g. 'Room Kick 48k'."),
+                        "body": s_("Metadata notes — how it was captured, what it is for. \
+                                    NOT the audio."),
+                        "slug": s_("Existing sample to replace, from list_samples. Omit to \
+                                    create a new one."),
+                        "tags": a_("Free tags ('kick', 'room', '808')."),
+                        "duration_secs": i_("Length in seconds — what a \
+                                             sample:<slug>#t:0-2:400 region anchor is \
+                                             measured against."),
+                        "sample_rate": i_("Sample rate in Hz, e.g. 48000."),
+                        "content_root": s_("File Root id holding the audio. Omit both \
+                                            content fields when no bytes are bound yet — a \
+                                            declared sample with no audio is an ordinary \
+                                            state."),
+                        "content_path": s_("Root-relative path of the audio, e.g. \
+                                            'Samples/Kicks/Room Kick 48k.wav'."),
+                    }),
+                    &["title", "body"],
+                )
+            },
+        },
+    ]
+}
+
+/// The lighting tools. Ignition keeps the cues for a song, a setlist or
+/// a show, and `lighting:<slug>#cue:12` is how anything else addresses
+/// one of them.
+fn lighting_tool_catalog() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_lighting",
+            plugin: "core",
+            description: "List the org's lighting documents: slug, title, scope (song / \
+                          setlist / show), cue labels, and when each was last written. Call \
+                          this FIRST — read_lighting and write_lighting take a `slug` from \
+                          here, and a lighting document is referenced elsewhere as \
+                          `lighting:<slug>`, a cue as `lighting:<slug>#cue:12`.",
+            schema: || obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "read_lighting",
+            plugin: "core",
+            description: "Read one lighting document in full: its cue list plus title, scope \
+                          and cue labels. Read before writing — write_lighting replaces the \
+                          cue list outright.",
+            schema: || {
+                obj(
+                    json!({ "slug": s_("Lighting slug, from list_lighting.") }),
+                    &["slug"],
+                )
+            },
+        },
+        ToolDef {
+            name: "write_lighting",
+            plugin: "core",
+            description: "Create or replace a lighting document. `scope` MUST be one of \
+                          'song', 'setlist' or 'show' — anything else is refused, because a \
+                          scope nobody can act on is worse than none. `cues` must be listed \
+                          here: the server does not parse lighting source, and an unlisted \
+                          cue is not addressable as `lighting:<slug>#cue:<label>`. Pass \
+                          `slug` to update (from list_lighting); omit it to create.",
+            schema: || {
+                obj(
+                    json!({
+                        "title": s_("Title, e.g. 'Sunday Set'."),
+                        "body": s_("The cue list, stored byte for byte."),
+                        "scope": json!({
+                            "type": "string",
+                            "enum": ["song", "setlist", "show"],
+                            "description": "What this covers. Refused if it is anything else.",
+                        }),
+                        "slug": s_("Existing document to replace, from list_lighting. Omit \
+                                    to create a new one."),
+                        "cues": a_("Cue labels in show order ('12', '13') — the anchors a \
+                                    lighting:<slug>#cue:<label> reference addresses."),
+                        "content_root": s_("File Root id holding any rendered media the show \
+                                            needs."),
+                        "content_path": s_("Root-relative path of that content."),
+                    }),
+                    &["title", "body", "scope"],
+                )
+            },
+        },
+    ]
 }
 
 /// The wiki tools. A wiki is one *subject* — a curated set of markdown
@@ -3363,8 +3621,429 @@ fn call_tool(
             }
         }
 
+        n if CHART_TOOLS.contains(&n) => chart_tool(org, n, args),
+        n if PATCH_TOOLS.contains(&n) => patch_tool(org, n, args),
+        n if SAMPLE_TOOLS.contains(&n) => sample_tool(org, n, args),
+        n if LIGHTING_TOOLS.contains(&n) => lighting_tool(org, n, args),
+
         #[cfg(feature = "plugin-wiki")]
         n if WIKI_TOOLS.contains(&n) => wiki_tool(org, principal, n, args),
+
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+// ── Chart tools ──────────────────────────────────────────────────
+
+/// The tools [`chart_tool`] answers; must match [`chart_tool_catalog`].
+const CHART_TOOLS: &[&str] = &["list_charts", "read_chart", "write_chart"];
+
+/// One chart tool call, straight onto the org's resources backend —
+/// the same `ResourcesService` the vox lane mounts, so a chart written
+/// here is the chart Keyflow reads.
+fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value, ToolFailure> {
+    use resources_proto::{ChartDoc, ResourcesService as _};
+
+    let charts = &org.resources;
+    let chart_err = |what: &str, subject: &str, e: &resources_proto::ResourcesError| match e {
+        resources_proto::ResourcesError::NotFound(s) => ToolFailure::Message(format!(
+            "no chart matching `{s}`. Call list_charts and use a slug from its result."
+        )),
+        other => ToolFailure::Message(format!("couldn't {what} `{subject}`: {other}")),
+    };
+
+    match name {
+        "list_charts" => {
+            let list = charts
+                .list_charts()
+                .map_err(|e| chart_err("list charts", &org.slug, &e))?;
+            let out: Vec<Value> = list
+                .iter()
+                .map(|c| {
+                    json!({
+                        "slug": c.slug,
+                        "title": c.title,
+                        "key": c.key,
+                        "notation": c.notation,
+                        "sections": c.sections,
+                        "rel_path": c.rel_path,
+                        "updated_at": c.updated_at,
+                        "node": format!("chart:{}", c.slug),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "count": out.len(),
+                "charts": out,
+                "note": "Pass `slug` to read_chart / write_chart. `node` is how a collection \
+                         or a link references the chart.",
+            }))
+        }
+
+        "read_chart" => {
+            let slug = required_str(args, "slug")?;
+            let doc = charts
+                .chart(&slug)
+                .map_err(|e| chart_err("read chart", &slug, &e))?;
+            Ok(json!({
+                "slug": doc.slug,
+                "title": doc.title,
+                "source": doc.source,
+                "key": doc.key,
+                "notation": doc.notation,
+                "sections": doc.sections,
+                "updated_at": doc.updated_at,
+            }))
+        }
+
+        "write_chart" => {
+            let title = required_str(args, "title")?;
+            let source = args
+                .get("source")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolFailure::Message("`source` is required".into()))?
+                .to_string();
+            let doc = ChartDoc {
+                slug: arg_str(args, "slug").unwrap_or_default(),
+                title,
+                source,
+                key: arg_str(args, "key").unwrap_or_default(),
+                notation: arg_str(args, "notation").unwrap_or_else(|| "keyflow".into()),
+                sections: arg_str_list(args, "sections")?.unwrap_or_default(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let out = charts
+                .upsert_chart(doc)
+                .map_err(|e| chart_err("write chart", &out_slug(args), &e))?;
+            Ok(json!({
+                "slug": out.slug,
+                "rel_path": out.rel_path,
+                "created": out.created,
+                "node": format!("chart:{}", out.slug),
+            }))
+        }
+
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+/// What the caller called the asset, for an error message before the
+/// server has assigned a slug.
+fn out_slug(args: &Value) -> String {
+    arg_str(args, "slug")
+        .or_else(|| arg_str(args, "title"))
+        .unwrap_or_default()
+}
+
+// ── The other three asset lanes ──────────────────────────────────
+//
+// ADR 0003's patch, sample and lighting kinds, each the chart lane
+// again with different frontmatter. Three consts and three dispatch
+// functions rather than one generic pair, because the argument shapes
+// really do differ and a tool description is written per kind.
+
+/// One asset-lane failure, phrased so the loop knows what to do next.
+fn asset_err(
+    kind: &'static str,
+    what: &str,
+    subject: &str,
+    e: &resources_proto::ResourcesError,
+) -> ToolFailure {
+    match e {
+        resources_proto::ResourcesError::NotFound(s) => ToolFailure::Message(format!(
+            "no {kind} matching `{s}`. Call list_{kind}s and use a slug from its result."
+        )),
+        other => ToolFailure::Message(format!("couldn't {what} `{subject}`: {other}")),
+    }
+}
+
+/// The File Root binding a write tool was given. Absent fields mean
+/// "nothing bound", which a manifest states as empty rather than
+/// omitting — so unbinding is expressible.
+fn content_arg(args: &Value) -> resources_proto::ContentRef {
+    resources_proto::ContentRef {
+        root_id: arg_str(args, "content_root").unwrap_or_default(),
+        path: arg_str(args, "content_path").unwrap_or_default(),
+    }
+}
+
+fn content_json(content: &resources_proto::ContentRef) -> Value {
+    json!({
+        "root_id": content.root_id,
+        "path": content.path,
+        "bound": content.is_bound(),
+    })
+}
+
+/// A non-negative integer argument; absent or malformed reads as `0`,
+/// which is this tier's "unknown".
+fn arg_u64(args: &Value, key: &str) -> u64 {
+    args.get(key).and_then(Value::as_u64).unwrap_or_default()
+}
+
+/// The tools [`patch_tool`] answers; must match [`patch_tool_catalog`].
+const PATCH_TOOLS: &[&str] = &["list_patches", "read_patch", "write_patch"];
+
+/// One patch tool call, straight onto the org's resources backend.
+fn patch_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value, ToolFailure> {
+    use resources_proto::{PatchDoc, ResourcesService as _};
+
+    let be = &org.resources;
+    match name {
+        "list_patches" => {
+            let list = be
+                .list_patches()
+                .map_err(|e| asset_err("patch", "list patches", &org.slug, &e))?;
+            let out: Vec<Value> = list
+                .iter()
+                .map(|p| {
+                    json!({
+                        "slug": p.slug,
+                        "title": p.title,
+                        "rig": p.rig,
+                        "tags": p.tags,
+                        "rel_path": p.rel_path,
+                        "content": content_json(&p.content),
+                        "updated_at": p.updated_at,
+                        "node": format!("patch:{}", p.slug),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "count": out.len(),
+                "patches": out,
+                "note": "Pass `slug` to read_patch / write_patch. `node` is how a collection \
+                         or a link references the patch. `content` names where its bytes are \
+                         in a File Root, if any are bound.",
+            }))
+        }
+
+        "read_patch" => {
+            let slug = required_str(args, "slug")?;
+            let doc = be
+                .patch(&slug)
+                .map_err(|e| asset_err("patch", "read patch", &slug, &e))?;
+            Ok(json!({
+                "slug": doc.slug,
+                "title": doc.title,
+                "body": doc.body,
+                "rig": doc.rig,
+                "tags": doc.tags,
+                "content": content_json(&doc.content),
+                "updated_at": doc.updated_at,
+            }))
+        }
+
+        "write_patch" => {
+            let title = required_str(args, "title")?;
+            let body = args
+                .get("body")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolFailure::Message("`body` is required".into()))?
+                .to_string();
+            let doc = PatchDoc {
+                slug: arg_str(args, "slug").unwrap_or_default(),
+                title,
+                rig: arg_str(args, "rig").unwrap_or_default(),
+                tags: arg_str_list(args, "tags")?.unwrap_or_default(),
+                body,
+                content: content_arg(args),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let out = be
+                .upsert_patch(doc)
+                .map_err(|e| asset_err("patch", "write patch", &out_slug(args), &e))?;
+            Ok(json!({
+                "slug": out.slug,
+                "rel_path": out.rel_path,
+                "created": out.created,
+                "node": format!("patch:{}", out.slug),
+            }))
+        }
+
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+/// The tools [`sample_tool`] answers; must match
+/// [`sample_tool_catalog`].
+const SAMPLE_TOOLS: &[&str] = &["list_samples", "read_sample", "write_sample"];
+
+/// One sample tool call. Manifests only — no audio passes through
+/// here, by design (ADR 0003 and `files.sync.selective`).
+fn sample_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value, ToolFailure> {
+    use resources_proto::{ResourcesService as _, SampleDoc};
+
+    let be = &org.resources;
+    match name {
+        "list_samples" => {
+            let list = be
+                .list_samples()
+                .map_err(|e| asset_err("sample", "list samples", &org.slug, &e))?;
+            let out: Vec<Value> = list
+                .iter()
+                .map(|s| {
+                    json!({
+                        "slug": s.slug,
+                        "title": s.title,
+                        "tags": s.tags,
+                        "duration_secs": s.duration_secs,
+                        "sample_rate": s.sample_rate,
+                        "rel_path": s.rel_path,
+                        "content": content_json(&s.content),
+                        "updated_at": s.updated_at,
+                        "node": format!("sample:{}", s.slug),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "count": out.len(),
+                "samples": out,
+                "note": "Pass `slug` to read_sample / write_sample. `node` is how a \
+                         collection or a link references the sample. The audio is not here: \
+                         `content` names the File Root path it sits at.",
+            }))
+        }
+
+        "read_sample" => {
+            let slug = required_str(args, "slug")?;
+            let doc = be
+                .sample(&slug)
+                .map_err(|e| asset_err("sample", "read sample", &slug, &e))?;
+            Ok(json!({
+                "slug": doc.slug,
+                "title": doc.title,
+                "body": doc.body,
+                "tags": doc.tags,
+                "duration_secs": doc.duration_secs,
+                "sample_rate": doc.sample_rate,
+                "content": content_json(&doc.content),
+                "updated_at": doc.updated_at,
+            }))
+        }
+
+        "write_sample" => {
+            let title = required_str(args, "title")?;
+            let body = args
+                .get("body")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolFailure::Message("`body` is required".into()))?
+                .to_string();
+            let doc = SampleDoc {
+                slug: arg_str(args, "slug").unwrap_or_default(),
+                title,
+                tags: arg_str_list(args, "tags")?.unwrap_or_default(),
+                duration_secs: arg_u64(args, "duration_secs"),
+                sample_rate: u32::try_from(arg_u64(args, "sample_rate")).unwrap_or(u32::MAX),
+                body,
+                content: content_arg(args),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let out = be
+                .upsert_sample(doc)
+                .map_err(|e| asset_err("sample", "write sample", &out_slug(args), &e))?;
+            Ok(json!({
+                "slug": out.slug,
+                "rel_path": out.rel_path,
+                "created": out.created,
+                "node": format!("sample:{}", out.slug),
+            }))
+        }
+
+        _ => Err(ToolFailure::Unknown),
+    }
+}
+
+/// The tools [`lighting_tool`] answers; must match
+/// [`lighting_tool_catalog`].
+const LIGHTING_TOOLS: &[&str] = &["list_lighting", "read_lighting", "write_lighting"];
+
+/// One lighting tool call.
+fn lighting_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Value, ToolFailure> {
+    use resources_proto::{LightingDoc, ResourcesService as _};
+
+    let be = &org.resources;
+    // `list_lighting` already reads right; the plural of this kind is
+    // itself, so the error phrasing needs no `s`.
+    let err = |what: &str, subject: &str, e: &resources_proto::ResourcesError| match e {
+        resources_proto::ResourcesError::NotFound(s) => ToolFailure::Message(format!(
+            "no lighting document matching `{s}`. Call list_lighting and use a slug from its \
+             result."
+        )),
+        other => ToolFailure::Message(format!("couldn't {what} `{subject}`: {other}")),
+    };
+    match name {
+        "list_lighting" => {
+            let list = be
+                .list_lighting()
+                .map_err(|e| err("list lighting", &org.slug, &e))?;
+            let out: Vec<Value> = list
+                .iter()
+                .map(|l| {
+                    json!({
+                        "slug": l.slug,
+                        "title": l.title,
+                        "scope": l.scope,
+                        "cues": l.cues,
+                        "rel_path": l.rel_path,
+                        "content": content_json(&l.content),
+                        "updated_at": l.updated_at,
+                        "node": format!("lighting:{}", l.slug),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "count": out.len(),
+                "lighting": out,
+                "note": "Pass `slug` to read_lighting / write_lighting. `node` is how a \
+                         collection or a link references it; a cue is \
+                         `lighting:<slug>#cue:<label>`, and only the listed `cues` are \
+                         addressable.",
+            }))
+        }
+
+        "read_lighting" => {
+            let slug = required_str(args, "slug")?;
+            let doc = be
+                .lighting(&slug)
+                .map_err(|e| err("read lighting", &slug, &e))?;
+            Ok(json!({
+                "slug": doc.slug,
+                "title": doc.title,
+                "body": doc.body,
+                "scope": doc.scope,
+                "cues": doc.cues,
+                "content": content_json(&doc.content),
+                "updated_at": doc.updated_at,
+            }))
+        }
+
+        "write_lighting" => {
+            let title = required_str(args, "title")?;
+            let body = args
+                .get("body")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolFailure::Message("`body` is required".into()))?
+                .to_string();
+            let doc = LightingDoc {
+                slug: arg_str(args, "slug").unwrap_or_default(),
+                title,
+                scope: required_str(args, "scope")?,
+                cues: arg_str_list(args, "cues")?.unwrap_or_default(),
+                body,
+                content: content_arg(args),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let out = be
+                .upsert_lighting(doc)
+                .map_err(|e| err("write lighting", &out_slug(args), &e))?;
+            Ok(json!({
+                "slug": out.slug,
+                "rel_path": out.rel_path,
+                "created": out.created,
+                "node": format!("lighting:{}", out.slug),
+            }))
+        }
 
         _ => Err(ToolFailure::Unknown),
     }
@@ -4073,6 +4752,61 @@ mod tests {
             let desc = tool["description"].as_str().expect("description");
             assert!(desc.contains("Operator-only"), "{desc}");
         }
+    }
+
+    /// The chart dispatch list and the chart catalog must agree, for
+    /// the same reason the wiki pair must: a tool listed but not
+    /// dispatched is a method-not-found the model can't explain.
+    #[test]
+    fn chart_tools_match_their_dispatch_list() {
+        let listed: Vec<&str> = chart_tool_catalog().iter().map(|t| t.name).collect();
+        assert_eq!(listed, CHART_TOOLS);
+        // Charts ride the core resources lane — no plugin gates them.
+        assert!(chart_tool_catalog().iter().all(|t| t.plugin == "core"));
+        let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
+        for tool in CHART_TOOLS {
+            assert!(names.contains(tool), "`{tool}` missing from the catalog");
+        }
+    }
+
+    /// The same agreement for ADR 0003's other three asset lanes, and
+    /// the same reason. Checked together because they are one shape
+    /// repeated: a lane that drifts from the pattern shows up here.
+    #[test]
+    fn the_asset_lanes_match_their_dispatch_lists() {
+        let lanes: [(Vec<ToolDef>, &[&str]); 3] = [
+            (patch_tool_catalog(), PATCH_TOOLS),
+            (sample_tool_catalog(), SAMPLE_TOOLS),
+            (lighting_tool_catalog(), LIGHTING_TOOLS),
+        ];
+        let names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();
+        for (catalog, dispatch) in lanes {
+            let listed: Vec<&str> = catalog.iter().map(|t| t.name).collect();
+            assert_eq!(listed, dispatch);
+            // These ride the core resources lane — no plugin gates them.
+            assert!(catalog.iter().all(|t| t.plugin == "core"));
+            for tool in dispatch {
+                assert!(names.contains(tool), "`{tool}` missing from the catalog");
+            }
+        }
+    }
+
+    /// Every asset tool name is distinct across the four lanes — the
+    /// dispatch arms are tried in order, so a name in two lists would
+    /// silently route to the first.
+    #[test]
+    fn no_asset_tool_name_appears_in_two_lanes() {
+        let mut all: Vec<&str> = CHART_TOOLS
+            .iter()
+            .chain(PATCH_TOOLS)
+            .chain(SAMPLE_TOOLS)
+            .chain(LIGHTING_TOOLS)
+            .copied()
+            .collect();
+        let total = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), total, "a tool name is claimed by two lanes");
     }
 
     /// The wiki dispatch list and the wiki catalog must agree: a tool

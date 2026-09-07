@@ -16,11 +16,24 @@
 //! resource` frontmatter), [`sidecar`] (read/write the annotation file),
 //! [`build`] (specs → links + sidecar — the authoring path), [`resolve`]
 //! (anchor → seek/region/span — the read path).
+//!
+//! The **asset lanes** — [`chart`], [`patch`], [`sample`] and
+//! [`lighting`] — are ADR 0003's four kinds, each laying a manifest
+//! down under `<org>/resources/<kind>s/`. They share [`asset`]: one
+//! slug rule and one "the app owns its own frontmatter and nothing
+//! else" contract for the whole tier. None of them moves content — an
+//! asset's bytes live in a File Root and the manifest only names them
+//! (`resources_proto::ContentRef`).
 
+pub mod asset;
 pub mod backend;
 pub mod build;
+pub mod chart;
+pub mod lighting;
 pub mod manifest;
+pub mod patch;
 pub mod resolve;
+pub mod sample;
 pub mod scripture_refs;
 pub mod sermon;
 pub mod sidecar;

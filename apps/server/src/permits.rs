@@ -758,7 +758,7 @@ table!(SCRIPTURE, "scripture", "scripture/**", [
     rd "study", rd "cross_refs", rd "topics_of", rd "verses_for_topic",
 ]);
 table!(LINKS, "links", "links/**", [
-    wr "create", wa "delete", rd "get", rd "links_for", rd "graph",
+    wr "create", wa "delete", rd "get", rd "links_for", rd "graph", rd "resolve_nodes",
 ]);
 #[cfg(feature = "plugin-fasttrackstudio")]
 table!(COLLECTION, "collection", "collections/**", [
@@ -766,6 +766,13 @@ table!(COLLECTION, "collection", "collections/**", [
 ]);
 table!(RESOURCES, "resources", "resources/**", [
     rd "transcript", wr "upsert_sermon", rd "list_sermons", rd "sermon", wa "relocate_sermons",
+    wr "upsert_chart", rd "chart", rd "list_charts", wa "delete_chart",
+    // ADR 0003's other three asset lanes. Same mount, same shape: an
+    // upsert writes, a get and a list read, and a delete is audited
+    // because it un-declares a node other collections may reference.
+    wr "upsert_patch", rd "patch", rd "list_patches", wa "delete_patch",
+    wr "upsert_sample", rd "sample", rd "list_samples", wa "delete_sample",
+    wr "upsert_lighting", rd "lighting", rd "list_lighting", wa "delete_lighting",
 ]);
 
 // ── Finance lane (every mutation audited) ────────────────────────────────

@@ -18,6 +18,31 @@
 //!
 //! The token form is `kind:id#anchor`; the `#anchor` is omitted when
 //! empty, so legacy `kind:id` tokens still round-trip.
+//!
+//! ## Domains — naming another organisation's node
+//!
+//! A reference may name a node in another org, which is what lets one
+//! setlist draw songs from several libraries (ADR 0003):
+//!
+//! ```text
+//! fasttrackstudio.app/song:keep-on-finding-more#t:1:30
+//! └────── domain ────┘ └kind┘└────── id ──────┘└anchor┘
+//! ```
+//!
+//! Two forms, and only two. **Qualified** (`domain/kind:id`) names
+//! exactly one node in the federation, because two orgs cannot collide on
+//! a domain. **Local** (`kind:id`) is the reader's own org and never
+//! anything subscribed. There is deliberately no *short* form — ADR 0002
+//! gives wiki references one because a reader holds a handful of wikis,
+//! but a reader holds thousands of songs, and a bare `song:hosanna` that
+//! quietly means a different recording in a different vault is the exact
+//! failure the domain exists to prevent.
+//!
+//! A domain addresses; it never authorises. Resolving a qualified
+//! reference requires access the reader already has — a membership row in
+//! that org, or a subscription to a source that publishes the node — and
+//! an unresolvable reference is reported as unresolved rather than
+//! guessed at or refused.
 
 use facet::Facet;
 use serde::{Deserialize, Serialize};
@@ -56,6 +81,23 @@ pub enum NodeKind {
     Video,
     /// An external resource — `id` is the URL.
     External,
+    /// A chart — `id` is the chart slug. Keyflow source under
+    /// `<org>/resources/charts/<slug>.kf`; the anchor is a section
+    /// (`#chorus`). A song's chart is also reachable as that song's
+    /// `Chart` component; this kind is the chart as a thing in its own
+    /// right, so a library can hold one that belongs to no song yet.
+    Chart,
+    /// A patch / preset — `id` is the slug, under
+    /// `<org>/resources/patches/<slug>/`. Signal's rigs and tones.
+    Patch,
+    /// A sample — `id` is the slug, under
+    /// `<org>/resources/samples/<slug>/`. A *sample library* is not a
+    /// kind: it is a `Collection` of kind `Library` over these.
+    Sample,
+    /// A lighting show — `id` is the slug, under
+    /// `<org>/resources/lighting/<slug>/`. Ignition's cues for a song, a
+    /// setlist or a show; the anchor is a cue (`#cue:12`).
+    Lighting,
 }
 
 impl NodeKind {
@@ -72,6 +114,10 @@ impl NodeKind {
             Self::Sermon => "sermon",
             Self::Video => "video",
             Self::External => "external",
+            Self::Chart => "chart",
+            Self::Patch => "patch",
+            Self::Sample => "sample",
+            Self::Lighting => "lighting",
         }
     }
 
@@ -88,6 +134,10 @@ impl NodeKind {
             "sermon" => Self::Sermon,
             "video" => Self::Video,
             "external" => Self::External,
+            "chart" => Self::Chart,
+            "patch" => Self::Patch,
+            "sample" => Self::Sample,
+            "lighting" => Self::Lighting,
             _ => return None,
         })
     }
@@ -96,6 +146,16 @@ impl NodeKind {
 /// A reference to one node — or a span inside one — in the graph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Facet)]
 pub struct NodeRef {
+    /// The publishing org's federation domain, when this reference names
+    /// another org's node. Empty is the reader's own org, which is what
+    /// every reference written before ADR 0003 means — so an absent
+    /// domain is not a missing value, it is *local*.
+    ///
+    /// A domain is a **name, not an address**: it survives the org moving
+    /// servers, and it is what makes two orgs unable to collide. It grants
+    /// nothing on its own (see [`NodeRef::is_local`]).
+    #[serde(default)]
+    pub domain: String,
     pub kind: NodeKind,
     pub id: String,
     /// Optional sub-node span (`word:5`, `^abc123`). Empty = the whole
@@ -108,10 +168,32 @@ impl NodeRef {
     #[must_use]
     pub fn new(kind: NodeKind, id: impl Into<String>) -> Self {
         Self {
+            domain: String::new(),
             kind,
             id: id.into(),
             anchor: String::new(),
         }
+    }
+
+    /// Point this reference at another org's node (builder). An empty
+    /// `domain` returns it to local.
+    ///
+    /// This is an *address*, not a grant: whether the reader may read what
+    /// it names is decided where the reference is resolved — by a
+    /// membership row in that org, or a subscription to a source that
+    /// publishes it — exactly as `wiki.subscribe.resolution` decides it
+    /// for pages.
+    #[must_use]
+    pub fn in_domain(mut self, domain: impl Into<String>) -> Self {
+        self.domain = domain.into();
+        self
+    }
+
+    /// True when this names the reader's own org — the case for every
+    /// reference that carries no domain.
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.domain.is_empty()
     }
 
     /// A verse node (`id` = OSIS).
@@ -209,26 +291,51 @@ impl NodeRef {
         Anchor::parse(&self.anchor)
     }
 
-    /// Canonical `kind:id` (or `kind:id#anchor`) string.
+    /// Canonical token: `kind:id`, `kind:id#anchor`, and with a domain
+    /// `domain/kind:id[#anchor]`.
     #[must_use]
     pub fn to_token(&self) -> String {
-        if self.anchor.is_empty() {
-            format!("{}:{}", self.kind.as_str(), self.id)
-        } else {
-            format!("{}:{}#{}", self.kind.as_str(), self.id, self.anchor)
+        let mut out = String::new();
+        if !self.domain.is_empty() {
+            out.push_str(&self.domain);
+            out.push('/');
         }
+        out.push_str(self.kind.as_str());
+        out.push(':');
+        out.push_str(&self.id);
+        if !self.anchor.is_empty() {
+            out.push('#');
+            out.push_str(&self.anchor);
+        }
+        out
     }
 
-    /// Parse a `kind:id` or `kind:id#anchor` token. The first `#` splits
-    /// the anchor off, so verse-range ids (`John.3.16-18`) stay intact.
+    /// Parse `kind:id`, `kind:id#anchor`, or `domain/kind:id[#anchor]`.
+    ///
+    /// Order matters, because two of the three parts may contain a `/`.
+    /// The first `#` splits the anchor off, so verse-range ids
+    /// (`John.3.16-18`) stay intact. The first `:` then splits the id off
+    /// — an id may hold slashes (`note:Projects/Album.md`) but a kind
+    /// never holds a colon, so the first colon is always the right one.
+    /// Only what remains can carry a domain, and it is taken at the *last*
+    /// slash, so `acme.test/note:Projects/Album.md` reads as domain
+    /// `acme.test` and id `Projects/Album.md`.
     #[must_use]
     pub fn parse(token: &str) -> Option<Self> {
         let (head, anchor) = match token.split_once('#') {
             Some((h, a)) => (h, a),
             None => (token, ""),
         };
-        let (kind, id) = head.split_once(':')?;
-        Some(Self::new(NodeKind::parse(kind)?, id).with_anchor(anchor))
+        let (prefix, id) = head.split_once(':')?;
+        let (domain, kind) = match prefix.rsplit_once('/') {
+            Some((d, k)) => (d, k),
+            None => ("", prefix),
+        };
+        Some(
+            Self::new(NodeKind::parse(kind)?, id)
+                .in_domain(domain)
+                .with_anchor(anchor),
+        )
     }
 }
 
@@ -343,6 +450,56 @@ pub fn format_timecode(secs: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A domain rides in front of the kind and survives a round trip,
+    /// and a token without one is local — which is what every reference
+    /// written before ADR 0003 is.
+    #[test]
+    fn a_domain_qualifies_a_node_and_its_absence_means_local() {
+        let local = NodeRef::parse("song:hosanna").unwrap();
+        assert!(local.is_local());
+        assert_eq!(local.domain, "");
+
+        let far = NodeRef::song("hosanna").in_domain("guest.example");
+        assert_eq!(far.to_token(), "guest.example/song:hosanna");
+        assert!(!far.is_local());
+        assert_eq!(NodeRef::parse(&far.to_token()), Some(far.clone()));
+
+        // An id may hold slashes and an anchor may hold colons; the
+        // domain is still read off the last slash *before* the kind.
+        let note = NodeRef::parse("acme.test/note:Projects/Album.md").unwrap();
+        assert_eq!(note.domain, "acme.test");
+        assert_eq!(note.kind, NodeKind::Note);
+        assert_eq!(note.id, "Projects/Album.md");
+
+        let anchored = NodeRef::parse("acme.test/song:hosanna#t:90").unwrap();
+        assert_eq!(anchored.domain, "acme.test");
+        assert_eq!(anchored.anchor, "t:90");
+        assert_eq!(anchored.anchor_kind(), Anchor::Timestamp(90));
+
+        // A local note with slashes is not mistaken for a qualified one.
+        let plain = NodeRef::parse("note:Projects/Album.md").unwrap();
+        assert!(plain.is_local());
+        assert_eq!(plain.id, "Projects/Album.md");
+    }
+
+    /// The kinds ADR 0003 adds for the sibling apps' assets.
+    #[test]
+    fn asset_kinds_round_trip() {
+        for token in [
+            "chart:doxology",
+            "patch:clean-strat",
+            "sample:kick-01",
+            "lighting:sunday-set",
+        ] {
+            let n = NodeRef::parse(token).unwrap_or_else(|| panic!("parse {token}"));
+            assert_eq!(n.to_token(), token);
+        }
+        assert_eq!(
+            NodeRef::parse("chart:doxology#chorus").unwrap().anchor,
+            "chorus"
+        );
+    }
 
     #[test]
     fn token_round_trips() {

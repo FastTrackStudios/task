@@ -39,6 +39,12 @@ pub mod link_sync;
 pub mod mcp;
 pub mod media;
 pub mod memberships;
+// Cross-org node resolution rides subscriptions, which are the wiki
+// feature's. Without it there is nothing to federate against and the
+// link store keeps its `NoFederation` default, which is the honest
+// answer for a single-org server.
+#[cfg(feature = "plugin-wiki")]
+pub mod node_homes;
 pub mod notifier;
 pub mod operator;
 pub mod org_roots;
@@ -1615,6 +1621,26 @@ pub(crate) async fn build_org_state(
         // the derived links the vault and sermon syncs mint). Opened
         // before scripture: the reader's backlinks read it.
         let links = links::Store::open(org_root.path().join("links.jsonl"));
+        // A reference naming another org resolves through the reader's
+        // own subscriptions (ADR 0003) — the store cannot answer that,
+        // so the server hands it a resolver that can.
+        #[cfg(feature = "plugin-wiki")]
+        let links = {
+            // `<data_root>/orgs/<slug>` → `<data_root>`: the resolver
+            // reads sibling orgs, so it needs the root above this one.
+            let orgs_dir = org_root
+                .path()
+                .parent()
+                .unwrap_or(org_root.path())
+                .to_path_buf();
+            let root = orgs_dir.parent().unwrap_or(&orgs_dir).to_path_buf();
+            links.with_homes(std::sync::Arc::new(node_homes::LocalHomes::new(
+                root,
+                wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok()),
+                org_root.slug(),
+                org_root.path().to_path_buf(),
+            )))
+        };
         // Scripture — read-only Bible spine loaded from the resource
         // library (`<org>/resources/bible/<TX>/`). A missing root yields
         // an empty store, so orgs without an installed corpus just show
@@ -1694,11 +1720,12 @@ pub(crate) async fn build_org_state(
         // JSONL at `<org>/collections.jsonl` (override via
         // `TASK_SERVER_COLLECTIONS_PATH`, mirroring the vault-root override
         // so tests can isolate it). A missing file is an empty store.
+        // The path itself is `example_org::collections_path` — the
+        // seeder writes the planted Library and Setlist there, and a
+        // second spelling here would serve an empty store over a world
+        // that had been planted correctly.
         #[cfg(feature = "plugin-fasttrackstudio")]
-        let collections_path = std::env::var("TASK_SERVER_COLLECTIONS_PATH")
-            .map_or_else(|_| org_root.path().join("collections.jsonl"), PathBuf::from);
-        #[cfg(feature = "plugin-fasttrackstudio")]
-        let collections = collection::Store::open(collections_path);
+        let collections = collection::Store::open(example_org::collections_path(&org_root));
         // Keep `note → verse` + `note → note` links live as notes are
         // saved: a background task syncs each changed note's
         // `[[wikilinks]]` into the store.

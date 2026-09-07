@@ -173,12 +173,23 @@ impl People {
 /// The password is the example's, so a token minted here and a sign-in
 /// on the demo server are the same credential.
 async fn sign_up(server: &crate::server::Server, member: example_org::Member) -> Person {
-    let name = member.name;
+    account(server, member.email, member.name).await
+}
+
+/// Create an account on `server` for somebody the example's cast does
+/// not name, and take its session.
+///
+/// The cast is the four people of *these two companies*, and it is
+/// deliberately not a directory of everyone who might ever hold a token.
+/// A chapter that boots a third org ([`crate::server::Server::start_beside`])
+/// needs somebody there to write with, and inventing that person in the
+/// cast would put them on the demo's sign-in picker for no reason.
+pub async fn account(server: &crate::server::Server, email: &str, name: &str) -> Person {
     let bundle = server
         .auth
         .auth
         .create_email_password_user(architect_auth::CreateEmailPasswordUser {
-            email: member.email.to_string(),
+            email: email.to_string(),
             password: example_org::PASSWORD.into(),
             name: Some(name.to_string()),
             username: None,
@@ -201,6 +212,6 @@ async fn sign_up(server: &crate::server::Server, member: example_org::Member) ->
     Person {
         subject: Subject::Person(PrincipalId::new(id)),
         token: bundle.token,
-        email: member.email.to_string(),
+        email: email.to_string(),
     }
 }

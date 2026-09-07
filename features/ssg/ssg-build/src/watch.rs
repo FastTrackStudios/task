@@ -92,9 +92,7 @@ pub fn on_change(
         }
     });
 
-    Ok(Watch {
-        _watcher: watcher,
-    })
+    Ok(Watch { _watcher: watcher })
 }
 
 /// Is this event a markdown write worth re-rendering for?

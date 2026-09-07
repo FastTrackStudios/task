@@ -19,7 +19,7 @@ pub mod service;
 
 pub use link::{Confidence, Provenance, Relation, TypedLink, Visibility};
 pub use node::{Anchor, NodeKind, NodeRef, format_timecode, parse_timecode};
-pub use service::{LinksError, LinksService};
+pub use service::{LinksError, LinksService, Reach, ResolvedNode};
 
 #[cfg(feature = "vox")]
 pub use service::{

@@ -1,0 +1,10 @@
+{
+  "rig": "helix",
+  "preset": "Warm Analog Pad",
+  "blocks": [
+    { "type": "amp", "model": "Vox AC30", "drive": 3.5 },
+    { "type": "delay", "model": "Analog Delay", "time_ms": 420, "feedback": 0.35 },
+    { "type": "reverb", "model": "Hall", "decay": 6.0, "mix": 0.45 }
+  ],
+  "notes": "Sits under the second chorus of Track One."
+}

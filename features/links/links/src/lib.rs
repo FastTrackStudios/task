@@ -12,10 +12,10 @@
 pub mod store;
 
 pub use links_proto::{
-    Confidence, LinksError, LinksService, NodeKind, NodeRef, Provenance, Relation, TypedLink,
-    Visibility,
+    Confidence, LinksError, LinksService, NodeKind, NodeRef, Provenance, Reach, Relation,
+    ResolvedNode, TypedLink, Visibility,
 };
-pub use store::Store;
+pub use store::{NoFederation, NodeHomes, Store};
 
 // architect-emitted vox bits, re-exported for the server mount.
 #[cfg(feature = "vox")]
