@@ -446,19 +446,19 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.7.1" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
 
 # ── FastTrackStudio monorepo — the music-production domains ───────────
 # These stay in the FTS monorepo; Task consumes them cross-repo. REPIN
