@@ -109,5 +109,24 @@ slow-timeout = { period = "20s", terminate-after = 3 }
 filter = 'package(wiki-live) and test(/repo_source|repo_sourced|working_copy/)'
 slow-timeout = { period = "15s", terminate-after = 3 }
 
+# The two binaries that boot a whole server before their first assertion.
+#
+# `profile.default` already gives `package(task-server)` 10s×3 for this
+# reason, and `profile.ci` did not carry the override across — so in CI
+# those tests ran against the bare 5s×3, a budget a third the size of the
+# one the same tests were judged to need locally. `task-cli`'s embedded
+# vox suite is here for the same reason and was not covered by either:
+# it starts an in-process server per test and then drives real CLI verbs
+# through it.
+#
+# This was not theoretical. `wiki_scaffold_over_embedded_vox` was killed
+# at 15.021s — not hung, just over by twenty milliseconds, while sharing
+# a 32-core box with 2,900 other tests. Passing or failing on how loaded
+# the runner happened to be is the definition of a flaky gate, and the
+# cure is the budget the default profile already agreed on.
+[[profile.ci.overrides]]
+filter = 'package(task-server) or (package(task-cli) and binary(vox_embedded))'
+slow-timeout = { period = "10s", terminate-after = 3 }
+
 [profile.patient]
 slow-timeout = { period = "30s", terminate-after = 4 }
