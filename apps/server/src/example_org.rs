@@ -688,7 +688,20 @@ pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
         body: "track-one.kf",
         demonstrates: "a Keyflow chart kept in Task between sessions — the `.kf` is the \
                        chart, an outside editor opens it, and `chart:track-one#chorus` \
-                       addresses a section",
+                       addresses a section; it is also `song:track-one`'s *default* \
+                       arrangement, the one a caller gets when it names no arrangement",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        library: "charts",
+        slug: "track-one-condensed-live",
+        manifest: "track-one-condensed-live.md",
+        body: "track-one-condensed-live.kf",
+        demonstrates: "one chart is one arrangement: a second reading of the *same* song, \
+                       joined to it by `song: song:track-one` and told apart by its \
+                       `arrangement` label — not a revision of the chart beside it, and not \
+                       the default, so a demo user can see both halves of the invariant in \
+                       the planted world",
     },
     DeclaredAsset {
         org: "acme-audio",
@@ -787,10 +800,16 @@ pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
         org: "acme-audio",
         title: "Chart Library",
         kind: "library",
-        items: &[("chart", "track-one"), ("chart", "track-two")],
+        items: &[
+            ("chart", "track-one"),
+            ("chart", "track-one-condensed-live"),
+            ("chart", "track-two"),
+        ],
         demonstrates: "a chart library is a `Collection` of kind `Library` over \
                        `chart:<slug>` references and nothing else — no chart service, \
-                       no chart store, no second vocabulary",
+                       no chart store, no second vocabulary — and it holds both \
+                       arrangements of Track One, because a library lists charts and one \
+                       song has as many as it is played ways",
     },
     DeclaredCollection {
         org: "acme-audio",

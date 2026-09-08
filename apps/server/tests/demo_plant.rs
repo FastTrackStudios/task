@@ -278,7 +278,7 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
     // And each lane's listing finds every one of its own, which is what
     // a library screen opens with.
     for (library, listed) in [
-        ("charts", lane.list_charts()?.len()),
+        ("charts", lane.list_charts("")?.len()),
         ("patches", lane.list_patches()?.len()),
         ("samples", lane.list_samples()?.len()),
         ("lighting", lane.list_lighting()?.len()),

@@ -29,7 +29,22 @@ fn chart(title: &str, source: &str, sections: &[&str]) -> ChartDoc {
         key: "A".into(),
         notation: "keyflow".into(),
         sections: sections.iter().map(|s| (*s).to_string()).collect(),
+        song: String::new(),
+        arrangement: String::new(),
+        is_default: false,
         updated_at: "2026-09-05T10:00:00Z".into(),
+    }
+}
+
+/// One arrangement of a song, as Keyflow saves it: the chart, the song
+/// it arranges, the label that tells it from the song's others, and
+/// whether it is asking to be the main one.
+fn arrangement(title: &str, song: &str, label: &str, is_default: bool) -> ChartDoc {
+    ChartDoc {
+        song: song.into(),
+        arrangement: label.into(),
+        is_default,
+        ..chart(title, DOXOLOGY, &["verse"])
     }
 }
 
@@ -74,7 +89,7 @@ async fn charts_round_trip_and_a_library_collects_them() {
     // plants a chart of its own (`chart:track-one`), so this asserts
     // what it wrote is present and in slug order — not that nothing
     // else is there.
-    let list = charts.list_charts().await.unwrap();
+    let list = charts.list_charts(String::new()).await.unwrap();
     let slugs: Vec<&str> = list.iter().map(|c| c.slug.as_str()).collect();
     assert!(
         slugs.contains(&"hosanna") && slugs.contains(&"doxology"),
@@ -141,7 +156,7 @@ async fn charts_round_trip_and_a_library_collects_them() {
             "the chart is gone"
         );
         let after: Vec<String> = charts
-            .list_charts()
+            .list_charts(String::new())
             .await
             .unwrap()
             .into_iter()
@@ -210,9 +225,87 @@ async fn re_saving_a_chart_keeps_the_manifest_body() {
     assert_eq!(doc.sections, ["verse-1", "chorus"]);
 
     // An empty title is refused, and writes nothing.
-    let before = charts.list_charts().await.unwrap().len();
+    let before = charts.list_charts(String::new()).await.unwrap().len();
     assert!(charts.upsert_chart(chart("", "| A |", &[])).await.is_err());
-    assert_eq!(charts.list_charts().await.unwrap().len(), before);
+    assert_eq!(
+        charts.list_charts(String::new()).await.unwrap().len(),
+        before
+    );
+}
+
+/// Two arrangements of one song, over the wire: saved as two charts,
+/// filtered back as one song's set, and the default moved between them
+/// by the server rather than by whoever wrote last.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_song_carries_several_arrangements_with_one_default() {
+    let (url, _tmp) = support::boot_ws().await.unwrap();
+    let charts: ResourcesServiceClient = vox::connect_lane(&url).establish().await.unwrap();
+
+    // The first chart of the song. It asks for nothing, and is the
+    // default anyway — a song with one chart and no main one is a state
+    // nothing can render.
+    let original = charts
+        .upsert_chart(arrangement(
+            "Be Thou My Vision",
+            "be-thou",
+            "original",
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(original.slug, "be-thou-my-vision-original");
+
+    let live = charts
+        .upsert_chart(arrangement(
+            "Be Thou My Vision",
+            "song:be-thou",
+            "condensed live",
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        live.slug, "be-thou-my-vision-condensed-live",
+        "the second arrangement is named for what it is, not `-2`"
+    );
+
+    // One call renders the song: its arrangements, their labels, and
+    // which one is the main one.
+    let of_song = charts.list_charts("be-thou".to_owned()).await.unwrap();
+    assert_eq!(of_song.len(), 2, "{of_song:?}");
+    assert!(
+        of_song.iter().all(|c| c.song == "song:be-thou"),
+        "a bare slug is normalised to this org's own song: {of_song:?}"
+    );
+    let default_of = |list: &[resources_proto::ChartSummary]| -> Vec<String> {
+        list.iter()
+            .filter(|c| c.is_default)
+            .map(|c| c.slug.clone())
+            .collect()
+    };
+    assert_eq!(default_of(&of_song), std::slice::from_ref(&original.slug));
+
+    // Asking moves it, and clears the loser in the same operation.
+    charts
+        .upsert_chart(ChartDoc {
+            slug: live.slug.clone(),
+            ..arrangement("Be Thou My Vision", "song:be-thou", "condensed live", true)
+        })
+        .await
+        .unwrap();
+    let after = charts.list_charts("song:be-thou".to_owned()).await.unwrap();
+    assert_eq!(default_of(&after), std::slice::from_ref(&live.slug));
+
+    // Deleting the default promotes the oldest remaining, so the song
+    // never has charts and no main one.
+    assert!(charts.delete_chart(live.slug).await.unwrap());
+    let left = charts.list_charts("song:be-thou".to_owned()).await.unwrap();
+    assert_eq!(default_of(&left), [original.slug]);
+
+    // The unfiltered list is still every chart the org holds — the seed
+    // plants some of its own.
+    let all = charts.list_charts(String::new()).await.unwrap();
+    assert!(all.len() > left.len(), "{all:?}");
 }
 
 /// The seed's own chart, planted from the committed example tree and

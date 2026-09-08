@@ -14,6 +14,18 @@
 //! task chart get hosanna | task chart save hosanna --title Hosanna --from -
 //! ```
 //!
+//! **One chart is one arrangement.** `--song` says which song a chart
+//! arranges, `--arrangement` says which reading of it this is, and
+//! `--default` makes it the one somebody gets when they ask for "the
+//! chart" of that song. `task chart list --song doxology` is then the
+//! song and its arrangements in one call, with the main one starred:
+//!
+//! ```text
+//! task chart save doxology.kf --title Doxology --song doxology --arrangement original --default
+//! task chart save live.kf --title Doxology --song doxology --arrangement 'condensed live'
+//! task chart list --song doxology
+//! ```
+//!
 //! Lives in its own module (like `plan` / `collection`) so concurrent
 //! agents editing `main.rs` only collide on the two-line dispatch arm.
 
@@ -47,6 +59,24 @@ pub enum ChartCmd {
         /// anchor is only addressable if the sections are declared here.
         #[arg(long = "section")]
         sections: Vec<String>,
+        /// The song this chart arranges: `song:doxology`, a bare
+        /// `doxology` (read as this org's own), or a qualified
+        /// `guest.example/song:hosanna`. Leave it off for a chart
+        /// nobody has attached to a song yet.
+        #[arg(long)]
+        song: Option<String>,
+        /// Which arrangement of that song this is — `original`,
+        /// `condensed live`. It also names the derived slug, so a
+        /// song's second chart is `doxology-condensed-live` rather than
+        /// `doxology-2`.
+        #[arg(long)]
+        arrangement: Option<String>,
+        /// Make this the song's main chart, clearing the flag on its
+        /// other arrangements. Leaving it off means *no opinion*: a
+        /// chart that is already the default stays it, and a song's
+        /// first chart becomes it regardless.
+        #[arg(long = "default")]
+        is_default: bool,
         /// Read the source from this file, or `-` for stdin. Without
         /// it, `slug_or_file` is read as the file.
         #[arg(long)]
@@ -68,8 +98,13 @@ pub enum ChartCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Every chart the org holds.
+    /// Every chart the org holds — or, with `--song`, one song's
+    /// arrangements, marked with which is the main one.
     List {
+        /// Only this song's charts: `song:doxology`, a bare
+        /// `doxology`, or a qualified `guest.example/song:hosanna`.
+        #[arg(long)]
+        song: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
@@ -98,6 +133,9 @@ pub async fn run_chart(cmd: ChartCmd, global_org: Option<&str>) -> eyre::Result<
             key,
             notation,
             sections,
+            song,
+            arrangement,
+            is_default,
             from,
             org,
             server,
@@ -113,6 +151,9 @@ pub async fn run_chart(cmd: ChartCmd, global_org: Option<&str>) -> eyre::Result<
                     key: key.unwrap_or_default(),
                     notation,
                     sections,
+                    song: song.unwrap_or_default(),
+                    arrangement: arrangement.unwrap_or_default(),
+                    is_default,
                     updated_at: chrono::Utc::now().to_rfc3339(),
                 })
                 .await
@@ -143,10 +184,16 @@ pub async fn run_chart(cmd: ChartCmd, global_org: Option<&str>) -> eyre::Result<
             }
             Ok(())
         }
-        ChartCmd::List { org, server, json } => {
+        ChartCmd::List {
+            song,
+            org,
+            server,
+            json,
+        } => {
             let client = client(org_of(org), server).await?;
+            let filter = song.unwrap_or_default();
             let list = client
-                .list_charts()
+                .list_charts(filter.clone())
                 .await
                 .map_err(|e| eyre::eyre!("list_charts: {e:?}"))?;
             if json {
@@ -154,17 +201,29 @@ pub async fn run_chart(cmd: ChartCmd, global_org: Option<&str>) -> eyre::Result<
                 return Ok(());
             }
             if list.is_empty() {
-                println!("no charts yet");
+                if filter.is_empty() {
+                    println!("no charts yet");
+                } else {
+                    println!("no charts of `{filter}`");
+                }
                 return Ok(());
             }
             for c in &list {
+                // A leading `*` is the song's main chart, and the
+                // arrangement label is what tells the rest apart.
                 println!(
-                    "{:<32} {:<4} {:<9} {:>2} sections  {}",
+                    "{} {:<32} {:<4} {:<9} {:>2} sections  {}{}",
+                    if c.is_default { "*" } else { " " },
                     c.slug,
                     c.key,
                     c.notation,
                     c.sections.len(),
-                    c.title
+                    c.title,
+                    if c.arrangement.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", c.arrangement)
+                    }
                 );
             }
             Ok(())

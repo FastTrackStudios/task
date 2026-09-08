@@ -895,47 +895,62 @@ pub fn tool_catalog() -> Vec<ToolDef> {
 /// The descriptions teach the loop: `list_charts` before guessing a
 /// slug, `read_chart` before rewriting one, `delete_chart` when a chart
 /// is retired, and sections declared explicitly because nothing on the
-/// server parses chart source.
+/// server parses chart source. They also teach that one chart is one
+/// *arrangement*, since the mistake a model makes otherwise is rewriting
+/// a song's only chart when it was asked for a second version of it.
 ///
 /// **Why these four tools also exist on plain HTTP.** ADR 0003 makes
 /// the sibling apps ordinary clients of Task, and the transport it
 /// names is vox over a WebSocket — the same lane Task's own web client
-/// rides, typed end to end. Keyflow cannot take that lane *yet*: it
-/// pins architect v0.0.2 while Task is on v0.7.1, and two architect
-/// majors in one wasm binary means two reqwest majors, which fails at
-/// link time with duplicate `intounderlyingsource_*` symbols out of
-/// rust-lld (Keyflow's own `apps/web/Cargo.toml` documents the
-/// failure). Until that pin moves, a browser app that can only reach
-/// Task with `fetch` and a bearer token needs a surface that is
-/// `fetch` and a bearer token — and MCP over Streamable HTTP already
-/// is one, authenticated and org-resolved for every other tool here.
+/// rides, typed end to end. Keyflow could not take that lane when these
+/// tools were written: it pinned architect v0.0.2 against Task's v0.7.1,
+/// and two copies of the architect crates in one wasm binary do not
+/// link. A browser app that could only reach Task with `fetch` and a
+/// bearer token needed a surface that was `fetch` and a bearer token,
+/// and MCP over Streamable HTTP already is one — authenticated and
+/// org-resolved for every other tool here.
 ///
-/// So this is a bridge, not a second API. The tools are thin wrappers
-/// over the very same `ResourcesService` methods (`upsert_chart`,
-/// `chart`, `list_charts`, `delete_chart`) the vox lane mounts: a
-/// chart written through MCP is byte-for-byte the chart the vox lane
-/// reads, because there is only one chart store and neither lane owns
-/// it. When Keyflow's architect pin moves, it should move to vox and
-/// these tools stay for what they were built for — agents.
+/// That pin has since moved: both repositories are on v0.8.2, so the
+/// obstacle is gone and Keyflow's client should migrate to vox. These
+/// tools stay regardless, for what they were built for — agents.
+///
+/// It was always a bridge rather than a second API. The tools are thin
+/// wrappers over the very same `ResourcesService` methods
+/// (`upsert_chart`, `chart`, `list_charts`, `delete_chart`) the vox lane
+/// mounts: a chart written through MCP is byte-for-byte the chart the
+/// vox lane reads, because there is only one chart store and neither
+/// lane owns it.
 fn chart_tool_catalog() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "list_charts",
             plugin: "core",
             description: "List the org's Keyflow charts: slug, title, key, notation, section \
-                          names and when each was last written. The chart SOURCE is not here \
-                          — a listing must not carry every chart's full text; read_chart \
-                          fetches one. Call this FIRST: read_chart, write_chart and \
-                          delete_chart take a `slug` from here, and a chart is referenced \
-                          elsewhere in the graph as `chart:<slug>`.",
-            schema: || obj(json!({}), &[]),
+                          names, the song each arranges, its arrangement label, whether it is \
+                          that song's main chart, and when each was last written. The chart \
+                          SOURCE is not here — a listing must not carry every chart's full \
+                          text; read_chart fetches one. Call this FIRST: read_chart, \
+                          write_chart and delete_chart take a `slug` from here, and a chart \
+                          is referenced elsewhere in the graph as `chart:<slug>`. Pass `song` \
+                          to see one song's arrangements only.",
+            schema: || {
+                obj(
+                    json!({
+                        "song": s_("Only charts of this song: 'song:doxology', a bare \
+                                    'doxology' (this org's own), or a qualified \
+                                    'guest.example/song:hosanna'. Omit for every chart."),
+                    }),
+                    &[],
+                )
+            },
         },
         ToolDef {
             name: "read_chart",
             plugin: "core",
-            description: "Read one chart in full: its Keyflow source plus title, key, notation \
-                          and sections. Read before writing — write_chart replaces the source \
-                          outright, so an edit means fetching the current text first.",
+            description: "Read one chart in full: its Keyflow source plus title, key, notation, \
+                          sections, the song it arranges and its arrangement label. Read before \
+                          writing — write_chart replaces the source outright, so an edit means \
+                          fetching the current text first.",
             schema: || {
                 obj(
                     json!({ "slug": s_("Chart slug, from list_charts.") }),
@@ -948,10 +963,13 @@ fn chart_tool_catalog() -> Vec<ToolDef> {
             plugin: "core",
             description: "Create or replace a chart. Pass `slug` to update an existing chart \
                           (from list_charts); omit it to create one, and the slug is derived \
-                          from the title. The `source` is stored verbatim as \
-                          `resources/charts/<slug>.kf`. `sections` must be listed here — the \
-                          server does not parse chart source, and an unlisted section is not \
-                          addressable as `chart:<slug>#<section>`.",
+                          from the title and the arrangement label. The `source` is stored \
+                          verbatim as `resources/charts/<slug>.kf`. `sections` must be listed \
+                          here — the server does not parse chart source, and an unlisted \
+                          section is not addressable as `chart:<slug>#<section>`. ONE CHART IS \
+                          ONE ARRANGEMENT: to add a second version of a song (a condensed live \
+                          cut, an acoustic reading) omit `slug` and pass the same `song` with a \
+                          different `arrangement` — do NOT overwrite the existing chart.",
             schema: || {
                 obj(
                     json!({
@@ -969,6 +987,17 @@ fn chart_tool_catalog() -> Vec<ToolDef> {
                                             'chorus') — the anchors a chart:<slug>#<section> \
                                             reference addresses.",
                         }),
+                        "song": s_("The song this chart arranges: 'song:doxology', a bare \
+                                    'doxology' (this org's own), or a qualified \
+                                    'guest.example/song:hosanna'. Omit for a chart not yet \
+                                    attached to a song, which is a valid state."),
+                        "arrangement": s_("Which reading of the song this is: 'original', \
+                                           'condensed live', 'acoustic in G'. Free text, and \
+                                           it names the derived slug."),
+                        "default": b_("Make this the song's main chart, clearing the flag on \
+                                       its other arrangements. Omitting it means no opinion: a \
+                                       chart that is already the default stays it, and a \
+                                       song's first chart becomes it regardless."),
                     }),
                     &["title", "source"],
                 )
@@ -3776,8 +3805,9 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
 
     match name {
         "list_charts" => {
+            let song = arg_str(args, "song").unwrap_or_default();
             let list = charts
-                .list_charts()
+                .list_charts(&song)
                 .map_err(|e| chart_err("list charts", &org.slug, &e))?;
             let out: Vec<Value> = list
                 .iter()
@@ -3788,6 +3818,9 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                         "key": c.key,
                         "notation": c.notation,
                         "sections": c.sections,
+                        "song": c.song,
+                        "arrangement": c.arrangement,
+                        "is_default": c.is_default,
                         "rel_path": c.rel_path,
                         "updated_at": c.updated_at,
                         "node": format!("chart:{}", c.slug),
@@ -3799,7 +3832,10 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 "charts": out,
                 "note": "No `source` here — read_chart fetches one chart's text. Pass `slug` \
                          to read_chart / write_chart / delete_chart. `node` is how a \
-                         collection or a link references the chart.",
+                         collection or a link references the chart. Charts sharing a `song` \
+                         are arrangements of it, told apart by `arrangement`; exactly one of \
+                         them has `is_default` — that is the one to open when nobody named \
+                         an arrangement.",
             }))
         }
 
@@ -3815,6 +3851,9 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 "key": doc.key,
                 "notation": doc.notation,
                 "sections": doc.sections,
+                "song": doc.song,
+                "arrangement": doc.arrangement,
+                "is_default": doc.is_default,
                 "updated_at": doc.updated_at,
             }))
         }
@@ -3833,15 +3872,32 @@ fn chart_tool(org: &crate::OrgAppState, name: &str, args: &Value) -> Result<Valu
                 key: arg_str(args, "key").unwrap_or_default(),
                 notation: arg_str(args, "notation").unwrap_or_else(|| "keyflow".into()),
                 sections: arg_str_list(args, "sections")?.unwrap_or_default(),
+                song: arg_str(args, "song").unwrap_or_default(),
+                arrangement: arg_str(args, "arrangement").unwrap_or_default(),
+                // `default` on the wire, `is_default` on the doc: the
+                // tool argument reads as English and the field reads as
+                // a field.
+                is_default: arg_bool(args, "default"),
                 updated_at: chrono::Utc::now().to_rfc3339(),
             };
+            let song = doc.song.clone();
             let out = charts
                 .upsert_chart(doc)
                 .map_err(|e| chart_err("write chart", &out_slug(args), &e))?;
+            // Which chart is now the song's main one — the server may
+            // have decided differently from what was asked (a song's
+            // first chart is its default whatever it asked for), and a
+            // caller that has to list again to find out will not.
+            let is_default = charts
+                .list_charts(&song)
+                .map(|l| l.iter().any(|c| c.slug == out.slug && c.is_default))
+                .unwrap_or_default();
             Ok(json!({
                 "slug": out.slug,
                 "rel_path": out.rel_path,
                 "created": out.created,
+                "song": song,
+                "is_default": is_default,
                 "node": format!("chart:{}", out.slug),
             }))
         }
