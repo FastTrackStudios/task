@@ -1604,12 +1604,9 @@ async fn mcp_dispatch(
         "ping" => Json(rpc_result(id, json!({}))).into_response(),
         "tools/list" => {
             let Some(target) = default_slug(&state, &pinned, &headers).await else {
-                return Json(rpc_error(
-                    id,
-                    code::INVALID_REQUEST,
-                    "no reachable org for this token",
-                ))
-                .into_response();
+                let caller = classify_caller(&state, &headers).await;
+                return Json(rpc_error(id, code::INVALID_REQUEST, caller.refusal()))
+                    .into_response();
             };
             match authenticate_for(&state, &target, &headers).await {
                 Ok(org) => {
@@ -1643,12 +1640,19 @@ async fn mcp_dispatch(
                     None => match default_slug(&state, &pinned, &headers).await {
                         Some(s) => s,
                         None => {
-                            return Json(rpc_error(
-                                id,
-                                code::INVALID_REQUEST,
-                                "no reachable org — pass `org`, or check `list_orgs`",
-                            ))
-                            .into_response();
+                            // Only a caller we can actually place is
+                            // told to name an org; the other two have
+                            // nothing to name it with.
+                            let caller = classify_caller(&state, &headers).await;
+                            let msg = match caller {
+                                Caller::Known => concat!(
+                                    "your account does not belong to any organization on this ",
+                                    "server yet — ask for a personal one, pass `org`, or check ",
+                                    "`list_orgs`"
+                                ),
+                                ref other => other.refusal(),
+                            };
+                            return Json(rpc_error(id, code::INVALID_REQUEST, msg)).into_response();
                         }
                     },
                 },
@@ -2073,6 +2077,68 @@ pub async fn reachable_orgs(state: &AppState, headers: &HeaderMap) -> Vec<String
     }
     reachable.sort();
     reachable
+}
+
+/// What this server can say about the caller before any org is chosen.
+///
+/// [`reachable_orgs`] answers with a list, and an empty list has two
+/// completely different causes: a token nobody recognises, and a real
+/// account that belongs to nothing yet. Collapsing them told a client
+/// holding a dead token that its *account* had no workspace, which sends
+/// someone to look for a provisioning problem when what they need is to
+/// sign in again. (Found exactly that way: a Keyflow client sent a bogus
+/// bearer and was told to check `list_orgs`.)
+enum Caller {
+    /// No `Authorization` header at all.
+    Anonymous,
+    /// A token this server cannot place: expired, revoked, or invented.
+    Unrecognised,
+    /// A real account. Carries no org list on purpose: the only callers
+    /// are the two sites where [`default_slug`] already came back empty,
+    /// so reaching this variant means the account belongs to nothing.
+    Known,
+}
+
+impl Caller {
+    /// The refusal to send. Each names the actual next move, which is
+    /// different in all three cases.
+    fn refusal(&self) -> &'static str {
+        match self {
+            Self::Anonymous => {
+                "no bearer token — send `Authorization: Bearer <token>` from your \
+                 FastTrackStudio sign-in"
+            }
+            Self::Unrecognised => {
+                "this token is not recognised — it has expired or been revoked. Sign in again."
+            }
+            Self::Known => {
+                "your account does not belong to any organization on this server yet — \
+                 ask for a personal one, or have someone add you"
+            }
+        }
+    }
+}
+
+/// Classify the caller, reusing [`reachable_orgs`] for the common path
+/// and paying the issuer round trip only when the answer was empty —
+/// which is the rare case, and the only one where the distinction
+/// between "unknown token" and "no orgs" can be drawn.
+async fn classify_caller(state: &AppState, headers: &HeaderMap) -> Caller {
+    let Some(token) = crate::watch_bridge::bearer(headers) else {
+        return Caller::Anonymous;
+    };
+    let reachable = reachable_orgs(state, headers).await;
+    if !reachable.is_empty() {
+        return Caller::Known;
+    }
+    // Empty. Either nobody knows this token, or the issuer does and the
+    // account simply has no memberships. Only the issuer can tell us,
+    // and a server with no issuer configured has already exhausted every
+    // local store above — so an empty answer there is an unknown token.
+    match crate::central_auth::configured() {
+        Some(central) if central.user_for(&token).await.is_some() => Caller::Known,
+        _ => Caller::Unrecognised,
+    }
 }
 
 /// Org slugs the home org's memberships table holds for this token's
