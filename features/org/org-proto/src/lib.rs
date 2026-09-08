@@ -27,6 +27,7 @@ pub use mount::{KnowledgeTree, TreePlace};
 pub use root::{DEFAULT_WIKI, DataRoot, OrgRoot, RootError, default_client_vault_root, wiki_slug};
 pub use service::{
     CreateOrgRequest, OrgManagementError, OrgManagementService, OrgManagementServiceRpc,
+    PersonalOrgRequest,
 };
 
 #[cfg(feature = "vox")]

@@ -179,6 +179,41 @@ Server state for a new asset kind is added the way every lane is: a
 `plugin`-guarded branch in `org_layer_router`. Screens, note widgets, fences
 and link claims need none of that — `PluginApp` already carries them.
 
+### 5. Every account gets one personal org, on first ask
+
+Decision 4 leaves a hole, and it is the first thing a new person meets.
+An account that has just signed up belongs to no organisation:
+`memberships::role_for` returns `None` everywhere, so every lane refuses
+— correctly — and `create_org` is fenced to home-org principals, so
+there is no move that gets them out of it. Keyflow can sign a person in
+and then offer them nowhere to put a chart.
+
+`OrgManagementService::ensure_personal_org` answers exactly that state,
+and nothing else. It takes a token and no other argument: **the slug is
+derived from the principal**, as a sanitised email local part plus the
+first eight hex digits of the account id. That one property is what
+makes it safe to expose where `create_org` is not — the call grants one
+org, to the account that asked, and cannot be aimed at anyone else's
+slug. It writes the `owner` membership row itself, because an org its
+requester cannot read is worse than no org.
+
+Deriving the slug rather than storing a mapping also makes the call
+idempotent for free: same account, same slug, so a client never has to
+remember whether it has provisioned yet. If the derived slug is already
+on disk, the call returns it when the caller has a row and refuses when
+they do not — a derived name must never adopt an existing org.
+
+It is fenced on identity and *unfenced on membership*, which is the
+inversion of every other call here and the reason it is the only one:
+being unknown to the issuer still gets nothing. A personal org is never
+the home org, and on a server with no home org the call refuses rather
+than claiming the home slot for whoever asked first.
+
+The cost is that anyone who can sign up at the issuer can cause one org
+directory to exist on the server. That is the same exposure as sign-up
+itself, bounded at one org per account by construction, but it does mean
+storage now grows with registrations rather than with invitations.
+
 ## Consequences
 
 **A setlist can finally span organisations.** The thing the four apps each

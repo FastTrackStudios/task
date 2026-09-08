@@ -49,6 +49,25 @@ pub(crate) enum OrgCmd {
         #[arg(long)]
         home: bool,
     },
+    /// Ask the server for your own personal org, creating it
+    /// on the first call.
+    ///
+    /// This is what a brand-new account uses. An account that
+    /// belongs to no org can reach nothing — every lane fences
+    /// on a membership row — and `org create` will not help,
+    /// because it is itself fenced to home-org principals.
+    /// This call is not, because it takes no slug: the server
+    /// derives one from your account, so it can only ever hand
+    /// you an org of your own.
+    ///
+    /// Idempotent. Run it as often as you like; the second
+    /// call returns the org the first one made.
+    Mine {
+        /// Server URL. Defaults to the active session's home
+        /// server URL when set, else `http://127.0.0.1:18080`.
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Ask the server to list its hosted orgs (the wire
     /// equivalent of `/.well-known/task-server.json`).
     /// Defaults to the active session's home server URL.
@@ -115,6 +134,23 @@ pub(crate) async fn run_org(cmd: OrgCmd) -> eyre::Result<()> {
             println!("  id:         {}", manifest.id);
             println!("  name:       {}", manifest.display_name);
             println!("  is_home:    {}", manifest.is_home);
+            println!("  server vox: {url}");
+        }
+        OrgCmd::Mine { server } => {
+            let token = crate::session_store::load()?
+                .and_then(|s| s.servers.get(&s.active).map(|e| e.token.clone()))
+                .unwrap_or_default();
+            let (client, url): (org_proto::OrgManagementServiceClient, _) =
+                establish_server_client(server.as_deref()).await?;
+            let manifest = client
+                .ensure_personal_org(org_proto::PersonalOrgRequest {
+                    session_token: token,
+                })
+                .await
+                .map_err(|e| eyre::eyre!("ensure_personal_org: {e:?}"))?;
+            println!("Your personal org is `{}`", manifest.slug);
+            println!("  id:         {}", manifest.id);
+            println!("  name:       {}", manifest.display_name);
             println!("  server vox: {url}");
         }
         OrgCmd::Init { slug, name, home } => {
