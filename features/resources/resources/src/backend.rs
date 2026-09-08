@@ -67,6 +67,17 @@ pub const SERMONS_BASE: &str = "Sermons.base";
 pub struct ResourcesBackend {
     /// `<org>/resources`.
     root: Arc<PathBuf>,
+    /// Serialises the read-decide-rewrite the chart default invariant
+    /// needs (see [`ResourcesBackend::reconcile_song_defaults`]).
+    ///
+    /// The invariant is a statement about a *set* of files, so the
+    /// decision is only sound if nobody else is editing that set
+    /// between the read and the writes. Two Keyflow tabs both saving an
+    /// arrangement of one song is the ordinary case, and without this
+    /// they interleave into a song with two defaults — or none.
+    /// Clones share the lock, which is what makes it hold across the
+    /// per-request clones the RPC layer hands out.
+    chart_defaults: Arc<std::sync::Mutex<()>>,
     /// `<org>/wikis`, when the host has named wikis — sermons synced
     /// with a `wiki` land under `<wikis>/<wiki>/Resources/Sermons/`.
     wikis: Option<Arc<PathBuf>>,
@@ -81,6 +92,7 @@ impl ResourcesBackend {
             root: Arc::new(resources_root.into()),
             wikis: None,
             links: None,
+            chart_defaults: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -123,9 +135,94 @@ impl ResourcesBackend {
             key: r.resource.key.clone(),
             notation: r.resource.notation.clone(),
             sections: r.resource.sections.clone(),
+            song: r.resource.song.clone(),
+            arrangement: r.resource.arrangement.clone(),
+            is_default: r.resource.is_default,
             rel_path: self.rel(&r.path),
             updated_at: r.resource.updated_at.clone(),
         }
+    }
+
+    /// Make exactly one of a song's charts the default, and write the
+    /// flag onto disk wherever it disagrees.
+    ///
+    /// This is the whole of the invariant
+    /// [`resources_proto::ResourcesService::upsert_chart`] documents,
+    /// in one place, run after every write and every delete. Doing it
+    /// as a *reconciliation* rather than as a patch applied at each
+    /// call site is deliberate: an upsert, a delete and a manifest
+    /// somebody hand-edited in an editor all leave the same question —
+    /// "which of this song's charts is the main one?" — and one answer
+    /// is easier to keep right than three.
+    ///
+    /// The winner, in order:
+    ///
+    /// 1. `prefer`, when the caller has just asked for it — the write
+    ///    that says "make this the main chart" wins over what was
+    ///    flagged before, because it is the more recent statement of
+    ///    intent.
+    /// 2. Otherwise a chart already flagged, so an ordinary save of a
+    ///    non-default arrangement disturbs nothing. Where more than one
+    ///    is flagged (a hand-edited tree, or a manifest restored from
+    ///    backup), the oldest of them wins and the rest are cleared.
+    /// 3. Otherwise the **oldest remaining** chart — earliest
+    ///    `updated_at`, ties broken by slug. This is the promotion rule
+    ///    on delete. Oldest rather than newest because a song's first
+    ///    chart is in practice the one the arrangements were cut down
+    ///    from: losing a condensed live version that had been made the
+    ///    main one should fall back to the original, not to whichever
+    ///    alternate happened to be edited most recently. Slug breaks
+    ///    ties so charts that track no timestamp still resolve
+    ///    deterministically rather than by directory order.
+    ///
+    /// A song with no charts left is nothing to reconcile, and charts
+    /// with no song are never touched: each of those is independent,
+    /// and "the default one" is not a question about them.
+    fn reconcile_song_defaults(
+        &self,
+        song: &str,
+        prefer: Option<&str>,
+    ) -> Result<(), ResourcesError> {
+        if song.is_empty() {
+            return Ok(());
+        }
+        let mut siblings: Vec<LoadedResource> = self
+            .charts()
+            .into_iter()
+            .filter(|r| r.resource.song == song)
+            .collect();
+        if siblings.is_empty() {
+            return Ok(());
+        }
+        // Oldest first, by (updated_at, slug) — the order rules 2 and 3
+        // both read the set in.
+        siblings.sort_by(|a, b| {
+            (&a.resource.updated_at, &a.resource.slug)
+                .cmp(&(&b.resource.updated_at, &b.resource.slug))
+        });
+
+        let winner = prefer
+            .filter(|s| siblings.iter().any(|r| r.resource.slug == *s))
+            .map(str::to_owned)
+            .or_else(|| {
+                siblings
+                    .iter()
+                    .find(|r| r.resource.is_default)
+                    .map(|r| r.resource.slug.clone())
+            })
+            .unwrap_or_else(|| siblings[0].resource.slug.clone());
+
+        for r in &siblings {
+            let want = r.resource.slug == winner;
+            if r.resource.is_default == want {
+                continue;
+            }
+            let existing =
+                std::fs::read_to_string(&r.path).map_err(|e| ResourcesError::Io(e.to_string()))?;
+            let out = chart::set_default(&existing, want).map_err(|e| io_err(&e))?;
+            std::fs::write(&r.path, out).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        }
+        Ok(())
     }
 
     // ── The directory-shaped asset lanes ─────────────────────────
@@ -650,6 +747,23 @@ impl ResourcesService for ResourcesBackend {
         if chart_doc.title.trim().is_empty() {
             return Err(ResourcesError::BadRequest("title is empty".into()));
         }
+        let mut chart_doc = chart_doc;
+        chart_doc.song = chart::song_token(&chart_doc.song)
+            .map_err(|e| ResourcesError::BadRequest(e.to_string()))?
+            .unwrap_or_default();
+        // An unattached chart is independent — "which is the default
+        // one?" is a question about a song, and this chart names none —
+        // so the flag never sticks to one.
+        if chart_doc.song.is_empty() {
+            chart_doc.is_default = false;
+        }
+        // Everything from here to the reconcile is one decision about a
+        // *set* of charts, so it is taken under the lock; see
+        // [`ResourcesBackend::chart_defaults`].
+        let _defaults = self
+            .chart_defaults
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let existing = self.charts();
         let taken: Vec<String> = existing.iter().map(|r| r.resource.slug.clone()).collect();
         let slug = chart::slug_for(&taken, &chart_doc);
@@ -664,11 +778,23 @@ impl ResourcesService for ResourcesBackend {
         }
 
         let root = self.charts_root();
+        let prior = existing.iter().find(|r| r.resource.slug == slug);
+        // `is_default: false` is *no opinion*, not "demote me". A
+        // client that never tracked the flag — Keyflow saving an edit
+        // to the source, the CLI without `--default` — would otherwise
+        // hand the song's default to some other chart every time
+        // somebody fixed a typo. So a chart that is already the default
+        // of the song it is still attached to stays it, and the only
+        // way to move a default is to ask for it on another chart.
+        //
+        // Re-attaching a chart to a *different* song does drop the
+        // flag: it was the old song's main chart, and it has no claim
+        // on the new song's.
+        let was_default =
+            prior.is_some_and(|r| r.resource.is_default && r.resource.song == chart_doc.song);
+        chart_doc.is_default = chart_doc.is_default || was_default;
         // A known slug keeps the file it is already in.
-        let md_path = existing
-            .iter()
-            .find(|r| r.resource.slug == slug)
-            .map_or_else(|| root.join(format!("{slug}.md")), |r| r.path.clone());
+        let md_path = prior.map_or_else(|| root.join(format!("{slug}.md")), |r| r.path.clone());
         let (md, created) = match std::fs::read_to_string(&md_path) {
             Ok(old) => (
                 chart::refresh_manifest(&old, &chart_doc).map_err(|e| io_err(&e))?,
@@ -685,6 +811,16 @@ impl ResourcesService for ResourcesBackend {
         // The source is the chart: stored verbatim, never re-rendered.
         std::fs::write(chart::source_path(&md_path), &chart_doc.source)
             .map_err(|e| ResourcesError::Io(e.to_string()))?;
+
+        // The flag the caller asked for is a request; the invariant is
+        // settled by re-reading the song's charts now that this one is
+        // among them. `prefer` carries the request through: asking to
+        // be the default wins, and not asking leaves whatever the song
+        // already had — unless it had nothing, in which case this write
+        // has just given the song its first chart and that chart is the
+        // main one whatever it asked for.
+        let prefer = chart_doc.is_default.then_some(slug.as_str());
+        self.reconcile_song_defaults(&chart_doc.song, prefer)?;
 
         Ok(ChartUpsert {
             slug,
@@ -711,23 +847,37 @@ impl ResourcesService for ResourcesBackend {
             key: found.resource.key,
             notation: found.resource.notation,
             sections: found.resource.sections,
+            song: found.resource.song,
+            arrangement: found.resource.arrangement,
+            is_default: found.resource.is_default,
             updated_at: found.resource.updated_at,
         })
     }
 
-    fn list_charts(&self) -> Result<Vec<ChartSummary>, ResourcesError> {
+    fn list_charts(&self, song: &str) -> Result<Vec<ChartSummary>, ResourcesError> {
+        // The filter is read the same way a chart's own `song` is, so
+        // `list_charts("doxology")` and `list_charts("song:doxology")`
+        // are the same question.
+        let want =
+            chart::song_token(song).map_err(|e| ResourcesError::BadRequest(e.to_string()))?;
         Ok(self
             .charts()
             .iter()
+            .filter(|r| want.as_ref().is_none_or(|s| r.resource.song == *s))
             .map(|r| self.chart_summary(r))
             .collect())
     }
 
     fn delete_chart(&self, slug: &str) -> Result<bool, ResourcesError> {
         safe_segment(slug, "slug")?;
+        let _defaults = self
+            .chart_defaults
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(found) = self.charts().into_iter().find(|r| r.resource.slug == slug) else {
             return Ok(false);
         };
+        let song = found.resource.song.clone();
         for path in [chart::source_path(&found.path), found.path] {
             match std::fs::remove_file(&path) {
                 Ok(()) => {}
@@ -735,6 +885,10 @@ impl ResourcesService for ResourcesBackend {
                 Err(e) => return Err(ResourcesError::Io(e.to_string())),
             }
         }
+        // Deleting the default leaves the song with none, which the
+        // invariant forbids while it still has a chart at all: the
+        // reconcile promotes the oldest remaining.
+        self.reconcile_song_defaults(&song, None)?;
         Ok(true)
     }
 
@@ -1175,7 +1329,21 @@ mod tests {
             key: "A".into(),
             notation: "keyflow".into(),
             sections: vec!["verse-1".into(), "chorus".into()],
+            song: String::new(),
+            arrangement: String::new(),
+            is_default: false,
             updated_at: "2026-09-05T10:00:00Z".into(),
+        }
+    }
+
+    /// One arrangement of a song: the chart, the label that tells it
+    /// from the song's others, and what it asks to be.
+    fn arrangement(title: &str, song: &str, label: &str, is_default: bool) -> ChartDoc {
+        ChartDoc {
+            song: song.into(),
+            arrangement: label.into(),
+            is_default,
+            ..chart_doc(title, "| A |")
         }
     }
 
@@ -1206,7 +1374,7 @@ mod tests {
         assert_eq!(back.key, "A");
         assert_eq!(back.sections, ["verse-1", "chorus"]);
 
-        let list = be.list_charts().unwrap();
+        let list = be.list_charts("").unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].slug, "great-are-you-lord");
         assert_eq!(list[0].notation, "keyflow");
@@ -1235,7 +1403,7 @@ mod tests {
         assert_eq!(first.slug, "hosanna");
         assert_eq!(second.slug, "hosanna-2");
         assert!(second.created);
-        assert_eq!(be.list_charts().unwrap().len(), 2);
+        assert_eq!(be.list_charts("").unwrap().len(), 2);
 
         let mut again = chart_doc("Hosanna (Live)", "| D |");
         again.slug = "hosanna".into();
@@ -1243,7 +1411,7 @@ mod tests {
         assert_eq!(update.slug, "hosanna");
         assert!(!update.created, "a named slug updates rather than forks");
         assert_eq!(be.chart("hosanna").unwrap().source, "| D |");
-        assert_eq!(be.list_charts().unwrap().len(), 2);
+        assert_eq!(be.list_charts("").unwrap().len(), 2);
     }
 
     #[test]
@@ -1281,7 +1449,309 @@ mod tests {
             be.upsert_chart(chart_doc("—", "| A |")),
             Err(ResourcesError::BadRequest(_))
         ));
-        assert!(be.list_charts().unwrap().is_empty());
+        assert!(be.list_charts("").unwrap().is_empty());
+    }
+
+    // ── Arrangements, and the default invariant ──────────────────
+
+    /// Which of a song's charts is flagged, by slug.
+    fn default_of(be: &ResourcesBackend, song: &str) -> Vec<String> {
+        be.list_charts(song)
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.is_default)
+            .map(|c| c.slug)
+            .collect()
+    }
+
+    /// The three fields, end to end: two arrangements of one song, told
+    /// apart by their labels, named by their labels, and filtered to
+    /// the song in one call.
+    #[test]
+    fn two_arrangements_of_one_song_are_two_charts_that_know_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        let original = be
+            .upsert_chart(arrangement("Doxology", "song:doxology", "original", true))
+            .unwrap();
+        let live = be
+            .upsert_chart(arrangement(
+                "Doxology",
+                "song:doxology",
+                "condensed live",
+                false,
+            ))
+            .unwrap();
+        assert_eq!(original.slug, "doxology-original");
+        assert_eq!(
+            live.slug, "doxology-condensed-live",
+            "the second arrangement is named for what it is, not `-2`"
+        );
+
+        let of_song = be.list_charts("song:doxology").unwrap();
+        assert_eq!(of_song.len(), 2);
+        assert_eq!(
+            of_song
+                .iter()
+                .map(|c| c.arrangement.as_str())
+                .collect::<Vec<_>>(),
+            ["condensed live", "original"],
+            "the labels come back with the list — one call renders the song"
+        );
+        assert_eq!(default_of(&be, "song:doxology"), ["doxology-original"]);
+
+        // The filter reads a bare slug the same way the field does, and
+        // an unrelated song sees none of this.
+        assert_eq!(be.list_charts("doxology").unwrap().len(), 2);
+        assert!(be.list_charts("song:hosanna").unwrap().is_empty());
+    }
+
+    /// The four halves of the invariant, in the order a person meets
+    /// them: the first chart is the default whatever it asked for, a
+    /// later one that asks takes it, the loser is cleared, and asking
+    /// for nothing changes nothing.
+    #[test]
+    fn a_song_has_exactly_one_default_chart() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        // 1. The first chart of a song is the default even though it
+        //    asked not to be — a song with one chart and no main one is
+        //    a state nothing can render.
+        be.upsert_chart(arrangement("Doxology", "song:doxology", "original", false))
+            .unwrap();
+        assert_eq!(default_of(&be, "song:doxology"), ["doxology-original"]);
+
+        // 2. A second arrangement that asks for nothing leaves it
+        //    alone.
+        be.upsert_chart(arrangement(
+            "Doxology",
+            "song:doxology",
+            "condensed live",
+            false,
+        ))
+        .unwrap();
+        assert_eq!(default_of(&be, "song:doxology"), ["doxology-original"]);
+
+        // 3. One that asks takes it, and the other is cleared in the
+        //    same operation.
+        be.upsert_chart(ChartDoc {
+            slug: "doxology-condensed-live".into(),
+            is_default: true,
+            ..arrangement("Doxology", "song:doxology", "condensed live", true)
+        })
+        .unwrap();
+        assert_eq!(
+            default_of(&be, "song:doxology"),
+            ["doxology-condensed-live"],
+            "two defaults, or none, is the failure this invariant exists to stop"
+        );
+
+        // 4. A chart of a *different* song is nobody else's business.
+        be.upsert_chart(arrangement("Hosanna", "song:hosanna", "", true))
+            .unwrap();
+        assert_eq!(default_of(&be, "song:hosanna"), ["hosanna"]);
+        assert_eq!(
+            default_of(&be, "song:doxology"),
+            ["doxology-condensed-live"]
+        );
+    }
+
+    /// An unattached chart is independent: it is never a default, and
+    /// it is never anybody's arrangement. Keyflow saves one of these
+    /// before the person has said what song it is, so it has to stay an
+    /// ordinary state rather than a half-written one.
+    #[test]
+    fn a_chart_with_no_song_is_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        be.upsert_chart(arrangement("Sketch", "", "", true))
+            .unwrap();
+        be.upsert_chart(arrangement("Another Sketch", "", "", true))
+            .unwrap();
+        let all = be.list_charts("").unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(
+            all.iter().all(|c| !c.is_default && c.song.is_empty()),
+            "an unattached chart claimed a default flag: {all:?}"
+        );
+
+        // Attaching it later is an ordinary re-save, and *then* it is
+        // the song's first chart and therefore its default.
+        be.upsert_chart(ChartDoc {
+            slug: "sketch".into(),
+            ..arrangement("Sketch", "song:doxology", "", false)
+        })
+        .unwrap();
+        assert_eq!(default_of(&be, "song:doxology"), ["sketch"]);
+    }
+
+    /// Deleting the default promotes the oldest remaining chart of that
+    /// song — earliest `updated_at`, ties broken by slug — so a song
+    /// never ends up with charts and no main one.
+    #[test]
+    fn deleting_the_default_promotes_the_oldest_remaining() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        for (label, stamp) in [
+            ("original", "2026-01-01T00:00:00Z"),
+            ("acoustic", "2026-02-01T00:00:00Z"),
+            ("condensed live", "2026-03-01T00:00:00Z"),
+        ] {
+            be.upsert_chart(ChartDoc {
+                updated_at: stamp.into(),
+                ..arrangement(
+                    "Doxology",
+                    "song:doxology",
+                    label,
+                    label == "condensed live",
+                )
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            default_of(&be, "song:doxology"),
+            ["doxology-condensed-live"]
+        );
+
+        assert!(be.delete_chart("doxology-condensed-live").unwrap());
+        assert_eq!(
+            default_of(&be, "song:doxology"),
+            ["doxology-original"],
+            "the oldest remaining is promoted, not the most recently edited"
+        );
+
+        // Down to one, that one is it; down to none, there is nothing
+        // to promote and nothing to complain about.
+        assert!(be.delete_chart("doxology-original").unwrap());
+        assert_eq!(default_of(&be, "song:doxology"), ["doxology-acoustic"]);
+        assert!(be.delete_chart("doxology-acoustic").unwrap());
+        assert!(be.list_charts("song:doxology").unwrap().is_empty());
+    }
+
+    /// A tree somebody hand-edited into two defaults (or none) is
+    /// reconciled by the next write, rather than staying wrong until
+    /// someone notices. The oldest of the flagged ones wins, which is
+    /// the same tie-break the promotion rule uses.
+    #[test]
+    fn a_hand_edited_double_default_is_reconciled_by_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        for (label, stamp) in [
+            ("original", "2026-01-01T00:00:00Z"),
+            ("acoustic", "2026-02-01T00:00:00Z"),
+        ] {
+            be.upsert_chart(ChartDoc {
+                updated_at: stamp.into(),
+                ..arrangement("Doxology", "song:doxology", label, false)
+            })
+            .unwrap();
+        }
+        // Somebody opened the acoustic manifest in an editor and set
+        // the flag by hand; now both are flagged.
+        let md = dir.path().join("resources/charts/doxology-acoustic.md");
+        let text = std::fs::read_to_string(&md)
+            .unwrap()
+            .replace("is_default: false", "is_default: true");
+        std::fs::write(&md, text).unwrap();
+        assert_eq!(default_of(&be, "song:doxology").len(), 2);
+
+        be.upsert_chart(ChartDoc {
+            slug: "doxology-original".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+            ..arrangement("Doxology", "song:doxology", "original", false)
+        })
+        .unwrap();
+        assert_eq!(default_of(&be, "song:doxology"), ["doxology-original"]);
+    }
+
+    /// Two writers racing on one song, which is two Keyflow tabs. The
+    /// backend's lock is what makes the outcome a *choice* rather than
+    /// an interleaving: whichever write lands second owns the flag, and
+    /// either way the song has exactly one.
+    #[test]
+    fn racing_writers_leave_the_song_with_exactly_one_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+        // Both arrangements exist first, so the race is purely about
+        // the flag rather than about who creates the file.
+        for label in ["original", "condensed live"] {
+            be.upsert_chart(arrangement("Doxology", "song:doxology", label, false))
+                .unwrap();
+        }
+
+        std::thread::scope(|s| {
+            for (slug, label) in [
+                ("doxology-original", "original"),
+                ("doxology-condensed-live", "condensed live"),
+            ] {
+                let be = be.clone();
+                s.spawn(move || {
+                    for _ in 0..25 {
+                        be.upsert_chart(ChartDoc {
+                            slug: slug.into(),
+                            ..arrangement("Doxology", "song:doxology", label, true)
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+
+        let flagged = default_of(&be, "song:doxology");
+        assert_eq!(
+            flagged.len(),
+            1,
+            "the race left the song with {} defaults: {flagged:?}",
+            flagged.len()
+        );
+        assert_eq!(be.list_charts("song:doxology").unwrap().len(), 2);
+    }
+
+    /// The song field is a node reference, read the way ADR 0003 reads
+    /// every reference: totally where it could be a song, refused where
+    /// it names something else.
+    #[test]
+    fn the_song_reference_is_normalised_and_a_wrong_kind_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = ResourcesBackend::new(dir.path().join("resources"));
+
+        let bare = be
+            .upsert_chart(arrangement("Doxology", "doxology", "", false))
+            .unwrap();
+        assert_eq!(
+            be.chart(&bare.slug).unwrap().song,
+            "song:doxology",
+            "a bare slug is stored as this org's own song"
+        );
+
+        // A qualified reference survives verbatim, so a chart can name
+        // another org's song even though writing *into* that org still
+        // needs a membership row.
+        let guest = be
+            .upsert_chart(arrangement(
+                "Hosanna",
+                "guest.example/song:hosanna",
+                "",
+                false,
+            ))
+            .unwrap();
+        assert_eq!(
+            be.chart(&guest.slug).unwrap().song,
+            "guest.example/song:hosanna"
+        );
+        assert_eq!(
+            be.list_charts("guest.example/song:hosanna").unwrap().len(),
+            1
+        );
+
+        assert!(matches!(
+            be.upsert_chart(arrangement("Nope", "chart:doxology", "", false)),
+            Err(ResourcesError::BadRequest(_))
+        ));
     }
 
     // ── The three asset lanes ────────────────────────────────────
@@ -1562,7 +2032,7 @@ mod tests {
         assert_eq!(be.list_patches().unwrap().len(), 1);
         assert_eq!(be.list_samples().unwrap().len(), 1);
         assert_eq!(be.list_lighting().unwrap().len(), 1);
-        assert_eq!(be.list_charts().unwrap().len(), 1);
+        assert_eq!(be.list_charts("").unwrap().len(), 1);
         assert!(matches!(
             be.patch("room-kick"),
             Err(ResourcesError::NotFound(_))

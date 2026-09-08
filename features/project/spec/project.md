@@ -250,9 +250,17 @@ vocabulary is deliberately deferred until the shapes in real trees are known.
 
 t[project.form.components]
 A form declares the components that may attach to it and to its parts. A song
-optionally carries a chart and zero or more sessions; a session is a component,
-not a project. A component is absent, present, or present several times — never
-silently invented — and components survive a part's promotion unchanged.
+carries a chart per arrangement, zero or more sessions, and at most one set of
+lyrics; a session is a component, not a project. A component is absent, present,
+or present several times — never silently invented — and components survive a
+part's promotion unchanged.
+
+One chart is one arrangement: the original and the condensed live version are
+two charts of one song, not two revisions of one chart, so charts are a
+cardinality-many component. Which of them is the main one is not the roster's
+question — it is carried by the chart itself in the resources tier
+(`resources_proto::ChartDoc::is_default`, ADR 0003), where the invariant that a
+song has exactly one default can be enforced over the whole set at once.
 
 ---
 

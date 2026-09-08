@@ -100,6 +100,19 @@ pub struct Resource {
     /// a `chart:<slug>#chorus` reference addresses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
+    /// The song a chart arranges, as a `song:<slug>` node token (or a
+    /// qualified `domain/song:<slug>`). Empty for a chart nobody has
+    /// attached to a song yet, which is an ordinary state.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub song: String,
+    /// Which arrangement of that song this chart is (`condensed live`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arrangement: String,
+    /// Whether this is the song's main chart. Exactly one chart of a
+    /// song carries it — the resources backend owns the invariant, not
+    /// whoever wrote the file.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_default: bool,
     /// The rig a patch is written for (`helix`, `kemper`, `serum`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub rig: String,
@@ -134,6 +147,11 @@ fn is_zero(n: &u64) -> bool {
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Resource {

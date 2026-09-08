@@ -150,6 +150,24 @@ pub struct SermonSummary {
 /// The `source` is the chart text, stored verbatim in
 /// `<org>/resources/charts/<slug>.kf` — an outside editor sees a plain
 /// chart file, not an encoding of one.
+///
+/// # One chart is one arrangement
+///
+/// A song is played more than one way — the original, a condensed live
+/// cut, an acoustic reading a tone down — and each of those is a
+/// *different chart of the same song*, not a revision of one chart.
+/// Three fields carry that, and they are the reason a second chart of a
+/// song is no longer merely a slug collision:
+///
+/// - [`ChartDoc::song`] says which song this arranges,
+/// - [`ChartDoc::arrangement`] says which reading of it this is,
+/// - [`ChartDoc::is_default`] says which one a caller that asked for
+///   "the chart" should get.
+///
+/// All three are defaulted, so every chart written before they existed
+/// still parses — as an unattached chart, which stays a valid and
+/// ordinary state: Keyflow saves what a person typed before they have
+/// said what song it is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
 pub struct ChartDoc {
     /// Chart slug — the `chart:<slug>` node id. Empty on a create:
@@ -178,6 +196,45 @@ pub struct ChartDoc {
     #[serde(default)]
     #[facet(default)]
     pub sections: Vec<String>,
+    /// The song this chart is an arrangement of, as a
+    /// `links_proto::NodeRef` token: `song:doxology` locally, or
+    /// `guest.example/song:hosanna` for another org's song (ADR 0003 —
+    /// a qualified reference is an address, not a grant, and this field
+    /// accepts one so that path stays open even though *writing* into
+    /// another org still needs a membership row).
+    ///
+    /// **Empty is valid and ordinary.** Keyflow saves a chart before
+    /// the person has said what song it is, and an unattached chart is
+    /// independent: the default invariant below does not touch it.
+    ///
+    /// The server normalises what it is given rather than refusing it:
+    /// a bare slug (`doxology`) is read as the local `song:doxology`,
+    /// because ADR 0003 keeps reference parsing total. A token naming
+    /// some *other* kind (`chart:doxology`) is a `BadRequest` — that is
+    /// not a lenient reading of a song, it is a different thing.
+    #[serde(default)]
+    #[facet(default)]
+    pub song: String,
+    /// Which reading of the song this is, in a person's own words:
+    /// `original`, `condensed live`, `acoustic in G`. Free text, and
+    /// empty is fine — the first chart of a song usually needs no label
+    /// because there is nothing yet to tell it apart from.
+    ///
+    /// It is not an identifier. It does feed the derived slug
+    /// (`doxology-condensed-live`), so that a song's second chart is
+    /// named for what it is rather than landing on `doxology-2`.
+    #[serde(default)]
+    #[facet(default)]
+    pub arrangement: String,
+    /// Whether this is the song's main chart — the one to open when
+    /// somebody asks for "the chart" and names no arrangement.
+    ///
+    /// The server owns this flag rather than storing what it is told;
+    /// see [`ResourcesService::upsert_chart`] for the invariant and why
+    /// it is enforced there rather than left to callers.
+    #[serde(default)]
+    #[facet(default)]
+    pub is_default: bool,
     /// When the caller last changed the chart (`RFC 3339`); empty when
     /// the caller does not track it. Caller-owned — the server stores
     /// what it is given and stamps nothing.
@@ -198,6 +255,12 @@ pub struct ChartUpsert {
 
 /// One chart, as `list_charts` reports it — everything but the source,
 /// which `chart` fetches.
+///
+/// It carries [`ChartSummary::song`], [`ChartSummary::arrangement`] and
+/// [`ChartSummary::is_default`] so that *one* call renders a song with
+/// its arrangements: `list_charts(song)` returns the whole set, the
+/// labels that tell them apart, and which one is the main one, with no
+/// read per row. That is the call a Keyflow song screen makes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
 pub struct ChartSummary {
     pub slug: String,
@@ -211,6 +274,20 @@ pub struct ChartSummary {
     #[serde(default)]
     #[facet(default)]
     pub sections: Vec<String>,
+    /// The song this chart arranges, as a `song:<slug>` token (or a
+    /// qualified `domain/song:<slug>`); empty for an unattached chart.
+    #[serde(default)]
+    #[facet(default)]
+    pub song: String,
+    /// The label that tells this arrangement from the song's others.
+    #[serde(default)]
+    #[facet(default)]
+    pub arrangement: String,
+    /// Whether this is the song's main chart. Exactly one chart of a
+    /// song carries it; an unattached chart never does.
+    #[serde(default)]
+    #[facet(default)]
+    pub is_default: bool,
     /// Manifest path (`charts/<slug>.md`) under the org's resources
     /// tier. The source sits beside it as `charts/<slug>.kf`.
     pub rel_path: String,
@@ -571,19 +648,74 @@ pub trait ResourcesService {
     /// parser is a UI-side git dependency, and the resources tier is not
     /// the place to pull it into the server.
     ///
+    /// [`ChartDoc::song`] is normalised to a canonical `song:<slug>`
+    /// token — a bare slug is read as local, a token of another kind is
+    /// a `BadRequest`, and empty stays empty.
+    ///
     /// An empty title is a `BadRequest`.
+    ///
+    /// # The default invariant, and why the server owns it
+    ///
+    /// **At most one default chart per song, and never zero while the
+    /// song has a chart at all.** The server enforces it inside this
+    /// call; [`ChartDoc::is_default`] as the caller passes it is a
+    /// *request*, not a stored value:
+    ///
+    /// - Writing a chart with `is_default: true` clears the flag on
+    ///   that song's other charts, in the same operation.
+    /// - The **first** chart saved for a song becomes the default
+    ///   whatever the caller passed, because a song with one chart and
+    ///   no main one is a state nothing can render sensibly.
+    /// - `is_default: false` is **no opinion**, not "demote me": a
+    ///   chart that is already its song's default stays it. Otherwise
+    ///   every save of an edited source by a client that does not track
+    ///   the flag would hand the default to some other chart. The way
+    ///   to move a default is to ask for it on the chart that should
+    ///   have it.
+    /// - Re-attaching a chart to a *different* song drops the flag: it
+    ///   was the old song's main chart and has no claim on the new
+    ///   song's — where, being that song's first chart, it may well
+    ///   become the default anyway.
+    /// - A chart with an empty `song` is independent: it is never a
+    ///   default, and it never clears anybody else's flag.
+    ///
+    /// It lives here rather than in each client because it is a
+    /// statement about a *set* of charts, and a client only ever holds
+    /// the one it is saving. Two Keyflow tabs both ticking "make this
+    /// the main chart" would otherwise leave a song with two defaults
+    /// and no way to tell which write was last; enforced here, the
+    /// second write clears the first, and the song has exactly one
+    /// default either way round.
     fn upsert_chart(&self, chart: ChartDoc) -> Result<ChartUpsert, ResourcesError>;
 
     /// One chart by slug, source included.
     fn chart(&self, slug: &str) -> Result<ChartDoc, ResourcesError>;
 
     /// Every chart under `resources/charts/`, by slug.
-    fn list_charts(&self) -> Result<Vec<ChartSummary>, ResourcesError>;
+    ///
+    /// `song` filters to one song's arrangements: pass a `song:<slug>`
+    /// token (a bare slug is accepted and read as local, as everywhere
+    /// in this lane), or the empty string for every chart the org
+    /// holds. The result carries each chart's arrangement label and
+    /// default flag, so a song and its arrangements render from this
+    /// one call.
+    fn list_charts(&self, song: &str) -> Result<Vec<ChartSummary>, ResourcesError>;
 
     /// Delete a chart's manifest and its `.kf` source. `false` when
     /// there was nothing there. A `chart:<slug>` reference held by a
     /// collection is left alone: a dangling reference is a legible
     /// state, not an error (ADR 0003).
+    ///
+    /// Deleting a song's **default** promotes another of that song's
+    /// charts, so the invariant `upsert_chart` states survives a
+    /// delete: the promoted one is the *oldest remaining* — the
+    /// earliest `updated_at`, ties broken by slug so the choice is
+    /// deterministic on charts that track no timestamp. Oldest rather
+    /// than newest because the oldest chart of a song is, in practice,
+    /// the one the arrangements were derived from: deleting a
+    /// condensed live cut that had been made the main one should fall
+    /// back to the original, not to whichever alternate was edited
+    /// most recently.
     fn delete_chart(&self, slug: &str) -> Result<bool, ResourcesError>;
 
     /// Create or replace a patch under

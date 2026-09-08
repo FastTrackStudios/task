@@ -43,7 +43,22 @@ fn chart(title: &str, source: &str, sections: &[&str]) -> ChartDoc {
         key: "A".into(),
         notation: "keyflow".into(),
         sections: sections.iter().map(|s| (*s).to_owned()).collect(),
+        song: String::new(),
+        arrangement: String::new(),
+        is_default: false,
         updated_at: "2026-09-06T10:00:00Z".into(),
+    }
+}
+
+/// One arrangement of a song: the chart, the song it arranges, the
+/// label that tells it from the song's others, and whether it asks to
+/// be that song's main one.
+fn arrangement(title: &str, song: &str, label: &str, is_default: bool) -> ChartDoc {
+    ChartDoc {
+        song: song.into(),
+        arrangement: label.into(),
+        is_default,
+        ..chart(title, DOXOLOGY, &["verse"])
     }
 }
 
@@ -86,7 +101,7 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
     let listed = alice
         .resources()
         .await
-        .list_charts()
+        .list_charts(String::new())
         .await
         .expect("list the charts");
     let slugs: Vec<&str> = listed.iter().map(|c| c.slug.as_str()).collect();
@@ -197,6 +212,185 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
         .find(|c| c.id == library.id)
         .expect("the library we made is listed as one");
     assert_eq!(ids(found), ["hosanna", "be-thou-my-vision"]);
+}
+
+/// A song played two ways is two charts, and the client never has to
+/// work out which is the main one.
+///
+/// This is the chapter for the sentence the feature exists for: *"one
+/// chart is one arrangement — the original, and a condensed live
+/// version, with a default that is the main one."* Everything here goes
+/// through the session as Alice, because the claim is about what a
+/// Keyflow client reaches, not about what a backend can be made to do.
+///
+/// The part worth driving over the wire rather than in a unit test is
+/// the **invariant**: the flag is the server's, so a client that saves
+/// two arrangements without thinking about defaults still ends up with
+/// a song that has exactly one.
+#[tokio::test]
+async fn a_song_carries_arrangements_and_exactly_one_of_them_is_the_default() {
+    let s = Scenario::open().await;
+    let alice = s.as_alice().await;
+
+    let defaults = |list: &[resources_proto::ChartSummary]| -> Vec<String> {
+        list.iter()
+            .filter(|c| c.is_default)
+            .map(|c| c.slug.clone())
+            .collect()
+    };
+
+    // Keyflow saves the album arrangement, asking for nothing.
+    let original = alice
+        .resources()
+        .await
+        .upsert_chart(arrangement("Doxology", "doxology", "original", false))
+        .await
+        .expect("save the first arrangement");
+    assert_eq!(
+        original.slug, "doxology-original",
+        "the arrangement names the slug"
+    );
+
+    // And then the condensed live cut. Same song, different reading —
+    // a second chart, not an edit of the first.
+    let live = alice
+        .resources()
+        .await
+        .upsert_chart(arrangement(
+            "Doxology",
+            "song:doxology",
+            "condensed live",
+            false,
+        ))
+        .await
+        .expect("save the second arrangement");
+    assert_eq!(
+        live.slug, "doxology-condensed-live",
+        "a song's second chart is named for what it is, not `doxology-2`"
+    );
+
+    // One call is the whole song screen: both arrangements, their
+    // labels, and which one to open by default.
+    let of_song = alice
+        .resources()
+        .await
+        .list_charts("doxology".into())
+        .await
+        .expect("list the song's arrangements");
+    assert_eq!(of_song.len(), 2, "{of_song:?}");
+    assert!(
+        of_song.iter().all(|c| c.song == "song:doxology"),
+        "a bare slug is read as this org's own song: {of_song:?}"
+    );
+    assert_eq!(
+        defaults(&of_song),
+        std::slice::from_ref(&original.slug),
+        "the song's first chart is its default even though nobody asked"
+    );
+
+    // Making the live cut the main one clears the other in the same
+    // operation — the client says which, never both.
+    alice
+        .resources()
+        .await
+        .upsert_chart(ChartDoc {
+            slug: live.slug.clone(),
+            ..arrangement("Doxology", "song:doxology", "condensed live", true)
+        })
+        .await
+        .expect("promote the live cut");
+    let promoted = alice
+        .resources()
+        .await
+        .list_charts("song:doxology".into())
+        .await
+        .expect("list again");
+    assert_eq!(defaults(&promoted), std::slice::from_ref(&live.slug));
+
+    // Deleting the default does not leave the song without one.
+    assert!(
+        alice
+            .resources()
+            .await
+            .delete_chart(live.slug)
+            .await
+            .expect("delete the default"),
+        "there was a chart to delete"
+    );
+    let remaining = alice
+        .resources()
+        .await
+        .list_charts("song:doxology".into())
+        .await
+        .expect("list what is left");
+    assert_eq!(
+        defaults(&remaining),
+        [original.slug],
+        "deleting the default left the song with charts and no main one"
+    );
+
+    // A chart nobody has attached to a song is independent, and stays
+    // out of every song's set — Keyflow saves one of these before the
+    // person has said what song it is.
+    alice
+        .resources()
+        .await
+        .upsert_chart(arrangement("Untitled Sketch", "", "", true))
+        .await
+        .expect("save an unattached chart");
+    let unattached = alice
+        .resources()
+        .await
+        .list_charts(String::new())
+        .await
+        .expect("list everything")
+        .into_iter()
+        .find(|c| c.slug == "untitled-sketch")
+        .expect("it is listed");
+    assert!(
+        unattached.song.is_empty() && !unattached.is_default,
+        "an unattached chart claimed a song's default flag: {unattached:?}"
+    );
+    assert_eq!(
+        alice
+            .resources()
+            .await
+            .list_charts("song:doxology".into())
+            .await
+            .expect("the song's set")
+            .len(),
+        1,
+        "an unattached chart leaked into a song's arrangements"
+    );
+}
+
+/// The planted world holds the same thing, so a demo user can reach it
+/// without saving anything: Track One is charted twice, and the album
+/// arrangement is the default.
+#[tokio::test]
+async fn the_seeded_song_has_two_arrangements_with_the_original_default() {
+    let s = Scenario::open().await;
+    let alice = s.as_alice().await;
+
+    let planted = alice
+        .resources()
+        .await
+        .list_charts("song:track-one".into())
+        .await
+        .expect("the seeded song's arrangements");
+    let mut labels: Vec<(&str, &str, bool)> = planted
+        .iter()
+        .map(|c| (c.slug.as_str(), c.arrangement.as_str(), c.is_default))
+        .collect();
+    labels.sort_unstable();
+    assert_eq!(
+        labels,
+        [
+            ("track-one", "original", true),
+            ("track-one-condensed-live", "condensed live", false),
+        ],
+        "the seed no longer plants two arrangements of one song"
+    );
 }
 
 /// Deleting a chart does not reach into the collections that reference

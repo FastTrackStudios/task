@@ -52,6 +52,9 @@ fn chart(title: &str, source: &str) -> ChartDoc {
         key: "A".into(),
         notation: "keyflow".into(),
         sections: vec!["chorus".to_owned()],
+        song: String::new(),
+        arrangement: String::new(),
+        is_default: false,
         updated_at: "2026-09-06T10:00:00Z".into(),
     }
 }

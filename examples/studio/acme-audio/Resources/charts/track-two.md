@@ -8,6 +8,9 @@ notation: keyflow
 sections:
 - verse
 - chorus
+song: song:track-two
+arrangement: original
+is_default: true
 updated_at: '2026-09-06T10:00:00Z'
 source: keyflow
 ---

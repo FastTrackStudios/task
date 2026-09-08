@@ -416,7 +416,11 @@ pub enum Form {
 #[serde(rename_all = "kebab-case")]
 #[repr(u8)]
 pub enum ComponentKind {
-    /// A chart or lead sheet.
+    /// A chart or lead sheet. **One chart is one arrangement**, so a
+    /// song carries as many as it is played ways — the original, the
+    /// condensed live cut, the acoustic reading. Which of them is the
+    /// main one is the resources tier's business, not the roster's:
+    /// `resources_proto::ChartDoc::is_default` (ADR 0003).
     Chart,
     /// A DAW session — Reaper, Pro Tools, Resolve.
     Session,
@@ -429,7 +433,8 @@ pub enum ComponentKind {
 /// How many of a component a thing may carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cardinality {
-    /// Absent or present. A song has at most one chart.
+    /// Absent or present. A song has at most one set of lyrics — there
+    /// is one text, however many ways it is played.
     Optional,
     /// Absent, present, or present several times. A song may be tracked
     /// in Reaper *and* Pro Tools, which the real archive does.
@@ -513,15 +518,20 @@ impl Form {
     pub fn part_components(self) -> &'static [(ComponentKind, Cardinality)] {
         match self {
             Self::Song => &[],
-            // A song optionally carries a chart and zero or more
-            // sessions, which is the rule's own example.
+            // A song carries a chart per arrangement and zero or more
+            // sessions, and one set of lyrics — the words are the same
+            // however the song is played, which is exactly what makes
+            // charts the plural one.
             Self::Single | Self::Ep | Self::Lp | Self::Album => &[
-                (ComponentKind::Chart, Cardinality::Optional),
+                (ComponentKind::Chart, Cardinality::Many),
                 (ComponentKind::Session, Cardinality::Many),
                 (ComponentKind::Lyrics, Cardinality::Optional),
             ],
+            // A live set is where the several arrangements actually
+            // show up: the same song charted long for the album and
+            // short for the night.
             Self::Concert | Self::LiveSet => &[
-                (ComponentKind::Chart, Cardinality::Optional),
+                (ComponentKind::Chart, Cardinality::Many),
                 (ComponentKind::Score, Cardinality::Optional),
                 (ComponentKind::Lyrics, Cardinality::Optional),
             ],
@@ -609,7 +619,8 @@ pub fn divergences(form: Option<Form>, parts: &Parts) -> Vec<Divergence> {
                 });
             }
         }
-        // And cardinality: at most one chart, however many sessions.
+        // And cardinality: at most one set of lyrics, however many
+        // charts and sessions.
         for (kind, card) in allowed {
             if *card == Cardinality::Optional {
                 let n = part.components.iter().filter(|c| c.kind == *kind).count();

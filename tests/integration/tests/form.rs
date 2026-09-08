@@ -187,11 +187,15 @@ async fn components_survive_a_parts_promotion() {
 }
 
 // t[verify project.form.components]
-/// Two charts on one song is flagged — and allowed.
+/// Two sets of lyrics on one song is flagged — and allowed.
 ///
-/// A song carries at most one chart, so a second is a divergence. It is
-/// still written: the grammar reports, and a person who genuinely has
-/// two charts is not someone the software should argue with.
+/// A song carries at most one set of lyrics, so a second is a
+/// divergence. It is still written: the grammar reports, and a person
+/// who genuinely has two is not someone the software should argue with.
+///
+/// Two *charts*, by contrast, are ordinary and flagged at all — one
+/// chart is one arrangement, and a song played two ways has two. That
+/// half is asserted here too, because it is the direction that changed.
 #[tokio::test]
 async fn a_component_the_grammar_does_not_expect_is_written_and_flagged() {
     let s = Scenario::open().await;
@@ -210,7 +214,9 @@ async fn a_component_the_grammar_does_not_expect_is_written_and_flagged() {
         .await
         .expect("name a song");
 
-    for name in ["Overture.pdf", "Overture (piano).pdf"] {
+    // Two arrangements of the one song — the original and the
+    // condensed live cut. Ordinary, and not a divergence.
+    for name in ["Overture.pdf", "Overture (live).pdf"] {
         alice
             .projects()
             .await
@@ -219,6 +225,34 @@ async fn a_component_the_grammar_does_not_expect_is_written_and_flagged() {
                 song.id,
                 Component {
                     kind: ComponentKind::Chart,
+                    name: name.into(),
+                },
+            )
+            .await
+            .expect("a second arrangement is an ordinary component");
+    }
+    assert!(
+        alice
+            .projects()
+            .await
+            .divergences(album.id)
+            .await
+            .expect("ask")
+            .is_empty(),
+        "two charts is two arrangements, which the grammar expects"
+    );
+
+    // Two sets of lyrics is not: there is one text, however many ways
+    // the song is played.
+    for name in ["Overture.txt", "Overture (alt).txt"] {
+        alice
+            .projects()
+            .await
+            .attach_component(
+                album.id,
+                song.id,
+                Component {
+                    kind: ComponentKind::Lyrics,
                     name: name.into(),
                 },
             )
