@@ -50,7 +50,7 @@
 set -euo pipefail
 
 ISSUER="${ISSUER:-https://auth.fasttrackstudio.app}"
-SERVER="${SERVER:-https://task.starcommand.live}"
+SERVER="${SERVER:-https://task.fasttrackstudio.app}"
 SSH_HOST="${SSH_HOST:-root@starcommand}"
 NAMESPACE="${NAMESPACE:-task}"
 KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -191,14 +191,39 @@ k exec -n "$NAMESPACE" "$POD" -- \
   task-server admin adopt-principal --email "$EMAIL" --principal "$PRINCIPAL"
 
 # ── 4. A session of its own ──────────────────────────────────────────
+# TWO files, and getting this wrong fails silently in the worst way.
+#
+# The routing document holds only `{url, slug}` per key. The TOKEN lives
+# in a sibling `<stem>-tokens/<key>.json`, because `session_store::load`
+# reads the routing doc and then fetches each key's token from that
+# directory — and **a key whose token file is missing is DROPPED**, on
+# the reasoning that it was signed out out-of-band.
+#
+# So a session file with the token written inline looks completely
+# correct, parses, prints fine under `task auth whoami`, and yet every
+# command goes out with no `Authorization` header at all. The server then
+# says "anonymous is not a member", which reads like a permissions or
+# adoption problem and is neither. That cost a full debugging session:
+# the server's own span said `auth.token_presented: false`, which is what
+# finally pointed here rather than at the membership rows.
 first_org="$(printf '%s' "$ORGS" | cut -d, -f1 | tr -d '[:space:]')"
 key="$first_org@$(printf '%s' "$SERVER" | sed -e 's|^https\?://||')"
+tokens_dir="$AGENT_DIR/$(basename "$SESSION" .json)-tokens"
+
 jq -n --arg k "$key" --arg url "$WS_SERVER" --arg slug "$first_org" \
-      --arg uid "$PRINCIPAL" --arg email "$EMAIL" --arg token "$TOKEN" \
-   '{home:$k, active:$k,
-     servers: {($k): {url:$url, slug:$slug, user_id:$uid, email:$email, token:$token}}}' \
-   > "$SESSION"
+   '{home:$k, active:$k, servers: {($k): {url:$url, slug:$slug}}}' > "$SESSION"
 chmod 600 "$SESSION"
+
+mkdir -p "$tokens_dir"
+chmod 700 "$tokens_dir"
+# `expires_at_unix` is advisory here: this is a fresh sign-in, and the
+# issuer is the authority on whether the token still works. A week is a
+# plausible horizon that does not pretend to more precision than the
+# sign-up response gave us.
+jq -n --arg t "$TOKEN" --arg e "$EMAIL" --arg u "$PRINCIPAL" \
+      --argjson x "$(( $(date +%s) + 604800 ))" \
+   '{token:$t, email:$e, user_id:$u, expires_at_unix:$x}' > "$tokens_dir/$key.json"
+chmod 600 "$tokens_dir/$key.json"
 
 echo
 echo "── done ──────────────────────────────────────────────"
