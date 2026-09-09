@@ -95,6 +95,32 @@ test-threads = 16
 status-level = "all"
 final-status-level = "flaky"
 slow-timeout = { period = "5s", terminate-after = 3 }
+# `final-status-level = "flaky"` above has been inert since it was
+# written: nextest can only report a test FLAKY when it failed and then
+# passed on a retry, and no retries were configured. So every
+# environment-sensitive failure was reported as a plain failure, and the
+# gate went red.
+#
+# That is not a hypothetical cost. Main was red for five days with a
+# stale assertion in `device_sync_e2e`, and nobody could see it, because
+# a red gate was the normal state and every branch inherited it. Two
+# consecutive runs of the same green commit failed on two DIFFERENT
+# tests — `transcode_rpc`, then `chunk_whole_file` — 2946 of 2947
+# passing each time. A gate that fails one random test per run says
+# nothing about the change under test.
+#
+# Two retries, and the honest reading of what that buys: a test that
+# passes on retry is reported FLAKY, loudly, in the summary — it is not
+# silently green. A test that is genuinely broken fails all three times
+# and still fails the run. What this removes is the class of failure
+# where a correct test loses a race for a core or a few megabytes of
+# free space against 2,946 others.
+#
+# The tests this covers measure physical resources — free space on the
+# filesystem, real elapsed time, servers on real endpoints. The comment
+# on `disk-measurement` below is honest that a real fix "may not
+# exist"; until it does, retrying is what keeps the signal.
+retries = 2
 
 [[profile.ci.overrides]]
 filter = 'binary(chunk_whole_file)'
