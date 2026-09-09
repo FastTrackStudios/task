@@ -14,6 +14,44 @@ use crate::shell::app_shell::AppShell;
 #[derive(Clone, Debug, PartialEq, Routable)]
 #[rustfmt::skip]
 pub enum Route {
+    // ── OUTSIDE the shell, deliberately ──────────────────────────────
+    //
+    // The far end of the central sign-in redirect: the issuer sends the
+    // browser back here carrying an authorization code, which the page
+    // redeems for a token before moving on.
+    //
+    // It sits ABOVE `#[layout(AppShell)]` because of what the shell is:
+    // the workspace. Mounting it runs the vault explorer, the presence
+    // publisher and every store-backed list hook, and those fan
+    // `project/list` + `task/list` out across every org over per-org vox
+    // lanes. A lane presents its identity ONCE, at the WebSocket
+    // upgrade (`vox_clients::shared_caller_with`), so a lane dialled
+    // during the redemption — before the redeemed token exists — is
+    // anonymous for its whole life, and the org answers
+    // `permission denied: anonymous is not a member (project/list)`.
+    // That is exactly the "Couldn't load your workspace" banner people
+    // saw on the first load after signing in through the issuer, and
+    // which a plain reload cured (by then the token was in storage
+    // before anything dialled).
+    //
+    // Nesting the callback under the shell was never meaningful in its
+    // own right — there is nothing to navigate to from a page that
+    // exists for a few hundred milliseconds — so the ordering is bought
+    // for free: while the code is being redeemed, NOTHING that talks to
+    // an org is mounted.
+    //
+    // The path is not free to change — it is registered in the issuer's
+    // `redirect_uris` for the `task` client, and authorize refuses any
+    // redirect_uri that is not an exact match, before the person ever
+    // reaches a login page.
+    //
+    // `error` is part of the contract too: OAuth reports refusals by
+    // redirecting here with `error=` instead of `code=`, so a route
+    // that only accepted `code` would drop a denial on the floor and
+    // show an empty page.
+    #[route("/auth/callback?:code&:state&:error")]
+    AuthCallbackRoute { code: String, state: String, error: String },
+
     #[layout(AppShell)]
         #[route("/")]
         HomeRoute {},
@@ -131,22 +169,6 @@ pub enum Route {
         // the app would silently receive only its first parameter.
         // `plugin_route` encodes going in, `PluginScreen` decodes
         // coming out.
-        // The far end of the central sign-in redirect: the issuer sends
-        // the browser back here carrying an authorization code, which
-        // the page redeems for a token before moving on.
-        //
-        // The path is not free to change — it is registered in the
-        // issuer's `redirect_uris` for the `task` client, and authorize
-        // refuses any redirect_uri that is not an exact match, before
-        // the person ever reaches a login page.
-        //
-        // `error` is part of the contract too: OAuth reports refusals by
-        // redirecting here with `error=` instead of `code=`, so a route
-        // that only accepted `code` would drop a denial on the floor and
-        // show an empty page.
-        #[route("/auth/callback?:code&:state&:error")]
-        AuthCallbackRoute { code: String, state: String, error: String },
-
         #[route("/app/:app?:q")]
         PluginRoute { app: String, q: String },
 

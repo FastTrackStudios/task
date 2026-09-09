@@ -648,6 +648,17 @@ async fn run_credential_sign_in(
 /// `/auth/session` then `/oauth2/userinfo`), so everything downstream —
 /// vox dialing, the locker, cached-token switch-back — is identical to a
 /// credential sign-in and none of it needs to know which door was used.
+///
+/// **`st.active` is written LAST, and that ordering is a contract.**
+/// `publish_session_token` runs first: it makes the new token the vox
+/// dial identity and drops every socket opened under the previous one.
+/// Only then does `active` flip. So `active.is_some()` means "the
+/// bearer is this session's token", which is what lets the two things
+/// watching it — [`SignInGate`], which mounts the workspace, and the
+/// `/auth/callback` page, which decides when to leave for the shell —
+/// treat that one signal as "it is safe to dial an org now". Setting
+/// `active` any earlier would put the workspace back on anonymous
+/// lanes, which is the bug this ordering exists to make impossible.
 async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: String) {
     st.busy.set(true);
     st.error.set(None);
@@ -921,6 +932,15 @@ pub fn SignInGate(children: Element) -> Element {
     // and the round trip ends silently back on the login form with the
     // code sitting unused in the address bar. Which is exactly what it
     // did.
+    //
+    // This hands the WHOLE router through, not one page, and that is
+    // only safe because `/auth/callback` is declared OUTSIDE
+    // `#[layout(AppShell)]` (see `routes.rs`). While it was inside, this
+    // exemption mounted the entire workspace — explorer, presence, every
+    // store-backed list — over a session that did not exist yet, and
+    // each org lane was dialled anonymously and stayed anonymous for
+    // life. That is the ordering this gate now guarantees: signed out,
+    // the only thing that renders is the page that signs you in.
     if at_central_callback() {
         return rsx! { {children} };
     }
