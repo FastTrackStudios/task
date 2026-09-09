@@ -125,7 +125,22 @@ async fn a_laptops_offline_work_reaches_the_server() {
         .await
         .expect("choose the album");
     laptop.tick().await;
-    let on_laptop = laptop_dir.path().join("Album").join("mix.wav");
+    // Grouped by ORG, not dropped straight under what the caller asked
+    // for: `SyncDaemon::landing_for` reads the `place` the offer
+    // carries and lands the replica under its first segment, which is
+    // the org slug. That is deliberate — one laptop syncs roots from
+    // several orgs, and two orgs may each have an "Album".
+    //
+    // This assertion named `<under>/Album/mix.wav` when the test was
+    // written, which is the shape for an offer that carries no place.
+    // The server's offers do carry one, so the test had never passed;
+    // it was merged red and stayed red, and because it is the only
+    // coverage of device sync it made the whole gate red with it.
+    let on_laptop = laptop_dir
+        .path()
+        .join(support::ORG)
+        .join("Album")
+        .join("mix.wav");
     assert_eq!(
         std::fs::read(&on_laptop).expect("the album never reached the laptop"),
         b"the rough mix"
