@@ -106,10 +106,71 @@ struct RawOrg {
     iroh: Option<String>,
 }
 
-fn parse_orgs(body: &str, bearer: Option<&str>) -> Result<Vec<OrgMeta>, String> {
+/// What one discovery answered, as it is cached.
+///
+/// The cache used to hold the org list alone, and that lost the issuer:
+/// see [`fetch_orgs`], where a server that cannot be reached falls back
+/// to this. An org list without its issuer is a client that has silently
+/// forgotten it can offer single sign-on.
+///
+/// Serialised with the orgs under `orgs` rather than as a bare array, so
+/// an entry written by an older build — which was that bare array — is
+/// still readable. See [`Discovered::parse_cached`].
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Discovered {
+    orgs: Vec<OrgMeta>,
+    /// The issuer this server advertised, if any. `None` is a real
+    /// answer — a self-hosted server issues its own accounts.
+    #[serde(default)]
+    central_auth: Option<String>,
+}
+
+impl Discovered {
+    /// Read a cache entry, accepting both shapes.
+    ///
+    /// The bare array is what every entry written before the issuer was
+    /// cached looks like. Reading it as "orgs, no issuer" is exactly
+    /// what those entries mean, and it keeps a stale cache from
+    /// producing a parse error on the one path that exists to survive
+    /// failure.
+    fn parse_cached(json: &str) -> Option<Self> {
+        if let Ok(full) = serde_json::from_str::<Self>(json) {
+            return Some(full);
+        }
+        serde_json::from_str::<Vec<OrgMeta>>(json)
+            .ok()
+            .map(|orgs| Self {
+                orgs,
+                central_auth: None,
+            })
+    }
+
+    /// Publish what this discovery said into the process-wide
+    /// registries the sign-in path reads.
+    ///
+    /// Called on BOTH paths — live and cached — because the registries
+    /// are what the UI gates on, and a value that reaches them only on
+    /// the live path is a feature that disappears whenever the network
+    /// hiccups.
+    fn publish(&self) {
+        task_ui_core::central_auth::note(self.central_auth.clone());
+        // Discovery is where a native client learns each org's iroh
+        // endpoint id; the transport keeps its own registry because
+        // `caller_for` is a free fn with no reach into the org-list
+        // signal.
+        #[cfg(not(target_arch = "wasm32"))]
+        task_ui_core::iroh_transport::note_org_endpoints(
+            self.orgs
+                .iter()
+                .map(|o| (o.slug.as_str(), o.iroh.as_deref())),
+        );
+    }
+}
+
+fn parse_orgs(body: &str, bearer: Option<&str>) -> Result<Discovered, String> {
     let wk: WellKnown = serde_json::from_str(body).map_err(|e| format!("parse well-known: {e}"))?;
     note_principal(bearer, wk.principal);
-    let list: Vec<OrgMeta> = wk
+    let orgs: Vec<OrgMeta> = wk
         .orgs
         .into_iter()
         .map(|o| OrgMeta {
@@ -123,22 +184,19 @@ fn parse_orgs(body: &str, bearer: Option<&str>) -> Result<Vec<OrgMeta>, String> 
         })
         .collect();
     // Discovery is also where the client learns whether this server
-    // issues its own accounts. Same reason as the endpoint ids below:
-    // sign-in needs it from a plain async fn, not a component.
-    task_ui_core::central_auth::note(wk.central_auth);
-    // Discovery is where a native client learns each org's iroh
-    // endpoint id; the transport keeps its own registry because
-    // `caller_for` is a free fn with no reach into the org-list signal.
-    #[cfg(not(target_arch = "wasm32"))]
-    task_ui_core::iroh_transport::note_org_endpoints(
-        list.iter().map(|o| (o.slug.as_str(), o.iroh.as_deref())),
-    );
-    Ok(list)
+    // issues its own accounts. Sign-in needs it from a plain async fn,
+    // not a component.
+    let found = Discovered {
+        orgs,
+        central_auth: wk.central_auth,
+    };
+    found.publish();
+    Ok(found)
 }
 
 /// Fetch the hosted org list from `/.well-known/task-server.json`.
 #[cfg(target_arch = "wasm32")]
-async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
+async fn fetch_orgs_live() -> Result<Discovered, String> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
 
@@ -188,7 +246,7 @@ async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
 /// [`http_base`], discovery resolves the org slug, and the vox dial can
 /// proceed (`vox_clients::org_ws_url` needs a real slug).
 #[cfg(not(target_arch = "wasm32"))]
-async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
+async fn fetch_orgs_live() -> Result<Discovered, String> {
     let base = http_base();
     if base.is_empty() {
         return Err("no server URL configured".to_owned());
@@ -223,7 +281,7 @@ async fn fetch_orgs_live() -> Result<Vec<OrgMeta>, String> {
     }
     .await;
     match &result {
-        Ok(orgs) => tracing::info!(url, count = orgs.len(), "org discovery ok"),
+        Ok(found) => tracing::info!(url, count = found.orgs.len(), "org discovery ok"),
         Err(e) => {
             tracing::warn!(url, error = %e, "org discovery failed");
             // Belt-and-suspenders: capture directly so this failure
@@ -302,28 +360,48 @@ fn orgs_cache_write(key: &str, value: &str) {
     let _ = std::fs::write(path, value);
 }
 
-/// Discover the hosted orgs, falling back to the last known list when
+/// Discover the hosted orgs, falling back to the last known answer when
 /// the server cannot be reached.
+///
+/// The fallback replays the whole answer, issuer included, not just the
+/// list. It used to cache the orgs alone, and the cost was invisible:
+/// the app looked fine — the org list was there — while
+/// `central_auth::issuer()` stayed `None`, and the login screen gates
+/// "Continue with FastTrackStudio" on exactly that. So a single failed
+/// discovery removed single sign-on from the UI, silently, with no
+/// error anywhere and no way for the person to tell that the button had
+/// ever existed.
+///
+/// That is not hypothetical: it happened during a routine deploy, where
+/// `/.well-known` answered 502 for a few seconds. Everyone who loaded
+/// the page in that window got the password form and no way back to the
+/// button short of a reload they had no reason to attempt.
 pub async fn fetch_orgs() -> Result<Vec<OrgMeta>, String> {
     let base = http_base();
     match fetch_orgs_live().await {
-        Ok(list) => {
+        Ok(found) => {
             if !base.is_empty() {
-                if let Ok(json) = serde_json::to_string(&list) {
+                if let Ok(json) = serde_json::to_string(&found) {
                     orgs_cache_write(&orgs_cache_key(&base), &json);
                 }
             }
-            Ok(list)
+            Ok(found.orgs)
         }
         Err(err) => {
             if base.is_empty() {
                 return Err(err);
             }
             match orgs_cache_read(&orgs_cache_key(&base))
-                .and_then(|j| serde_json::from_str::<Vec<OrgMeta>>(&j).ok())
-                .filter(|l| !l.is_empty())
+                .and_then(|j| Discovered::parse_cached(&j))
+                .filter(|d| !d.orgs.is_empty())
             {
-                Some(cached) => Ok(cached),
+                Some(cached) => {
+                    // The same registries the live path fills. Without
+                    // this the client keeps the orgs and forgets the
+                    // issuer, which is the bug this comment describes.
+                    cached.publish();
+                    Ok(cached.orgs)
+                }
                 None => Err(err),
             }
         }
@@ -345,5 +423,69 @@ mod orgs_cache_tests {
         let k = orgs_cache_key("https://a.b/../../etc");
         assert!(!k.contains('/') && !k.contains('.') || k.starts_with("task.orgs."));
         assert!(!k["task.orgs.".len()..].contains('/'));
+    }
+}
+
+#[cfg(test)]
+mod cached_discovery_tests {
+    use super::Discovered;
+
+    fn orgs_json() -> &'static str {
+        r#"[{"slug":"codywright","name":"Cody Wright","is_home":true,
+             "id":null,"disabled_plugins":[],"member":true,"iroh":null}]"#
+    }
+
+    /// The whole point: a cached answer still knows the issuer.
+    ///
+    /// Without it, one failed discovery takes "Continue with
+    /// FastTrackStudio" off the login screen — the org list is still
+    /// there, so nothing looks wrong, and the person is left with the
+    /// password form and no way to tell the button ever existed.
+    #[test]
+    fn a_cached_answer_carries_the_issuer() {
+        let json = format!(
+            r#"{{"orgs":{},"central_auth":"https://auth.fasttrackstudio.app"}}"#,
+            orgs_json()
+        );
+        let cached = Discovered::parse_cached(&json).expect("parses");
+        assert_eq!(
+            cached.central_auth.as_deref(),
+            Some("https://auth.fasttrackstudio.app")
+        );
+        assert_eq!(cached.orgs.len(), 1);
+    }
+
+    /// A cache entry written by an older build is a BARE ARRAY. It has
+    /// to keep parsing: this is the one path that exists to survive a
+    /// server being unreachable, so a parse error here would turn a
+    /// hiccup into a dead app on the first load after an upgrade.
+    #[test]
+    fn an_entry_from_before_the_issuer_was_cached_still_reads() {
+        let cached = Discovered::parse_cached(orgs_json()).expect("the old shape still parses");
+        assert_eq!(cached.orgs.len(), 1);
+        assert_eq!(cached.central_auth, None, "it genuinely did not know one");
+    }
+
+    /// `None` is a real answer, not a missing one: a self-hosted server
+    /// issues its own accounts, and the button must stay hidden there.
+    #[test]
+    fn a_self_hosted_server_caches_no_issuer() {
+        let json = format!(r#"{{"orgs":{},"central_auth":null}}"#, orgs_json());
+        let cached = Discovered::parse_cached(&json).expect("parses");
+        assert_eq!(cached.central_auth, None);
+    }
+
+    /// Round trip: what the live path writes is what the cached path
+    /// reads. These are the two halves that drifted apart before.
+    #[test]
+    fn what_is_written_is_what_is_read() {
+        let found = Discovered {
+            orgs: serde_json::from_str(orgs_json()).expect("orgs"),
+            central_auth: Some("https://auth.fasttrackstudio.app".to_owned()),
+        };
+        let json = serde_json::to_string(&found).expect("serialises");
+        let back = Discovered::parse_cached(&json).expect("round trips");
+        assert_eq!(back.central_auth, found.central_auth);
+        assert_eq!(back.orgs.len(), found.orgs.len());
     }
 }
