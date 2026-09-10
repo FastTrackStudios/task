@@ -33,6 +33,25 @@
 //! at all. Each is named in the rule and each is unimplemented, which is
 //! why `project.capability.conventions` carries an impl marker for the
 //! half that exists and this paragraph for the half that does not.
+//!
+//! That last sentence was briefly untrue. ADR 0003 added `Session`,
+//! `Signal`, `Ignition` and `Keyflow` to both enums and `docs/spec/unmet.md`
+//! recorded the rule as fully met on the strength of it: a project could
+//! declare `keyflow`, and a surface could read that label and decide to
+//! show a chart, which looks like "deliverable kinds and UI surfaces"
+//! from a distance.
+//!
+//! It was not. Those four brought no facets, no tool layouts and no
+//! ignore patterns — every one of them mapped to an empty slice — so the
+//! rule's first two clauses, the ones this module actually implements,
+//! had nothing to implement for them. What they supplied was a name for
+//! an *application*, which is a thing Task must not hold on a consumer's
+//! behalf: it makes every app wait on a Task release to describe its own
+//! domain, and it makes a sixth app impossible until this enum admits
+//! it. ADR 0004 removed them and put the gap back in `unmet.md`. A rule
+//! honestly recorded as half-met is a debt somebody can pay; a rule
+//! marked met by a vocabulary that does nothing is a debt nobody can
+//! find.
 
 use files_domain::facet::Capability as Convention;
 use project_proto::parts::{Capabilities, Capability};
@@ -43,10 +62,6 @@ pub fn convention_of(capability: Capability) -> Convention {
     match capability {
         Capability::MusicProduction => Convention::MusicProduction,
         Capability::VideoProduction => Convention::VideoProduction,
-        Capability::Session => Convention::Session,
-        Capability::Signal => Convention::Signal,
-        Capability::Ignition => Convention::Ignition,
-        Capability::Keyflow => Convention::Keyflow,
     }
 }
 

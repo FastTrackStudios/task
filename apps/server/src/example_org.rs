@@ -766,9 +766,12 @@ pub fn assets_of(slug: &str) -> impl Iterator<Item = &'static DeclaredAsset> + '
 /// One ordered collection the example plants.
 ///
 /// ADR 0003's third decision is that *nothing new is built for
-/// libraries*: a library is a `Collection` of kind `Library` over node
+/// libraries*: a library is a `Collection` of kind `"library"` over node
 /// references, and a setlist is the same primitive with a different
-/// kind. A seed that planted four assets and no collection would leave
+/// kind string. ADR 0004 sharpened that — the kind is a word this
+/// example supplies, not one the store enumerates — which makes the
+/// seed the demonstration that an application can name its own domain
+/// without a Task release. A seed that planted four assets and no collection would leave
 /// that claim unillustrated — a demo user would find four orphans and
 /// no way to see them as a library — so the planted world holds both.
 ///
@@ -782,8 +785,14 @@ pub struct DeclaredCollection {
     pub org: &'static str,
     /// Display title, and the identity a replant matches on.
     pub title: &'static str,
-    /// `library`, `setlist`, `show` or `playlist` —
-    /// `CollectionKind::as_str`'s own spelling.
+    /// The kind label, which this example defines and Task does not.
+    ///
+    /// It reads `library` and `setlist` because that is what a studio
+    /// calls these; after ADR 0004 those are strings the seed picked,
+    /// not members of a vocabulary the store publishes. Written in the
+    /// normal form [`collection::CollectionKind::new`] produces —
+    /// lowercase, trimmed — so a declaration matches what the store
+    /// holds.
     pub kind: &'static str,
     /// The nodes it holds, in order: `(kind, id)` — the two halves of a
     /// `kind:id` reference. No domain: every item here is this org's
@@ -805,7 +814,7 @@ pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
             ("chart", "track-one-condensed-live"),
             ("chart", "track-two"),
         ],
-        demonstrates: "a chart library is a `Collection` of kind `Library` over \
+        demonstrates: "a chart library is a `Collection` of kind `\"library\"` over \
                        `chart:<slug>` references and nothing else — no chart service, \
                        no chart store, no second vocabulary — and it holds both \
                        arrangements of Track One, because a library lists charts and one \
@@ -827,6 +836,25 @@ pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
                        assembled by reference out of several libraries at once — the \
                        song, the chart it is played from, and the cues that run over it \
                        — with no app knowing the others are there",
+    },
+    DeclaredCollection {
+        org: "acme-audio",
+        title: "Thursday Rehearsal",
+        // The point of this row is the word. `rehearsal-pool` is not a
+        // kind Task has ever enumerated, and after ADR 0004 there is no
+        // list for it to be missing from — the seed just picked it.
+        kind: "rehearsal-pool",
+        items: &[
+            ("song", "track-two"),
+            ("song", "track-three"),
+            ("chart", "track-two"),
+        ],
+        demonstrates: "ADR 0004's test of decision 2, in the planted world rather than \
+                       only in a test: an application naming something in its own domain \
+                       — a rehearsal pool, which no version of Task has ever heard of — \
+                       and getting ordering, membership and reference resolution anyway. \
+                       If a demo user can build this, so can a seventh app, without a \
+                       release of the store it is built on",
     },
 ];
 
@@ -876,13 +904,11 @@ fn plant_collections(org_root: &org_proto::OrgRoot, slug: &str) {
         if held.iter().any(|c| c.title == d.title) {
             continue;
         }
-        let kind = match d.kind {
-            "library" => CollectionKind::Library,
-            "setlist" => CollectionKind::Setlist,
-            "show" => CollectionKind::Show,
-            "playlist" => CollectionKind::Playlist,
-            other => CollectionKind::Other(other.to_owned()),
-        };
+        // No match arm any more: a kind is the declaring app's own word,
+        // and this seeder is one such app (ADR 0004). `library` and
+        // `setlist` are strings the example chose, not a vocabulary Task
+        // offers.
+        let kind = CollectionKind::new(d.kind);
         let made = match store.create(slug.to_owned(), d.title.to_owned(), kind) {
             Ok(made) => made,
             Err(e) => {
@@ -1354,7 +1380,7 @@ mod declared_tests {
     /// can answer: an asset this seed commits, or a song it commits.
     ///
     /// This is the assertion that keeps the seed from demonstrating the
-    /// wrong thing. A `Setlist` full of references to nothing still
+    /// wrong thing. A setlist full of references to nothing still
     /// plants, still lists, and still opens — as a list of unresolved
     /// rows, which is exactly the state ADR 0003 says is *legible* and
     /// therefore exactly the state a demo cannot be made of.
@@ -1368,11 +1394,25 @@ mod declared_tests {
                 c.title,
                 c.org
             );
+            // Not "is this one of four words" any more — there is no
+            // list to be one of (ADR 0004). What is still checkable, and
+            // is the thing that actually bites, is that a declaration is
+            // written in the normal form the store keeps: declare
+            // `Setlist` here and the seed would plant `setlist`, so the
+            // replant check that matches on the declared spelling would
+            // never recognise its own row and would plant a duplicate on
+            // every boot.
+            let planted_as = collection_proto::CollectionKind::new(c.kind);
+            assert_eq!(
+                planted_as.as_str(),
+                c.kind,
+                "{}: declare the kind as the store will hold it (lowercase, trimmed)",
+                c.title
+            );
             assert!(
-                matches!(c.kind, "library" | "setlist" | "show" | "playlist"),
-                "{}: `{}` is not a collection kind",
-                c.title,
-                c.kind
+                !planted_as.is_empty(),
+                "{}: a collection with no kind",
+                c.title
             );
             assert!(!c.items.is_empty(), "{}: an empty collection", c.title);
             for (kind, id) in c.items {

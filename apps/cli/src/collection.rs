@@ -1,11 +1,18 @@
 //! `task collection …` + `task song …` — headless library / setlist
 //! seeding (W0.5).
 //!
-//! A song **Library**, a **Setlist**, a **Show**, and a **Playlist** are
-//! the same primitive: an ordered list of [`NodeRef`] items served by
-//! `CollectionService`. These verbs create such collections, populate and
-//! reorder them, and inspect them — all without a GUI, so the W7 (Alan
-//! Parsons import) and W8 (Days to Praise seed) pipelines can drive them.
+//! A song library, a setlist, a show and a playlist are the same
+//! primitive: an ordered list of [`NodeRef`] items served by
+//! `CollectionService`, under a kind string the caller picks. These verbs
+//! create such collections, populate and reorder them, and inspect them —
+//! all without a GUI, so the W7 (Alan Parsons import) and W8 (Days to
+//! Praise seed) pipelines can drive them.
+//!
+//! `--kind` takes any word (ADR 0004): Task stopped enumerating the
+//! kinds its consumers use, so this CLI has no list to validate against
+//! and does not pretend to. It normalises — trims and lowercases — so
+//! that `--kind Setlist` and a web client writing `setlist` name one
+//! kind rather than two.
 //!
 //! `task song add` is the composite verb: it builds a durable **Song
 //! folder** with the `song` crate (a `song.md` index + a default
@@ -38,8 +45,9 @@ pub enum CollectionCmd {
     Create {
         /// Human title (e.g. `"Sunday Library"`).
         title: String,
-        /// What kind of collection: `library` | `setlist` | `show` |
-        /// `playlist` | `other:NAME`.
+        /// What kind of collection — any word you like, and what it
+        /// means is yours: `library`, `setlist`, `rehearsal-pool`.
+        /// Trimmed and lowercased so one word is one kind.
         #[arg(long, default_value = "library")]
         kind: String,
         #[arg(long)]
@@ -99,7 +107,8 @@ pub enum CollectionCmd {
     },
     /// List collections in the active org, optionally filtered by kind.
     List {
-        /// Restrict to one kind (`library` | `setlist` | … | `other:NAME`).
+        /// Restrict to one kind — whatever word the collections were
+        /// created with (`library`, `setlist`, `rehearsal-pool`, …).
         #[arg(long)]
         kind: Option<String>,
         #[arg(long)]
@@ -200,24 +209,28 @@ pub enum SongCmd {
 
 // ── parsing helpers ───────────────────────────────────────────────────
 
-/// Parse a `--kind` value into a [`CollectionKind`]. `other:NAME` maps to
-/// [`CollectionKind::Other`]; the four named kinds match case-insensitively;
-/// anything else falls through to `Other(<verbatim>)`.
+/// Parse a `--kind` value into a [`CollectionKind`].
+///
+/// There is nothing left to parse. A kind is whatever word the caller
+/// wants, normalised by [`CollectionKind::new`] — `library` and
+/// `setlist` are no more privileged here than `rehearsal-pool`, because
+/// Task does not know what any of them mean (ADR 0004).
+///
+/// The `other:` prefix this used to accept is gone with the enum that
+/// needed it: there is no longer a closed set to escape from, so
+/// `--kind other:Rehearsal` would now create a collection of kind
+/// `other:rehearsal`, which is not what anybody typing it meant. It is
+/// stripped rather than kept, and the stripping is the one piece of
+/// legacy indulgence in the CLI: an old script or an old shell-history
+/// line keeps working and lands on the kind it always described.
 fn parse_kind(s: &str) -> CollectionKind {
-    if let Some(rest) = s
+    let s = s.trim();
+    let bare = s
         .strip_prefix("other:")
         .or_else(|| s.strip_prefix("Other:"))
         .or_else(|| s.strip_prefix("OTHER:"))
-    {
-        return CollectionKind::Other(rest.to_string());
-    }
-    match s.to_ascii_lowercase().as_str() {
-        "library" => CollectionKind::Library,
-        "setlist" => CollectionKind::Setlist,
-        "show" => CollectionKind::Show,
-        "playlist" => CollectionKind::Playlist,
-        other => CollectionKind::Other(other.to_string()),
-    }
+        .unwrap_or(s);
+    CollectionKind::new(bare)
 }
 
 /// Parse a `kind:id[#anchor]` node token into a [`NodeRef`].
@@ -1003,17 +1016,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_kind_is_case_insensitive_with_an_other_escape() {
-        assert!(matches!(parse_kind("library"), CollectionKind::Library));
-        assert!(matches!(parse_kind("Setlist"), CollectionKind::Setlist));
-        assert!(matches!(parse_kind("SHOW"), CollectionKind::Show));
-        assert!(matches!(parse_kind("playlist"), CollectionKind::Playlist));
-        // `other:` preserves the caller's casing for the free-text
-        // label; a bare unknown word is lowercased.
-        assert!(
-            matches!(parse_kind("other:Rehearsal Pool"), CollectionKind::Other(s) if s == "Rehearsal Pool")
+    fn parse_kind_normalises_and_privileges_no_word() {
+        // Every spelling of one word is one kind — this is the property
+        // that stops a CLI user and a web user from splitting a store in
+        // half without either of them seeing an error.
+        for spelling in ["setlist", "Setlist", "SETLIST", "  setlist  "] {
+            assert_eq!(parse_kind(spelling).as_str(), "setlist");
+        }
+        // A word Task has never heard of is handled exactly like one it
+        // used to have a variant for. That equivalence is the change.
+        assert_eq!(parse_kind("Rehearsal Pool").as_str(), "rehearsal pool");
+        assert_eq!(parse_kind("Archive").as_str(), "archive");
+        // The retired `other:` escape is stripped, so an old invocation
+        // lands on the kind it always meant rather than on a kind whose
+        // label begins "other:".
+        assert_eq!(
+            parse_kind("other:Rehearsal Pool").as_str(),
+            "rehearsal pool"
         );
-        assert!(matches!(parse_kind("Archive"), CollectionKind::Other(s) if s == "archive"));
+        assert_eq!(parse_kind("OTHER:archive").as_str(), "archive");
     }
 
     #[test]

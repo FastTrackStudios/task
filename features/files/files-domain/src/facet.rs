@@ -23,18 +23,28 @@ use std::collections::BTreeMap;
 /// What kind of work a project supports. Closed and small, so a sync
 /// client, a placement policy and a UI can each reason about every
 /// member.
+///
+/// This is the same vocabulary as [`project_proto::parts::Capability`],
+/// duplicated because neither crate can depend on the other and there is
+/// no shared leaf; `project::conventions` bridges them and carries a
+/// test that fails if either side gains a member the other lacks. Add
+/// here and you must add there.
+///
+/// # Kinds of work only
+///
+/// ADR 0003 briefly added `Session`, `Signal`, `Ignition` and `Keyflow`
+/// — four application names — and ADR 0004 removed them. The test of a
+/// member here is mechanical and it is right below: `layouts_for` and
+/// `ignore::patterns_for` must have something to say about it. All four
+/// returned the empty slice, because none of those applications writes
+/// anything into a project tree; what they contributed to this enum was
+/// a name, and a name for a *consumer* at that. A primitive that
+/// enumerates its consumers is not a primitive — see
+/// `project_proto::parts::Capability` for the argument at length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Capability {
     MusicProduction,
     VideoProduction,
-    /// Session — setlists, songs, playback.
-    Session,
-    /// Signal — rigs, patches, sample libraries.
-    Signal,
-    /// Ignition — lighting for a song, a setlist or a show.
-    Ignition,
-    /// Keyflow — charts.
-    Keyflow,
 }
 
 /// A named class of content.
@@ -231,14 +241,6 @@ fn layouts_for(capability: Capability) -> &'static [&'static [ToolDir]] {
     match capability {
         Capability::MusicProduction => &[PRO_TOOLS, REAPER, LOGIC],
         Capability::VideoProduction => &[RESOLVE],
-        // The four sibling apps declare no tool-directory layouts: none
-        // of them writes a session folder into a project tree the way a
-        // DAW or Resolve does. Their material is addressed as nodes
-        // under `resources/` instead (ADR 0003). When one of them grows
-        // a scratch layout, it is declared here.
-        Capability::Session | Capability::Signal | Capability::Ignition | Capability::Keyflow => {
-            &[]
-        }
     }
 }
 

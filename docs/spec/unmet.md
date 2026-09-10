@@ -44,6 +44,33 @@ deliverable kinds and UI surfaces have no home at all. The marker covers
 the half that exists and `project::conventions` says so in its module
 docs rather than letting the marker imply the rest.
 
+**This entry came back, and that was the right move.** ADR 0003 added
+`Capability::{Session, Signal, Ignition, Keyflow}` — the names of the
+four applications built on Task — and this file recorded the deliverable
+kinds and UI surfaces half as filled on the strength of it: a project
+could declare `keyflow`, and a surface could read that label and decide
+to show a chart.
+
+It was not filled. Those four variants brought no facets, no tool
+layouts and no ignore patterns; every one of them mapped to an empty
+slice in `files_domain`, so the two clauses this rule's implementation
+actually covers had nothing to cover for them. What they supplied was a
+name for a *consumer*, and a primitive that enumerates its consumers is
+not a primitive — every app then waits on a Task release before it can
+say a word about its own domain, and a sixth app cannot exist until the
+enum admits it. [ADR 0004](../adr/0004-vault-assets-resources.md)
+removed them from both `project-proto` and `files-domain`, and this
+paragraph is the honest replacement.
+
+What would actually meet the half that is missing: a capability that
+declares deliverable kinds and surfaces has to be a kind of *work*, the
+way `music-production` is — a claim about what tools wrote this tree,
+paying for itself in the ignore layer and the facet map — with the
+deliverable vocabulary hung off that. Which application opens the result
+is resolved from the node kinds and asset shapes present, not from a
+label Task maintains. Recording an honest gap is better than a
+vocabulary that has to be released to describe someone else's domain.
+
 ## Not reachable from this harness
 
 ### `storage.query.reach`
