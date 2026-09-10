@@ -1,13 +1,21 @@
-//! Chapter — Keyflow keeps its charts here, and a library is a
-//! collection.
+//! Chapter — Keyflow keeps its charts here, they are ordinary vault
+//! documents, and a library is a collection.
 //!
 //! ADR 0003's first claim, driven the way the app that made it will
 //! drive it: an outside application signs in with an ordinary token,
-//! calls four ordinary RPCs on the resources tier, and gathers what it
-//! saved into an existing `Collection` of kind `Library`. No chart
-//! service, no chart store, no private lane — the chapter passes using
-//! only what was already mounted, which is the whole of what "nothing
-//! new is built for libraries" means.
+//! calls four ordinary RPCs, and gathers what it saved into an existing
+//! `Collection` of kind `Library`. No chart service, no chart store, no
+//! private lane — the chapter passes using only what was already
+//! mounted, which is the whole of what "nothing new is built for
+//! libraries" means.
+//!
+//! ADR 0004 decision 1 then moved where the bytes land: a chart is a
+//! **vault document** on the `Assets/` shelf, and a song is one beside
+//! it. That the four RPCs did not change is what this chapter still
+//! passing says. What it gained is the second half — the same client,
+//! through the *vault* lane, seeing the chart it just saved as an
+//! ordinary page. That is the claim ADR 0004 exists for, and a chapter
+//! that only exercised `ResourcesService` could not make it.
 //!
 //! # Over the wire, because that is the claim
 //!
@@ -82,7 +90,11 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
         .await
         .expect("save a chart");
     assert_eq!(saved.slug, "hosanna", "the slug is the chart's identity");
-    assert_eq!(saved.rel_path, "charts/hosanna.md");
+    assert_eq!(
+        saved.rel_path,
+        resources_proto::assets::chart_path("hosanna"),
+        "the lane hands back a vault path an app opens without composing one"
+    );
     assert!(saved.created);
 
     for (title, source, sections) in [
@@ -125,13 +137,56 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
         "the sections are the anchors `chart:hosanna#chorus` addresses"
     );
 
-    // The one thing a client cannot see: on disk the source is a plain
-    // chart file, so an editor that has never heard of Task opens it.
-    let kf = s.orgs.acme.org_root().join("resources/charts/hosanna.kf");
-    assert_eq!(
-        std::fs::read_to_string(&kf).expect("the `.kf` is on disk"),
-        HOSANNA,
-        "the chart is stored as an encoding of a chart rather than as one"
+    // ── and the chart it saved is an ordinary vault page ─────────────
+    //
+    // The whole of ADR 0004 decision 1, from the client side: the same
+    // session, the *vault* lane, the `rel_path` the chart lane handed
+    // back, unmodified. A chart is in the folder index, so search, the
+    // graph, backlinks and `[[wikilink]]` autocomplete all reach it; it
+    // declares which shelf it is on, so a notes list can leave it
+    // there; and it has a collaborative document, so two people can
+    // edit it. None of that was built for charts — it is what every
+    // vault file already had.
+    let vault = alice.vault().await;
+    let index = vault
+        .folder_index("default".to_owned())
+        .await
+        .expect("the folder index");
+    let page = index
+        .pages
+        .iter()
+        .find(|p| p.path == saved.rel_path)
+        .expect("the chart is a page of the vault like any other");
+    assert!(page.is_asset(), "and it declares the shelf it is on");
+    assert_eq!(page.page_type, resources_proto::assets::TYPE_ASSET);
+
+    let bytes = vault
+        .get_file("default".to_owned(), saved.rel_path.clone())
+        .await
+        .expect("read the chart through the vault lane");
+    let text = String::from_utf8(bytes.0).expect("utf8");
+    assert!(
+        text.contains(HOSANNA),
+        "the source is a fence in the document's body: {text}"
+    );
+    assert!(
+        vault
+            .open_collab("default".to_owned(), saved.rel_path.clone())
+            .await
+            .is_ok(),
+        "a chart has a collaborative document, because a vault file does"
+    );
+
+    // The disk assertion is now about the tier, not the file format:
+    // nothing of this chart is on the resources tier any more.
+    assert!(
+        !s.orgs
+            .acme
+            .org_root()
+            .join("resources/charts/hosanna.kf")
+            .exists(),
+        "the `.kf` sidecar came back — a file the vault walker never \
+         collects is a file nobody can search, link or collaborate on"
     );
 
     // ── a library is a collection, and nothing else ──────────────────
@@ -454,4 +509,143 @@ async fn deleting_a_chart_leaves_the_reference_that_named_it() {
     let charts = s.orgs.acme.org_root().join("resources/charts");
     assert!(!charts.join("hosanna.kf").exists());
     assert!(!charts.join("hosanna.md").exists());
+}
+
+/// A song, its two arrangements, and the join between them — ADR 0004's
+/// other half, through the lanes a client actually holds.
+///
+/// The claim under test is that **nothing lists anything twice**. A
+/// chart names its song; the song says nothing back. So adding an
+/// arrangement is one write, and the answer to "what arrangements does
+/// this song have?" is a query rather than a field somebody has to
+/// remember to update. The vendored song folder this replaced kept the
+/// same fact in four places — an `arrangements:` list, a
+/// `defaultArrangement` uuid, a directory per arrangement, and each
+/// arrangement's own note — and four places is four places to drift.
+#[tokio::test]
+async fn a_song_and_its_arrangements_join_by_reference_and_nothing_lists_twice() {
+    let s = Scenario::open().await;
+    let alice = s.as_alice().await;
+
+    let song = alice
+        .resources()
+        .await
+        .upsert_song(resources_proto::SongDoc {
+            slug: String::new(),
+            title: "Opening Night".into(),
+            writers: vec!["A. Wright".into()],
+            key: "C Major".into(),
+            tags: vec!["album".into()],
+            updated_at: "2026-09-09T10:00:00Z".into(),
+        })
+        .await
+        .expect("save a song");
+    assert_eq!(song.slug, "opening-night");
+    assert_eq!(
+        song.rel_path,
+        resources_proto::assets::song_path("opening-night"),
+        "a song is a vault document beside its charts, on its own shelf"
+    );
+
+    // Two arrangements, saved as two charts that each name the song.
+    // Neither asks to be the default. The server still gives the song
+    // exactly one, because a song with a chart and no main one is a
+    // state nothing can render.
+    for label in ["original", "live"] {
+        alice
+            .resources()
+            .await
+            .upsert_chart(arrangement(
+                "Opening Night",
+                "song:opening-night",
+                label,
+                false,
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("save the {label} arrangement: {e:?}"));
+    }
+
+    // The join, in one call and from the chart side only.
+    let arrangements = alice
+        .resources()
+        .await
+        .list_charts("song:opening-night".into())
+        .await
+        .expect("list the song's arrangements");
+    let slugs: Vec<&str> = arrangements.iter().map(|c| c.slug.as_str()).collect();
+    assert_eq!(
+        slugs,
+        ["opening-night-live", "opening-night-original"],
+        "the arrangements are the charts that name the song, in slug order"
+    );
+    let defaults: Vec<&str> = arrangements
+        .iter()
+        .filter(|c| c.is_default)
+        .map(|c| c.slug.as_str())
+        .collect();
+    assert_eq!(
+        defaults.len(),
+        1,
+        "a song with charts has exactly one default, and the server owns \
+         the flag: {arrangements:?}"
+    );
+
+    // And the song document itself lists none of them — the fact lives
+    // in one place, on the side that can maintain it with one write.
+    let vault = alice.vault().await;
+    let bytes = vault
+        .get_file("default".to_owned(), song.rel_path.clone())
+        .await
+        .expect("read the song through the vault lane");
+    let text = String::from_utf8(bytes.0).expect("utf8");
+    assert!(
+        !text.contains("opening-night-live"),
+        "the song document lists an arrangement — the join is one-way on \
+         purpose: {text}"
+    );
+    assert!(
+        !text.contains("defaultArrangement"),
+        "a uuid pointer came back; the flag belongs on the chart: {text}"
+    );
+
+    // A song is a vault page like any other, which is the whole reason
+    // it moved.
+    let index = vault
+        .folder_index("default".to_owned())
+        .await
+        .expect("the folder index");
+    let page = index
+        .pages
+        .iter()
+        .find(|p| p.path == song.rel_path)
+        .expect("the song is a page of the vault");
+    assert!(page.is_asset());
+    assert!(
+        page.tags.contains(&"album".to_owned()),
+        "tags come free with being a vault file: {:?}",
+        page.tags
+    );
+
+    // Deleting the song leaves its arrangements: an arrangement of a
+    // song that is gone is a legible state, not a reason to destroy
+    // somebody's chart (the same choice ADR 0003 made for a collection
+    // holding a deleted chart).
+    assert!(
+        alice
+            .resources()
+            .await
+            .delete_song("opening-night".into())
+            .await
+            .expect("delete the song")
+    );
+    assert_eq!(
+        alice
+            .resources()
+            .await
+            .list_charts("song:opening-night".into())
+            .await
+            .expect("the arrangements outlive the song")
+            .len(),
+        2
+    );
 }

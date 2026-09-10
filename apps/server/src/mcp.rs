@@ -888,7 +888,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
 }
 
 /// The chart tools. A chart is Keyflow's document, kept in the org's
-/// resources tier (`resources/charts/<slug>.kf` plus a manifest), and
+/// vault, on the Assets shelf (`Assets/Charts/<slug>.md`, ADR 0004), and
 /// addressable from anywhere in the graph as `chart:<slug>` — which is
 /// what lets a `Library` collection hold one (ADR 0003).
 ///
@@ -964,7 +964,7 @@ fn chart_tool_catalog() -> Vec<ToolDef> {
             description: "Create or replace a chart. Pass `slug` to update an existing chart \
                           (from list_charts); omit it to create one, and the slug is derived \
                           from the title and the arrangement label. The `source` is stored \
-                          verbatim as `resources/charts/<slug>.kf`. `sections` must be listed \
+                          verbatim, in a ```keyflow fence in the chart's own vault document. `sections` must be listed \
                           here — the server does not parse chart source, and an unlisted \
                           section is not addressable as `chart:<slug>#<section>`. ONE CHART IS \
                           ONE ARRANGEMENT: to add a second version of a song (a condensed live \
@@ -1006,7 +1006,7 @@ fn chart_tool_catalog() -> Vec<ToolDef> {
         ToolDef {
             name: "delete_chart",
             plugin: "core",
-            description: "Delete one chart: its manifest and its `.kf` source both go. \
+            description: "Delete one chart: its vault document goes. \
                           Returns `deleted: false` when there was nothing there — deleting \
                           twice is not an error, because a second tab hitting delete should \
                           not see a failure. A `chart:<slug>` reference held by a collection \

@@ -22,6 +22,7 @@
 //! Mount the server-side backend with [`serve`], or compose
 //! through [`Service`] into an `architect::Services` bundle.
 
+pub mod assets;
 mod base_view;
 mod collab;
 mod error;

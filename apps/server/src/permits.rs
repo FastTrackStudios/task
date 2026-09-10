@@ -767,6 +767,11 @@ table!(COLLECTION, "collection", "collections/**", [
 table!(RESOURCES, "resources", "resources/**", [
     rd "transcript", wr "upsert_sermon", rd "list_sermons", rd "sermon", wa "relocate_sermons",
     wr "upsert_chart", rd "chart", rd "list_charts", wa "delete_chart",
+    // ADR 0004: the song lane, the chart lane's sibling on the Assets
+    // shelf. `delete_song` is audited for the same reason `delete_chart`
+    // is — it un-declares a node other documents reference, and the
+    // charts that named it are deliberately left dangling.
+    wr "upsert_song", rd "song", rd "list_songs", wa "delete_song",
     // ADR 0003's other three asset lanes. Same mount, same shape: an
     // upsert writes, a get and a list read, and a delete is audited
     // because it un-declares a node other collections may reference.

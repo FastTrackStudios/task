@@ -1740,7 +1740,61 @@ pub(crate) async fn build_org_state(
         // sermon's `→ verse` links into the same typed-link store.
         let resources = resources::ResourcesBackend::new(org_root.resources_dir())
             .with_wikis(org_root.wikis_dir())
-            .with_links(links.clone());
+            .with_links(links.clone())
+            // ADR 0004 decision 1: charts are vault documents on the
+            // `Assets/` shelf, so the chart lane writes through the
+            // vault backend mounted above rather than `std::fs`. That
+            // is the entire mechanism by which a chart gets a Loro
+            // document, collaborative editing, wikilinks, tags and
+            // search — `vault-collab` is already listening to this
+            // backend's broadcasts, and a chart write is now one of
+            // them. The lane refuses without this, on purpose.
+            .with_assets(vault_sync_state.clone(), "default")
+            .map_err(|e| eyre::eyre!("attach the vault to the chart lane: {e}"))?;
+        // Move whatever ADR 0003 left in `<org>/resources/charts/` onto
+        // the shelf. Idempotent and non-destructive (it copies and
+        // leaves a breadcrumb), so it runs on every boot rather than
+        // being a step somebody has to remember on the one deployment
+        // that had charts.
+        // On a blocking thread, not this one: the migration writes
+        // through `VaultSync::put_file`, whose broadcast takes a
+        // `tokio::sync::RwLock` with `blocking_read` — which panics if
+        // called from a thread that is driving async tasks. Every other
+        // caller of that lane reaches it through the RPC dispatcher's
+        // blocking pool, so this is the one place that has to say so.
+        let migration = {
+            let lane = resources.clone();
+            tokio::task::spawn_blocking(move || lane.migrate_charts()).await
+        };
+        match migration
+            .map_err(|e| resources_proto::ResourcesError::Io(e.to_string()))
+            .and_then(|r| r)
+        {
+            Ok(report) if !report.migrated.is_empty() => {
+                architect_telemetry::wide::set(
+                    "assets.charts_migrated",
+                    i64::try_from(report.migrated.len()).unwrap_or(-1),
+                );
+                architect_telemetry::wide::set(
+                    "assets.charts_migrated_slugs",
+                    report.migrated.join(","),
+                );
+            }
+            Ok(report) => {
+                architect_telemetry::wide::set(
+                    "assets.charts_on_shelf",
+                    i64::try_from(report.kept.len()).unwrap_or(-1),
+                );
+            }
+            // A migration that cannot run is not a reason to refuse to
+            // serve: the charts it did not reach are still on disk,
+            // exactly where they were, and the next boot tries again.
+            // Refusing here would take an org offline over files
+            // nothing has lost.
+            Err(e) => {
+                architect_telemetry::wide::set("assets.charts_migration_error", e.to_string());
+            }
+        }
         // Cookbook lives at `<wiki>/Cookbook/*.cook`, NOT the vault
         // root. Which wiki is now a real question: with named wikis an
         // org can hold a Cooking wiki, and recipes belong there rather

@@ -248,7 +248,17 @@ impl Backend {
     /// [`VaultSyncError::NotFound`] only in `Explicit` mode
     /// when the id is unregistered; `UnderParent` always
     /// succeeds.
-    fn root(&self, vault_id: &str) -> Result<PathBuf, VaultSyncError> {
+    ///
+    /// Public because a server-side lane that keeps its documents in a
+    /// vault has to *read* them by walking — the Assets tier's chart
+    /// lane parses frontmatter off every chart to list them, and no
+    /// wire call returns parsed frontmatter for a subtree. Writes still
+    /// go through [`VaultSync::put_file`], which is the part that must
+    /// not be bypassed: it takes the write lock, hashes, and broadcasts
+    /// the `Put` that the collab write-behind and the FS watcher key
+    /// off. Reading around the backend is safe; writing around it is
+    /// not.
+    pub fn root(&self, vault_id: &str) -> Result<PathBuf, VaultSyncError> {
         match &self.layout {
             Layout::Explicit(map) => map
                 .read()

@@ -29,6 +29,10 @@ wiki-proto = { workspace = true }
 # into a Library or a Setlist, and the resolver that says whether a
 # reference naming another org may be followed.
 resources-proto = { workspace = true, features = ["vox"] }
+# ADR 0004: a chart is a vault document, so the chapters that drive the
+# chart lane also read it back through `VaultSync` — being a vault item
+# is the claim, and it is only checkable from the vault lane.
+vault-proto = { workspace = true, features = ["vox"] }
 collection-proto = { workspace = true, features = ["vox"] }
 links-proto = { workspace = true, features = ["vox"] }
 task = { workspace = true }

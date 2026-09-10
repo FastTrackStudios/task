@@ -260,7 +260,8 @@ enum Commands {
     #[command(subcommand)]
     Files(FilesCmd),
     /// Keyflow charts kept in the org's resources tier
-    /// (`resources/charts/<slug>.kf`) — save, read, list, delete. The
+    /// (`Assets/Charts/<slug>.md` in the vault, ADR 0004) — save, read, list,
+    /// delete. The
     /// same four RPCs Keyflow itself calls (ADR 0003).
     #[command(subcommand)]
     Chart(chart::ChartCmd),

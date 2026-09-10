@@ -18,13 +18,134 @@ use links_proto::{
 use resources_proto::{
     ChartDoc, ChartSummary, ChartUpsert, ContentRef, LightingDoc, LightingSummary, LightingUpsert,
     PatchDoc, PatchSummary, PatchUpsert, ResourcesError, ResourcesService, SampleDoc,
-    SampleSummary, SampleUpsert, SermonResource, SermonSummary, SermonUpsert, TranscriptDoc,
+    SampleSummary, SampleUpsert, SermonResource, SermonSummary, SermonUpsert, SongDoc, SongSummary,
+    SongUpsert, TranscriptDoc,
 };
+
+use vault_proto::{IfMatch, VaultSync as _};
 
 use crate::scripture_refs::{self, RefHit};
 use crate::types::{AnnotationFile, ResourceKind};
 use crate::walker::{LoadedResource, walk};
-use crate::{ResourceError, chart, lighting, patch, sample, sermon, sidecar, transcript};
+use crate::{ResourceError, chart, lighting, patch, sample, sermon, sidecar, song, transcript};
+
+/// The subtree song folders and song media share
+/// (`<org>/resources/songs/`).
+///
+/// Both meanings of "song" live here and only one of them moved: the
+/// markdown (`song.md`, `arrangements/**`) is now on the vault's Assets
+/// shelf; `manifest.json` and the audio stems stay, because they are
+/// imports the `/media` route serves. See
+/// [`ResourcesBackend::migrate_song_folders`].
+pub const LEGACY_SONGS_DIR: &str = "songs";
+
+/// The vendored `song` crate's index file inside a song folder. Its
+/// presence is what tells a *song folder* from the media directory of
+/// the same name.
+const VENDORED_SONG_FILE: &str = "song.md";
+
+/// The vendored `song` crate's arrangements subdirectory.
+const VENDORED_ARRANGEMENTS_DIR: &str = "arrangements";
+
+/// The vendored `song` crate's per-arrangement note.
+const VENDORED_ARRANGEMENT_FILE: &str = "arrangement.md";
+
+/// A top-level scalar from a vendored frontmatter block, by key.
+///
+/// Hand-rolled rather than `serde_yaml` because the vendored files
+/// carry nested structures this does not model and must not have to:
+/// the migration reads four scalars off them (`title`, `name`, `key`,
+/// `id`, `defaultArrangement`) and copies the rest of the document
+/// verbatim. Parsing a shape defined in another repository, at a
+/// pinned tag, would make this code break when that repository changed
+/// something the migration does not care about.
+fn vendored_key(document: &str, key: &str) -> Option<String> {
+    let (fm, _) = crate::sermon::split(document)?;
+    for line in fm.lines() {
+        // Top-level only — a nested `  name:` under `arrangements:`
+        // belongs to an entry, not to the document.
+        if line.starts_with(char::is_whitespace) || line.starts_with('-') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix(key).and_then(|r| r.strip_prefix(':')) {
+            let v = rest.trim().trim_matches(['"', '\'']);
+            return (!v.is_empty()).then(|| v.to_owned());
+        }
+    }
+    None
+}
+
+/// The breadcrumb left in `<org>/resources/songs/` after a migration.
+const SONG_MIGRATION_NOTE_BODY: &str = "\
+# The song documents moved to the vault
+
+ADR 0004 decision 1. A song's **document** is now a vault item on the
+Assets shelf, and so is each of its arrangements:
+
+    <org>/vault/Assets/Songs/<slug>.md      — the song
+    <org>/vault/Assets/Charts/<slug>.md     — one per arrangement
+
+That is what buys them collaborative editing, wikilinks, tags and
+search. Each arrangement became a chart that *names* its song
+(`song: song:<slug>`) instead of being nested inside it, and the
+`defaultArrangement` uuid became `is_default` on the chart it pointed
+at — the flag now lives on the thing it is a fact about.
+
+**What is still live here, and must not be deleted:** `manifest.json`
+and the audio stems. Those are Resources — imported bytes nobody types
+into — and `GET /org/{slug}/media/songs/...` serves them to the player.
+They did not move and are not a snapshot.
+
+**What is a frozen snapshot:** `song.md` and `arrangements/**`. They
+were copied, not moved. The global player still reads them over the
+media route (`player_ui::song_session::fetch_kf_manifest`), so they are
+kept — but edits made in the vault since the migration are not
+reflected here. Repointing the player at the Assets tier is recorded in
+`docs/spec/unmet.md`.
+";
+
+/// The breadcrumb left in `<org>/resources/charts/` after a migration,
+/// for the person who opens the folder later and finds files nothing
+/// reads.
+const MIGRATION_NOTE: &str = "_MIGRATED.md";
+
+/// What that breadcrumb says. Deliberately prose rather than a marker
+/// file: the reader is a human wondering whether it is safe to delete
+/// the folder, and the honest answer has a condition in it.
+const MIGRATION_NOTE_BODY: &str = "\
+# These charts moved to the vault
+
+ADR 0004 decision 1 made charts **vault documents** on the Assets shelf:
+
+    <org>/vault/Assets/Charts/<slug>.md
+
+Each of those holds what used to be two files here — the manifest's
+frontmatter, and the `.kf` source, now a ```keyflow fence in the body.
+That is what buys a chart collaborative editing, wikilinks, tags and
+search, none of which this tier could offer.
+
+**The files beside this note were copied, not moved, and nothing reads
+them any more.** They are a snapshot frozen at migration time: edits made
+in the vault since are not reflected here.
+
+They are deliberately not deleted, because cross-organisation reach still
+resolves a foreign `chart:<slug>` through this directory
+(`node_homes::LocalHomes::locate`, and the `SourceKind::Resource`
+subscription whose slug is `charts`). Vault-held assets have no equivalent
+yet — see ADR 0004's consequences, and `docs/spec/unmet.md`. Once that
+path exists, this directory can go.
+";
+
+/// What one run of [`ResourcesBackend::migrate_charts`] did — named
+/// slugs rather than counts, because the thing an operator wants from a
+/// migration log is *which* chart, and a count cannot answer that.
+#[derive(Debug, Default, Clone)]
+pub struct ChartMigration {
+    /// Charts copied onto the shelf by this run.
+    pub migrated: Vec<String>,
+    /// Charts already on the shelf, left alone. The steady state.
+    pub kept: Vec<String>,
+}
 
 /// `provenance.source_ref` on every link the sync mints — so a re-sync
 /// replaces only its own links, never a reader's annotations.
@@ -33,9 +154,14 @@ pub const SOURCE_REF: &str = "sermon-sync";
 /// The subtree sermons live in, under the org-wide resources root.
 const SERMONS_DIR: &str = "sermons";
 
-/// The subtree charts live in, under the org-wide resources root
+/// The subtree charts lived in under the org-wide resources root
 /// (ADR 0003: `resources/charts/<slug>.kf`).
-const CHARTS_DIR: &str = "charts";
+///
+/// **Read-only as of ADR 0004.** Charts are vault documents now
+/// ([`AssetShelf`]); this constant survives so
+/// [`ResourcesBackend::migrate_charts`] can find what ADR 0003 left
+/// behind, and so the migration's breadcrumb lands in the right place.
+pub const LEGACY_CHARTS_DIR: &str = "charts";
 
 /// The subtree Signal's patches live in (ADR 0003:
 /// `resources/patches/<slug>/`). The directory names in this block are
@@ -63,10 +189,119 @@ const WIKIS_PREFIX: &str = "wikis/";
 /// the wiki opens the collection through.
 pub const SERMONS_BASE: &str = "Sermons.base";
 
+/// The org's vault, as the chart lane addresses it — ADR 0004's Assets
+/// tier in the two fields it actually needs.
+///
+/// # Why the backend holds a vault and not a directory
+///
+/// This is the whole mechanical content of "charts become vault
+/// documents". A chart write is a [`VaultSync::put_file`], which is
+/// what makes `vault-collab` see it: the backend takes its write lock,
+/// hashes the bytes, and broadcasts a `VaultEvent::Put` that the
+/// per-vault inbound listener folds into any open Loro document for
+/// that path. Write around it — a bare `std::fs::write`, which is
+/// exactly what ADR 0003's chart lane did — and a chart somebody has
+/// open in another tab silently reverts on their next keystroke,
+/// because the doc never learned the file changed.
+///
+/// Reads deliberately go straight to disk instead. Listing charts means
+/// parsing frontmatter out of every document on the shelf, and no wire
+/// call returns that for a subtree; `manifest` returns paths and shas.
+/// Reading around the backend costs nothing — there is no lock to take
+/// and no event to emit — so the asymmetry is the right one rather than
+/// an inconsistency.
+#[derive(Clone)]
+struct AssetShelf {
+    /// The backend every asset write goes through.
+    vault: vault::sync::Backend,
+    /// Which vault. `"default"` on a server org; a test may use its
+    /// own. Carried rather than assumed because the same backend serves
+    /// an org's named wikis under other ids, and a chart belongs to the
+    /// org's own vault.
+    vault_id: String,
+    /// That vault's root on disk, resolved once at construction — the
+    /// walk side of the asymmetry above.
+    root: PathBuf,
+}
+
+impl AssetShelf {
+    /// `<vault>/Assets/Charts` on disk.
+    fn charts_dir(&self) -> PathBuf {
+        self.root
+            .join(resources_proto::assets::ASSETS_DIR)
+            .join(resources_proto::assets::CHARTS_DIR)
+    }
+
+    /// `<vault>/Assets/Songs` on disk.
+    fn songs_dir(&self) -> PathBuf {
+        self.root
+            .join(resources_proto::assets::ASSETS_DIR)
+            .join(resources_proto::assets::SONGS_DIR)
+    }
+
+    /// A vault-relative, forward-slashed path for an absolute one under
+    /// the root. This is what an app gets back as `rel_path`, and what
+    /// it hands to `VaultSync` to open the document — so it must be the
+    /// vault's own spelling, not the resources tier's.
+    fn rel(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    /// Write one asset document.
+    ///
+    /// [`IfMatch::Force`], and the reason is the conflict policy
+    /// `vault-collab` states canonically rather than laziness. The
+    /// chart lane's contract is that the slug is the identity and a
+    /// save replaces the source outright; there is no sha for Keyflow
+    /// to have held, because Keyflow addresses charts by slug and never
+    /// saw one. A conditional write would therefore have nothing to
+    /// condition on and would fail whenever *anyone* — including the
+    /// collab write-behind flushing a keystroke a second ago — had
+    /// touched the file.
+    ///
+    /// Forcing is safe here precisely because the doc layer is
+    /// downstream of it: an external `put_file` into an open document
+    /// is merged in character by character against the last flushed
+    /// text, so concurrent typing interleaves with the save rather than
+    /// being reverted. Last-writer-wins at the file, three-way merge at
+    /// the document. That is the documented behaviour, not a happy
+    /// accident, and it is why the app-owned/authored split in
+    /// [`crate::chart::refresh_document`] matters: the smaller the
+    /// region a save rewrites, the less there is to merge.
+    fn put(&self, rel: &str, text: &str) -> Result<(), ResourcesError> {
+        self.vault
+            .put_file(
+                &self.vault_id,
+                rel,
+                text.as_bytes().to_vec(),
+                IfMatch::Force,
+            )
+            .map(|_ack| ())
+            .map_err(|e| ResourcesError::Io(format!("write {rel}: {e}")))
+    }
+
+    /// Remove one asset document, idempotently.
+    fn delete(&self, rel: &str) -> Result<(), ResourcesError> {
+        self.vault
+            .delete_file(&self.vault_id, rel, IfMatch::Force)
+            .map_err(|e| ResourcesError::Io(format!("delete {rel}: {e}")))
+    }
+}
+
 #[derive(Clone, architect::HasDispatcher)]
 pub struct ResourcesBackend {
     /// `<org>/resources`.
     root: Arc<PathBuf>,
+    /// The org's vault, when the host wires one in — ADR 0004's Assets
+    /// tier. The chart lane refuses without it rather than falling back
+    /// to ADR 0003's `std::fs` path: two write paths for one lane is
+    /// how a "collaborative" chart quietly stops being one, and a lane
+    /// that fails loudly on a misconfigured host is cheaper to find
+    /// than a lane that silently writes the wrong tier.
+    assets: Option<AssetShelf>,
     /// Serialises the read-decide-rewrite the chart default invariant
     /// needs (see [`ResourcesBackend::reconcile_song_defaults`]).
     ///
@@ -90,10 +325,303 @@ impl ResourcesBackend {
     pub fn new(resources_root: impl Into<PathBuf>) -> Self {
         Self {
             root: Arc::new(resources_root.into()),
+            assets: None,
             wikis: None,
             links: None,
             chart_defaults: Arc::new(std::sync::Mutex::new(())),
         }
+    }
+
+    /// Attach the org's vault, so the chart lane can write the Assets
+    /// tier (ADR 0004 decision 1).
+    ///
+    /// Without this the chart RPCs refuse; see [`ResourcesBackend::assets`].
+    ///
+    /// # Errors
+    ///
+    /// [`ResourcesError::Io`] when `vault_id` names no registered root.
+    pub fn with_assets(
+        mut self,
+        vault: vault::sync::Backend,
+        vault_id: impl Into<String>,
+    ) -> Result<Self, ResourcesError> {
+        let vault_id = vault_id.into();
+        let root = vault
+            .root(&vault_id)
+            .map_err(|e| ResourcesError::Io(format!("vault `{vault_id}`: {e}")))?;
+        self.assets = Some(AssetShelf {
+            vault,
+            vault_id,
+            root,
+        });
+        Ok(self)
+    }
+
+    /// Move every ADR 0003 chart off `<org>/resources/charts/` onto the
+    /// vault's Assets shelf. Idempotent, and it deletes nothing.
+    ///
+    /// Run on every boot. There is real data on production —
+    /// `chart:doxology`, `chart:doxology-2`, `chart:agent-smoke-test`
+    /// and `chart:vox` in org `codywright` — and a migration that has
+    /// to be remembered is a migration that gets skipped on the one
+    /// deployment that mattered.
+    ///
+    /// # Copy, never move
+    ///
+    /// Each legacy pair (`<slug>.md` + `<slug>.kf`) is *read* and
+    /// composed into `Assets/Charts/<slug>.md` through
+    /// [`AssetShelf::put`]. The originals stay exactly where they are.
+    /// Three reasons, in order of how much they cost if ignored:
+    ///
+    /// 1. **Reversible by inspection.** Both copies are on disk and a
+    ///    person can diff them. Nothing about the rollback story
+    ///    depends on a backup existing or on this code being correct.
+    /// 2. **Cross-organisation reach still reads the old tier.**
+    ///    `node_homes::LocalHomes::locate` and the
+    ///    `SourceKind::Resource` materialiser both resolve a foreign
+    ///    `chart:` through `<org>/resources/charts/`. Deleting the
+    ///    originals would break a subscriber's library the moment this
+    ///    shipped. They keep working — against a snapshot frozen at
+    ///    migration time, which is a regression and is documented as
+    ///    one rather than hidden by a deletion.
+    /// 3. **A half-finished migration is not a lost chart.** If this
+    ///    process dies between two charts, the next boot resumes and
+    ///    the untouched ones are still where they always were.
+    ///
+    /// A `_MIGRATED.md` breadcrumb is written beside the originals
+    /// saying where they went and that they are no longer read. That
+    /// note is for the person who opens the folder in six months, which
+    /// is the only reader a leftover directory ever has.
+    ///
+    /// # Idempotence
+    ///
+    /// A slug whose asset document already exists is skipped outright —
+    /// the vault copy is authoritative the instant it exists, and
+    /// re-composing it from the frozen originals would revert every
+    /// edit made since. Skipped is the *normal* outcome: on a settled
+    /// deployment every boot after the first migrates nothing.
+    ///
+    /// # Errors
+    ///
+    /// The first unreadable legacy chart or unwritable vault path.
+    /// Charts already migrated are still counted, so a retry after a
+    /// fixed permission resumes rather than restarts.
+    pub fn migrate_charts(&self) -> Result<ChartMigration, ResourcesError> {
+        let shelf = self.shelf()?;
+        let legacy_dir = self.root.join(LEGACY_CHARTS_DIR);
+        let mut report = ChartMigration::default();
+        // Only ADR 0003's own manifests: `walk` parses frontmatter, so
+        // a stray note in the folder is not mistaken for a chart.
+        for found in walk(&legacy_dir)
+            .into_iter()
+            .filter(|r| r.resource.kind == crate::types::ResourceKind::Chart)
+        {
+            let slug = found.resource.slug.clone();
+            let rel = resources_proto::assets::chart_path(&slug);
+            if shelf.root.join(&rel).exists() {
+                report.kept.push(slug);
+                continue;
+            }
+            let manifest = std::fs::read_to_string(&found.path)
+                .map_err(|e| ResourcesError::Io(format!("read {}: {e}", found.path.display())))?;
+            // A `.kf` that is gone is an empty source, not a failure:
+            // the manifest is the chart's identity and losing it is
+            // what would be unrecoverable.
+            let source = match std::fs::read_to_string(found.path.with_extension("kf")) {
+                Ok(s) => s,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(ResourcesError::Io(e.to_string())),
+            };
+            let document = chart::migrate_document(&manifest, &source).map_err(|e| io_err(&e))?;
+            shelf.put(&rel, &document)?;
+            report.migrated.push(slug);
+        }
+        if !report.migrated.is_empty() {
+            let note = legacy_dir.join(MIGRATION_NOTE);
+            if !note.exists() {
+                let _ = std::fs::write(&note, MIGRATION_NOTE_BODY);
+            }
+        }
+        self.migrate_song_folders(&mut report)?;
+        Ok(report)
+    }
+
+    /// The other half of the migration: the vendored song folders
+    /// `task song add` wrote — `<resources>/songs/<slug>/song.md` plus
+    /// `arrangements/<dir>/{arrangement.md,*.kf}` — become a song
+    /// document and one chart per arrangement.
+    ///
+    /// # Two things called "songs", and only one of them moves
+    ///
+    /// `<resources>/songs/<slug>/` holds both. `manifest.json` and the
+    /// audio stems beside it are **Resources** in ADR 0004's sense —
+    /// imports, binary, nothing anybody types into — and they stay
+    /// exactly where they are, which is why a cross-organisation
+    /// `song:<slug>` keeps resolving *and* keeps being fetchable where
+    /// a `chart:<slug>` no longer is. What moves is the markdown: the
+    /// document a person writes, edits and links to.
+    ///
+    /// That the two shared a directory was an accident of history, and
+    /// separating them by *file kind* rather than by directory is
+    /// exactly the tier rule stated as code.
+    ///
+    /// # Translating the vendored shape
+    ///
+    /// Each `arrangements/<dir>/arrangement.md` becomes a chart whose
+    /// `song` is `song:<song-slug>`, whose `arrangement` is the
+    /// vendored `name`, and whose source is the `.kf` that sat beside
+    /// it — folded into the chart's own fence. The song's
+    /// `defaultArrangement` uuid selects which chart gets `is_default`,
+    /// and then stops existing: the flag lives on the thing it is a
+    /// fact about, where `reconcile_song_defaults` can maintain it.
+    ///
+    /// A song's *first or only* arrangement takes the song's own slug
+    /// (`chart:opening-night`), so the common case reads the way a
+    /// person would name it; a second one is suffixed by its label
+    /// through the ordinary [`chart::slug_for`] path.
+    ///
+    /// # What still reads the originals
+    ///
+    /// The global player fetches
+    /// `GET /org/{org}/media/songs/{slug}/song.md` and the
+    /// `arrangement.md` it points at (`player_ui::song_session`). Those
+    /// files are **copied, not moved**, so it keeps working — against a
+    /// snapshot frozen at migration time. Repointing the player at the
+    /// Assets tier needs a cross-tier read path the vault does not
+    /// have; it is recorded in `docs/spec/unmet.md` beside the
+    /// cross-org gap rather than left to be discovered.
+    fn migrate_song_folders(&self, report: &mut ChartMigration) -> Result<(), ResourcesError> {
+        let shelf = self.shelf()?;
+        let songs_dir = self.root.join(LEGACY_SONGS_DIR);
+        let Ok(entries) = std::fs::read_dir(&songs_dir) else {
+            return Ok(());
+        };
+        let mut touched = false;
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            let index = dir.join(VENDORED_SONG_FILE);
+            if !index.is_file() {
+                continue;
+            }
+            let Some(slug) = dir.file_name().and_then(|s| s.to_str()).map(str::to_owned) else {
+                continue;
+            };
+            let text = std::fs::read_to_string(&index)
+                .map_err(|e| ResourcesError::Io(format!("read {}: {e}", index.display())))?;
+
+            // The song document, unless it is already on the shelf.
+            let rel = resources_proto::assets::song_path(&slug);
+            if shelf.root.join(&rel).exists() {
+                report.kept.push(format!("song:{slug}"));
+            } else {
+                let doc = song::migrate_document(&text, &slug).map_err(|e| io_err(&e))?;
+                shelf.put(&rel, &doc)?;
+                report.migrated.push(format!("song:{slug}"));
+                touched = true;
+            }
+
+            touched |= self.migrate_arrangements(&dir, &slug, &text, report)?;
+        }
+        if touched {
+            let note = songs_dir.join(MIGRATION_NOTE);
+            if !note.exists() {
+                let _ = std::fs::write(&note, SONG_MIGRATION_NOTE_BODY);
+            }
+        }
+        Ok(())
+    }
+
+    /// One song folder's arrangements → charts. Returns whether
+    /// anything was written.
+    fn migrate_arrangements(
+        &self,
+        dir: &Path,
+        song_slug: &str,
+        index: &str,
+        report: &mut ChartMigration,
+    ) -> Result<bool, ResourcesError> {
+        let shelf = self.shelf()?;
+        let default_id = vendored_key(index, "defaultArrangement");
+        let Ok(arrangements) = std::fs::read_dir(dir.join(VENDORED_ARRANGEMENTS_DIR)) else {
+            return Ok(false);
+        };
+        // Deterministic order: the first arrangement claims the song's
+        // own slug, so a rerun on a fresh disk names the same charts.
+        let mut dirs: Vec<PathBuf> = arrangements
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join(VENDORED_ARRANGEMENT_FILE).is_file())
+            .collect();
+        dirs.sort();
+
+        let mut wrote = false;
+        for (nth, arr_dir) in dirs.iter().enumerate() {
+            let note = arr_dir.join(VENDORED_ARRANGEMENT_FILE);
+            let text = std::fs::read_to_string(&note)
+                .map_err(|e| ResourcesError::Io(format!("read {}: {e}", note.display())))?;
+            let name = vendored_key(&text, "name").unwrap_or_default();
+            // The song's own slug for the first arrangement; the label
+            // disambiguates the rest, through the same rule Keyflow's
+            // own saves go through.
+            let slug = if nth == 0 {
+                song_slug.to_owned()
+            } else {
+                crate::asset::slug_for(&[], "", &format!("{song_slug} {name}"))
+            };
+            let rel = resources_proto::assets::chart_path(&slug);
+            if shelf.root.join(&rel).exists() {
+                report.kept.push(format!("chart:{slug}"));
+                continue;
+            }
+            let source = std::fs::read_dir(arr_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|e| e == "kf"))
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_default();
+            let doc = ChartDoc {
+                slug: slug.clone(),
+                title: vendored_key(index, "title").unwrap_or_else(|| song_slug.to_owned()),
+                source,
+                key: vendored_key(&text, "key").unwrap_or_default(),
+                notation: chart::SOURCE.to_owned(),
+                sections: Vec::new(),
+                song: format!("song:{song_slug}"),
+                arrangement: name,
+                // The uuid pointer becomes a boolean on the chart it
+                // pointed at, and the reconcile below settles the
+                // invariant whatever the folder claimed.
+                is_default: match (&default_id, vendored_key(&text, "id")) {
+                    (Some(want), Some(have)) => *want == have,
+                    // A folder with no default at all: the first
+                    // arrangement is the song's main one, which is what
+                    // `upsert_chart` would have decided anyway.
+                    (None, _) => nth == 0,
+                    _ => false,
+                },
+                updated_at: String::new(),
+            };
+            let document = chart::render_document(&doc, &slug).map_err(|e| io_err(&e))?;
+            shelf.put(&rel, &document)?;
+            report.migrated.push(format!("chart:{slug}"));
+            wrote = true;
+        }
+        if wrote {
+            self.reconcile_song_defaults(&format!("song:{song_slug}"), None)?;
+        }
+        Ok(wrote)
+    }
+
+    /// The Assets shelf, or the refusal a host without a vault gets.
+    fn shelf(&self) -> Result<&AssetShelf, ResourcesError> {
+        self.assets.as_ref().ok_or_else(|| {
+            ResourcesError::BadRequest(
+                "charts are vault documents (ADR 0004) and this backend has no vault attached"
+                    .into(),
+            )
+        })
     }
 
     /// Attach the named-wikis root (`<org>/wikis`), so a sermon can be
@@ -115,16 +643,37 @@ impl ResourcesBackend {
         self.root.join(SERMONS_DIR)
     }
 
-    /// `<org>/resources/charts` — Keyflow's tier, flat by slug.
-    fn charts_root(&self) -> PathBuf {
-        self.root.join(CHARTS_DIR)
-    }
-
-    /// Every chart manifest, slug-sorted (that is [`walk`]'s order).
+    /// Every chart document on the Assets shelf, slug-sorted (that is
+    /// [`walk`]'s order).
+    ///
+    /// Filtering on the parsed kind rather than on the extension is
+    /// what keeps a person's own note under `Assets/Charts/` — a README
+    /// about the folder, say — from being read as a chart with no
+    /// title. The shelf is a vault directory; anybody may put a
+    /// markdown file in it.
     fn charts(&self) -> Vec<LoadedResource> {
-        walk(self.charts_root())
+        let Ok(shelf) = self.shelf() else {
+            return Vec::new();
+        };
+        walk(shelf.charts_dir())
             .into_iter()
             .filter(|r| r.resource.kind == crate::types::ResourceKind::Chart)
+            .collect()
+    }
+
+    /// Every song document on the Assets shelf, slug-sorted.
+    ///
+    /// The kind filter matters more here than for charts: the *media*
+    /// tier also has a `songs` directory, and a person may well keep a
+    /// note about an album under `Assets/Songs/`. Only a page that says
+    /// it is a song is one.
+    fn songs(&self) -> Vec<LoadedResource> {
+        let Ok(shelf) = self.shelf() else {
+            return Vec::new();
+        };
+        walk(shelf.songs_dir())
+            .into_iter()
+            .filter(|r| r.resource.kind == crate::types::ResourceKind::Song)
             .collect()
     }
 
@@ -138,7 +687,14 @@ impl ResourcesBackend {
             song: r.resource.song.clone(),
             arrangement: r.resource.arrangement.clone(),
             is_default: r.resource.is_default,
-            rel_path: self.rel(&r.path),
+            // Vault-relative, because that is the only path a caller
+            // can do anything with now: it is what `VaultSync::get_file`
+            // and `open_collab` take. `self.rel` (resources-relative)
+            // would name a tier this document is not on.
+            rel_path: self
+                .shelf()
+                .map(|s| s.rel(&r.path))
+                .unwrap_or_else(|_| self.rel(&r.path)),
             updated_at: r.resource.updated_at.clone(),
         }
     }
@@ -220,7 +776,11 @@ impl ResourcesBackend {
             let existing =
                 std::fs::read_to_string(&r.path).map_err(|e| ResourcesError::Io(e.to_string()))?;
             let out = chart::set_default(&existing, want).map_err(|e| io_err(&e))?;
-            std::fs::write(&r.path, out).map_err(|e| ResourcesError::Io(e.to_string()))?;
+            // Through the vault like every other asset write: clearing
+            // a sibling's flag is a write to a document somebody may
+            // have open, and it has to reach their screen.
+            let shelf = self.shelf()?;
+            shelf.put(&shelf.rel(&r.path), &out)?;
         }
         Ok(())
     }
@@ -743,6 +1303,102 @@ impl ResourcesService for ResourcesBackend {
         Ok(moved)
     }
 
+    // ── Songs: the thing charts are arrangements of ───────────────
+    //
+    // The chart lane again, minus the default invariant — a song has no
+    // set-shaped rule to maintain, because nothing about a song is a
+    // fact about its siblings. That the two lanes are otherwise the
+    // same code shape is the point rather than a coincidence: ADR 0004
+    // adds a shelf, not a subsystem, and a second kind on the shelf
+    // should cost a `render`/`refresh` pair and nothing else.
+
+    fn upsert_song(&self, song_doc: SongDoc) -> Result<SongUpsert, ResourcesError> {
+        if song_doc.title.trim().is_empty() {
+            return Err(ResourcesError::BadRequest("title is empty".into()));
+        }
+        let shelf = self.shelf()?;
+        let existing = self.songs();
+        let taken: Vec<String> = existing.iter().map(|r| r.resource.slug.clone()).collect();
+        let slug = song::slug_for(&taken, &song_doc);
+        if slug.is_empty() {
+            return Err(ResourcesError::BadRequest(format!(
+                "title {:?} has no sluggable characters",
+                song_doc.title
+            )));
+        }
+        let prior = existing.iter().find(|r| r.resource.slug == slug);
+        let rel = prior.map_or_else(
+            || resources_proto::assets::song_path(&slug),
+            |r| shelf.rel(&r.path),
+        );
+        let abs = shelf.root.join(&rel);
+        let (md, created) = match std::fs::read_to_string(&abs) {
+            Ok(old) => (
+                song::refresh_document(&old, &song_doc).map_err(|e| io_err(&e))?,
+                false,
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+                song::render_document(&song_doc, &slug).map_err(|e| io_err(&e))?,
+                true,
+            ),
+            Err(e) => return Err(ResourcesError::Io(e.to_string())),
+        };
+        shelf.put(&rel, &md)?;
+        Ok(SongUpsert {
+            slug,
+            rel_path: rel,
+            created,
+        })
+    }
+
+    fn song(&self, slug: &str) -> Result<SongDoc, ResourcesError> {
+        self.shelf()?;
+        let found = self
+            .songs()
+            .into_iter()
+            .find(|r| r.resource.slug == slug)
+            .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))?;
+        Ok(SongDoc {
+            slug: found.resource.slug,
+            title: found.resource.title,
+            writers: found.resource.writers,
+            key: found.resource.key,
+            tags: found.resource.tags,
+            updated_at: found.resource.updated_at,
+        })
+    }
+
+    fn list_songs(&self) -> Result<Vec<SongSummary>, ResourcesError> {
+        let shelf = self.shelf()?;
+        Ok(self
+            .songs()
+            .iter()
+            .map(|r| SongSummary {
+                slug: r.resource.slug.clone(),
+                title: r.resource.title.clone(),
+                writers: r.resource.writers.clone(),
+                key: r.resource.key.clone(),
+                tags: r.resource.tags.clone(),
+                rel_path: shelf.rel(&r.path),
+                updated_at: r.resource.updated_at.clone(),
+            })
+            .collect())
+    }
+
+    fn delete_song(&self, slug: &str) -> Result<bool, ResourcesError> {
+        safe_segment(slug, "slug")?;
+        let shelf = self.shelf()?;
+        let Some(found) = self.songs().into_iter().find(|r| r.resource.slug == slug) else {
+            return Ok(false);
+        };
+        // Charts naming this song are left alone — an arrangement of a
+        // song that is gone reads as attached to something unresolved,
+        // which is the legible state ADR 0003 chose for a dangling
+        // reference and the only one a person can repair.
+        shelf.delete(&shelf.rel(&found.path))?;
+        Ok(true)
+    }
+
     fn upsert_chart(&self, chart_doc: ChartDoc) -> Result<ChartUpsert, ResourcesError> {
         if chart_doc.title.trim().is_empty() {
             return Err(ResourcesError::BadRequest("title is empty".into()));
@@ -777,7 +1433,7 @@ impl ResourcesService for ResourcesBackend {
             )));
         }
 
-        let root = self.charts_root();
+        let shelf = self.shelf()?;
         let prior = existing.iter().find(|r| r.resource.slug == slug);
         // `is_default: false` is *no opinion*, not "demote me". A
         // client that never tracked the flag — Keyflow saving an edit
@@ -793,24 +1449,28 @@ impl ResourcesService for ResourcesBackend {
         let was_default =
             prior.is_some_and(|r| r.resource.is_default && r.resource.song == chart_doc.song);
         chart_doc.is_default = chart_doc.is_default || was_default;
-        // A known slug keeps the file it is already in.
-        let md_path = prior.map_or_else(|| root.join(format!("{slug}.md")), |r| r.path.clone());
-        let (md, created) = match std::fs::read_to_string(&md_path) {
+        // A known slug keeps the document it is already in — including
+        // one a person filed somewhere else in the vault. Moving it
+        // back would be Task overruling somebody's filing, and the
+        // frontmatter is what says it is a chart, not the folder.
+        let rel = prior.map_or_else(
+            || resources_proto::assets::chart_path(&slug),
+            |r| shelf.rel(&r.path),
+        );
+        let abs = shelf.root.join(&rel);
+        let (md, created) = match std::fs::read_to_string(&abs) {
             Ok(old) => (
-                chart::refresh_manifest(&old, &chart_doc).map_err(|e| io_err(&e))?,
+                chart::refresh_document(&old, &chart_doc).map_err(|e| io_err(&e))?,
                 false,
             ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
-                chart::render_manifest(&chart_doc, &slug).map_err(|e| io_err(&e))?,
+                chart::render_document(&chart_doc, &slug).map_err(|e| io_err(&e))?,
                 true,
             ),
             Err(e) => return Err(ResourcesError::Io(e.to_string())),
         };
-        std::fs::create_dir_all(&root).map_err(|e| ResourcesError::Io(e.to_string()))?;
-        std::fs::write(&md_path, md).map_err(|e| ResourcesError::Io(e.to_string()))?;
-        // The source is the chart: stored verbatim, never re-rendered.
-        std::fs::write(chart::source_path(&md_path), &chart_doc.source)
-            .map_err(|e| ResourcesError::Io(e.to_string()))?;
+        // One file, one write, through the vault — see [`AssetShelf::put`].
+        shelf.put(&rel, &md)?;
 
         // The flag the caller asked for is a request; the invariant is
         // settled by re-reading the song's charts now that this one is
@@ -824,22 +1484,24 @@ impl ResourcesService for ResourcesBackend {
 
         Ok(ChartUpsert {
             slug,
-            rel_path: self.rel(&md_path),
+            rel_path: rel,
             created,
         })
     }
 
     fn chart(&self, slug: &str) -> Result<ChartDoc, ResourcesError> {
+        self.shelf()?;
         let found = self
             .charts()
             .into_iter()
             .find(|r| r.resource.slug == slug)
             .ok_or_else(|| ResourcesError::NotFound(slug.to_string()))?;
-        let source = match std::fs::read_to_string(chart::source_path(&found.path)) {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(ResourcesError::Io(e.to_string())),
-        };
+        // The source is a fence in the document's own body, so reading
+        // it is reading the document — there is no second file to miss,
+        // and no window in which a chart has a manifest but no chart.
+        let document =
+            std::fs::read_to_string(&found.path).map_err(|e| ResourcesError::Io(e.to_string()))?;
+        let source = chart::source_of(&document);
         Ok(ChartDoc {
             slug: found.resource.slug,
             title: found.resource.title,
@@ -874,17 +1536,14 @@ impl ResourcesService for ResourcesBackend {
             .chart_defaults
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let shelf = self.shelf()?;
         let Some(found) = self.charts().into_iter().find(|r| r.resource.slug == slug) else {
             return Ok(false);
         };
         let song = found.resource.song.clone();
-        for path in [chart::source_path(&found.path), found.path] {
-            match std::fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(ResourcesError::Io(e.to_string())),
-            }
-        }
+        // One file, and through the vault: the `Delete` broadcast is
+        // what tells an open editor the document is gone.
+        shelf.delete(&shelf.rel(&found.path))?;
         // Deleting the default leaves the song with none, which the
         // invariant forbids while it still has a chart at all: the
         // reconcile promotes the oldest remaining.
@@ -1122,11 +1781,38 @@ mod tests {
         }
     }
 
+    /// A backend over a tempdir with both tiers wired: the resources
+    /// root every sermon/patch/sample/lighting lane writes, and the
+    /// **vault** the chart lane now writes (ADR 0004). The chart lane
+    /// refuses outright without the second, which is the point — a
+    /// misconfigured host fails loudly rather than writing charts
+    /// somewhere they cannot be collaborated on.
+    fn backend(dir: &tempfile::TempDir) -> ResourcesBackend {
+        let vault = vault::sync::Backend::single(VAULT_ID, dir.path().join("vault"))
+            .expect("open the test vault");
+        ResourcesBackend::new(dir.path().join("resources"))
+            .with_assets(vault, VAULT_ID)
+            .expect("attach the vault")
+    }
+
+    /// The vault id the tests register. Not `"default"` on purpose: the
+    /// backend must carry whatever id its host gave it rather than
+    /// assuming the server's.
+    const VAULT_ID: &str = "test-vault";
+
+    /// Where a chart lands on disk, for the assertions that check the
+    /// shelf rather than the lane.
+    fn chart_file(dir: &tempfile::TempDir, slug: &str) -> PathBuf {
+        dir.path()
+            .join("vault")
+            .join(resources_proto::assets::chart_path(slug))
+    }
+
     #[test]
     fn upsert_lays_down_three_files_and_links() {
         let dir = tempfile::tempdir().unwrap();
         let store = links::Store::open(dir.path().join("links.jsonl"));
-        let be = ResourcesBackend::new(dir.path().join("resources")).with_links(store.clone());
+        let be = backend(&dir).with_links(store.clone());
 
         let out = be
             .upsert_sermon(sermon(
@@ -1173,7 +1859,7 @@ mod tests {
     fn resync_keeps_body_and_annotations_and_replaces_links() {
         let dir = tempfile::tempdir().unwrap();
         let store = links::Store::open(dir.path().join("links.jsonl"));
-        let be = ResourcesBackend::new(dir.path().join("resources")).with_links(store.clone());
+        let be = backend(&dir).with_links(store.clone());
         be.upsert_sermon(sermon("AAA", "God Restores", "John 3:16"))
             .unwrap();
 
@@ -1217,7 +1903,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("wikis/bible")).unwrap();
         let store = links::Store::open(dir.path().join("links.jsonl"));
-        let be = ResourcesBackend::new(dir.path().join("resources"))
+        let be = backend(&dir)
             .with_wikis(dir.path().join("wikis"))
             .with_links(store);
 
@@ -1273,7 +1959,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("wikis/bible")).unwrap();
         let store = links::Store::open(dir.path().join("links.jsonl"));
-        let be = ResourcesBackend::new(dir.path().join("resources"))
+        let be = backend(&dir)
             .with_wikis(dir.path().join("wikis"))
             .with_links(store);
         be.upsert_sermon(sermon("AAA", "God Restores", "John 3:16"))
@@ -1314,7 +2000,7 @@ mod tests {
     #[test]
     fn title_collision_gets_id_suffix() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         be.upsert_sermon(sermon("AAA", "Hope", "")).unwrap();
         let out = be.upsert_sermon(sermon("BBB", "Hope", "")).unwrap();
         assert_eq!(out.slug, "hope-bbb");
@@ -1347,26 +2033,34 @@ mod tests {
         }
     }
 
-    /// The two files, the round trip, and the delete — the whole chart
-    /// lane against one temp resources tier.
+    /// One vault document, the round trip, and the delete — the whole
+    /// chart lane against a temp vault.
     #[test]
-    fn chart_upsert_lays_down_source_and_manifest() {
+    fn a_chart_upsert_lays_down_one_vault_document() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         let out = be
             .upsert_chart(chart_doc("Great Are You Lord", "[Verse 1]\n| A | E |\n"))
             .unwrap();
         assert_eq!(out.slug, "great-are-you-lord");
-        assert_eq!(out.rel_path, "charts/great-are-you-lord.md");
+        assert_eq!(
+            out.rel_path, "Assets/Charts/great-are-you-lord.md",
+            "the path an app hands to VaultSync, vault-relative"
+        );
         assert!(out.created);
 
-        let base = dir.path().join("resources/charts");
-        assert!(base.join("great-are-you-lord.md").is_file());
-        assert_eq!(
-            std::fs::read_to_string(base.join("great-are-you-lord.kf")).unwrap(),
-            "[Verse 1]\n| A | E |\n",
-            "the .kf is the source, verbatim"
+        let md = chart_file(&dir, "great-are-you-lord");
+        let text = std::fs::read_to_string(&md).expect("the document is in the vault");
+        assert!(text.contains("type: asset"), "{text}");
+        assert!(text.contains("asset_kind: chart"), "{text}");
+        assert!(
+            text.contains("[Verse 1]\n| A | E |\n"),
+            "the source is in the body, verbatim: {text}"
+        );
+        assert!(
+            !dir.path().join("resources/charts").exists(),
+            "nothing is written to the tier charts left"
         );
 
         let back = be.chart("great-are-you-lord").unwrap();
@@ -1380,8 +2074,7 @@ mod tests {
         assert_eq!(list[0].notation, "keyflow");
 
         assert!(be.delete_chart("great-are-you-lord").unwrap());
-        assert!(!base.join("great-are-you-lord.md").exists());
-        assert!(!base.join("great-are-you-lord.kf").exists());
+        assert!(!md.exists());
         assert!(
             !be.delete_chart("great-are-you-lord").unwrap(),
             "deleting twice is `false`, not an error"
@@ -1397,7 +2090,7 @@ mod tests {
     #[test]
     fn chart_slug_collision_makes_a_second_chart() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         let first = be.upsert_chart(chart_doc("Hosanna", "| A |")).unwrap();
         let second = be.upsert_chart(chart_doc("Hosanna", "| E |")).unwrap();
         assert_eq!(first.slug, "hosanna");
@@ -1410,16 +2103,25 @@ mod tests {
         let update = be.upsert_chart(again).unwrap();
         assert_eq!(update.slug, "hosanna");
         assert!(!update.created, "a named slug updates rather than forks");
-        assert_eq!(be.chart("hosanna").unwrap().source, "| D |");
+        assert_eq!(
+            be.chart("hosanna").unwrap().source,
+            "| D |\n",
+            "the one byte a fence cannot preserve: a source that did not \
+             end in a newline comes back with one (ADR 0004, recorded in \
+             `resources_proto::assets`)"
+        );
         assert_eq!(be.list_charts("").unwrap().len(), 2);
     }
 
+    /// The contract that makes a chart safe to collaborate on: a
+    /// Keyflow save rewrites the app's frontmatter and the app's fence,
+    /// and leaves the paragraph a person typed beside it alone.
     #[test]
-    fn chart_re_upsert_keeps_the_manifest_body() {
+    fn chart_re_upsert_keeps_the_document_body() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         be.upsert_chart(chart_doc("Hosanna", "| A |")).unwrap();
-        let md = dir.path().join("resources/charts/hosanna.md");
+        let md = chart_file(&dir, "hosanna");
         let hand = std::fs::read_to_string(&md)
             .unwrap()
             .replace("## Notes", "## Notes\n- capo 2, drop the bridge\n");
@@ -1433,13 +2135,234 @@ mod tests {
         let text = std::fs::read_to_string(&md).unwrap();
         assert!(text.contains("- capo 2, drop the bridge"), "{text}");
         assert!(text.contains("key: E"), "app-owned key rewritten: {text}");
-        assert_eq!(be.chart("hosanna").unwrap().source, "| A | E |");
+        assert_eq!(be.chart("hosanna").unwrap().source, "| A | E |\n");
+    }
+
+    /// ADR 0003 → ADR 0004, against a tier laid out the way production
+    /// actually holds one. Three claims, and all three are about what
+    /// an operator can verify by looking:
+    ///
+    /// - the chart is on the shelf, source and hand edits intact;
+    /// - **nothing was deleted** — the originals and a breadcrumb are
+    ///   still there, so the change is reversible by inspection;
+    /// - running it again changes nothing, including after somebody has
+    ///   edited the migrated chart. A second boot must not revert a
+    ///   day's work back to the frozen snapshot.
+    #[test]
+    fn the_migration_copies_charts_onto_the_shelf_and_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = backend(&dir);
+        let legacy = dir.path().join("resources/charts");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(
+            legacy.join("doxology.md"),
+            "---\ntype: resource\nresource_kind: chart\nslug: doxology\ntitle: Doxology\ncapo: 2\n---\n# Doxology\n\n## Notes\n\n- from the hymnal\n",
+        )
+        .unwrap();
+        std::fs::write(legacy.join("doxology.kf"), "[Verse]\n| G | C |\n").unwrap();
+
+        let first = be.migrate_charts().unwrap();
+        assert_eq!(first.migrated, ["doxology"]);
+        assert!(first.kept.is_empty());
+
+        // On the shelf, as an asset, with everything the person wrote.
+        let moved = std::fs::read_to_string(chart_file(&dir, "doxology")).unwrap();
+        assert!(moved.contains("type: asset"), "{moved}");
+        assert!(moved.contains("capo: 2"), "foreign key survives: {moved}");
+        assert!(moved.contains("- from the hymnal"), "prose survives");
+        assert_eq!(be.chart("doxology").unwrap().source, "[Verse]\n| G | C |\n");
+
+        // Nothing deleted, and a note for whoever finds the folder.
+        assert!(legacy.join("doxology.md").is_file());
+        assert!(legacy.join("doxology.kf").is_file());
+        let note = std::fs::read_to_string(legacy.join(MIGRATION_NOTE)).unwrap();
+        assert!(note.contains("copied, not moved"), "{note}");
+
+        // A second run is a no-op — and stays one after an edit, which
+        // is the case that would otherwise silently revert.
+        be.upsert_chart(ChartDoc {
+            slug: "doxology".into(),
+            ..chart_doc("Doxology", "[Verse]\n| G | Am |\n")
+        })
+        .unwrap();
+        let second = be.migrate_charts().unwrap();
+        assert!(second.migrated.is_empty(), "{second:?}");
+        assert_eq!(second.kept, ["doxology"]);
+        assert_eq!(
+            be.chart("doxology").unwrap().source,
+            "[Verse]\n| G | Am |\n",
+            "a re-run reverted an edit back to the frozen snapshot"
+        );
+    }
+
+    /// The vendored song folder `task song add` used to write, turned
+    /// into a song and two charts — ADR 0004's other half.
+    ///
+    /// The claims, and each is one of the four rows of the translation
+    /// table in `SongDoc`'s docs:
+    ///
+    /// - the song is a document on the shelf, its uuids dropped;
+    /// - each arrangement is a **chart that names its song**, not a
+    ///   directory nested inside it;
+    /// - `defaultArrangement`'s uuid became `is_default` on the chart
+    ///   it pointed at;
+    /// - the `.kf` beside each arrangement is now that chart's fence.
+    ///
+    /// And, as everywhere in this migration: nothing is deleted, and
+    /// the media that shares the directory is not touched.
+    #[test]
+    fn a_vendored_song_folder_becomes_a_song_and_its_arrangements() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = backend(&dir);
+        let folder = dir.path().join("resources/songs/opening-night");
+        std::fs::create_dir_all(folder.join("arrangements/default")).unwrap();
+        std::fs::create_dir_all(folder.join("arrangements/live")).unwrap();
+        std::fs::write(
+            folder.join("song.md"),
+            "---\nid: 75e30481\ntitle: Opening Night\ntags: []\ndefaultArrangement: be760d4e\narrangements:\n- id: be760d4e\n  name: Default\n  dir: default\n  key: C Major\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("arrangements/default/arrangement.md"),
+            "---\nid: be760d4e\nname: Default\nkey: C Major\nchartRef:\n  path: arrangements/default/opening-night.kf\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("arrangements/default/opening-night.kf"),
+            "[Verse]\n| C | F |\n",
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("arrangements/live/arrangement.md"),
+            "---\nid: aa11bb22\nname: Live\nkey: D Major\n---\n",
+        )
+        .unwrap();
+        std::fs::write(folder.join("arrangements/live/live.kf"), "[Verse]\n| D |\n").unwrap();
+        // The media half, which must survive untouched.
+        std::fs::write(folder.join("manifest.json"), "{\"slug\":\"opening-night\"}").unwrap();
+
+        let report = be.migrate_charts().unwrap();
+        assert!(
+            report.migrated.contains(&"song:opening-night".to_owned()),
+            "{report:?}"
+        );
+
+        // The song, without its uuids.
+        let song = be.song("opening-night").unwrap();
+        assert_eq!(song.title, "Opening Night");
+        let text = std::fs::read_to_string(
+            dir.path()
+                .join("vault")
+                .join(resources_proto::assets::song_path("opening-night")),
+        )
+        .unwrap();
+        assert!(!text.contains("75e30481"), "{text}");
+        assert!(!text.contains("defaultArrangement"), "{text}");
+
+        // Two charts, each naming the song, with their sources folded
+        // into their own fences.
+        let charts = be.list_charts("song:opening-night").unwrap();
+        let slugs: Vec<&str> = charts.iter().map(|c| c.slug.as_str()).collect();
+        assert_eq!(
+            slugs,
+            ["opening-night", "opening-night-live"],
+            "the first arrangement takes the song's own name"
+        );
+        assert_eq!(
+            be.chart("opening-night").unwrap().source,
+            "[Verse]\n| C | F |\n"
+        );
+        assert_eq!(
+            be.chart("opening-night-live").unwrap().source,
+            "[Verse]\n| D |\n"
+        );
+
+        // The uuid pointer became a flag on the chart it pointed at,
+        // and there is exactly one.
+        let defaults: Vec<&str> = charts
+            .iter()
+            .filter(|c| c.is_default)
+            .map(|c| c.slug.as_str())
+            .collect();
+        assert_eq!(defaults, ["opening-night"], "{charts:?}");
+        assert_eq!(
+            charts
+                .iter()
+                .find(|c| c.slug == "opening-night-live")
+                .unwrap()
+                .arrangement,
+            "Live",
+            "the vendored `name` is the arrangement label"
+        );
+
+        // Nothing deleted, and the media the player streams is not a
+        // snapshot — it never moved.
+        assert!(folder.join("song.md").is_file());
+        assert!(
+            folder
+                .join("arrangements/default/opening-night.kf")
+                .is_file()
+        );
+        assert!(folder.join("manifest.json").is_file());
+        let note = std::fs::read_to_string(dir.path().join("resources/songs").join(MIGRATION_NOTE))
+            .unwrap();
+        assert!(note.contains("must not be deleted"), "{note}");
+
+        // Idempotent.
+        let again = be.migrate_charts().unwrap();
+        assert!(
+            again.migrated.is_empty(),
+            "a re-run rewrote settled files: {again:?}"
+        );
+    }
+
+    /// The song lane itself, which is the chart lane minus the
+    /// invariant — a round trip and a delete that leaves the
+    /// arrangements alone.
+    #[test]
+    fn a_song_round_trips_and_deleting_it_keeps_its_charts() {
+        let dir = tempfile::tempdir().unwrap();
+        let be = backend(&dir);
+        let out = be
+            .upsert_song(SongDoc {
+                slug: String::new(),
+                title: "Opening Night".into(),
+                writers: vec!["A. Wright".into()],
+                key: "C Major".into(),
+                tags: vec!["album".into()],
+                updated_at: "2026-09-09T10:00:00Z".into(),
+            })
+            .unwrap();
+        assert_eq!(out.slug, "opening-night");
+        assert_eq!(out.rel_path, "Assets/Songs/opening-night.md");
+        assert!(out.created);
+
+        let back = be.song("opening-night").unwrap();
+        assert_eq!(back.title, "Opening Night");
+        assert_eq!(back.writers, ["A. Wright"]);
+        assert_eq!(be.list_songs().unwrap().len(), 1);
+
+        // A chart of it, so the delete has something to leave behind.
+        be.upsert_chart(ChartDoc {
+            song: "song:opening-night".into(),
+            ..chart_doc("Opening Night", "| C |")
+        })
+        .unwrap();
+
+        assert!(be.delete_song("opening-night").unwrap());
+        assert!(!be.delete_song("opening-night").unwrap());
+        assert_eq!(
+            be.list_charts("song:opening-night").unwrap().len(),
+            1,
+            "an arrangement of a song that is gone is a legible state, \
+             not a reason to destroy somebody's chart"
+        );
     }
 
     #[test]
     fn chart_without_a_title_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         assert!(matches!(
             be.upsert_chart(chart_doc("   ", "| A |")),
             Err(ResourcesError::BadRequest(_))
@@ -1470,7 +2393,7 @@ mod tests {
     #[test]
     fn two_arrangements_of_one_song_are_two_charts_that_know_it() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         let original = be
             .upsert_chart(arrangement("Doxology", "song:doxology", "original", true))
@@ -1514,7 +2437,7 @@ mod tests {
     #[test]
     fn a_song_has_exactly_one_default_chart() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         // 1. The first chart of a song is the default even though it
         //    asked not to be — a song with one chart and no main one is
@@ -1565,7 +2488,7 @@ mod tests {
     #[test]
     fn a_chart_with_no_song_is_independent() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         be.upsert_chart(arrangement("Sketch", "", "", true))
             .unwrap();
@@ -1594,7 +2517,7 @@ mod tests {
     #[test]
     fn deleting_the_default_promotes_the_oldest_remaining() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         for (label, stamp) in [
             ("original", "2026-01-01T00:00:00Z"),
@@ -1639,7 +2562,7 @@ mod tests {
     #[test]
     fn a_hand_edited_double_default_is_reconciled_by_the_next_write() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         for (label, stamp) in [
             ("original", "2026-01-01T00:00:00Z"),
             ("acoustic", "2026-02-01T00:00:00Z"),
@@ -1650,9 +2573,9 @@ mod tests {
             })
             .unwrap();
         }
-        // Somebody opened the acoustic manifest in an editor and set
-        // the flag by hand; now both are flagged.
-        let md = dir.path().join("resources/charts/doxology-acoustic.md");
+        // Somebody opened the acoustic chart in an editor and set the
+        // flag by hand; now both are flagged.
+        let md = chart_file(&dir, "doxology-acoustic");
         let text = std::fs::read_to_string(&md)
             .unwrap()
             .replace("is_default: false", "is_default: true");
@@ -1675,7 +2598,7 @@ mod tests {
     #[test]
     fn racing_writers_leave_the_song_with_exactly_one_default() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         // Both arrangements exist first, so the race is purely about
         // the flag rather than about who creates the file.
         for label in ["original", "condensed live"] {
@@ -1717,7 +2640,7 @@ mod tests {
     #[test]
     fn the_song_reference_is_normalised_and_a_wrong_kind_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         let bare = be
             .upsert_chart(arrangement("Doxology", "doxology", "", false))
@@ -1801,7 +2724,7 @@ mod tests {
     #[test]
     fn patch_upsert_lays_down_a_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         let out = be
             .upsert_patch(patch_doc("Warm Analog Pad", "{\"blocks\":[\"reverb\"]}"))
@@ -1843,7 +2766,7 @@ mod tests {
     #[test]
     fn patch_slug_collision_makes_a_second_patch() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         assert_eq!(
             be.upsert_patch(patch_doc("Lead", "{}")).unwrap().slug,
             "lead"
@@ -1864,7 +2787,7 @@ mod tests {
     #[test]
     fn patch_re_upsert_keeps_the_manifest_body() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         be.upsert_patch(patch_doc("Lead", "{}")).unwrap();
         let md = dir.path().join("resources/patches/lead/patch.md");
         let hand = std::fs::read_to_string(&md)
@@ -1891,7 +2814,7 @@ mod tests {
     #[test]
     fn sample_upsert_records_where_the_audio_is_without_touching_it() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         let out = be
             .upsert_sample(sample_doc("Room Kick 48k", "{\"mic\":\"D112\"}"))
@@ -1931,7 +2854,7 @@ mod tests {
     #[test]
     fn a_sample_may_have_no_bytes_bound_yet() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         let mut doc = sample_doc("Unbound", "");
         doc.content = ContentRef::default();
         be.upsert_sample(doc).unwrap();
@@ -1943,7 +2866,7 @@ mod tests {
     #[test]
     fn lighting_upsert_lays_down_a_directory_and_validates_its_scope() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
 
         let out = be
             .upsert_lighting(lighting_doc("Sunday Set", "{\"cues\":[]}"))
@@ -1971,7 +2894,7 @@ mod tests {
     #[test]
     fn an_unknown_lighting_scope_is_refused_and_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         for scope in ["", "evening", "Show", "tour"] {
             let mut doc = lighting_doc("Sunday Set", "{}");
             doc.scope = scope.into();
@@ -1997,7 +2920,7 @@ mod tests {
     #[test]
     fn an_asset_without_a_usable_title_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         for title in ["   ", "—"] {
             assert!(matches!(
                 be.upsert_patch(patch_doc(title, "{}")),
@@ -2022,7 +2945,7 @@ mod tests {
     #[test]
     fn the_lanes_do_not_see_each_other() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         be.upsert_patch(patch_doc("Lead", "{}")).unwrap();
         be.upsert_sample(sample_doc("Room Kick", "{}")).unwrap();
         be.upsert_lighting(lighting_doc("Sunday Set", "{}"))
@@ -2044,7 +2967,7 @@ mod tests {
     #[test]
     fn delete_refuses_a_traversing_slug() {
         let dir = tempfile::tempdir().unwrap();
-        let be = ResourcesBackend::new(dir.path().join("resources"));
+        let be = backend(&dir);
         assert!(matches!(
             be.delete_patch("../charts"),
             Err(ResourcesError::BadRequest(_))

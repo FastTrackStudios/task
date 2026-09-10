@@ -13,11 +13,19 @@
 //! show up as a backlink in the scripture reader.
 //!
 //! The **chart lane** ([`ChartDoc`] and friends) is the second writer
-//! on the same tier: Keyflow keeps a person's charts under
-//! `<org>/resources/charts/` through these RPCs, and a *library* of
-//! them is an ordinary `Collection` of kind `Library` over
-//! `chart:<slug>` node references — ADR 0003, which builds nothing new
-//! for libraries on purpose.
+//! on this service, and as of ADR 0004 it no longer writes this tier at
+//! all: a chart is a **vault document** on the Assets shelf
+//! (`<vault>/Assets/Charts/<slug>.md` — see [`assets`]), written through
+//! `VaultSync::put_file` so the CRDT layer holds a document for it. A
+//! *library* of charts is still an ordinary `Collection` of kind
+//! `Library` over `chart:<slug>` node references — ADR 0003, which
+//! builds nothing new for libraries on purpose, and ADR 0004 keeps.
+//!
+//! The lane stays here rather than moving to a vault service because a
+//! lane is a vocabulary, not a storage location: Keyflow calls
+//! `upsert_chart` and gets slug derivation, the one-default-per-song
+//! invariant and section anchors. Where the bytes land is the server's
+//! business, and it changed.
 //!
 //! The **asset lanes** that follow it are the same lane again, once per
 //! kind ADR 0003's table gives a home to: [`PatchDoc`] and [`SampleDoc`]
@@ -27,6 +35,8 @@
 //! whole point of the decision is that a `patch:` or a `lighting:`
 //! reference is addressable from a setlist without any of these apps
 //! knowing the others exist.
+
+pub mod assets;
 
 use facet::Facet;
 use serde::{Deserialize, Serialize};
@@ -147,9 +157,12 @@ pub struct SermonSummary {
 /// slugs are derived (`resources::sermon::slugify`), suffixing a
 /// collision so two charts titled the same never overwrite each other.
 ///
-/// The `source` is the chart text, stored verbatim in
-/// `<org>/resources/charts/<slug>.kf` — an outside editor sees a plain
-/// chart file, not an encoding of one.
+/// The `source` is the chart text, stored verbatim in a
+/// ` ```keyflow ` fence in the body of the chart's vault document
+/// (`<vault>/Assets/Charts/<slug>.md` — ADR 0004, see [`assets`]). A
+/// markdown editor that has never heard of Task shows a person their
+/// chart; Task shows them the chart *and* the notes beside it, in one
+/// collaboratively-edited document.
 ///
 /// # One chart is one arrangement
 ///
@@ -247,7 +260,11 @@ pub struct ChartDoc {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
 pub struct ChartUpsert {
     pub slug: String,
-    /// Resources-relative path of the manifest (`charts/<slug>.md`).
+    /// **Vault-relative** path of the chart document
+    /// (`Assets/Charts/<slug>.md`) — the path `VaultSync::get_file`,
+    /// `put_file` and `open_collab` take, so an app that wants to open
+    /// this chart collaboratively hands this string straight over
+    /// without composing anything (ADR 0004).
     pub rel_path: String,
     /// `true` when the chart did not exist before this call.
     pub created: bool,
@@ -290,6 +307,121 @@ pub struct ChartSummary {
     pub is_default: bool,
     /// Manifest path (`charts/<slug>.md`) under the org's resources
     /// tier. The source sits beside it as `charts/<slug>.kf`.
+    pub rel_path: String,
+    #[serde(default)]
+    #[facet(default)]
+    pub updated_at: String,
+}
+
+/// A **song** as the Assets tier holds it — ADR 0004, the sibling of
+/// [`ChartDoc`].
+///
+/// A song is the thing charts are arrangements *of*. It carries the
+/// title, the key it is usually in, who wrote it, and whatever a person
+/// wants to write about it; the arrangements are not listed here,
+/// because they list themselves — every [`ChartDoc::song`] naming this
+/// song is one of them, and [`ResourcesService::list_charts`] answers
+/// "which?" in one call.
+///
+/// # Two things called "songs" under `resources/`, and only one moved
+///
+/// `<org>/resources/songs/<slug>/` holds a `manifest.json` and audio
+/// stems — the bytes the player streams and the `/media` route serves.
+/// Those are **Resources** in ADR 0004's sense: imports, binary,
+/// nothing anybody types into, and they stay exactly where they are.
+///
+/// What moved is the *document*: the song note somebody writes, edits
+/// and links to. It is now `<vault>/Assets/Songs/<slug>.md`, and it is
+/// an ordinary vault page — collaborative, searchable, taggable,
+/// backlinked. That the media and the document lived in one directory
+/// was the accident; the tier rule sorts them, and it sorts them the
+/// way ADR 0004 states it: *Resources are the things nobody types
+/// into.*
+///
+/// Because the media directory stays, a cross-organisation
+/// `song:<slug>` still resolves and is still served — songs lose none
+/// of the reach charts lost. See `node_homes`.
+///
+/// # The nested arrangement folder is an import shape, not this model
+///
+/// `task song add` used to write a vendored layout from the external
+/// `song` crate — `song.md` with a uuid `defaultArrangement` and an
+/// embedded `arrangements:` list, plus `arrangements/<dir>/arrangement.md`
+/// beside a `.kf`. Two representations of one idea existed, and this is
+/// the one Task keeps:
+///
+/// | idea | vendored folder | Task |
+/// |---|---|---|
+/// | an arrangement | `arrangements/<dir>/arrangement.md` | a [`ChartDoc`], one chart is one arrangement |
+/// | which is the main one | `defaultArrangement: <uuid>` | [`ChartDoc::is_default`], an invariant the server owns |
+/// | which song it belongs to | nesting inside the song's directory | [`ChartDoc::song`], a `song:<slug>` reference |
+/// | the chart itself | a `.kf` beside the arrangement note | a ` ```keyflow ` fence in the chart's own body |
+///
+/// The right-hand column is flat, link-shaped and made of markdown, and
+/// that is not a stylistic preference: a uuid in a nested directory
+/// cannot be a wikilink, cannot be a backlink, and cannot be found by
+/// search. Every row on the right is something a person can write, read
+/// and follow. The migration translates the left into the right and
+/// leaves the original in place to be inspected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
+pub struct SongDoc {
+    /// Song slug — the `song:<slug>` node id. Empty on a create: the
+    /// server derives it from the title, the same way a chart's is
+    /// derived, so `song add "Opening Night"` and a `song:opening-night`
+    /// reference agree without anybody spelling the rule twice.
+    #[serde(default)]
+    #[facet(default)]
+    pub slug: String,
+    pub title: String,
+    /// Who wrote it. Empty is ordinary.
+    #[serde(default)]
+    #[facet(default)]
+    pub writers: Vec<String>,
+    /// Musical key as written (`C Major`, `Bb`, `f#m`); empty when
+    /// unset. The song's usual key — an arrangement may differ, and
+    /// says so on its own [`ChartDoc::key`].
+    #[serde(default)]
+    #[facet(default)]
+    pub key: String,
+    /// Free tags, `#` stripped. They are vault tags: the same tag on a
+    /// song and on a note puts them in one place.
+    #[serde(default)]
+    #[facet(default)]
+    pub tags: Vec<String>,
+    /// When the caller last changed the song (`RFC 3339`); empty when
+    /// the caller does not track it. Caller-owned — the server stores
+    /// what it is given and stamps nothing.
+    #[serde(default)]
+    #[facet(default)]
+    pub updated_at: String,
+}
+
+/// What the server laid down for one song.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
+pub struct SongUpsert {
+    pub slug: String,
+    /// **Vault-relative** path of the song document
+    /// (`Assets/Songs/<slug>.md`) — the path `VaultSync` takes.
+    pub rel_path: String,
+    /// `true` when the song did not exist before this call.
+    pub created: bool,
+}
+
+/// One song, as `list_songs` reports it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet, Default)]
+pub struct SongSummary {
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    #[facet(default)]
+    pub writers: Vec<String>,
+    #[serde(default)]
+    #[facet(default)]
+    pub key: String,
+    #[serde(default)]
+    #[facet(default)]
+    pub tags: Vec<String>,
+    /// Vault-relative path of the song document.
     pub rel_path: String,
     #[serde(default)]
     #[facet(default)]
@@ -686,6 +818,44 @@ pub trait ResourcesService {
     /// and no way to tell which write was last; enforced here, the
     /// second write clears the first, and the song has exactly one
     /// default either way round.
+    /// Create or replace a song document at
+    /// `<vault>/Assets/Songs/<slug>.md` (ADR 0004).
+    ///
+    /// The identity is the slug: pass one to update, leave it empty and
+    /// the server derives it from the title and suffixes a collision,
+    /// exactly as `upsert_chart` does. The app owns the frontmatter
+    /// keys it writes; every other key and the whole body — the prose
+    /// somebody wrote about the song — survive verbatim.
+    ///
+    /// Nothing about a song's *arrangements* is stored here. A chart
+    /// names its song and the song is silent about its charts, which is
+    /// the only direction that can be maintained by one write: adding an
+    /// arrangement is an `upsert_chart`, and nothing has to be kept in
+    /// step. `list_charts("song:<slug>")` is the read.
+    ///
+    /// An empty title is a `BadRequest`.
+    fn upsert_song(&self, song: SongDoc) -> Result<SongUpsert, ResourcesError>;
+
+    /// One song by slug.
+    fn song(&self, slug: &str) -> Result<SongDoc, ResourcesError>;
+
+    /// Every song on the Assets shelf, by slug.
+    fn list_songs(&self) -> Result<Vec<SongSummary>, ResourcesError>;
+
+    /// Delete a song document. `false` when there was nothing there.
+    ///
+    /// Its charts are **not** deleted, and this is the same choice ADR
+    /// 0003 made for a collection holding a deleted chart: an
+    /// arrangement of a song that is gone still parses, still has a
+    /// source somebody may want, and reads as attached to a song that
+    /// does not resolve. A legible state, not an error — and one a
+    /// person can fix by re-creating the song, which deleting the
+    /// charts would have made impossible.
+    ///
+    /// The media under `<org>/resources/songs/<slug>/` is not touched
+    /// either. It is a different tier and a different lifetime.
+    fn delete_song(&self, slug: &str) -> Result<bool, ResourcesError>;
+
     fn upsert_chart(&self, chart: ChartDoc) -> Result<ChartUpsert, ResourcesError>;
 
     /// One chart by slug, source included.
@@ -804,8 +974,8 @@ mod reborrow_impls {
     use super::{
         ChartDoc, ChartSummary, ChartUpsert, ContentRef, LightingDoc, LightingSummary,
         LightingUpsert, PatchDoc, PatchSummary, PatchUpsert, SampleDoc, SampleSummary,
-        SampleUpsert, SermonResource, SermonSummary, SermonUpsert, TranscriptDoc,
-        TranscriptSegment,
+        SampleUpsert, SermonResource, SermonSummary, SermonUpsert, SongDoc, SongSummary,
+        SongUpsert, TranscriptDoc, TranscriptSegment,
     };
     unsafe impl vox_types::Reborrow for TranscriptSegment {
         type Ref<'a> = TranscriptSegment;
@@ -827,6 +997,15 @@ mod reborrow_impls {
     }
     unsafe impl vox_types::Reborrow for ChartUpsert {
         type Ref<'a> = ChartUpsert;
+    }
+    unsafe impl vox_types::Reborrow for SongDoc {
+        type Ref<'a> = SongDoc;
+    }
+    unsafe impl vox_types::Reborrow for SongUpsert {
+        type Ref<'a> = SongUpsert;
+    }
+    unsafe impl vox_types::Reborrow for SongSummary {
+        type Ref<'a> = SongSummary;
     }
     unsafe impl vox_types::Reborrow for ChartSummary {
         type Ref<'a> = ChartSummary;

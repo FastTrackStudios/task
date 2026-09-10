@@ -123,10 +123,13 @@ wiki-live = { workspace = true, optional = true }
 wiki-graph = { workspace = true, optional = true }
 # `task collection …` + `task song …` — W0.5 headless
 # library/setlist seeding. `CollectionService` client over vox
-# (NodeRef/NodeKind re-exported from links-proto) plus the
-# durable Song-folder writer from the `song` crate.
+# (NodeRef/NodeKind re-exported from links-proto).
+#
+# The `song` crate's folder writer used to live here too. ADR 0004 made
+# a song a vault document and an arrangement a chart, so `task song add`
+# now calls `ResourcesService` and the vendored layout is an import
+# shape the server migrates rather than a thing this CLI writes.
 collection-proto = { workspace = true, features = ["vox"], optional = true }
-song = { workspace = true, optional = true }
 # `task song ingest` — stems become content-addressed attachments
 # (initiate/PUT/complete against the org's AttachmentService).
 attachments-proto = { workspace = true, features = ["vox"] }
@@ -265,7 +268,6 @@ plugin-fitness = [
 plugin-fasttrackstudio = [
     "task-server/plugin-fasttrackstudio",
     "dep:collection-proto",
-    "dep:song",
 ]
 plugin-wiki = [
     "task-server/plugin-wiki",

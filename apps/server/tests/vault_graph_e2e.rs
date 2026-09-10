@@ -16,6 +16,9 @@
 
 use vault_proto::{IfMatch, VaultGraphClient, VaultSyncClient};
 
+// Each binary uses a slice of the shared boot helpers; "unused"
+// here means "this binary did not need that one".
+#[allow(dead_code)]
 mod support;
 
 async fn boot_server() -> eyre::Result<(String, tempfile::TempDir)> {
@@ -110,5 +113,17 @@ async fn graph_queries_over_seeded_vault() {
     assert_eq!(get("philosophy"), Some(2));
     assert_eq!(get("planning"), Some(1));
     assert_eq!(get("inline/tag"), Some(1));
-    assert_eq!(tags[0].tag, "philosophy");
+    // The *ordering* rather than the winner. Pinning `tags[0]` pins the
+    // most-used tag in the whole seeded vault, which is a fact about the
+    // seed rather than about this backend — the day the example grew
+    // three tagged charts and two tagged songs (ADR 0004), it failed
+    // here instead of where the change was. The same reasoning as the
+    // orphans block above.
+    let order: Vec<(std::cmp::Reverse<u64>, &str)> = tags
+        .iter()
+        .map(|t| (std::cmp::Reverse(t.count), t.tag.as_str()))
+        .collect();
+    let mut sorted = order.clone();
+    sorted.sort_unstable();
+    assert_eq!(order, sorted, "count desc, then tag asc: {tags:?}");
 }

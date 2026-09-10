@@ -294,6 +294,11 @@ vox-core = { workspace = true }
 # `connection_identity` dials with a hand-built handshake (subprotocol /
 # Authorization header) — `vox::connect_lane` only takes a URL.
 vox-websocket = { workspace = true }
+# `chart_collab_e2e` joins two CRDT replicas to a chart's vault document
+# over the served `DocSync` registry — ADR 0004's whole claim, driven
+# through the transport rather than against the registry in-process.
+crdt = { workspace = true, features = ["vox"] }
+uuid = { workspace = true }
 tokio-tungstenite = { version = "0.29", default-features = false, features = [
     "connect",
     "handshake",

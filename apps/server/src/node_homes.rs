@@ -19,12 +19,40 @@
 //!
 //! # Which source publishes a node
 //!
-//! Assets live at `<org>/resources/<kind>s/` (ADR 0003), and a Resource
-//! subscription materialises `<org>/resources/<slug>/`. So the source
-//! that publishes `chart:doxology` is the one whose slug is `charts`,
-//! and a reader subscribed to `guest.example/charts` may follow any
-//! `guest.example/chart:*`. One subscription per library, which is the
-//! granularity a person actually chooses in.
+//! Library material lives at `<org>/resources/<kind>s/` (ADR 0003), and
+//! a Resource subscription materialises `<org>/resources/<slug>/`. So
+//! the source that publishes `chart:doxology` is the one whose slug is
+//! `charts`, and a reader subscribed to `guest.example/charts` may
+//! follow any `guest.example/chart:*`. One subscription per library,
+//! which is the granularity a person actually chooses in.
+//!
+//! # ADR 0004 moved charts out from under that, and it costs
+//!
+//! A chart is a vault document now (`<org>/vault/Assets/Charts/`), and
+//! **the vault has no cross-organisation reach**. The subscription
+//! vocabulary, the materialiser and the media route all name
+//! `resources/`; nothing names a vault path, and nothing should — a
+//! vault is an org's private tree and opening a route onto it is a
+//! decision, not a fix.
+//!
+//! So the subscription slug `charts` still gates the *permission*
+//! (nothing about "a reference addresses, it never authorises" changed),
+//! [`LocalHomes::locate`] still resolves the reference by looking on the
+//! shelf, and the reader still cannot fetch the bytes. What breaks,
+//! concretely:
+//!
+//! - `wiki_live::materialize::refresh_resource` copies
+//!   `<org>/resources/<slug>/` into a subscriber's held tree. A chart
+//!   library subscription now materialises the frozen ADR 0003 snapshot
+//!   the migration left, or an empty directory for an org that never
+//!   had one.
+//! - `GET /org/{slug}/media/{*path}` (`per_org_media_handler`) serves
+//!   the org's `resources/` tree. A chart's `rel_path` no longer names
+//!   anything it can reach.
+//!
+//! ADR 0004 says nothing should land before an Assets-tier reach path
+//! exists. It landed anyway, with the gap recorded in
+//! `docs/spec/unmet.md` rather than discovered later.
 //!
 //! # What is deliberately not distinguished
 //!
@@ -110,15 +138,41 @@ impl LocalHomes {
     }
 
     /// Where a node's content sits inside its own org, if it is there.
-    /// Charts keep their source beside the manifest, so the `.kf` is the
-    /// interesting file; every other kind is a directory.
+    ///
+    /// Every kind but one is a directory (or a manifest) under
+    /// `<org>/resources/<library>/`. **Charts are the exception, and it
+    /// is ADR 0004's cost showing up here**: a chart is a vault
+    /// document now (`<org>/vault/Assets/Charts/<slug>.md`), so this
+    /// looks on the shelf first and falls back to the frozen ADR 0003
+    /// copies the migration deliberately left behind.
+    ///
+    /// The shelf branch keeps *resolution* working — a subscriber can
+    /// still name and follow a foreign `chart:<slug>`, and the
+    /// subscription is still what decides it, which is the security
+    /// claim `tests/integration/tests/setlist.rs` watches change. What
+    /// it does **not** restore is *fetching*: the returned `rel_path`
+    /// names a path under `vault/`, and no cross-org route serves that.
+    /// `GET /org/{slug}/media/{*path}` reads `resources/`, and
+    /// `SourceKind::Resource` materialisation copies
+    /// `<org>/resources/<slug>/`. So a subscribed reader learns a chart
+    /// exists and cannot read its bytes.
+    ///
+    /// That is a regression against what ADR 0003 shipped, it is
+    /// recorded in `docs/spec/unmet.md`, and ADR 0004 says plainly that
+    /// nothing should land before an Assets-tier reach path exists.
+    /// Left legible here rather than papered over: a `Reach::Reachable`
+    /// pointing at an unservable path is a bug somebody can find, where
+    /// a blanket `NotFound` would look like the chart was never there.
     fn locate(&self, org: &str, library: &str, node: &NodeRef) -> Option<(String, PathBuf)> {
-        let base = self
-            .data_root
-            .join("orgs")
-            .join(org)
-            .join("resources")
-            .join(library);
+        let org_dir = self.data_root.join("orgs").join(org);
+        if node.kind == NodeKind::Chart {
+            let rel = resources_proto::assets::chart_path(&node.id);
+            let path = org_dir.join("vault").join(&rel);
+            if path.exists() {
+                return Some((format!("vault/{rel}"), path));
+            }
+        }
+        let base = org_dir.join("resources").join(library);
         let candidates = match node.kind {
             NodeKind::Chart => vec![format!("{}.kf", node.id), node.id.clone()],
             _ => vec![node.id.clone(), format!("{}.md", node.id)],
@@ -237,5 +291,61 @@ mod tests {
         assert_eq!(resolved.reach, Reach::NotPermitted);
         // The chart exists, and the answer does not admit that.
         assert_eq!(resolved.rel_path, "");
+    }
+
+    /// A chart on the ADR 0004 shelf is located there, and the path it
+    /// comes back with is the vault one.
+    ///
+    /// The second half of this test is the honest part: that path is
+    /// not servable across an org boundary by anything that exists, so
+    /// what a subscriber gets is a resolvable reference to bytes they
+    /// cannot fetch. Pinned rather than hidden — when the Assets reach
+    /// path lands, this assertion is what changes.
+    #[test]
+    fn a_chart_resolves_off_the_vault_shelf_and_names_an_unservable_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shelf = tmp
+            .path()
+            .join("orgs/guest/vault")
+            .join(resources_proto::assets::charts_dir());
+        std::fs::create_dir_all(&shelf).unwrap();
+        std::fs::write(
+            shelf.join("hosanna.md"),
+            "---\ntype: asset\nasset_kind: chart\nslug: hosanna\n---\n",
+        )
+        .unwrap();
+
+        let mut domains = HashMap::new();
+        domains.insert("guest.example".to_owned(), "guest".to_owned());
+        let reader_root = tmp.path().join("orgs/mine");
+        std::fs::create_dir_all(&reader_root).unwrap();
+        let store = wiki_live::subscriptions::SubscriptionStore::open(&reader_root);
+        store
+            .subscribe(
+                &Subscriber::Vault,
+                wiki_proto::subscription::Subscription {
+                    domain: "guest.example".into(),
+                    slug: "charts".into(),
+                    kind: SourceKind::Resource,
+                    title: "Charts".into(),
+                    core: false,
+                    declined: false,
+                },
+            )
+            .expect("subscribe");
+
+        let homes = LocalHomes::new(tmp.path().to_path_buf(), domains, "mine", reader_root);
+        let node = NodeRef::new(NodeKind::Chart, "hosanna").in_domain("guest.example");
+        let resolved = homes.resolve(&node);
+        assert_eq!(resolved.reach, Reach::Reachable);
+        assert_eq!(
+            resolved.rel_path, "vault/Assets/Charts/hosanna.md",
+            "the shelf is where a chart is now"
+        );
+        assert!(
+            !resolved.rel_path.starts_with("resources/"),
+            "and `/org/{{slug}}/media/` serves only `resources/` — \
+             the gap ADR 0004 names, recorded in docs/spec/unmet.md"
+        );
     }
 }

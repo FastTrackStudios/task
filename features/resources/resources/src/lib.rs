@@ -37,6 +37,7 @@ pub mod sample;
 pub mod scripture_refs;
 pub mod sermon;
 pub mod sidecar;
+pub mod song;
 pub mod transcript;
 pub mod types;
 pub mod walker;

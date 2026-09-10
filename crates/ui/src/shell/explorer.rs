@@ -321,8 +321,22 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
         let vault_id = scope.read().vault_id.clone();
         async move { fetch_folder_index(slug, vault_id).await }
     });
+    // Assets are vault items and are deliberately *not* notes (ADR
+    // 0004). They stay reachable everywhere a vault file is reachable —
+    // search, tags, backlinks, the graph, `[[wikilink]]` autocomplete —
+    // and they are kept out of this one surface, because this surface
+    // means "my notes" and a chart listed beside a journal entry is
+    // exactly what a separate shelf exists to prevent.
+    //
+    // The filter is here rather than in `folder_index` on purpose:
+    // every other consumer of that RPC wants the whole vault, and a
+    // server that hid assets from all of them would have moved charts
+    // into the vault and then hidden them from it.
     let tree = use_memo(move || match &*files.read_unchecked() {
-        Some(Ok(pages)) => Some(Rc::new(build_tree(pages))),
+        Some(Ok(pages)) => {
+            let notes: Vec<_> = pages.iter().filter(|p| !p.is_asset()).cloned().collect();
+            Some(Rc::new(build_tree(&notes)))
+        }
         _ => None,
     });
 

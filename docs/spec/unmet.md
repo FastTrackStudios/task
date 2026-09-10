@@ -44,6 +44,67 @@ deliverable kinds and UI surfaces have no home at all. The marker covers
 the half that exists and `project::conventions` says so in its module
 docs rather than letting the marker imply the rest.
 
+## Regressed on purpose, and recorded rather than hidden
+
+### Cross-organisation reach for the Assets tier
+
+ADR 0004 decision 1 moved charts, song documents and arrangements from
+`<org>/resources/` into the vault's `Assets/` shelf, because that — and
+only that — is what gives them a CRDT document, collaborative editing,
+wikilinks, tags and search. ADR 0003 had put them under `resources/`
+for a different and equally good reason: **that tree is the one another
+organisation can reach.**
+
+The ADR says plainly that *"nothing here should land before that path
+exists"*. It landed first. This entry is the debt, stated in the terms
+somebody can act on.
+
+**What reaches `resources/` and has no Assets equivalent:**
+
+| mechanism | where | what it does for a chart today |
+|---|---|---|
+| `SourceKind::Resource` subscription, slug `charts` | `features/wiki/wiki-live/src/materialize.rs::refresh_resource`, called from `subscriptions_backend.rs` | byte-copies the publisher's `<org>/resources/charts/` into the subscriber's held tree. It now copies the **frozen ADR 0003 snapshot** the migration left, or an empty directory for an org that never had one. Edits made in the vault since are not in it. |
+| `GET /org/{slug}/media/{*path}` | `apps/server/src/lib.rs::per_org_media_handler` | serves the org's `resources/` tree. A chart's `rel_path` is `Assets/Charts/<slug>.md` under `vault/`, which this route cannot reach and must not be widened to reach — a vault is an org's private tree, and opening a route onto it is a decision, not a fix. |
+| `links::NodeHomes` resolution | `apps/server/src/node_homes.rs::LocalHomes::locate` | *still works.* It was taught to look on the shelf, so a subscribed reader can name and follow a foreign `chart:<slug>`. What comes back is a `Reach::Reachable` naming a path nothing serves — legible, and deliberately not disguised as `NotFound`. |
+
+**Tests that pin the current state:** `tests/integration/tests/setlist.rs`
+(the subscription gates resolution, before/during/after — the security
+claim, and it still holds), `apps/server/tests/cross_org_nodes_e2e.rs`,
+and `node_homes`' own
+`a_chart_resolves_off_the_vault_shelf_and_names_an_unservable_path`,
+which asserts the gap rather than the absence of one.
+
+**Songs are the counter-example, and it is instructive.** A song's
+*media* — `<org>/resources/songs/<slug>/manifest.json` and its stems —
+did not move, because it is a Resource in ADR 0004's sense: imported
+bytes nobody types into. So `song:<slug>` still resolves *and* is still
+fetchable across an org boundary. Only the markdown moved. The tier rule
+sorts what shares a directory, and where it sorts cleanly nothing is
+lost.
+
+**What closing this needs:** a way for a subscription to publish a
+*subtree of the vault* under a name, materialised and served the way
+`resources/` is — which is a decision about what an org exposes, not a
+plumbing change. Until then a cross-org chart library is a regression
+against what ADR 0003 shipped.
+
+### The player still reads the frozen song folders
+
+`crates/player-ui/src/song_session.rs::fetch_kf_manifest` fetches
+`GET /org/{org}/media/songs/<slug>/song.md`, follows its
+`arrangements[].dir`, and reads `arrangement.md` for the key, the
+`chartRef` and the stems. Those files are on the resources tier, and the
+migration **copies rather than moves**, so the player keeps working —
+against a snapshot frozen at migration time. A chart edited in the vault
+after the migration is not what the player shows.
+
+Repointing it needs the player to reach `Assets/Songs/` and
+`Assets/Charts/` — i.e. the same cross-tier read path the entry above
+describes, from a wasm client that today only speaks to `/media`. Until
+then the frozen folders must not be deleted, and
+`resources::backend::SONG_MIGRATION_NOTE_BODY` says so on disk, beside
+them, for whoever opens the directory.
+
 ## Not reachable from this harness
 
 ### `storage.query.reach`

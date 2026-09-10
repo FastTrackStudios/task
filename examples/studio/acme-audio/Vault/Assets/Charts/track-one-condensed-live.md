@@ -1,6 +1,6 @@
 ---
-type: resource
-resource_kind: chart
+type: asset
+asset_kind: chart
 slug: track-one-condensed-live
 title: Track One
 key: A
@@ -13,9 +13,18 @@ arrangement: condensed live
 is_default: false
 updated_at: '2026-09-07T10:00:00Z'
 source: keyflow
+tags: [chart, live]
 ---
-<!-- The chart itself is `track-one-condensed-live.kf` beside this file; edit it there. Sections anchor as chart:track-one-condensed-live#<section>. -->
 # Track One
+
+```keyflow
+[Verse 1]
+| A | E | F#m | D |
+
+[Chorus]
+| D | A | E | F#m |
+| D | A | E | E   |
+```
 
 The same song as `chart:track-one`, charted a second way: one verse, one
 chorus, no bridge — what the band actually plays on a night when the set
@@ -30,4 +39,5 @@ what you reach for by naming its arrangement instead.
 
 ## Notes
 
-_Notes about this chart go here; the source is `track-one-condensed-live.kf`._
+_The cut is the bridge. If the set is running very long, take the second
+chorus down to half time instead of dropping it._

@@ -642,36 +642,73 @@ pub fn wikis_of(slug: &str) -> impl Iterator<Item = &'static DeclaredWiki> + '_ 
 
 // ── The resource-tier assets (ADR 0003) ──────────────────────────────
 
-/// One asset the example plants under `<org>/resources/`.
+/// Which tier an example asset is planted on — ADR 0004's first
+/// decision, in the seed.
 ///
-/// ADR 0003 gives four kinds a home there — a Keyflow chart, a Signal
-/// patch, a Signal sample, an Ignition lighting document — and says a
-/// *library* of any of them is an ordinary `Collection` of kind
-/// `Library` over `<kind>:<slug>` references. That claim is only
-/// checkable from a planted world if the planted world actually holds
-/// one of each, so it does.
+/// The two are not variants of one storage scheme; they are the whole
+/// distinction the ADR draws. A **Resource** is an import: it sits
+/// outside the vault tree, it does not change, and it is a leaf in the
+/// graph. An **Asset** is a vault item on the `Assets/` shelf: it is
+/// edited, by more than one person, and it inherits collaboration,
+/// tags, wikilinks and search from being a vault file rather than
+/// having any of them built.
+///
+/// Charts are the kind that moved, because they are the kind people
+/// edit. Patches, samples and lighting stay on the resources tier for
+/// now: they are binary payloads nobody types into, and ADR 0004 does
+/// not move them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetTier {
+    /// `<org>/resources/<library>/` — planted from `Resources/**`.
+    Resources,
+    /// `<org>/vault/<library>/` — planted from `Vault/**`, where
+    /// `library` is a shelf path like `Assets/Charts`.
+    Vault,
+}
+
+/// One asset the example plants, on whichever tier ADR 0004 gives its
+/// kind.
+///
+/// ADR 0003 gave four kinds a home under `resources/` — a Keyflow
+/// chart, a Signal patch, a Signal sample, an Ignition lighting
+/// document — and said a *library* of any of them is an ordinary
+/// `Collection` of kind `Library` over `<kind>:<slug>` references. ADR
+/// 0004 kept the library claim and moved charts to the vault. Both
+/// claims are only checkable from a planted world if the planted world
+/// actually holds one of each, so it does.
 ///
 /// Planting needs no code: [`plant`] copies `Resources/**` into the
-/// org's `resources/` tier verbatim. What this declaration buys is the
-/// contract — [`declared_tests`] fails if a declared asset has no
-/// committed tree, or if its directory name drifts from the one
+/// org's `resources/` tier and `Vault/**` into its vault, verbatim.
+/// What this declaration buys is the contract — [`declared_tests`]
+/// fails if a declared asset has no committed tree, or if a
+/// resource-tier directory name drifts from the one
 /// `node_homes::library_of` resolves cross-org references through.
 #[derive(Debug, Clone, Copy)]
 pub struct DeclaredAsset {
     /// The org that holds it.
     pub org: &'static str,
-    /// The directory under `resources/` — and therefore the
-    /// subscription slug a cross-org reader names. Fixed by
-    /// `node_homes::library_of`: `charts`, `patches`, `samples`,
-    /// `lighting`.
+    /// Which tier it is planted on.
+    pub tier: AssetTier,
+    /// On [`AssetTier::Resources`]: the directory under `resources/` —
+    /// and therefore the subscription slug a cross-org reader names,
+    /// fixed by `node_homes::library_of` (`patches`, `samples`,
+    /// `lighting`).
+    ///
+    /// On [`AssetTier::Vault`]: the shelf path under the vault root
+    /// (`Assets/Charts`), fixed by `resources_proto::assets`.
     pub library: &'static str,
     /// The node id: `chart:<slug>`, `patch:<slug>`, and so on.
     pub slug: &'static str,
-    /// Path of the manifest under `<org>/Resources/<library>/` in the
-    /// committed tree. A chart is flat (`<slug>.md`); the other kinds
-    /// own a directory (`<slug>/patch.md`).
+    /// Path of the manifest under the tier's committed directory. A
+    /// chart is flat (`<slug>.md`); the resource kinds own a directory
+    /// (`<slug>/patch.md`).
     pub manifest: &'static str,
-    /// The file holding the asset's own document, beside the manifest.
+    /// The file holding the asset's own document, beside the manifest —
+    /// empty for an asset that *is* one document, which is every vault
+    /// asset. A chart carries its source in a ` ```keyflow ` fence in
+    /// its own body, because a `.kf` beside it would be a file the
+    /// vault walker never collects and therefore a file nobody could
+    /// search, link or collaborate on.
     pub body: &'static str,
     /// One line on what this asset exists in the seed to prove.
     pub demonstrates: &'static str,
@@ -682,21 +719,47 @@ pub struct DeclaredAsset {
 pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
     DeclaredAsset {
         org: "acme-audio",
-        library: "charts",
+        tier: AssetTier::Vault,
+        library: "Assets/Songs",
         slug: "track-one",
         manifest: "track-one.md",
-        body: "track-one.kf",
-        demonstrates: "a Keyflow chart kept in Task between sessions — the `.kf` is the \
-                       chart, an outside editor opens it, and `chart:track-one#chorus` \
-                       addresses a section; it is also `song:track-one`'s *default* \
-                       arrangement, the one a caller gets when it names no arrangement",
+        body: "",
+        demonstrates: "a song as a vault document — the thing charts are arrangements *of*, \
+                       with its two arrangements joined to it by their own `song:` key rather \
+                       than nested inside it; the audio it names stays on the resources tier, \
+                       which is the ADR 0004 tier rule visible in one directory listing",
     },
     DeclaredAsset {
         org: "acme-audio",
-        library: "charts",
+        tier: AssetTier::Vault,
+        library: "Assets/Songs",
+        slug: "track-two",
+        manifest: "track-two.md",
+        body: "",
+        demonstrates: "the ordinary case beside it: one song, one arrangement, and nothing \
+                       extra to express it",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        tier: AssetTier::Vault,
+        library: "Assets/Charts",
+        slug: "track-one",
+        manifest: "track-one.md",
+        body: "",
+        demonstrates: "ADR 0004 decision 1, planted: a Keyflow chart as an ordinary vault \
+                       document on the `Assets/` shelf, so a demo user can open it in two \
+                       tabs and watch it converge — collaboration inherited from being a \
+                       vault file rather than built for charts. It is also \
+                       `song:track-one`'s *default* arrangement, and \
+                       `chart:track-one#chorus` addresses the section in its fence",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        tier: AssetTier::Vault,
+        library: "Assets/Charts",
         slug: "track-one-condensed-live",
         manifest: "track-one-condensed-live.md",
-        body: "track-one-condensed-live.kf",
+        body: "",
         demonstrates: "one chart is one arrangement: a second reading of the *same* song, \
                        joined to it by `song: song:track-one` and told apart by its \
                        `arrangement` label — not a revision of the chart beside it, and not \
@@ -705,16 +768,18 @@ pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
     },
     DeclaredAsset {
         org: "acme-audio",
-        library: "charts",
+        tier: AssetTier::Vault,
+        library: "Assets/Charts",
         slug: "track-two",
         manifest: "track-two.md",
-        body: "track-two.kf",
+        body: "",
         demonstrates: "the second chart, because one chart is a file and two are a \
                        library — `Chart Library` in the seed collects both, and a demo \
                        user opening the planted org finds a list rather than an orphan",
     },
     DeclaredAsset {
         org: "acme-audio",
+        tier: AssetTier::Resources,
         library: "lighting",
         slug: "track-one-lights",
         manifest: "track-one-lights/show.md",
@@ -726,6 +791,7 @@ pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
     },
     DeclaredAsset {
         org: "acme-audio",
+        tier: AssetTier::Resources,
         library: "patches",
         slug: "warm-analog-pad",
         manifest: "warm-analog-pad/patch.md",
@@ -736,6 +802,7 @@ pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
     },
     DeclaredAsset {
         org: "acme-audio",
+        tier: AssetTier::Resources,
         library: "samples",
         slug: "room-kick-48k",
         manifest: "room-kick-48k/sample.md",
@@ -746,6 +813,7 @@ pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
     },
     DeclaredAsset {
         org: "acme-audio",
+        tier: AssetTier::Resources,
         library: "lighting",
         slug: "album-launch-show",
         manifest: "album-launch-show/show.md",
@@ -1291,8 +1359,19 @@ mod declared_tests {
                 a.slug,
                 a.org
             );
-            for file in [a.manifest, a.body] {
-                let path = format!("{}/Resources/{}/{}", a.org, a.library, file);
+            // The tier is the committed directory: `Resources/**` plants
+            // into `resources/`, `Vault/**` into the vault. An asset
+            // declared on the wrong one is an asset a demo user reaches
+            // through the wrong lane, which is exactly the confusion ADR
+            // 0004 exists to end.
+            let area = match a.tier {
+                AssetTier::Resources => "Resources",
+                AssetTier::Vault => "Vault",
+            };
+            // An empty `body` is the vault case: a chart *is* one
+            // document, source and all.
+            for file in [a.manifest, a.body].into_iter().filter(|f| !f.is_empty()) {
+                let path = format!("{}/{area}/{}/{}", a.org, a.library, file);
                 assert!(
                     STUDIO.get_file(&path).is_some(),
                     "{}: `{path}` is not committed — {}",
@@ -1300,6 +1379,87 @@ mod declared_tests {
                     a.demonstrates
                 );
             }
+        }
+    }
+
+    /// A vault asset declares the tier it is on, in its own frontmatter,
+    /// and carries its document with it.
+    ///
+    /// This is the seed half of ADR 0004's recognition rule. A chart
+    /// that still said `type: resource` would parse — the manifest
+    /// grammar is shared — and would be filed on the shelf while
+    /// claiming to be an import, which is the one state the tier
+    /// distinction cannot survive. So the committed tree is checked
+    /// against the constants the server reads, not against a habit.
+    #[test]
+    fn every_vault_asset_declares_the_tier_and_holds_its_own_source() {
+        use resources_proto::assets;
+        for a in DECLARED_ASSETS
+            .iter()
+            .filter(|a| a.tier == AssetTier::Vault)
+        {
+            let path = format!("{}/Vault/{}/{}", a.org, a.library, a.manifest);
+            let text = STUDIO
+                .get_file(&path)
+                .and_then(|f| f.contents_utf8())
+                .unwrap_or_else(|| panic!("{}: `{path}` is not committed", a.slug));
+            assert!(
+                text.contains(&format!("{}: {}", assets::TYPE_KEY, assets::TYPE_ASSET)),
+                "{}: `{path}` does not declare `type: asset`",
+                a.slug
+            );
+            assert!(
+                !text.contains(resources::chart::LEGACY_KIND_KEY),
+                "{}: `{path}` still carries ADR 0003's `resource_kind`",
+                a.slug
+            );
+            assert!(
+                a.body.is_empty(),
+                "{}: a vault asset is one document — its source belongs in its own body",
+                a.slug
+            );
+            // A chart carries its source in its own body; a song is
+            // prose and carries none. Which kind it is comes from the
+            // shelf it is on, because that is the organising
+            // convention the tier is made of.
+            if a.library == assets::charts_dir() {
+                assert!(
+                    assets::extract_fenced(text, assets::CHART_FENCE).is_some(),
+                    "{}: `{path}` has no ```{} fence, so it has no chart in it",
+                    a.slug,
+                    assets::CHART_FENCE
+                );
+            }
+        }
+    }
+
+    /// Every vault asset is on the shelf ADR 0004 names, spelled the
+    /// way the server spells it. A drift here plants charts somewhere
+    /// `list_charts` does not walk, and the seed would silently hold
+    /// nothing.
+    #[test]
+    fn every_vault_asset_sits_on_the_assets_shelf() {
+        for a in DECLARED_ASSETS
+            .iter()
+            .filter(|a| a.tier == AssetTier::Vault)
+        {
+            assert!(
+                resources_proto::assets::is_asset_path(&format!("{}/x.md", a.library)),
+                "{}: `{}` is not under the Assets shelf",
+                a.slug,
+                a.library
+            );
+            let expected = if a.library == resources_proto::assets::charts_dir() {
+                resources_proto::assets::chart_path(a.slug)
+            } else {
+                resources_proto::assets::song_path(a.slug)
+            };
+            assert_eq!(
+                format!("{}/{}", a.library, a.manifest),
+                expected,
+                "{}: the committed path is not where its lane writes",
+                a.slug
+            );
         }
     }
 
@@ -1311,7 +1471,16 @@ mod declared_tests {
     #[test]
     fn every_asset_library_is_a_home_some_node_kind_resolves_through() {
         use links::NodeKind;
-        for a in DECLARED_ASSETS {
+        // Vault assets are exempt, and the exemption *is* ADR 0004's
+        // cost: `library_of` maps a node kind onto a `resources/`
+        // subdirectory, which is what a cross-org subscription names. A
+        // chart no longer has bytes there, so pinning `Assets/Charts`
+        // against that map would assert a reach that does not exist.
+        // See `docs/spec/unmet.md`.
+        for a in DECLARED_ASSETS
+            .iter()
+            .filter(|a| a.tier == AssetTier::Resources)
+        {
             let known = [
                 NodeKind::Song,
                 NodeKind::Sermon,
@@ -1378,18 +1547,25 @@ mod declared_tests {
             for (kind, id) in c.items {
                 let kind = NodeKind::parse(kind)
                     .unwrap_or_else(|| panic!("{}: `{kind}` is not a node kind", c.title));
-                let library = crate::node_homes::library_of(kind).unwrap_or_else(|| {
-                    panic!("{}: `{kind:?}` has no home under resources/", c.title)
-                });
-                // A song is a folder with a manifest; an asset is a
-                // `DECLARED_ASSETS` row, which the test above proves is
-                // committed.
+                // A song is a folder with a manifest; anything else is a
+                // `DECLARED_ASSETS` row, which the tests above prove is
+                // committed on whichever tier it declares.
+                //
+                // The lookup is by slug rather than by
+                // `node_homes::library_of`, and that is ADR 0004
+                // showing up in the seed: a chart's directory is
+                // `Assets/Charts` on the vault, not `charts` under
+                // `resources/`, so the resources-tier map no longer
+                // answers "where does this kind live?" for every kind.
+                // What a collection actually asserts is that the
+                // reference resolves to something planted, and the slug
+                // is the identity a `chart:<slug>` reference carries.
                 let planted = if kind == NodeKind::Song {
                     STUDIO
                         .get_file(format!("{}/Resources/songs/{id}/manifest.json", c.org))
                         .is_some()
                 } else {
-                    assets_of(c.org).any(|a| a.library == library && a.slug == *id)
+                    assets_of(c.org).any(|a| a.slug == *id)
                 };
                 assert!(
                     planted,

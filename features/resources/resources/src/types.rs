@@ -58,7 +58,20 @@ pub struct MediaRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resource {
     pub slug: String,
-    #[serde(rename = "resource_kind")]
+    /// Which kind of thing this is.
+    ///
+    /// Two spellings, and the alias is not legacy tolerance — it is the
+    /// tier boundary ADR 0004 drew. A **resource** declares
+    /// `resource_kind`; an **asset** on the vault's `Assets/` shelf
+    /// declares `asset_kind` (`vault_proto::assets::KIND_KEY`). Both
+    /// parse here because the *manifest grammar* is shared even though
+    /// the tiers are not: a chart and a sermon carry the same title,
+    /// tags and media keys, and duplicating this struct per tier would
+    /// buy nothing but drift.
+    ///
+    /// Which tier a document is on is answered by where it lives and by
+    /// its `type:` key, never by guessing from this one.
+    #[serde(rename = "resource_kind", alias = "asset_kind")]
     pub kind: ResourceKind,
     #[serde(default)]
     pub title: String,

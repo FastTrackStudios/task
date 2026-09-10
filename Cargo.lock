@@ -10849,6 +10849,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "vault-proto",
  "vox",
  "vox-core",
  "wiki-proto",
@@ -17899,6 +17900,8 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "thiserror 2.0.20",
+ "vault",
+ "vault-proto",
  "vox",
  "vox-types",
 ]
@@ -17911,6 +17914,7 @@ dependencies = [
  "facet",
  "serde",
  "thiserror 2.0.20",
+ "vault-proto",
  "vox",
  "vox-types",
 ]
@@ -19638,17 +19642,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "song"
-version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/FastTrackStudio?tag=v0.1.0#0d7e77114458b2a0dccbe90c6ec4499c4f396bd4"
-dependencies = [
- "serde",
- "serde_yaml",
- "thiserror 2.0.20",
- "uuid",
-]
-
-[[package]]
 name = "sorted-index-buffer"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -20978,7 +20971,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
- "song",
  "task",
  "task-plugin",
  "task-server",

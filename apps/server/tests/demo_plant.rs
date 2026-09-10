@@ -209,7 +209,11 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
 
     let org = org_proto::DataRoot::new(tmp.path().to_owned()).org(slug);
     let resources = org.resources_dir();
-    let lane = resources::ResourcesBackend::new(&resources);
+    // The chart lane writes the org's vault now (ADR 0004), so the
+    // backend needs it — and refuses without it, which is why this is
+    // the same wiring `AppState` does rather than a test convenience.
+    let vault = vault::Backend::single("default", org.vault_dir())?;
+    let lane = resources::ResourcesBackend::new(&resources).with_assets(vault, "default")?;
 
     let declared: Vec<_> = task_server::example_org::assets_of(slug).collect();
     eyre::ensure!(
@@ -218,20 +222,33 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
     );
 
     for a in declared {
-        // The directory is the subscription slug, so it is derived from
-        // the node kind rather than trusted from the declaration.
-        let kind = [
-            NodeKind::Chart,
-            NodeKind::Patch,
-            NodeKind::Sample,
-            NodeKind::Lighting,
-        ]
-        .into_iter()
-        .find(|k| task_server::node_homes::library_of(*k) == Some(a.library))
-        .unwrap_or_else(|| panic!("{}: `{}` is no asset kind's home", a.slug, a.library));
+        use task_server::example_org::AssetTier;
 
-        let home = resources.join(a.library);
-        for file in [a.manifest, a.body] {
+        // Where the tier says the files are. A resource-tier asset's
+        // directory is derived from the node kind rather than trusted
+        // from the declaration, because that string is the subscription
+        // slug a cross-org reader names.
+        let (kind, home) = match a.tier {
+            // On the Assets shelf, the per-kind subdirectory *is* the
+            // kind — that is the whole of the tier's organising
+            // convention, so reading it back off the path is reading
+            // the convention rather than trusting a second field.
+            AssetTier::Vault if a.library == resources_proto::assets::songs_dir() => {
+                (NodeKind::Song, org.vault_dir().join(a.library))
+            }
+            AssetTier::Vault => (NodeKind::Chart, org.vault_dir().join(a.library)),
+            AssetTier::Resources => {
+                let kind = [NodeKind::Patch, NodeKind::Sample, NodeKind::Lighting]
+                    .into_iter()
+                    .find(|k| task_server::node_homes::library_of(*k) == Some(a.library))
+                    .unwrap_or_else(|| {
+                        panic!("{}: `{}` is no asset kind's home", a.slug, a.library)
+                    });
+                (kind, resources.join(a.library))
+            }
+        };
+
+        for file in [a.manifest, a.body].into_iter().filter(|f| !f.is_empty()) {
             let path = home.join(file);
             assert!(
                 path.is_file(),
@@ -242,16 +259,48 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
             );
         }
 
-        // The shape each lane writes: a chart is flat beside its `.kf`
-        // source, everything else owns a directory because it grows
-        // sidecars.
+        // The shape each lane writes: a chart is **one vault document**
+        // with its source in a fence (ADR 0004 — a `.kf` beside it
+        // would be a file the vault walker never collects), everything
+        // else owns a directory because it grows sidecars.
         match kind {
-            NodeKind::Chart => assert!(
-                home.join(format!("{}.kf", a.slug)).is_file(),
-                "{}: the chart source is not `charts/{}.kf`",
-                a.slug,
-                a.slug
-            ),
+            // A song is prose: no fence, and its audio stays on the
+            // resources tier, which is the assertion that keeps the
+            // migration honest about what it moved.
+            NodeKind::Song => {
+                assert!(
+                    org.resources_dir()
+                        .join("songs")
+                        .join(a.slug)
+                        .join("manifest.json")
+                        .is_file(),
+                    "{}: the song's media left the resources tier — it is an import, \
+                     and `/media/songs/{}/…` serves it",
+                    a.slug,
+                    a.slug
+                );
+            }
+            NodeKind::Chart => {
+                let path = org
+                    .vault_dir()
+                    .join(resources_proto::assets::chart_path(a.slug));
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("{}: {} unreadable: {e}", a.slug, path.display()));
+                assert!(
+                    !home.join(format!("{}.kf", a.slug)).exists(),
+                    "{}: a `.kf` sidecar came back",
+                    a.slug
+                );
+                assert!(
+                    resources_proto::assets::extract_fenced(
+                        &text,
+                        resources_proto::assets::CHART_FENCE
+                    )
+                    .is_some_and(|s| !s.trim().is_empty()),
+                    "{}: the planted chart has no source in its fence",
+                    a.slug
+                );
+            }
             _ => assert!(
                 home.join(a.slug).is_dir(),
                 "{}: `{}/{}` is not a directory",
@@ -263,6 +312,7 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
 
         // And it reads back through the RPC the apps call.
         let read = match kind {
+            NodeKind::Song => lane.song(a.slug).map(|s| (s.slug, s.title)),
             NodeKind::Chart => lane.chart(a.slug).map(|c| (c.slug, c.title)),
             NodeKind::Patch => lane.patch(a.slug).map(|p| (p.slug, p.title)),
             NodeKind::Sample => lane.sample(a.slug).map(|s| (s.slug, s.title)),
@@ -278,7 +328,8 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
     // And each lane's listing finds every one of its own, which is what
     // a library screen opens with.
     for (library, listed) in [
-        ("charts", lane.list_charts("")?.len()),
+        ("Assets/Charts", lane.list_charts("")?.len()),
+        ("Assets/Songs", lane.list_songs()?.len()),
         ("patches", lane.list_patches()?.len()),
         ("samples", lane.list_samples()?.len()),
         ("lighting", lane.list_lighting()?.len()),
@@ -288,7 +339,7 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
             .count();
         assert!(
             listed >= declared,
-            "resources/{library}/: {declared} declared, {listed} listed"
+            "{library}/: {declared} declared, {listed} listed"
         );
     }
     Ok(())
