@@ -45,13 +45,68 @@ word about its own domain.
 
 ## Decision
 
-### 1. Three tiers, distinguished by what they are for
+### 1. Four roots, and one trait they all implement
 
-| tier | bytes | mutable | collaborative | may reference |
+An organisation's file hierarchy has exactly four roots:
+
+| root | holds | cardinality |
+|---|---|---|
+| `vault/` | the knowledge system — notes | exactly one vault |
+| `wiki/` | every wiki | many, named |
+| `assets/` | every asset group | many, named |
+| `projects/` | every project and sub-project | many, nested |
+
+All four implement one trait: a **shelf** — a named, file-backed root
+that registers for sync and per-file CRDT, and that may be published,
+subscribed to and resolved into.
+
+That trait is the whole of decision 1. Everything below is a consequence
+of it rather than a separate mechanism.
+
+| shelf | mutable | collaborative | subscribable | may reference |
 |---|---|---|---|---|
-| **Vault** | in the vault tree | yes | yes (CRDT) | anything |
-| **Assets** | `<org>/assets/<kind>/` | yes | yes (CRDT) | anything |
-| **Resources** | outside the vault tree | no | no | **nothing** |
+| Vault | yes | yes | **no** — a vault is shared by link, not subscription | anything |
+| Wiki | yes | yes | yes | anything |
+| Assets | yes | yes | yes | anything |
+| Projects | yes | yes | yes | anything |
+| *Resources* | no | no | yes | **nothing** |
+
+Resources are an asset group that happens to be immutable and
+leaf-only: imports, held whole, never authored here. They are listed
+apart because those two properties are worth naming, not because they
+are a fifth root.
+
+**Collaboration follows registration, not location.** This is the fact
+the trait is built on, and it was learned the expensive way — see the
+note at the end of this section.
+
+### 1a. Subscriptions are granular
+
+A subscription names a shelf *or part of one*.
+
+An asset group "Live Tracks" may hold collections — "Worship Tracks",
+"Pop Tracks" — and an organisation subscribing to it should be able to
+take the worship material and not the rest. Whole-shelf subscription is
+the degenerate case, not the only one.
+
+The same selection governs what a *machine* keeps locally. Subscribing
+says what this organisation may see; syncing says what this laptop
+bothers to hold. A studio machine takes the multitracks; a phone takes
+the charts and leaves forty gigabytes of stems on the server. Both are
+the same question — *which part of this shelf?* — asked at different
+scopes, and they should share one vocabulary rather than growing two.
+
+This is why the four roots matter beyond tidiness. Large content lives
+on shelves the vault merely *references*, so a vault stays small and
+fully synced while the material it points at is fetched on demand. A
+reference resolving to something not resident locally is an ordinary
+state, not an error.
+
+The mechanism already exists at the Files layer: `files_domain::Facet`
+and `FacetMap`, with `files.sync.selective` describing atomic facets
+that bring their dependencies. Granular subscription should be that
+primitive addressed from the subscription lane — not a second selection
+system with its own rules.
 
 **Vault** is the knowledge system: notes and wiki pages, the things whose
 links *are* the point.
