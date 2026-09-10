@@ -174,6 +174,42 @@ pub struct Piece {
 /// variant carries a whole convention set — which tool directories are
 /// recognised, which facets exist, which surfaces appear — so adding one
 /// is a design act rather than a string.
+///
+/// # What may be added here, and what may not
+///
+/// ADR 0003 added `Session`, `Signal`, `Ignition` and `Keyflow` — the
+/// names of four applications built on Task — and argued for them
+/// explicitly: "what `keyflow` means is precisely *Keyflow opens this*."
+/// ADR 0004 removed them, and the reason is worth having in front of
+/// anyone tempted to put them back.
+///
+/// A capability says what **work** a project holds. `music-production`
+/// and `video-production` are kinds of work: each one is a claim about
+/// what tools wrote this tree, and it pays for itself immediately —
+/// `files_domain::ignore` drops a Reaper `.rpp-bak` because the project
+/// said it does music production, and it would be wrong to drop it
+/// otherwise. That is a convention set, and declaring it is a design
+/// act.
+///
+/// `keyflow` was not that. It carried no tool layout, no facet and no
+/// ignore pattern — `layouts_for` and `ignores_for` in `files-domain`
+/// both returned the empty slice for all four — because none of those
+/// applications writes a session folder into a project tree. What it
+/// carried was a *name*, and a name is the one thing a store must not
+/// hold on its consumers' behalf. A primitive that enumerates its
+/// consumers is not a primitive: it makes every application wait on a
+/// release of the thing it is built on before it can say a word about
+/// its own domain, and it means a sixth application cannot exist until
+/// this enum admits it.
+///
+/// Which application opens a project is the application's business,
+/// answered by looking at what is actually there — the node kinds and
+/// asset shapes the project holds — rather than by a label maintained
+/// here. So the rule for a new variant is: it names a *kind of work*
+/// and it brings a convention set with it. If the honest description of
+/// a proposed variant is "and then App X opens it", the answer is no,
+/// and `docs/spec/unmet.md` records the resulting gap rather than
+/// papering over it with a word.
 #[cfg_attr(feature = "fake", derive(::fake::Dummy))]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Facet, Serialize, Deserialize,
@@ -185,14 +221,6 @@ pub enum Capability {
     MusicProduction,
     /// Footage, proxies, cuts, renders. Resolve and Premiere layouts.
     VideoProduction,
-    /// Setlists, songs, playback — the Session surface.
-    Session,
-    /// Rigs, patches, sample libraries — the Signal surface.
-    Signal,
-    /// Lighting for a song, a setlist or a show — the Ignition surface.
-    Ignition,
-    /// Charts — the Keyflow surface.
-    Keyflow,
 }
 
 impl Capability {
@@ -202,10 +230,6 @@ impl Capability {
         match self {
             Self::MusicProduction => "music-production",
             Self::VideoProduction => "video-production",
-            Self::Session => "session",
-            Self::Signal => "signal",
-            Self::Ignition => "ignition",
-            Self::Keyflow => "keyflow",
         }
     }
 
@@ -216,10 +240,13 @@ impl Capability {
         match s.trim().to_ascii_lowercase().as_str() {
             "music-production" | "music_production" => Some(Self::MusicProduction),
             "video-production" | "video_production" => Some(Self::VideoProduction),
-            "session" => Some(Self::Session),
-            "signal" => Some(Self::Signal),
-            "ignition" => Some(Self::Ignition),
-            "keyflow" => Some(Self::Keyflow),
+            // `session`, `signal`, `ignition` and `keyflow` used to
+            // parse, and deliberately no longer do. A project whose
+            // frontmatter still carries one is not silently dropped:
+            // `Capabilities` keeps it in `unrecognised`, which is the
+            // whole reason that field exists, so a surface can say
+            // "this project declares a word I do not know" instead of
+            // pretending the line was never written.
             _ => None,
         }
     }

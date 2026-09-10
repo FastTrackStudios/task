@@ -129,6 +129,39 @@ created: 2026-09-02
 ---
 ```
 
+### Promoting a vetted page into a curated wiki
+
+The pattern this feature is for: research goes in a *working* wiki the
+agent writes freely, and only crosses into a *curated* wiki — one where
+a person has read every page — when that person says so.
+
+```bash
+task wiki promote <working> Concepts/Dynamic\ Range.md --to <curated> --dry-run
+task wiki promote <working> Concepts/Dynamic\ Range.md --to <curated>
+task wiki promote <working> Questions/Open.md --to <curated> --type technique
+task wiki promote <working> Concepts/X.md --to <curated> --as Techniques/X.md --force
+```
+
+What it does, and does not do:
+
+- **Copies.** The working page stays, body byte-identical, and gains
+  `promoted_to: "<curated>::<path>"` + `promoted_at:`. The copy gains
+  `promoted_from:` + the same `promoted_at:`. The research trail behind
+  a vetted claim is the reason it is a copy.
+- **Checks the target's schema.** A source `type:` the curated wiki's
+  `schema.md` does not declare is *refused*, naming the types it does
+  declare. `--type <one of those>` is how a person says which they
+  meant — it picks from the target's vocabulary, never widens it. So
+  the curated wiki needs a `schema.md` with a page-type table.
+- **Never clobbers.** An occupied target path refuses before anything is
+  written; `--force` replaces it but is still guarded, so an edit that
+  landed in between conflicts instead of being lost.
+- **Keeps links working.** A bare `[[link]]` the curated wiki cannot
+  resolve is rewritten to `[[<working>::Name]]`; one it can resolve, and
+  one that already names a wiki, are left alone.
+- **Does not launder.** `ai_generated:` / `generated_by:` cross over
+  untouched. Vetting vouches for the claim, not the authorship.
+
 ## 2. Ingest sources
 
 Three ways a source lands under `raw/sources/`, all SHA-256 deduplicated

@@ -136,7 +136,7 @@ async fn charts_round_trip_and_a_library_collects_them() {
             .create(
                 support::ORG.to_owned(),
                 "Sunday Charts".to_owned(),
-                CollectionKind::Library,
+                CollectionKind::new("library"),
             )
             .await
             .unwrap();
@@ -156,7 +156,7 @@ async fn charts_round_trip_and_a_library_collects_them() {
             .await
             .unwrap()
             .expect("the library exists");
-        assert_eq!(back.kind, CollectionKind::Library);
+        assert_eq!(back.kind, CollectionKind::new("library"));
         let tokens: Vec<String> = back.items.iter().map(|i| i.node.to_token()).collect();
         assert_eq!(
             tokens,

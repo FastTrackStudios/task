@@ -571,9 +571,14 @@ pub fn wiki_slug(title: &str) -> String {
 /// `features/wiki/spec/wiki.md` says an org holds a *set* of wikis and
 /// that a vault is not one of them. A seed with a single wiki cannot
 /// show the difference between those claims and the one-wiki world
-/// that preceded them, so the example carries four across three orgs —
-/// two owned by the studio, two personal, each at a different
-/// visibility.
+/// that preceded them, so the example carries five across three orgs —
+/// three owned by the studio, two personal, spanning all three
+/// visibilities.
+///
+/// Two of the studio's three are a *pair*: `Audio Production` is
+/// curated and `Studio Research` is the agent's working wiki that feeds
+/// it. A promotion between them is the seam, and it is only testable
+/// from a planted world that holds both — see [`PROMOTION_PAIR`].
 #[derive(Debug, Clone, Copy)]
 pub struct DeclaredWiki {
     /// The org that owns it. Personal wikis belong to a person's own
@@ -621,6 +626,15 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
                        web is one web while each page keeps one owning wiki",
     },
     DeclaredWiki {
+        org: "acme-audio",
+        title: "Studio Research",
+        visibility: Visibility::Private,
+        demonstrates: "the working half of a curated/working pair: an agent's unvetted \
+                       wiki whose pages reach Audio Production only by promotion, which \
+                       copies rather than moves and refuses a type the target's schema \
+                       does not declare",
+    },
+    DeclaredWiki {
         org: "alice-personal",
         title: "Bible Study",
         visibility: Visibility::Private,
@@ -635,6 +649,25 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
                        private: absent from discovery, subscribable with the reference",
     },
 ];
+
+/// The seed's curated/working pair, as `(working, curated)` slugs.
+///
+/// `wiki.promote.*` is a rule about two wikis at once, so unlike every
+/// other wiki rule it cannot be exercised against a single planted
+/// wiki. This names the pair once, so the suite and the demo agree on
+/// which two wikis the story is told on.
+pub const PROMOTION_PAIR: (&str, &str) = ("studio-research", "audio-production");
+
+/// The page on the working wiki that is ready to promote: its type
+/// (`concept`) is one the curated wiki declares, so it crosses over
+/// with no override.
+pub const SEED_PROMOTABLE_PAGE: &str = "Concepts/Dynamic Range.md";
+
+/// The page on the working wiki that must NOT promote as it stands: its
+/// type is `question`, which the curated wiki does not declare. The
+/// refusal is the feature, so the seed carries the case that triggers
+/// it.
+pub const SEED_UNPROMOTABLE_PAGE: &str = "Questions/Do small speakers need a different master.md";
 
 /// The wiki the seed's Edit lane story is told on: the owner holds
 /// Editor here, one request is open from a cast member without the
@@ -859,9 +892,12 @@ pub fn assets_of(slug: &str) -> impl Iterator<Item = &'static DeclaredAsset> + '
 /// One ordered collection the example plants.
 ///
 /// ADR 0003's third decision is that *nothing new is built for
-/// libraries*: a library is a `Collection` of kind `Library` over node
+/// libraries*: a library is a `Collection` of kind `"library"` over node
 /// references, and a setlist is the same primitive with a different
-/// kind. A seed that planted four assets and no collection would leave
+/// kind string. ADR 0004 sharpened that — the kind is a word this
+/// example supplies, not one the store enumerates — which makes the
+/// seed the demonstration that an application can name its own domain
+/// without a Task release. A seed that planted four assets and no collection would leave
 /// that claim unillustrated — a demo user would find four orphans and
 /// no way to see them as a library — so the planted world holds both.
 ///
@@ -875,8 +911,14 @@ pub struct DeclaredCollection {
     pub org: &'static str,
     /// Display title, and the identity a replant matches on.
     pub title: &'static str,
-    /// `library`, `setlist`, `show` or `playlist` —
-    /// `CollectionKind::as_str`'s own spelling.
+    /// The kind label, which this example defines and Task does not.
+    ///
+    /// It reads `library` and `setlist` because that is what a studio
+    /// calls these; after ADR 0004 those are strings the seed picked,
+    /// not members of a vocabulary the store publishes. Written in the
+    /// normal form [`collection::CollectionKind::new`] produces —
+    /// lowercase, trimmed — so a declaration matches what the store
+    /// holds.
     pub kind: &'static str,
     /// The nodes it holds, in order: `(kind, id)` — the two halves of a
     /// `kind:id` reference. No domain: every item here is this org's
@@ -898,7 +940,7 @@ pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
             ("chart", "track-one-condensed-live"),
             ("chart", "track-two"),
         ],
-        demonstrates: "a chart library is a `Collection` of kind `Library` over \
+        demonstrates: "a chart library is a `Collection` of kind `\"library\"` over \
                        `chart:<slug>` references and nothing else — no chart service, \
                        no chart store, no second vocabulary — and it holds both \
                        arrangements of Track One, because a library lists charts and one \
@@ -920,6 +962,25 @@ pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
                        assembled by reference out of several libraries at once — the \
                        song, the chart it is played from, and the cues that run over it \
                        — with no app knowing the others are there",
+    },
+    DeclaredCollection {
+        org: "acme-audio",
+        title: "Thursday Rehearsal",
+        // The point of this row is the word. `rehearsal-pool` is not a
+        // kind Task has ever enumerated, and after ADR 0004 there is no
+        // list for it to be missing from — the seed just picked it.
+        kind: "rehearsal-pool",
+        items: &[
+            ("song", "track-two"),
+            ("song", "track-three"),
+            ("chart", "track-two"),
+        ],
+        demonstrates: "ADR 0004's test of decision 2, in the planted world rather than \
+                       only in a test: an application naming something in its own domain \
+                       — a rehearsal pool, which no version of Task has ever heard of — \
+                       and getting ordering, membership and reference resolution anyway. \
+                       If a demo user can build this, so can a seventh app, without a \
+                       release of the store it is built on",
     },
 ];
 
@@ -969,13 +1030,11 @@ fn plant_collections(org_root: &org_proto::OrgRoot, slug: &str) {
         if held.iter().any(|c| c.title == d.title) {
             continue;
         }
-        let kind = match d.kind {
-            "library" => CollectionKind::Library,
-            "setlist" => CollectionKind::Setlist,
-            "show" => CollectionKind::Show,
-            "playlist" => CollectionKind::Playlist,
-            other => CollectionKind::Other(other.to_owned()),
-        };
+        // No match arm any more: a kind is the declaring app's own word,
+        // and this seeder is one such app (ADR 0004). `library` and
+        // `setlist` are strings the example chose, not a vocabulary Task
+        // offers.
+        let kind = CollectionKind::new(d.kind);
         let made = match store.create(slug.to_owned(), d.title.to_owned(), kind) {
             Ok(made) => made,
             Err(e) => {
@@ -1312,6 +1371,74 @@ mod declared_tests {
         }
     }
 
+    /// A promotion is checked against the TARGET wiki's declared page
+    /// types, so a curated wiki with no committed `schema.md` cannot be
+    /// promoted into at all — the verb would refuse before it ever
+    /// reached the interesting part. The pair's two schemas are as
+    /// load-bearing as its pages.
+    #[test]
+    fn the_promotion_pair_commits_both_schemas() {
+        let (working, curated) = PROMOTION_PAIR;
+        for slug in [working, curated] {
+            let title = DECLARED_WIKIS
+                .iter()
+                .find(|w| wiki_slug(w.title) == slug)
+                .unwrap_or_else(|| panic!("`{slug}` is not a declared wiki"));
+            assert!(
+                STUDIO
+                    .get_file(format!("{}/Wikis/{}/schema.md", title.org, title.title))
+                    .is_some(),
+                "{slug}: no schema.md — a promotion has nothing to check against",
+            );
+        }
+    }
+
+    /// The two halves of the promotion story: one page whose type the
+    /// curated wiki declares (it promotes), one whose type it does not
+    /// (it is refused). Without the second the seed can only show the
+    /// happy path, and the refusal is the feature.
+    #[test]
+    fn the_promotion_pair_commits_a_promotable_and_an_unpromotable_page() {
+        let (working, curated) = PROMOTION_PAIR;
+        let working_title = DECLARED_WIKIS
+            .iter()
+            .find(|w| wiki_slug(w.title) == working)
+            .expect("the working wiki is declared");
+        let read = |page: &str| {
+            STUDIO
+                .get_file(format!(
+                    "{}/Wikis/{}/{page}",
+                    working_title.org, working_title.title
+                ))
+                .unwrap_or_else(|| panic!("{working}: no committed `{page}`"))
+                .contents_utf8()
+                .unwrap_or_default()
+                .to_owned()
+        };
+
+        let curated_schema = STUDIO
+            .get_file("acme-audio/Wikis/Audio Production/schema.md")
+            .expect("the curated schema is committed")
+            .contents_utf8()
+            .unwrap_or_default();
+        let declared: Vec<String> = wiki_proto::promote::declared_types(curated_schema)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+
+        let ok = read(SEED_PROMOTABLE_PAGE);
+        assert!(
+            ok.contains("type: concept") && declared.iter().any(|t| t == "concept"),
+            "{SEED_PROMOTABLE_PAGE} must carry a type `{curated}` declares; it holds {declared:?}"
+        );
+        let refused = read(SEED_UNPROMOTABLE_PAGE);
+        assert!(
+            refused.contains("type: question") && !declared.iter().any(|t| t == "question"),
+            "{SEED_UNPROMOTABLE_PAGE} must carry a type `{curated}` does NOT declare — \
+             it is the seed's refusal case"
+        );
+    }
+
     /// The slug is load-bearing in two places that must agree: the
     /// directory the seeder plants to, and the middle of every
     /// reference into the wiki. A title that slugs to nothing, or to
@@ -1560,7 +1687,7 @@ mod declared_tests {
     /// can answer: an asset this seed commits, or a song it commits.
     ///
     /// This is the assertion that keeps the seed from demonstrating the
-    /// wrong thing. A `Setlist` full of references to nothing still
+    /// wrong thing. A setlist full of references to nothing still
     /// plants, still lists, and still opens — as a list of unresolved
     /// rows, which is exactly the state ADR 0003 says is *legible* and
     /// therefore exactly the state a demo cannot be made of.
@@ -1574,11 +1701,25 @@ mod declared_tests {
                 c.title,
                 c.org
             );
+            // Not "is this one of four words" any more — there is no
+            // list to be one of (ADR 0004). What is still checkable, and
+            // is the thing that actually bites, is that a declaration is
+            // written in the normal form the store keeps: declare
+            // `Setlist` here and the seed would plant `setlist`, so the
+            // replant check that matches on the declared spelling would
+            // never recognise its own row and would plant a duplicate on
+            // every boot.
+            let planted_as = collection_proto::CollectionKind::new(c.kind);
+            assert_eq!(
+                planted_as.as_str(),
+                c.kind,
+                "{}: declare the kind as the store will hold it (lowercase, trimmed)",
+                c.title
+            );
             assert!(
-                matches!(c.kind, "library" | "setlist" | "show" | "playlist"),
-                "{}: `{}` is not a collection kind",
-                c.title,
-                c.kind
+                !planted_as.is_empty(),
+                "{}: a collection with no kind",
+                c.title
             );
             assert!(!c.items.is_empty(), "{}: an empty collection", c.title);
             for (kind, id) in c.items {

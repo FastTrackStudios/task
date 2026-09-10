@@ -1,6 +1,6 @@
 [package]
 name = "collection-proto"
-description = "Wasm-clean wire contract for the generic ordered-collection primitive: a `Collection { kind, items }` is an ordered list of `links_proto::NodeRef` items, each carrying a lexorank sort key. A song Library, a Setlist, a Show, or a Playlist are all instances of this with a different `CollectionKind`."
+description = "Wasm-clean wire contract for the generic ordered-collection primitive: a `Collection { kind, items }` is an ordered list of `links_proto::NodeRef` items, each carrying a lexorank sort key. The `CollectionKind` label is a normalised string the caller defines; this crate promises ordering, membership and reference resolution and nothing about what a kind means."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -252,7 +252,7 @@ async fn collect_and_delete(
             .create(
                 support::ORG.to_owned(),
                 format!("{kind} library"),
-                CollectionKind::Library,
+                CollectionKind::new("library"),
             )
             .await
             .unwrap();
@@ -272,7 +272,7 @@ async fn collect_and_delete(
             .await
             .unwrap()
             .expect("the library exists");
-        assert_eq!(back.kind, CollectionKind::Library);
+        assert_eq!(back.kind, CollectionKind::new("library"));
         let tokens: Vec<String> = back.items.iter().map(|i| i.node.to_token()).collect();
         assert_eq!(
             tokens,

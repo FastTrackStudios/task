@@ -4,7 +4,23 @@ Date: 2026-09-05
 
 ## Status
 
-Accepted.
+Accepted, and **partly superseded** by
+[ADR 0004](0004-vault-assets-resources.md).
+
+Still standing: decision 1 (a node reference may name another
+organisation) and the client model in decision 4 — apps reach Task as
+ordinary OIDC clients through the permit table, with no private lanes.
+
+Overturned by 0004:
+
+- **Decision 2** — `Capability::{Session, Signal, Ignition, Keyflow}`.
+  Naming the consuming applications in Task's own vocabulary was the
+  wrong instinct, argued for here explicitly and withdrawn there.
+- **Decision 3** — the asset kinds' home under `<org>/resources/`.
+  Charts move to the Assets tier, inside the vault, because that is
+  where collaborative editing lives.
+- `CollectionKind`'s named variants, added alongside this work, become
+  an app-supplied string.
 
 ## Context
 

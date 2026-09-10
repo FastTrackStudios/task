@@ -55,6 +55,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # own rather than this harness's `Session`.
 task-ui-core = { workspace = true }
 serde_json = { workspace = true }
+# `wiki_promote.rs` stamps a promotion with an explicit instant so the
+# rendered documents are a pure function of their inputs.
+chrono = { workspace = true }
 
 [lints]
 workspace = true

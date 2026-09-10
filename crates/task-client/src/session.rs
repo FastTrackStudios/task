@@ -1,9 +1,54 @@
-//! Persistent CLI session file.
+//! The persistent session: who this machine is signed in as, and
+//! where.
 //!
-//! Written by `task auth login` / `task auth signup`, read by every
-//! subcommand that needs an authenticated `user_id` / a server to
-//! talk to. Lives at `$XDG_DATA_HOME/task/session.json` (override via
+//! Written by `task auth login` / `task auth signup`, read by anything
+//! that needs an authenticated `user_id` or a server to talk to. Lives
+//! at `$XDG_DATA_HOME/task/session.json` (override via
 //! `TASK_SESSION_FILE`).
+//!
+//! ## The one trap in this module — read this before hand-writing a
+//! session file
+//!
+//! **`session.json` is a routing document. It does not contain the
+//! token.** The token for session key `k` lives in a *sibling*
+//! `<stem>-tokens/<k>.json`, written through architect-auth's
+//! [`FileTokenStore`] so it gets an atomic write and `0600`. The
+//! routing document holds only `home` / `active` / `key → {url, slug}`.
+//!
+//! This split has a failure mode that is worth a paragraph because it
+//! costs an afternoon every time somebody meets it. Write a session
+//! file by hand with the token inline — the obvious shape, and the
+//! shape every older version of this file used — and the token is
+//! simply not where anything looks for it. Before this crate existed,
+//! [`load`] responded by *silently dropping the whole entry*, on the
+//! reasoning that a missing token file means "signed out
+//! out-of-band". The result: the file parses, `task auth whoami`
+//! prints the account, and every RPC goes out with no `Authorization`
+//! header at all. The server then answers `anonymous is not a member`,
+//! which reads exactly like a permissions problem and is not one. The
+//! account is fine. The membership is fine. The token never left the
+//! disk.
+//!
+//! Two changes make that unreachable rather than merely documented:
+//!
+//! 1. **An inline token is adopted, not ignored.** If a key has no
+//!    token file but the routing entry carries `token` + `user_id`,
+//!    [`load`] promotes it into a proper token file and re-saves. This
+//!    is also what finally makes the pre-split upgrade path work: an
+//!    old embedded-token file whose entries had a `slug` field parsed
+//!    as the *current* shape, so the legacy branch below never ran and
+//!    the tokens went in the bin.
+//! 2. **A half-written entry is loud.** An inline `token` with no
+//!    `user_id` cannot be adopted (a session needs the id), so it is an
+//!    error naming the key, the token path, and the rule — instead of a
+//!    silent drop that surfaces three layers away as an authorization
+//!    failure.
+//!
+//! A key that genuinely has nothing — no token file, no inline token —
+//! is still dropped, because that really is the signed-out-out-of-band
+//! case. It is now *reported*: [`load_report`] returns what was
+//! dropped so a caller can say so, and [`load`] stays the terse form
+//! for callers that do not care.
 //!
 //! ## Shape — multi-server, server-aware
 //!
@@ -94,11 +139,50 @@ pub struct CliSession {
 /// plain URL string keyed by slug; current files store `{url, slug}`
 /// keyed by session key. Deserialize accepts both; serialize always
 /// emits the struct form.
+///
+/// The three trailing fields are **read-only**: they are never
+/// serialized (see the `skip_serializing_if`s), and they exist purely
+/// so [`load_at`] can see a token that somebody — a previous version
+/// of this program, or a person editing the file — put inline. Without
+/// them serde parses such a document happily and discards exactly the
+/// field that matters. See the module doc.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum RouteVal {
-    Meta { url: String, slug: String },
+    Meta {
+        url: String,
+        slug: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_id: Option<uuid::Uuid>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+    },
     Url(String),
+}
+
+/// A session key that was present in the routing document but produced
+/// no usable entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dropped {
+    /// The session key, e.g. `codywright@task.starcommand.live`.
+    pub key: String,
+    /// Where its token was looked for.
+    pub token_file: PathBuf,
+}
+
+/// The full result of reading a session: what loaded, and what did
+/// not.
+///
+/// [`load`] throws the second half away. Anything user-facing should
+/// not: a dropped key is the difference between "you are signed out"
+/// and "you are signed in and every request is anonymous", and only
+/// this struct can tell them apart.
+#[derive(Debug, Default)]
+pub struct Load {
+    pub session: Option<CliSession>,
+    pub dropped: Vec<Dropped>,
 }
 
 /// What `session.json` holds on disk: the non-secret routing state.
@@ -301,42 +385,106 @@ fn entry_from_stored(
 
 // ── load / save / clear ─────────────────────────────────────────────
 
+/// Read the session, discarding the report of what could not be read.
+/// The convenient form; [`load_report`] is the honest one.
 pub fn load() -> eyre::Result<Option<CliSession>> {
+    Ok(load_report()?.session)
+}
+
+/// Read the session **and** report every key that was skipped. Prefer
+/// this anywhere the answer is shown to a person: see the module doc
+/// on why a silently-skipped key looks like a permissions failure.
+pub fn load_report() -> eyre::Result<Load> {
     load_at(&paths()?)
 }
 
-pub fn load_at(p: &Paths) -> eyre::Result<Option<CliSession>> {
+pub fn load_at(p: &Paths) -> eyre::Result<Load> {
     let path = &p.session;
     if !path.exists() {
-        return Ok(None);
+        return Ok(Load::default());
     }
     let raw =
         std::fs::read_to_string(path).map_err(|e| eyre::eyre!("read {}: {e}", path.display()))?;
     // Current shape: routing doc + per-key token files.
     if let Ok(doc) = serde_json::from_str::<RoutingDoc>(&raw) {
         let mut servers = BTreeMap::new();
+        let mut dropped = Vec::new();
+        // Set when an inline token had to be promoted into a token
+        // file, so the repaired shape is written back once and the
+        // wrong shape is never tolerated twice.
+        let mut repaired = false;
         for (key, val) in doc.servers {
-            let (url, slug) = match val {
-                RouteVal::Meta { url, slug } => (url, slug),
+            let (url, slug, inline) = match val {
+                RouteVal::Meta {
+                    url,
+                    slug,
+                    token,
+                    user_id,
+                    email,
+                } => (url, slug, Some((token, user_id, email))),
                 // Slug-keyed legacy row: the key WAS the slug.
-                RouteVal::Url(url) => (url, key.clone()),
+                RouteVal::Url(url) => (url, key.clone(), None),
             };
-            // A missing token file means that key was signed out
-            // out-of-band — drop the entry rather than failing
-            // every command.
-            let Some(stored) = token_store(p, &key)
+            let stored = token_store(p, &key)
                 .load()
-                .map_err(|e| eyre::eyre!("load token for `{key}`: {e}"))?
-            else {
-                continue;
+                .map_err(|e| eyre::eyre!("load token for `{key}`: {e}"))?;
+            let stored = match (stored, inline) {
+                // The ordinary path: the token file is authoritative.
+                // An inline token alongside it is stale routing-doc
+                // residue and is ignored, deliberately — the file with
+                // `0600` on it wins over the one without.
+                (Some(stored), _) => stored,
+                // No token file, but the routing entry carries a whole
+                // credential: adopt it. This is the pre-split shape,
+                // and adopting is the upgrade that shape was always
+                // supposed to get.
+                (None, Some((Some(token), Some(user_id), email))) if !token.is_empty() => {
+                    repaired = true;
+                    StoredSession::new(token)
+                        .with_user_id(user_id.to_string())
+                        .with_email(email.unwrap_or_default())
+                }
+                // A token with no user id cannot become a session, and
+                // pretending otherwise is exactly the silent-anonymous
+                // failure this module exists to prevent. Say so, name
+                // the file, and state the rule.
+                (None, Some((Some(_), None, _))) => {
+                    return Err(eyre::eyre!(
+                        "session entry `{key}` has an inline `token` but no `user_id`, so it \
+                         cannot be adopted.\n  {} is a ROUTING document: the token belongs in \
+                         {}.\n  Left as-is every request would go out with no Authorization \
+                         header and the server would answer `anonymous is not a member` — a \
+                         failure that reads like a permissions problem and is not one.\n  Fix: \
+                         add `user_id`, or re-run `task auth login`.",
+                        path.display(),
+                        p.tokens.join(format!("{key}.json")).display(),
+                    ));
+                }
+                // Nothing anywhere: genuinely signed out out-of-band.
+                // Drop the entry rather than failing every command —
+                // but say that we did.
+                (None, _) => {
+                    dropped.push(Dropped {
+                        key: key.clone(),
+                        token_file: p.tokens.join(format!("{key}.json")),
+                    });
+                    continue;
+                }
             };
             servers.insert(key.clone(), entry_from_stored(&key, url, slug, stored)?);
         }
-        return Ok(Some(CliSession {
+        let sess = CliSession {
             home: doc.home,
             active: doc.active,
             servers,
-        }));
+        };
+        if repaired {
+            save_at(p, &sess)?;
+        }
+        return Ok(Load {
+            session: Some(sess),
+            dropped,
+        });
     }
     // Pre-split multi-server shape (tokens embedded in
     // session.json): upgrade to the split layout. Keys were slugs.
@@ -357,7 +505,10 @@ pub fn load_at(p: &Paths) -> eyre::Result<Option<CliSession>> {
             servers,
         };
         save_at(p, &sess)?;
-        return Ok(Some(sess));
+        return Ok(Load {
+            session: Some(sess),
+            dropped: Vec::new(),
+        });
     }
     // Fall back to legacy single-org shape and upgrade.
     let legacy: LegacySession = serde_json::from_str(&raw).map_err(|e| {
@@ -386,7 +537,10 @@ pub fn load_at(p: &Paths) -> eyre::Result<Option<CliSession>> {
     // Persist the upgraded shape so the legacy form is only ever
     // tolerated once.
     save_at(p, &sess)?;
-    Ok(Some(sess))
+    Ok(Load {
+        session: Some(sess),
+        dropped: Vec::new(),
+    })
 }
 
 pub fn save(sess: &CliSession) -> eyre::Result<()> {
@@ -443,6 +597,13 @@ pub fn save_at(p: &Paths, sess: &CliSession) -> eyre::Result<()> {
                         } else {
                             entry.slug.clone()
                         },
+                        // Never written back. The token went to its own
+                        // `0600` file above; putting a copy here would
+                        // recreate the very shape the module doc warns
+                        // about, in a world-readable file.
+                        token: None,
+                        user_id: None,
+                        email: None,
                     },
                 )
             })
@@ -665,7 +826,7 @@ mod tests {
         assert_eq!(sess.home, "fts");
         save_at(&p, &sess).unwrap();
 
-        let loaded = load_at(&p).unwrap().expect("session exists");
+        let loaded = load_at(&p).unwrap().session.expect("session exists");
         assert_eq!(loaded.active, key);
         assert_eq!(loaded.active_slug(), "codywright");
         let prod = loaded.servers.get(&key).unwrap();
@@ -677,7 +838,7 @@ mod tests {
         // Local + prod coexist as distinct token files.
         assert_eq!(loaded.servers.len(), 2);
         clear_at(&p).unwrap();
-        assert!(load_at(&p).unwrap().is_none());
+        assert!(load_at(&p).unwrap().session.is_none());
     }
 
     #[test]
@@ -733,7 +894,7 @@ mod tests {
                     .with_email("a@x".to_owned()),
             )
             .unwrap();
-        let loaded = load_at(&p).unwrap().expect("session exists");
+        let loaded = load_at(&p).unwrap().session.expect("session exists");
         let e = loaded.servers.get("fts").unwrap();
         assert_eq!(e.slug, "fts", "slug recovered from the legacy key");
         assert_eq!(e.url, "local");

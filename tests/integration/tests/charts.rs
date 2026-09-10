@@ -202,7 +202,11 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
     let library = alice
         .collections()
         .await
-        .create(org.clone(), "Sunday Charts".into(), CollectionKind::Library)
+        .create(
+            org.clone(),
+            "Sunday Charts".into(),
+            CollectionKind::new("library"),
+        )
         .await
         .expect("create the library");
     assert!(library.items.is_empty());
@@ -268,7 +272,7 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
     let libraries = alice
         .collections()
         .await
-        .list(org, Some(CollectionKind::Library))
+        .list(org, Some(CollectionKind::new("library")))
         .await
         .expect("list the libraries");
     let found = libraries
@@ -476,7 +480,7 @@ async fn deleting_a_chart_leaves_the_reference_that_named_it() {
     let library = alice
         .collections()
         .await
-        .create(org, "Sunday Charts".into(), CollectionKind::Library)
+        .create(org, "Sunday Charts".into(), CollectionKind::new("library"))
         .await
         .expect("create the library");
     alice
