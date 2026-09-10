@@ -135,12 +135,34 @@ pub(super) async fn run(args: Args) -> eyre::Result<()> {
 
     // Does the target already hold this page? Asked before anything is
     // written, so a refusal leaves both wikis byte-identical.
-    let existing = pages
+    //
+    // Only a genuine "no such page" counts as absent. Any other error —
+    // a refusal, a wiki that does not exist, a backend that is unwell —
+    // is reported rather than read as an empty slot: treating "I could
+    // not look" as "nothing is there" is exactly how a clobber-safe
+    // verb stops being clobber-safe.
+    let existing = match pages
         .read_page(args.to_wiki.clone(), plan.to_path.clone())
         .await
-        .ok();
+    {
+        Ok(doc) => Some(doc),
+        Err(vox::VoxError::User(e)) if matches!(*e, wiki_proto::WikiError::NotFound(_)) => None,
+        Err(e) => {
+            return Err(eyre::eyre!(
+                "could not check whether `{}::{}` is already taken: {e:?} — refusing rather \
+                 than writing over a page this could not read",
+                args.to_wiki,
+                plan.to_path,
+            ));
+        }
+    };
+    //
+    // A dry run is exempt: its job is to say what *would* happen, and
+    // "it would be refused, here is the page you would be replacing" is
+    // more use than the refusal on its own. It still writes nothing.
     if let Some(doc) = &existing
         && !args.force
+        && !args.dry_run
     {
         return Err(eyre::eyre!(
             "`{}::{}` already exists (sha256 {}). A promotion never overwrites a curated \
@@ -176,6 +198,15 @@ pub(super) async fn run(args: Args) -> eyre::Result<()> {
     }
 
     if args.dry_run {
+        if let Some(doc) = &existing
+            && !args.force
+        {
+            eprintln!(
+                "  REFUSED  `{}::{}` already exists (sha256 {}) — this promotion would not \
+                 run without `--force` or a different `--as <path>`",
+                args.to_wiki, plan.to_path, doc.sha256
+            );
+        }
         println!(
             "would write {}::{}  (type {}{})",
             args.to_wiki,

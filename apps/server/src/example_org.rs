@@ -1298,7 +1298,7 @@ mod declared_tests {
         };
 
         let curated_schema = STUDIO
-            .get_file(format!("acme-audio/Wikis/Audio Production/schema.md"))
+            .get_file("acme-audio/Wikis/Audio Production/schema.md")
             .expect("the curated schema is committed")
             .contents_utf8()
             .unwrap_or_default();

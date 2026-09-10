@@ -729,7 +729,9 @@ pub(crate) enum WikiCmd {
         /// type is not one the target declares.
         #[arg(long = "type", value_name = "TYPE")]
         as_type: Option<String>,
-        /// Print both documents and write nothing.
+        /// Print both documents and write nothing. An occupied target
+        /// is reported rather than refused, so a dry run says what
+        /// would happen instead of stopping at the first objection.
         #[arg(long)]
         dry_run: bool,
         /// Replace an existing page at the target path. Without it an
