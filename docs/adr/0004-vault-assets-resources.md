@@ -75,8 +75,31 @@ that could reference back into the vault would make the import layer
 part of the graph it was supposed to feed, and there would be no
 direction left in which to say "this came from outside".
 
-**Charts move from Resources to Assets.** They are edited, by more than
-one person, which is the whole distinction.
+**Songs, arrangements and charts move from Resources to Assets.** They
+are edited, by more than one person, which is the whole distinction.
+
+This is wider than it first appeared, and the widening is the point.
+Adding one song through the existing `task song add --chart` produces:
+
+```text
+resources/songs/opening-night/song.md
+resources/songs/opening-night/arrangements/default/opening-night.kf
+resources/songs/opening-night/arrangements/default/arrangement.md
+```
+
+— and leaves `vault/` holding nothing but `.fts-root.json`. So it was
+never only charts that sat outside the vault: a song note, its
+arrangement notes and its chart files are all there. Moving charts alone
+would put a song in one tier and its own chart in another, which is
+worse than either end state.
+
+Patches, samples and lighting stay in Resources. They are binary
+payloads nobody types into, and no one co-edits a WAV.
+
+Note for whoever implements this: an `arrangements/` folder already
+exists on disk, and an `arrangement` field was added to `ChartDoc`
+separately. Two representations of one idea. One of them has to become
+authoritative rather than both surviving quietly.
 
 ### 2. Collections carry an app-defined kind
 
