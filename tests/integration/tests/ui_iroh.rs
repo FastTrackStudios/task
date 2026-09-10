@@ -63,9 +63,21 @@ async fn the_app_client_reaches_an_org_over_iroh_as_a_signed_in_person() {
         .await
         .expect("establish over iroh");
     let listed = projects.list().await.expect("list projects as Alice");
-    // The example studio plants no project pages — empty is the seeded
-    // truth. The claim is the call round-tripped through the gate.
-    assert!(listed.is_empty(), "the seeded vault has no project pages");
+    // The example studio plants project pages now, and that is the
+    // change worth noting rather than the count: this used to assert
+    // `is_empty()`, because a project was a vault note and the committed
+    // tree carried none. ADR 0004's Projects tier made a project a
+    // directory, and the committed studio's project directories carry
+    // their own `project.md` — so the seeded world has projects in it
+    // before anybody declares one.
+    //
+    // The claim is still that the call round-tripped through the gate;
+    // the seeded content is what makes it a claim about something.
+    let titles: Vec<&str> = listed.iter().map(|p| p.title.as_str()).collect();
+    assert!(
+        titles.contains(&"First Single"),
+        "the seeded studio's projects did not come back over iroh: {titles:?}"
+    );
 
     // And the identity genuinely rode along: a second client over the
     // SAME cached connection makes a call the gate refuses to anonymous

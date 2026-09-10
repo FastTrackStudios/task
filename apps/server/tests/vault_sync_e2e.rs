@@ -39,6 +39,34 @@ async fn connect(url: &str) -> eyre::Result<VaultSyncClient> {
         .map_err(|e| eyre::eyre!("vault-sync connect: {e:?}"))
 }
 
+/// The next event on one vault id, skipping every other shelf's.
+///
+/// Bounded rather than a loop with no floor: a stream that never
+/// produces the id being waited for should fail with "no event on
+/// `default`" rather than hang until the harness kills it.
+///
+/// A macro rather than a function because the receiver's type is
+/// `vox::channel`'s and naming it here would pin this test to a wire
+/// detail it has no opinion about.
+macro_rules! next_on {
+    ($rx:expr, $vault_id:expr) => {{
+        let mut found = None;
+        for _ in 0..64 {
+            let msg = tokio::time::timeout(Duration::from_secs(2), $rx.recv())
+                .await
+                .expect("event timeout")
+                .expect("rx error")
+                .expect("rx closed");
+            let change = msg.get();
+            if change.vault_id == $vault_id {
+                found = Some(change.event.clone());
+                break;
+            }
+        }
+        found.unwrap_or_else(|| panic!("no event on `{}` in 64 messages", $vault_id))
+    }};
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn put_manifest_get_round_trip() {
     let (url, _tmp) = boot_server().await.unwrap();
@@ -117,14 +145,19 @@ async fn subscribe_receives_put_and_delete() {
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv())
-        .await
-        .expect("event timeout")
-        .expect("rx error")
-        .expect("rx closed");
-    let change = msg.get();
-    assert_eq!(change.vault_id, "default", "event carries its vault id");
-    match &change.event {
+    // The stream is one channel over EVERY shelf the org holds — its
+    // vault, its wikis, its asset groups and (since ADR 0004's fourth
+    // root) each of its projects — which is why the event carries a
+    // `vault_id` at all. So the assertion has to name the vault it
+    // asked about rather than trusting the next message to be its own.
+    //
+    // It used to trust it, and got away with it because nothing else on
+    // the seeded disk was writing. A project shelf's `project.md`
+    // landing between the put and the delete is what turned "the next
+    // message" into a coin toss, and a test that reads another shelf's
+    // event as its own would go on failing intermittently forever.
+    let change = next_on!(rx, "default");
+    match &change {
         VaultEvent::Put { path, size, .. } => {
             assert_eq!(path, "a.md");
             assert_eq!(*size, 1);
@@ -136,12 +169,7 @@ async fn subscribe_receives_put_and_delete() {
         .delete_file("default".to_string(), "a.md".to_string(), IfMatch::Force)
         .await
         .unwrap();
-    let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv())
-        .await
-        .expect("event timeout")
-        .expect("rx error")
-        .expect("rx closed");
-    match &msg.get().event {
+    match &next_on!(rx, "default") {
         VaultEvent::Delete { path } => assert_eq!(path, "a.md"),
         other => panic!("expected Delete, got {other:?}"),
     }

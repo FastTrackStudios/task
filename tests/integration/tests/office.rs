@@ -2,8 +2,14 @@
 //!
 //! A session folder is not a project. The project is the thing with a
 //! deadline, a lead, a list of what is left to do — and in this product
-//! it is a markdown page in the org's vault, which is why it can be
-//! edited in Obsidian and why it survives the server that served it.
+//! it is a markdown page, which is why it can be edited in Obsidian and
+//! why it survives the server that served it.
+//!
+//! That page used to be in the org's vault. ADR 0004's Projects tier
+//! moved it into the project's own directory — `<org>/projects/<slug>/
+//! project.md` — so a project is one thing in one place rather than a
+//! note here and its bytes there. Nothing about the page itself
+//! changed: same frontmatter, same markdown, same editor.
 //!
 //! This chapter is short on purpose. It is not a test of the project
 //! feature, which has its own; it asks the three things only an
@@ -17,7 +23,7 @@ use integration::client::Session;
 use integration::scenario::Scenario;
 
 /// A project draft. `id` nil and `path` empty means "you assign them" —
-/// the backend picks `Projects/<slug>.md`.
+/// the backend picks `<slug>/project.md` on the Projects tier.
 fn draft(title: &str) -> project::ProjectInfo {
     project::ProjectInfo {
         title: title.into(),
@@ -53,7 +59,7 @@ async fn a_project_created_over_the_wire_comes_back_in_the_list() {
 /// where Obsidian would find it, put there by a call that arrived over
 /// a network.
 #[tokio::test]
-async fn a_project_is_a_markdown_page_in_the_vault() {
+async fn a_project_is_a_markdown_page_on_the_projects_tier() {
     let s = Scenario::open().await;
     let made = s
         .as_alice()
@@ -64,7 +70,7 @@ async fn a_project_is_a_markdown_page_in_the_vault() {
         .await
         .expect("create");
 
-    let page = s.orgs.acme.backend.vault_root().join(&made.path);
+    let page = s.orgs.acme.org_root().join("projects").join(&made.path);
     let text = std::fs::read_to_string(&page).unwrap_or_else(|e| panic!("{}: {e}", page.display()));
     assert!(
         text.contains("Album — mix and master"),

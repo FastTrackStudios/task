@@ -65,7 +65,38 @@ pub struct ProjectBackend {
     /// the stream mount can each hold a backend clone.
     #[cfg(feature = "vox")]
     events: architect::PubSub<crate::service::ProjectEvent>,
+    /// Told `(rel, dir)` after a project's page first appears on disk.
+    ///
+    /// # Why a project needs one and an asset does not
+    ///
+    /// A project's directory **is a shelf**, and a shelf is only
+    /// collaborative once it has been registered on `vault::Backend`,
+    /// `GraphBackend` and `VaultCollab` (`org_proto::shelf`). The
+    /// server registers every shelf it finds at boot; a project created
+    /// while the server runs is not one of them, and without this hook
+    /// it would stay unregistered until the next restart — its page
+    /// silently not collaborative, its files not in the graph, and no
+    /// error anywhere to say so. That is exactly the class of bug
+    /// `crate::shelves` exists to prevent, arriving through a door
+    /// that module could not see.
+    ///
+    /// An asset never needed one because an asset is a *file* on a
+    /// shelf that already exists (`assets/songs/` is scaffolded with
+    /// the org), and a wiki has had the identical hook since
+    /// `create_wiki` — `wiki_live::backend::WikiCreatedHook`, which
+    /// this deliberately mirrors rather than inventing a second shape
+    /// for.
+    ///
+    /// `None` off the server: the CLI and the tests open a
+    /// `ProjectBackend` over a directory with no registry behind it,
+    /// and a project made there is a file, which is all it needs to be.
+    on_created: Option<ProjectCreatedHook>,
 }
+
+/// What [`ProjectBackend::with_on_created`] is handed: a callback run
+/// with a new project's tier-relative directory and its absolute path,
+/// once its page exists on disk.
+pub type ProjectCreatedHook = std::sync::Arc<dyn Fn(&str, &Path) + Send + Sync>;
 
 // Manual impl: `PubSub` carries no `Debug`.
 impl std::fmt::Debug for ProjectBackend {
@@ -83,7 +114,33 @@ impl ProjectBackend {
             root: projects_root.into(),
             #[cfg(feature = "vox")]
             events: architect::PubSub::sliding(256),
+            on_created: None,
         }
+    }
+
+    /// Register a callback run when a project's directory first becomes
+    /// one — see [`ProjectBackend::on_created`].
+    #[must_use]
+    pub fn with_on_created(mut self, hook: ProjectCreatedHook) -> Self {
+        self.on_created = Some(hook);
+        self
+    }
+
+    /// Announce a newly-declared project's directory, so the server can
+    /// register it as a shelf.
+    ///
+    /// Called after the page is on disk and never before: the hook's
+    /// first act is to register the directory as a vault root, and a
+    /// root registered over a directory whose page has not landed is a
+    /// shelf whose first `list` finds nothing.
+    fn announce_shelf(&self, path: &str) {
+        let Some(hook) = &self.on_created else {
+            return;
+        };
+        let Some(rel) = crate::write::page_dir(path) else {
+            return;
+        };
+        hook(rel, &self.root.join(rel));
     }
 
     /// Publish a project change to every `events` subscriber. Call
@@ -233,6 +290,10 @@ impl ProjectService for ProjectBackend {
         }
         write_project(&self.root, &mut project, false)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
+        // A new project directory is a new shelf. Announced before
+        // the event, so a subscriber that reacts by reading the
+        // project finds a registered root rather than a race.
+        self.announce_shelf(&project.path);
         self.publish(crate::service::ProjectEvent::Upserted(project.clone()));
         Ok(project)
     }
@@ -437,6 +498,10 @@ impl ProjectService for ProjectBackend {
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
         // The roster is not touched — see `project.part.listing`. The
         // album still lists ten songs, in the same order.
+        // A new project directory is a new shelf. Announced before
+        // the event, so a subscriber that reacts by reading the
+        // project finds a registered root rather than a race.
+        self.announce_shelf(&promoted.path);
         self.publish(crate::service::ProjectEvent::Upserted(promoted.clone()));
         Ok(promoted)
     }
@@ -637,7 +702,7 @@ impl ProjectService for ProjectBackend {
         let abs = self.root.join(dir);
         if !abs.is_dir() {
             return Err(ProjectError::NotFound(format!(
-                "{dir} is not a directory in this vault"
+                "{dir} is not a directory on the Projects tier"
             )));
         }
 
@@ -675,6 +740,10 @@ impl ProjectService for ProjectBackend {
         // whatever was already there.
         write_project(&self.root, &mut adopted, false)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
+        // A new project directory is a new shelf. Announced before
+        // the event, so a subscriber that reacts by reading the
+        // project finds a registered root rather than a race.
+        self.announce_shelf(&adopted.path);
         self.publish(crate::service::ProjectEvent::Upserted(adopted.clone()));
         Ok(adopted)
     }

@@ -1533,7 +1533,14 @@ pub(crate) async fn build_org_state(
         // carries its milestones with it instead of leaving them behind
         // in a vault.
         let projects_root = org_root.projects_dir();
-        let projects = project::ProjectBackend::new(projects_root.clone());
+        // The hook is what keeps a project declared at runtime from
+        // being a directory nothing registered — see
+        // `ShelfRegistry::project_created_hook`. It is handed the
+        // runtime because the lane's dispatcher is synchronous and
+        // `attach` is not.
+        let projects = project::ProjectBackend::new(projects_root.clone()).with_on_created(
+            shelf_registry.project_created_hook(tokio::runtime::Handle::current()),
+        );
         let goals = goal::GoalBackend::new(vault_root.clone());
         let milestones = milestone::MilestoneBackend::new(projects_root.clone());
         let workstreams = workstream::WorkstreamBackend::new(projects_root.clone());

@@ -133,10 +133,31 @@ async fn a_page_write_is_a_files_write() {
         .await
         .expect("browse the vault");
 
+    // A TASK, not a project. This test used to write a project page,
+    // and a project page is not in the vault any more — ADR 0004's
+    // Projects tier gave a project a directory of its own, so its page
+    // sits on a shelf and the vault's sink never sees it.
+    //
+    // That is a narrowing of this rule's *scope*, not a hole in it, and
+    // the distinction is worth being precise about because it would be
+    // easy to record as a regression. `project.vault.write-path` is a
+    // claim about **the vault**: every page in it is written through the
+    // Files API. Every page still in it still is — tasks, goals,
+    // milestones, notes, wiki pages — and this test proves it with the
+    // one that has the most writers.
+    //
+    // What a project page gets instead is its own shelf's root, adopted
+    // by `adopt_knowledge_roots`, and a catalogue that hears about it
+    // through the disk watcher rather than through a synchronous sink.
+    // The consequence is real and recorded in `docs/spec/unmet.md`: the
+    // delta arrives on the next sweep instead of on the write. Closing
+    // it means binding a page sink per project shelf, which needs
+    // `ProjectBackend` to write shelf-relative rather than tier-relative
+    // — a change worth making on its own and not inside this one.
     let made = alice
-        .projects()
+        .tasks()
         .await
-        .create(draft("Crescendum"))
+        .create(task::TaskInfo::new("Comp the lead vocal"))
         .await
         .expect("create");
 
@@ -156,12 +177,7 @@ async fn a_page_write_is_a_files_write() {
     );
 
     // And a delete is heard the same way.
-    alice
-        .projects()
-        .await
-        .delete(made.id)
-        .await
-        .expect("delete");
+    alice.tasks().await.delete(made.id).await.expect("delete");
     assert!(
         alice
             .tree()
@@ -200,7 +216,7 @@ async fn the_page_on_disk_is_the_same_markdown_it_always_was() {
         alice.projects().await.update(next).await.expect("write");
     }
 
-    let page = s.orgs.acme.org_root().join("vault").join(&made.path);
+    let page = s.orgs.acme.org_root().join("projects").join(&made.path);
     let text = std::fs::read_to_string(&page).expect("the page is a file");
     assert!(text.starts_with("---\n"), "not frontmatter:\n{text}");
     assert!(

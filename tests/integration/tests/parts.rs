@@ -90,9 +90,11 @@ async fn an_album_divides_into_parts_without_creating_projects() {
          says a part costs no page"
     );
 
-    // And nothing landed on disk beside the album's own page.
-    let vault = s.orgs.acme.org_root().join("vault");
-    let pages: Vec<String> = walkdir(&vault)
+    // And nothing landed on disk beside the album's own page. The
+    // Projects tier is where a project's files are now, so this is
+    // where a part would have written itself one if it had.
+    let tier = s.orgs.acme.org_root().join("projects");
+    let pages: Vec<String> = walkdir(&tier)
         .into_iter()
         .filter(|p| PIECES.iter().any(|piece| p.contains(piece)))
         .collect();
@@ -644,26 +646,62 @@ async fn parentage_is_declared_rather_than_read_off_the_path() {
         .await
         .expect("promote it");
 
+    // Parentage is the declared field, and it is set.
     assert_eq!(song.parent_id, Some(album.id));
-    // Siblings on disk, parent and child in the model.
-    let album_dir = std::path::Path::new(&album.path).parent();
-    let song_dir = std::path::Path::new(&song.path).parent();
-    assert_eq!(
-        album_dir, song_dir,
-        "this test assumes both land under Projects/; if that changed, \
-         the assertion below is the one that still matters"
-    );
+
+    // The child's files ARE nested under the parent's now — ADR 0004's
+    // Projects tier, where a project is a directory and a subproject is
+    // a directory inside it, so `cp -r` of an album carries its songs.
+    // This test used to assert the opposite, because a promoted song's
+    // page landed beside its album's in `vault/Projects/`. Its own
+    // comment said which half would still matter if that changed, and
+    // this is that half.
+    let album_dir = std::path::Path::new(&album.path)
+        .parent()
+        .expect("the album's directory");
     assert!(
-        !song.path.contains(
-            std::path::Path::new(&album.path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("album")
-        ),
-        "the child's path is nested under the parent's, which would make \
-         containment look like hierarchy: {}",
-        song.path
+        std::path::Path::new(&song.path).starts_with(album_dir),
+        "a subproject's files belong inside its parent's directory: {} is not under {}",
+        song.path,
+        album_dir.display()
     );
+
+    // And the containment is NOT what makes it a child. A directory
+    // nested inside a project, declaring no parent, is a project of its
+    // own — `project.nesting.explicit`: *"Parentage is a declared link,
+    // not a consequence of directory containment."* If anything read
+    // the hierarchy off the path, this one would come back parented to
+    // the album, and nothing would ever have told anybody.
+    let mut orphan = draft("Bonus Track");
+    orphan.path = format!("{}/bonus-track/project.md", album_dir.display());
+    let orphan = alice
+        .projects()
+        .await
+        .create(orphan)
+        .await
+        .expect("a project inside another project's directory");
+    assert!(
+        orphan
+            .path
+            .starts_with(&format!("{}/", album_dir.display())),
+        "the fixture did not land where the test needs it: {}",
+        orphan.path
+    );
+    assert_eq!(
+        orphan.parent_id, None,
+        "containment was read as hierarchy — a project nested on disk \
+         acquired a parent nobody declared"
+    );
+
+    // Read back over the wire, in case the answer differed between the
+    // write path and the scan.
+    let fetched = alice
+        .projects()
+        .await
+        .get(orphan.id)
+        .await
+        .expect("resolves");
+    assert_eq!(fetched.parent_id, None);
 }
 
 /// Every markdown file under `root`, as paths.

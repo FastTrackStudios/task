@@ -169,7 +169,7 @@ async fn the_merge_leaves_a_record_of_what_it_absorbed() {
     // Read the page off disk, not through the lane: the lane follows the
     // alias, and what is being checked is what a person opening the file
     // in Obsidian sees.
-    let page = s.orgs.acme.org_root().join("vault").join(&film.path);
+    let page = s.orgs.acme.org_root().join("projects").join(&film.path);
     let text = std::fs::read_to_string(&page)
         .unwrap_or_else(|e| panic!("the absorbed page is gone from {page:?}: {e}"));
     assert!(

@@ -56,7 +56,7 @@ async fn authored_state_is_markdown_that_reads_without_this_software() {
         .await
         .expect("name a song");
 
-    let page = s.orgs.acme.org_root().join("vault").join(&made.path);
+    let page = s.orgs.acme.org_root().join("projects").join(&made.path);
     let text = std::fs::read_to_string(&page).expect("the page is a file");
 
     // Everything needed to interpret it is in the one file.
@@ -97,7 +97,7 @@ async fn a_page_edited_outside_is_re_projected_without_a_restart() {
         .create(draft("Crescendum"))
         .await
         .expect("create");
-    let page = s.orgs.acme.org_root().join("vault").join(&made.path);
+    let page = s.orgs.acme.org_root().join("projects").join(&made.path);
 
     // Somebody renames it in Obsidian while the server is running.
     let text = std::fs::read_to_string(&page).expect("read");
@@ -135,7 +135,7 @@ async fn a_write_lands_in_the_file_whole() {
         .create(draft("Crescendum"))
         .await
         .expect("create");
-    let page = s.orgs.acme.org_root().join("vault").join(&made.path);
+    let page = s.orgs.acme.org_root().join("projects").join(&made.path);
 
     // Rewrite it repeatedly while reading from another thread. Every
     // read must parse — a torn write shows up as frontmatter that does
@@ -196,8 +196,8 @@ async fn a_page_that_cannot_be_parsed_costs_one_page() {
         .orgs
         .acme
         .org_root()
-        .join("vault")
-        .join("Projects/broken.md");
+        .join("projects")
+        .join("broken/project.md");
     std::fs::create_dir_all(broken.parent().expect("parent")).expect("mkdir");
     std::fs::write(&broken, "---\ntype: project\ntitle: [unclosed\n").expect("write");
 
