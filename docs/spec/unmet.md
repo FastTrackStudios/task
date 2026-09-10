@@ -9,9 +9,22 @@ As of the last update: **117 of 119 built-feature rules verified, 93 with
 an implementation reference.** What follows is the remainder — two rules,
 down from three — and one rule met in part. The 57 rules of
 [`../../features/wiki/spec/wiki.md`](../../features/wiki/spec/wiki.md)
-are tallied separately: **32 carry an implementation marker, 27 of those
+are tallied separately: **37 carry an implementation marker, 32 of those
 are verified, 25 have neither** — the "declared, not built" section below
 says which and why.
+
+The five `wiki.promote.*` rules are new and all five land met: the
+planner is `wiki_proto::promote` (unit-tested against both schema
+dialects), the composition is `task wiki promote`, and
+`tests/integration/tests/wiki_promote.rs` verifies all five over the org
+router against the seeded Studio Research / Audio Production pair. One
+honest caveat, recorded here rather than in a marker: a promotion is two
+`write_page` calls with no transaction across them, so a crash between
+them leaves the copy written and the source's back-reference missing.
+The order is chosen so that is the recoverable direction (`--force`
+repairs it) and the CLI says so when it happens; a genuinely atomic
+promotion would need a multi-page write on the Pages service, which no
+caller needs yet.
 
 ## Met, and not checkable by a test
 

@@ -185,6 +185,13 @@ impl Session {
         self.establish().await
     }
 
+    /// One wiki's `schema.md` and `purpose.md` — the contract that says
+    /// what a page of this wiki looks like. Read by anything that has
+    /// to decide whether a page belongs here, promotion included.
+    pub async fn wiki_schema(&self) -> wiki_proto::service::schema::SchemaClient {
+        self.establish().await
+    }
+
     /// What the org's vault and wikis subscribe to.
     pub async fn wiki_subscriptions(
         &self,
@@ -315,6 +322,7 @@ signable!(
     TaskServiceClient,
     wiki_proto::service::registry::RegistryClient,
     wiki_proto::service::pages::PagesClient,
+    wiki_proto::service::schema::SchemaClient,
     wiki_proto::service::subscriptions::SubscriptionsClient,
     wiki_proto::service::edits::EditsClient,
     resources_proto::ResourcesServiceClient,

@@ -504,6 +504,85 @@ never look at.
 
 ---
 
+## Promotion
+
+Some of an org's wikis are **curated** — a person has read every page, and that
+is the only property they have that a search engine does not. Others are
+**working**: an agent writes them continuously, about whatever it was asked, and
+their value is coverage rather than trust. Both are ordinary wikis under
+`wiki.many.set`; the difference is who vouches for the contents.
+
+Left alone the two collapse into one. Either research never reaches the curated
+wiki, or it is written straight into it and the curation is gone — invisibly,
+because nothing on the page says which sentences a person read. **Promotion** is
+the seam: the deliberate, per-page act of a person saying "this one is vetted".
+
+### A promotion copies; the working page stays
+
+t[wiki.promote.copy]
+Promoting a page from one wiki to another leaves the source page in place. The
+promoted page is the vetted claim; the source is the working material behind it,
+including the sweep, the dead ends and the sources that turned out to be weak.
+Deleting the source would destroy the trail that lets anyone check how the claim
+was reached, and would make a subject look unresearched to the next agent pass
+the moment it became trusted. Nothing else about the source changes: its body is
+byte-identical after the promotion.
+
+---
+
+### Both ends record the promotion
+
+t[wiki.promote.provenance]
+A promoted page names the wiki and path it came from; the source page names the
+wiki and path its vetted form went to; both carry the same instant, so the two
+halves of one promotion can be matched without a separate record. Provenance the
+source page already carried is carried across rather than dropped — a page
+written by a model that a person has vetted is still a page written by a model,
+and laundering that on the way into the curated wiki removes the one distinction
+promotion exists to keep (`wiki.link.provenance`).
+
+---
+
+### The target's schema is the gate
+
+t[wiki.promote.schema]
+A promotion is checked against the target wiki's own declared page types. A
+source type the target does not declare is refused, by name, with the target's
+vocabulary shown — never written anyway, and never mapped by guess. Writing it
+anyway would put a page in a curated wiki that its own schema forbids, which is
+the pollution promotion exists to prevent, arriving through the mechanism built
+to prevent it; guessing is worse, because a wrong guess produces a well-formed
+page whose only defect is its meaning. A person may say which of the target's
+types they meant, and that choice picks from the target's vocabulary rather than
+adding to it. A target that declares no types at all is refused: a check that
+always passes is not a check.
+
+---
+
+### A promotion never silently overwrites
+
+t[wiki.promote.no-clobber]
+Promoting onto a path the target already holds is refused before anything is
+written, so a refusal leaves both wikis byte-identical. An explicit override
+replaces the page; it overrides "this path is taken" and never "this page
+changed under you" — a forced promotion is still guarded by the version it was
+planned against, so a curated page edited in the meantime conflicts rather than
+losing the edit to a machine's redraft.
+
+---
+
+### References survive the crossing
+
+t[wiki.promote.links]
+A bare reference in a promoted page is resolved against the target wiki. One the
+target can resolve is left exactly as written; one it cannot is qualified to the
+wiki that holds the referent, so it points at the working page rather than
+dangling — or, worse, landing on a same-named page in the target that means
+something else. References that already name a wiki are never rewritten: they
+already say where they point.
+
+---
+
 ## Resources
 
 A **Resource** is an external work pulled in to be referenced: a book, a video,
@@ -764,7 +843,8 @@ The seeded world is:
 | what | owner | kind | demonstrates |
 |---|---|---|---|
 | **Music Theory** | acme-audio | wiki, public | multiplicity; the target of a cross-wiki reference, including a block anchor |
-| **Audio Production** | acme-audio | wiki, public | two wikis referencing each other both ways — one web, one owning wiki per page |
+| **Audio Production** | acme-audio | wiki, public | two wikis referencing each other both ways — one web, one owning wiki per page; and the *curated* half of the promotion pair |
+| **Studio Research** | acme-audio | wiki, private | the *working* half: an agent's unvetted wiki, holding one page ready to promote and one whose type the curated wiki does not declare |
 | **Bible Study** | alice-personal | wiki, private | a wiki annotating a Resource without writing into it; private is a refusal, not an absence |
 | **Cooking** | alice-personal | wiki, unlisted | a personal wiki in a person's own org; unlisted rather than private |
 | **Bible** | — | Resource | read-only spine, verse addressing, core membership, licence and per-passage availability |
@@ -789,6 +869,15 @@ member holding no Editor role; one auto-approved Editor change; a repo-sourced
 wiki over a small committed repository; and VNT subscribed to ACME's Audio
 Production across the two demo servers, so `wiki.subscribe.federated` is
 exercised against a second server rather than asserted.
+
+`wiki.promote.*` is the one family of rules about *two* wikis at once, so it
+cannot be exercised against a single planted wiki. Studio Research and Audio
+Production are the pair (`example_org::PROMOTION_PAIR`), and both commit a
+`schema.md` — without the target's declared types there is nothing for a
+promotion to be checked against. Studio Research carries both halves of the
+story: `Concepts/Dynamic Range.md`, whose type the curated wiki declares, and
+`Questions/Do small speakers need a different master.md`, whose type it does
+not. The refusal is the feature, so the seed carries the case that triggers it.
 
 Scripture is in the seeded core set, so a freshly planted vault resolves a verse
 reference with nothing subscribed by hand — which is the check that

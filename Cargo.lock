@@ -10830,6 +10830,7 @@ dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.8.2)",
  "architect-auth",
  "async-trait",
+ "chrono",
  "collection-proto",
  "files",
  "files-domain",
