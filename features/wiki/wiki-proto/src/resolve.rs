@@ -110,6 +110,7 @@ mod tests {
             title: slug.into(),
             core: false,
             declined: false,
+            selection: Default::default(),
         }
     }
 

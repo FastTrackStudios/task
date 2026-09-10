@@ -38,7 +38,7 @@ use editor::EditorState;
 pub(crate) const VAULT_ID: &str = "default";
 
 /// The vault id a wiki's pages are served under (`wiki:<slug>`) —
-/// mirrors the server's `wiki_vault::vault_id`.
+/// mirrors the server's `shelves::vault_id`.
 pub(crate) fn wiki_vault_id(wiki: &str) -> String {
     format!("wiki:{wiki}")
 }

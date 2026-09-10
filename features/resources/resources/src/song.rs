@@ -1,4 +1,4 @@
-//! The song document on the Assets shelf — `<vault>/Assets/Songs/<slug>.md`.
+//! The song document on the songs asset group — `<org>/assets/songs/<slug>.md`.
 //!
 //! ADR 0004 decision 1, the sibling of [`crate::chart`]. A song is the
 //! thing charts are arrangements *of*: a title, the key it is usually
@@ -136,7 +136,7 @@ pub fn refresh_document(existing: &str, song: &SongDoc) -> Result<String, Resour
     Ok(format!("---\n{}---\n{body}", yaml(&fm)?))
 }
 
-/// Build a song's vault document from the vendored `song` crate's
+/// Build a song's shelf document from the vendored `song` crate's
 /// `song.md`, which is what `task song add` used to write.
 ///
 /// # What is dropped, and why that is the right call

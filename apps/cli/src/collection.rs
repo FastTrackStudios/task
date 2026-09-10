@@ -9,7 +9,7 @@
 //!
 //! `task song add` is the composite verb: it writes a **song document**
 //! and, with `--chart`, a **chart** for its default arrangement — both
-//! on the vault's Assets shelf through `ResourcesService` (ADR 0004) —
+//! on the charts asset group through `ResourcesService` (ADR 0004) —
 //! and then registers the song in a target collection as a
 //! `song:<slug>` node.
 //!
@@ -474,7 +474,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
             // copied `.kf`. Two representations of one idea existed
             // (that folder and `ChartDoc::arrangement`, added in
             // PR #80), and ADR 0004 makes the flat, link-shaped one
-            // authoritative: a song is a vault document, an arrangement
+            // authoritative: a song is a shelf document, an arrangement
             // is a chart that *names* its song, and the chart source is
             // a fence in that chart's own body.
             //
@@ -552,7 +552,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
             if !pdf.is_empty() || !audio.is_empty() {
                 eyre::bail!(
                     "`--pdf` / `--audio` are not supported since ADR 0004: a song's \
-                     attachments are bytes, not vault documents. Adopt them into a File \
+                     attachments are bytes, not shelf documents. Adopt them into a File \
                      Root (`task files …`) and reference them from the song."
                 );
             }

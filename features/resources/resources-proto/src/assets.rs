@@ -1,24 +1,47 @@
-//! Charts on the **Assets shelf** — where a chart lives now, and how
-//! its source is carried inside an ordinary vault document.
+//! Charts and songs on the **Assets tier** — where they live now, and
+//! how a chart's source is carried inside an ordinary markdown
+//! document.
 //!
-//! ADR 0004 decision 1. The tier itself — what `Assets/` means, how a
-//! page is recognised as one, and why any of it is a vault concern —
-//! is [`vault_proto::assets`], and the constants are re-exported here
-//! so a chart caller reads one module. This file holds only the two
-//! things that are about *charts*: their path, and the encoding that
-//! lets a chart be one markdown file.
+//! ADR 0004 decision 1. The tier itself — what a shelf is, why it is a
+//! sibling of `vault/` rather than a subtree of it, and how a directory
+//! becomes collaborative — is [`org_proto::shelf`]. This file holds
+//! only the things that are about *charts and songs*: which shelf each
+//! lives on, its path within that shelf, and the encoding that lets a
+//! chart be one markdown file.
+//!
+//! # Each kind is its own shelf, and the path is short because of it
+//!
+//! `<org>/assets/charts/<slug>.md`, `<org>/assets/songs/<slug>.md`.
+//!
+//! An earlier draft put these at `<vault>/Assets/Charts/<slug>.md`, and
+//! the difference is not cosmetic. A path relative to the *vault* has
+//! to carry the tier and the kind in it, because everything in a vault
+//! shares one root; a path relative to *its own shelf* carries neither,
+//! because the shelf is the kind. So [`chart_path`] is `<slug>.md` and
+//! the shelf is named by [`CHARTS_VAULT_ID`] — one `(vault_id, path)`
+//! pair, which is exactly the key `vault-collab` documents are held
+//! under.
+//!
+//! What that buys is the thing the draft could not have: an asset shelf
+//! is **subscribable**. `<org>/assets/songs/` is a song library another
+//! organisation can subscribe to and resolve a song from, on the same
+//! terms it subscribes to a wiki. A vault never can be
+//! (`wiki.boundary.no-subscribe`), so filing songs inside one made a
+//! cross-organisation song library unreachable by construction — which
+//! is why ADR 0004 recorded that as a regression instead of a feature.
 //!
 //! # The chart source lives in the body, in a fence
 //!
 //! Under ADR 0003 a chart was two files: `<slug>.md` (the manifest) and
-//! `<slug>.kf` (the source, verbatim). That split cannot survive the
+//! `<slug>.kf` (the source, verbatim). The split does not survive the
 //! move, and the reason is mechanical rather than aesthetic: the vault
 //! walker collects `.md` and `.base` and nothing else
-//! (`vault_live::walker`), so a `.kf` under the vault root would be a
-//! file the vault does not know about — not indexed, not searched, not
-//! in the graph, not a page anyone can open, and above all not a thing
-//! `vault-collab` would ever be asked to hold a document for. Charts
-//! would have moved house and gained nothing.
+//! (`vault_live::walker`), and a shelf is registered through the same
+//! backend — so a `.kf` on it would be a file the shelf does not know
+//! about: not indexed, not searched, not in the graph, not a page
+//! anyone can open, and above all not a thing `vault-collab` would ever
+//! be asked to hold a document for. Charts would have moved house and
+//! gained nothing.
 //!
 //! So the source becomes a fenced block in the document itself:
 //!
@@ -39,7 +62,7 @@
 //! ```
 //!
 //! One file, one path, one CRDT document. Two people editing "a chart"
-//! are editing one vault markdown document through exactly the path two
+//! are editing one markdown document through exactly the path two
 //! people editing a note use, and the prose they write around the chart
 //! converges with the chart itself — which is what "these are all just
 //! manipulations of the markdown files" has to mean if it means
@@ -51,27 +74,35 @@
 //! Something is given up and it should be named: an outside editor can
 //! no longer open a file that is *only* the chart. What it opens is a
 //! document whose largest block is the chart. In exchange the chart
-//! becomes collaborative, searchable, linkable and reviewable, which is
-//! the trade ADR 0004 makes on purpose.
+//! becomes collaborative, searchable, linkable, reviewable and
+//! subscribable across organisations, which is the trade ADR 0004
+//! makes on purpose.
 //!
 //! The one byte the round trip does not preserve: a fence cannot
 //! represent a source that does not end in a newline, so [`fence`]
 //! adds one. Recorded rather than hidden.
 
-pub use vault_proto::assets::{ASSETS_DIR, KIND_KEY, TYPE_ASSET, TYPE_KEY, is_asset_path};
+/// Frontmatter key naming what kind of page this is.
+pub const TYPE_KEY: &str = "type";
 
-/// The per-kind subdirectory charts live in — `Assets/Charts/`.
+/// The [`TYPE_KEY`] value that says "this page is an asset".
+pub const TYPE_ASSET: &str = "asset";
+
+/// Frontmatter key naming which kind of asset a page is.
 ///
-/// Per-kind rather than flat because assets are heterogeneous by
-/// definition ("any file and any directory"), and a person opening
-/// `Assets/` should see kinds, not a thousand slugs.
-pub const CHARTS_DIR: &str = "Charts";
+/// Deliberately **not** `resource_kind`: the tier changed, and a page
+/// that still says `resource_kind` is a page the migration has not
+/// reached yet — which is a fact worth being able to see from the file.
+pub const KIND_KEY: &str = "asset_kind";
+
+/// The asset group charts live on — `<org>/assets/charts/`.
+pub const CHARTS_KIND: &str = "charts";
 
 /// [`KIND_KEY`] value for a Keyflow chart.
 pub const CHART_KIND: &str = "chart";
 
-/// The per-kind subdirectory songs live in — `Assets/Songs/`.
-pub const SONGS_DIR: &str = "Songs";
+/// The asset group song documents live on — `<org>/assets/songs/`.
+pub const SONGS_KIND: &str = "songs";
 
 /// [`KIND_KEY`] value for a song.
 pub const SONG_KIND: &str = "song";
@@ -81,40 +112,48 @@ pub const SONG_KIND: &str = "song";
 /// the notation name rather than something Task-specific.
 pub const CHART_FENCE: &str = "keyflow";
 
-/// `Assets/Charts` — the vault-relative directory charts live in.
+/// `assets:charts` — the vault id the charts shelf is registered under.
+///
+/// Composed by [`org_proto::Shelf::vault_id`] and never spelled here,
+/// so the id a chart write uses and the id the boot loop registered
+/// cannot drift.
 #[must_use]
-pub fn charts_dir() -> String {
-    format!("{ASSETS_DIR}/{CHARTS_DIR}")
+pub fn charts_vault_id() -> String {
+    shelf_id(CHARTS_KIND)
 }
 
-/// `Assets/Charts/<slug>.md` — the vault-relative path of one chart.
+/// `assets:songs` — the vault id the songs shelf is registered under.
+#[must_use]
+pub fn songs_vault_id() -> String {
+    shelf_id(SONGS_KIND)
+}
+
+fn shelf_id(kind: &str) -> String {
+    use org_proto::Shelf as _;
+    org_proto::AssetShelf::new(kind.to_owned(), std::path::PathBuf::new()).vault_id()
+}
+
+/// `<slug>.md` — one chart's path **on the charts shelf**.
 ///
-/// The single place this string is composed. An application should
-/// prefer the `rel_path` the upsert hands back; a server-side caller
-/// that holds only a slug (migration, seed, cross-org resolution) asks
-/// here.
+/// Shelf-relative, not org-relative and not vault-relative. An
+/// application should prefer the `rel_path` the upsert hands back; a
+/// server-side caller that holds only a slug (migration, seed,
+/// cross-org resolution) asks here.
 #[must_use]
 pub fn chart_path(slug: &str) -> String {
-    format!("{ASSETS_DIR}/{CHARTS_DIR}/{slug}.md")
+    format!("{slug}.md")
 }
 
-/// `Assets/Songs` — the vault-relative directory songs live in.
-#[must_use]
-pub fn songs_dir() -> String {
-    format!("{ASSETS_DIR}/{SONGS_DIR}")
-}
-
-/// `Assets/Songs/<slug>.md` — the vault-relative path of one song.
+/// `<slug>.md` — one song document's path on the songs shelf.
 ///
 /// Note what is *not* here: a song's audio. `manifest.json` and the
 /// stems stay at `<org>/resources/songs/<slug>/`, because they are
 /// Resources in ADR 0004's sense — imported bytes nobody types into,
-/// which the `/media` route serves and a cross-org subscription
-/// materialises. The document moved; the payload did not, and the two
-/// having shared a directory was the accident.
+/// which the `/media` route serves. The document moved; the payload did
+/// not, and the two having shared a directory was the accident.
 #[must_use]
 pub fn song_path(slug: &str) -> String {
-    format!("{ASSETS_DIR}/{SONGS_DIR}/{slug}.md")
+    format!("{slug}.md")
 }
 
 /// The longest run of backticks anywhere in `text`.
@@ -246,16 +285,18 @@ mod tests {
 
     #[test]
     fn a_chart_path_is_composed_in_exactly_one_place() {
-        assert_eq!(chart_path("doxology"), "Assets/Charts/doxology.md");
-        assert_eq!(charts_dir(), "Assets/Charts");
-        assert!(is_asset_path(&chart_path("doxology")));
-        assert_eq!(song_path("doxology"), "Assets/Songs/doxology.md");
-        assert_eq!(songs_dir(), "Assets/Songs");
-        assert!(is_asset_path(&song_path("doxology")));
+        assert_eq!(chart_path("doxology"), "doxology.md");
+        assert_eq!(song_path("doxology"), "doxology.md");
+        assert_eq!(
+            charts_vault_id(),
+            "assets:charts",
+            "the shelf carries the kind, so the path does not have to"
+        );
+        assert_eq!(songs_vault_id(), "assets:songs");
         assert_ne!(
-            chart_path("doxology"),
-            song_path("doxology"),
-            "a song and its chart are two documents, not one"
+            charts_vault_id(),
+            songs_vault_id(),
+            "a song and its chart are two documents on two shelves, not one"
         );
     }
 

@@ -10,7 +10,7 @@
 //! libraries" means.
 //!
 //! ADR 0004 decision 1 then moved where the bytes land: a chart is a
-//! **vault document** on the `Assets/` shelf, and a song is one beside
+//! **shelf document** on the `charts` asset group, and a song is one on
 //! it. That the four RPCs did not change is what this chapter still
 //! passing says. What it gained is the second half — the same client,
 //! through the *vault* lane, seeing the chart it just saved as an
@@ -148,20 +148,25 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
     // edit it. None of that was built for charts — it is what every
     // vault file already had.
     let vault = alice.vault().await;
+    // The charts shelf, not the vault: a chart is an ordinary
+    // collaborative document of `assets:charts` (ADR 0004), which is a
+    // sibling root and therefore one another org can subscribe to.
     let index = vault
-        .folder_index("default".to_owned())
+        .folder_index(resources_proto::assets::charts_vault_id())
         .await
         .expect("the folder index");
     let page = index
         .pages
         .iter()
         .find(|p| p.path == saved.rel_path)
-        .expect("the chart is a page of the vault like any other");
-    assert!(page.is_asset(), "and it declares the shelf it is on");
+        .expect("the chart is a page of its shelf like any other");
     assert_eq!(page.page_type, resources_proto::assets::TYPE_ASSET);
 
     let bytes = vault
-        .get_file("default".to_owned(), saved.rel_path.clone())
+        .get_file(
+            resources_proto::assets::charts_vault_id(),
+            saved.rel_path.clone(),
+        )
         .await
         .expect("read the chart through the vault lane");
     let text = String::from_utf8(bytes.0).expect("utf8");
@@ -171,10 +176,14 @@ async fn a_client_keeps_a_chart_library_through_the_lanes_that_exist() {
     );
     assert!(
         vault
-            .open_collab("default".to_owned(), saved.rel_path.clone())
+            .open_collab(
+                resources_proto::assets::charts_vault_id(),
+                saved.rel_path.clone()
+            )
             .await
             .is_ok(),
-        "a chart has a collaborative document, because a vault file does"
+        "a chart has a collaborative document because its shelf is registered — \
+         which is what confers collaboration, not being inside the vault"
     );
 
     // The disk assertion is now about the tier, not the file format:
@@ -544,7 +553,7 @@ async fn a_song_and_its_arrangements_join_by_reference_and_nothing_lists_twice()
     assert_eq!(
         song.rel_path,
         resources_proto::assets::song_path("opening-night"),
-        "a song is a vault document beside its charts, on its own shelf"
+        "a song is a shelf document beside its charts, on its own shelf"
     );
 
     // Two arrangements, saved as two charts that each name the song.
@@ -594,7 +603,10 @@ async fn a_song_and_its_arrangements_join_by_reference_and_nothing_lists_twice()
     // in one place, on the side that can maintain it with one write.
     let vault = alice.vault().await;
     let bytes = vault
-        .get_file("default".to_owned(), song.rel_path.clone())
+        .get_file(
+            resources_proto::assets::songs_vault_id(),
+            song.rel_path.clone(),
+        )
         .await
         .expect("read the song through the vault lane");
     let text = String::from_utf8(bytes.0).expect("utf8");
@@ -608,18 +620,18 @@ async fn a_song_and_its_arrangements_join_by_reference_and_nothing_lists_twice()
         "a uuid pointer came back; the flag belongs on the chart: {text}"
     );
 
-    // A song is a vault page like any other, which is the whole reason
-    // it moved.
+    // A song is a page of its shelf like any other, which is the whole
+    // reason it moved.
     let index = vault
-        .folder_index("default".to_owned())
+        .folder_index(resources_proto::assets::songs_vault_id())
         .await
         .expect("the folder index");
     let page = index
         .pages
         .iter()
         .find(|p| p.path == song.rel_path)
-        .expect("the song is a page of the vault");
-    assert!(page.is_asset());
+        .expect("the song is a page of its shelf");
+    assert_eq!(page.page_type, resources_proto::assets::TYPE_ASSET);
     assert!(
         page.tags.contains(&"album".to_owned()),
         "tags come free with being a vault file: {:?}",

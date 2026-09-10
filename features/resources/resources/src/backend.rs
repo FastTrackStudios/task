@@ -77,31 +77,32 @@ fn vendored_key(document: &str, key: &str) -> Option<String> {
 
 /// The breadcrumb left in `<org>/resources/songs/` after a migration.
 const SONG_MIGRATION_NOTE_BODY: &str = "\
-# The song documents moved to the vault
+# The song documents moved to the assets tier
 
-ADR 0004 decision 1. A song's **document** is now a vault item on the
-Assets shelf, and so is each of its arrangements:
+ADR 0004 decision 1. A song's **document** is now a document on an asset
+group of its own, and so is each of its arrangements:
 
-    <org>/vault/Assets/Songs/<slug>.md      — the song
-    <org>/vault/Assets/Charts/<slug>.md     — one per arrangement
+    <org>/assets/songs/<slug>.md      — the song
+    <org>/assets/charts/<slug>.md     — one per arrangement
 
 That is what buys them collaborative editing, wikilinks, tags and
-search. Each arrangement became a chart that *names* its song
-(`song: song:<slug>`) instead of being nested inside it, and the
-`defaultArrangement` uuid became `is_default` on the chart it pointed
-at — the flag now lives on the thing it is a fact about.
+search — an asset group is registered for per-file CRDT exactly as a
+wiki is — *and* what makes them reachable from another organisation: a
+group is a shelf, and a shelf can be subscribed to. Each arrangement
+became a chart that *names* its song (`song: song:<slug>`) instead of
+being nested inside it, and the `defaultArrangement` uuid became
+`is_default` on the chart it pointed at — the flag now lives on the
+thing it is a fact about.
 
 **What is still live here, and must not be deleted:** `manifest.json`
 and the audio stems. Those are Resources — imported bytes nobody types
 into — and `GET /org/{slug}/media/songs/...` serves them to the player.
-They did not move and are not a snapshot.
+They did not move and are not a snapshot. One song, sorted into two
+tiers by whether anybody types into it.
 
 **What is a frozen snapshot:** `song.md` and `arrangements/**`. They
-were copied, not moved. The global player still reads them over the
-media route (`player_ui::song_session::fetch_kf_manifest`), so they are
-kept — but edits made in the vault since the migration are not
-reflected here. Repointing the player at the Assets tier is recorded in
-`docs/spec/unmet.md`.
+were copied, not moved, so a reader that has not been repointed still
+finds something. The live copy is the one on the shelf.
 ";
 
 /// The breadcrumb left in `<org>/resources/charts/` after a migration,
@@ -113,11 +114,12 @@ const MIGRATION_NOTE: &str = "_MIGRATED.md";
 /// file: the reader is a human wondering whether it is safe to delete
 /// the folder, and the honest answer has a condition in it.
 const MIGRATION_NOTE_BODY: &str = "\
-# These charts moved to the vault
+# These charts moved to the assets tier
 
-ADR 0004 decision 1 made charts **vault documents** on the Assets shelf:
+ADR 0004 decision 1 made charts documents on an asset group of their
+own:
 
-    <org>/vault/Assets/Charts/<slug>.md
+    <org>/assets/charts/<slug>.md
 
 Each of those holds what used to be two files here — the manifest's
 frontmatter, and the `.kf` source, now a ```keyflow fence in the body.
@@ -125,15 +127,16 @@ That is what buys a chart collaborative editing, wikilinks, tags and
 search, none of which this tier could offer.
 
 **The files beside this note were copied, not moved, and nothing reads
-them any more.** They are a snapshot frozen at migration time: edits made
-in the vault since are not reflected here.
+them any more.** They are a snapshot frozen at migration time: edits
+made on the shelf since are not reflected here.
 
-They are deliberately not deleted, because cross-organisation reach still
-resolves a foreign `chart:<slug>` through this directory
-(`node_homes::LocalHomes::locate`, and the `SourceKind::Resource`
-subscription whose slug is `charts`). Vault-held assets have no equivalent
-yet — see ADR 0004's consequences, and `docs/spec/unmet.md`. Once that
-path exists, this directory can go.
+They are deliberately not deleted, because a subscriber taking this
+org's `charts` library before the move holds a copy addressed against
+this directory, and deleting the original under a live subscription is
+not something a migration should decide on its own. Cross-organisation
+resolution reads the shelf first (`node_homes::LocalHomes::locate`), so
+a foreign `chart:<slug>` already follows the live copy. Once no
+subscriber is pointed here, this directory can go.
 ";
 
 /// What one run of [`ResourcesBackend::migrate_charts`] did — named
@@ -157,7 +160,7 @@ const SERMONS_DIR: &str = "sermons";
 /// The subtree charts lived in under the org-wide resources root
 /// (ADR 0003: `resources/charts/<slug>.kf`).
 ///
-/// **Read-only as of ADR 0004.** Charts are vault documents now
+/// **Read-only as of ADR 0004.** Charts are shelf documents now
 /// ([`AssetShelf`]); this constant survives so
 /// [`ResourcesBackend::migrate_charts`] can find what ADR 0003 left
 /// behind, and so the migration's breadcrumb lands in the right place.
@@ -189,20 +192,33 @@ const WIKIS_PREFIX: &str = "wikis/";
 /// the wiki opens the collection through.
 pub const SERMONS_BASE: &str = "Sermons.base";
 
-/// The org's vault, as the chart lane addresses it — ADR 0004's Assets
-/// tier in the two fields it actually needs.
+/// One **asset group** — `<org>/assets/<kind>/`, registered on the
+/// vault backend as `assets:<kind>` (ADR 0004 decision 1).
 ///
-/// # Why the backend holds a vault and not a directory
+/// # Why the backend holds a shelf and not a directory
 ///
-/// This is the whole mechanical content of "charts become vault
+/// This is the whole mechanical content of "charts become collaborative
 /// documents". A chart write is a [`VaultSync::put_file`], which is
 /// what makes `vault-collab` see it: the backend takes its write lock,
 /// hashes the bytes, and broadcasts a `VaultEvent::Put` that the
-/// per-vault inbound listener folds into any open Loro document for
+/// per-shelf inbound listener folds into any open Loro document for
 /// that path. Write around it — a bare `std::fs::write`, which is
 /// exactly what ADR 0003's chart lane did — and a chart somebody has
 /// open in another tab silently reverts on their next keystroke,
 /// because the doc never learned the file changed.
+///
+/// **Nothing here needs the shelf to be inside the vault**, and that is
+/// the correction this type carries. An earlier draft filed charts at
+/// `<vault>/Assets/Charts/` to obtain the paragraph above; every word
+/// of it is true of any root the server registered, which is why the
+/// wiki tier has been collaborative all along from outside the vault.
+/// The shelf is a sibling now, and the only difference on this side is
+/// which `vault_id` the write names. What changed on the *other* side
+/// is that a sibling can be subscribed to and a vault cannot.
+///
+/// One of these per kind, because a kind is the shelf: the charts group
+/// and the songs group are separate roots with separate ids, so a path
+/// on one is `<slug>.md` rather than `Assets/Charts/<slug>.md`.
 ///
 /// Reads deliberately go straight to disk instead. Listing charts means
 /// parsing frontmatter out of every document on the shelf, and no wire
@@ -214,35 +230,20 @@ pub const SERMONS_BASE: &str = "Sermons.base";
 struct AssetShelf {
     /// The backend every asset write goes through.
     vault: vault::sync::Backend,
-    /// Which vault. `"default"` on a server org; a test may use its
-    /// own. Carried rather than assumed because the same backend serves
-    /// an org's named wikis under other ids, and a chart belongs to the
-    /// org's own vault.
+    /// This group's id on that backend — `assets:charts`,
+    /// `assets:songs`. Composed by `org_proto::Shelf::vault_id`, so it
+    /// is the same string the boot loop registered.
     vault_id: String,
-    /// That vault's root on disk, resolved once at construction — the
-    /// walk side of the asymmetry above.
+    /// This group's root on disk, resolved once — the walk side of the
+    /// asymmetry above.
     root: PathBuf,
 }
 
 impl AssetShelf {
-    /// `<vault>/Assets/Charts` on disk.
-    fn charts_dir(&self) -> PathBuf {
-        self.root
-            .join(resources_proto::assets::ASSETS_DIR)
-            .join(resources_proto::assets::CHARTS_DIR)
-    }
-
-    /// `<vault>/Assets/Songs` on disk.
-    fn songs_dir(&self) -> PathBuf {
-        self.root
-            .join(resources_proto::assets::ASSETS_DIR)
-            .join(resources_proto::assets::SONGS_DIR)
-    }
-
-    /// A vault-relative, forward-slashed path for an absolute one under
+    /// A shelf-relative, forward-slashed path for an absolute one under
     /// the root. This is what an app gets back as `rel_path`, and what
     /// it hands to `VaultSync` to open the document — so it must be the
-    /// vault's own spelling, not the resources tier's.
+    /// shelf's own spelling, not the resources tier's.
     fn rel(&self, path: &Path) -> String {
         path.strip_prefix(&self.root)
             .unwrap_or(path)
@@ -301,7 +302,7 @@ pub struct ResourcesBackend {
     /// how a "collaborative" chart quietly stops being one, and a lane
     /// that fails loudly on a misconfigured host is cheaper to find
     /// than a lane that silently writes the wrong tier.
-    assets: Option<AssetShelf>,
+    assets: std::collections::BTreeMap<String, AssetShelf>,
     /// Serialises the read-decide-rewrite the chart default invariant
     /// needs (see [`ResourcesBackend::reconcile_song_defaults`]).
     ///
@@ -325,7 +326,7 @@ impl ResourcesBackend {
     pub fn new(resources_root: impl Into<PathBuf>) -> Self {
         Self {
             root: Arc::new(resources_root.into()),
-            assets: None,
+            assets: std::collections::BTreeMap::new(),
             wikis: None,
             links: None,
             chart_defaults: Arc::new(std::sync::Mutex::new(())),
@@ -340,25 +341,29 @@ impl ResourcesBackend {
     /// # Errors
     ///
     /// [`ResourcesError::Io`] when `vault_id` names no registered root.
-    pub fn with_assets(
-        mut self,
-        vault: vault::sync::Backend,
-        vault_id: impl Into<String>,
-    ) -> Result<Self, ResourcesError> {
-        let vault_id = vault_id.into();
-        let root = vault
-            .root(&vault_id)
-            .map_err(|e| ResourcesError::Io(format!("vault `{vault_id}`: {e}")))?;
-        self.assets = Some(AssetShelf {
-            vault,
-            vault_id,
-            root,
-        });
+    pub fn with_assets(mut self, vault: vault::sync::Backend) -> Result<Self, ResourcesError> {
+        use resources_proto::assets::{CHARTS_KIND, SONGS_KIND};
+        for (kind, vault_id) in [
+            (CHARTS_KIND, resources_proto::assets::charts_vault_id()),
+            (SONGS_KIND, resources_proto::assets::songs_vault_id()),
+        ] {
+            let root = vault
+                .root(&vault_id)
+                .map_err(|e| ResourcesError::Io(format!("asset shelf `{vault_id}`: {e}")))?;
+            self.assets.insert(
+                kind.to_owned(),
+                AssetShelf {
+                    vault: vault.clone(),
+                    vault_id,
+                    root,
+                },
+            );
+        }
         Ok(self)
     }
 
     /// Move every ADR 0003 chart off `<org>/resources/charts/` onto the
-    /// vault's Assets shelf. Idempotent, and it deletes nothing.
+    /// charts asset group. Idempotent, and it deletes nothing.
     ///
     /// Run on every boot. There is real data on production —
     /// `chart:doxology`, `chart:doxology-2`, `chart:agent-smoke-test`
@@ -369,7 +374,7 @@ impl ResourcesBackend {
     /// # Copy, never move
     ///
     /// Each legacy pair (`<slug>.md` + `<slug>.kf`) is *read* and
-    /// composed into `Assets/Charts/<slug>.md` through
+    /// composed into `<org>/assets/charts/<slug>.md` through
     /// [`AssetShelf::put`]. The originals stay exactly where they are.
     /// Three reasons, in order of how much they cost if ignored:
     ///
@@ -407,7 +412,7 @@ impl ResourcesBackend {
     /// Charts already migrated are still counted, so a retry after a
     /// fixed permission resumes rather than restarts.
     pub fn migrate_charts(&self) -> Result<ChartMigration, ResourcesError> {
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::CHARTS_KIND)?;
         let legacy_dir = self.root.join(LEGACY_CHARTS_DIR);
         let mut report = ChartMigration::default();
         // Only ADR 0003's own manifests: `walk` parses frontmatter, so
@@ -491,7 +496,7 @@ impl ResourcesBackend {
     /// have; it is recorded in `docs/spec/unmet.md` beside the
     /// cross-org gap rather than left to be discovered.
     fn migrate_song_folders(&self, report: &mut ChartMigration) -> Result<(), ResourcesError> {
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::SONGS_KIND)?;
         let songs_dir = self.root.join(LEGACY_SONGS_DIR);
         let Ok(entries) = std::fs::read_dir(&songs_dir) else {
             return Ok(());
@@ -540,7 +545,7 @@ impl ResourcesBackend {
         index: &str,
         report: &mut ChartMigration,
     ) -> Result<bool, ResourcesError> {
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::CHARTS_KIND)?;
         let default_id = vendored_key(index, "defaultArrangement");
         let Ok(arrangements) = std::fs::read_dir(dir.join(VENDORED_ARRANGEMENTS_DIR)) else {
             return Ok(false);
@@ -614,13 +619,14 @@ impl ResourcesBackend {
         Ok(wrote)
     }
 
-    /// The Assets shelf, or the refusal a host without a vault gets.
-    fn shelf(&self) -> Result<&AssetShelf, ResourcesError> {
-        self.assets.as_ref().ok_or_else(|| {
-            ResourcesError::BadRequest(
-                "charts are vault documents (ADR 0004) and this backend has no vault attached"
-                    .into(),
-            )
+    /// One asset group's shelf, or the refusal a host with no shelves
+    /// wired in gets.
+    fn shelf(&self, kind: &str) -> Result<&AssetShelf, ResourcesError> {
+        self.assets.get(kind).ok_or_else(|| {
+            ResourcesError::BadRequest(format!(
+                "the `{kind}` asset group (ADR 0004) is not attached to this backend; \
+                     charts and songs are shelf documents and there is no `std::fs` fallback"
+            ))
         })
     }
 
@@ -643,35 +649,35 @@ impl ResourcesBackend {
         self.root.join(SERMONS_DIR)
     }
 
-    /// Every chart document on the Assets shelf, slug-sorted (that is
+    /// Every chart document on the charts group, slug-sorted (that is
     /// [`walk`]'s order).
     ///
     /// Filtering on the parsed kind rather than on the extension is
-    /// what keeps a person's own note under `Assets/Charts/` — a README
+    /// what keeps a person's own note on the charts shelf — a README
     /// about the folder, say — from being read as a chart with no
     /// title. The shelf is a vault directory; anybody may put a
     /// markdown file in it.
     fn charts(&self) -> Vec<LoadedResource> {
-        let Ok(shelf) = self.shelf() else {
+        let Ok(shelf) = self.shelf(resources_proto::assets::CHARTS_KIND) else {
             return Vec::new();
         };
-        walk(shelf.charts_dir())
+        walk(&shelf.root)
             .into_iter()
             .filter(|r| r.resource.kind == crate::types::ResourceKind::Chart)
             .collect()
     }
 
-    /// Every song document on the Assets shelf, slug-sorted.
+    /// Every song document on the songs group, slug-sorted.
     ///
     /// The kind filter matters more here than for charts: the *media*
     /// tier also has a `songs` directory, and a person may well keep a
-    /// note about an album under `Assets/Songs/`. Only a page that says
+    /// note about an album on the songs shelf. Only a page that says
     /// it is a song is one.
     fn songs(&self) -> Vec<LoadedResource> {
-        let Ok(shelf) = self.shelf() else {
+        let Ok(shelf) = self.shelf(resources_proto::assets::SONGS_KIND) else {
             return Vec::new();
         };
-        walk(shelf.songs_dir())
+        walk(&shelf.root)
             .into_iter()
             .filter(|r| r.resource.kind == crate::types::ResourceKind::Song)
             .collect()
@@ -687,12 +693,13 @@ impl ResourcesBackend {
             song: r.resource.song.clone(),
             arrangement: r.resource.arrangement.clone(),
             is_default: r.resource.is_default,
-            // Vault-relative, because that is the only path a caller
+            // Shelf-relative, because that is the only path a caller
             // can do anything with now: it is what `VaultSync::get_file`
-            // and `open_collab` take. `self.rel` (resources-relative)
-            // would name a tier this document is not on.
+            // and `open_collab` take, against `assets:charts`.
+            // `self.rel` (resources-relative) would name a tier this
+            // document is not on.
             rel_path: self
-                .shelf()
+                .shelf(resources_proto::assets::CHARTS_KIND)
                 .map(|s| s.rel(&r.path))
                 .unwrap_or_else(|_| self.rel(&r.path)),
             updated_at: r.resource.updated_at.clone(),
@@ -779,7 +786,7 @@ impl ResourcesBackend {
             // Through the vault like every other asset write: clearing
             // a sibling's flag is a write to a document somebody may
             // have open, and it has to reach their screen.
-            let shelf = self.shelf()?;
+            let shelf = self.shelf(resources_proto::assets::CHARTS_KIND)?;
             shelf.put(&shelf.rel(&r.path), &out)?;
         }
         Ok(())
@@ -1316,7 +1323,7 @@ impl ResourcesService for ResourcesBackend {
         if song_doc.title.trim().is_empty() {
             return Err(ResourcesError::BadRequest("title is empty".into()));
         }
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::SONGS_KIND)?;
         let existing = self.songs();
         let taken: Vec<String> = existing.iter().map(|r| r.resource.slug.clone()).collect();
         let slug = song::slug_for(&taken, &song_doc);
@@ -1352,7 +1359,7 @@ impl ResourcesService for ResourcesBackend {
     }
 
     fn song(&self, slug: &str) -> Result<SongDoc, ResourcesError> {
-        self.shelf()?;
+        self.shelf(resources_proto::assets::SONGS_KIND)?;
         let found = self
             .songs()
             .into_iter()
@@ -1369,7 +1376,7 @@ impl ResourcesService for ResourcesBackend {
     }
 
     fn list_songs(&self) -> Result<Vec<SongSummary>, ResourcesError> {
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::SONGS_KIND)?;
         Ok(self
             .songs()
             .iter()
@@ -1387,7 +1394,7 @@ impl ResourcesService for ResourcesBackend {
 
     fn delete_song(&self, slug: &str) -> Result<bool, ResourcesError> {
         safe_segment(slug, "slug")?;
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::SONGS_KIND)?;
         let Some(found) = self.songs().into_iter().find(|r| r.resource.slug == slug) else {
             return Ok(false);
         };
@@ -1433,7 +1440,7 @@ impl ResourcesService for ResourcesBackend {
             )));
         }
 
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::CHARTS_KIND)?;
         let prior = existing.iter().find(|r| r.resource.slug == slug);
         // `is_default: false` is *no opinion*, not "demote me". A
         // client that never tracked the flag — Keyflow saving an edit
@@ -1490,7 +1497,7 @@ impl ResourcesService for ResourcesBackend {
     }
 
     fn chart(&self, slug: &str) -> Result<ChartDoc, ResourcesError> {
-        self.shelf()?;
+        self.shelf(resources_proto::assets::CHARTS_KIND)?;
         let found = self
             .charts()
             .into_iter()
@@ -1536,7 +1543,7 @@ impl ResourcesService for ResourcesBackend {
             .chart_defaults
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let shelf = self.shelf()?;
+        let shelf = self.shelf(resources_proto::assets::CHARTS_KIND)?;
         let Some(found) = self.charts().into_iter().find(|r| r.resource.slug == slug) else {
             return Ok(false);
         };
@@ -1783,28 +1790,42 @@ mod tests {
 
     /// A backend over a tempdir with both tiers wired: the resources
     /// root every sermon/patch/sample/lighting lane writes, and the
-    /// **vault** the chart lane now writes (ADR 0004). The chart lane
-    /// refuses outright without the second, which is the point — a
-    /// misconfigured host fails loudly rather than writing charts
-    /// somewhere they cannot be collaborated on.
+    /// **asset groups** the chart and song lanes write (ADR 0004).
+    /// Those lanes refuse outright without the second, which is the
+    /// point — a misconfigured host fails loudly rather than writing
+    /// charts somewhere they cannot be collaborated on.
+    ///
+    /// The shelves are registered here the way the server's boot loop
+    /// registers them: one root per kind, under the id
+    /// `org_proto::Shelf::vault_id` composes. A test that invented its
+    /// own id would be testing a wiring no deployment has.
     fn backend(dir: &tempfile::TempDir) -> ResourcesBackend {
-        let vault = vault::sync::Backend::single(VAULT_ID, dir.path().join("vault"))
-            .expect("open the test vault");
+        let assets = dir.path().join("assets");
+        let vault = vault::sync::Backend::with_roots(
+            [
+                (
+                    resources_proto::assets::charts_vault_id(),
+                    assets.join(resources_proto::assets::CHARTS_KIND),
+                ),
+                (
+                    resources_proto::assets::songs_vault_id(),
+                    assets.join(resources_proto::assets::SONGS_KIND),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
         ResourcesBackend::new(dir.path().join("resources"))
-            .with_assets(vault, VAULT_ID)
-            .expect("attach the vault")
+            .with_assets(vault)
+            .expect("attach the asset groups")
     }
-
-    /// The vault id the tests register. Not `"default"` on purpose: the
-    /// backend must carry whatever id its host gave it rather than
-    /// assuming the server's.
-    const VAULT_ID: &str = "test-vault";
 
     /// Where a chart lands on disk, for the assertions that check the
     /// shelf rather than the lane.
     fn chart_file(dir: &tempfile::TempDir, slug: &str) -> PathBuf {
         dir.path()
-            .join("vault")
+            .join("assets")
+            .join(resources_proto::assets::CHARTS_KIND)
             .join(resources_proto::assets::chart_path(slug))
     }
 
@@ -2033,7 +2054,7 @@ mod tests {
         }
     }
 
-    /// One vault document, the round trip, and the delete — the whole
+    /// One shelf document, the round trip, and the delete — the whole
     /// chart lane against a temp vault.
     #[test]
     fn a_chart_upsert_lays_down_one_vault_document() {
@@ -2045,7 +2066,7 @@ mod tests {
             .unwrap();
         assert_eq!(out.slug, "great-are-you-lord");
         assert_eq!(
-            out.rel_path, "Assets/Charts/great-are-you-lord.md",
+            out.rel_path, "great-are-you-lord.md",
             "the path an app hands to VaultSync, vault-relative"
         );
         assert!(out.created);
@@ -2252,7 +2273,8 @@ mod tests {
         assert_eq!(song.title, "Opening Night");
         let text = std::fs::read_to_string(
             dir.path()
-                .join("vault")
+                .join("assets")
+                .join(resources_proto::assets::SONGS_KIND)
                 .join(resources_proto::assets::song_path("opening-night")),
         )
         .unwrap();
@@ -2334,7 +2356,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(out.slug, "opening-night");
-        assert_eq!(out.rel_path, "Assets/Songs/opening-night.md");
+        assert_eq!(out.rel_path, "opening-night.md");
         assert!(out.created);
 
         let back = be.song("opening-night").unwrap();

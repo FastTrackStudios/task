@@ -209,11 +209,18 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
 
     let org = org_proto::DataRoot::new(tmp.path().to_owned()).org(slug);
     let resources = org.resources_dir();
-    // The chart lane writes the org's vault now (ADR 0004), so the
-    // backend needs it — and refuses without it, which is why this is
-    // the same wiring `AppState` does rather than a test convenience.
-    let vault = vault::Backend::single("default", org.vault_dir())?;
-    let lane = resources::ResourcesBackend::new(&resources).with_assets(vault, "default")?;
+    // The chart and song lanes write asset groups now (ADR 0004), so
+    // the backend needs them registered — and refuses without them,
+    // which is why this is the same wiring `AppState` does rather than
+    // a test convenience. Every shelf, through the trait, exactly as
+    // the boot loop does it.
+    let vault = vault::Backend::with_roots(
+        org.shelves()
+            .iter()
+            .map(|s| (s.vault_id(), s.root().to_path_buf()))
+            .collect(),
+    );
+    let lane = resources::ResourcesBackend::new(&resources).with_assets(vault)?;
 
     let declared: Vec<_> = task_server::example_org::assets_of(slug).collect();
     eyre::ensure!(
@@ -229,14 +236,14 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
         // from the declaration, because that string is the subscription
         // slug a cross-org reader names.
         let (kind, home) = match a.tier {
-            // On the Assets shelf, the per-kind subdirectory *is* the
-            // kind — that is the whole of the tier's organising
-            // convention, so reading it back off the path is reading
-            // the convention rather than trusting a second field.
-            AssetTier::Vault if a.library == resources_proto::assets::songs_dir() => {
-                (NodeKind::Song, org.vault_dir().join(a.library))
+            // The asset group *is* the kind — that is the whole of the
+            // tier's organising convention, so reading it back off the
+            // group name is reading the convention rather than trusting
+            // a second field.
+            AssetTier::Assets if a.library == resources_proto::assets::SONGS_KIND => {
+                (NodeKind::Song, org.asset_shelf_dir(a.library))
             }
-            AssetTier::Vault => (NodeKind::Chart, org.vault_dir().join(a.library)),
+            AssetTier::Assets => (NodeKind::Chart, org.asset_shelf_dir(a.library)),
             AssetTier::Resources => {
                 let kind = [NodeKind::Patch, NodeKind::Sample, NodeKind::Lighting]
                     .into_iter()
@@ -259,7 +266,7 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
             );
         }
 
-        // The shape each lane writes: a chart is **one vault document**
+        // The shape each lane writes: a chart is **one shelf document**
         // with its source in a fence (ADR 0004 — a `.kf` beside it
         // would be a file the vault walker never collects), everything
         // else owns a directory because it grows sidecars.
@@ -281,9 +288,7 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
                 );
             }
             NodeKind::Chart => {
-                let path = org
-                    .vault_dir()
-                    .join(resources_proto::assets::chart_path(a.slug));
+                let path = home.join(resources_proto::assets::chart_path(a.slug));
                 let text = std::fs::read_to_string(&path)
                     .unwrap_or_else(|e| panic!("{}: {} unreadable: {e}", a.slug, path.display()));
                 assert!(
@@ -328,8 +333,14 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
     // And each lane's listing finds every one of its own, which is what
     // a library screen opens with.
     for (library, listed) in [
-        ("Assets/Charts", lane.list_charts("")?.len()),
-        ("Assets/Songs", lane.list_songs()?.len()),
+        (
+            resources_proto::assets::CHARTS_KIND,
+            lane.list_charts("")?.len(),
+        ),
+        (
+            resources_proto::assets::SONGS_KIND,
+            lane.list_songs()?.len(),
+        ),
         ("patches", lane.list_patches()?.len()),
         ("samples", lane.list_samples()?.len()),
         ("lighting", lane.list_lighting()?.len()),
@@ -740,6 +751,7 @@ async fn seeded_references_resolve_against_the_readers_subscriptions() -> eyre::
             title: "Music Theory".into(),
             core: false,
             declined: false,
+            selection: Default::default(),
         },
     )?;
     let held = store.active(&reader)?;
@@ -768,6 +780,113 @@ async fn seeded_references_resolve_against_the_readers_subscriptions() -> eyre::
         .expect("scripture is core");
     assert!(bible.core && !bible.declined);
     assert!(!bible.kind.is_editable(), "a Resource is never editable");
+    Ok(())
+}
+
+/// The planted world holds a **cross-organisation song library**, and
+/// a demo user can take it.
+///
+/// ADR 0004 decision 1, in the seed rather than in prose: ACME plants
+/// its songs onto `<org>/assets/songs/`, which is a shelf and therefore
+/// subscribable, and alice-personal — the other planted org — takes it
+/// and ends up with the documents on her own disk.
+///
+/// This is the seed half of the policy that everything must exist in
+/// the suite *and* in the planted world. `tests/integration/tests/
+/// song_library.rs` proves the mechanism over the wire; this proves a
+/// demo user opening the demo can reach it, which is the difference
+/// between a feature and a feature somebody can find.
+///
+/// Under the `<vault>/Assets/Songs/` draft this test could not have
+/// been written at all: a vault is never subscribable, so there was
+/// nothing here for alice to take.
+/// t[verify wiki.access.directory] — the planted shelf is in the
+/// directory a person browses, not only reachable by a slug they
+/// already knew.
+/// t[verify wiki.resource.subscribe] — an asset group is subscribed to
+/// on the same terms as a wiki: it has a local presence, it refreshes,
+/// and what arrives is what the publisher holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_planted_song_shelf_is_subscribable_across_orgs() -> eyre::Result<()> {
+    use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
+
+    let tmp = tempfile::tempdir()?;
+    let data_root_path = tmp.path();
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(data_root_path, "acme-audio")?;
+    plant(data_root_path, "alice-personal")?;
+
+    let data_root = org_proto::DataRoot::new(data_root_path.to_owned());
+    let acme = data_root.org("acme-audio");
+    let alice = data_root.org("alice-personal");
+
+    let shelf = acme.asset_shelf_dir(resources_proto::assets::SONGS_KIND);
+    eyre::ensure!(
+        shelf.join("track-one.md").is_file(),
+        "the seed plants its songs onto the songs shelf: {}",
+        shelf.display()
+    );
+
+    // The resolver a server wires in, over the two planted orgs.
+    let mut domains = std::collections::HashMap::new();
+    domains.insert("acme.test".to_owned(), "acme-audio".to_owned());
+    domains.insert("alice.test".to_owned(), "alice-personal".to_owned());
+    let upstream = wiki_live::subscriptions_backend::LocalOrgs::new(
+        data_root_path.to_path_buf(),
+        domains.clone(),
+    );
+
+    let subscription = Subscription {
+        domain: "acme.test".into(),
+        slug: resources_proto::assets::SONGS_KIND.into(),
+        kind: SourceKind::Assets,
+        title: "Songs".into(),
+        core: false,
+        declined: false,
+        selection: Default::default(),
+    };
+
+    // The shelf admits her, and the directory lists it — both halves,
+    // because a shelf nobody can discover is a shelf only somebody who
+    // already knew the slug can take.
+    use wiki_live::subscriptions_backend::{Admission, Upstream as _};
+    assert_eq!(
+        upstream.admits("alice-personal", &subscription),
+        Admission::Admitted
+    );
+    assert!(
+        upstream
+            .discover("alice-personal")
+            .iter()
+            .any(|s| s.kind == SourceKind::Assets && s.qualified() == "acme.test/songs"),
+        "the planted song shelf is not in the directory a person browses"
+    );
+
+    let store = wiki_live::subscriptions::SubscriptionStore::open(alice.path());
+    store.subscribe(&Subscriber::Vault, subscription.clone())?;
+    let root = upstream
+        .local_root(&subscription)
+        .expect("the shelf is reachable on this data root");
+    let out = wiki_live::materialize::refresh_assets(&root, alice.path(), &subscription)?;
+    eyre::ensure!(out.pulled > 0, "a fresh subscription pulls the shelf");
+    eyre::ensure!(out.skipped == 0, "a whole-shelf selection skips nothing");
+
+    let copy = wiki_live::materialize::assets_copy_dir(
+        alice.path(),
+        "acme.test",
+        resources_proto::assets::SONGS_KIND,
+    );
+    let text = std::fs::read_to_string(copy.join("track-one.md"))
+        .expect("the song document is on alice's disk");
+    eyre::ensure!(
+        text.contains(&format!(
+            "{}: {}",
+            resources_proto::assets::TYPE_KEY,
+            resources_proto::assets::TYPE_ASSET
+        )),
+        "and it is the document ACME wrote: {text}"
+    );
     Ok(())
 }
 
@@ -805,6 +924,7 @@ async fn a_subscription_materializes_and_its_references_resolve() -> eyre::Resul
         title: "Music Theory".into(),
         core: false,
         declined: false,
+        selection: Default::default(),
     };
     let store = wiki_live::subscriptions::SubscriptionStore::open(alice.path());
     store.subscribe(&Subscriber::Vault, subscription.clone())?;
@@ -905,6 +1025,7 @@ async fn a_client_manages_its_own_subscriptions() -> eyre::Result<()> {
         title: "Music Theory".into(),
         core: false,
         declined: false,
+        selection: Default::default(),
     };
     backend.subscribe(me.clone(), music.clone())?;
     // Twice is refused rather than silently ignored.

@@ -1,12 +1,12 @@
-//! The Keyflow chart on disk — **one vault document** on the Assets
+//! The Keyflow chart on disk — **one markdown document** on the charts
 //! shelf, and what an app may never clobber.
 //!
-//! `<vault>/Assets/Charts/<slug>.md`, and nothing beside it. The
+//! `<org>/assets/charts/<slug>.md`, and nothing beside it. The
 //! frontmatter is `type: asset`, `asset_kind: chart`; the chart source
 //! is a ` ```keyflow ` fence in the body; everything else in the body
 //! belongs to whoever wrote it.
 //!
-//! # Why one file, and why in the vault
+//! # Why one file, and why on a shelf of its own
 //!
 //! ADR 0004 decision 1. Under ADR 0003 a chart was two files under
 //! `<org>/resources/charts/` — a manifest and a `<slug>.kf` holding the
@@ -16,20 +16,30 @@
 //! editing a chart in Keyflow got none of what two people editing a
 //! note get.
 //!
-//! Assets are vault items. Not "backed by" the vault, not "synced to"
-//! it — they *are* vault files, filed on a shelf named `Assets/`. That
-//! single move is the whole feature: `vault-collab` already keys a Loro
-//! document by `(vault_id, path)` for any vault file, the graph already
-//! indexes any `.md`, search already walks the tree. Collaboration is
-//! **inherited**, not built. See [`resources_proto::assets`] for the
-//! shelf and [`vault_proto::assets`] for the tier.
+//! So charts moved onto an **asset group** — `<org>/assets/charts/`, a
+//! sibling of `vault/` and `wiki/` that is registered for file sync,
+//! the link graph and per-file CRDT exactly as those are
+//! ([`org_proto::shelf`]). That single move is the whole feature:
+//! `vault-collab` already keys a Loro document by `(vault_id, path)`
+//! for any registered root, the graph already indexes any `.md` under
+//! one, search already walks the tree. Collaboration is **inherited**,
+//! not built.
 //!
-//! The two files became one because the vault walker collects `.md` and
-//! `.base` and nothing else: a `.kf` under the vault root would be a
-//! file the vault does not know about, and charts would have moved
-//! house and gained nothing. So the source is a fenced block, and the
-//! document a person opens in Task is the chart plus their notes about
-//! it, converging together.
+//! An intermediate draft filed charts *inside* the vault
+//! (`<vault>/Assets/Charts/`) on the belief that being a vault file was
+//! what conferred all that. It is not — being registered is, which the
+//! `wiki/` tier has demonstrated from outside the vault all along — and
+//! the belief cost the other half of the ADR: a vault is never
+//! subscribable, so a chart library inside one was one no other
+//! organisation could take. The shelf is a sibling, and a foreign
+//! `chart:<slug>` resolves and fetches again.
+//!
+//! The two files became one because the walker collects `.md` and
+//! `.base` and nothing else: a `.kf` on the shelf would be a file the
+//! shelf does not know about, and charts would have moved house and
+//! gained nothing. So the source is a fenced block, and the document a
+//! person opens in Task is the chart plus their notes about it,
+//! converging together.
 //!
 //! # What is app-owned and what is not
 //!
@@ -237,7 +247,7 @@ fn render_body(chart: &ChartDoc, slug: &str) -> String {
 {}\n\
 ## Notes\n\
 \n\
-_Notes about this chart go here. It is an ordinary vault document: \
+_Notes about this chart go here. It is an ordinary markdown document: \
 [[wikilink]] it, tag it, search it, and edit it with somebody else. \
 Sections anchor as `chart:{slug}#<section>`._\n",
         chart.title,

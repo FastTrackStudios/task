@@ -914,6 +914,7 @@ pub async fn subscribe_to(
                 title: title.to_owned(),
                 core: false,
                 declined: false,
+                selection: Default::default(),
             },
         )
         .await

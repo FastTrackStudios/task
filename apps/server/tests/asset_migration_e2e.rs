@@ -108,7 +108,7 @@ async fn a_boot_on_an_adr_0003_disk_migrates_and_deletes_nothing() {
     assert_eq!(doxology.source, "[Verse]\n| G | C | D | G |\n");
     let text = std::fs::read_to_string(
         org_root
-            .vault_dir()
+            .asset_shelf_dir(resources_proto::assets::CHARTS_KIND)
             .join(resources_proto::assets::chart_path("doxology")),
     )
     .expect("the chart is on the shelf");
@@ -169,7 +169,13 @@ async fn a_boot_on_an_adr_0003_disk_migrates_and_deletes_nothing() {
     for note in ["charts/_MIGRATED.md", "songs/_MIGRATED.md"] {
         let text = std::fs::read_to_string(resources_dir.join(note))
             .unwrap_or_else(|e| panic!("no breadcrumb at `{note}`: {e}"));
-        assert!(text.contains("vault"), "{note}: {text}");
+        // The breadcrumb has to name where the live copy went, because
+        // its reader is a person deciding whether the folder is safe to
+        // delete and the honest answer is "the other tier has it".
+        assert!(
+            text.contains("assets"),
+            "{note} does not say where the live copy is: {text}"
+        );
     }
 
     // ── an edit, and then a second boot over the same disk ───────────

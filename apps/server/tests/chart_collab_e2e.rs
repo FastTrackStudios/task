@@ -4,10 +4,18 @@
 //!
 //! Everything else in the change is plumbing: a directory name, a
 //! frontmatter key, a migration. The claim the plumbing exists to make
-//! is that a chart *inherits* collaboration by being a vault file
-//! rather than having any built for it — so the test that matters is
-//! the one where a chart Keyflow saved is picked up by two independent
-//! CRDT replicas, edited concurrently, and agreed on.
+//! is that a chart *inherits* collaboration by living on a **registered
+//! shelf** rather than having any built for it — so the test that
+//! matters is the one where a chart Keyflow saved is picked up by two
+//! independent CRDT replicas, edited concurrently, and agreed on.
+//!
+//! The shelf is `assets:charts` — `<org>/assets/charts/`, a sibling of
+//! the vault rather than a directory inside it. That distinction is
+//! what this file quietly proves: nothing below mentions the vault, and
+//! it converges anyway, because collaboration follows registration and
+//! not location (`org_proto::shelf`). An earlier draft filed charts
+//! inside the vault believing the opposite, and paid for the belief by
+//! making a cross-organisation chart library impossible.
 //!
 //! # Why this drives three different lanes at once
 //!
@@ -93,7 +101,7 @@ async fn eventually(what: &str, mut cond: impl AsyncFnMut() -> bool) {
     panic!("timed out waiting for: {what}");
 }
 
-// t[verify storage.crdt.layer] — a chart is a vault document, so two
+// t[verify storage.crdt.layer] — a chart is a shelf document, so two
 // clients editing one converge through the same registry two clients
 // editing a note do, and nothing chart-shaped was built to make it so
 #[tokio::test(flavor = "multi_thread")]
@@ -107,18 +115,22 @@ async fn two_clients_editing_one_chart_converge() {
     assert_eq!(
         saved.rel_path,
         resources_proto::assets::chart_path("doxology"),
-        "the lane hands back a vault path, so nobody has to guess one"
+        "the lane hands back a shelf path, so nobody has to guess one"
     );
 
     // ── and the path it handed back opens a collaborative document ───
     //
     // No translation step. This is the sentence ADR 0004 is about: the
-    // chart lane's `rel_path` is a vault path, and the vault lane takes
-    // vault paths.
+    // chart lane's `rel_path` is a shelf path, and the vault lane takes
+    // `(vault_id, path)` for *any* registered shelf — which is the
+    // whole of why the shelf did not have to be inside the vault.
     let ack = vault
-        .open_collab("default".to_owned(), saved.rel_path.clone())
+        .open_collab(
+            resources_proto::assets::charts_vault_id(),
+            saved.rel_path.clone(),
+        )
         .await
-        .expect("a chart is a vault file, so it has a collab document");
+        .expect("a chart is on a registered shelf, so it has a collab document");
     let doc_id = ack.doc_id;
 
     let alice = join(&url, doc_id).await;
@@ -168,7 +180,9 @@ async fn two_clients_editing_one_chart_converge() {
     // the debounce fires, `put_file` commits, and the chart on disk is
     // what both people are looking at.
     let org_root = support::org_root(&tmp);
-    let path = org_root.vault_dir().join(&saved.rel_path);
+    let path = org_root
+        .asset_shelf_dir(resources_proto::assets::CHARTS_KIND)
+        .join(&saved.rel_path);
     eventually("the write-behind to reach the file", async || {
         std::fs::read_to_string(&path).is_ok_and(|t| t.contains(alice_note) && t.contains(bob_bar))
     })

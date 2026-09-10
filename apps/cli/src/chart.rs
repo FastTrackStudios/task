@@ -2,8 +2,8 @@
 //! shell.
 //!
 //! A chart is Keyflow's document, and Task is where it lives between
-//! sessions: since ADR 0004 that is one **vault document** on the
-//! Assets shelf, `<vault>/Assets/Charts/<slug>.md`, holding the source
+//! sessions: since ADR 0004 that is one **markdown document** on the
+//! charts asset group, `<org>/assets/charts/<slug>.md`, holding the source
 //! verbatim in a ` ```keyflow ` fence and whatever prose somebody wrote
 //! around it. Being a vault file is what gives a chart collaborative
 //! editing, wikilinks, tags and search — none of which was built for
@@ -117,7 +117,7 @@ pub enum ChartCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a chart's vault document. References to
+    /// Delete a chart's document. References to
     /// it from collections are left alone; a dangling reference reads
     /// as unresolved, which is a legible state.
     Rm {

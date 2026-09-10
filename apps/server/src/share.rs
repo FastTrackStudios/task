@@ -365,7 +365,7 @@ fn validate_target(target: &ShareTarget) -> Result<(), ShareError> {
         // any other vault id is a client bug, not a link to mint.
         ShareTarget::Note { vault_id, .. }
             if vault_id != share_proto::DEFAULT_VAULT
-                && crate::wiki_vault::wiki_of(vault_id).is_none() =>
+                && crate::shelves::wiki_of(vault_id).is_none() =>
         {
             Err(ShareError::Invalid(format!("bad note vault: {vault_id}")))
         }
@@ -1497,7 +1497,7 @@ pub fn landing_html(slug: &str, link: &StoredLink, app_origin: &str) -> String {
 /// — a share link to a wiki page must land in the wiki, not the vault).
 /// Query-shaped so the caller can append `&share=1`.
 pub fn note_open_path(slug: &str, vault_id: &str, note: &str) -> String {
-    match crate::wiki_vault::wiki_of(vault_id) {
+    match crate::shelves::wiki_of(vault_id) {
         Some(wiki) => format!(
             "/wiki/w/{}/{}/page?path={}",
             urlencoding_encode(slug),

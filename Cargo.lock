@@ -17912,9 +17912,9 @@ version = "0.1.0"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.8.2)",
  "facet",
+ "org-proto",
  "serde",
  "thiserror 2.0.20",
- "vault-proto",
  "vox",
  "vox-types",
 ]
@@ -24392,6 +24392,7 @@ dependencies = [
  "chrono",
  "diffy",
  "mime_guess",
+ "org-proto",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -24418,6 +24419,7 @@ dependencies = [
  "chrono",
  "facet",
  "fake",
+ "org-proto",
  "sea-orm",
  "serde",
  "serde_json",

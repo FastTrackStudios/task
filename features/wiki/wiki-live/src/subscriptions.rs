@@ -263,6 +263,7 @@ pub fn core_resource(domain: &str, slug: &str, title: &str) -> Subscription {
         title: title.to_owned(),
         core: true,
         declined: false,
+        selection: Default::default(),
     }
 }
 
@@ -284,6 +285,7 @@ mod tests {
             title: slug.into(),
             core: false,
             declined: false,
+            selection: Default::default(),
         }
     }
 

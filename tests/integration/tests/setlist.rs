@@ -15,25 +15,30 @@
 //! only one that reaches. A test that subscribed first and resolved
 //! once could not tell resolution from a permanently open door.
 //!
-//! # ADR 0004 moved the bytes, and this chapter is where that costs
+//! # ADR 0004 moved the bytes, and this chapter is where that shows
 //!
-//! A chart is a vault document now (`vault/Assets/Charts/<slug>.md`),
-//! not a file on the resources tier. Everything this chapter is *about*
-//! still holds — a subscription is what admits the reader, and dropping
-//! it takes the reach away again — because resolution was taught to
-//! look on the shelf.
+//! A chart is an **asset-group** document now
+//! (`<org>/assets/charts/<slug>.md`), not a file on the resources
+//! tier. Everything this chapter is about still holds — a subscription
+//! is what admits the reader, and dropping it takes the reach away
+//! again — and the step *after* resolution holds too, which is the part
+//! that changed.
 //!
-//! What no longer holds is the step after resolution. The `rel_path`
-//! that comes back names a path under `vault/`, and nothing serves
-//! that across an org boundary: `GET /org/{slug}/media/{*path}` reads
-//! `resources/`, and a `SourceKind::Resource` subscription materialises
-//! `<org>/resources/<slug>/`. So the studio can *name and follow* the
-//! guest's chart and cannot *fetch* it.
+//! An intermediate draft filed charts at `<vault>/Assets/Charts/`, and
+//! under it this chapter carried a deliberate `assert!(refused.is_err())`
+//! saying a chart library could not be subscribed to at all: a vault is
+//! never subscribable (`wiki.boundary.no-subscribe`), so a shelf inside
+//! one was not either. The studio could name and follow the guest's
+//! chart and could not fetch it — a `Reach::Reachable` pointing at a
+//! path nothing served.
 //!
-//! That is a regression against what ADR 0003 shipped, ADR 0004 says so
-//! in its consequences, and `docs/spec/unmet.md` records it with the
-//! two mechanisms by name. It is asserted below rather than left to be
-//! discovered, because a gap a test states is a gap somebody can close.
+//! That assertion is inverted below, and the inversion is the whole
+//! point of moving the shelf out of the vault. `assets/` is a sibling
+//! root, an asset group is a shelf, a shelf is subscribable, and
+//! `wiki_live::materialize::refresh_assets` brings it down onto disk.
+//! The security claim is untouched: the vault-refusal rule in
+//! `LocalOrgs::admits` is the same code it always was, because an asset
+//! group is not a vault.
 //!
 //! # Two orgs on one disk, and why it is that arrangement
 //!
@@ -64,10 +69,13 @@ const GUEST_DOMAIN: &str = "alice.test";
 /// reader names when subscribing.
 const CHART_LIBRARY: &str = "charts";
 
-/// The subscription slug that publishes songs. A song's *media* is
-/// still on the resources tier (ADR 0004: imports, binary, nothing
-/// anybody types into), which is why this one still works end to end
-/// and `CHART_LIBRARY` no longer does.
+/// The subscription slug that publishes songs — the asset group's own
+/// name, because each group is its own shelf.
+///
+/// A song's *media* stays on the resources tier (ADR 0004: imports,
+/// binary, nothing anybody types into) while its document is on the
+/// shelf, and both are asserted below: the tier rule is only real if
+/// you can see it sort one thing into each tier.
 const SONG_LIBRARY: &str = "songs";
 
 fn chart(title: &str, source: &str) -> ChartDoc {
@@ -99,10 +107,14 @@ fn source_of(domain: &str, slug: &str) -> Subscription {
     Subscription {
         domain: domain.into(),
         slug: slug.into(),
-        kind: SourceKind::Resource,
+        // An asset group, not a Resource: ADR 0004 moved songs and
+        // charts onto shelves people type into, and the kind is what
+        // says which tree of the publishing org the slug names.
+        kind: SourceKind::Assets,
         title: slug.into(),
         core: false,
         declined: false,
+        selection: Default::default(),
     }
 }
 
@@ -126,13 +138,11 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     // They publish a **song**, through the same lane a sibling app
     // uses, and the media that goes with it.
     //
-    // A song rather than a chart, and the difference is ADR 0004's tier
-    // rule paying off. A song's document moved to the vault; its media
-    // — `manifest.json` and the stems — did not, because it is an
-    // import nobody types into. So `resources/songs/<slug>/` still
-    // exists, still publishes, and is still what a subscription names.
-    // The chart half of the same story is asserted below, where it now
-    // fails.
+    // A song's *document* moved to the `songs` asset group; its media —
+    // `manifest.json` and the stems — did not, because it is an import
+    // nobody types into. Both halves are asserted below, which is what
+    // makes ADR 0004's tier rule a fact about this deployment rather
+    // than a paragraph.
     guest_session
         .resources()
         .await
@@ -157,7 +167,8 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     )
     .unwrap();
 
-    // They also publish a chart of it, which is the case that regressed.
+    // They also publish a chart of it — the case that regressed under
+    // the `<vault>/Assets/` draft and is restored here.
     let published = guest_session
         .resources()
         .await
@@ -246,40 +257,67 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     );
     assert_eq!(during[1].org, GUEST_ORG, "the answer names the publisher");
     assert_eq!(
-        during[1].rel_path, "resources/songs/hosanna",
+        during[1].rel_path, "assets/songs/hosanna.md",
         "a reachable reference says where the content sits in its own \
-         org — and for a song that is still a path `/org/{{slug}}/media/` \
-         serves, because the media never left the resources tier"
+         org, and for a song that is its document on the `songs` shelf"
+    );
+    // The other half of the tier rule, in the same breath: the
+    // document is on the shelf and the media it names is still an
+    // import on the resources tier, which `/org/{slug}/media/` serves.
+    // One song, sorted into two tiers by whether anybody types into it.
+    assert!(
+        guest
+            .org_root()
+            .join("resources/songs/hosanna/manifest.json")
+            .is_file(),
+        "the song's media followed its document off the resources tier"
     );
 
-    // ── ADR 0004's cost, pinned ──────────────────────────────────────
+    // ── the chart library, which is the assertion that inverted ──────
     //
-    // The same story for a *chart* no longer works, and it fails at the
-    // first step rather than quietly later: `resources/charts/` is not
-    // there to subscribe to, because a chart is a vault document now.
-    //
-    // This assertion is the regression, stated. ADR 0004 says nothing
-    // should land before an Assets-tier reach path exists; it landed,
-    // and `docs/spec/unmet.md` names the two mechanisms that need one
-    // (`materialize::refresh_resource` and `per_org_media_handler`).
-    // When that path lands, this is the assertion that changes.
-    let refused = alice
+    // Under the `<vault>/Assets/` draft this block asserted
+    // `refused.is_err()` and explained that a chart library could not be
+    // subscribed to at all. It can now, because the shelf is a sibling
+    // of the vault rather than a directory inside it — and *only*
+    // because of that: `LocalOrgs::admits` still refuses a vault by the
+    // same code, which the case below checks is still true.
+    let their_chart = NodeRef::new(NodeKind::Chart, "hosanna").in_domain(GUEST_DOMAIN);
+    assert_eq!(
+        resolve(&alice, std::slice::from_ref(&their_chart)).await[0].reach,
+        Reach::NotPermitted,
+        "the songs subscription admitted a chart — one shelf, one \
+         subscription, and a reference never authorises on its own"
+    );
+    alice
         .wiki_subscriptions()
         .await
         .subscribe(Subscriber::Vault, source_of(GUEST_DOMAIN, CHART_LIBRARY))
+        .await
+        .expect("a chart library is a shelf, and a shelf is subscribable");
+    let admitted = resolve(&alice, &[their_chart]).await;
+    assert_eq!(
+        admitted[0].reach,
+        Reach::Reachable,
+        "and with the subscription, the guest's chart is reachable"
+    );
+    assert_eq!(
+        admitted[0].rel_path, "assets/charts/hosanna.md",
+        "naming a path on a shelf a subscription materialises, rather \
+         than one under `vault/` that nothing serves"
+    );
+
+    // The rule the whole tier rests on, checked here rather than
+    // assumed: a *vault* is refused by name, with the distinction
+    // stated. Moving assets out of the vault widened nothing.
+    let vault_refused = alice
+        .wiki_subscriptions()
+        .await
+        .subscribe(Subscriber::Vault, source_of(GUEST_DOMAIN, "vault"))
         .await;
     assert!(
-        refused.is_err(),
-        "a chart library subscribed — the Assets reach path exists now, \
-         and this chapter (and docs/spec/unmet.md) should say so"
-    );
-    let their_chart = NodeRef::new(NodeKind::Chart, "hosanna").in_domain(GUEST_DOMAIN);
-    assert_eq!(
-        resolve(&alice, &[their_chart]).await[0].reach,
-        Reach::NotPermitted,
-        "and with no subscription to admit it, the guest's chart is \
-         refused — the security claim is intact; it is the reach that is \
-         gone"
+        vault_refused.is_err(),
+        "a vault was subscribable — `wiki.boundary.no-subscribe` is the \
+         one rule an asset shelf must not have loosened"
     );
 
     // ── after: the same reference, refused again ─────────────────────

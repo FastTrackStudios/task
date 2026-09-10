@@ -107,22 +107,49 @@ impl LocalOrgs {
     /// Where a source's files live in its publishing org: a wiki under
     /// `wikis/<slug>`, a Resource under `resources/<slug>` — the
     /// corpus library (`OrgRoot::resources_dir`), where `admin bible
-    /// install` puts scripture. A Resource is not a wiki
+    /// install` puts scripture — an asset shelf under `assets/<kind>`,
+    /// a project under `projects/<name>`. A Resource is not a wiki
     /// (`wiki.resource.not-a-wiki`), and its text was never going to
     /// sit in the wikis directory.
-    fn source_root(&self, org: &str, subscription: &Subscription) -> PathBuf {
-        let kind_dir = match subscription.kind {
-            SourceKind::Wiki => "wikis",
-            SourceKind::Resource => "resources",
-        };
-        self.org_dir(org).join(kind_dir).join(&subscription.slug)
+    ///
+    /// The tier directory comes from [`SourceKind::tier_dir`] rather
+    /// than from a match here, so the resolver that opens a tree and
+    /// the discovery that walks it cannot come to disagree about which
+    /// tree that is.
+    ///
+    /// # The slug is a stranger's string, and this is where it lands
+    ///
+    /// A subscription slug arrives from another organisation and is
+    /// joined onto a path inside this one's private tree. `..`,
+    /// an absolute path (which `Path::join` honours by *discarding*
+    /// everything to its left), a bare `.` — any of them turns a
+    /// subscription into a reader of somewhere it was never offered.
+    /// So the slug must be its own slug: `wiki_slug` is idempotent on
+    /// anything safe, and a string that does not survive it is not a
+    /// name of anything on disk. `None` here is a refusal, not a
+    /// missing directory.
+    ///
+    /// This predates the Assets tier and was true of wikis all along;
+    /// it is stated and enforced now because a second tier makes the
+    /// same string reach a second tree, and "the wiki case happened to
+    /// be fine" is not a property anybody checked.
+    fn source_root(&self, org: &str, subscription: &Subscription) -> Option<PathBuf> {
+        let slug = &subscription.slug;
+        if slug.is_empty() || *slug != org_proto::wiki_slug(slug) {
+            return None;
+        }
+        Some(
+            self.org_dir(org)
+                .join(subscription.kind.tier_dir())
+                .join(slug),
+        )
     }
 }
 
 impl Upstream for LocalOrgs {
     fn local_root(&self, subscription: &Subscription) -> Option<PathBuf> {
         let org = self.domains.get(&subscription.domain)?;
-        let root = self.source_root(org, subscription);
+        let root = self.source_root(org, subscription)?;
         root.is_dir().then_some(root)
     }
 
@@ -148,17 +175,35 @@ impl Upstream for LocalOrgs {
                 org
             ));
         }
-        let root = self.source_root(org, subscription);
+        let Some(root) = self.source_root(org, subscription) else {
+            return Admission::Refused(format!(
+                "`{}` is not a name: a source slug is joined onto a path inside {}'s own \
+                 tree, so it must be a slug and nothing else",
+                subscription.slug, org
+            ));
+        };
         if !root.is_dir() {
             return Admission::Refused(format!(
                 "`{}` has no {} `{}`",
                 subscription.domain,
-                match subscription.kind {
-                    SourceKind::Wiki => "wiki",
-                    SourceKind::Resource => "resource",
-                },
+                subscription.kind.noun(),
                 subscription.slug
             ));
+        }
+        // t[impl wiki.resource.rights] applies to an asset shelf too,
+        // by a different argument that lands in the same place: a shelf
+        // is *published* — it is the thing ADR 0004 moved out of the
+        // vault precisely so another org could reach it — and it
+        // carries no `wiki.toml` to state a visibility in. An org that
+        // does not want a shelf read does not put it under `assets/`,
+        // the way an org that does not want a wiki read marks it
+        // private. That is a real difference from a wiki and it is
+        // recorded here rather than discovered: **every asset shelf an
+        // org holds is world-readable to anyone who can name it.**
+        // Narrowing that is a `wiki.toml`-shaped follow-up, and until
+        // it exists the vault is the private tree and `assets/` is not.
+        if subscription.kind == SourceKind::Assets {
+            return Admission::Admitted;
         }
         // t[impl wiki.resource.rights] — a Resource this platform
         // publishes is held whole because its licence allows it (only
@@ -199,10 +244,15 @@ impl Upstream for LocalOrgs {
             let Some(domain) = self.domain_of(&slug) else {
                 continue;
             };
-            let Ok(wikis) = std::fs::read_dir(org.path().join("wikis")) else {
-                continue;
-            };
-            for wiki in wikis.flatten() {
+            // Not `else { continue }`: an org may hold asset shelves
+            // and no wikis at all, and skipping the whole org because
+            // one of its four roots is absent would hide the other
+            // three.
+            for wiki in std::fs::read_dir(org.path().join("wikis"))
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
                 if !wiki.path().is_dir() {
                     continue;
                 }
@@ -233,7 +283,36 @@ impl Upstream for LocalOrgs {
                     },
                     core: false,
                     declined: false,
+                    selection: Default::default(),
                 });
+            }
+            // t[impl wiki.access.directory] for the Assets tier. Every
+            // asset shelf an org holds is listed, with no visibility
+            // filter, because there is nowhere for one to be declared
+            // — see the note in `admits`. Listing them is therefore not
+            // a widening: it says out loud what naming one already
+            // reaches.
+            if let Ok(shelves) = std::fs::read_dir(org.path().join("assets")) {
+                for shelf in shelves.flatten() {
+                    if !shelf.path().is_dir() {
+                        continue;
+                    }
+                    let Some(kind) = shelf.file_name().to_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    if kind.starts_with('.') || kind != org_proto::wiki_slug(&kind) {
+                        continue;
+                    }
+                    out.push(Subscription {
+                        domain: domain.to_owned(),
+                        slug: kind.clone(),
+                        kind: SourceKind::Assets,
+                        title: kind,
+                        core: false,
+                        declined: false,
+                        selection: Default::default(),
+                    });
+                }
             }
         }
         out.sort_by(|a, b| a.qualified().cmp(&b.qualified()));
@@ -281,6 +360,13 @@ impl SubscriptionsBackend {
             SourceKind::Resource => {
                 materialize::resource_copy_dir(&self.org_root, &subscription.slug)
             }
+            // Beside the subscribed wikis, addressed by the reference
+            // that names it — see `materialize::assets_copy_dir`.
+            SourceKind::Assets | SourceKind::Projects => materialize::assets_copy_dir(
+                &self.org_root,
+                &subscription.domain,
+                &subscription.slug,
+            ),
         };
         let files = count_files(&copy);
         HeldSubscription {
@@ -436,6 +522,13 @@ impl Subscriptions for SubscriptionsBackend {
             // reader opens (`materialize::resource_copy_dir`).
             SourceKind::Resource => materialize::refresh_resource(&root, &self.org_root, &held)
                 .map_err(|e| WikiError::Io(e.to_string()))?,
+            // Any file, any size — so the byte walker rather than the
+            // vault engine, which carries markdown only and would drop
+            // a shelf's stems on the floor without saying so.
+            SourceKind::Assets | SourceKind::Projects => {
+                materialize::refresh_assets(&root, &self.org_root, &held)
+                    .map_err(|e| WikiError::Io(e.to_string()))?
+            }
         };
         Ok(RefreshReport {
             qualified: qualified.to_owned(),
@@ -497,6 +590,7 @@ mod tests {
             title: String::new(),
             core: false,
             declined: false,
+            selection: Default::default(),
         }
     }
 

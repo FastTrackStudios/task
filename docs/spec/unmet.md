@@ -46,64 +46,63 @@ docs rather than letting the marker imply the rest.
 
 ## Regressed on purpose, and recorded rather than hidden
 
-### Cross-organisation reach for the Assets tier
+*Nothing is in this section.* Both entries that were here — cross-org
+reach for the Assets tier, and the player reading a frozen song folder —
+came from an intermediate draft of ADR 0004 that filed assets at
+`<vault>/Assets/<Kind>/`, and both are closed by moving the tier out to
+`<org>/assets/<group>/`. The section is kept, empty, because an empty
+section somebody has to deliberately re-open is a better guard than a
+heading that quietly disappears.
 
-ADR 0004 decision 1 moved charts, song documents and arrangements from
-`<org>/resources/` into the vault's `Assets/` shelf, because that — and
-only that — is what gives them a CRDT document, collaborative editing,
-wikilinks, tags and search. ADR 0003 had put them under `resources/`
-for a different and equally good reason: **that tree is the one another
-organisation can reach.**
+What closed them, for the record, since the first entry said plainly
+what it would take:
 
-The ADR says plainly that *"nothing here should land before that path
-exists"*. It landed first. This entry is the debt, stated in the terms
-somebody can act on.
+> **What closing this needs:** a way for a subscription to publish a
+> *subtree of the vault* under a name, materialised and served the way
+> `resources/` is — which is a decision about what an org exposes, not
+> a plumbing change.
 
-**What reaches `resources/` and has no Assets equivalent:**
+That turned out to be the wrong shape of answer, and the right one was
+smaller. The tier never needed to be inside the vault. It was put there
+to obtain per-file CRDT, and per-file CRDT does not come from the vault
+— it comes from a directory being **registered** on `vault::Backend` +
+`GraphBackend` + `VaultCollab`, which the `wiki/` tier has demonstrated
+from outside the vault since before any of this
+(`features/org/org-proto/src/shelf.rs` argues it at length;
+`wiki_editor_e2e::two_collab_sessions_converge_on_a_wiki_page` is the
+evidence). So `assets/` became a sibling root, an asset group became an
+`org_proto::Shelf` like a wiki, and everything the first entry listed as
+missing followed from that one move:
 
-| mechanism | where | what it does for a chart today |
-|---|---|---|
-| `SourceKind::Resource` subscription, slug `charts` | `features/wiki/wiki-live/src/materialize.rs::refresh_resource`, called from `subscriptions_backend.rs` | byte-copies the publisher's `<org>/resources/charts/` into the subscriber's held tree. It now copies the **frozen ADR 0003 snapshot** the migration left, or an empty directory for an org that never had one. Edits made in the vault since are not in it. |
-| `GET /org/{slug}/media/{*path}` | `apps/server/src/lib.rs::per_org_media_handler` | serves the org's `resources/` tree. A chart's `rel_path` is `Assets/Charts/<slug>.md` under `vault/`, which this route cannot reach and must not be widened to reach — a vault is an org's private tree, and opening a route onto it is a decision, not a fix. |
-| `links::NodeHomes` resolution | `apps/server/src/node_homes.rs::LocalHomes::locate` | *still works.* It was taught to look on the shelf, so a subscribed reader can name and follow a foreign `chart:<slug>`. What comes back is a `Reach::Reachable` naming a path nothing serves — legible, and deliberately not disguised as `NotFound`. |
+| what was missing | what serves it now |
+|---|---|
+| a cross-org materialiser for assets | `wiki_live::materialize::refresh_assets`, reached by `SourceKind::Assets` — the byte walker rather than the vault engine, because a shelf holds any file and the markdown-only engine would have dropped the rest without saying so |
+| `links::NodeHomes` naming a path something serves | `node_homes::LocalHomes::locate` returns `assets/<group>/<slug>.md`, which is exactly what a subscription materialises |
+| a test that the reach exists | `tests/integration/tests/song_library.rs` (both halves: whole shelf, and part of one), `demo_plant::the_planted_song_shelf_is_subscribable_across_orgs` |
+| the assertion that pinned the gap | `tests/integration/tests/setlist.rs` — its `assert!(refused.is_err())` on a chart-library subscription is now `.expect("a chart library is a shelf, and a shelf is subscribable")` |
 
-**Tests that pin the current state:** `tests/integration/tests/setlist.rs`
-(the subscription gates resolution, before/during/after — the security
-claim, and it still holds), `apps/server/tests/cross_org_nodes_e2e.rs`,
-and `node_homes`' own
-`a_chart_resolves_off_the_vault_shelf_and_names_an_unservable_path`,
-which asserts the gap rather than the absence of one.
+The second entry — **the player still reads the frozen song folders** —
+closes for a different reason, and it is worth stating exactly rather
+than claiming more than is true. `crates/player-ui`'s
+`fetch_kf_manifest` fetches `GET /org/{org}/media/songs/<slug>/song.md`,
+on the resources tier. That is still where a song's *media* lives and
+still correct: ADR 0004 moves the song's **document** and leaves
+`manifest.json` and the stems where they are, because they are imports
+nobody types into. What made the entry a regression was that the
+*document* had moved somewhere unreachable, so the two halves of a song
+could no longer be brought back together across an org boundary. They
+can: the document is on a subscribable shelf and the media is on the
+tier `/media` serves. `tests/integration/tests/setlist.rs` asserts both
+in one breath, which is the only way a tier rule is checkable at all.
 
-**Songs are the counter-example, and it is instructive.** A song's
-*media* — `<org>/resources/songs/<slug>/manifest.json` and its stems —
-did not move, because it is a Resource in ADR 0004's sense: imported
-bytes nobody types into. So `song:<slug>` still resolves *and* is still
-fetchable across an org boundary. Only the markdown moved. The tier rule
-sorts what shares a directory, and where it sorts cleanly nothing is
-lost.
-
-**What closing this needs:** a way for a subscription to publish a
-*subtree of the vault* under a name, materialised and served the way
-`resources/` is — which is a decision about what an org exposes, not a
-plumbing change. Until then a cross-org chart library is a regression
-against what ADR 0003 shipped.
-
-### The player still reads the frozen song folders
-
-`crates/player-ui/src/song_session.rs::fetch_kf_manifest` fetches
-`GET /org/{org}/media/songs/<slug>/song.md`, follows its
-`arrangements[].dir`, and reads `arrangement.md` for the key, the
-`chartRef` and the stems. Those files are on the resources tier, and the
-migration **copies rather than moves**, so the player keeps working —
-against a snapshot frozen at migration time. A chart edited in the vault
-after the migration is not what the player shows.
-
-Repointing it needs the player to reach `Assets/Songs/` and
-`Assets/Charts/` — i.e. the same cross-tier read path the entry above
-describes, from a wasm client that today only speaks to `/media`. Until
-then the frozen folders must not be deleted, and
-`resources::backend::SONG_MIGRATION_NOTE_BODY` says so on disk, beside
-them, for whoever opens the directory.
+**What is still open, and is not a regression.** `/org/{slug}/media/`
+serves `resources/` and does not serve `assets/`. That is deliberate,
+not an oversight: reach for a shelf goes through a *subscription*, which
+is a thing an organisation takes on and can drop, where a media route is
+an open door. A player that wants a foreign org's asset document reads
+its own subscribed copy under `subscribed/<domain>/<group>/`. If a
+direct route is ever wanted it is a decision to make on its own terms,
+and it should be made in an ADR rather than by widening a handler.
 
 ## Not reachable from this harness
 

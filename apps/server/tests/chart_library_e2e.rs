@@ -9,7 +9,7 @@
 //! chart store, no chart lane — which is exactly what this test asserts
 //! by using only what was already mounted.
 //!
-//! ADR 0004 moved where the bytes land: a chart is a **vault document**
+//! ADR 0004 moved where the bytes land: a chart is a **shelf document**
 //! on the `Assets/` shelf, not a manifest-plus-`.kf` on the resources
 //! tier. The lane did not change, which is the point of this file still
 //! passing — an app calls the same four RPCs and gets back a `rel_path`
@@ -71,8 +71,9 @@ async fn charts_round_trip_and_a_library_collects_them() {
         .unwrap();
     assert_eq!(first.slug, "hosanna");
     assert_eq!(
-        first.rel_path, "Assets/Charts/hosanna.md",
-        "the path an app opens through VaultSync"
+        first.rel_path, "hosanna.md",
+        "the path an app opens through VaultSync, relative to the \
+         `assets:charts` shelf it names alongside"
     );
     assert!(first.created);
     let second = charts
@@ -81,12 +82,12 @@ async fn charts_round_trip_and_a_library_collects_them() {
         .unwrap();
     assert_eq!(second.slug, "doxology");
 
-    // On disk: one vault document on the Assets shelf, declaring its
+    // On disk: one markdown document on the charts shelf, declaring its
     // tier, with the source in its own body. Nothing on the resources
-    // tier — that is the whole of ADR 0004 decision 1, visible in a
-    // directory listing.
+    // tier, and nothing under `vault/` either — that is the whole of
+    // ADR 0004 decision 1, visible in a directory listing.
     let org_root = support::org_root(&tmp);
-    let dir = org_root.vault_dir().join("Assets/Charts");
+    let dir = org_root.asset_shelf_dir(resources_proto::assets::CHARTS_KIND);
     let document = std::fs::read_to_string(dir.join("hosanna.md")).unwrap();
     assert!(document.contains("type: asset"), "{document}");
     assert!(document.contains("asset_kind: chart"), "{document}");
@@ -229,7 +230,7 @@ async fn re_saving_a_chart_keeps_the_document_body() {
 
     let org_root = support::org_root(&tmp);
     let md = org_root
-        .vault_dir()
+        .asset_shelf_dir(resources_proto::assets::CHARTS_KIND)
         .join(resources_proto::assets::chart_path("great-are-you-lord"));
     let hand = std::fs::read_to_string(&md)
         .unwrap()
@@ -352,21 +353,23 @@ async fn the_seeded_chart_is_readable_through_the_lane() {
         "the source came out of the document's own fence"
     );
 
-    // And the seeded chart is an ordinary vault page: it is in the
-    // folder index, so search, the graph and `[[wikilinks]]` all reach
-    // it, and it says which shelf it is on so a notes list can leave it
-    // there. That sentence is the entire justification for ADR 0004
+    // And the seeded chart is an ordinary page of its shelf: it is in
+    // the folder index, so search, the graph and `[[wikilinks]]` all
+    // reach it, and it is on a shelf of its own rather than in the
+    // middle of somebody's notes. That sentence is the entire justification for ADR 0004
     // decision 1, and this is the only place it is checked over the
     // wire rather than asserted in prose.
     let vault: vault_proto::VaultSyncClient = vox::connect_lane(&url).establish().await.unwrap();
-    let index = vault.folder_index("default".to_owned()).await.unwrap();
+    let index = vault
+        .folder_index(resources_proto::assets::charts_vault_id())
+        .await
+        .unwrap();
     let page = index
         .pages
         .iter()
         .find(|p| p.path == resources_proto::assets::chart_path("track-one"))
-        .expect("the chart is a page of the vault like any other");
+        .expect("the chart is a page of its shelf like any other");
     assert_eq!(page.page_type, resources_proto::assets::TYPE_ASSET);
-    assert!(page.is_asset(), "and it reads as one");
     assert!(
         page.tags.contains(&"chart".to_owned()),
         "tags come free with being a vault file: {:?}",
