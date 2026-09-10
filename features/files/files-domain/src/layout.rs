@@ -82,7 +82,23 @@ pub enum NotAProject {
 pub enum Entry {
     /// An org's library. Content it owns that belongs to no project — a
     /// template, a LUT, a sample pack.
+    ///
+    /// The **files tier's** `Assets/`, and not ADR 0004's assets root —
+    /// see [`Entry::AssetGroup`], which is the other one. Two things in
+    /// this repository are called assets and they are spelled apart in
+    /// the committed tree for exactly that reason.
     Assets(String),
+    /// One of an org's **asset groups** — ADR 0004's `assets/` root, one
+    /// of the four (`vault/`, `wiki/`, `assets/`, `projects/`).
+    ///
+    /// Committed as `AssetGroups/<group>/` and planted to
+    /// `<org>/assets/<group>/`. Distinct from [`Entry::Assets`] because
+    /// the two really are different things: the files tier's `Assets/`
+    /// is loose material reached by `RootId` through the files lanes,
+    /// while an asset group is a *shelf* — registered for per-file CRDT
+    /// like a wiki, and subscribable by another organisation. A person
+    /// co-edits a chart on one of these; nobody co-edits a LUT.
+    AssetGroup(String),
     /// An org's `Projects/` — a container rather than a thing, and it
     /// still needs a name. A caller walking a tree and asking about every
     /// directory should get an answer here, not a shrug that reads the
@@ -176,6 +192,7 @@ pub fn classify(parts: &[&str]) -> Entry {
         [] => Entry::Unknown,
         [org] => Entry::Org((*org).to_string()),
         [org, "Assets", ..] => Entry::Assets((*org).to_string()),
+        [org, "AssetGroups", ..] => Entry::AssetGroup((*org).to_string()),
         [org, "Vault", ..] => Entry::Vault((*org).to_string()),
         [org, "Wiki", ..] | [org, "Wikis", ..] => Entry::Wiki((*org).to_string()),
         [org, "Resources", ..] => Entry::Resources((*org).to_string()),

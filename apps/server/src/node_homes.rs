@@ -19,12 +19,33 @@
 //!
 //! # Which source publishes a node
 //!
-//! Assets live at `<org>/resources/<kind>s/` (ADR 0003), and a Resource
-//! subscription materialises `<org>/resources/<slug>/`. So the source
-//! that publishes `chart:doxology` is the one whose slug is `charts`,
-//! and a reader subscribed to `guest.example/charts` may follow any
-//! `guest.example/chart:*`. One subscription per library, which is the
-//! granularity a person actually chooses in.
+//! Library material lives at `<org>/resources/<kind>s/` (ADR 0003), and
+//! a Resource subscription materialises `<org>/resources/<slug>/`. So
+//! the source that publishes `chart:doxology` is the one whose slug is
+//! `charts`, and a reader subscribed to `guest.example/charts` may
+//! follow any `guest.example/chart:*`. One subscription per library,
+//! which is the granularity a person actually chooses in.
+//!
+//! # ADR 0004 moved charts and songs onto their own shelves
+//!
+//! A chart is an asset-group document now
+//! (`<org>/assets/charts/<slug>.md`), and **the group name is the
+//! subscription slug** — the same string `library_of` already returned.
+//! So nothing about this module's rule changed: the source that
+//! publishes `chart:doxology` is still the one whose slug is `charts`,
+//! and a reader subscribed to `guest.example/charts` may still follow
+//! any `guest.example/chart:*`. What changed is only which of the two
+//! trees on disk that slug names, and [`SourceKind::Assets`] is how the
+//! subscription says which.
+//!
+//! An earlier draft filed these under `<vault>/Assets/` instead, and
+//! that draft could not do this at all: a vault is never subscribable
+//! (`wiki.boundary.no-subscribe`), so a chart inside one was resolvable
+//! and unfetchable — a `Reach::Reachable` naming a path nothing served.
+//! Moving the shelf out of the vault is what makes the two halves agree
+//! again, and it is why `wiki_live::materialize::refresh_assets` can
+//! bring a foreign song library down onto disk where
+//! `refresh_resource` never could.
 //!
 //! # What is deliberately not distinguished
 //!
@@ -105,20 +126,46 @@ impl LocalHomes {
         let Ok(subs) = store.active(&Subscriber::Vault) else {
             return false;
         };
-        subs.iter()
-            .any(|s| s.kind == SourceKind::Resource && s.domain == domain && s.slug == library)
+        // Either kind admits: `charts` is an asset group and `patches`
+        // is a resource library, and which one a slug denotes is the
+        // publisher's business rather than the reader's. Matching on
+        // the slug and not the kind is what keeps a subscription taken
+        // out before ADR 0004 working after it.
+        subs.iter().any(|s| {
+            matches!(s.kind, SourceKind::Resource | SourceKind::Assets)
+                && s.domain == domain
+                && s.slug == library
+        })
     }
 
     /// Where a node's content sits inside its own org, if it is there.
-    /// Charts keep their source beside the manifest, so the `.kf` is the
-    /// interesting file; every other kind is a directory.
+    ///
+    /// Two trees, and which one is asked first follows ADR 0004's tier
+    /// rule rather than the node's kind: an **asset group**
+    /// (`<org>/assets/<library>/`) holds what people type into, a
+    /// **resource library** (`<org>/resources/<library>/`) holds what
+    /// they import. Charts and songs moved; patches, samples and
+    /// lighting did not, and nobody co-edits a WAV.
+    ///
+    /// The asset shelf is tried first and the resources tier is the
+    /// fallback, because the migration **copies and deletes nothing**
+    /// (`ResourcesBackend::migrate_charts`): both trees hold a chart on
+    /// a migrated deployment, one of them frozen at migration time. The
+    /// live one has to win, and the live one is the shelf.
+    ///
+    /// The returned `rel_path` is org-relative, so a caller can see
+    /// which tier answered — `assets/charts/hosanna.md` against
+    /// `resources/patches/warm-pad/patch.md`.
     fn locate(&self, org: &str, library: &str, node: &NodeRef) -> Option<(String, PathBuf)> {
-        let base = self
-            .data_root
-            .join("orgs")
-            .join(org)
-            .join("resources")
-            .join(library);
+        let org_dir = self.data_root.join("orgs").join(org);
+        if matches!(node.kind, NodeKind::Chart | NodeKind::Song) {
+            let rel = format!("{}.md", node.id);
+            let path = org_dir.join("assets").join(library).join(&rel);
+            if path.exists() {
+                return Some((format!("assets/{library}/{rel}"), path));
+            }
+        }
+        let base = org_dir.join("resources").join(library);
         let candidates = match node.kind {
             NodeKind::Chart => vec![format!("{}.kf", node.id), node.id.clone()],
             _ => vec![node.id.clone(), format!("{}.md", node.id)],
@@ -237,5 +284,61 @@ mod tests {
         assert_eq!(resolved.reach, Reach::NotPermitted);
         // The chart exists, and the answer does not admit that.
         assert_eq!(resolved.rel_path, "");
+    }
+
+    /// A chart on the ADR 0004 shelf is located there, and the path it
+    /// comes back with is one another organisation can actually reach.
+    ///
+    /// This assertion is the inversion of the one it replaces. Under
+    /// the `<vault>/Assets/` draft the same test ended
+    /// `assert!(!rel_path.starts_with("resources/"))` with a comment
+    /// explaining that nothing served the path it *did* start with —
+    /// the regression ADR 0004 said should not have landed. It names an
+    /// asset group now, which is a shelf a subscription materialises
+    /// (`wiki_live::materialize::refresh_assets`), so resolving and
+    /// fetching agree again.
+    #[test]
+    fn a_chart_resolves_off_its_asset_shelf_and_names_a_reachable_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shelf = tmp.path().join("orgs/guest/assets/charts");
+        std::fs::create_dir_all(&shelf).unwrap();
+        std::fs::write(
+            shelf.join("hosanna.md"),
+            "---\ntype: asset\nasset_kind: chart\nslug: hosanna\n---\n",
+        )
+        .unwrap();
+
+        let mut domains = HashMap::new();
+        domains.insert("guest.example".to_owned(), "guest".to_owned());
+        let reader_root = tmp.path().join("orgs/mine");
+        std::fs::create_dir_all(&reader_root).unwrap();
+        let store = wiki_live::subscriptions::SubscriptionStore::open(&reader_root);
+        store
+            .subscribe(
+                &Subscriber::Vault,
+                wiki_proto::subscription::Subscription {
+                    domain: "guest.example".into(),
+                    slug: "charts".into(),
+                    kind: SourceKind::Assets,
+                    title: "Charts".into(),
+                    core: false,
+                    declined: false,
+                    selection: Default::default(),
+                },
+            )
+            .expect("subscribe");
+
+        let homes = LocalHomes::new(tmp.path().to_path_buf(), domains, "mine", reader_root);
+        let node = NodeRef::new(NodeKind::Chart, "hosanna").in_domain("guest.example");
+        let resolved = homes.resolve(&node);
+        assert_eq!(resolved.reach, Reach::Reachable);
+        assert_eq!(
+            resolved.rel_path, "assets/charts/hosanna.md",
+            "the asset group is where a chart is now, and it is subscribable"
+        );
+        assert!(
+            !resolved.rel_path.starts_with("vault/"),
+            "a vault is never subscribable, so a shelf inside one could not be reached"
+        );
     }
 }

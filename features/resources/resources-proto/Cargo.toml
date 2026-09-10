@@ -11,6 +11,12 @@ repository.workspace = true
 [dependencies]
 facet = { workspace = true }
 thiserror = { workspace = true }
+# ADR 0004: a chart is a vault document on the Assets shelf, so this
+# crate's `assets` module re-exports the tier's own constants rather
+# than re-spelling them. Wire contract only — no filesystem, wasm-clean.
+# The shelf trait: an asset group's vault id is composed by
+# `org_proto::Shelf`, never spelled here.
+org-proto = { path = "../../org/org-proto", default-features = false }
 architect = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 

@@ -14,10 +14,17 @@
 //! that `--kind Setlist` and a web client writing `setlist` name one
 //! kind rather than two.
 //!
-//! `task song add` is the composite verb: it builds a durable **Song
-//! folder** with the `song` crate (a `song.md` index + a default
-//! arrangement), attaches chart / pdf / audio files, and then registers
-//! the song in a target collection as a `song:<slug>` node.
+//! `task song add` is the composite verb: it writes a **song document**
+//! and, with `--chart`, a **chart** for its default arrangement — both
+//! on the charts asset group through `ResourcesService` (ADR 0004) —
+//! and then registers the song in a target collection as a
+//! `song:<slug>` node.
+//!
+//! It used to write the external `song` crate's folder layout directly
+//! to `<org>/resources/songs/<slug>/`. That layout is now an *import
+//! shape*: the server migrates one when it finds one, and this command
+//! writes the tier the migration writes. See `resources_proto::SongDoc`
+//! for the translation and why the flat form won.
 //!
 //! Lives in its own module (like `plan` / `workstream`) so concurrent
 //! agents editing `main.rs` only collide on the two-line dispatch arm.
@@ -32,8 +39,7 @@ use collection_proto::{
     Collection, CollectionKind, CollectionServiceClient, NodeKind, NodeRef, Placement,
 };
 use eyre::Context;
-use song::{Arrangement, AttachmentRef, ChartRef, Key, PartsManifest, Song};
-use uuid::Uuid;
+use resources_proto::{ChartDoc, ResourcesServiceClient, SongDoc};
 
 use crate::errors;
 
@@ -471,69 +477,97 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
             server,
             json,
         } => {
-            // Resolve the org once: its slug names the collection service's
-            // scope, and its on-disk root is where the Song folder is
-            // written (`<org>/resources/songs/<slug>`).
+            // ── ADR 0004: this writes the Assets tier, through the
+            // lanes, rather than a folder on disk ───────────────────
+            //
+            // It used to call `song::to_folder` — the vendored layout
+            // from the external `song` crate: `song.md` with a uuid
+            // `defaultArrangement` and an embedded `arrangements:`
+            // list, plus `arrangements/<dir>/arrangement.md` beside a
+            // copied `.kf`. Two representations of one idea existed
+            // (that folder and `ChartDoc::arrangement`, added in
+            // PR #80), and ADR 0004 makes the flat, link-shaped one
+            // authoritative: a song is a shelf document, an arrangement
+            // is a chart that *names* its song, and the chart source is
+            // a fence in that chart's own body.
+            //
+            // The consequence worth stating: what this command writes
+            // is now collaborative, searchable, taggable and linkable,
+            // because it is in the vault. What it wrote before was
+            // none of those things — which is the whole of why the
+            // `--chart` path is worth keeping and worth moving.
+            //
+            // The verb is unchanged. `task song add --chart X` still
+            // takes a chart file from anywhere on disk and still
+            // registers `song:<slug>` in the target collection; only
+            // where the bytes land moved, and the server decides that.
             let active = crate::org_ctx::resolve_active(org.as_deref())?;
             let org_slug = active.root.slug().to_string();
-            let song_slug = slug(&title);
-            let song_root = active.root.resources_dir().join("songs").join(&song_slug);
-
-            let key: Key = match key.as_deref() {
-                Some(k) => k
-                    .parse()
-                    .map_err(|e| errors::usage("parse key").cause(format!("{e}")).report())?,
-                None => Key::default(),
-            };
             let arr_name = arrangement.unwrap_or_else(|| "Default".to_string());
-            let arr_slug = slug(&arr_name);
-            let arr_id = Uuid::new_v4();
+            let key = key.unwrap_or_default();
 
-            // Chart lands inside the default arrangement folder; pdfs +
-            // audio land under `attachments/`. Refs are relative paths.
-            let chart_ref = chart.as_ref().map(|src| {
-                let fname = file_name(src);
-                ChartRef::from_path(format!("arrangements/{arr_slug}/{fname}"))
-            });
-
-            let mut attachment_refs = Vec::new();
-            for src in &pdf {
-                attachment_refs.push(attachment_ref(src, "pdf"));
-            }
-            for src in &audio {
-                attachment_refs.push(attachment_ref(src, "audio"));
-            }
-
-            let arrangement = Arrangement {
-                id: arr_id,
-                name: arr_name,
-                key,
-                chart_ref: chart_ref.clone(),
-                parts: PartsManifest::default(),
-                attachment_refs: attachment_refs.clone(),
-            };
-            let song = Song {
-                id: Uuid::new_v4(),
-                title: title.clone(),
-                tags: Vec::new(),
-                default_arrangement: arr_id,
-                arrangements: vec![arrangement],
+            // The chart file is read here and *sent*, not copied: the
+            // server owns where a chart lives, and a CLI that wrote the
+            // vault directly would bypass `put_file` and with it the
+            // CRDT layer — the exact mistake ADR 0004 exists to undo.
+            let source = match chart.as_ref() {
+                Some(path) => std::fs::read_to_string(path)
+                    .wrap_err_with(|| format!("read chart {}", path.display()))?,
+                None => String::new(),
             };
 
-            // Write the folder skeleton (song.md + arrangement.md + dirs)…
-            song::to_folder(&song, &song_root)
-                .map_err(|e| eyre::eyre!("write song folder {}: {e}", song_root.display()))?;
+            let resources =
+                crate::establish_client::<ResourcesServiceClient>(server.clone(), &org_slug)
+                    .await?;
+            let song = resources
+                .upsert_song(SongDoc {
+                    slug: String::new(),
+                    title: title.clone(),
+                    writers: Vec::new(),
+                    key: key.clone(),
+                    tags: Vec::new(),
+                    updated_at: String::new(),
+                })
+                .await
+                .map_err(|e| eyre::eyre!("upsert_song: {e:?}"))?;
+            let song_slug = song.slug.clone();
 
-            // …then copy the referenced bytes into place.
-            if let (Some(src), Some(cref)) = (chart.as_ref(), chart_ref.as_ref()) {
-                if let Some(rel) = &cref.path {
-                    copy_into(src, &song_root.join(rel))?;
-                }
-            }
-            for (src, aref) in pdf.iter().chain(audio.iter()).zip(&attachment_refs) {
-                if let Some(rel) = &aref.path {
-                    copy_into(src, &song_root.join(rel))?;
-                }
+            let chart_written = if chart.is_some() {
+                Some(
+                    resources
+                        .upsert_chart(ChartDoc {
+                            slug: String::new(),
+                            title: title.clone(),
+                            source,
+                            key,
+                            notation: "keyflow".into(),
+                            sections: Vec::new(),
+                            song: format!("song:{song_slug}"),
+                            arrangement: arr_name.clone(),
+                            // The server owns the invariant; a song's
+                            // first chart becomes its default whatever
+                            // this asks for.
+                            is_default: true,
+                            updated_at: String::new(),
+                        })
+                        .await
+                        .map_err(|e| eyre::eyre!("upsert_chart: {e:?}"))?,
+                )
+            } else {
+                None
+            };
+
+            // `--pdf` / `--audio` are not asset documents: they are
+            // bytes. They stay out of the vault, and out of this
+            // command, until there is a lane that puts them in a File
+            // Root — a chart is text somebody edits, a reference mix is
+            // not, and ADR 0004 draws exactly that line.
+            if !pdf.is_empty() || !audio.is_empty() {
+                eyre::bail!(
+                    "`--pdf` / `--audio` are not supported since ADR 0004: a song's \
+                     attachments are bytes, not shelf documents. Adopt them into a File \
+                     Root (`task files …`) and reference them from the song."
+                );
             }
 
             // Register the song in the target collection.
@@ -553,7 +587,10 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
             if json {
                 return emit_json(&updated);
             }
-            println!("wrote song `{title}` → {}", song_root.display());
+            println!("wrote song `{title}` → {}", song.rel_path);
+            if let Some(c) = &chart_written {
+                println!("wrote chart:{} ({arr_name}) → {}", c.slug, c.rel_path);
+            }
             println!("added song:{song_slug} to `{}`", updated.title);
             print_collection(&updated);
         }
@@ -980,34 +1017,6 @@ fn upsert_note_frontmatter(
     }
     std::fs::write(note_path, format!("---\n{front_out}---\n{body}"))
         .map_err(|e| eyre::eyre!("write {}: {e}", note_path.display()))?;
-    Ok(())
-}
-
-// ── song file helpers ─────────────────────────────────────────────────
-
-fn file_name(p: &Path) -> String {
-    p.file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "attachment".to_string())
-}
-
-fn attachment_ref(src: &Path, kind: &str) -> AttachmentRef {
-    let fname = file_name(src);
-    AttachmentRef {
-        id: Uuid::new_v4().simple().to_string(),
-        path: Some(format!("attachments/{fname}")),
-        sha256: None,
-        kind: Some(kind.to_string()),
-    }
-}
-
-/// Copy `src` to `dest`, creating parent dirs. Errors if `src` is missing.
-fn copy_into(src: &Path, dest: &Path) -> eyre::Result<()> {
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).wrap_err_with(|| format!("mkdir {}", parent.display()))?;
-    }
-    std::fs::copy(src, dest)
-        .wrap_err_with(|| format!("copy {} → {}", src.display(), dest.display()))?;
     Ok(())
 }
 

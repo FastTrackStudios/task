@@ -21,6 +21,16 @@
 //!     └── ...
 //! ```
 //!
+//! `vault/`, `wiki/`, `assets/` and `projects/` are ADR 0004's four
+//! roots, and each named directory under them is a
+//! [`crate::Shelf`] — registered for sync, the link graph and per-file
+//! CRDT by one loop, and (except the vault) publishable for another
+//! organisation to subscribe to. `resources/` is not a fifth root: it
+//! is an asset group that happens to be immutable and leaf-only.
+//! `projects/` is the one that has not moved yet — a project's tree is
+//! still a File Root under `files/` — and [`crate::Tier::Projects`]
+//! says why the type exists in advance of the move.
+//!
 //! Default data root is `$HOME/.task/` (override with
 //! `TASK_DATA_ROOT`). Per-org databases live under
 //! `<data_root>/orgs/<slug>/{auth,timer,finance}.sqlite`.
@@ -200,13 +210,27 @@ impl DataRoot {
         // `vault/` is personal; `wiki/Knowledge/` is curated
         // (LLM-Wiki shape); `wiki/LLM/` is loose scratch the
         // agents own (memories, journals, run logs).
+        // `assets/<kind>/` is created up-front for the same reason the
+        // rest of these are: Task's own lanes (charts, songs) write
+        // there, and a shelf that does not exist is a shelf
+        // `LocalOrgs::admits` refuses — so a fresh org would publish an
+        // empty song library as "no such shelf" rather than as an empty
+        // one, which is a different and worse answer.
+        let asset_dirs: Vec<String> = crate::DEFAULT_ASSET_KINDS
+            .iter()
+            .map(|k| format!("assets/{k}"))
+            .collect();
         for sub in [
             "vault",
             "attachments",
             "wiki/Knowledge",
             "wiki/LLM/Memories",
             "wiki/LLM/Journals",
-        ] {
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(asset_dirs)
+        {
             let p = org.path().join(sub);
             std::fs::create_dir_all(&p).map_err(|source| RootError::Create {
                 path: p.display().to_string(),
@@ -477,6 +501,114 @@ impl OrgRoot {
     #[must_use]
     pub fn bible_dir(&self, translation: &str) -> PathBuf {
         self.resources_dir().join("bible").join(translation)
+    }
+
+    /// `<org>/assets/` — the **Assets tier**, a sibling of `vault/`,
+    /// `wiki/`, `wikis/` and `resources/`.
+    ///
+    /// ADR 0004 decision 1. Assets are the things that will be useful
+    /// later rather than the inner workings of a knowledge base: a
+    /// chart, a song, a session file. Any file, any directory, any
+    /// size.
+    ///
+    /// A sibling and not a subtree of `vault/`, which an earlier draft
+    /// of the ADR had it be. The draft's reason was that being in the
+    /// vault is what makes a file collaborative, and that is simply not
+    /// how it works — see [`crate::shelf`]. Collaboration follows
+    /// registration; `wiki/` is outside the vault and collaborative
+    /// already. The cost of the draft was real: a shelf of songs
+    /// sitting in the middle of somebody's notes, and — because a vault
+    /// is never subscribable — no way for another organisation to
+    /// reach it.
+    ///
+    /// One directory per **kind** ([`Self::asset_shelf_dir`]), because
+    /// a kind is the unit somebody publishes and subscribes to.
+    #[must_use]
+    pub fn assets_dir(&self) -> PathBuf {
+        self.path.join("assets")
+    }
+
+    /// `<org>/assets/<kind>/` — one asset kind's shelf root.
+    #[must_use]
+    pub fn asset_shelf_dir(&self, kind: &str) -> PathBuf {
+        self.assets_dir().join(kind)
+    }
+
+    /// Every asset shelf this org holds, as `(kind, root)`.
+    ///
+    /// The set is what is on disk — exactly the rule
+    /// [`Self::named_wikis`] follows for wikis (`wiki.many.set`) —
+    /// unioned with [`crate::DEFAULT_ASSET_KINDS`], the kinds Task's
+    /// own lanes write and which therefore have to be registered
+    /// before anybody has used them.
+    ///
+    /// Reading the set from disk rather than from an enum is what lets
+    /// an application put a shelf here that Task has never heard of and
+    /// have it registered, published and subscribable on the same terms
+    /// as a chart library. ADR 0004 decision 2 is the same rule for
+    /// collections; this is it for storage.
+    ///
+    /// Sorted by kind, so a caller enumerating shelves gets a stable
+    /// order rather than the filesystem's.
+    #[must_use]
+    pub fn asset_shelves(&self) -> Vec<(String, PathBuf)> {
+        let mut kinds: Vec<String> = crate::DEFAULT_ASSET_KINDS
+            .iter()
+            .map(|k| (*k).to_owned())
+            .collect();
+        if let Ok(entries) = std::fs::read_dir(self.assets_dir()) {
+            for entry in entries.flatten() {
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                let Some(kind) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                // A kind whose directory name is not its own slug would
+                // make the reference in a page and the folder on disk
+                // disagree, and the disagreement would surface only as
+                // an unresolved link. Skip rather than guess — the same
+                // rule `named_wikis` applies, for the same reason.
+                if kind != wiki_slug(&kind) || kinds.contains(&kind) {
+                    continue;
+                }
+                kinds.push(kind);
+            }
+        }
+        kinds.sort();
+        kinds
+            .into_iter()
+            .map(|k| {
+                let root = self.asset_shelf_dir(&k);
+                (k, root)
+            })
+            .collect()
+    }
+
+    /// Every shelf this org holds — its vault, each named wiki, each
+    /// asset shelf — as one list.
+    ///
+    /// **This is the list the server's registration loop consumes**,
+    /// and having exactly one such list is the point of
+    /// [`crate::Shelf`]. Before it, the vault was registered by one
+    /// piece of code and the wikis by another, and a third tier meant a
+    /// third; see that module for why two spellings of one act is a
+    /// defect rather than a style.
+    ///
+    /// The vault comes first because it is the one shelf an org always
+    /// has, and the order is otherwise the stable order of
+    /// [`Self::named_wikis`] followed by [`Self::asset_shelves`].
+    #[must_use]
+    pub fn shelves(&self) -> Vec<Box<dyn crate::Shelf>> {
+        let mut out: Vec<Box<dyn crate::Shelf>> =
+            vec![Box::new(crate::VaultShelf::new(self.vault_dir()))];
+        out.extend(self.named_wikis().into_iter().map(|(slug, root)| {
+            Box::new(crate::WikiShelf::new(slug, root)) as Box<dyn crate::Shelf>
+        }));
+        out.extend(self.asset_shelves().into_iter().map(|(kind, root)| {
+            Box::new(crate::AssetShelf::new(kind, root)) as Box<dyn crate::Shelf>
+        }));
+        out
     }
 
     pub fn manifest(&self) -> Result<OrgManifest, ParseError> {

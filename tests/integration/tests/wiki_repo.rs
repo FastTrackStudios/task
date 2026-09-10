@@ -241,6 +241,7 @@ async fn a_repo_sourced_wiki_mirrors_its_repository_and_is_a_wiki_like_any_other
                 title: w.title.into(),
                 core: false,
                 declined: false,
+                selection: Default::default(),
             },
         )
         .await

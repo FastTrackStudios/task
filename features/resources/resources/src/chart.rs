@@ -1,19 +1,59 @@
-//! The Keyflow chart on disk — two files under
-//! `<org>/resources/charts/`, and what an app may never clobber.
+//! The Keyflow chart on disk — **one markdown document** on the charts
+//! shelf, and what an app may never clobber.
 //!
-//! - `<slug>.kf` — the chart source, byte for byte as Keyflow sent it.
-//!   An editor that knows nothing about Task opens it and sees a chart.
-//! - `<slug>.md` — the `type: resource`, `resource_kind: chart`
-//!   manifest. The app owns the frontmatter keys that describe the
-//!   chart ([`APP_OWNED`]); every other key, and the whole body, belong
-//!   to whoever wrote them, and a re-upsert keeps them verbatim — the
-//!   same contract [`crate::sermon::refresh_manifest`] holds the sermon
-//!   sync to.
+//! `<org>/assets/charts/<slug>.md`, and nothing beside it. The
+//! frontmatter is `type: asset`, `asset_kind: chart`; the chart source
+//! is a ` ```keyflow ` fence in the body; everything else in the body
+//! belongs to whoever wrote it.
+//!
+//! # Why one file, and why on a shelf of its own
+//!
+//! ADR 0004 decision 1. Under ADR 0003 a chart was two files under
+//! `<org>/resources/charts/` — a manifest and a `<slug>.kf` holding the
+//! source verbatim — and the resources tier is plain `std::fs`, so a
+//! chart had no CRDT document, no collaborative editing, no wikilinks,
+//! no tags, no search and no presence in Task's own UI. Two people
+//! editing a chart in Keyflow got none of what two people editing a
+//! note get.
+//!
+//! So charts moved onto an **asset group** — `<org>/assets/charts/`, a
+//! sibling of `vault/` and `wiki/` that is registered for file sync,
+//! the link graph and per-file CRDT exactly as those are
+//! ([`org_proto::shelf`]). That single move is the whole feature:
+//! `vault-collab` already keys a Loro document by `(vault_id, path)`
+//! for any registered root, the graph already indexes any `.md` under
+//! one, search already walks the tree. Collaboration is **inherited**,
+//! not built.
+//!
+//! An intermediate draft filed charts *inside* the vault
+//! (`<vault>/Assets/Charts/`) on the belief that being a vault file was
+//! what conferred all that. It is not — being registered is, which the
+//! `wiki/` tier has demonstrated from outside the vault all along — and
+//! the belief cost the other half of the ADR: a vault is never
+//! subscribable, so a chart library inside one was one no other
+//! organisation could take. The shelf is a sibling, and a foreign
+//! `chart:<slug>` resolves and fetches again.
+//!
+//! The two files became one because the walker collects `.md` and
+//! `.base` and nothing else: a `.kf` on the shelf would be a file the
+//! shelf does not know about, and charts would have moved house and
+//! gained nothing. So the source is a fenced block, and the document a
+//! person opens in Task is the chart plus their notes about it,
+//! converging together.
+//!
+//! # What is app-owned and what is not
+//!
+//! [`APP_OWNED`] frontmatter keys and the ` ```keyflow ` fence are
+//! Keyflow's; a re-save rewrites exactly those. Every other frontmatter
+//! key, and every other byte of the body, belongs to whoever wrote them
+//! and survives verbatim — the same contract
+//! [`crate::sermon::refresh_manifest`] holds the sermon sync to, now
+//! extended to cover one block of the body as well.
 //!
 //! The slug is the chart's identity (`chart:<slug>` in the link graph
-//! and in a `Library` collection), and it is kebab-cased by the *same*
+//! and in a `Library` collection), kebab-cased by the *same*
 //! [`crate::sermon::slugify`] the sermon lane uses — one slug rule for
-//! the whole resources tier.
+//! every kind Task files by name.
 //!
 //! **One chart is one arrangement.** A song played three ways is three
 //! charts, told apart by [`ChartDoc::arrangement`] and joined by
@@ -25,6 +65,7 @@
 
 use links_proto::{NodeKind, NodeRef};
 use resources_proto::ChartDoc;
+use resources_proto::assets::{CHART_FENCE, CHART_KIND, KIND_KEY, TYPE_ASSET, TYPE_KEY};
 use serde_yaml::{Mapping, Value};
 
 use crate::ResourceError;
@@ -50,14 +91,14 @@ pub const APP_OWNED: &[&str] = &[
 /// invariant working.
 pub const IS_DEFAULT_KEY: &str = "is_default";
 
-/// `source:` value on a chart manifest — where the `.kf` came from.
+/// `source:` value on a chart document — where the chart came from.
 pub const SOURCE: &str = "keyflow";
 
-/// The source file beside a chart manifest (`<slug>.kf`).
-#[must_use]
-pub fn source_path(md_path: &std::path::Path) -> std::path::PathBuf {
-    md_path.with_extension("kf")
-}
+/// The frontmatter key ADR 0003 used for the kind, kept here so the
+/// migration can recognise — and drop — a document it has already
+/// rewritten. A chart still carrying this key is one nothing has
+/// migrated yet, which is a fact worth being able to read off the file.
+pub const LEGACY_KIND_KEY: &str = "resource_kind";
 
 /// The slug this chart gets: its own when it names one, else a kebab of
 /// the title *and the arrangement label*, else — a kebab taken by a
@@ -74,7 +115,7 @@ pub fn source_path(md_path: &std::path::Path) -> std::path::PathBuf {
 /// from renaming a chart that already exists: re-saving a chart names
 /// its slug, and naming a slug means "the same one again".
 ///
-/// `taken` is every slug already on disk.
+/// `taken` is every slug already on the shelf.
 #[must_use]
 pub fn slug_for(taken: &[String], chart: &ChartDoc) -> String {
     let title = if chart.arrangement.trim().is_empty() {
@@ -138,13 +179,14 @@ fn owned_values(chart: &ChartDoc) -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// Rewrite just the default flag on an existing manifest, leaving every
+/// Rewrite just the default flag on an existing document, leaving every
 /// other key and the whole body untouched.
 ///
 /// This is how the backend clears the flag on a song's other charts
 /// when one of them is made the default: it must not disturb a chart it
-/// was not asked to write, so it touches exactly one key rather than
-/// round-tripping a [`ChartDoc`] through [`refresh_manifest`].
+/// was not asked to write — including that chart's source — so it
+/// touches exactly one key rather than round-tripping a [`ChartDoc`]
+/// through [`refresh_document`].
 pub fn set_default(existing: &str, is_default: bool) -> Result<String, ResourceError> {
     let (fm_text, body) = split(existing).ok_or(ResourceError::NoFrontmatter)?;
     let mut fm: Mapping =
@@ -153,17 +195,39 @@ pub fn set_default(existing: &str, is_default: bool) -> Result<String, ResourceE
     Ok(format!("---\n{}---\n{body}", yaml(&fm)?))
 }
 
+/// Serialise the frontmatter, with the sequence keys in flow form.
+///
+/// The flow pass is not cosmetic — see
+/// [`crate::asset::inline_sequences`]: a block sequence `serde_yaml`
+/// emits is read as *empty* by the parser behind the vault's folder
+/// index, so a document written the other way would have no tags in
+/// Task's own UI. An asset whose tags do not work like a note's tags is
+/// not a vault item in the one way that matters.
 fn yaml(mapping: &Mapping) -> Result<String, ResourceError> {
-    serde_yaml::to_string(mapping).map_err(|e| ResourceError::Yaml(e.to_string()))
+    let text = serde_yaml::to_string(mapping).map_err(|e| ResourceError::Yaml(e.to_string()))?;
+    Ok(crate::asset::inline_sequences(&text, &["sections", "tags"]))
 }
 
-/// A fresh manifest: the frontmatter plus a body pointing at the `.kf`.
-/// Nothing of the chart is duplicated into the markdown — the source
-/// file is the chart.
-pub fn render_manifest(chart: &ChartDoc, slug: &str) -> Result<String, ResourceError> {
+/// The chart source held in a document's ` ```keyflow ` fence, or the
+/// empty string when it has none.
+///
+/// Total rather than fallible on purpose: a chart whose fence a person
+/// deleted is a chart with no source right now, not a corrupt file, and
+/// the next save heals it (see
+/// [`resources_proto::assets::replace_fenced`]). Refusing to read it
+/// would make one bad edit look like a lost chart.
+#[must_use]
+pub fn source_of(document: &str) -> String {
+    let body = split(document).map_or(document, |(_, body)| body);
+    resources_proto::assets::extract_fenced(body, CHART_FENCE).unwrap_or_default()
+}
+
+/// A fresh chart document: the frontmatter, a heading, the source in
+/// its fence, and an empty notes section for the person who opens it.
+pub fn render_document(chart: &ChartDoc, slug: &str) -> Result<String, ResourceError> {
     let mut fm = Mapping::new();
-    fm.insert("type".into(), "resource".into());
-    fm.insert("resource_kind".into(), "chart".into());
+    fm.insert(TYPE_KEY.into(), TYPE_ASSET.into());
+    fm.insert(KIND_KEY.into(), CHART_KIND.into());
     fm.insert("slug".into(), slug.into());
     for (k, v) in owned_values(chart) {
         fm.insert(k.into(), v);
@@ -178,27 +242,96 @@ pub fn render_manifest(chart: &ChartDoc, slug: &str) -> Result<String, ResourceE
 
 fn render_body(chart: &ChartDoc, slug: &str) -> String {
     format!(
-        "<!-- The chart itself is `{slug}.kf` beside this file; edit it there. Sections anchor as chart:{slug}#<section>. -->\n\
-# {}\n\
+        "# {}\n\
 \n\
+{}\n\
 ## Notes\n\
 \n\
-_Notes about this chart go here; the source is `{slug}.kf`._\n",
+_Notes about this chart go here. It is an ordinary markdown document: \
+[[wikilink]] it, tag it, search it, and edit it with somebody else. \
+Sections anchor as `chart:{slug}#<section>`._\n",
         chart.title,
+        resources_proto::assets::fence(&chart.source, CHART_FENCE),
     )
 }
 
-/// Re-upsert an existing manifest: rewrite only the [`APP_OWNED`]
-/// frontmatter keys, keep every other key and the whole body byte for
-/// byte.
-pub fn refresh_manifest(existing: &str, chart: &ChartDoc) -> Result<String, ResourceError> {
+/// Re-save an existing chart document: rewrite the [`APP_OWNED`]
+/// frontmatter keys and the ` ```keyflow ` fence, and keep every other
+/// key and every other byte of the body.
+///
+/// The body clause is the one that matters for collaboration. Keyflow
+/// saving a chart must not stamp on the paragraph somebody typed under
+/// `## Notes` thirty seconds ago — and because the write goes through
+/// `put_file` into a file `vault-collab` may hold an open document for,
+/// anything this function *does* change is folded into that document by
+/// the inbound three-way merge rather than reverting a live edit.
+pub fn refresh_document(existing: &str, chart: &ChartDoc) -> Result<String, ResourceError> {
     let (fm_text, body) = split(existing).ok_or(ResourceError::NoFrontmatter)?;
     let mut fm: Mapping =
         serde_yaml::from_str(fm_text).map_err(|e| ResourceError::Yaml(e.to_string()))?;
+    promote_frontmatter(&mut fm);
     for (k, v) in owned_values(chart) {
         fm.insert(k.into(), v);
     }
+    let body = resources_proto::assets::replace_fenced(body, CHART_FENCE, &chart.source);
     Ok(format!("---\n{}---\n{body}", yaml(&fm)?))
+}
+
+/// Move a document's frontmatter onto the Assets tier's vocabulary,
+/// in place: `type: resource` → `type: asset`, and `resource_kind` →
+/// `asset_kind` at the same position rather than appended.
+///
+/// Called on every re-save, not only by the migration, so a chart that
+/// somehow still carries ADR 0003's keys is corrected the next time
+/// anybody touches it. Idempotent: a document already on the new
+/// vocabulary is left exactly as it is, which is what lets the
+/// migration run on every boot without rewriting settled files.
+pub fn promote_frontmatter(fm: &mut Mapping) {
+    fm.insert(TYPE_KEY.into(), TYPE_ASSET.into());
+    if let Some(kind) = fm.remove(Value::from(LEGACY_KIND_KEY)) {
+        // `insert` keeps an existing key's position and appends a new
+        // one, so re-inserting under the new name puts the kind at the
+        // end. That is a cosmetic difference in a migrated file and not
+        // worth a rebuild of the mapping.
+        fm.entry(KIND_KEY.into()).or_insert(kind);
+    }
+}
+
+/// Build the vault document for a chart being migrated off the ADR 0003
+/// resources tier: its old manifest, plus the `.kf` that sat beside it.
+///
+/// Everything the person wrote survives — foreign frontmatter keys, the
+/// whole body — and the source is folded in as the fence. The one
+/// rewrite is the tier vocabulary ([`promote_frontmatter`]).
+///
+/// Deliberately *not* expressed as "render a fresh document from the
+/// parsed [`ChartDoc`]": that would round-trip through a type that
+/// knows only the keys ADR 0003 declared, and quietly drop the `capo:`
+/// somebody added by hand. A migration that loses data it did not
+/// understand is not reversible by inspection.
+pub fn migrate_document(existing: &str, source: &str) -> Result<String, ResourceError> {
+    let (fm_text, body) = split(existing).ok_or(ResourceError::NoFrontmatter)?;
+    let mut fm: Mapping =
+        serde_yaml::from_str(fm_text).map_err(|e| ResourceError::Yaml(e.to_string()))?;
+    promote_frontmatter(&mut fm);
+    let body = strip_sidecar_pointer(body);
+    let body = resources_proto::assets::replace_fenced(&body, CHART_FENCE, source);
+    Ok(format!("---\n{}---\n{body}", yaml(&fm)?))
+}
+
+/// Drop the HTML comment ADR 0003's `render_manifest` wrote at the top
+/// of every chart manifest — the one pointing at the `.kf` beside it.
+/// After the migration there is no file beside it, so the line would be
+/// a wrong instruction rather than a stale one.
+fn strip_sidecar_pointer(body: &str) -> String {
+    let rest = body.trim_start_matches('\n');
+    match rest.strip_prefix("<!-- The chart itself is ") {
+        Some(after) => match after.find("-->") {
+            Some(end) => after[end + 3..].trim_start_matches('\n').to_owned(),
+            None => body.to_owned(),
+        },
+        None => body.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -207,11 +340,13 @@ mod tests {
     use crate::manifest::parse_manifest;
     use crate::types::ResourceKind;
 
+    const SOURCE_TEXT: &str = "[Verse 1]\n| A | E |\n";
+
     fn chart() -> ChartDoc {
         ChartDoc {
             slug: String::new(),
             title: "Great Are You Lord".into(),
-            source: "[Verse 1]\n| A | E |\n".into(),
+            source: SOURCE_TEXT.into(),
             key: "A".into(),
             notation: "keyflow".into(),
             sections: vec!["verse-1".into(), "chorus".into()],
@@ -286,16 +421,30 @@ mod tests {
 
     #[test]
     fn setting_the_default_flag_touches_one_key_only() {
-        let existing = "---\ntype: resource\nresource_kind: chart\nslug: doxology\ntitle: Doxology\nis_default: true\ncapo: 2\n---\n# Doxology\n- notes\n";
+        let existing = "---\ntype: asset\nasset_kind: chart\nslug: doxology\ntitle: Doxology\nis_default: true\ncapo: 2\n---\n# Doxology\n\n```keyflow\n| G |\n```\n";
         let out = set_default(existing, false).unwrap();
         assert!(out.contains("is_default: false"), "{out}");
         assert!(out.contains("capo: 2"), "foreign key survives: {out}");
-        assert!(out.ends_with("---\n# Doxology\n- notes\n"), "{out}");
+        assert_eq!(source_of(&out), "| G |\n", "the source is untouched");
     }
 
+    /// The whole shape of an asset in one assertion: it is a vault
+    /// document, it declares its tier, and its source is a fence.
     #[test]
-    fn manifest_renders_and_parses_back() {
-        let md = render_manifest(&chart(), "great-are-you-lord").unwrap();
+    fn a_chart_renders_as_an_asset_document_and_parses_back() {
+        let md = render_document(&chart(), "great-are-you-lord").unwrap();
+        assert!(md.contains("type: asset"), "{md}");
+        assert!(md.contains("asset_kind: chart"), "{md}");
+        assert!(
+            !md.contains("resource_kind"),
+            "the tier moved; the key moved with it: {md}"
+        );
+        assert!(
+            !md.contains(".kf"),
+            "there is no file beside it any more: {md}"
+        );
+        assert_eq!(source_of(&md), SOURCE_TEXT);
+
         let r = parse_manifest(&md).unwrap();
         assert_eq!(r.kind, ResourceKind::Chart);
         assert_eq!(r.slug, "great-are-you-lord");
@@ -308,17 +457,60 @@ mod tests {
         assert!(r.is_default);
         assert_eq!(r.updated_at, "2026-09-05T10:00:00Z");
         assert_eq!(r.source, SOURCE);
-        assert!(md.contains("great-are-you-lord.kf"));
     }
 
+    /// The contract a collaborator depends on: Keyflow saving a chart
+    /// rewrites its own frontmatter and its own fence, and leaves the
+    /// prose somebody else is typing exactly where it was.
     #[test]
-    fn refresh_keeps_body_and_foreign_keys() {
-        let existing = "---\ntype: resource\nresource_kind: chart\nslug: great-are-you-lord\ntitle: Old Title\ncapo: 2\n---\n# Great Are You Lord\n## Notes\n- play it slower\n";
-        let out = refresh_manifest(existing, &chart()).unwrap();
-        assert!(out.ends_with("---\n# Great Are You Lord\n## Notes\n- play it slower\n"));
+    fn a_re_save_keeps_the_body_and_foreign_keys() {
+        let existing = "---\ntype: asset\nasset_kind: chart\nslug: great-are-you-lord\ntitle: Old Title\ncapo: 2\n---\n# Great Are You Lord\n\n```keyflow\n| old |\n```\n\n## Notes\n\n- play it slower\n";
+        let out = refresh_document(existing, &chart()).unwrap();
+        assert!(
+            out.ends_with("## Notes\n\n- play it slower\n"),
+            "the prose moved: {out}"
+        );
+        assert_eq!(source_of(&out), SOURCE_TEXT, "the source is app-owned");
+        assert!(out.contains("capo: 2"), "foreign key survives: {out}");
         let r = parse_manifest(&out).unwrap();
         assert_eq!(r.title, "Great Are You Lord", "title IS app-owned");
         assert_eq!(r.key, "A");
+    }
+
+    /// Migration off ADR 0003: the old manifest plus the `.kf` beside
+    /// it become one asset document, and nothing a person wrote is
+    /// lost — not a foreign key, not a paragraph.
+    #[test]
+    fn a_resource_manifest_migrates_into_an_asset_document() {
+        let legacy = "---\ntype: resource\nresource_kind: chart\nslug: doxology\ntitle: Doxology\ncapo: 2\n---\n<!-- The chart itself is `doxology.kf` beside this file; edit it there. -->\n# Doxology\n\n## Notes\n\n- from the hymnal\n";
+        let out = migrate_document(legacy, "[Verse]\n| G |\n").unwrap();
+
+        assert!(out.contains("type: asset"), "{out}");
+        assert!(out.contains("asset_kind: chart"), "{out}");
+        assert!(!out.contains("resource_kind"), "{out}");
+        assert!(!out.contains(".kf"), "the pointer is a lie now: {out}");
         assert!(out.contains("capo: 2"), "foreign key survives: {out}");
+        assert!(out.contains("- from the hymnal"), "prose survives: {out}");
+        assert_eq!(source_of(&out), "[Verse]\n| G |\n");
+
+        // Idempotent by construction: migrating the result again is the
+        // result. The server re-runs this on every boot.
+        let again = migrate_document(&out, source_of(&out).as_str()).unwrap();
+        assert_eq!(again, out);
+
+        let r = parse_manifest(&out).unwrap();
+        assert_eq!(r.kind, ResourceKind::Chart, "`asset_kind` still parses");
+        assert_eq!(r.slug, "doxology");
+    }
+
+    /// A chart whose fence somebody deleted reads as sourceless rather
+    /// than as an error, and the next save puts it back.
+    #[test]
+    fn a_missing_fence_is_empty_rather_than_broken() {
+        let mangled = "---\ntype: asset\nasset_kind: chart\nslug: d\ntitle: D\n---\n# D\n\noops\n";
+        assert_eq!(source_of(mangled), "");
+        let healed = refresh_document(mangled, &chart()).unwrap();
+        assert_eq!(source_of(&healed), SOURCE_TEXT);
+        assert!(healed.contains("oops"), "{healed}");
     }
 }

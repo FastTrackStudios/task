@@ -19,6 +19,10 @@ chrono = { workspace = true, features = ["clock", "serde"] }
 # Three-way merge for a stale Edit Request (`wiki.edit.rebase`).
 diffy = "0.4"
 mime_guess = "2"
+# The shelf trait and the org tier layout: an asset shelf is a
+# subscribable source, and `Selection` is what a granular subscription
+# takes of one.
+org-proto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

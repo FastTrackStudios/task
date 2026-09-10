@@ -235,7 +235,11 @@ async fn mcp_chart_tools_end_to_end() {
         saved["slug"], "great-are-you-lord",
         "slug from title: {saved}"
     );
-    assert_eq!(saved["rel_path"], "charts/great-are-you-lord.md");
+    assert_eq!(
+        saved["rel_path"], "great-are-you-lord.md",
+        "ADR 0004: a chart is a shelf document, and the path an agent \
+         gets back is the one `VaultSync` takes"
+    );
     assert_eq!(saved["created"], true);
     assert_eq!(saved["node"], "chart:great-are-you-lord");
 
@@ -266,8 +270,12 @@ async fn mcp_chart_tools_end_to_end() {
     assert!(!err, "read_chart failed: {doc}");
     assert_eq!(
         doc["source"].as_str().expect("source"),
-        SOURCE,
-        "the source must survive the round trip verbatim"
+        format!("{SOURCE}\n"),
+        "the source must survive the round trip verbatim — but for the \
+         one byte a fence cannot represent: ADR 0004 stores a chart in a \
+         ```keyflow block in its own shelf document, and a block cannot \
+         hold a source that does not end in a newline, so one is added. \
+         Recorded in `resources_proto::assets`, and the only difference."
     );
     assert_eq!(doc["title"], "Great Are You Lord");
     assert_eq!(doc["key"], "A");

@@ -101,6 +101,68 @@ pub fn strings(items: &[String]) -> Value {
     Value::Sequence(items.iter().map(|s| Value::from(s.as_str())).collect())
 }
 
+/// Rewrite the named top-level keys' block sequences into **flow**
+/// form (`tags: [a, b]`), in already-serialised frontmatter.
+///
+/// # Why this exists, and it is not cosmetic
+///
+/// A vault page's tags reach the folder index — and from there the
+/// sidebar, the tag tree and every UI that groups by tag — through
+/// `editor_state::markdown::parse_frontmatter`, whose block-sequence
+/// branch requires each `- item` line to be **indented**. `serde_yaml`
+/// emits them unindented:
+///
+/// ```text
+/// tags:
+/// - album
+/// ```
+///
+/// which that parser reads as an *empty* property. So a vault document
+/// this crate writes with block-form tags has, as far as Task's own UI
+/// is concerned, no tags at all — silently, with the file looking
+/// perfectly correct to a person and to `serde_yaml`.
+///
+/// That is exactly the class of bug ADR 0004 is supposed to remove:
+/// an asset is a vault item, and if its tags do not work like a note's
+/// tags then it is not one. Rather than teach an external parser a
+/// second YAML shape, this writes the shape the vault already uses —
+/// every seeded note in `examples/studio` spells tags inline — so the
+/// files this crate produces and the files a person writes by hand
+/// parse the same way.
+///
+/// Only *top-level* keys, and only the ones named: nested sequences
+/// (a `media:` list of mappings) are left alone, because flow form
+/// cannot carry them and nothing reads them through that parser.
+#[must_use]
+pub fn inline_sequences(yaml: &str, keys: &[&str]) -> String {
+    let mut out = String::with_capacity(yaml.len());
+    let mut lines = yaml.lines().peekable();
+    while let Some(line) = lines.next() {
+        let is_target = line
+            .strip_suffix(':')
+            .is_some_and(|k| keys.contains(&k) && !k.starts_with(char::is_whitespace));
+        if !is_target {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        // Collect the unindented `- item` lines that follow. A scalar
+        // item only — a nested mapping under one of these keys is not
+        // something the caller declared, so leave the block alone.
+        let mut items: Vec<String> = Vec::new();
+        while let Some(next) = lines.peek() {
+            let Some(item) = next.strip_prefix("- ") else {
+                break;
+            };
+            items.push(item.trim().to_owned());
+            lines.next();
+        }
+        let key = line.trim_end_matches(':');
+        out.push_str(&format!("{key}: [{}]\n", items.join(", ")));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +196,33 @@ mod tests {
         assert!(out.ends_with("---\n# Lead\n\n- bright\n"), "{out}");
         assert!(out.contains("title: New"), "{out}");
         assert!(out.contains("amp: ac30"), "foreign key survives: {out}");
+    }
+
+    /// The bug this guards: a block sequence `serde_yaml` emits is
+    /// invisible to the vault's own frontmatter parser, so a chart or
+    /// song written with block-form tags would have no tags in Task's
+    /// UI — which would make it not-a-vault-item in the one way that
+    /// matters.
+    #[test]
+    fn sequences_are_written_the_way_the_vault_reads_them() {
+        let yaml = "title: Opening Night\nwriters:\n- A. Wright\n- B. Lee\nkey: C\ntags:\n- album\nmedia:\n- kind: video\n";
+        let out = inline_sequences(yaml, &["writers", "tags"]);
+        assert!(out.contains("writers: [A. Wright, B. Lee]"), "{out}");
+        assert!(out.contains("tags: [album]"), "{out}");
+        assert!(out.contains("title: Opening Night"), "{out}");
+        assert!(out.contains("key: C"), "{out}");
+        assert!(
+            out.contains("media:\n- kind: video"),
+            "a key nobody named is left alone: {out}"
+        );
+    }
+
+    /// An empty sequence still has to *be* one, or a re-read turns
+    /// `tags: []` into a string.
+    #[test]
+    fn an_empty_sequence_stays_a_sequence() {
+        assert_eq!(inline_sequences("tags: []\n", &["tags"]), "tags: []\n");
+        assert_eq!(inline_sequences("tags:\n", &["tags"]), "tags: []\n");
     }
 
     #[test]

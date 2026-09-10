@@ -205,8 +205,19 @@ impl Session {
         self.establish().await
     }
 
-    /// The resources tier — sermons, and ADR 0003's four asset lanes
-    /// (`resources/charts/`, `patches/`, `samples/`, `lighting/`).
+    /// The org's vault, over the wire — files, the folder index, and
+    /// `open_collab`.
+    ///
+    /// A chapter reaches for this to assert that something *is a vault
+    /// item*, which since ADR 0004 is a claim the chart and song lanes
+    /// make and can no longer be taken on trust: an asset that is not
+    /// in the folder index has none of the collaboration, search or
+    /// linking the whole decision was for.
+    pub async fn vault(&self) -> vault_proto::VaultSyncClient {
+        self.establish().await
+    }
+
+    /// The resources tier — sermons, and the asset lanes.
     ///
     /// This is the lane a sibling app is a client of: Keyflow saving a
     /// chart calls exactly this, with an ordinary token, through the
@@ -214,6 +225,11 @@ impl Session {
     /// use it establish it here rather than touching
     /// `org.resources` — "an app gains nothing extra by being
     /// first-party" is a claim about the wire.
+    ///
+    /// ADR 0004 split what it writes without changing what it is:
+    /// charts and songs land in the vault (`Assets/Charts`,
+    /// `Assets/Songs`), patches, samples and lighting stay on
+    /// `resources/`. The lane is a vocabulary, not a storage location.
     pub async fn resources(&self) -> resources_proto::ResourcesServiceClient {
         self.establish().await
     }
@@ -328,4 +344,5 @@ signable!(
     resources_proto::ResourcesServiceClient,
     collection_proto::CollectionServiceClient,
     links_proto::LinksServiceClient,
+    vault_proto::VaultSyncClient,
 );

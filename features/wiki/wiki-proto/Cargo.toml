@@ -16,6 +16,12 @@ facet = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 thiserror = { workspace = true }
 architect = { workspace = true }
+# The shelf trait and the org's tier layout. `SourceKind` and
+# `Subscriber` are the wire shadows of `org_proto::Tier`, and the two
+# conversions that keep them honest live here rather than in a
+# comment. Default features off: the vox half of `org-proto` is a
+# server concern and this crate has a wasm-clean baseline.
+org-proto = { path = "../../org/org-proto", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }

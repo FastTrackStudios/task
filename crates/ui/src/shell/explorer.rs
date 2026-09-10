@@ -321,6 +321,13 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
         let vault_id = scope.read().vault_id.clone();
         async move { fetch_folder_index(slug, vault_id).await }
     });
+    // No asset filter here, and its absence is the point. ADR 0004
+    // moved charts and songs out of the vault entirely, onto
+    // `<org>/assets/<kind>/` shelves of their own — so `folder_index`
+    // over the vault never sees one, and a filter would be code
+    // guarding a case that can no longer arise. The earlier draft that
+    // filed them at `<vault>/Assets/` needed one precisely because it
+    // had put a shelf in the middle of somebody's notes.
     let tree = use_memo(move || match &*files.read_unchecked() {
         Some(Ok(pages)) => Some(Rc::new(build_tree(pages))),
         _ => None,

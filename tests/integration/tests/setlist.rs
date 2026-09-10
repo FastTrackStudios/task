@@ -15,6 +15,31 @@
 //! only one that reaches. A test that subscribed first and resolved
 //! once could not tell resolution from a permanently open door.
 //!
+//! # ADR 0004 moved the bytes, and this chapter is where that shows
+//!
+//! A chart is an **asset-group** document now
+//! (`<org>/assets/charts/<slug>.md`), not a file on the resources
+//! tier. Everything this chapter is about still holds — a subscription
+//! is what admits the reader, and dropping it takes the reach away
+//! again — and the step *after* resolution holds too, which is the part
+//! that changed.
+//!
+//! An intermediate draft filed charts at `<vault>/Assets/Charts/`, and
+//! under it this chapter carried a deliberate `assert!(refused.is_err())`
+//! saying a chart library could not be subscribed to at all: a vault is
+//! never subscribable (`wiki.boundary.no-subscribe`), so a shelf inside
+//! one was not either. The studio could name and follow the guest's
+//! chart and could not fetch it — a `Reach::Reachable` pointing at a
+//! path nothing served.
+//!
+//! That assertion is inverted below, and the inversion is the whole
+//! point of moving the shelf out of the vault. `assets/` is a sibling
+//! root, an asset group is a shelf, a shelf is subscribable, and
+//! `wiki_live::materialize::refresh_assets` brings it down onto disk.
+//! The security claim is untouched: the vault-refusal rule in
+//! `LocalOrgs::admits` is the same code it always was, because an asset
+//! group is not a vault.
+//!
 //! # Two orgs on one disk, and why it is that arrangement
 //!
 //! `LocalHomes` — the only [`links::NodeHomes`] that exists — answers
@@ -44,6 +69,15 @@ const GUEST_DOMAIN: &str = "alice.test";
 /// reader names when subscribing.
 const CHART_LIBRARY: &str = "charts";
 
+/// The subscription slug that publishes songs — the asset group's own
+/// name, because each group is its own shelf.
+///
+/// A song's *media* stays on the resources tier (ADR 0004: imports,
+/// binary, nothing anybody types into) while its document is on the
+/// shelf, and both are asserted below: the tier rule is only real if
+/// you can see it sort one thing into each tier.
+const SONG_LIBRARY: &str = "songs";
+
 fn chart(title: &str, source: &str) -> ChartDoc {
     ChartDoc {
         slug: String::new(),
@@ -69,14 +103,18 @@ async fn resolve(who: &Session, nodes: &[NodeRef]) -> Vec<links_proto::ResolvedN
         .expect("resolve the setlist")
 }
 
-fn source_of(domain: &str) -> Subscription {
+fn source_of(domain: &str, slug: &str) -> Subscription {
     Subscription {
         domain: domain.into(),
-        slug: CHART_LIBRARY.into(),
-        kind: SourceKind::Resource,
-        title: "Charts".into(),
+        slug: slug.into(),
+        // An asset group, not a Resource: ADR 0004 moved songs and
+        // charts onto shelves people type into, and the kind is what
+        // says which tree of the publishing org the slug names.
+        kind: SourceKind::Assets,
+        title: slug.into(),
         core: false,
         declined: false,
+        selection: Default::default(),
     }
 }
 
@@ -97,7 +135,40 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     let owner = integration::people::account(&guest, "alice@alice.test", "Alice").await;
     let guest_session = Session::open(&guest, owner.token.clone()).await;
 
-    // They publish a chart, through the same lane Keyflow uses.
+    // They publish a **song**, through the same lane a sibling app
+    // uses, and the media that goes with it.
+    //
+    // A song's *document* moved to the `songs` asset group; its media —
+    // `manifest.json` and the stems — did not, because it is an import
+    // nobody types into. Both halves are asserted below, which is what
+    // makes ADR 0004's tier rule a fact about this deployment rather
+    // than a paragraph.
+    guest_session
+        .resources()
+        .await
+        .upsert_song(resources_proto::SongDoc {
+            slug: String::new(),
+            title: "Hosanna".into(),
+            writers: vec!["Alice".into()],
+            key: "D".into(),
+            tags: Vec::new(),
+            updated_at: "2026-09-09T10:00:00Z".into(),
+        })
+        .await
+        .expect("the guest saves their song");
+    // The media an import leaves. Written directly because importing it
+    // is a different chapter; what matters here is that the bytes are
+    // on the tier a subscriber can reach.
+    let media = guest.org_root().join("resources/songs/hosanna");
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(
+        media.join("manifest.json"),
+        "{\"slug\":\"hosanna\",\"title\":\"Hosanna\",\"stems\":[]}",
+    )
+    .unwrap();
+
+    // They also publish a chart of it — the case that regressed under
+    // the `<vault>/Assets/` draft and is restored here.
     let published = guest_session
         .resources()
         .await
@@ -116,7 +187,7 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
 
     // ── the setlist: one local reference, one qualified ──────────────
     let mine = NodeRef::new(NodeKind::Chart, "doxology");
-    let theirs = NodeRef::new(NodeKind::Chart, "hosanna").in_domain(GUEST_DOMAIN);
+    let theirs = NodeRef::new(NodeKind::Song, "hosanna").in_domain(GUEST_DOMAIN);
 
     let setlist = alice
         .collections()
@@ -170,16 +241,16 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     );
     assert_eq!(
         before[1].rel_path, "",
-        "the refusal carried the path of a chart the reader may not have"
+        "the refusal carried the path of a song the reader may not have"
     );
 
     // ── the subscription, taken on the way a person takes one ────────
     alice
         .wiki_subscriptions()
         .await
-        .subscribe(Subscriber::Vault, source_of(GUEST_DOMAIN))
+        .subscribe(Subscriber::Vault, source_of(GUEST_DOMAIN, SONG_LIBRARY))
         .await
-        .expect("ACME subscribes to the guest's charts");
+        .expect("ACME subscribes to the guest's songs");
 
     let during = resolve(&alice, &nodes).await;
     assert_eq!(during[0].reach, Reach::Local, "the local half did not move");
@@ -190,8 +261,67 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     );
     assert_eq!(during[1].org, GUEST_ORG, "the answer names the publisher");
     assert_eq!(
-        during[1].rel_path, "resources/charts/hosanna.kf",
-        "a reachable reference says where the content sits in its own org"
+        during[1].rel_path, "assets/songs/hosanna.md",
+        "a reachable reference says where the content sits in its own \
+         org, and for a song that is its document on the `songs` shelf"
+    );
+    // The other half of the tier rule, in the same breath: the
+    // document is on the shelf and the media it names is still an
+    // import on the resources tier, which `/org/{slug}/media/` serves.
+    // One song, sorted into two tiers by whether anybody types into it.
+    assert!(
+        guest
+            .org_root()
+            .join("resources/songs/hosanna/manifest.json")
+            .is_file(),
+        "the song's media followed its document off the resources tier"
+    );
+
+    // ── the chart library, which is the assertion that inverted ──────
+    //
+    // Under the `<vault>/Assets/` draft this block asserted
+    // `refused.is_err()` and explained that a chart library could not be
+    // subscribed to at all. It can now, because the shelf is a sibling
+    // of the vault rather than a directory inside it — and *only*
+    // because of that: `LocalOrgs::admits` still refuses a vault by the
+    // same code, which the case below checks is still true.
+    let their_chart = NodeRef::new(NodeKind::Chart, "hosanna").in_domain(GUEST_DOMAIN);
+    assert_eq!(
+        resolve(&alice, std::slice::from_ref(&their_chart)).await[0].reach,
+        Reach::NotPermitted,
+        "the songs subscription admitted a chart — one shelf, one \
+         subscription, and a reference never authorises on its own"
+    );
+    alice
+        .wiki_subscriptions()
+        .await
+        .subscribe(Subscriber::Vault, source_of(GUEST_DOMAIN, CHART_LIBRARY))
+        .await
+        .expect("a chart library is a shelf, and a shelf is subscribable");
+    let admitted = resolve(&alice, &[their_chart]).await;
+    assert_eq!(
+        admitted[0].reach,
+        Reach::Reachable,
+        "and with the subscription, the guest's chart is reachable"
+    );
+    assert_eq!(
+        admitted[0].rel_path, "assets/charts/hosanna.md",
+        "naming a path on a shelf a subscription materialises, rather \
+         than one under `vault/` that nothing serves"
+    );
+
+    // The rule the whole tier rests on, checked here rather than
+    // assumed: a *vault* is refused by name, with the distinction
+    // stated. Moving assets out of the vault widened nothing.
+    let vault_refused = alice
+        .wiki_subscriptions()
+        .await
+        .subscribe(Subscriber::Vault, source_of(GUEST_DOMAIN, "vault"))
+        .await;
+    assert!(
+        vault_refused.is_err(),
+        "a vault was subscribable — `wiki.boundary.no-subscribe` is the \
+         one rule an asset shelf must not have loosened"
     );
 
     // ── after: the same reference, refused again ─────────────────────
@@ -205,7 +335,7 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
         .await
         .unsubscribe(
             Subscriber::Vault,
-            format!("{GUEST_DOMAIN}/{CHART_LIBRARY}"),
+            format!("{GUEST_DOMAIN}/{SONG_LIBRARY}"),
             true,
         )
         .await
@@ -216,7 +346,7 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     assert_eq!(
         after[1].reach,
         Reach::NotPermitted,
-        "the chart stayed readable after the subscription that admitted it was dropped"
+        "the song stayed readable after the subscription that admitted it was dropped"
     );
     assert_eq!(after[1].rel_path, "");
 
@@ -273,7 +403,7 @@ async fn an_org_on_another_server_parses_and_does_not_resolve() {
     let refused = alice
         .wiki_subscriptions()
         .await
-        .subscribe(Subscriber::Vault, source_of("vnt.test"))
+        .subscribe(Subscriber::Vault, source_of("vnt.test", SONG_LIBRARY))
         .await;
     assert!(
         refused.is_err(),

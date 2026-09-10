@@ -3,11 +3,17 @@
 //! rests on: *nothing new is built for libraries*.
 //!
 //! Keyflow keeps a person's charts in Task by calling four ordinary
-//! RPCs (`upsert_chart` / `chart` / `list_charts` / `delete_chart`) on
-//! the resources tier, and a library of those charts is an existing
-//! `Collection` of kind `Library` over `chart:<slug>` node references.
-//! No chart service, no chart store, no chart lane — which is exactly
-//! what this test asserts by using only what was already mounted.
+//! RPCs (`upsert_chart` / `chart` / `list_charts` / `delete_chart`),
+//! and a library of those charts is an existing `Collection` of kind
+//! `Library` over `chart:<slug>` node references. No chart service, no
+//! chart store, no chart lane — which is exactly what this test asserts
+//! by using only what was already mounted.
+//!
+//! ADR 0004 moved where the bytes land: a chart is a **shelf document**
+//! on the `Assets/` shelf, not a manifest-plus-`.kf` on the resources
+//! tier. The lane did not change, which is the point of this file still
+//! passing — an app calls the same four RPCs and gets back a `rel_path`
+//! it can hand straight to `VaultSync`.
 //!
 //! It also pins the honest half of the decision: deleting a chart does
 //! not reach into the collections that referenced it. The reference
@@ -55,7 +61,7 @@ const DOXOLOGY: &str = "[Verse]\n| G | C | D | G |\n";
 /// `Library`, and one deleted out from under it.
 #[tokio::test(flavor = "multi_thread")]
 async fn charts_round_trip_and_a_library_collects_them() {
-    let (url, _tmp) = support::boot_ws().await.unwrap();
+    let (url, tmp) = support::boot_ws().await.unwrap();
     let charts: ResourcesServiceClient = vox::connect_lane(&url).establish().await.unwrap();
 
     // Two charts, saved the way Keyflow saves them.
@@ -64,7 +70,11 @@ async fn charts_round_trip_and_a_library_collects_them() {
         .await
         .unwrap();
     assert_eq!(first.slug, "hosanna");
-    assert_eq!(first.rel_path, "charts/hosanna.md");
+    assert_eq!(
+        first.rel_path, "hosanna.md",
+        "the path an app opens through VaultSync, relative to the \
+         `assets:charts` shelf it names alongside"
+    );
     assert!(first.created);
     let second = charts
         .upsert_chart(chart("Doxology", DOXOLOGY, &["verse"]))
@@ -72,18 +82,30 @@ async fn charts_round_trip_and_a_library_collects_them() {
         .unwrap();
     assert_eq!(second.slug, "doxology");
 
-    // On disk: the source is a plain chart file an outside editor
-    // opens, and the manifest is an ordinary `type: resource` page.
-    let org_root = org_proto::DataRoot::from_env().unwrap().org(support::ORG);
-    let dir = org_root.resources_dir().join("charts");
-    assert_eq!(
-        std::fs::read_to_string(dir.join("hosanna.kf")).unwrap(),
-        HOSANNA,
-        "the .kf holds the source verbatim"
+    // On disk: one markdown document on the charts shelf, declaring its
+    // tier, with the source in its own body. Nothing on the resources
+    // tier, and nothing under `vault/` either — that is the whole of
+    // ADR 0004 decision 1, visible in a directory listing.
+    let org_root = support::org_root(&tmp);
+    let dir = org_root.asset_shelf_dir(resources_proto::assets::CHARTS_KIND);
+    let document = std::fs::read_to_string(dir.join("hosanna.md")).unwrap();
+    assert!(document.contains("type: asset"), "{document}");
+    assert!(document.contains("asset_kind: chart"), "{document}");
+    assert!(
+        document.contains("sections: [verse-1, chorus]"),
+        "sections are written in flow form, because the parser behind the \
+         vault's folder index reads an unindented block sequence as empty \
+         — see `resources::asset::inline_sequences`: {document}"
     );
-    let manifest = std::fs::read_to_string(dir.join("hosanna.md")).unwrap();
-    assert!(manifest.contains("resource_kind: chart"), "{manifest}");
-    assert!(manifest.contains("- chorus"), "sections: {manifest}");
+    assert!(
+        document.contains(HOSANNA),
+        "the source is in the body, verbatim: {document}"
+    );
+    assert!(
+        !org_root.resources_dir().join("charts/hosanna.kf").exists(),
+        "the `.kf` sidecar is gone — a vault file the walker never \
+         collects is a file nobody can search, link or collaborate on"
+    );
 
     // Both list, and the source round-trips byte for byte. The seed
     // plants a chart of its own (`chart:track-one`), so this asserts
@@ -149,7 +171,6 @@ async fn charts_round_trip_and_a_library_collects_them() {
         // the chart it wanted. Resolution is the reader's problem, and
         // an unresolved reference is not an error (ADR 0003).
         assert!(charts.delete_chart("hosanna".to_owned()).await.unwrap());
-        assert!(!dir.join("hosanna.kf").exists());
         assert!(!dir.join("hosanna.md").exists());
         assert!(
             charts.chart("hosanna".to_owned()).await.is_err(),
@@ -190,21 +211,27 @@ async fn charts_round_trip_and_a_library_collects_them() {
 }
 
 /// The re-save path Keyflow lives on: the slug is the identity, the
-/// source is replaced outright, and a hand edit to the manifest body
-/// survives — the same contract the sermon sync holds.
+/// source is replaced outright, and a hand edit to the document body
+/// survives — the same contract the sermon sync holds, now covering the
+/// prose beside a chart as well as the frontmatter around it.
+///
+/// This is the assertion collaboration rests on. A person typing under
+/// `## Notes` and an app saving the chart are editing one document, and
+/// the app has to rewrite the smallest region it can — its frontmatter
+/// keys and its own fence — or every save would stamp on live work.
 #[tokio::test(flavor = "multi_thread")]
-async fn re_saving_a_chart_keeps_the_manifest_body() {
-    let (url, _tmp) = support::boot_ws().await.unwrap();
+async fn re_saving_a_chart_keeps_the_document_body() {
+    let (url, tmp) = support::boot_ws().await.unwrap();
     let charts: ResourcesServiceClient = vox::connect_lane(&url).establish().await.unwrap();
     charts
         .upsert_chart(chart("Great Are You Lord", HOSANNA, &["verse-1"]))
         .await
         .unwrap();
 
-    let org_root = org_proto::DataRoot::from_env().unwrap().org(support::ORG);
+    let org_root = support::org_root(&tmp);
     let md = org_root
-        .resources_dir()
-        .join("charts/great-are-you-lord.md");
+        .asset_shelf_dir(resources_proto::assets::CHARTS_KIND)
+        .join(resources_proto::assets::chart_path("great-are-you-lord"));
     let hand = std::fs::read_to_string(&md)
         .unwrap()
         .replace("## Notes", "## Notes\n- capo 2 for Sunday\n");
@@ -321,5 +348,31 @@ async fn the_seeded_chart_is_readable_through_the_lane() {
     assert_eq!(doc.title, "Track One");
     assert_eq!(doc.key, "A");
     assert_eq!(doc.sections, ["verse-1", "chorus", "bridge"]);
-    assert!(doc.source.contains("[Chorus]"), "the .kf came with it");
+    assert!(
+        doc.source.contains("[Chorus]"),
+        "the source came out of the document's own fence"
+    );
+
+    // And the seeded chart is an ordinary page of its shelf: it is in
+    // the folder index, so search, the graph and `[[wikilinks]]` all
+    // reach it, and it is on a shelf of its own rather than in the
+    // middle of somebody's notes. That sentence is the entire justification for ADR 0004
+    // decision 1, and this is the only place it is checked over the
+    // wire rather than asserted in prose.
+    let vault: vault_proto::VaultSyncClient = vox::connect_lane(&url).establish().await.unwrap();
+    let index = vault
+        .folder_index(resources_proto::assets::charts_vault_id())
+        .await
+        .unwrap();
+    let page = index
+        .pages
+        .iter()
+        .find(|p| p.path == resources_proto::assets::chart_path("track-one"))
+        .expect("the chart is a page of its shelf like any other");
+    assert_eq!(page.page_type, resources_proto::assets::TYPE_ASSET);
+    assert!(
+        page.tags.contains(&"chart".to_owned()),
+        "tags come free with being a vault file: {:?}",
+        page.tags
+    );
 }

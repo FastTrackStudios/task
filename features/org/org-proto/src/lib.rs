@@ -19,6 +19,7 @@ pub mod root;
 #[cfg(feature = "vox")]
 pub mod schema_stamp;
 pub mod service;
+pub mod shelf;
 pub mod snapshot;
 
 pub use issuer::{IssuerError, IssuerProfile};
@@ -28,6 +29,10 @@ pub use root::{DEFAULT_WIKI, DataRoot, OrgRoot, RootError, default_client_vault_
 pub use service::{
     CreateOrgRequest, OrgManagementError, OrgManagementService, OrgManagementServiceRpc,
     PersonalOrgRequest,
+};
+pub use shelf::{
+    AssetShelf, DEFAULT_ASSET_KINDS, ProjectShelf, Selection, Shelf, Tier, VAULT_ID, VaultShelf,
+    WikiShelf, facet_of,
 };
 
 #[cfg(feature = "vox")]

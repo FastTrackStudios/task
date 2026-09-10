@@ -21,6 +21,9 @@ use wiki_proto::service::pages::PagesClient;
 use wiki_proto::service::registry::RegistryClient;
 use wiki_proto::{WikiChange, WikiEvent};
 
+// Each binary uses a slice of the shared boot helpers; "unused"
+// here means "this binary did not need that one".
+#[allow(dead_code)]
 mod support;
 
 const WIKI: &str = "music-theory";

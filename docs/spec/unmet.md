@@ -84,6 +84,66 @@ is resolved from the node kinds and asset shapes present, not from a
 label Task maintains. Recording an honest gap is better than a
 vocabulary that has to be released to describe someone else's domain.
 
+## Regressed on purpose, and recorded rather than hidden
+
+*Nothing is in this section.* Both entries that were here — cross-org
+reach for the Assets tier, and the player reading a frozen song folder —
+came from an intermediate draft of ADR 0004 that filed assets at
+`<vault>/Assets/<Kind>/`, and both are closed by moving the tier out to
+`<org>/assets/<group>/`. The section is kept, empty, because an empty
+section somebody has to deliberately re-open is a better guard than a
+heading that quietly disappears.
+
+What closed them, for the record, since the first entry said plainly
+what it would take:
+
+> **What closing this needs:** a way for a subscription to publish a
+> *subtree of the vault* under a name, materialised and served the way
+> `resources/` is — which is a decision about what an org exposes, not
+> a plumbing change.
+
+That turned out to be the wrong shape of answer, and the right one was
+smaller. The tier never needed to be inside the vault. It was put there
+to obtain per-file CRDT, and per-file CRDT does not come from the vault
+— it comes from a directory being **registered** on `vault::Backend` +
+`GraphBackend` + `VaultCollab`, which the `wiki/` tier has demonstrated
+from outside the vault since before any of this
+(`features/org/org-proto/src/shelf.rs` argues it at length;
+`wiki_editor_e2e::two_collab_sessions_converge_on_a_wiki_page` is the
+evidence). So `assets/` became a sibling root, an asset group became an
+`org_proto::Shelf` like a wiki, and everything the first entry listed as
+missing followed from that one move:
+
+| what was missing | what serves it now |
+|---|---|
+| a cross-org materialiser for assets | `wiki_live::materialize::refresh_assets`, reached by `SourceKind::Assets` — the byte walker rather than the vault engine, because a shelf holds any file and the markdown-only engine would have dropped the rest without saying so |
+| `links::NodeHomes` naming a path something serves | `node_homes::LocalHomes::locate` returns `assets/<group>/<slug>.md`, which is exactly what a subscription materialises |
+| a test that the reach exists | `tests/integration/tests/song_library.rs` (both halves: whole shelf, and part of one), `demo_plant::the_planted_song_shelf_is_subscribable_across_orgs` |
+| the assertion that pinned the gap | `tests/integration/tests/setlist.rs` — its `assert!(refused.is_err())` on a chart-library subscription is now `.expect("a chart library is a shelf, and a shelf is subscribable")` |
+
+The second entry — **the player still reads the frozen song folders** —
+closes for a different reason, and it is worth stating exactly rather
+than claiming more than is true. `crates/player-ui`'s
+`fetch_kf_manifest` fetches `GET /org/{org}/media/songs/<slug>/song.md`,
+on the resources tier. That is still where a song's *media* lives and
+still correct: ADR 0004 moves the song's **document** and leaves
+`manifest.json` and the stems where they are, because they are imports
+nobody types into. What made the entry a regression was that the
+*document* had moved somewhere unreachable, so the two halves of a song
+could no longer be brought back together across an org boundary. They
+can: the document is on a subscribable shelf and the media is on the
+tier `/media` serves. `tests/integration/tests/setlist.rs` asserts both
+in one breath, which is the only way a tier rule is checkable at all.
+
+**What is still open, and is not a regression.** `/org/{slug}/media/`
+serves `resources/` and does not serve `assets/`. That is deliberate,
+not an oversight: reach for a shelf goes through a *subscription*, which
+is a thing an organisation takes on and can drop, where a media route is
+an open door. A player that wants a foreign org's asset document reads
+its own subscribed copy under `subscribed/<domain>/<group>/`. If a
+direct route is ever wanted it is a decision to make on its own terms,
+and it should be made in an ADR rather than by widening a handler.
+
 ## Not reachable from this harness
 
 ### `storage.query.reach`

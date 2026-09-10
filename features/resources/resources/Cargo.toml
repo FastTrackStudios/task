@@ -14,6 +14,10 @@ links-proto = { workspace = true }
 # links in the org's typed-link store.
 links = { workspace = true }
 resources-proto = { workspace = true }
+# ADR 0004: the chart lane's documents live in the org's vault, and every
+# write goes through `VaultSync::put_file` so `vault-collab` sees it.
+vault = { workspace = true }
+vault-proto = { workspace = true }
 # Book table + OSIS ids for the caption scripture-reference extractor.
 scripture-proto = { workspace = true }
 architect = { workspace = true }

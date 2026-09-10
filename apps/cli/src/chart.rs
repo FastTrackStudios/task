@@ -2,10 +2,15 @@
 //! shell.
 //!
 //! A chart is Keyflow's document, and Task is where it lives between
-//! sessions: `<org>/resources/charts/<slug>.kf` holds the source
-//! verbatim, `<slug>.md` the manifest a wiki or a `Library` collection
-//! can see. These verbs are the same four RPCs Keyflow itself calls —
-//! nothing here is a private lane (ADR 0003).
+//! sessions: since ADR 0004 that is one **markdown document** on the
+//! charts asset group, `<org>/assets/charts/<slug>.md`, holding the source
+//! verbatim in a ` ```keyflow ` fence and whatever prose somebody wrote
+//! around it. Being a vault file is what gives a chart collaborative
+//! editing, wikilinks, tags and search — none of which was built for
+//! charts.
+//!
+//! These verbs are the same four RPCs Keyflow itself calls — nothing
+//! here is a private lane (ADR 0003).
 //!
 //! `save` takes the source on `--from <file>` or stdin (`--from -`), so
 //! a chart round-trips through a pipe:
@@ -112,7 +117,7 @@ pub enum ChartCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a chart — both its manifest and its `.kf`. References to
+    /// Delete a chart's document. References to
     /// it from collections are left alone; a dangling reference reads
     /// as unresolved, which is a legible state.
     Rm {

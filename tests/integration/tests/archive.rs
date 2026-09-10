@@ -55,6 +55,7 @@ fn tally(reads: &[Read]) -> BTreeMap<&'static str, usize> {
     for read in reads {
         let name = match &read.entry {
             Entry::Assets(_) => "assets",
+            Entry::AssetGroup(_) => "asset-group",
             Entry::Projects(_) => "projects-root",
             Entry::Vault(_) => "vault",
             Entry::Wiki(_) => "wiki",

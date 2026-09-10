@@ -54,6 +54,8 @@ pub mod presence;
 pub mod server_mgmt;
 pub mod share;
 pub mod share_guest;
+#[cfg(feature = "plugin-wiki")]
+pub mod shelves;
 pub mod snapshot;
 pub mod storage;
 pub mod watch_bridge;
@@ -64,8 +66,6 @@ pub mod webhooks;
 pub mod wiki_repo;
 #[cfg(feature = "plugin-wiki")]
 pub mod wiki_tracker;
-#[cfg(feature = "plugin-wiki")]
-pub mod wiki_vault;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -175,20 +175,17 @@ pub struct OrgAppState {
     /// into it through [`presence::PresenceRouter`]. Docs persist
     /// under `<org>/crdt/` (override: `TASK_SERVER_CRDT_ROOT`).
     pub vault_collab: vault_collab::VaultCollab,
-    /// FS watcher over the org's vault root — external disk edits
-    /// (vim, Obsidian, `git pull`) broadcast the same `VaultEvent`s
-    /// wire writes do, which both `subscribe` clients and the
-    /// vault-collab inbound listener consume. Held for its lifetime;
-    /// `None` when attaching failed (warned, non-fatal).
-    pub vault_watcher: Option<Arc<vault::sync::WatcherHandle>>,
     /// Wiki feature backend rooted at this org's `vault/`.
     #[cfg(feature = "plugin-wiki")]
     pub wiki: wiki_live::WikiBackend,
-    /// The wikis' second door: every wiki root registered as the vault
-    /// `wiki:<slug>` (sync, graph, collab, watcher, event bridge).
-    /// Held for the watchers' lifetime.
-    #[cfg(feature = "plugin-wiki")]
-    pub wiki_vaults: wiki_vault::WikiVaults,
+    /// Every shelf this org holds, registered for sync, graph and CRDT
+    /// — the vault, each wiki, each asset group. Held for the
+    /// watchers' lifetime: external disk edits (vim, Obsidian, `git
+    /// pull`) broadcast the same `VaultEvent`s wire writes do, which
+    /// both `subscribe` clients and the vault-collab inbound listener
+    /// consume, and a dropped handle is a shelf that stops noticing
+    /// them.
+    pub shelf_registry: shelves::ShelfRegistry,
     /// What this org's vault and wikis subscribe to. Keyed by
     /// subscriber rather than by wiki, because the org vault holds
     /// subscriptions too and is not a wiki.
@@ -925,22 +922,45 @@ pub(crate) async fn build_org_state(
             }
             roots
         };
-        // `"default"` → the org's vault root *directly* — one vault per
-        // org. Earlier we used `under_parent`, which routed writes
-        // into `vault_root/default/…` — and every `ProjectBackend` /
-        // `GoalBackend` scan then saw each file twice (once at the
-        // real path, once under the ghost `default/` subdir). Beside
-        // it, `wiki:<slug>` → that wiki's root for every wiki the org
-        // holds (`wiki_vault`), registered below once the wiki backend
-        // exists — the same explicit layout, so an unknown id is still
-        // `NotFound` and a page path is still guarded the same way.
+        // Every shelf this org holds, as one list: the vault, each
+        // wiki, each asset group (`org_proto::Shelf`). **This list is
+        // the only way anything is registered for sync, graph or
+        // CRDT** — see `crate::shelves` for why a second path is a
+        // defect rather than a style, and `org_proto::shelf` for why
+        // collaboration follows registration rather than which
+        // directory a file sits in.
+        //
+        // Vault ids are namespaced by tier by the trait: `default` for
+        // the vault, `wiki:<slug>`, `assets:<kind>`. So an unknown id
+        // is still `NotFound`, a page path is still guarded the same
+        // way, and a wiki called `songs` and an asset group called
+        // `songs` stay different roots.
+        //
+        // The two environment overrides are honoured *here*, before the
+        // list is built, rather than inside the loop: they say where a
+        // shelf's directory is, not whether it is a shelf.
+        let shelves: Vec<Box<dyn org_proto::Shelf>> = {
+            let mut shelves: Vec<Box<dyn org_proto::Shelf>> =
+                vec![Box::new(org_proto::VaultShelf::new(vault_root.clone()))];
+            #[cfg(feature = "plugin-wiki")]
+            shelves.extend(wiki_roots.iter().map(|(slug, root)| {
+                Box::new(org_proto::WikiShelf::new(slug.clone(), root.clone()))
+                    as Box<dyn org_proto::Shelf>
+            }));
+            shelves.extend(org_root.asset_shelves().into_iter().map(|(kind, root)| {
+                Box::new(org_proto::AssetShelf::new(kind, root)) as Box<dyn org_proto::Shelf>
+            }));
+            shelves
+        };
+        // Empty backends. Every root arrives through
+        // `ShelfRegistry::attach`, including the vault's — the vault
+        // used to be constructed with its root already in, which is
+        // precisely the second registration path this removes.
         std::fs::create_dir_all(&vault_root).map_err(|e| eyre::eyre!("vault backend: {e}"))?;
-        let vault_sync_state = vault::Backend::single("default", vault_root.clone())
-            .map_err(|e| eyre::eyre!("vault backend: {e}"))?;
+        let vault_sync_state = vault::Backend::with_roots(std::collections::HashMap::new());
         // Link-graph reader over the same roots the sync backend
-        // serves — read-only, so no dir creation. Wiki roots join it
-        // in the same registration as the sync backend.
-        let vault_graph = vault::GraphBackend::single("default", vault_root.clone());
+        // serves — read-only, so no dir creation.
+        let vault_graph = vault::GraphBackend::with_roots(std::collections::HashMap::new());
         // Recipes are `.cook` files under the wiki root, outside the
         // vault this backend serves — so a `.base` filtering
         // `type: recipe` matches nothing unless the backend is told
@@ -966,19 +986,19 @@ pub(crate) async fn build_org_state(
         let crdt_root = std::env::var("TASK_SERVER_CRDT_ROOT")
             .map_or_else(|_| org_root.path().join("crdt"), PathBuf::from);
         let vault_collab = vault_collab::VaultCollab::new(vault_sync_state.clone(), crdt_root);
-        vault_collab.watch_vault("default");
-        // External disk edits (vim, Obsidian, git) → VaultEvents.
-        // Best-effort: a vault on a filesystem without notify support
-        // still serves wire traffic, just without live disk pickup.
-        let vault_watcher = match vault_sync_state.start_watcher("default").await {
-            Ok(handle) => Some(Arc::new(handle)),
-            Err(e) => {
-                tracing::warn!(org = %org_root.slug(), "vault watcher not attached: {e}");
-                None
-            }
-        };
+        // The registry that turns a shelf into a collaborative one. The
+        // wiki backend joins it below, for the event bridge only; the
+        // registration itself needs nothing from the wiki feature,
+        // which is what lets a build with the plugin compiled out still
+        // register its vault and its asset groups.
+        let shelf_registry = crate::shelves::ShelfRegistry::new(
+            org_root.slug(),
+            vault_sync_state.clone(),
+            vault_graph.clone(),
+            vault_collab.clone(),
+        );
         #[cfg(feature = "plugin-wiki")]
-        let (wiki, wiki_vaults) = {
+        let (wiki, shelf_registry) = {
             let mut roots = wiki_roots.clone();
             // Compatibility alias. Every client predating multi-wiki
             // asks for `"default"`, and renaming the tier to
@@ -1009,25 +1029,17 @@ pub(crate) async fn build_org_state(
                     // pull request (`wiki.source.editable`); the
                     // server holds the forge clients.
                     .with_lander(std::sync::Arc::new(crate::wiki_repo::ForgeLander));
-            // Each wiki root is a vault root too (`wiki:<slug>`): the
-            // editor's sync / collab / graph / live-changes path over
-            // the same files the `Pages` service writes. Registered
-            // now for every wiki at boot, and again by `create_wiki`
-            // for one made while the server runs. The `default` alias
-            // is skipped — it is the `knowledge` tier under another
-            // name, and one vault id per directory is enough.
-            let wiki_vaults = wiki_vault::WikiVaults::new(
-                org_root.slug(),
-                vault_sync_state.clone(),
-                vault_graph.clone(),
-                vault_collab.clone(),
-                backend.clone(),
-            );
+            // Each wiki root is a shelf like any other (`wiki:<slug>`):
+            // the editor's sync / collab / graph / live-changes path
+            // over the same files the `Pages` service writes. Attaching
+            // happens in the one loop below, with the vault and the
+            // asset groups; what the wiki backend adds here is the
+            // event bridge and the runtime-creation hook. The `default`
+            // alias is not a shelf — it is the `knowledge` tier under
+            // another name, and one vault id per directory is enough.
+            let shelf_registry = shelf_registry.with_wiki(backend.clone());
             let backend = backend
-                .with_on_created(wiki_vaults.created_hook(tokio::runtime::Handle::current()));
-            for (slug, root) in &wiki_roots {
-                wiki_vaults.attach(slug, root).await;
-            }
+                .with_on_created(shelf_registry.created_hook(tokio::runtime::Handle::current()));
             // Hand this org's vault and each of its wikis the core
             // set. Doing it at boot rather than at org creation is
             // what makes `wiki.core.retroactive` true: an org planted
@@ -1035,13 +1047,16 @@ pub(crate) async fn build_org_state(
             // and one that declined keeps its decline.
             let subs = wiki_live::subscriptions::SubscriptionStore::open(org_root.path());
             let core = core_subscriptions();
-            let mut subscribers = vec![wiki_proto::Subscriber::Vault];
-            subscribers.extend(
-                roots
-                    .keys()
-                    .map(|slug| wiki_proto::Subscriber::Wiki(slug.clone())),
-            );
-            for subscriber in subscribers {
+            // Driven by the shelf list, like the registration loop —
+            // the second place "the vault and each wiki" used to be
+            // spelled by hand, and the second place a new tier would
+            // have been forgotten. An asset group subscribes on the
+            // same terms: a chart library that cites another org's song
+            // library wants those songs to go on being corrected.
+            for subscriber in shelves
+                .iter()
+                .map(|shelf| wiki_proto::Subscriber::of_shelf(shelf.as_ref()))
+            {
                 match subs.ensure_core(&subscriber, &core) {
                     Ok(added) if !added.is_empty() => tracing::info!(
                         org = %org_root.slug(),
@@ -1058,8 +1073,18 @@ pub(crate) async fn build_org_state(
                     ),
                 }
             }
-            (backend, wiki_vaults)
+            (backend, shelf_registry)
         };
+        // ── The one registration loop ────────────────────────────────
+        //
+        // Vault, wikis and asset groups, in one place, by one call.
+        // Before this there were two: `Backend::single` + three loose
+        // calls for the vault, and `WikiVaults::attach` for each wiki.
+        // A third tier would have been a third, and the failure mode of
+        // a forgotten step is silent — see `crate::shelves`.
+        for shelf in &shelves {
+            shelf_registry.attach(shelf.as_ref()).await;
+        }
 
         // The subscription service, over the same store the boot sweep
         // just topped up. `LocalOrgs` resolves a source published by
@@ -1740,7 +1765,67 @@ pub(crate) async fn build_org_state(
         // sermon's `→ verse` links into the same typed-link store.
         let resources = resources::ResourcesBackend::new(org_root.resources_dir())
             .with_wikis(org_root.wikis_dir())
-            .with_links(links.clone());
+            .with_links(links.clone())
+            // ADR 0004 decision 1: charts and songs live on their own
+            // asset groups (`assets:charts`, `assets:songs`), which the
+            // shelf loop above registered — so the chart lane writes
+            // through the vault backend rather than `std::fs`. That is
+            // the entire mechanism by which a chart gets a Loro
+            // document, collaborative editing, wikilinks, tags and
+            // search: `vault-collab` is already listening to this
+            // backend's broadcasts, and a chart write is now one of
+            // them. The lane refuses without this, on purpose.
+            //
+            // The shelves are siblings of the vault rather than
+            // directories inside it, which is what additionally makes
+            // them *subscribable* — a song library another org can take
+            // and resolve from. A vault never can be.
+            .with_assets(vault_sync_state.clone())
+            .map_err(|e| eyre::eyre!("attach the asset groups to the chart lane: {e}"))?;
+        // Move whatever ADR 0003 left in `<org>/resources/charts/` onto
+        // the shelf. Idempotent and non-destructive (it copies and
+        // leaves a breadcrumb), so it runs on every boot rather than
+        // being a step somebody has to remember on the one deployment
+        // that had charts.
+        // On a blocking thread, not this one: the migration writes
+        // through `VaultSync::put_file`, whose broadcast takes a
+        // `tokio::sync::RwLock` with `blocking_read` — which panics if
+        // called from a thread that is driving async tasks. Every other
+        // caller of that lane reaches it through the RPC dispatcher's
+        // blocking pool, so this is the one place that has to say so.
+        let migration = {
+            let lane = resources.clone();
+            tokio::task::spawn_blocking(move || lane.migrate_charts()).await
+        };
+        match migration
+            .map_err(|e| resources_proto::ResourcesError::Io(e.to_string()))
+            .and_then(|r| r)
+        {
+            Ok(report) if !report.migrated.is_empty() => {
+                architect_telemetry::wide::set(
+                    "assets.charts_migrated",
+                    i64::try_from(report.migrated.len()).unwrap_or(-1),
+                );
+                architect_telemetry::wide::set(
+                    "assets.charts_migrated_slugs",
+                    report.migrated.join(","),
+                );
+            }
+            Ok(report) => {
+                architect_telemetry::wide::set(
+                    "assets.charts_on_shelf",
+                    i64::try_from(report.kept.len()).unwrap_or(-1),
+                );
+            }
+            // A migration that cannot run is not a reason to refuse to
+            // serve: the charts it did not reach are still on disk,
+            // exactly where they were, and the next boot tries again.
+            // Refusing here would take an org offline over files
+            // nothing has lost.
+            Err(e) => {
+                architect_telemetry::wide::set("assets.charts_migration_error", e.to_string());
+            }
+        }
         // Cookbook lives at `<wiki>/Cookbook/*.cook`, NOT the vault
         // root. Which wiki is now a real question: with named wikis an
         // org can hold a Cooking wiki, and recipes belong there rather
@@ -1858,7 +1943,6 @@ pub(crate) async fn build_org_state(
             attachments: attachment_service,
             vault_sync: vault_sync_state,
             vault_collab,
-            vault_watcher,
             #[cfg(feature = "plugin-scripture")]
             scripture,
             links,
@@ -1868,7 +1952,7 @@ pub(crate) async fn build_org_state(
             #[cfg(feature = "plugin-wiki")]
             wiki,
             #[cfg(feature = "plugin-wiki")]
-            wiki_vaults,
+            shelf_registry,
             #[cfg(feature = "plugin-wiki")]
             subscriptions,
             #[cfg(feature = "plugin-wiki")]

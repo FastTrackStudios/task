@@ -91,6 +91,16 @@ pub struct Refreshed {
     pub local_only: Vec<String>,
     /// Pages both sides changed. Held, never resolved.
     pub conflicted: Vec<String>,
+    /// Files upstream holds that this subscription's
+    /// [`org_proto::Selection`] does not take (ADR 0004 decision 1a).
+    ///
+    /// Counted rather than ignored, because "the shelf has forty
+    /// gigabytes of stems and you asked for the charts" and "the shelf
+    /// is empty" look identical from the copy on disk. One is working
+    /// as asked and the other is broken, and a person has to be able to
+    /// tell which. Zero for a whole-shelf subscription, which is every
+    /// subscription that existed before selections did.
+    pub skipped: usize,
 }
 
 impl Refreshed {
@@ -364,6 +374,80 @@ pub fn refresh_resource(
     subscription: &wiki_proto::Subscription,
 ) -> Result<Refreshed, MaterializeError> {
     let copy = resource_copy_dir(org_root, &subscription.slug);
+    refresh_tree(upstream_root, &copy, &subscription.selection)
+}
+
+/// Where an org keeps a subscribed **asset shelf**:
+/// `<org>/subscribed/<domain>/<kind>/`, beside its subscribed wikis.
+///
+/// A wiki's address and not a Resource's, and the two choices are made
+/// for the same reason rather than opposite ones. A Resource goes to
+/// `resources/<slug>/` because a reader opens it by canonical address
+/// and would not find it anywhere else. An asset shelf is *mounted*:
+/// a person browses it, a file-sync client shows it, and a reference
+/// resolves into it by `domain/kind`. `subscribed/<domain>/<kind>/` is
+/// where the reference already looks.
+#[must_use]
+pub fn assets_copy_dir(org_root: &Path, domain: &str, kind: &str) -> PathBuf {
+    local_copy_dir(org_root, domain, kind)
+}
+
+/// Bring a subscribed **asset shelf** up to date from `upstream_root`,
+/// the publishing org's `assets/<kind>/` directory.
+///
+/// t[impl wiki.subscribe.local-copy] — after this returns the shelf
+/// resolves with the network down, because everything upstream had is
+/// on disk.
+///
+/// # Why the byte walker and not the vault sync engine
+///
+/// `refresh` rides `vault_sync_client`, which carries the vault's file
+/// set — markdown and `.base` — because that is what a wiki is. An
+/// asset shelf is explicitly "any file, any directory, at any size"
+/// (ADR 0004): a song document beside a `.kf`, a session file, a stem.
+/// Materialising it through the vault engine would silently drop every
+/// file that is not markdown, and a song library arriving without its
+/// songs is the worst available failure — it looks like it worked.
+///
+/// The shelf is still registered for CRDT on **both** sides, which is
+/// the part that surprises: collaboration follows registration, and
+/// each org registers its own copy. What crosses the boundary is bytes
+/// and a base snapshot, exactly as for a wiki; what does not cross is a
+/// Loro document, which was never true of wikis either.
+///
+/// # Errors
+///
+/// Any failure reading upstream or writing the copy.
+pub fn refresh_assets(
+    upstream_root: &Path,
+    org_root: &Path,
+    subscription: &wiki_proto::Subscription,
+) -> Result<Refreshed, MaterializeError> {
+    let copy = assets_copy_dir(org_root, &subscription.domain, &subscription.slug);
+    refresh_tree(upstream_root, &copy, &subscription.selection)
+}
+
+/// Copy every file under `upstream_root` that `selection` admits into
+/// `copy`, byte for byte.
+///
+/// Shared by Resources and asset shelves because it is one act: bring a
+/// tree of arbitrary bytes across, keep what only the subscriber has,
+/// and report rather than delete. A file that differs is overwritten —
+/// for a Resource because nothing is ever written into one
+/// (`wiki.resource.no-annotations`), and for an asset shelf because a
+/// subscriber's edit to a shelf they do not own is upstream's content
+/// with local work on top, which the base-snapshot path
+/// (`refresh_subscription`) is what handles.
+///
+/// t[impl files.sync.selective] — at the organisation scope. What is
+/// outside the selection is not fetched, and `skipped` counts it, so a
+/// person can see that a partial subscription is partial on purpose
+/// rather than broken.
+fn refresh_tree(
+    upstream_root: &Path,
+    copy: &Path,
+    selection: &org_proto::Selection,
+) -> Result<Refreshed, MaterializeError> {
     let io = |path: &Path, source: std::io::Error| MaterializeError::Io {
         path: path.display().to_string(),
         source,
@@ -371,6 +455,10 @@ pub fn refresh_resource(
     let mut out = Refreshed::default();
     let mut upstream_files = std::collections::BTreeSet::new();
     for rel in walk_files(upstream_root).map_err(|(p, e)| io(&p, e))? {
+        if !selection.admits(org_proto::facet_of(&rel)) {
+            out.skipped += 1;
+            continue;
+        }
         upstream_files.insert(rel.clone());
         let src = upstream_root.join(&rel);
         let dst = copy.join(&rel);
@@ -388,8 +476,8 @@ pub fn refresh_resource(
         out.pulled += 1;
     }
     if copy.is_dir() {
-        for rel in walk_files(&copy).map_err(|(p, e)| io(&p, e))? {
-            if !upstream_files.contains(&rel) {
+        for rel in walk_files(copy).map_err(|(p, e)| io(&p, e))? {
+            if !upstream_files.contains(&rel) && selection.admits(org_proto::facet_of(&rel)) {
                 out.local_only.push(rel);
             }
         }
@@ -445,6 +533,7 @@ mod tests {
             title: "Bible".into(),
             core: true,
             declined: false,
+            selection: Default::default(),
         };
 
         let first = refresh_resource(up.path(), org.path(), &sub).unwrap();
