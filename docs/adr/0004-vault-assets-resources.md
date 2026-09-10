@@ -50,19 +50,45 @@ word about its own domain.
 | tier | bytes | mutable | collaborative | may reference |
 |---|---|---|---|---|
 | **Vault** | in the vault tree | yes | yes (CRDT) | anything |
-| **Assets** | in the vault tree | yes | yes (CRDT) | anything |
+| **Assets** | `<org>/assets/<kind>/` | yes | yes (CRDT) | anything |
 | **Resources** | outside the vault tree | no | no | **nothing** |
 
 **Vault** is the knowledge system: notes and wiki pages, the things whose
 links *are* the point.
 
-**Assets** are vault items mechanically and a separate shelf
-conceptually. Any file, any directory. They are the things that will be
-useful later rather than the inner workings of a knowledge base — a
-chart, a patch, a session file. Being vault items is not an
-implementation detail to be hidden: it is precisely what buys them
-collaboration, tags, wikilinks and search without building any of it
-twice.
+**Assets** are a tier of their own — `<org>/assets/<kind>/`, beside
+`vault/`, `wiki/` and `resources/` — holding the things that will be
+useful later rather than the inner workings of a knowledge base. Any
+file, any directory, at any size. A chart, a song, a session file.
+There are several kinds, and each kind is its own shelf.
+
+An earlier draft of this ADR made Assets a subtree of the vault
+(`<vault>/Assets/<Kind>/`) to obtain collaboration. That was solving a
+problem that did not exist. The `wiki/` tier is not inside the vault
+either, and its pages are already collaborative — `wiki_editor_e2e`
+states it plainly: the wiki editor is "`VaultSync` files, per-file CRDT
+collab", and `two_collab_sessions_converge_on_a_wiki_page` proves for a
+wiki page what `vault_collab_e2e` proves for the vault. Per-file CRDT
+follows the wiring, not the directory. Assets get it the same way the
+wiki tier does.
+
+**What Wiki and Assets share is a trait, not a hierarchy.** Both are
+*subscribable sources*: a named shelf of files an organisation may
+publish, another may subscribe to, and a reference may resolve into.
+That is the abstraction, and both tiers implement it — rather than one
+being a special case of the other, which would make every future shelf
+either a wiki-shaped compromise or a second copy of the same machinery.
+
+So `<org>/assets/songs/` is a song library another organisation can
+subscribe to, exactly as it subscribes to a wiki today, and gets the
+visibility rules, materialisation and reference resolution that already
+exist for wikis. Nothing about subscription is asset-specific.
+
+The tier is also where the size difference lives. A wiki carries
+`media/` for images and attachments; an Asset shelf is where large
+content belongs, over the Files layer that is already mounted on these
+roots. That is the only mechanical difference between the two, and it
+is a difference of degree rather than of kind.
 
 **Resources** are imports. Sermon transcripts, scripture, a downloaded
 article. They sit outside the vault tree, they do not change, and they
