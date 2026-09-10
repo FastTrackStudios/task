@@ -1,0 +1,92 @@
+[package]
+name = "task-client"
+description = "The supported way to open a Task org and drive its services — the same typed clients in-process or over the wire."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The transport. `vox::connect_lane` covers the ordinary dial; the
+# `-websocket` crate is here because `dial_authenticated` builds its own
+# handshake request (the session token rides the upgrade) and hands the
+# finished stream to `WsLink::new`, which `connect_lane` has no seam for.
+vox = { workspace = true, features = ["transport-websocket", "transport-websocket-tls"] }
+vox-core = { workspace = true }
+vox-websocket = { workspace = true }
+# Never enabled by vox-websocket itself; this direct dependency exists
+# purely so feature unification compiles wss:// support into the shared
+# tokio-tungstenite instance. Matches apps/cli's own declaration.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio = { workspace = true }
+# Embedded mode: the whole router in-process over architect's
+# `LocalServer`, with no socket. This is the dependency that inverts the
+# usual crates/ → apps/ direction, and the crate doc explains why.
+task-server = { path = "../../apps/server", default-features = false }
+architect = { workspace = true, features = ["local"] }
+# `DataRoot` — the "is this org on this machine?" question the embedded
+# fallback turns on.
+org-proto = { workspace = true }
+# Session tokens live in per-key `FileTokenStore` files (atomic write,
+# 0600), never in the routing document.
+architect-auth = { workspace = true }
+eyre.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+# `remote_org_id` reads the server's `/.well-known/task-server.json`.
+reqwest = { workspace = true }
+
+[features]
+# One feature per plugin, forwarded straight to the embedded server, so
+# an embedding app chooses which plugins its in-process backend carries
+# exactly as a deploy chooses which ones its server carries. Default =
+# everything, matching `task-server`'s own default, so a plain
+# `task-client` build hosts the same world a plain `task-server` does.
+#
+# These exist on the client and not only on the server because the
+# *client* is what an app depends on: without them, an app that wants a
+# smaller embedded backend would have to name `task-server` in its own
+# manifest to turn a plugin off, which is precisely the "reach past the
+# supported surface" this crate exists to remove.
+default = [
+    "plugin-mealplan",
+    "plugin-fitness",
+    "plugin-fasttrackstudio",
+    "plugin-wiki",
+    "plugin-scripture",
+    "plugin-email",
+    "plugin-git",
+    "plugin-agent",
+    "plugin-scheduling",
+    "plugin-finance",
+    "plugin-contacts",
+    "plugin-recall",
+    "plugin-home",
+]
+plugin-mealplan = ["task-server/plugin-mealplan"]
+plugin-fitness = ["task-server/plugin-fitness"]
+plugin-fasttrackstudio = ["task-server/plugin-fasttrackstudio"]
+plugin-wiki = ["task-server/plugin-wiki"]
+plugin-scripture = ["task-server/plugin-scripture"]
+plugin-email = ["task-server/plugin-email"]
+plugin-git = ["task-server/plugin-git"]
+plugin-agent = ["task-server/plugin-agent"]
+plugin-scheduling = ["task-server/plugin-scheduling"]
+plugin-finance = ["task-server/plugin-finance"]
+plugin-contacts = ["task-server/plugin-contacts"]
+plugin-recall = ["task-server/plugin-recall"]
+plugin-home = ["task-server/plugin-home"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# The worked example drives one ordinary service. Project is the
+# smallest interesting one: `list()` takes no arguments and every
+# seeded org has projects.
+project = { workspace = true, features = ["vox"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

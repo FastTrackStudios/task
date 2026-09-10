@@ -266,6 +266,13 @@ plugin-recall = ["dep:recall-proto", "dep:recall"]
 plugin-home = ["dep:locations", "dep:inventory"]
 
 [dev-dependencies]
+# `task_client_e2e` drives the supported library surface (ADR 0004
+# decision 4) against this very server, both over a socket and
+# in-process. A dev-dependency cycle — task-client depends on
+# task-server — which cargo allows precisely for this case: the crate
+# that offers embedded mode cannot be tested against the server it
+# embeds any other way.
+task-client = { workspace = true }
 # `device_sync_e2e` drives a real sync daemon against this server, which
 # is the deployment shape the device-pull loop exists for.
 files-daemon = { workspace = true }

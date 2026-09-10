@@ -24,6 +24,7 @@ members = [
     "crates/note-tabs",
     "crates/player-ui",
     "crates/plugin",
+    "crates/task-client",
     "crates/ui",
     "crates/ui-core",
     "crates/widgets",
@@ -385,6 +386,7 @@ tag-proto = { path = "features/tag/tag-proto" }
 task = { path = "features/task/task", default-features = false }
 task-proto = { path = "features/task/task-proto", default-features = false }
 task-ui = { path = "features/task/task-ui" }
+task-client = { path = "crates/task-client", default-features = false }
 task-server = { path = "apps/server" }
 threads = { path = "features/threads/threads" }
 threads-db = { path = "features/threads/threads-db" }
