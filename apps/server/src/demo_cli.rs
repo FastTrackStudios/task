@@ -127,11 +127,24 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
     // The projects, DECLARED — pages in the org vault, which is what
     // the app's Projects view lists. Idempotent the same way the tree
     // planting is: a page already at the path is left alone.
-    let projects = project::ProjectBackend::new(org.vault_dir());
+    let projects = project::ProjectBackend::new(org.projects_dir());
     for declared in example_org::declared_of(&slug) {
         use project::ProjectService as _;
         let info = project::ProjectInfo {
             title: declared.title.to_owned(),
+            // The page goes in the project's OWN directory — the one
+            // the tree was planted into — rather than at a path derived
+            // from the title. The two differ on purpose in this seed:
+            // the directory is "First Single - Example Client", because
+            // that is what a studio calls a folder, and the project is
+            // titled "First Single". Letting `create` pick would put
+            // the declaration in a second, empty directory beside the
+            // one holding the work.
+            path: format!(
+                "{}/{}",
+                example_org::project_rel(declared.dir),
+                org_proto::PROJECT_PAGE
+            ),
             capabilities: project::Capabilities::from_names(declared.capabilities.iter().copied()),
             form: declared.form,
             // Only what a person would write. Where the sessions live
@@ -171,12 +184,41 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
     for declared in example_org::declared_of(&slug) {
         use project::ProjectService as _;
         use task::TaskService as _;
-        let Some(info) = projects
-            .list()
-            .ok()
-            .and_then(|all| all.into_iter().find(|p| p.title == declared.title))
-        else {
+        let page = format!(
+            "{}/{}",
+            example_org::project_rel(declared.dir),
+            org_proto::PROJECT_PAGE
+        );
+        let Some(info) = projects.get_by_path(&page).ok() else {
             continue;
+        };
+        // Parentage, reconciled on every plant. It is the DECLARED link
+        // and nothing else — `project.nesting.explicit`: the fact that
+        // `Track Two` sits inside `example-album/` on disk says where
+        // its files are and says nothing at all about what it belongs
+        // to. A reader that inferred one from the other would be the
+        // second, competing definition `project.definition.single`
+        // forbids.
+        let parent_id = declared.parent.and_then(|parent_dir| {
+            let parent_page = format!(
+                "{}/{}",
+                example_org::project_rel(parent_dir),
+                org_proto::PROJECT_PAGE
+            );
+            projects.get_by_path(&parent_page).ok().map(|p| p.id)
+        });
+        let info = if parent_id.is_some() && info.parent_id != parent_id {
+            let mut np = info.clone();
+            np.parent_id = parent_id;
+            match projects.update(np) {
+                Ok(updated) => {
+                    println!("  project: {} parented", declared.title);
+                    updated
+                }
+                Err(e) => return Err(eyre::eyre!("parent {}: {e}", declared.title)),
+            }
+        } else {
+            info
         };
         // Parts, reconciled on every plant: missing ones are added, and
         // the ORDER is enforced to the declaration's — which is the
@@ -272,11 +314,7 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
             if *medium != project::Medium::Video {
                 continue;
             }
-            let dest = org
-                .path()
-                .join("files")
-                .join("Projects")
-                .join(declared.dir)
+            let dest = example_org::project_path(&org, declared.dir)
                 .join("Deliverables")
                 .join(format!("{name}.mp4"));
             if dest.exists() {
@@ -312,11 +350,7 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                 .join("songs")
                 .join(example_org::song_slug(name))
                 .join(format!("{name}.wav"));
-            let dest = org
-                .path()
-                .join("files")
-                .join("Projects")
-                .join(declared.dir)
+            let dest = example_org::project_path(&org, declared.dir)
                 .join("Deliverables")
                 .join(format!("{name}.wav"));
             if dest.exists() || !src.is_file() {
@@ -345,7 +379,7 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
             if existing.iter().any(|r| r.name == declared.title) {
                 continue;
             }
-            let dir = org.path().join("files").join("Projects").join(declared.dir);
+            let dir = example_org::project_path(&org, declared.dir);
             if !dir.is_dir() {
                 continue;
             }
@@ -417,7 +451,7 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         );
     }
     println!("\nprojects on disk, adopted as File Roots:");
-    let projects = org.path().join("files").join("Projects");
+    let projects = org.projects_dir();
     if let Ok(entries) = std::fs::read_dir(&projects) {
         let mut names: Vec<_> = entries
             .flatten()

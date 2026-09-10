@@ -98,6 +98,7 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     let files = org_root.path().join("files");
     let resources = org_root.resources_dir();
     let assets = org_root.assets_dir();
+    let projects = org_root.projects_dir();
     let repos = repos_dir(org_root);
 
     // `Dir::files` is one level deep, so walk the whole subtree.
@@ -111,6 +112,7 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
         &files,
         &resources,
         &assets,
+        &projects,
         &repos,
         &mut planted,
     )?;
@@ -186,6 +188,7 @@ fn plant(
     files: &Path,
     resources: &Path,
     assets: &Path,
+    projects: &Path,
     repos: &Path,
     planted: &mut Planted,
 ) -> std::io::Result<()> {
@@ -231,6 +234,25 @@ fn plant(
             // `Repos/<name>/…` → `repos/<name>/…`: plain files here;
             // `plant_repo_wikis` makes each a git repository afterwards.
             Some("Repos") => repos.join(rel.strip_prefix("Repos").unwrap_or(rel)),
+            // `Projects/<Dir>/…` → `<org>/projects/<slug>/…` — ADR
+            // 0004's fourth root, one directory per project, holding
+            // the whole of it.
+            //
+            // The committed area keeps the name `Projects/` and the
+            // human directory names ("Example Album") because that tree
+            // is read by other suites as a picture of a studio's disk
+            // (`tests/integration/src/archive.rs`). What the seeder does
+            // with it is slug the top-level name and plant it on the
+            // tier, so the committed tree stays legible and the planted
+            // one matches the layout every other reader expects.
+            Some("Projects") => {
+                let inner = rel.strip_prefix("Projects").unwrap_or(rel);
+                let mut parts = inner.iter();
+                match parts.next().and_then(|s| s.to_str()) {
+                    Some(name) => projects.join(wiki_slug(name)).join(parts.as_path()),
+                    None => continue,
+                }
+            }
             _ => files.join(rel),
         };
         if dest.exists() {
@@ -245,7 +267,7 @@ fn plant(
     }
     for child in dir.dirs() {
         plant(
-            child, slug, vault, wiki, wikis, files, resources, assets, repos, planted,
+            child, slug, vault, wiki, wikis, files, resources, assets, projects, repos, planted,
         )?;
     }
     Ok(())
@@ -352,33 +374,76 @@ pub fn cast_of(slug: &str) -> Vec<Member> {
     CAST.iter().filter(|m| m.org == slug).copied().collect()
 }
 
-/// Where a project of this org's example tree sits on disk.
+/// Where a project of this org's example tree sits on disk:
+/// `<org>/projects/<slug>/`.
 ///
-/// The adoptable roots are under `files/Projects/`, so a caller that
-/// wants to adopt "Example Album" needs this rather than a guess about
-/// the layout.
+/// `name` is the committed tree's directory name ("Example Album"); the
+/// planted directory is its slug, which is the spelling every reference
+/// into the project carries.
 #[must_use]
 pub fn project_path(org_root: &org_proto::OrgRoot, name: &str) -> std::path::PathBuf {
-    org_root.path().join("files").join("Projects").join(name)
+    org_root.projects_dir().join(project_rel(name))
 }
 
-/// A project the seeder DECLARES — a `ProjectInfo` page in the org
-/// vault, which is what the app's Projects view lists.
+/// A declared project's directory, relative to the Projects tier.
+///
+/// **Only the first segment is slugged**, and that asymmetry is the
+/// rule rather than an oversight. The first segment names a *shelf*,
+/// and a shelf's name travels: it is the middle of every reference into
+/// the project and the directory a subscriber materialises, so it has
+/// to be spelled one way — the same argument `wiki_slug` makes for a
+/// wiki. Everything below it is an ordinary path inside that shelf,
+/// where "Track Two" and "Audio Files" are what the tools that made
+/// them wrote, and renaming them to please a slug rule would break
+/// every session file that points at them.
+///
+/// `Example Album` → `example-album`;
+/// `Example Album/Track Two` → `example-album/Track Two`.
+#[must_use]
+pub fn project_rel(dir: &str) -> String {
+    match dir.split_once('/') {
+        Some((top, rest)) => format!("{}/{rest}", wiki_slug(top)),
+        None => wiki_slug(dir),
+    }
+}
+
+/// A project the seeder DECLARES — a `project.md` at the root of the
+/// project's own directory, which is what the app's Projects view
+/// lists.
 ///
 /// Planting the trees alone left the app's Projects page empty, which
-/// read as broken rather than as "adoption is your first move". The
-/// declaration and the adoption are different acts on purpose — a
-/// project *is* its page (`project.identity.declaration`); its session
-/// trees become File Roots when someone adopts them — so the seeder
-/// declaring these takes nothing away from the adoption half of the
-/// demo. The trees under `files/Projects/` are still sitting there
-/// unadopted.
+/// read as broken rather than as "adoption is your first move". After
+/// ADR 0004's fourth root the two acts have converged: a project's page
+/// lives *inside* the project's directory, so declaring one is writing
+/// a file into the tree it describes — which is what
+/// `ProjectService::adopt` always did, now generalised. The tree is
+/// still adopted as a File Root separately, because that is a Files
+/// act and it is what makes the deliverables reviewable.
 pub struct DeclaredProject {
     pub org: &'static str,
-    /// Directory name under `files/Projects/` — what `project_path`
-    /// resolves, and where the parts (if any) are read from.
+    /// Directory name under the committed tree's `Projects/`, and —
+    /// slugged — the project's directory on the tier. What
+    /// `project_path` resolves, and where the parts (if any) are read
+    /// from.
+    ///
+    /// A **sub-project** carries its parent's directory in front of its
+    /// own: `Example Album/Track Two`. That is the on-disk nesting and
+    /// nothing else; [`Self::parent`] is what makes it a subproject.
     pub dir: &'static str,
     pub title: &'static str,
+    /// The `dir` of this project's parent, for a sub-project.
+    ///
+    /// Two things follow from it and they are deliberately separate.
+    /// The seeder sets `parent_id` on the page, which is the parentage
+    /// (`project.nesting.explicit` — a declared link, never a directory
+    /// name). And `dir` puts the child's files inside the parent's,
+    /// which is where promotion would have left them.
+    ///
+    /// The seed carries one because the album/song pair is the case the
+    /// whole part-versus-project distinction was written for, and a
+    /// planted world with no subproject in it cannot show a demo user —
+    /// or a test — the difference between a roster entry and a project.
+    pub parent: Option<&'static str>,
     /// Rendered into the page body — clients are people in the story,
     /// not yet a field on the model.
     pub clients: &'static str,
@@ -415,6 +480,7 @@ pub const DECLARED: &[DeclaredProject] = &[
     DeclaredProject {
         org: "acme-audio",
         dir: "Example Album",
+        parent: None,
         title: "Example Album",
         clients: "",
         form: Some(project::Form::Album),
@@ -434,9 +500,47 @@ pub const DECLARED: &[DeclaredProject] = &[
             ("Sequence the album", "open", Some(10)),
         ],
     },
+    // The subproject, and the reason the seed has one: an album's song
+    // that earned a project of its own is the case
+    // `project.part.promotion` was written for, and the difference
+    // between a roster entry and a project is not demonstrable from a
+    // world containing only top-level projects.
+    //
+    // It stays in the album's `parts` roster above — three tracks
+    // before and after, in playing order — which is `project.part
+    // .listing`: "a roster of its pieces, not a list of the ones that
+    // are not projects". A test below pins that both are true at once.
+    //
+    // Its deliverable is VIDEO on purpose. Video is the medium that
+    // exercises the review platform end to end — renditions, frame
+    // comments, the version switcher — and it is generated at plant
+    // time into the subproject's own `Deliverables/`, so the surface a
+    // client reaches for a subproject is the same one they reach for
+    // its parent, reached through the same File Root machinery.
+    DeclaredProject {
+        org: "acme-audio",
+        dir: "Example Album/Track Two",
+        parent: Some("Example Album"),
+        title: "Track Two",
+        clients: "",
+        form: Some(project::Form::Song),
+        capabilities: &["music-production"],
+        parts: &[],
+        deliverables: &[(
+            "Track Two visualiser",
+            project::Medium::Video,
+            project::Scope::WholeProject,
+            project::Audience::Client,
+        )],
+        tasks: &[
+            ("Cut the visualiser to the album mix", "in-progress", None),
+            ("Colour pass on the visualiser", "open", Some(4)),
+        ],
+    },
     DeclaredProject {
         org: "acme-audio",
         dir: "First Single - Example Client",
+        parent: None,
         title: "First Single",
         clients: "Example Client",
         form: Some(project::Form::Single),
@@ -472,6 +576,7 @@ pub const DECLARED: &[DeclaredProject] = &[
     DeclaredProject {
         org: "vnt-video",
         dir: "Example Documentary - First Client, Second Client",
+        parent: None,
         title: "Example Documentary",
         clients: "First Client, Second Client",
         form: None,
@@ -496,6 +601,7 @@ pub const DECLARED: &[DeclaredProject] = &[
     DeclaredProject {
         org: "vnt-video",
         dir: "Shared Project",
+        parent: None,
         title: "Shared Project",
         clients: "",
         form: None,
@@ -1284,6 +1390,80 @@ mod declared_tests {
                 );
             }
         }
+    }
+
+    /// A declared parent exists, the child's directory is inside it,
+    /// and the child carries a committed `project.md` — which is the
+    /// whole of what makes it a project rather than a folder
+    /// (`project.identity.declaration`).
+    ///
+    /// t[verify project.nesting.uniform] — the sub-project is declared
+    /// by the same struct, with the same fields, as its parent. There
+    /// is no `DeclaredSubProject`, because there is no sub-project
+    /// entity.
+    #[test]
+    fn every_declared_parent_exists_and_holds_its_child() {
+        for d in DECLARED {
+            let Some(parent) = d.parent else { continue };
+            let p = DECLARED
+                .iter()
+                .find(|x| x.dir == parent && x.org == d.org)
+                .unwrap_or_else(|| panic!("{}: parent `{parent}` is not declared", d.title));
+            assert!(
+                d.dir.starts_with(&format!("{}/", p.dir)),
+                "{}: a subproject's files live inside its parent's directory, \
+                 and `{}` is not inside `{}`",
+                d.title,
+                d.dir,
+                p.dir
+            );
+            assert!(
+                STUDIO
+                    .get_file(format!("{}/Projects/{}/project.md", d.org, d.dir))
+                    .is_some(),
+                "{}: a subproject needs a committed `project.md`; without one \
+                 the directory is unclassified content, not a project",
+                d.title
+            );
+        }
+    }
+
+    /// t[verify project.part.listing] — *"A parent's part list is a
+    /// roster of its pieces, not a list of the ones that are not
+    /// projects."*
+    ///
+    /// The album lists three tracks and one of them is a project. Both
+    /// are true at once, and the seed is where that is demonstrable: a
+    /// world where promoting a song removed it from its album's running
+    /// order would look correct in every unit test and wrong to anybody
+    /// reading the track listing.
+    #[test]
+    fn a_promoted_part_stays_in_its_parents_roster() {
+        let mut checked = 0;
+        for d in DECLARED {
+            let Some(parent_dir) = d.parent else { continue };
+            let parent = DECLARED
+                .iter()
+                .find(|x| x.dir == parent_dir && x.org == d.org)
+                .expect("declared parent");
+            // The child's directory name under its parent is the part's
+            // name, which is how the seed's promotion and the album's
+            // roster refer to the same piece.
+            let piece = d.dir.rsplit('/').next().unwrap_or(d.dir);
+            assert!(
+                parent.parts.contains(&piece),
+                "{}: `{piece}` is a project, and it must STILL be one of \
+                 {}'s parts — promotion adds a page, it does not edit the roster",
+                d.title,
+                parent.title
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "the seed carries no subproject, so nothing here is being checked — \
+             see `DeclaredProject::parent` on why the example needs one"
+        );
     }
 
     /// Every audio deliverable resolves to a committed song folder —

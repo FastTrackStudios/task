@@ -63,30 +63,33 @@ impl ProjectDefaults for StaticProjectDefaults {
     }
 }
 
-/// Production impl. Scans `<vault_root>/Projects/*.md` for a
-/// matching `id:` on each call. Cheap for now (sequential
-/// readdir + frontmatter parse); a cache lives in
-/// `vault-live` once we wire that in.
+/// Production impl. Walks the **Projects tier** — `<org>/projects/` —
+/// for a matching `id:` on each call, reading only the `project.md`
+/// pages the walk finds.
+///
+/// It used to `read_dir` a flat `<vault_root>/Projects/` and take every
+/// `.md` in it, which had two faults beyond looking in what is now the
+/// wrong place. It missed a project whose page sat one directory down
+/// (`Projects/Health/Health.md` was a real shape — the CLI's own
+/// resolver walked recursively to find them, and this one did not), and
+/// a single unreadable file aborted the whole scan through a `?` on
+/// `read_to_string`, so one bad page made every project on the box
+/// non-billable. Both are gone: the walk finds pages at any depth, and
+/// an unreadable one is skipped rather than fatal.
 pub struct VaultProjectDefaults {
-    pub vault_root: PathBuf,
+    pub projects_root: PathBuf,
 }
 
 #[async_trait::async_trait]
 impl ProjectDefaults for VaultProjectDefaults {
     async fn lookup(&self, project_id: Uuid) -> Option<(i64, String, bool)> {
-        let projects_dir = self.vault_root.join("Projects");
-        let entries = std::fs::read_dir(&projects_dir).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+        for found in org_proto::walk_projects(&self.projects_root) {
+            let page = found.dir.join(org_proto::PROJECT_PAGE);
+            let Ok(raw) = std::fs::read_to_string(&page) else {
                 continue;
-            }
-            let raw = std::fs::read_to_string(&path).ok()?;
-            let rel = path
-                .strip_prefix(&self.vault_root)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let basename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            };
+            let rel = format!("{}/{}", found.rel, org_proto::PROJECT_PAGE);
+            let basename = found.rel.rsplit('/').next().unwrap_or(&found.rel);
             let Ok(p) = project::parse_str(&rel, basename, &raw) else {
                 continue;
             };

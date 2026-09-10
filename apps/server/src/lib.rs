@@ -950,6 +950,16 @@ pub(crate) async fn build_org_state(
             shelves.extend(org_root.asset_shelves().into_iter().map(|(kind, root)| {
                 Box::new(org_proto::AssetShelf::new(kind, root)) as Box<dyn org_proto::Shelf>
             }));
+            // ADR 0004's fourth root. A project's whole directory — its
+            // `project.md`, its sessions, its sub-projects, its
+            // deliverables — is one shelf, registered by the same loop
+            // as the rest. That registration is what keeps a project
+            // page collaborative after it left the vault: per-file CRDT
+            // follows `add_root` + `watch_vault`, not the directory a
+            // file happens to sit in (`org_proto::shelf`).
+            shelves.extend(org_root.project_shelves().into_iter().map(|(slug, root)| {
+                Box::new(org_proto::ProjectShelf::new(slug, root)) as Box<dyn org_proto::Shelf>
+            }));
             shelves
         };
         // Empty backends. Every root arrives through
@@ -1195,8 +1205,10 @@ pub(crate) async fn build_org_state(
             Box::pin(async move { timer::Migrator::up(&db, None).await.map(|()| db) })
         })
         .await?;
+        // The rate cascade reads each session's project page on close,
+        // and project pages are on the Projects tier now.
         let timer_defaults = std::sync::Arc::new(timer::store::VaultProjectDefaults {
-            vault_root: vault_root.clone(),
+            projects_root: org_root.projects_dir(),
         });
         let timer = timer::Store::new(timer_conn, timer_defaults);
 
@@ -1505,13 +1517,26 @@ pub(crate) async fn build_org_state(
             }
         }
 
-        // Project + Goal readers. Both walk
-        // `<org>/vault/` on each call; cheap-clone PathBuf
-        // wrappers, no shared mutable state.
-        let projects = project::ProjectBackend::new(vault_root.clone());
+        // Goals walk `<org>/vault/` on each call; projects walk
+        // `<org>/projects/`, ADR 0004's fourth root, where a project is
+        // a whole directory rather than a note among somebody's files.
+        //
+        // Milestones and workstreams follow the project rather than the
+        // vault, and that is the change worth reading twice. Both
+        // derive their page path from their project's
+        // (`default_milestone_path`, `default_workstream_path`), so a
+        // milestone of Crescendum lands at
+        // `projects/crescendum/milestones/<slug>.md` — inside the
+        // project it belongs to. That is the same sentence the tier is
+        // for: everything about a project is in the project's own
+        // directory, so copying, archiving or handing over a project
+        // carries its milestones with it instead of leaving them behind
+        // in a vault.
+        let projects_root = org_root.projects_dir();
+        let projects = project::ProjectBackend::new(projects_root.clone());
         let goals = goal::GoalBackend::new(vault_root.clone());
-        let milestones = milestone::MilestoneBackend::new(vault_root.clone());
-        let workstreams = workstream::WorkstreamBackend::new(vault_root.clone());
+        let milestones = milestone::MilestoneBackend::new(projects_root.clone());
+        let workstreams = workstream::WorkstreamBackend::new(projects_root.clone());
         // Root content lives outside the vault (`<org>/files/`); the
         // Named / Project Version entities that reference it are
         // ordinary vault pages, so the backend gets both paths.

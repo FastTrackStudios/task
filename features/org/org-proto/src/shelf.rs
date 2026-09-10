@@ -124,18 +124,51 @@ pub enum Tier {
     Wiki,
     /// One asset group: `<org>/assets/<name>/`.
     Assets,
-    /// One project: `<org>/projects/<name>/`, nesting for
-    /// sub-projects.
+    /// One project's byte tree: `<org>/projects/<slug>/`.
     ///
-    /// **Not yet where projects live.** A project's tree is a File Root
-    /// under the files tier today, and moving it is a follow-up rather
-    /// than part of the change that introduced this trait. The variant
-    /// exists now anyway, and that is the point: if a fourth root
-    /// needed the trait reshaped to fit, the trait would not be an
-    /// abstraction — it would be a description of the three cases that
-    /// happened to exist when it was written. It needed nothing. A
-    /// project is a named directory that wants sync, CRDT and
-    /// subscription, which is what a shelf is.
+    /// The fourth root, and the last to move. It was declared here one
+    /// change before it existed, as a test of the trait: if a fourth
+    /// tier had needed [`Shelf`] reshaped to fit, the trait would not
+    /// have been an abstraction — it would have been a description of
+    /// the three cases that happened to exist when it was written. It
+    /// needed nothing. Every method a project answers, it answers with
+    /// the trait's own default, and the only line
+    /// [`crate::ProjectShelf`] adds beyond `tier`/`name`/`root` is the
+    /// blank one between them.
+    ///
+    /// # A project is two halves, and only one of them is here
+    ///
+    /// A project is a **note** — a markdown page in the vault whose
+    /// frontmatter declares `type: project`
+    /// (`project.identity.declaration`) — and a **tree** of the bytes
+    /// the work produced. This tier is the tree. The note stays in the
+    /// vault, and [`crate::OrgRoot::project_shelves`] says at length
+    /// why that split is the coherent one rather than a compromise.
+    ///
+    /// # Nested, like submodules
+    ///
+    /// ADR 0004 calls this tier "many, **nested**", and it means it
+    /// literally: `projects/crescendum/track-two/` is a project inside
+    /// a project, and the intended model is git's submodule — the child
+    /// is a shelf in its own right, and the parent holds a *reference*
+    /// to it rather than swallowing it. Taking a copy of the parent is
+    /// then a choice between everything and the surface, with the
+    /// sub-project visible either way as a named reference.
+    ///
+    /// [`crate::OrgRoot::project_shelves`] enumerates only the top
+    /// level today, and says exactly which mechanism is missing before
+    /// it can enumerate the rest: the collaboration layer has no
+    /// equivalent of `files::scan::walk_live_tree`'s prune, so two
+    /// overlapping shelf roots would put one file in two link graphs
+    /// and two CRDT documents.
+    ///
+    /// The nesting on disk is not the parentage. Parentage is the
+    /// child's declared `parentId`, because `project.nesting.explicit`
+    /// forbids the inference a directory would invite: *"Parentage is a
+    /// declared link, not a consequence of directory containment.
+    /// Hardcoded directory names — `Projects/`, `Albums/` — express no
+    /// hierarchy and are not consulted."* The directory says where the
+    /// bytes are; the frontmatter says what the project belongs to.
     Projects,
 }
 
@@ -491,12 +524,60 @@ impl Shelf for AssetShelf {
     }
 }
 
-/// One project's tree — `<org>/projects/<name>/`.
+/// One project's tree — `<org>/projects/<slug>/`.
 ///
-/// Present, and not yet enumerated by [`crate::OrgRoot::shelves`]
-/// unless the directory exists: a project's files are a File Root under
-/// the files tier today, and re-homing them is a follow-up. See
-/// [`Tier::Projects`] for why the type exists in advance of the move.
+/// Each *project* is its own shelf, at any depth: an album is one, and
+/// a song promoted out of that album into a subproject is another,
+/// nested inside it the way a git submodule is. See [`Tier::Projects`]
+/// for the model and [`crate::OrgRoot::project_shelves`] for the one
+/// mechanism the collaboration layer still needs before a nested shelf
+/// can be registered safely.
+///
+/// # The four questions, and why this type answers none of them itself
+///
+/// [`Shelf`] asks four things a shelf may have an opinion about. A
+/// project has an opinion about all four, and in every case the
+/// opinion is already the trait's default — which is worth writing
+/// down, because "the default happened to fit" and "the default is
+/// right here for a reason" look identical in code and are not the
+/// same claim.
+///
+/// **`is_subscribable` — yes**, from [`Tier::is_subscribable`], with
+/// no override. A project is *precisely* the unit one organisation
+/// hands another: the mix engineer at another studio is given a song,
+/// the colourist is given a cut. `project.location.federated` already
+/// says so — *"the locations composing a project may sit on different
+/// servers, owned by different orgs"* and *"cross-org collaboration is
+/// expressed as grants, never by duplicating a project per org"* —
+/// and a subscription is what that sentence costs at the storage
+/// layer. It is also the argument for a subproject being a shelf: the
+/// engineer subscribes to one song and not the other fourteen, which
+/// is only sayable if the song is a thing that can be subscribed to.
+///
+/// **`is_editable` — yes**, from the trait default. A project tree is
+/// the one shelf that is written by *tools* rather than by people
+/// typing: Pro Tools, Reaper, a render. That is what a File Root is
+/// for, and it is why a project tree that could not be written would
+/// be a contradiction rather than a restriction. The read-only case is
+/// a *subscribed copy* — somebody else's project, refreshed from
+/// upstream — and that is a fact about the subscription, which
+/// `wiki.subscribe.editability` already owns.
+///
+/// **`vault_id` — `project:<slug>`**, from the trait's composition.
+/// Namespaced by tier for the same reason a wiki and an asset kind
+/// are: an org may hold a wiki called `crescendum`, an asset group
+/// called `crescendum` and a project called `crescendum`, and they are
+/// three roots that must stay three.
+///
+/// **`subscriber_key` — `project:<slug>`**, likewise. A project both
+/// *may be* subscribed to and *may hold* subscriptions — an album
+/// citing another org's song library wants those songs to go on being
+/// corrected — and keeping those two as separate questions is what
+/// stops the first from being read as an answer to the second.
+///
+/// Four defaults and no override. If a later tier does need one, that
+/// is the interesting moment: it means the trait had been describing
+/// its implementations rather than abstracting over them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectShelf {
     name: String,
@@ -581,5 +662,42 @@ mod tests {
             AssetShelf::new("songs".into(), "/tmp/a".into()).subscriber_key(),
             "assets:songs"
         );
+        assert_eq!(
+            ProjectShelf::new("crescendum".into(), "/tmp/p".into()).subscriber_key(),
+            "project:crescendum"
+        );
+    }
+
+    /// The claim [`Tier::Projects`] makes about the trait: a project
+    /// answers all four of the questions a shelf may have an opinion
+    /// about, and answers every one of them with the trait's own
+    /// default. A day when this test has to change is a day the
+    /// abstraction turned out to be a description.
+    #[test]
+    fn a_project_needed_no_method_of_its_own() {
+        let p = ProjectShelf::new("crescendum".into(), "/tmp/p".into());
+        assert!(
+            p.is_subscribable(),
+            "a project is the unit one org hands another"
+        );
+        assert!(p.is_editable(), "a project tree is written by its tools");
+        assert_eq!(p.vault_id(), "project:crescendum");
+        assert_eq!(p.subscriber_key(), "project:crescendum");
+        assert_eq!(p.tier(), Tier::Projects);
+        assert_eq!(p.name(), "crescendum");
+    }
+
+    /// A project, a wiki and an asset group may all be called the same
+    /// thing. Three names, three roots, and the ids keep them apart.
+    #[test]
+    fn a_project_cannot_collide_with_a_wiki_or_an_asset_group() {
+        let ids: std::collections::HashSet<String> = [
+            WikiShelf::new("crescendum".into(), "/tmp/w".into()).vault_id(),
+            AssetShelf::new("crescendum".into(), "/tmp/a".into()).vault_id(),
+            ProjectShelf::new("crescendum".into(), "/tmp/p".into()).vault_id(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ids.len(), 3);
     }
 }

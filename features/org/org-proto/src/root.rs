@@ -27,9 +27,15 @@
 //! CRDT by one loop, and (except the vault) publishable for another
 //! organisation to subscribe to. `resources/` is not a fifth root: it
 //! is an asset group that happens to be immutable and leaf-only.
-//! `projects/` is the one that has not moved yet — a project's tree is
-//! still a File Root under `files/` — and [`crate::Tier::Projects`]
-//! says why the type exists in advance of the move.
+//!
+//! All four have moved. `projects/` was the last of them, and it is
+//! the one where "a shelf" and "the thing a person means" come apart
+//! most: a project is a *note* in the vault and a *tree* of bytes on
+//! this tier, and only the tree is here.
+//! [`OrgRoot::project_shelves`] is the argument for that split, for
+//! why a subproject is a shelf beside its parent rather than a subtree
+//! inside it, and for why these roots may not overlap even though the
+//! Files layer is happy to nest its own.
 //!
 //! Default data root is `$HOME/.task/` (override with
 //! `TASK_DATA_ROOT`). Per-org databases live under
@@ -220,9 +226,18 @@ impl DataRoot {
             .iter()
             .map(|k| format!("assets/{k}"))
             .collect();
+        // `projects/` is the tier directory and not a shelf — a fresh
+        // org holds no projects. It is created anyway so that
+        // `project_shelves` reads an empty directory rather than a
+        // missing one, and so declaring the org's first project is a
+        // write rather than a `NotFound`. Exactly the reason the asset
+        // *kinds* are scaffolded; the difference is that Task itself
+        // writes those two kinds and nobody can predict a project's
+        // name.
         for sub in [
             "vault",
             "attachments",
+            "projects",
             "wiki/Knowledge",
             "wiki/LLM/Memories",
             "wiki/LLM/Journals",
@@ -534,6 +549,262 @@ impl OrgRoot {
         self.assets_dir().join(kind)
     }
 
+    /// `<org>/projects/` — the **Projects tier**, ADR 0004's fourth
+    /// root and the last of them to move.
+    ///
+    /// One directory per top-level project, and **everything a project
+    /// is** lives inside it: its declaring page, its sub-projects, its
+    /// working files, its deliverables. Nothing about a project is kept
+    /// anywhere else, and other things reach it by reference.
+    /// [`Self::project_shelves`] is the argument for both halves of
+    /// that — why the page moved out of the vault, and why a
+    /// sub-project is a subtree rather than a shelf of its own.
+    #[must_use]
+    pub fn projects_dir(&self) -> PathBuf {
+        self.path.join("projects")
+    }
+
+    /// `<org>/projects/<slug>/` — one top-level project's directory,
+    /// which is the whole of that project.
+    ///
+    /// The slug is [`crate::wiki_slug`] of the project's title — the
+    /// same slugging every other named thing in the org uses, so a
+    /// reference into a project spells its name the way a reference
+    /// into a wiki spells its.
+    #[must_use]
+    pub fn project_shelf_dir(&self, slug: &str) -> PathBuf {
+        self.projects_dir().join(slug)
+    }
+
+    /// `<org>/projects/<path>/project.md` — a project's declaring page,
+    /// wherever in the tier it sits.
+    ///
+    /// `path` is tier-relative, so a top-level project is `crescendum`
+    /// and one of its sub-projects is `crescendum/track-two`. That is
+    /// the same string [`crate::PROJECT_PAGE`] is appended to, and the
+    /// same string a reference carries.
+    #[must_use]
+    pub fn project_page(&self, rel: &str) -> PathBuf {
+        self.projects_dir().join(rel).join(crate::PROJECT_PAGE)
+    }
+
+    /// The **legacy** home of a project's tree: `<org>/files/Projects/`.
+    ///
+    /// Where every project on every deployment sits until the migration
+    /// has run. Kept as a resolver rather than as a string in three
+    /// places, because the migration, the mount layout and the seeder
+    /// all have to agree on it, and a fourth spelling of it is how one
+    /// of them ends up looking in the wrong directory.
+    #[must_use]
+    pub fn legacy_projects_dir(&self) -> PathBuf {
+        self.path.join("files").join("Projects")
+    }
+
+    /// Every project shelf this org holds, as `(slug, root)`.
+    ///
+    /// # Why this is a set on disk, like the wikis and the asset kinds
+    ///
+    /// Same rule, third time (`wiki.many.set`): the set is what the
+    /// directory holds. A project created while the server runs needs
+    /// no code change to be registered, published and subscribable, and
+    /// a project restored from a backup by `cp -r` is simply there.
+    ///
+    /// # A project is self-contained, page included
+    ///
+    /// The project's declaring page moved here too. It used to be a
+    /// vault note at `vault/Projects/<slug>.md` while its bytes were a
+    /// File Root somewhere else, and the split cost more than it
+    /// bought.
+    ///
+    /// What it cost is best said as a question a person actually asks:
+    /// *where is this project?* Under the split there were two honest
+    /// answers and no way to give one. Copying a project to another
+    /// machine meant copying two things from two places and hoping the
+    /// join survived. Archiving one meant remembering the page. Handing
+    /// one to another organisation meant a subscription to the tree and
+    /// a separate story for the declaration. Every one of those is the
+    /// same defect: a project had no single location, so nothing could
+    /// be done to a project as a whole.
+    ///
+    /// Now it does. `<org>/projects/crescendum/` is the project — its
+    /// `project.md`, its sub-projects, its sessions, its
+    /// `Deliverables/`. `cp -r` of that directory is a copy of the
+    /// project. `rm -r` is a deletion of it. A subscription to the
+    /// shelf is a share of it. And `project.identity.stable`'s promise
+    /// — *"a project carried to another machine by `cp -r` arrives
+    /// intact"* — becomes true of the whole project rather than of the
+    /// half of it that was in the vault.
+    ///
+    /// **The page is still an ordinary markdown note.** It is
+    /// `project.md` at the root of the project's own directory, with
+    /// the same `type: project` frontmatter it always had, and
+    /// `project.identity.declaration` reads the same way: *"an ordinary
+    /// note — greppable, and editable in any editor — so nothing
+    /// outside the file is needed to interpret it."* What changed is
+    /// which registered root it sits in, and per `crate::shelf` that
+    /// changes nothing about it: a shelf is registered on
+    /// `vault::Backend`, `GraphBackend` and `VaultCollab` exactly as
+    /// the vault is, so the page keeps its CRDT document, its
+    /// wikilinks, its search and its live editor. Collaboration follows
+    /// registration, not location — the whole point of that module.
+    ///
+    /// **What it costs, stated plainly.** A project is no longer in the
+    /// vault's page index, so a vault-wide search or a `.base` view
+    /// filtering `type: project` no longer finds one. That is the
+    /// trade: a project is its own thing, reached by reference, and
+    /// references are what `links` is for. `links_proto::NodeKind`
+    /// resolves a `project:` reference to this tier the same way it
+    /// resolves `song:` to the assets tier after ADR 0004, which is why
+    /// "referenced as needed" is a mechanism here and not a hope.
+    ///
+    /// # A sub-project is a submodule, and this list is not there yet
+    ///
+    /// The model a sub-project is meant to follow is git's submodule: a
+    /// sub-project is **its own shelf at any depth**, and its parent
+    /// holds a *reference* to it rather than swallowing it. Somebody
+    /// taking a copy of the album chooses — take everything, or take
+    /// the surface and know from a named, unresolved reference that
+    /// `track-two` exists and has not been materialised. That second
+    /// state is the ordinary one ADR 0004 describes for any reference
+    /// to something not resident locally, and it is emphatically not an
+    /// error and not a silent absence.
+    ///
+    /// **This method returns only top-level directories today, and
+    /// that is a limitation rather than the design.** What is missing is
+    /// one specific mechanism, and it is worth naming precisely,
+    /// because everything else about the submodule model is already
+    /// expressible.
+    ///
+    /// Shelf roots may not overlap. A shelf is registered on
+    /// `vault::Backend`, `GraphBackend` and `VaultCollab`, and **none
+    /// of those three prunes**. Register both `projects/crescendum` and
+    /// `projects/crescendum/track-two` as things stand and every file
+    /// under the child sits in two roots at once: two link graphs
+    /// claiming it, two watchers announcing each write, and two CRDT
+    /// document ids over one file — which is the silent clobbering
+    /// `crate::shelf`'s module docs exist to prevent. So until the
+    /// prune exists, enumerating a nested project here would not
+    /// deliver submodules; it would deliver corruption.
+    ///
+    /// The *Files* layer already solved exactly this and is the
+    /// template. `files::registry::Registry::conflicting_root`
+    /// deliberately allows a root inside a root — "a song inside an
+    /// album" is its own example — because `files::scan::walk_live_tree`
+    /// prunes the inner root's directory out of the outer root's walk,
+    /// and its doc says in as many words: *"the prune is what makes
+    /// relaxing this safe, so the two must stay together."* The
+    /// collaboration layer needs the same pair. Concretely: the vault
+    /// walk (`vault_live::walker::walk_vault`) and the manifest walk
+    /// (`vault_live::sync::collect`) must stop at a directory that
+    /// declares itself a shelf, the way `sync::is_root_internal`
+    /// already stops at a File Root's own bookkeeping. On this tier the
+    /// declaration is [`crate::PROJECT_PAGE`].
+    ///
+    /// Once that lands, this method changes to
+    /// [`crate::project_page::walk_projects`] and every project at
+    /// every depth is a shelf. Nothing else has to move: the vault id
+    /// is already `project:<rel>`-shaped, the trait already answers
+    /// every question a nested shelf asks, and
+    /// [`crate::project_page::FoundProject`] already carries the
+    /// tier-relative path a nested shelf would be keyed by.
+    ///
+    /// # The depth question, and what `Selection` cannot say
+    ///
+    /// "Take everything" versus "take the surface and know the
+    /// sub-project is there" is a subscription decision, and ADR 0004
+    /// decision 1a's [`crate::Selection`] is where subscription
+    /// decisions belong. It cannot express this one, and the reason is
+    /// exact rather than incidental:
+    ///
+    /// [`crate::Selection::admits`] is a **predicate over paths inside
+    /// one root**. Under the submodule model a sub-project's files are
+    /// not paths inside its parent's root — they are pruned out of it —
+    /// so no predicate of that shape can reach them, whatever facets it
+    /// names. `Facets` narrows *within* a shelf; depth chooses *which
+    /// shelves*. Those are different questions and one type answering
+    /// both would be the "second selection system with its own rules"
+    /// the ADR warns against, arrived at from the other direction.
+    ///
+    /// So the extension is a second field on the subscription beside
+    /// `Selection`, not a third variant inside it, and the stated
+    /// default is **surface-only**: a subscription that says nothing
+    /// takes the shelf it named and leaves its sub-shelves as visible,
+    /// named, unresolved references. That is the safe direction — it
+    /// cannot pull gigabytes nobody asked for, and the reference stays
+    /// on screen so a person can choose — and it is the same
+    /// conservative stance [`crate::Selection::admits`] already takes
+    /// about unmapped content.
+    ///
+    /// **A cycle becomes expressible** the moment a parent references a
+    /// sub-project by name: A may reference B may reference A, and a
+    /// person can write that by hand. It is tolerated rather than
+    /// refused at write time — refusing would mean every write
+    /// validating a graph it may hold only part of, which
+    /// `project.location.degraded` says must still work — and stopped
+    /// at materialisation, by a visited-set over shelf ids. The same
+    /// stance `ProjectService::get` already takes for merge chains,
+    /// which are the identical hazard one field over.
+    ///
+    /// `project.nesting.explicit` is not violated by any of this. It
+    /// forbids *inferring* parentage from directory containment, and
+    /// nothing here infers: a child's `project.md` declares `parentId`,
+    /// and that declaration is the parentage. The spec's own next
+    /// sentence grants the layout — *"A project's files usually live
+    /// under its parent's directory and need not."*
+    ///
+    /// A directory that is not its own slug is skipped for the same
+    /// reason a wiki's is: the reference and the folder would disagree,
+    /// and the disagreement would surface only as a link that does not
+    /// resolve.
+    ///
+    /// # A directory is a shelf before it is a project
+    ///
+    /// This method does **not** check for a `project.md`, and
+    /// [`crate::project_page::walk_projects`] does. That is not an
+    /// inconsistency; the two answer different questions.
+    ///
+    /// "Is this a project?" is `project.identity.declaration`, and the
+    /// answer is the page. "Should this directory be registered for
+    /// sync, the link graph and per-file CRDT?" is a question about
+    /// bytes, and the answer is yes for anything sitting on the tier.
+    /// They come apart in exactly one situation and it is a common one:
+    /// a project arriving by sync, whose files land before its page
+    /// does. A shelf that refused to register until the page appeared
+    /// would be a directory whose files are silently not collaborative
+    /// — no error, no warning, and two people editing one file
+    /// clobbering each other, which is the failure `crate::shelf`'s
+    /// module docs exist to prevent. Registering a directory that turns
+    /// out to hold no project costs a watcher and an empty graph root.
+    ///
+    /// Sorted by slug, so a caller enumerating projects gets a stable
+    /// order rather than the filesystem's.
+    #[must_use]
+    pub fn project_shelves(&self) -> Vec<(String, PathBuf)> {
+        let mut slugs: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(self.projects_dir()) {
+            for entry in entries.flatten() {
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                let Some(slug) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if slug != wiki_slug(&slug) || slugs.contains(&slug) {
+                    continue;
+                }
+                slugs.push(slug);
+            }
+        }
+        slugs.sort();
+        slugs
+            .into_iter()
+            .map(|s| {
+                let root = self.project_shelf_dir(&s);
+                (s, root)
+            })
+            .collect()
+    }
+
     /// Every asset shelf this org holds, as `(kind, root)`.
     ///
     /// The set is what is on disk — exactly the rule
@@ -597,7 +868,8 @@ impl OrgRoot {
     ///
     /// The vault comes first because it is the one shelf an org always
     /// has, and the order is otherwise the stable order of
-    /// [`Self::named_wikis`] followed by [`Self::asset_shelves`].
+    /// [`Self::named_wikis`], then [`Self::asset_shelves`], then
+    /// [`Self::project_shelves`].
     #[must_use]
     pub fn shelves(&self) -> Vec<Box<dyn crate::Shelf>> {
         let mut out: Vec<Box<dyn crate::Shelf>> =
@@ -607,6 +879,9 @@ impl OrgRoot {
         }));
         out.extend(self.asset_shelves().into_iter().map(|(kind, root)| {
             Box::new(crate::AssetShelf::new(kind, root)) as Box<dyn crate::Shelf>
+        }));
+        out.extend(self.project_shelves().into_iter().map(|(slug, root)| {
+            Box::new(crate::ProjectShelf::new(slug, root)) as Box<dyn crate::Shelf>
         }));
         out
     }
@@ -778,6 +1053,74 @@ mod tests {
         std::fs::create_dir_all(org.wikis_dir().join("music-theory")).unwrap();
         let slugs: Vec<String> = org.named_wikis().into_iter().map(|(s, _)| s).collect();
         assert_eq!(slugs, [DEFAULT_WIKI, "music-theory"]);
+    }
+
+    /// t[verify project.nesting.uniform] — an album and a song promoted
+    /// out of it are two shelves side by side, and the set says nothing
+    /// about which is which. Depth is not a property a shelf has.
+    #[test]
+    fn a_subproject_is_a_shelf_beside_its_parent_not_inside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = DataRoot::new(tmp.path().to_owned());
+        let org = root.init_org("acme-audio", "ACME Audio", true).unwrap();
+
+        // A fresh org has the tier and no projects on it.
+        assert!(org.projects_dir().is_dir());
+        assert!(org.project_shelves().is_empty());
+
+        for slug in ["crescendum", "track-two", "Not A Slug"] {
+            std::fs::create_dir_all(org.project_shelf_dir(slug)).unwrap();
+        }
+        let slugs: Vec<String> = org.project_shelves().into_iter().map(|(s, _)| s).collect();
+        assert_eq!(
+            slugs,
+            ["crescendum", "track-two"],
+            "a directory that is not its own slug is skipped, like a wiki's"
+        );
+
+        // The property the whole design turns on: no shelf root
+        // contains another, so no file is ever in two roots at once.
+        let roots: Vec<PathBuf> = org.project_shelves().into_iter().map(|(_, p)| p).collect();
+        for a in &roots {
+            for b in &roots {
+                assert!(
+                    a == b || !b.starts_with(a),
+                    "{} contains {} — two vault roots over one file",
+                    a.display(),
+                    b.display()
+                );
+            }
+        }
+    }
+
+    /// The one list the registration loop consumes holds all four
+    /// tiers, each under its own namespaced id. Before the projects
+    /// tier moved this list stopped at three, and the fourth was a
+    /// File Root nobody registered for CRDT.
+    #[test]
+    fn every_tier_is_in_the_one_shelf_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = DataRoot::new(tmp.path().to_owned());
+        let org = root.init_org("acme-audio", "ACME Audio", true).unwrap();
+        std::fs::create_dir_all(org.named_wiki_dir("music-theory")).unwrap();
+        std::fs::create_dir_all(org.project_shelf_dir("crescendum")).unwrap();
+
+        let shelves = org.shelves();
+        let ids: Vec<String> = shelves.iter().map(|s| s.vault_id()).collect();
+        assert!(ids.contains(&crate::VAULT_ID.to_string()));
+        assert!(ids.contains(&"wiki:music-theory".to_string()));
+        assert!(ids.contains(&"assets:songs".to_string()));
+        assert!(
+            ids.contains(&"project:crescendum".to_string()),
+            "the projects tier is registered by the same loop as the rest: {ids:?}"
+        );
+
+        // Every tier is represented, and no id is claimed twice.
+        let tiers: std::collections::HashSet<crate::Tier> =
+            shelves.iter().map(|s| s.tier()).collect();
+        assert_eq!(tiers.len(), 4, "four roots, four tiers");
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "two shelves share an id: {ids:?}");
     }
 
     #[test]
