@@ -121,7 +121,11 @@ async fn a_setlist_reaches_another_orgs_chart_only_while_subscribed() {
     let setlist = alice
         .collections()
         .await
-        .create(org, "Album Launch Set".into(), CollectionKind::Setlist)
+        .create(
+            org,
+            "Album Launch Set".into(),
+            CollectionKind::new("setlist"),
+        )
         .await
         .expect("create the setlist");
     for node in [mine.clone(), theirs.clone()] {

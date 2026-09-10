@@ -294,13 +294,20 @@ async fn demo_plants_the_resource_tier_assets() -> eyre::Result<()> {
     Ok(())
 }
 
-/// The seeded collections — a `Library` and a `Setlist` that a demo
-/// user can open, holding the assets above.
+/// The seeded collections — a library, a setlist and a rehearsal pool
+/// that a demo user can open, holding the assets above.
 ///
 /// Four assets and no collection would leave ADR 0003's third decision
 /// ("a library is a collection; an asset is a node") planted as four
 /// orphans. These are written at plant time through the real store, so
 /// what is asserted here is what the `CollectionService` serves.
+///
+/// The kinds are checked as *strings*, because after ADR 0004 that is
+/// all they are: `library` and `setlist` are words the seed chose, and
+/// `rehearsal-pool` is there precisely because no version of Task has
+/// ever enumerated it. A demo user reaching that third collection is the
+/// planted proof that an application can name its own domain without a
+/// release of the store underneath it.
 #[cfg(feature = "plugin-fasttrackstudio")]
 #[tokio::test(flavor = "multi_thread")]
 async fn demo_plants_the_collections_that_gather_the_assets() -> eyre::Result<()> {

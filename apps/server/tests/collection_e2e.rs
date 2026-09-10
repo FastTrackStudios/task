@@ -82,7 +82,7 @@ async fn create_add_list_reorder_round_trip() {
         .create(
             "acme".to_string(),
             "Sunday Set".to_string(),
-            CollectionKind::Setlist,
+            CollectionKind::new("setlist"),
         )
         .await
         .expect("create round-trips over vox");
@@ -111,7 +111,7 @@ async fn create_add_list_reorder_round_trip() {
 
     // list — the setlist is visible in the org, filtered by kind.
     let listed = client
-        .list("acme".to_string(), Some(CollectionKind::Setlist))
+        .list("acme".to_string(), Some(CollectionKind::new("setlist")))
         .await
         .expect("list round-trips");
     assert_eq!(listed.len(), 1);
@@ -119,7 +119,7 @@ async fn create_add_list_reorder_round_trip() {
     // A different kind filter excludes it.
     assert!(
         client
-            .list("acme".to_string(), Some(CollectionKind::Library))
+            .list("acme".to_string(), Some(CollectionKind::new("library")))
             .await
             .expect("list(library) round-trips")
             .is_empty()
@@ -143,4 +143,84 @@ async fn create_add_list_reorder_round_trip() {
         .expect("get round-trips")
         .expect("collection exists");
     assert_eq!(ids(&fetched), ["a", "c", "x", "b"]);
+}
+
+/// The test ADR 0004 decision 2 asks for by name: *can a seventh
+/// application appear without touching this repository?*
+///
+/// It drives the shipped lane with a kind Task has never heard of and
+/// never will — no variant, no match arm, no release — and asks for the
+/// three things a store actually owes: the kind survives the round trip,
+/// filtering finds it, and filtering by a *different* app's kind does
+/// not. If that passes, an app owns its own vocabulary.
+///
+/// It also pins the normalisation, over the wire rather than in a unit
+/// test, because the wire is where the two spellings meet: a CLI user
+/// typing `--kind Rehearsal-Pool` and a web client writing
+/// `rehearsal-pool` have to land on one collection. A store that let
+/// those diverge would split somebody's data with no error anywhere.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_app_defined_kind_round_trips_and_folds_its_spellings() {
+    let (url, _tmp) = boot_server().await.unwrap();
+    let client = connect(&url).await.unwrap();
+
+    let pool = client
+        .create(
+            "acme".to_string(),
+            "Thursday Rehearsal".to_string(),
+            // A word no version of Task has ever enumerated.
+            CollectionKind::new("rehearsal-pool"),
+        )
+        .await
+        .expect("a caller-defined kind is not Task's business to approve");
+    assert_eq!(pool.kind.as_str(), "rehearsal-pool");
+
+    // Found by the spelling that made it…
+    let listed = client
+        .list(
+            "acme".to_string(),
+            Some(CollectionKind::new("rehearsal-pool")),
+        )
+        .await
+        .expect("list round-trips");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, pool.id);
+
+    // …and by every other spelling of the same word, which is the
+    // property that keeps two clients from splitting one library.
+    for spelling in ["Rehearsal-Pool", "REHEARSAL-POOL", "  rehearsal-pool "] {
+        assert_eq!(
+            client
+                .list("acme".to_string(), Some(CollectionKind::new(spelling)))
+                .await
+                .expect("list round-trips")
+                .len(),
+            1,
+            "`{spelling}` should name the same kind"
+        );
+    }
+
+    // A different app's kind does not see it. Kinds partition; they just
+    // are not partitioned by a list Task maintains.
+    assert!(
+        client
+            .list("acme".to_string(), Some(CollectionKind::new("setlist")))
+            .await
+            .expect("list round-trips")
+            .is_empty()
+    );
+
+    // And an unlabelled collection is still refused — the one thing the
+    // store does have an opinion about, because a blank label carries no
+    // information for anybody.
+    assert!(
+        client
+            .create(
+                "acme".to_string(),
+                "Nameless".to_string(),
+                CollectionKind::new("  "),
+            )
+            .await
+            .is_err()
+    );
 }

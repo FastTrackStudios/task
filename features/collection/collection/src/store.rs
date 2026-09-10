@@ -111,6 +111,18 @@ impl CollectionService for Store {
         title: String,
         kind: CollectionKind,
     ) -> Result<Collection, CollectionError> {
+        // An unlabelled collection is not a thing a caller ever means.
+        // `CollectionKind` stays total so that a legacy or hand-edited
+        // row still loads (losing a collection's whole ordering over a
+        // blank label would be the worse failure), so the refusal lives
+        // here, on the way in, where there is somebody to tell.
+        if kind.is_empty() {
+            return Err(CollectionError::BadRequest(
+                "collection kind is empty; a kind is the caller's own label \
+                 and must be a non-blank word"
+                    .to_string(),
+            ));
+        }
         let mut inner = self.inner.lock().expect("collection store poisoned");
         let mut c = Collection::new(org, title, kind);
         c.id = uuid::Uuid::new_v4().to_string();
@@ -211,17 +223,148 @@ mod tests {
         c.items.iter().map(|it| it.node.id.clone()).collect()
     }
 
+    /// Two lines lifted verbatim out of a real planted vault
+    /// (`~/.local/share/task-demo/acme/orgs/acme-audio/collections.jsonl`),
+    /// written by the enum-era code, plus a third row in the shape the
+    /// enum's `Other(String)` escape hatch produced.
+    ///
+    /// Copied rather than generated on purpose: a fixture this code
+    /// wrote would only prove that this code agrees with itself, and the
+    /// question the migration turns on is what is *already on somebody's
+    /// disk*.
+    const LEGACY_JSONL: &str = concat!(
+        r#"{"id":"24aacad5-f90f-4546-a896-ac60ed94a511","org":"acme-audio","title":"Chart Library","kind":"Library","items":[{"node":{"domain":"","kind":"Chart","id":"track-one","anchor":""},"rank":"m"},{"node":{"domain":"","kind":"Chart","id":"track-two","anchor":""},"rank":"mm"}]}"#,
+        "\n",
+        r#"{"id":"e96d2138-0cd2-4545-958b-d127f28f74e1","org":"acme-audio","title":"Album Launch Set","kind":"Setlist","items":[{"node":{"domain":"","kind":"Song","id":"track-one","anchor":""},"rank":"m"}]}"#,
+        "\n",
+        r#"{"id":"aaaaaaaa-0000-0000-0000-000000000000","org":"acme-audio","title":"Rehearsal Pool","kind":{"Other":"Rehearsal Pool"},"items":[]}"#,
+        "\n",
+    );
+
+    /// The claim ADR 0004 made about this migration — "existing rows
+    /// carry their variant's `as_str()` value, which is already what is
+    /// persisted" — was **wrong**, and this test is where that is
+    /// established rather than asserted.
+    ///
+    /// serde never called `as_str()`. An externally-tagged unit variant
+    /// writes its Rust variant name, so the bytes on disk say `"Library"`
+    /// with a capital L, and `Other(label)` writes the map
+    /// `{"Other":"<label>"}` rather than a string. Neither reads back as
+    /// a plain `String`.
+    ///
+    /// What makes the migration free *anyway* is normalisation: the kind
+    /// label is ASCII-lowercased on the way in, so the legacy `"Library"`
+    /// lands on exactly the `library` that the post-ADR writer produces
+    /// for the same collection. No rewrite pass, no version field, no
+    /// dual-read window — but a hand-written `Deserialize`, and this
+    /// test to keep it honest.
+    ///
+    /// The stakes are why it is pinned: `Store::open` drops lines it
+    /// cannot parse (`filter_map(… .ok())`), so a failure here would not
+    /// have surfaced as an error. It would have surfaced as a demo user
+    /// opening a library that had silently become empty.
+    #[test]
+    fn legacy_rows_load_with_their_kinds_folded() {
+        let path = std::env::temp_dir().join(format!("col-legacy-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&path, LEGACY_JSONL).unwrap();
+
+        let s = Store::open(&path);
+        let held = s.list("acme-audio".into(), None).unwrap();
+        assert_eq!(
+            held.len(),
+            3,
+            "a legacy row failed to parse and was dropped"
+        );
+
+        // The capitalised unit variants fold onto the lowercase label the
+        // new writer uses — which is what makes the filter keep working
+        // across the change.
+        let by_title = |t: &str| held.iter().find(|c| c.title == t).unwrap().clone();
+        assert_eq!(by_title("Chart Library").kind.as_str(), "library");
+        assert_eq!(by_title("Album Launch Set").kind.as_str(), "setlist");
+        // And the `Other` map arm, whose free-text label is normalised
+        // like any other: identity has to be stable under a shift key.
+        assert_eq!(by_title("Rehearsal Pool").kind.as_str(), "rehearsal pool");
+
+        // Filtering — the operation that would have split someone's data
+        // — finds the legacy row from the new spelling.
+        assert_eq!(
+            s.list("acme-audio".into(), Some(CollectionKind::new("library")))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            s.list("acme-audio".into(), Some(CollectionKind::new("LIBRARY")))
+                .unwrap()
+                .len(),
+            1,
+            "a kind must not depend on how the caller shifted their keys"
+        );
+
+        // Items and their ranks survive intact: the migration touches the
+        // label and nothing else about the row.
+        assert_eq!(
+            nodes(&by_title("Chart Library")),
+            ["track-one", "track-two"]
+        );
+
+        // Rewriting the file (any mutation persists all rows) emits the
+        // normalised string form, so the legacy shapes are gone for good
+        // once a store has been written once.
+        s.add_item(Placement {
+            collection_id: by_title("Album Launch Set").id,
+            node: NodeRef::song("track-two"),
+            after: None,
+        })
+        .unwrap();
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert!(rewritten.contains(r#""kind":"library""#));
+        assert!(!rewritten.contains(r#""kind":"Library""#));
+        assert!(!rewritten.contains(r#""Other""#));
+
+        // …and a store reopened on the rewritten bytes reads the same
+        // kinds, which is the round trip the migration promises.
+        let re = Store::open(&path);
+        assert_eq!(
+            re.list("acme-audio".into(), Some(CollectionKind::new("setlist")))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// A collection with no kind is refused, because the label is the
+    /// only thing a caller tells this store about its own domain and a
+    /// blank one carries no information at all.
+    #[test]
+    fn an_empty_kind_is_refused_on_create() {
+        let s = store();
+        assert!(matches!(
+            s.create("acme".into(), "Nameless".into(), CollectionKind::new("   ")),
+            Err(CollectionError::BadRequest(_))
+        ));
+    }
+
     #[test]
     fn create_get_list_and_persist() {
         let path = std::env::temp_dir().join(format!("col-{}.jsonl", uuid::Uuid::new_v4()));
         let s = Store::open(&path);
         let lib = s
-            .create("acme".into(), "Songs".into(), CollectionKind::Library)
+            .create(
+                "acme".into(),
+                "Songs".into(),
+                CollectionKind::new("library"),
+            )
             .unwrap();
         assert!(!lib.id.is_empty());
-        s.create("acme".into(), "Set A".into(), CollectionKind::Setlist)
-            .unwrap();
-        s.create("other".into(), "X".into(), CollectionKind::Library)
+        s.create(
+            "acme".into(),
+            "Set A".into(),
+            CollectionKind::new("setlist"),
+        )
+        .unwrap();
+        s.create("other".into(), "X".into(), CollectionKind::new("library"))
             .unwrap();
 
         // Reopen — persisted.
@@ -229,7 +372,7 @@ mod tests {
         assert_eq!(re.get(&lib.id).unwrap().unwrap().title, "Songs");
         assert_eq!(re.list("acme".into(), None).unwrap().len(), 2);
         assert_eq!(
-            re.list("acme".into(), Some(CollectionKind::Setlist))
+            re.list("acme".into(), Some(CollectionKind::new("setlist")))
                 .unwrap()
                 .len(),
             1
@@ -241,7 +384,7 @@ mod tests {
     fn add_appends_and_inserts_after() {
         let s = store();
         let c = s
-            .create("acme".into(), "Set".into(), CollectionKind::Setlist)
+            .create("acme".into(), "Set".into(), CollectionKind::new("setlist"))
             .unwrap();
         let id = c.id;
         let add = |slug: &str, after: Option<NodeRef>| {
@@ -269,7 +412,7 @@ mod tests {
     fn duplicate_add_rejected() {
         let s = store();
         let c = s
-            .create("acme".into(), "L".into(), CollectionKind::Library)
+            .create("acme".into(), "L".into(), CollectionKind::new("library"))
             .unwrap();
         let p = Placement {
             collection_id: c.id.clone(),
@@ -284,7 +427,7 @@ mod tests {
     fn reorder_moves_one_item() {
         let s = store();
         let c = s
-            .create("acme".into(), "Set".into(), CollectionKind::Setlist)
+            .create("acme".into(), "Set".into(), CollectionKind::new("setlist"))
             .unwrap();
         let id = c.id;
         for slug in ["a", "b", "c", "d"] {
@@ -320,7 +463,7 @@ mod tests {
     fn remove_and_missing() {
         let s = store();
         let c = s
-            .create("acme".into(), "L".into(), CollectionKind::Library)
+            .create("acme".into(), "L".into(), CollectionKind::new("library"))
             .unwrap();
         s.add_item(Placement {
             collection_id: c.id.clone(),

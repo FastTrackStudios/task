@@ -78,12 +78,6 @@ fn capability_patterns(capability: Capability) -> &'static [&'static str] {
             "*.pek",
             "*.cfa",
         ],
-        // Nothing yet: the four sibling apps leave no scratch files in a
-        // project tree. Declaring a pattern here before an app writes one
-        // would exclude from history a file nobody has seen.
-        Capability::Session | Capability::Signal | Capability::Ignition | Capability::Keyflow => {
-            &[]
-        }
     }
 }
 

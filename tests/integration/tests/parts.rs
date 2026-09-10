@@ -449,6 +449,36 @@ async fn capabilities_are_a_set_drawn_from_a_closed_vocabulary() {
         "an unrecognised capability was written back to the page: {:?}",
         read.capabilities.unrecognised
     );
+
+    // ADR 0004 decision 3, verified rather than asserted: the names of
+    // the applications built on Task are *not* capabilities.
+    //
+    // `session`, `signal`, `ignition` and `keyflow` were briefly in the
+    // vocabulary (ADR 0003) and are not any more. A capability names a
+    // kind of *work* and brings a convention set — tool layouts, facets,
+    // ignore patterns — and those four brought none of that; what they
+    // brought was the name of a consumer, which made every app wait on a
+    // Task release to describe its own domain and made a sixth app
+    // impossible until this enum admitted it.
+    //
+    // They are refused exactly the way `interpretive-dance` is: not
+    // specially, which is the point. If this ever passes again, someone
+    // has helpfully put an application's name back into the store it is
+    // built on.
+    let mut apps = album.clone();
+    apps.capabilities =
+        project::Capabilities::from_names(["session", "signal", "ignition", "keyflow"]);
+    let saved = alice
+        .projects()
+        .await
+        .update(apps)
+        .await
+        .expect("declaring application names is legible, not an error");
+    assert!(
+        saved.capabilities.held.is_empty(),
+        "an application name was accepted as a capability: {:?}",
+        saved.capabilities.held
+    );
 }
 
 // t[verify project.capability.mutable]
