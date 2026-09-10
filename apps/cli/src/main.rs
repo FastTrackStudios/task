@@ -92,7 +92,14 @@ mod recipe_import;
 mod resources;
 mod runner;
 mod sample;
-mod session_store;
+/// The session file used to be `apps/cli/src/session_store.rs`. It is
+/// now `task_client::session`, because a session is not a CLI concept:
+/// any consumer that reaches a *remote* org needs the same routing
+/// document and the same tokens, and a second implementation of it
+/// would be a second way to hit the inline-token trap that module's
+/// header describes. Aliased rather than renamed at ~50 call sites, so
+/// the move is legible as a move.
+pub(crate) use task_client::session as session_store;
 mod setup;
 mod shared;
 mod skills;
@@ -1027,126 +1034,94 @@ async fn run(cli: Cli) -> eyre::Result<()> {
     Ok(())
 }
 
-/// Resolve the per-org vox URL from CLI flags + env + session.
-/// Mirror of the helper inside `run_vault_sync`, lifted out
-/// because project + goal share the same routing surface.
-fn resolve_org_vox_url(server: Option<String>, org_slug: &str) -> String {
-    let base = resolve_server_base(server.as_deref());
-    format!("{base}/org/{org_slug}/vox")
-}
-
-/// Which server should this invocation talk to? Precedence:
+/// The CLI's ambient configuration, as a [`task_client::Config`].
 ///
-/// 1. explicit `--server` (clap; the flag beats its env binding)
-/// 2. `TASK_VOX_URL` env (folded into the global flag by clap)
-/// 3. the active session's stored server URL (`task auth login`
-///    against a remote records where it signed in, so subsequent
-///    commands need nothing but the session)
-/// 4. the localhost default
+/// Everything below this point is a thin adapter. The connection logic
+/// — transport resolution, the local-first fallback, the authenticated
+/// dial, the in-process backend — lives in `crates/task-client` and is
+/// **not duplicated here**; these functions exist only to (a) supply
+/// the CLI's process-global flags as ordinary configuration, since a
+/// library cannot read clap globals, and (b) translate
+/// [`task_client::Error`] into the CLI's exit-code taxonomy.
 ///
-/// Returns a normalized vox base (`ws(s)://host[:port]`, no
-/// trailing `/vox`).
-fn resolve_server_base(explicit: Option<&str>) -> String {
-    let flag_or_env = explicit
-        .map(str::to_owned)
-        .or_else(global_server)
-        .or_else(|| std::env::var("TASK_VOX_URL").ok())
-        .filter(|u| !u.trim().is_empty());
-    // Only consult the session file when nothing explicit is set —
-    // keeps the hot path off the filesystem.
-    let session_url = if flag_or_env.is_some() {
-        None
-    } else {
-        session_store::load()
+/// The `--server` flag / `TASK_VOX_URL` fold is done here rather than
+/// in the crate because clap has already collapsed the two by the time
+/// a command runs, and the crate's job is to honour a decision, not to
+/// re-litigate one.
+fn client_config(server: Option<&str>) -> task_client::Config {
+    task_client::Config {
+        server: server
+            .map(str::to_owned)
+            .or_else(global_server)
+            .or_else(|| std::env::var("TASK_VOX_URL").ok())
+            .filter(|u| !u.trim().is_empty()),
+        server_vox: std::env::var("TASK_SERVER_VOX_URL")
             .ok()
-            .flatten()
-            .and_then(|s| s.active_server().map(|e| e.url.clone()))
-    };
-    pick_server_base(flag_or_env.as_deref(), session_url.as_deref())
+            .filter(|u| !u.is_empty()),
+        // `None` keeps the crate reading `TASK_EMBED` and keeps the
+        // local-first fallback armed — the CLI's historical behaviour,
+        // and the reason a laptop with no server running still works.
+        embed: None,
+        use_session: true,
+    }
 }
 
-/// Look up an org's manifest id from the resolved server's
-/// `/.well-known/task-server.json` — the remote counterpart of
-/// reading `<org>/org.toml` off the local data root. Best-effort:
-/// `None` on any failure (offline, older server, unknown slug).
-/// Meaningless in embedded mode (the org IS the local data root, so
-/// the manifest read already answered).
-pub(crate) async fn remote_org_id(slug: &str) -> Option<uuid::Uuid> {
-    if embed_enabled() {
-        return None;
+/// A [`task_client::TaskClient`] carrying this invocation's flags.
+fn client(server: Option<&str>) -> task_client::TaskClient {
+    task_client::TaskClient::new(client_config(server))
+}
+
+/// Tag a `task-client` failure with the CLI's exit class and, for a
+/// transport failure, the "how do I point this somewhere else" hint.
+/// The taxonomy is the CLI's, so the mapping is too.
+fn client_error(e: task_client::Error) -> eyre::Report {
+    if e.is_transport() {
+        return errors::connection(format!(
+            "connect `{}`",
+            e.url().unwrap_or("the configured server")
+        ))
+        .cause(e.cause().unwrap_or("unreachable"))
+        .hint("is task-server running? point the CLI elsewhere with --server or TASK_VOX_URL")
+        .report();
     }
-    let origin = resolve_server_http_base(None);
-    let url = format!("{origin}/.well-known/task-server.json");
-    let doc: serde_json::Value = reqwest::get(&url).await.ok()?.json().await.ok()?;
-    doc.get("orgs")?.as_array()?.iter().find_map(|o| {
-        if o.get("slug")?.as_str()? != slug {
-            return None;
-        }
-        o.get("id")?.as_str()?.parse().ok()
-    })
+    eyre::eyre!("{e}")
+}
+
+/// Resolve the per-org vox URL from CLI flags + env + session.
+fn resolve_org_vox_url(server: Option<String>, org_slug: &str) -> String {
+    client(server.as_deref()).org_vox_url(org_slug)
+}
+
+/// Which server should this invocation talk to? Precedence and
+/// normalization live in `task_client`; see
+/// [`task_client::TaskClient::server_base`].
+fn resolve_server_base(explicit: Option<&str>) -> String {
+    client(explicit).server_base()
 }
 
 /// HTTP(S) base for the server's plain HTTP routes (`/blobs/*`),
 /// derived from the resolved vox base (`ws→http`, `wss→https`).
 fn resolve_server_http_base(explicit: Option<&str>) -> String {
-    let base = resolve_server_base(explicit);
-    if let Some(rest) = base.strip_prefix("wss://") {
-        format!("https://{rest}")
-    } else if let Some(rest) = base.strip_prefix("ws://") {
-        format!("http://{rest}")
-    } else {
-        base
-    }
+    client(explicit).http_base()
 }
 
-/// Pure core of [`resolve_server_base`] — unit-testable precedence
-/// fold. `flag_or_env` is `--server`/`TASK_VOX_URL` (already
-/// flag-over-env, courtesy of clap), `session_url` the active
-/// session entry's stored server.
-fn pick_server_base(flag_or_env: Option<&str>, session_url: Option<&str>) -> String {
-    if let Some(u) = flag_or_env.filter(|u| !u.trim().is_empty()) {
-        return session_store::normalize_server_base(u);
-    }
-    if let Some(u) = session_url.filter(|u| !u.trim().is_empty()) {
-        return session_store::normalize_server_base(u);
-    }
-    session_store::DEFAULT_LOCAL_VOX.to_owned()
+/// Look up an org's manifest id from the resolved server's
+/// `/.well-known/task-server.json`. Best-effort; `None` in embedded
+/// mode, where the local manifest read already answered.
+pub(crate) async fn remote_org_id(slug: &str) -> Option<uuid::Uuid> {
+    client(None).remote_org_id(slug).await
 }
-
-/// Embedded backend, built once per process: a full `AppState` plus the
-/// construction `Scope` that keeps its in-process vox acceptor tasks
-/// alive. Only initialized when embedded mode is active.
-struct Embedded {
-    state: task_server::AppState,
-    scope: std::sync::Arc<architect::Scope>,
-}
-
-static EMBEDDED: tokio::sync::OnceCell<Embedded> = tokio::sync::OnceCell::const_new();
 
 /// True when the CLI should host the backend in-process instead of
 /// talking to a running `task-server`. Opt-in via `TASK_EMBED`.
 pub(crate) fn embed_enabled() -> bool {
-    std::env::var("TASK_EMBED").is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+    task_client::embed_env()
 }
 
 /// Can `slug` be served in-process? True when the org exists under
-/// the local data root — the precondition for the embedded fallback
-/// in [`establish_for_url`].
+/// the local data root — the precondition for the embedded fallback.
 fn org_on_disk(slug: &str) -> bool {
-    org_proto::DataRoot::from_env().is_ok_and(|r| r.orgs_dir().join(slug).is_dir())
-}
-
-/// Lazily build (once) and return the embedded backend.
-async fn embedded() -> eyre::Result<&'static Embedded> {
-    EMBEDDED
-        .get_or_try_init(|| async {
-            let scope = architect::Scope::new();
-            let state = task_server::AppState::new(None)
-                .await
-                .map_err(|e| eyre::eyre!("embedded backend boot: {e}"))?;
-            Ok::<_, eyre::Report>(Embedded { state, scope })
-        })
-        .await
+    task_client::org_on_disk(slug)
 }
 
 /// Establish a typed service client over the active transport: an
@@ -1157,211 +1132,32 @@ async fn establish_client<C>(server: Option<String>, slug: &str) -> eyre::Result
 where
     C: vox_core::FromVoxLane,
 {
-    let url = resolve_org_vox_url(server, slug);
-    establish_for_url(&url).await
-}
-
-/// `wss://host:port/anything` → `wss://host:port`. Everything past the
-/// authority is per-org routing, not identity scope — two orgs on one
-/// server share a session, two servers never do.
-/// `host[:port]` of a URL, scheme dropped — `https://a/x` and
-/// `wss://a/y` are the same server.
-fn authority(u: &str) -> &str {
-    let o = origin(u);
-    o.split_once("://").map_or(o, |(_, rest)| rest)
-}
-
-fn origin(u: &str) -> &str {
-    let (scheme, rest) = u.split_once("://").unwrap_or(("", u));
-    let prefix = if scheme.is_empty() {
-        0
-    } else {
-        scheme.len() + 3
-    };
-    let authority_len = rest.find('/').unwrap_or(rest.len());
-    &u[..prefix + authority_len]
-}
-
-/// The stored session token to present when dialing `url`, if any.
-///
-/// Scoped to the target twice over:
-///
-/// - **by server** — a token is only offered to the same scheme+authority
-///   that issued it, so pointing the CLI at another host with `--server`
-///   never hands that host the credential for the one we're signed into;
-/// - **by org** — auth stores are per-org, so a token from `codywright`
-///   is not a credential in `cbu`; it resolves to `anonymous` there. The
-///   entry whose slug matches the URL's `/org/<slug>/vox` wins, and only
-///   if none matches do we fall back to the active entry.
-///
-/// Without the org half, `task --org cbu …` would present whichever
-/// session happened to be active — right host, wrong org, refused — and
-/// the refusal reads identically to being signed out.
-fn session_bearer_for(url: &str) -> Option<String> {
-    let session = crate::session_store::load().ok().flatten()?;
-    // Authority only: a session saved as `https://host` must sign a dial
-    // to `wss://host/org/x/vox` — same server, different scheme — or the
-    // call goes out anonymous and every command reads "not a member".
-    let same_server = |e: &crate::session_store::ServerEntry| {
-        authority(&e.url) == authority(url) && !e.token.is_empty()
-    };
-    if let Some(slug) = url
-        .rsplit_once("/org/")
-        .and_then(|(_, rest)| rest.strip_suffix("/vox"))
-        && let Some(entry) = session
-            .servers
-            .values()
-            .find(|e| e.slug == slug && same_server(e))
-    {
-        return Some(entry.token.clone());
-    }
-    let entry = session.active_server()?;
-    same_server(entry).then(|| entry.token.clone())
-}
-
-/// Dial `url` and establish `C`, presenting the stored session identity on
-/// the handshake.
-///
-/// `vox::connect_lane` takes only a URL, and vox middleware is per typed
-/// client (keyed to a service descriptor) rather than per connection — so
-/// there is no choke point on the call path to hang a token on. The
-/// identity therefore rides the WebSocket upgrade, as the web client does
-/// it (`task_ui_core::vox_clients`), and the server applies it to every
-/// call on the connection. Without this the CLI reaches the permission
-/// gate as `principal=anonymous` on every RPC — fine while the gate is
-/// observe-only, refused the moment `TASK_ENFORCE_PERMISSIONS=1`.
-///
-/// The token goes in `Authorization`, NOT the `vox.bearer.…` subprotocol
-/// the browser uses: tungstenite fails the handshake outright when it
-/// offers a subprotocol the peer doesn't echo, which would make the CLI
-/// unable to reach an older server or anything behind a proxy that drops
-/// the header. See `dial_ws_native` in task-ui-core.
-async fn dial_authenticated<C>(url: &str) -> Result<C, vox_core::ConnectionError>
-where
-    C: vox_core::FromVoxLane,
-{
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-
-    // A tokenless dial stays on the stock path — identical behaviour to
-    // before, including its error shapes.
-    let Some(token) = session_bearer_for(url) else {
-        return vox::connect_lane(url).establish().await;
-    };
-    let request = async {
-        let mut request = url.into_client_request().ok()?;
-        request
-            .headers_mut()
-            .insert("authorization", format!("Bearer {token}").parse().ok()?);
-        Some(request)
-    }
-    .await;
-    // An unrepresentable URL or header is not an auth problem; let the
-    // stock path produce its usual error for it.
-    let Some(request) = request else {
-        return vox::connect_lane(url).establish().await;
-    };
-    match tokio_tungstenite::connect_async(request).await {
-        Ok((stream, _response)) => {
-            vox_core::initiator_on(vox_websocket::WsLink::new(stream))
-                .establish::<C>()
-                .await
-        }
-        // Report through the stock path so the caller's `connect_error`
-        // hint (and the embedded-server fallback above it) still applies.
-        Err(_) => vox::connect_lane(url).establish().await,
-    }
-}
-
-/// Tag a vox connect/establish failure with the `Connection` exit
-/// class (6) and a "how do I point this somewhere else" hint.
-fn connect_error<E: std::fmt::Debug>(url: &str, e: &E) -> eyre::Report {
-    errors::connection(format!("connect `{url}`"))
-        .cause(format!("{e:?}"))
-        .hint("is task-server running? point the CLI elsewhere with --server or TASK_VOX_URL")
-        .report()
+    client(server.as_deref())
+        .org(slug)
+        .await
+        .map_err(client_error)
 }
 
 /// Establish a typed client given an already-resolved per-org vox URL
-/// (`…/org/<slug>/vox`). The choke point every per-org command goes
-/// through. Transport resolution:
-///
-/// 1. `TASK_EMBED` set — serve the slug in-process, always.
-/// 2. Otherwise dial the URL.
-/// 3. Dial failed AND the target is the localhost default (nothing
-///    remote was configured via `--server` / `TASK_VOX_URL` / a
-///    remote session) AND the org exists under the local data root —
-///    boot the embedded backend and serve in-process. This is what
-///    keeps "no server running" workflows (timer, finance, wiki on a
-///    laptop) working now that every command talks vox; an explicit
-///    remote target still fails loud.
+/// (`…/org/<slug>/vox`). The transport rule — including the
+/// local-first fallback and exactly when it does *not* apply — is
+/// documented on [`task_client::TaskClient::org_at`].
 async fn establish_for_url<C>(url: &str) -> eyre::Result<C>
 where
     C: vox_core::FromVoxLane,
 {
-    let slug = url
-        .rsplit_once("/org/")
-        .and_then(|(_, rest)| rest.strip_suffix("/vox"));
-    if embed_enabled() {
-        let slug = slug.ok_or_else(|| {
-            eyre::eyre!("can't recover an org slug from `{url}` for embedded mode")
-        })?;
-        return establish_embedded(slug).await;
-    }
-    match Box::pin(dial_authenticated(url)).await {
-        Ok(client) => Ok(client),
-        Err(e) => {
-            if let Some(slug) = slug {
-                if url.starts_with(session_store::DEFAULT_LOCAL_VOX) && org_on_disk(slug) {
-                    return establish_embedded(slug).await;
-                }
-            }
-            Err(connect_error(url, &e))
-        }
-    }
+    client(None).org_at(url).await.map_err(client_error)
 }
 
 /// Establish a typed client against the **server-management** endpoint
-/// (`/server/vox` — `OrgManagementService` / `SnapshotService`). The
-/// server-level counterpart of [`establish_client`]: no per-org slug.
-/// Embedded (`TASK_EMBED`) serves the same router in-process via
-/// [`task_server::AppState::server_local_server`]; otherwise it's a
-/// WebSocket to the resolved server URL. Returns the client plus the
-/// endpoint label for user-facing messages (`(embedded)` in-process).
+/// (`/server/vox` — `OrgManagementService` / `SnapshotService`).
+/// Returns the client plus the endpoint label for user-facing messages
+/// (`(embedded)` in-process).
 async fn establish_server_client<C>(server: Option<&str>) -> eyre::Result<(C, String)>
 where
     C: vox_core::FromVoxLane,
 {
-    if embed_enabled() {
-        let emb = embedded().await?;
-        let client = emb
-            .state
-            .server_local_server(&emb.scope)
-            .establish()
-            .await
-            .map_err(|e| eyre::eyre!("embedded /server/vox establish: {e:?}"))?;
-        Ok((client, "(embedded)".into()))
-    } else {
-        let url = resolve_server_vox_url(server)?;
-        let client = Box::pin(vox::connect_lane(&url).establish())
-            .await
-            .map_err(|e| connect_error(&url, &e))?;
-        Ok((client, url))
-    }
-}
-
-/// Establish a typed client against the in-process [`LocalServer`] for
-/// `slug`. Shared by [`establish_client`] and [`establish_for_url`].
-async fn establish_embedded<C>(slug: &str) -> eyre::Result<C>
-where
-    C: vox_core::FromVoxLane,
-{
-    let emb = embedded().await?;
-    emb.state
-        .local_server(slug, &emb.scope)
-        .ok_or_else(|| eyre::eyre!("org `{slug}` not hosted in embedded mode"))?
-        .establish()
-        .await
-        .map_err(|e| eyre::eyre!("embedded establish for `{slug}`: {e:?}"))
+    client(server).server().await.map_err(client_error)
 }
 
 /// Resolve the active org slug from `--org` flag or the
@@ -1414,140 +1210,12 @@ pub(crate) fn resolve_slug(org_override: Option<&str>) -> eyre::Result<String> {
     }
 }
 
-/// Resolve the server-management vox URL:
-/// - explicit `--server <ws://...>` flag wins
-/// - else honor `TASK_SERVER_VOX_URL`
-/// - else fall back to `ws://127.0.0.1:18080/server/vox`
-fn resolve_server_vox_url(override_url: Option<&str>) -> eyre::Result<String> {
-    if let Some(u) = override_url {
-        return Ok(normalize_server_vox(u));
-    }
-    if let Ok(env) = std::env::var("TASK_SERVER_VOX_URL") {
-        if !env.is_empty() {
-            return Ok(normalize_server_vox(&env));
-        }
-    }
-    Ok("ws://127.0.0.1:18080/server/vox".into())
-}
-
-fn normalize_server_vox(raw: &str) -> String {
-    // Already pointed at the right endpoint.
-    if raw.ends_with("/server/vox") {
-        return raw.to_owned();
-    }
-    // Map http(s) → ws(s).
-    let ws: String = if let Some(rest) = raw.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else if let Some(rest) = raw.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if raw.starts_with("ws://") || raw.starts_with("wss://") {
-        raw.to_owned()
-    } else {
-        format!("ws://{raw}")
-    };
-    // Strip legacy `/vox` suffix (the per-org URL hint that
-    // `TASK_VOX_URL` sometimes points at) so we don't end up
-    // with `…/vox/server/vox`. Then attach the canonical
-    // server-mgmt path.
-    let trimmed = ws.trim_end_matches('/').trim_end_matches("/vox");
-    format!("{trimmed}/server/vox")
-}
-
-#[cfg(test)]
-mod bearer_scope_tests {
-    use super::origin;
-
-    #[test]
-    fn org_path_is_not_part_of_identity_scope() {
-        // Every org on one server shares the session, so the per-org
-        // routing suffix must not make the token look out-of-scope.
-        assert_eq!(
-            origin("wss://task.starcommand.live/org/codywright/vox"),
-            "wss://task.starcommand.live"
-        );
-        assert_eq!(
-            origin("wss://task.starcommand.live"),
-            "wss://task.starcommand.live"
-        );
-    }
-
-    #[test]
-    fn a_different_server_is_a_different_scope() {
-        // The point of the check: `--server elsewhere` must never hand
-        // that host the credential we hold for this one.
-        assert_ne!(
-            origin("wss://task.starcommand.live/org/x/vox"),
-            origin("wss://evil.example/org/x/vox"),
-        );
-        // Port and scheme are part of the authority, not decoration.
-        assert_ne!(
-            origin("ws://127.0.0.1:18080/vox"),
-            origin("ws://127.0.0.1:9/vox")
-        );
-        assert_ne!(origin("ws://host/vox"), origin("wss://host/vox"));
-    }
-}
-
+/// The URL-resolution and bearer-scoping tests that used to live here
+/// moved with the code they cover, into `crates/task-client`
+/// (`transport::tests`). What remains is the one assertion about a
+/// helper the CLI still owns.
 #[cfg(test)]
 mod server_resolution_tests {
-    use super::*;
-
-    #[test]
-    fn flag_or_env_beats_session() {
-        assert_eq!(
-            pick_server_base(
-                Some("wss://task.starcommand.live/vox"),
-                Some("ws://127.0.0.1:18080")
-            ),
-            "wss://task.starcommand.live"
-        );
-        // …and the flip: env pointing local wins over a stored
-        // remote session — the URL switch IS the selector.
-        assert_eq!(
-            pick_server_base(
-                Some("ws://127.0.0.1:18080/vox"),
-                Some("wss://task.starcommand.live")
-            ),
-            "ws://127.0.0.1:18080"
-        );
-    }
-
-    #[test]
-    fn session_beats_default() {
-        assert_eq!(
-            pick_server_base(None, Some("wss://task.starcommand.live/vox")),
-            "wss://task.starcommand.live"
-        );
-        // Legacy "local" session entries resolve to the default.
-        assert_eq!(
-            pick_server_base(None, Some("local")),
-            session_store::DEFAULT_LOCAL_VOX
-        );
-    }
-
-    #[test]
-    fn default_when_nothing_set() {
-        assert_eq!(
-            pick_server_base(None, None),
-            session_store::DEFAULT_LOCAL_VOX
-        );
-        // Blank values don't shadow lower-precedence sources.
-        assert_eq!(
-            pick_server_base(Some(""), Some(" ")),
-            session_store::DEFAULT_LOCAL_VOX
-        );
-    }
-
-    #[test]
-    fn org_url_appends_per_org_path() {
-        // resolve_org_vox_url rides the same fold; with an
-        // explicit server the env/session never enter.
-        assert_eq!(
-            resolve_org_vox_url(Some("wss://task.starcommand.live/vox".into()), "codywright"),
-            "wss://task.starcommand.live/org/codywright/vox"
-        );
-    }
-
     #[test]
     fn ws_http_derivation() {
         use crate::auth::ws_base_to_http;

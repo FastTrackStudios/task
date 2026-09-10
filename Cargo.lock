@@ -20980,6 +20980,7 @@ dependencies = [
  "sha2 0.10.9",
  "song",
  "task",
+ "task-client",
  "task-plugin",
  "task-server",
  "tempfile",
@@ -20987,7 +20988,6 @@ dependencies = [
  "timer",
  "timer-proto",
  "tokio",
- "tokio-tungstenite",
  "tracing",
  "uuid",
  "vault",
@@ -20998,7 +20998,6 @@ dependencies = [
  "vault-sync-client",
  "vox",
  "vox-core",
- "vox-websocket",
  "walkdir",
  "wiki-archive",
  "wiki-graph",
@@ -21009,6 +21008,28 @@ dependencies = [
  "workflows-proto",
  "workouts",
  "workstream",
+]
+
+[[package]]
+name = "task-client"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.8.2)",
+ "architect-auth",
+ "eyre",
+ "org-proto",
+ "project",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "task-server",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "uuid",
+ "vox",
+ "vox-core",
+ "vox-websocket",
 ]
 
 [[package]]
@@ -21309,6 +21330,7 @@ dependencies = [
  "tag",
  "tag-proto",
  "task",
+ "task-client",
  "task-plugin",
  "tempfile",
  "thiserror 2.0.20",
