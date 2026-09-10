@@ -556,9 +556,14 @@ pub fn wiki_slug(title: &str) -> String {
 /// `features/wiki/spec/wiki.md` says an org holds a *set* of wikis and
 /// that a vault is not one of them. A seed with a single wiki cannot
 /// show the difference between those claims and the one-wiki world
-/// that preceded them, so the example carries four across three orgs —
-/// two owned by the studio, two personal, each at a different
-/// visibility.
+/// that preceded them, so the example carries five across three orgs —
+/// three owned by the studio, two personal, spanning all three
+/// visibilities.
+///
+/// Two of the studio's three are a *pair*: `Audio Production` is
+/// curated and `Studio Research` is the agent's working wiki that feeds
+/// it. A promotion between them is the seam, and it is only testable
+/// from a planted world that holds both — see [`PROMOTION_PAIR`].
 #[derive(Debug, Clone, Copy)]
 pub struct DeclaredWiki {
     /// The org that owns it. Personal wikis belong to a person's own
@@ -606,6 +611,15 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
                        web is one web while each page keeps one owning wiki",
     },
     DeclaredWiki {
+        org: "acme-audio",
+        title: "Studio Research",
+        visibility: Visibility::Private,
+        demonstrates: "the working half of a curated/working pair: an agent's unvetted \
+                       wiki whose pages reach Audio Production only by promotion, which \
+                       copies rather than moves and refuses a type the target's schema \
+                       does not declare",
+    },
+    DeclaredWiki {
         org: "alice-personal",
         title: "Bible Study",
         visibility: Visibility::Private,
@@ -620,6 +634,25 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
                        private: absent from discovery, subscribable with the reference",
     },
 ];
+
+/// The seed's curated/working pair, as `(working, curated)` slugs.
+///
+/// `wiki.promote.*` is a rule about two wikis at once, so unlike every
+/// other wiki rule it cannot be exercised against a single planted
+/// wiki. This names the pair once, so the suite and the demo agree on
+/// which two wikis the story is told on.
+pub const PROMOTION_PAIR: (&str, &str) = ("studio-research", "audio-production");
+
+/// The page on the working wiki that is ready to promote: its type
+/// (`concept`) is one the curated wiki declares, so it crosses over
+/// with no override.
+pub const SEED_PROMOTABLE_PAGE: &str = "Concepts/Dynamic Range.md";
+
+/// The page on the working wiki that must NOT promote as it stands: its
+/// type is `question`, which the curated wiki does not declare. The
+/// refusal is the feature, so the seed carries the case that triggers
+/// it.
+pub const SEED_UNPROMOTABLE_PAGE: &str = "Questions/Do small speakers need a different master.md";
 
 /// The wiki the seed's Edit lane story is told on: the owner holds
 /// Editor here, one request is open from a cast member without the
@@ -1243,6 +1276,74 @@ mod declared_tests {
                 w.title
             );
         }
+    }
+
+    /// A promotion is checked against the TARGET wiki's declared page
+    /// types, so a curated wiki with no committed `schema.md` cannot be
+    /// promoted into at all — the verb would refuse before it ever
+    /// reached the interesting part. The pair's two schemas are as
+    /// load-bearing as its pages.
+    #[test]
+    fn the_promotion_pair_commits_both_schemas() {
+        let (working, curated) = PROMOTION_PAIR;
+        for slug in [working, curated] {
+            let title = DECLARED_WIKIS
+                .iter()
+                .find(|w| wiki_slug(w.title) == slug)
+                .unwrap_or_else(|| panic!("`{slug}` is not a declared wiki"));
+            assert!(
+                STUDIO
+                    .get_file(format!("{}/Wikis/{}/schema.md", title.org, title.title))
+                    .is_some(),
+                "{slug}: no schema.md — a promotion has nothing to check against",
+            );
+        }
+    }
+
+    /// The two halves of the promotion story: one page whose type the
+    /// curated wiki declares (it promotes), one whose type it does not
+    /// (it is refused). Without the second the seed can only show the
+    /// happy path, and the refusal is the feature.
+    #[test]
+    fn the_promotion_pair_commits_a_promotable_and_an_unpromotable_page() {
+        let (working, curated) = PROMOTION_PAIR;
+        let working_title = DECLARED_WIKIS
+            .iter()
+            .find(|w| wiki_slug(w.title) == working)
+            .expect("the working wiki is declared");
+        let read = |page: &str| {
+            STUDIO
+                .get_file(format!(
+                    "{}/Wikis/{}/{page}",
+                    working_title.org, working_title.title
+                ))
+                .unwrap_or_else(|| panic!("{working}: no committed `{page}`"))
+                .contents_utf8()
+                .unwrap_or_default()
+                .to_owned()
+        };
+
+        let curated_schema = STUDIO
+            .get_file("acme-audio/Wikis/Audio Production/schema.md")
+            .expect("the curated schema is committed")
+            .contents_utf8()
+            .unwrap_or_default();
+        let declared: Vec<String> = wiki_proto::promote::declared_types(curated_schema)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+
+        let ok = read(SEED_PROMOTABLE_PAGE);
+        assert!(
+            ok.contains("type: concept") && declared.iter().any(|t| t == "concept"),
+            "{SEED_PROMOTABLE_PAGE} must carry a type `{curated}` declares; it holds {declared:?}"
+        );
+        let refused = read(SEED_UNPROMOTABLE_PAGE);
+        assert!(
+            refused.contains("type: question") && !declared.iter().any(|t| t == "question"),
+            "{SEED_UNPROMOTABLE_PAGE} must carry a type `{curated}` does NOT declare — \
+             it is the seed's refusal case"
+        );
     }
 
     /// The slug is load-bearing in two places that must agree: the

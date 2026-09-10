@@ -4,6 +4,7 @@
 
 use clap::Subcommand;
 
+mod promote;
 mod scaffold;
 
 use crate::establish_for_url;
@@ -697,6 +698,55 @@ pub(crate) enum WikiCmd {
     /// agent scaffolds a wiki with (`wiki.many.set`).
     #[command(subcommand)]
     Page(WikiPageCmd),
+    /// Copy a vetted page from a working wiki into a curated one,
+    /// translating it into the target's page types and recording the
+    /// promotion on both ends (`wiki.promote.*`).
+    ///
+    /// This is how an agent's research wiki feeds a human's curated
+    /// wiki without the two becoming one pile: research is written
+    /// freely, and a page crosses over only when a person names it.
+    /// The source page is KEPT — it is the working material behind
+    /// the vetted claim, and the curated copy is not a replacement
+    /// for it.
+    ///
+    /// A source type the target's `schema.md` does not declare is
+    /// refused rather than guessed at; `--type` says which of the
+    /// target's own types you meant.
+    Promote {
+        /// The wiki the page is in today — the working one.
+        from_wiki: String,
+        /// Wiki-root-relative path of the page, e.g.
+        /// `Concepts/Dynamic Range.md`.
+        path: String,
+        /// The wiki the vetted copy lands in — the curated one.
+        #[arg(long = "to", value_name = "WIKI")]
+        to: String,
+        /// Where it lands. Defaults to the directory the target's
+        /// schema declares for the type, plus the source basename.
+        #[arg(long = "as", value_name = "PATH")]
+        as_path: Option<String>,
+        /// The target's page type to promote as, when the source's own
+        /// type is not one the target declares.
+        #[arg(long = "type", value_name = "TYPE")]
+        as_type: Option<String>,
+        /// Print both documents and write nothing. An occupied target
+        /// is reported rather than refused, so a dry run says what
+        /// would happen instead of stopping at the first objection.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replace an existing page at the target path. Without it an
+        /// occupied target is refused.
+        #[arg(long)]
+        force: bool,
+        /// Guard the target write: refuse unless the target page is
+        /// still at this hash (`task wiki page read --sha`).
+        #[arg(long, default_value = "")]
+        base_sha256: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Rename a wiki — the title people see; the slug stays.
     SetTitle {
         slug: String,
@@ -2332,6 +2382,32 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         WikiCmd::Watch(c) => run_wiki_watch(c).await,
         WikiCmd::Edits(c) => run_wiki_edits(c).await,
         WikiCmd::Page(c) => run_wiki_page(c).await,
+        WikiCmd::Promote {
+            from_wiki,
+            path,
+            to,
+            as_path,
+            as_type,
+            dry_run,
+            force,
+            base_sha256,
+            org,
+            server,
+        } => {
+            promote::run(promote::Args {
+                from_wiki,
+                path,
+                to_wiki: to,
+                as_path,
+                as_type,
+                base_sha256,
+                dry_run,
+                force,
+                org,
+                server,
+            })
+            .await
+        }
         WikiCmd::Scaffold {
             title,
             slug,
