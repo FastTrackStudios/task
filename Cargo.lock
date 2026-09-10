@@ -23131,6 +23131,7 @@ dependencies = [
  "indexmap 2.14.0",
  "notify 8.2.0",
  "notify-debouncer-mini 0.7.0",
+ "org-proto",
  "rayon",
  "regex",
  "serde",

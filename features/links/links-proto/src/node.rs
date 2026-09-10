@@ -98,6 +98,39 @@ pub enum NodeKind {
     /// `<org>/resources/lighting/<slug>/`. Ignition's cues for a song, a
     /// setlist or a show; the anchor is a cue (`#cue:12`).
     Lighting,
+    /// A project — `id` is its path on the Projects tier
+    /// (`example-album`, or `example-album/track-two` for a
+    /// sub-project), and it resolves to that project's declaring page,
+    /// `<org>/projects/<id>/project.md`.
+    ///
+    /// # This kind exists because a project stopped being a note
+    ///
+    /// It used to be reachable as [`Self::Note`]: a project was a page
+    /// in the vault, so `note:Projects/Album.md` addressed it and
+    /// nothing else was needed. ADR 0004's fourth root moved a project
+    /// out of the vault into a directory of its own, and the whole
+    /// compatibility story for that move is *"it can be referenced as
+    /// needed"* — a task, a note, a wiki page naming a project must go
+    /// on resolving. A sentence is not a mechanism; this is the
+    /// mechanism.
+    ///
+    /// # Why the id is a path and not a slug
+    ///
+    /// Every other tier here is flat, so a slug is enough for a song or
+    /// a chart. Projects nest — `project.nesting.uniform` says "one
+    /// project entity and it nests without limit" — and a sub-project is
+    /// a shelf of its own inside its parent's directory. Its address
+    /// therefore has to carry where it is, exactly as [`Self::Note`]'s
+    /// does. `project:example-album/track-two` reads as one id with a
+    /// slash in it, which the reference parser already handles: an id
+    /// may hold slashes, a kind may not.
+    ///
+    /// The same string is the shelf's name, so a reference into a
+    /// project and a subscription to it spell it identically — the
+    /// property `wiki_slug` exists to give wikis.
+    ///
+    /// The anchor addresses inside the project's page, like a note's.
+    Project,
 }
 
 impl NodeKind {
@@ -118,6 +151,7 @@ impl NodeKind {
             Self::Patch => "patch",
             Self::Sample => "sample",
             Self::Lighting => "lighting",
+            Self::Project => "project",
         }
     }
 
@@ -138,6 +172,7 @@ impl NodeKind {
             "patch" => Self::Patch,
             "sample" => Self::Sample,
             "lighting" => Self::Lighting,
+            "project" => Self::Project,
             _ => return None,
         })
     }

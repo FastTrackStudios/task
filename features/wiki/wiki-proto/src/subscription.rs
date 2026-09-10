@@ -62,11 +62,18 @@ pub enum SourceKind {
     /// One project of a publishing org — `<org>/projects/<name>/`, the
     /// fourth root of ADR 0004 decision 1.
     ///
-    /// The variant is here because the type has to be able to say it:
-    /// a project is a shelf, and a shelf that cannot appear on the wire
-    /// is a shelf nobody can subscribe to. Projects still live as File
-    /// Roots under the files tier, so nothing publishes this yet —
-    /// see [`org_proto::Tier::Projects`].
+    /// Its slug is the project's **tier-relative path**, not a library
+    /// name, and that is the difference from every other member here.
+    /// `Assets` publishes a directory holding many songs, so its slug is
+    /// the kind; a project is one thing, and it is itself the unit
+    /// somebody publishes — a mix engineer is given a song, not "the
+    /// projects library". So `example-album` and
+    /// `example-album/track-two` are two subscribable slugs, which is
+    /// the submodule model in `org_proto::OrgRoot::project_shelves`.
+    ///
+    /// Editable, like a wiki and an asset shelf: a project tree is
+    /// written by the tools that made it, and a collaborator given one
+    /// is given it to work in.
     Projects,
 }
 
@@ -145,8 +152,15 @@ pub enum Subscriber {
     /// library that cites another org's song library wants those songs
     /// to go on being corrected, not to hold a snapshot of them.
     Assets(String),
-    /// One of the org's projects, by name. See
-    /// [`SourceKind::Projects`] — the fourth root, not yet re-homed.
+    /// One of the org's projects, by its tier-relative path. See
+    /// [`SourceKind::Projects`].
+    ///
+    /// A project subscribes for the same reason a wiki does: an album
+    /// citing another org's song library wants those songs to go on
+    /// being corrected rather than to hold a snapshot. A *sub*-project
+    /// subscribes on its own terms too — `example-album/track-two` is
+    /// a subscriber key of its own, because a sub-project is a shelf
+    /// and not a subtree.
     Projects(String),
 }
 

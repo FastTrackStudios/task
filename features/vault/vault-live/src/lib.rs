@@ -62,6 +62,10 @@ pub mod refs;
 /// `vault::sync::Backend` (also re-exported as
 /// [`Backend`]).
 pub mod sync;
+
+/// Where one registered root stops and a nested one begins — the
+/// prune that lets a shelf hold a shelf.
+pub mod shelf_boundary;
 pub mod vault;
 pub mod walker;
 pub mod watcher;

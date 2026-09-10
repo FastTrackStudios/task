@@ -785,6 +785,17 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), 
             continue;
         }
         if path.is_dir() {
+            // A nested shelf is somebody else's root. It has its own
+            // manifest, and putting its files in this one would make a
+            // replica pull them twice and a CRDT open them under two
+            // ids — see `crate::shelf_boundary`. This is the manifest
+            // half of the same pair `walker::is_skip` implements for
+            // the page walk; the two must stay together, exactly as
+            // `files::scan::walk_live_tree` and
+            // `Registry::conflicting_root` do one layer down.
+            if crate::shelf_boundary::is_nested_shelf(root, &path) {
+                continue;
+            }
             collect(root, &path, out)?;
             continue;
         }

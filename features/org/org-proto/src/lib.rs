@@ -33,8 +33,8 @@ pub use service::{
     PersonalOrgRequest,
 };
 pub use shelf::{
-    AssetShelf, DEFAULT_ASSET_KINDS, ProjectShelf, Selection, Shelf, Tier, VAULT_ID, VaultShelf,
-    WikiShelf, facet_of,
+    AssetShelf, DEFAULT_ASSET_KINDS, Depth, ProjectShelf, Selection, Shelf, Tier, VAULT_ID,
+    VaultShelf, WikiShelf, facet_of, reachable,
 };
 
 #[cfg(feature = "vox")]

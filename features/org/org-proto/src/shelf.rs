@@ -318,6 +318,132 @@ impl Selection {
     }
 }
 
+/// **How far down** a subscription reaches: this shelf, or this shelf
+/// and the ones nested inside it.
+///
+/// # Why this is beside [`Selection`] and not inside it
+///
+/// The obvious move is a third `Selection` variant, and it is wrong for
+/// a reason worth stating exactly, because "add a variant" will look
+/// tempting again.
+///
+/// [`Selection::admits`] is a **predicate over paths inside one root**.
+/// A nested shelf's files are not paths inside its parent's root —
+/// `vault_live::shelf_boundary` prunes them out of the parent's walk,
+/// which is the whole mechanism that lets a shelf hold a shelf at all —
+/// so no predicate of that shape can reach them, whatever facets it
+/// names. `Selection` narrows *within* a shelf; this chooses *which
+/// shelves*. They are different questions, and one type answering both
+/// is precisely the "second selection system with its own rules" ADR
+/// 0004 warns against, arrived at from the other direction.
+///
+/// The two compose: a subscription carries one of each, and a
+/// [`Depth::Deep`] subscription applies its `Selection` to every shelf
+/// it reaches, so "the worship material, wherever in this project it
+/// is" is one sentence rather than one per sub-project.
+///
+/// # Why the default is the shallow one
+///
+/// [`Depth::Surface`] is [`Default`], so a subscription written before
+/// this type existed — and one written by somebody who did not think
+/// about it — takes the shelf it named and no more. Two reasons, and
+/// the first is the one that matters:
+///
+/// A deep default can pull an unbounded amount of somebody else's disk
+/// on the strength of a request that never mentioned it. An album with
+/// fifteen promoted songs is fifteen shelves of multitracks, and the
+/// person who asked for the album asked for the album. The failure is
+/// silent, expensive and remote — the worst combination available.
+///
+/// The second is that surface-only is not a *loss*. The sub-project is
+/// still there: a named, unresolved reference, which ADR 0004 makes the
+/// ordinary state of any reference to something not resident locally.
+/// A person seeing "Track Two — not materialised" can ask for it. A
+/// person whose laptop silently filled cannot un-ask.
+///
+/// This is the same conservative direction [`Selection::admits`] takes
+/// about unmapped content, for the same reason: shipping bytes nobody
+/// asked for is worse than reporting an absence.
+///
+/// # Cycles
+///
+/// A parent references a sub-project; a sub-project may reference a
+/// project that references it back. A cycle is therefore writable by
+/// hand, and it must not hang a materialisation or exhaust its memory.
+///
+/// It is **tolerated rather than refused at write time.** Refusing
+/// would mean every write validating a graph the writer may hold only
+/// part of, and `project.location.degraded` says a project must still
+/// open when a location composing it is unreachable — so the check
+/// would have to pass on evidence that is missing, which means it would
+/// either refuse valid writes or not really be a check.
+///
+/// So it is stopped where the graph is actually being walked, by a
+/// visited set over shelf names. That is the stance
+/// `ProjectService::get` already takes for merge chains, which are the
+/// identical hazard one field over: bounded traversal, and a message
+/// naming what did not settle rather than a hang.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, FacetDerive)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum Depth {
+    /// This shelf only. Shelves nested inside it stay visible as
+    /// unresolved references.
+    #[default]
+    Surface,
+    /// This shelf and every shelf nested inside it, transitively.
+    Deep,
+}
+
+impl Depth {
+    /// Whether a shelf nested inside a subscribed one is taken too.
+    #[must_use]
+    pub const fn reaches_nested(self) -> bool {
+        matches!(self, Self::Deep)
+    }
+
+    /// How a person reads it.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Surface => "this shelf only",
+            Self::Deep => "this shelf and everything nested in it",
+        }
+    }
+}
+
+/// Walk a shelf and the shelves nested inside it, stopping at a cycle.
+///
+/// `nested` answers "which shelves does this one reference", and the
+/// visited set is what makes a cycle terminate rather than hang — see
+/// [`Depth`] on why a cycle is tolerated at write time and stopped
+/// here.
+///
+/// Returns the shelves reached, in the order they were first seen, with
+/// `start` always first. A [`Depth::Surface`] walk is `[start]`, which
+/// is the degenerate case rather than a separate path — one code path
+/// means a bug in the traversal cannot hide in the shallow case.
+#[must_use]
+pub fn reachable(start: &str, depth: Depth, nested: &dyn Fn(&str) -> Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(start.to_owned());
+    while let Some(name) = queue.pop_front() {
+        // The set is checked on the way IN rather than on the way out,
+        // so a shelf reached twice by two different parents is walked
+        // once and a shelf that reaches itself terminates immediately.
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        out.push(name.clone());
+        if depth.reaches_nested() {
+            queue.extend(nested(&name));
+        }
+    }
+    out
+}
+
 /// The facet a path on a shelf resolves to, for selection purposes.
 ///
 /// The shelf's **top-level directory** is its facet, and nothing
@@ -685,6 +811,63 @@ mod tests {
         assert_eq!(p.subscriber_key(), "project:crescendum");
         assert_eq!(p.tier(), Tier::Projects);
         assert_eq!(p.name(), "crescendum");
+    }
+
+    /// A subscription that says nothing about depth takes the shelf it
+    /// named and no more — the sub-project is a reference, not a
+    /// forty-gigabyte surprise.
+    #[test]
+    fn depth_defaults_to_the_shelf_that_was_asked_for() {
+        assert_eq!(Depth::default(), Depth::Surface);
+        assert!(!Depth::default().reaches_nested());
+        assert!(Depth::Deep.reaches_nested());
+    }
+
+    /// The submodule walk: an album reaches its songs, and a song
+    /// reaches nothing further.
+    #[test]
+    fn a_deep_subscription_reaches_the_shelves_nested_in_it() {
+        let nested = |s: &str| match s {
+            "example-album" => vec![
+                "example-album/track-two".to_owned(),
+                "example-album/track-three".to_owned(),
+            ],
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            reachable("example-album", Depth::Surface, &nested),
+            ["example-album"],
+            "surface takes what was asked for and nothing else"
+        );
+        assert_eq!(
+            reachable("example-album", Depth::Deep, &nested),
+            [
+                "example-album",
+                "example-album/track-two",
+                "example-album/track-three",
+            ]
+        );
+    }
+
+    /// A cycle is writable by hand, so it has to terminate here rather
+    /// than be refused at write time — see [`Depth`]. Every shelf is
+    /// visited once, the walk returns, and neither the stack nor the
+    /// queue runs away.
+    #[test]
+    fn a_cycle_terminates_and_visits_each_shelf_once() {
+        // a → b → c → a, plus b → a for a second way back in.
+        let nested = |s: &str| match s {
+            "a" => vec!["b".to_owned()],
+            "b" => vec!["c".to_owned(), "a".to_owned()],
+            "c" => vec!["a".to_owned()],
+            _ => Vec::new(),
+        };
+        let walked = reachable("a", Depth::Deep, &nested);
+        assert_eq!(walked, ["a", "b", "c"]);
+
+        // The tightest cycle there is: a shelf that references itself.
+        let self_ref = |_: &str| vec!["only".to_owned()];
+        assert_eq!(reachable("only", Depth::Deep, &self_ref), ["only"]);
     }
 
     /// A project, a wiki and an asset group may all be called the same

@@ -343,9 +343,15 @@ mod tests {
             "---\ntype: project\ntitle: Example Album\n---\n",
         )
         .unwrap();
-        // A second directory whose page never arrived — a half-synced
-        // tree, or one somebody made with mkdir.
-        std::fs::create_dir_all(org.project_shelf_dir("track-two")).unwrap();
+        // A project whose page carries no title — hand-written, or
+        // mid-edit. It is still a project, and it still needs a root.
+        let untitled = org.project_shelf_dir("track-two");
+        std::fs::create_dir_all(&untitled).unwrap();
+        std::fs::write(
+            untitled.join(crate::PROJECT_PAGE),
+            "---\ntype: project\n---\n",
+        )
+        .unwrap();
 
         let trees = org.knowledge_trees();
         let by_place = |place: &str| {
@@ -362,7 +368,7 @@ mod tests {
         assert_eq!(
             by_place("acme-audio/Projects/track-two").as_deref(),
             Some("track-two"),
-            "no marker falls back to the slug — a miss, not a wrong name"
+            "no title falls back to the slug — a miss, not a wrong name"
         );
         assert!(
             trees.iter().all(|t| !t.at.read_only),
