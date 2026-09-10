@@ -369,7 +369,7 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
     // `settled` waits out the catalogue walk so the videos generated
     // above are browsable the moment the server boots.
     {
-        use files::service::roots::{AdoptRequest, RootsService};
+        use files::service::roots::RootsService;
         let backend = files::FilesBackend::new(org.path().join("files"), org.vault_dir())
             .map_err(|e| eyre::eyre!("files backend: {e}"))?;
         let existing = RootsService::list(&backend)
@@ -383,16 +383,17 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
             if !dir.is_dir() {
                 continue;
             }
+            // `adopt_org_tree`, not the wire verb: a project's directory
+            // is on the Projects tier, which sits outside `<org>/files/`
+            // like the vault and the wiki do, and `RootsService::adopt`
+            // confines to that boundary on purpose. This registers
+            // without the confinement and drives the same catalogue walk
+            // — both halves, because the review surface streams
+            // renditions and a rendition belongs to a catalogued file.
             let root = backend
-                .adopt(AdoptRequest {
-                    path: dir.to_string_lossy().into_owned(),
-                    name: declared.title.to_owned(),
-                    flavor: files::model::RootFlavor::Media,
-                    hash_content: true,
-                })
-                .await
+                .adopt_org_tree(&dir, declared.title, true)
                 .map_err(|e| eyre::eyre!("adopt {}: {e}", declared.title))?;
-            backend.settled(files::RootId::new(root.id)).await;
+            backend.settled(root).await;
             println!("  root: {} adopted in place", declared.title);
         }
 

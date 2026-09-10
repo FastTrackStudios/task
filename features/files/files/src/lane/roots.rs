@@ -131,6 +131,47 @@ impl FilesBackend {
             .map(|a| progress_of(root_id, &a))
     }
 
+    /// Adopt one of the **org's own** directories and walk it, the way
+    /// [`RootsService::adopt`] adopts one inside the files boundary.
+    ///
+    /// # Why this exists beside both of them
+    ///
+    /// `RootsService::adopt` confines its path to `<org>/files/`, which
+    /// is right: it is a wire verb, and a caller that could name any
+    /// path could adopt `/etc`. `FilesBackend::adopt_tree` skips the
+    /// confinement because the directory is the org's outright — that
+    /// is how the vault, the wiki and the resource library become roots
+    /// — but it only *registers*, so nothing walks the tree and the
+    /// catalogue stays empty.
+    ///
+    /// A Projects-tier shelf needs both halves. It is the org's own
+    /// directory, sitting outside `<org>/files/` like the vault, and it
+    /// is full of content that has to be in the catalogue — because
+    /// `files_ui::review` streams *renditions*, a rendition belongs to a
+    /// catalogued file, and a project whose deliverables are not
+    /// catalogued is a project whose video will not play.
+    ///
+    /// So: register without confinement, then drive the same adoption
+    /// the wire verb drives. `hash_content` is the caller's, and
+    /// [`FilesBackend::settled`] is how a seeder waits for the walk.
+    ///
+    /// # Errors
+    ///
+    /// The directory is not one, or it overlaps a root registered
+    /// elsewhere.
+    pub fn adopt_org_tree(
+        &self,
+        tree: &std::path::Path,
+        name: &str,
+        hash_content: bool,
+    ) -> Result<RootId, FilesFault> {
+        let root_id = self.adopt_tree(tree, name)?;
+        self.adoptions().begin(root_id, hash_content);
+        let driver = self.clone();
+        tokio::spawn(async move { driver.drive_adoption(root_id).await });
+        Ok(root_id)
+    }
+
     /// Walk the tree, then read it — the work behind an `adopt` that has
     /// already returned.
     ///
