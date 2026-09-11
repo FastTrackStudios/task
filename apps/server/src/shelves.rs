@@ -206,9 +206,6 @@ impl ShelfRegistry {
     /// The `create_wiki` hook: register a wiki made while the server
     /// runs, from the dispatcher's thread, by handing the async attach
     /// to `handle`.
-    ///
-    /// The same shape serves an asset group created at runtime; it is a
-    /// hook because `create_wiki` is the only lane that has one today.
     #[must_use]
     pub fn created_hook(
         &self,
@@ -217,6 +214,36 @@ impl ShelfRegistry {
         let this = self.clone();
         Arc::new(move |slug: &str, root: &Path| {
             let shelf = org_proto::WikiShelf::new(slug.to_owned(), root.to_path_buf());
+            let this = this.clone();
+            handle.spawn(async move { this.attach(&shelf).await });
+        })
+    }
+
+    /// The same hook for a **project** declared while the server runs.
+    ///
+    /// A project's directory is a shelf, and the boot loop only sees
+    /// the shelves that exist at boot. Without this, a project created
+    /// through the lane — or promoted out of a part, or adopted — would
+    /// have an unregistered directory until the next restart: its page
+    /// silently not collaborative, its files absent from the link
+    /// graph, and nothing failing to say so. That is the exact failure
+    /// this module's own docs describe, reached through a door that did
+    /// not exist when they were written, and it is why the projects
+    /// tier is the first one to need a hook that assets never did.
+    ///
+    /// Registration is idempotent per vault id apart from the watcher,
+    /// so a project whose page is rewritten does not accumulate
+    /// registrations — `announce_shelf` fires on the three verbs that
+    /// bring a directory into existence as a project (`create`,
+    /// `promote_part`, `adopt`) and not on every save.
+    #[must_use]
+    pub fn project_created_hook(
+        &self,
+        handle: tokio::runtime::Handle,
+    ) -> project::ProjectCreatedHook {
+        let this = self.clone();
+        Arc::new(move |rel: &str, root: &Path| {
+            let shelf = org_proto::ProjectShelf::new(rel.to_owned(), root.to_path_buf());
             let this = this.clone();
             handle.spawn(async move { this.attach(&shelf).await });
         })

@@ -14,6 +14,11 @@ repository.workspace = true
 # those live inside it, and replication must not treat the server's own
 # version store as vault content.
 files-proto = { workspace = true, default-features = false }
+# One constant: `PROJECT_PAGE`, the file that declares a directory to be
+# a shelf of its own. `crate::shelf_boundary` prunes at it, the way
+# `sync::is_root_internal` already prunes at `files_proto`'s marker.
+# One spelling, in the crate that owns the org layout.
+org-proto = { workspace = true }
 # Vault is native-only (file IO + watching). The `#![cfg(not(wasm))]`
 # at the crate root keeps wasm builds happy.
 walkdir = { workspace = true }

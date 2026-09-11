@@ -15,6 +15,7 @@
 pub mod issuer;
 pub mod manifest;
 pub mod mount;
+pub mod project_page;
 pub mod root;
 #[cfg(feature = "vox")]
 pub mod schema_stamp;
@@ -25,14 +26,15 @@ pub mod snapshot;
 pub use issuer::{IssuerError, IssuerProfile};
 pub use manifest::{OrgManifest, ParseError};
 pub use mount::{KnowledgeTree, TreePlace};
+pub use project_page::{FoundProject, PROJECT_PAGE, walk_projects};
 pub use root::{DEFAULT_WIKI, DataRoot, OrgRoot, RootError, default_client_vault_root, wiki_slug};
 pub use service::{
     CreateOrgRequest, OrgManagementError, OrgManagementService, OrgManagementServiceRpc,
     PersonalOrgRequest,
 };
 pub use shelf::{
-    AssetShelf, DEFAULT_ASSET_KINDS, ProjectShelf, Selection, Shelf, Tier, VAULT_ID, VaultShelf,
-    WikiShelf, facet_of,
+    AssetShelf, DEFAULT_ASSET_KINDS, Depth, ProjectShelf, Selection, Shelf, Tier, VAULT_ID,
+    VaultShelf, WikiShelf, facet_of, reachable,
 };
 
 #[cfg(feature = "vox")]

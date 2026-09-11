@@ -18,7 +18,8 @@
 //!
 //! ```text
 //! <org>/
-//!   Projects/<name>/              read-write   files/Projects/<name>
+//!   Projects/<slug>/              read-write   projects/<slug>/
+//!   Projects/<name>/              read-write   files/Projects/<name>  (legacy)
 //!   Vault/                        read-write   vault/
 //!   Wiki/                         read-write   wiki/        (Knowledge + LLM)
 //!   Wiki/<slug>/                  read-write   wikis/<slug>/
@@ -130,6 +131,32 @@ impl OrgRoot {
             ["subscribed", domain, slug] if !domain.starts_with('.') => {
                 TreePlace::read_only(shown(&[SUBSCRIBED_FOLDER, domain, slug]))
             }
+            // ADR 0004's Projects tier: one directory per project,
+            // parents and children alike (`OrgRoot::project_shelves`).
+            ["projects", slug] => TreePlace::writable(shown(&[PROJECTS_FOLDER, slug])),
+            // Where a project's tree sat before that tier existed, and
+            // still sits on any deployment the migration has not
+            // reached — or has deliberately not been asked to touch.
+            //
+            // **Kept indefinitely, not deprecated.**
+            // `project.location.composed` says a project composes
+            // content from several locations at once and that no
+            // location is privileged as its "real" home, so a tree
+            // sitting outside `projects/` is a supported state and not
+            // an unfinished migration. Deleting this arm would make a
+            // NAS-hosted or legacy tree unplaceable, which is precisely
+            // the mount regression this module was written to end.
+            //
+            // The shown folder does change for a tree the migration
+            // moves — `Projects/Example Album` becomes
+            // `Projects/example-album`, because the directory is named
+            // by the project's slug now and not by whatever somebody
+            // typed in Finder. That is a rename inside the mount, which
+            // is a thing the mount already does: a place is computed
+            // per root by `OrgPlacer` on every sweep rather than stored,
+            // so the agent moves the folder and nothing is stranded.
+            // Per-machine `mounts.toml` rows, which DO store an
+            // absolute path, are rewritten by the migration itself.
             ["files", "Projects", name] | ["files", name] => {
                 TreePlace::writable(shown(&[PROJECTS_FOLDER, name]))
             }
@@ -144,8 +171,30 @@ impl OrgRoot {
     /// Read from disk, so a wiki created or a source subscribed since
     /// boot appears on the next call without a code change. The vault
     /// is not listed: it is adopted separately, because adopting it also
-    /// binds the page-write sink. Projects are not listed either — they
-    /// are roots by creation, not by discovery.
+    /// binds the page-write sink.
+    ///
+    /// # Projects are listed now, and used not to be
+    ///
+    /// This method's doc used to end "Projects are not listed either —
+    /// they are roots by creation, not by discovery", and that was true
+    /// of a world where a project's tree was whatever directory
+    /// somebody had pointed `adopt` at. It is not true of
+    /// `<org>/projects/<slug>/`, which is a place the org's own layout
+    /// describes — so a project shelf is discoverable in exactly the
+    /// sense a named wiki is, and discovering it is what makes its
+    /// deliverables reviewable without anybody having adopted anything.
+    ///
+    /// That matters more than tidiness. `files_ui::review` streams
+    /// *renditions*, and a rendition belongs to a File Root; a project
+    /// tree that is not a root has no renditions, so its video will not
+    /// play and its frame comments have nothing to hang on. Before
+    /// this, the only thing making the seeded studio reviewable was the
+    /// seeder calling `adopt` by hand — which is why a project created
+    /// any other way was silently un-reviewable.
+    ///
+    /// A project restored from a backup, arrived by sync, or created
+    /// while the server runs is a root within one sweep now, for the
+    /// same reason a wiki is.
     ///
     /// Sorted by place, so two servers holding the same org register in
     /// the same order and a log of what was adopted reads the same way
@@ -173,6 +222,25 @@ impl OrgRoot {
         push(RESOURCES_FOLDER.to_string(), self.resources_dir());
         for (domain, slug, tree) in subscribed_copies(&self.path().join("subscribed")) {
             push(format!("{SUBSCRIBED_FOLDER} — {domain} — {slug}"), tree);
+        }
+        // The registered NAME is the convention the review surface
+        // resolves a deliverable through — `files_ui::review::
+        // locate_titled` finds the root whose name is the project's
+        // title, then browses its `Deliverables/`. So the name here has
+        // to be the project's own, which its `project.md` declares; a
+        // project whose page is unreadable falls back to its slug, and
+        // the review lane simply does not find it — an honest miss
+        // rather than a root filed under the wrong name, which would
+        // find the WRONG deliverable.
+        //
+        // Only top-level projects. A sub-project is a subtree of its
+        // parent's shelf and is browsed through it; adopting one as a
+        // second root would work at the Files layer (nested roots are
+        // supported and pruned) but would put it at a second place in
+        // the mount, and a person would see the same folder twice.
+        for (slug, tree) in self.project_shelves() {
+            let name = crate::project_page::title_of(&tree).unwrap_or_else(|| slug.clone());
+            push(name, tree);
         }
 
         out.sort_by(|a, b| a.at.place.cmp(&b.at.place));
@@ -250,6 +318,61 @@ mod tests {
         assert_eq!(
             p("files/Laptop Project"),
             rw("acme-audio/Projects/Laptop Project")
+        );
+        // ADR 0004's tier, and the legacy home, land in the same folder
+        // — which is what stops the move from being a thing a person
+        // has to be told about.
+        assert_eq!(
+            p("projects/crescendum"),
+            rw("acme-audio/Projects/crescendum")
+        );
+    }
+
+    /// A project shelf is a knowledge tree now, registered under the
+    /// project's own title — the name `files_ui::review::locate_titled`
+    /// resolves a deliverable through. Without this, a project that
+    /// nobody had adopted by hand had no renditions and so no
+    /// reviewable video.
+    #[test]
+    fn a_project_shelf_is_adopted_under_the_title_its_marker_records() {
+        let (_tmp, org) = org();
+        let tree = org.project_shelf_dir("example-album");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(
+            tree.join(crate::PROJECT_PAGE),
+            "---\ntype: project\ntitle: Example Album\n---\n",
+        )
+        .unwrap();
+        // A project whose page carries no title — hand-written, or
+        // mid-edit. It is still a project, and it still needs a root.
+        let untitled = org.project_shelf_dir("track-two");
+        std::fs::create_dir_all(&untitled).unwrap();
+        std::fs::write(
+            untitled.join(crate::PROJECT_PAGE),
+            "---\ntype: project\n---\n",
+        )
+        .unwrap();
+
+        let trees = org.knowledge_trees();
+        let by_place = |place: &str| {
+            trees
+                .iter()
+                .find(|t| t.at.place == place)
+                .map(|t| t.name.clone())
+        };
+        assert_eq!(
+            by_place("acme-audio/Projects/example-album").as_deref(),
+            Some("Example Album"),
+            "the root's name is the review lane's key"
+        );
+        assert_eq!(
+            by_place("acme-audio/Projects/track-two").as_deref(),
+            Some("track-two"),
+            "no title falls back to the slug — a miss, not a wrong name"
+        );
+        assert!(
+            trees.iter().all(|t| !t.at.read_only),
+            "a project tree is written by its own tools"
         );
     }
 

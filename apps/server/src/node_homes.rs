@@ -66,6 +66,12 @@ use wiki_proto::subscription::{SourceKind, Subscriber};
 /// `None` for the kinds that are not library material: a note or a block
 /// is vault-internal, and a verse comes from the scripture spine, which
 /// has its own core subscription.
+///
+/// [`NodeKind::Project`] is `None` too, and for a third reason again —
+/// see [`PROJECTS_TIER`]. A project is not published *by* a library; it
+/// is itself the thing another org subscribes to, so the subscription
+/// slug is the project's own id rather than a directory that holds many
+/// of them.
 #[must_use]
 pub fn library_of(kind: NodeKind) -> Option<&'static str> {
     Some(match kind {
@@ -82,9 +88,28 @@ pub fn library_of(kind: NodeKind) -> Option<&'static str> {
         | NodeKind::Topic
         | NodeKind::Entity
         | NodeKind::Block
+        | NodeKind::Project
         | NodeKind::External => return None,
     })
 }
+
+/// The tier a `project:` reference resolves into.
+///
+/// # A project is its own library
+///
+/// Every other qualified kind here names a slug inside a *shared*
+/// directory: `song:hosanna` is one of many under `assets/songs/`, and
+/// subscribing to `songs` admits the reader to all of them. A project is
+/// not shaped like that. `<org>/projects/example-album/` is one project
+/// and nothing else, and it is the unit somebody publishes — a mix
+/// engineer is given a song, not "the projects library".
+///
+/// So [`library_of`] answers `None` and the subscription slug is the
+/// project's own id. `example-album` and `example-album/track-two` are
+/// two subscribable things, which is exactly the submodule model
+/// `org_proto::OrgRoot::project_shelves` describes: a person may take
+/// the album, or take one song out of it, and the slug says which.
+pub const PROJECTS_TIER: &str = "projects";
 
 /// Resolves qualified references against the orgs this deployment holds.
 ///
@@ -132,8 +157,10 @@ impl LocalHomes {
         // the slug and not the kind is what keeps a subscription taken
         // out before ADR 0004 working after it.
         subs.iter().any(|s| {
-            matches!(s.kind, SourceKind::Resource | SourceKind::Assets)
-                && s.domain == domain
+            matches!(
+                s.kind,
+                SourceKind::Resource | SourceKind::Assets | SourceKind::Projects
+            ) && s.domain == domain
                 && s.slug == library
         })
     }
@@ -197,6 +224,28 @@ impl NodeHomes for LocalHomes {
                 rel_path: String::new(),
             };
         }
+        // A project is its own library, so it takes the same shape one
+        // step earlier: the subscription slug IS the project's id, and
+        // the content is that project's declaring page. See
+        // [`PROJECTS_TIER`] on why it does not go through `library_of`.
+        if node.kind == NodeKind::Project {
+            if !self.subscribes_to(&node.domain, &node.id) {
+                return refused(Reach::NotPermitted);
+            }
+            let rel = format!("{PROJECTS_TIER}/{}/{}", node.id, org_proto::PROJECT_PAGE);
+            let path = self.data_root.join("orgs").join(org).join(&rel);
+            return if path.exists() {
+                ResolvedNode {
+                    node: node.clone(),
+                    reach: Reach::Reachable,
+                    org: org.clone(),
+                    title: String::new(),
+                    rel_path: rel,
+                }
+            } else {
+                refused(Reach::NotFound)
+            };
+        }
         let Some(library) = library_of(node.kind) else {
             // Nothing outside the library kinds is published across an
             // org boundary today: a note or a block is vault-internal.
@@ -235,6 +284,127 @@ mod tests {
         for kind in [NodeKind::Note, NodeKind::Block, NodeKind::Wiki] {
             assert_eq!(library_of(kind), None);
         }
+        assert_eq!(
+            library_of(NodeKind::Project),
+            None,
+            "a project is its own library — see PROJECTS_TIER"
+        );
+    }
+
+    /// A `project:` reference is a refusal without a subscription and a
+    /// path with one, and the path it names is the project's own
+    /// declaring page on the Projects tier.
+    ///
+    /// This is the mechanism behind "a project can be referenced as
+    /// needed" — the sentence ADR 0004's fourth root rests on now that a
+    /// project is not a vault note. Before this kind existed,
+    /// `NodeKind::parse("project")` returned `None` and the reference
+    /// did not even parse.
+    #[test]
+    fn a_project_reference_resolves_to_the_projects_tier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut domains = HashMap::new();
+        domains.insert("acme.test".to_owned(), "acme".to_owned());
+        let reader = tmp.path().join("orgs/reader");
+        std::fs::create_dir_all(&reader).unwrap();
+        let homes = LocalHomes::new(tmp.path().to_path_buf(), domains, "reader", reader.clone());
+
+        let node = NodeRef::new(NodeKind::Project, "example-album").in_domain("acme.test");
+        assert_eq!(
+            homes.resolve(&node).reach,
+            Reach::NotPermitted,
+            "no subscription, and an outsider is never told whether it exists"
+        );
+
+        // Subscribe to that one project, by its own path.
+        let store = wiki_live::subscriptions::SubscriptionStore::open(&reader);
+        store
+            .subscribe(
+                &Subscriber::Vault,
+                wiki_proto::subscription::Subscription {
+                    domain: "acme.test".to_owned(),
+                    slug: "example-album".to_owned(),
+                    kind: SourceKind::Projects,
+                    title: "Example Album".to_owned(),
+                    core: false,
+                    declined: false,
+                    selection: org_proto::Selection::All,
+                },
+            )
+            .expect("hold a subscription");
+
+        assert_eq!(
+            homes.resolve(&node).reach,
+            Reach::NotFound,
+            "subscribed, and the publisher does not hold it — a different answer"
+        );
+
+        let page = tmp
+            .path()
+            .join("orgs/acme/projects/example-album")
+            .join(org_proto::PROJECT_PAGE);
+        std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+        std::fs::write(&page, "---\ntype: project\ntitle: Example Album\n---\n").unwrap();
+
+        let resolved = homes.resolve(&node);
+        assert_eq!(resolved.reach, Reach::Reachable);
+        assert_eq!(resolved.org, "acme");
+        assert_eq!(
+            resolved.rel_path, "projects/example-album/project.md",
+            "the answer names the publisher's own path, as every other kind's does"
+        );
+    }
+
+    /// A sub-project is subscribed to on its own terms, and holding the
+    /// parent is not holding the child. That is the submodule model at
+    /// the reference layer: `Depth::Surface` is the default, so a
+    /// subscriber who took the album has a *reference* to the song and
+    /// not its bytes.
+    #[test]
+    fn a_subproject_is_a_subscription_of_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut domains = HashMap::new();
+        domains.insert("acme.test".to_owned(), "acme".to_owned());
+        let reader = tmp.path().join("orgs/reader");
+        std::fs::create_dir_all(&reader).unwrap();
+        let homes = LocalHomes::new(tmp.path().to_path_buf(), domains, "reader", reader.clone());
+
+        for rel in ["example-album", "example-album/track-two"] {
+            let page = tmp
+                .path()
+                .join("orgs/acme/projects")
+                .join(rel)
+                .join(org_proto::PROJECT_PAGE);
+            std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+            std::fs::write(&page, "---\ntype: project\n---\n").unwrap();
+        }
+
+        let store = wiki_live::subscriptions::SubscriptionStore::open(&reader);
+        store
+            .subscribe(
+                &Subscriber::Vault,
+                wiki_proto::subscription::Subscription {
+                    domain: "acme.test".to_owned(),
+                    slug: "example-album".to_owned(),
+                    kind: SourceKind::Projects,
+                    title: "Example Album".to_owned(),
+                    core: false,
+                    declined: false,
+                    selection: org_proto::Selection::All,
+                },
+            )
+            .expect("hold a subscription");
+
+        let album = NodeRef::new(NodeKind::Project, "example-album").in_domain("acme.test");
+        let song =
+            NodeRef::new(NodeKind::Project, "example-album/track-two").in_domain("acme.test");
+        assert_eq!(homes.resolve(&album).reach, Reach::Reachable);
+        assert_eq!(
+            homes.resolve(&song).reach,
+            Reach::NotPermitted,
+            "taking the album is not taking the song — surface-only is the default, \
+             and the song stays a reference until somebody asks for it"
+        );
     }
 
     /// A domain nobody answers to is `UnknownDomain`, and the reader's

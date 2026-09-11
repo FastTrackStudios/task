@@ -1,28 +1,41 @@
 //! Server-side [`ProjectService`] backend.
 //!
-//! Walks the configured vault root on each call (cheap — the
-//! vault page index lives in memory once `Vault::open` runs).
+//! Walks the **Projects tier** — `<org>/projects/` — on each call,
+//! looking for `project.md` pages and reading only those.
 //! `ProjectBackend` is what the task-server mounts under
 //! `/org/<slug>/vox`; the architect-rpc macro emits a sync
 //! shim, so the server-bridge can call this directly even
 //! though the trait surface is sync.
 //!
+//! # It used to walk the vault
+//!
+//! Until ADR 0004's fourth root, a project was a note at
+//! `vault/Projects/<slug>.md` and its material was a File Root
+//! somewhere else. A project is now a *directory*, and the whole of it
+//! is in one place: `<org>/projects/<slug>/` holds the page, the
+//! sessions, the sub-projects and the deliverables. `cp -r` of that
+//! directory is a copy of the project, which is what
+//! `project.identity.stable` always promised and only half delivered.
+//!
+//! Nothing about the page itself changed: same `type: project`
+//! frontmatter, same atomic write through `vault::save_page_at`, same
+//! per-file CRDT — because a shelf gets collaboration from being
+//! registered, not from being the vault (`org_proto::shelf`).
+//!
 //! Cheap to `Clone` — the inner [`std::path::PathBuf`] is
-//! reused; each request re-opens the vault. Future
+//! reused; each request re-walks the tier. Future
 //! optimization: cache the parsed list with an mtime check.
 
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use uuid::Uuid;
-use vault::Vault;
 
 use crate::model::ProjectInfo;
 use crate::parts::{
     Audience, Component, Conflict, Deliverable, DeliverableItem, Divergence, Merged, Part, Piece,
     Scope,
 };
-use crate::scan::scan_vault;
 use crate::service::{ProjectError, ProjectService};
 use crate::write::{default_project_path, write_project};
 
@@ -30,7 +43,19 @@ use crate::write::{default_project_path, write_project};
 /// boot per org, cloned into the vox bridge.
 #[derive(Clone, architect::HasDispatcher)]
 pub struct ProjectBackend {
-    vault_root: PathBuf,
+    /// The **Projects tier** — `<org>/projects/`. Every path this
+    /// backend handles is relative to it: `crescendum/project.md`, and
+    /// `crescendum/track-two/project.md` for a subproject.
+    ///
+    /// It used to be the org vault, and the rename is the whole of ADR
+    /// 0004's fourth root as far as this file is concerned. What did
+    /// *not* change is what a project is on disk: a markdown page with
+    /// `type: project` frontmatter, opened through `vault::Vault`,
+    /// written through `vault::save_page_at`, atomic and merged and
+    /// collaborative exactly as before. A shelf gets all of that from
+    /// being registered rather than from being the vault — see
+    /// `org_proto::shelf`, which exists to make that sentence true.
+    root: PathBuf,
     /// Fan-out hub behind the `#[subscribe] fn events` stream —
     /// every successful mutation publishes the post-write state
     /// here ([`ProjectEvent::Upserted`] / [`ProjectEvent::Deleted`]).
@@ -40,25 +65,82 @@ pub struct ProjectBackend {
     /// the stream mount can each hold a backend clone.
     #[cfg(feature = "vox")]
     events: architect::PubSub<crate::service::ProjectEvent>,
+    /// Told `(rel, dir)` after a project's page first appears on disk.
+    ///
+    /// # Why a project needs one and an asset does not
+    ///
+    /// A project's directory **is a shelf**, and a shelf is only
+    /// collaborative once it has been registered on `vault::Backend`,
+    /// `GraphBackend` and `VaultCollab` (`org_proto::shelf`). The
+    /// server registers every shelf it finds at boot; a project created
+    /// while the server runs is not one of them, and without this hook
+    /// it would stay unregistered until the next restart — its page
+    /// silently not collaborative, its files not in the graph, and no
+    /// error anywhere to say so. That is exactly the class of bug
+    /// `crate::shelves` exists to prevent, arriving through a door
+    /// that module could not see.
+    ///
+    /// An asset never needed one because an asset is a *file* on a
+    /// shelf that already exists (`assets/songs/` is scaffolded with
+    /// the org), and a wiki has had the identical hook since
+    /// `create_wiki` — `wiki_live::backend::WikiCreatedHook`, which
+    /// this deliberately mirrors rather than inventing a second shape
+    /// for.
+    ///
+    /// `None` off the server: the CLI and the tests open a
+    /// `ProjectBackend` over a directory with no registry behind it,
+    /// and a project made there is a file, which is all it needs to be.
+    on_created: Option<ProjectCreatedHook>,
 }
+
+/// What [`ProjectBackend::with_on_created`] is handed: a callback run
+/// with a new project's tier-relative directory and its absolute path,
+/// once its page exists on disk.
+pub type ProjectCreatedHook = std::sync::Arc<dyn Fn(&str, &Path) + Send + Sync>;
 
 // Manual impl: `PubSub` carries no `Debug`.
 impl std::fmt::Debug for ProjectBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProjectBackend")
-            .field("vault_root", &self.vault_root)
+            .field("root", &self.root)
             .finish_non_exhaustive()
     }
 }
 
 impl ProjectBackend {
     #[must_use]
-    pub fn new(vault_root: impl Into<PathBuf>) -> Self {
+    pub fn new(projects_root: impl Into<PathBuf>) -> Self {
         Self {
-            vault_root: vault_root.into(),
+            root: projects_root.into(),
             #[cfg(feature = "vox")]
             events: architect::PubSub::sliding(256),
+            on_created: None,
         }
+    }
+
+    /// Register a callback run when a project's directory first becomes
+    /// one — see [`ProjectBackend::on_created`].
+    #[must_use]
+    pub fn with_on_created(mut self, hook: ProjectCreatedHook) -> Self {
+        self.on_created = Some(hook);
+        self
+    }
+
+    /// Announce a newly-declared project's directory, so the server can
+    /// register it as a shelf.
+    ///
+    /// Called after the page is on disk and never before: the hook's
+    /// first act is to register the directory as a vault root, and a
+    /// root registered over a directory whose page has not landed is a
+    /// shelf whose first `list` finds nothing.
+    fn announce_shelf(&self, path: &str) {
+        let Some(hook) = &self.on_created else {
+            return;
+        };
+        let Some(rel) = crate::write::page_dir(path) else {
+            return;
+        };
+        hook(rel, &self.root.join(rel));
     }
 
     /// Publish a project change to every `events` subscriber. Call
@@ -73,10 +155,10 @@ impl ProjectBackend {
         let _ = event;
     }
 
-    /// Vault root this backend reads from.
+    /// The Projects tier this backend reads from — `<org>/projects/`.
     #[must_use]
-    pub fn vault_root(&self) -> &Path {
-        &self.vault_root
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// Write a project back to its page and announce it.
@@ -86,17 +168,62 @@ impl ProjectBackend {
     /// the caller's whole `ProjectInfo` when what changed is one field.
     fn save(&self, mut project: ProjectInfo) -> Result<ProjectInfo, ProjectError> {
         project.date_modified = Some(Utc::now());
-        write_project(&self.vault_root, &mut project, true)
+        write_project(&self.root, &mut project, true)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
         self.publish(crate::service::ProjectEvent::Upserted(project.clone()));
         Ok(project)
     }
 
+    /// Every project on the tier, parsed.
+    ///
+    /// # Why this walks for pages instead of opening the tier as a
+    /// vault
+    ///
+    /// It used to be `Vault::open(vault_root)` + `scan_vault`, and that
+    /// was right when a project was one markdown file among a person's
+    /// notes: opening the vault reads every `.md` under it, and a vault
+    /// is all markdown.
+    ///
+    /// The Projects tier is not. It is sessions, takes, renders and
+    /// stems — the largest content this system holds — and opening it
+    /// as a vault would read every file in it on every call to
+    /// `list()`. The pages are a vanishing fraction of the bytes, and
+    /// they sit in exactly one place per project, so
+    /// [`org_proto::walk_projects`] finds them by directory and this
+    /// reads only those.
+    ///
+    /// It also removes a scan that would have got slower as the studio
+    /// filled up, which is `storage.query.no-scan`'s whole complaint —
+    /// query cost should scale with the size of the result and not with
+    /// the size of the tree.
     fn list_inner(&self) -> Result<Vec<ProjectInfo>, ProjectError> {
-        let vault = Vault::open(&self.vault_root).map_err(|e| {
-            ProjectError::Io(format!("open vault {}: {e}", self.vault_root.display()))
-        })?;
-        scan_vault(&vault).map_err(|e| ProjectError::Io(format!("scan: {e}")))
+        let mut out = Vec::new();
+        for found in org_proto::walk_projects(&self.root) {
+            let page = found.dir.join(org_proto::PROJECT_PAGE);
+            let raw = match std::fs::read_to_string(&page) {
+                Ok(raw) => raw,
+                // The walk saw it and the read did not: a page deleted
+                // between the two, or a permission the server does not
+                // have. One unreadable project must not empty the list.
+                Err(e) => {
+                    tracing::warn!(path = %page.display(), error = %e, "project: page unreadable");
+                    continue;
+                }
+            };
+            let rel = format!("{}/{}", found.rel, org_proto::PROJECT_PAGE);
+            let basename = found.rel.rsplit('/').next().unwrap_or(&found.rel);
+            match crate::parse::parse_str(&rel, basename, &raw) {
+                Ok(p) => out.push(p),
+                // A discriminator without complete frontmatter — it
+                // happens mid-edit, and it is why this is silent where
+                // the shared scan warns.
+                Err(crate::parse::ParseError::NoFrontmatter) => {}
+                Err(e) => {
+                    tracing::warn!(path = %rel, error = %e, "project: parse failed");
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -157,12 +284,16 @@ impl ProjectService for ProjectBackend {
         }
         project.date_modified = Some(now);
 
-        let abs = self.vault_root.join(&project.path);
+        let abs = self.root.join(&project.path);
         if abs.exists() {
             return Err(ProjectError::AlreadyExists(project.path.clone()));
         }
-        write_project(&self.vault_root, &mut project, false)
+        write_project(&self.root, &mut project, false)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
+        // A new project directory is a new shelf. Announced before
+        // the event, so a subscriber that reacts by reading the
+        // project finds a registered root rather than a race.
+        self.announce_shelf(&project.path);
         self.publish(crate::service::ProjectEvent::Upserted(project.clone()));
         Ok(project)
     }
@@ -179,7 +310,7 @@ impl ProjectService for ProjectBackend {
         next.path = existing.path;
         next.date_created = existing.date_created.or(next.date_created);
         next.date_modified = Some(Utc::now());
-        write_project(&self.vault_root, &mut next, true)
+        write_project(&self.root, &mut next, true)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
         self.publish(crate::service::ProjectEvent::Upserted(next.clone()));
         Ok(next)
@@ -194,17 +325,17 @@ impl ProjectService for ProjectBackend {
             .into_iter()
             .find(|p| p.id == id)
             .ok_or_else(|| ProjectError::NotFound(id.to_string()))?;
-        if self.vault_root.join(new_path).exists() {
+        if self.root.join(new_path).exists() {
             return Err(ProjectError::AlreadyExists(new_path.to_owned()));
         }
         // Through the vault's write path, like every other page mutation
         // here (`project.vault.write-path`).
-        vault::move_page_at(&self.vault_root, &p.path, new_path)
+        vault::move_page_at(&self.root, &p.path, new_path)
             .map_err(|e| ProjectError::Io(format!("rename: {e}")))?;
         p.path = new_path.to_owned();
         p.date_modified = Some(Utc::now());
         // Re-serialize so frontmatter mtime tracks the move.
-        write_project(&self.vault_root, &mut p, true)
+        write_project(&self.root, &mut p, true)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
         self.publish(crate::service::ProjectEvent::Upserted(p.clone()));
         Ok(p)
@@ -344,17 +475,33 @@ impl ProjectService for ProjectBackend {
             // album is.
             ..ProjectInfo::default()
         };
-        promoted.path = default_project_path(&named.name);
-        if self.vault_root.join(&promoted.path).exists() {
+        // Inside the parent's own directory, because that is where the
+        // song's material already is: promoting Track Two writes a page
+        // into `crescendum/track-two/`, beside the takes and the
+        // sessions that made somebody want to promote it. Nothing
+        // moves, which is what makes promotion cheap enough to be
+        // reversible (`project.part.promotion`), and it is why a
+        // subproject is a subtree of its parent's shelf rather than a
+        // shelf of its own — see `org_proto::OrgRoot::project_shelves`.
+        //
+        // The directory is not the parentage. That is `parent_id`,
+        // three lines up, and `project.nesting.explicit` is the reason
+        // nothing anywhere reads a parent off a path.
+        promoted.path = crate::write::child_project_path(Some(&parent.path), &named.name);
+        if self.root.join(&promoted.path).exists() {
             return Err(ProjectError::AlreadyExists(promoted.path));
         }
         let now = Utc::now();
         promoted.date_created = Some(now);
         promoted.date_modified = Some(now);
-        write_project(&self.vault_root, &mut promoted, false)
+        write_project(&self.root, &mut promoted, false)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
         // The roster is not touched — see `project.part.listing`. The
         // album still lists ten songs, in the same order.
+        // A new project directory is a new shelf. Announced before
+        // the event, so a subscriber that reacts by reading the
+        // project finds a registered root rather than a race.
+        self.announce_shelf(&promoted.path);
         self.publish(crate::service::ProjectEvent::Upserted(promoted.clone()));
         Ok(promoted)
     }
@@ -406,7 +553,7 @@ impl ProjectService for ProjectBackend {
             self.save(parent)?;
         }
 
-        vault::delete_page_at(&self.vault_root, &subproject.path)
+        vault::delete_page_at(&self.root, &subproject.path)
             .map_err(|e| ProjectError::Io(format!("remove {}: {e}", subproject.path)))?;
         self.publish(crate::service::ProjectEvent::Deleted(project));
         Ok(part)
@@ -552,10 +699,10 @@ impl ProjectService for ProjectBackend {
         if dir.is_empty() || dir.contains("..") || dir.starts_with('/') {
             return Err(ProjectError::BadRequest(format!("bad directory: {dir}")));
         }
-        let abs = self.vault_root.join(dir);
+        let abs = self.root.join(dir);
         if !abs.is_dir() {
             return Err(ProjectError::NotFound(format!(
-                "{dir} is not a directory in this vault"
+                "{dir} is not a directory on the Projects tier"
             )));
         }
 
@@ -591,8 +738,12 @@ impl ProjectService for ProjectBackend {
         };
         // Nothing is moved: the page is written *into* the tree, beside
         // whatever was already there.
-        write_project(&self.vault_root, &mut adopted, false)
+        write_project(&self.root, &mut adopted, false)
             .map_err(|e| ProjectError::Io(format!("write: {e}")))?;
+        // A new project directory is a new shelf. Announced before
+        // the event, so a subscriber that reacts by reading the
+        // project finds a registered root rather than a race.
+        self.announce_shelf(&adopted.path);
         self.publish(crate::service::ProjectEvent::Upserted(adopted.clone()));
         Ok(adopted)
     }
@@ -810,7 +961,7 @@ impl ProjectService for ProjectBackend {
         }
         // Through the vault's write path, like `write_project` — a bare
         // `remove_file` here was the last delete that bypassed it.
-        crate::write::delete_project(&self.vault_root, &p.path)
+        crate::write::delete_project(&self.root, &p.path)
             .map_err(|e| ProjectError::Io(format!("remove {}: {e}", p.path)))?;
         self.publish(crate::service::ProjectEvent::Deleted(id));
         Ok(())

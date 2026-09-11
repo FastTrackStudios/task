@@ -135,14 +135,36 @@ impl LocalOrgs {
     /// be fine" is not a property anybody checked.
     fn source_root(&self, org: &str, subscription: &Subscription) -> Option<PathBuf> {
         let slug = &subscription.slug;
-        if slug.is_empty() || *slug != org_proto::wiki_slug(slug) {
+        if slug.is_empty() {
             return None;
         }
-        Some(
-            self.org_dir(org)
-                .join(subscription.kind.tier_dir())
-                .join(slug),
-        )
+        // A project's slug is a **path** on the tier, because projects
+        // nest and a sub-project is `crescendum/track-two`. Every other
+        // tier is flat, so its slug is one segment and a slash in it is
+        // a traversal attempt.
+        //
+        // The guard is therefore per-segment rather than relaxed: each
+        // segment must still be its own slug, which rules out `..`, a
+        // leading `/` (an empty first segment), a bare `.`, a trailing
+        // slash and anything with a character that would not survive
+        // `wiki_slug`. What it admits is one more slash than before,
+        // and only where the tier has somewhere for it to point.
+        let segments: Vec<&str> = if subscription.kind == SourceKind::Projects {
+            slug.split('/').collect()
+        } else {
+            vec![slug.as_str()]
+        };
+        if segments
+            .iter()
+            .any(|s| s.is_empty() || *s != org_proto::wiki_slug(s))
+        {
+            return None;
+        }
+        let mut root = self.org_dir(org).join(subscription.kind.tier_dir());
+        for segment in segments {
+            root.push(segment);
+        }
+        Some(root)
     }
 }
 
@@ -204,6 +226,38 @@ impl Upstream for LocalOrgs {
         // it exists the vault is the private tree and `assets/` is not.
         if subscription.kind == SourceKind::Assets {
             return Admission::Admitted;
+        }
+        // A project admits on the same terms as an asset shelf, and the
+        // paragraph above applies to it word for word: it is published
+        // by existing on the tier, it carries no `wiki.toml` to state a
+        // visibility in, and **every project an org holds is
+        // world-readable to anyone who can name it**. Recorded here
+        // rather than discovered.
+        //
+        // One thing is different and it is the reason this arm is
+        // separate rather than folded into the one above: the slug is
+        // the project's own tier-relative path, so
+        // `crescendum/track-two` is a name a stranger may hold and
+        // `crescendum` is another. `source_root` is what confines it —
+        // a slug that is not a path inside this org's tier was refused
+        // above — and it is the only thing standing between a
+        // stranger's string and this org's disk.
+        if subscription.kind == SourceKind::Projects {
+            // A directory on the tier is not necessarily a project.
+            // `project.identity.declaration`: without a `project.md` it
+            // is unclassified content, and subscribing to unclassified
+            // content would hand out a folder nobody declared.
+            return if root.join(org_proto::PROJECT_PAGE).is_file() {
+                Admission::Admitted
+            } else {
+                Admission::Refused(format!(
+                    "`{}` is a directory on {}'s Projects tier and not a project: \
+                     it declares no `{}`, so there is nothing to subscribe to",
+                    subscription.qualified(),
+                    org,
+                    org_proto::PROJECT_PAGE
+                ))
+            };
         }
         // t[impl wiki.resource.rights] — a Resource this platform
         // publishes is held whole because its licence allows it (only
@@ -592,6 +646,73 @@ mod tests {
             declined: false,
             selection: Default::default(),
         }
+    }
+
+    /// A project's slug is a path, because projects nest — and the
+    /// guard that used to reject every slash now runs per segment
+    /// instead of being relaxed.
+    ///
+    /// The three refusals are the point. A subscription slug is a
+    /// **stranger's string** joined onto a path inside this org's own
+    /// tree, and widening what it may contain is exactly the moment to
+    /// prove that `..`, an absolute path and an empty segment still do
+    /// not survive it. A slash was doing that job by accident before;
+    /// now it is done on purpose.
+    #[test]
+    fn a_project_slug_is_a_path_and_a_traversal_is_still_refused() {
+        let (dir, upstream) = world();
+        let album = dir.path().join("orgs/acme/projects/crescendum");
+        let song = album.join("track-two");
+        for d in [&album, &song] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join(org_proto::PROJECT_PAGE), "---\ntype: project\n---\n").unwrap();
+        }
+        let project = |slug: &str| Subscription {
+            kind: SourceKind::Projects,
+            ..sub(slug)
+        };
+
+        // A parent and a nested child are two subscribable names.
+        assert_eq!(
+            upstream.local_root(&project("crescendum")),
+            Some(album.clone())
+        );
+        assert_eq!(
+            upstream.local_root(&project("crescendum/track-two")),
+            Some(song)
+        );
+        assert_eq!(
+            upstream.admits("alice", &project("crescendum/track-two")),
+            Admission::Admitted
+        );
+
+        // A directory on the tier that declares no project is not one,
+        // and subscribing to it would hand out a folder nobody declared.
+        std::fs::create_dir_all(album.join("Deliverables")).unwrap();
+        assert!(matches!(
+            upstream.admits("alice", &project("crescendum/Deliverables")),
+            Admission::Refused(_)
+        ));
+
+        // And the guard, per segment.
+        for bad in [
+            "crescendum/../../../etc",
+            "../acme/projects/crescendum",
+            "/etc/passwd",
+            "crescendum//track-two",
+            "crescendum/",
+            "crescendum/.",
+        ] {
+            assert_eq!(
+                upstream.local_root(&project(bad)),
+                None,
+                "`{bad}` was joined onto a path inside somebody's own tree"
+            );
+        }
+
+        // Every other tier stays flat: a slash there is still a name of
+        // nothing, because there is nowhere for it to point.
+        assert_eq!(upstream.local_root(&sub("theory/secret")), None);
     }
 
     /// t[verify wiki.resource.subscribe] — the platform's Resource is

@@ -1126,8 +1126,6 @@ pub(crate) async fn timer_ctx(org_override: Option<&str>) -> eyre::Result<TimerC
     let ctx = crate::org_ctx::resolve_active(org_override)?;
     let db_url = std::env::var("TASK_TIMER_DB")
         .unwrap_or_else(|_| format!("sqlite://{}?mode=rwc", ctx.root.timer_db().display()));
-    let vault_root = std::env::var("TASK_VAULT_ROOT")
-        .map_or_else(|_| ctx.root.vault_dir(), std::path::PathBuf::from);
     let org_id = std::env::var("TASK_ORG_ID")
         .ok()
         .and_then(|s| s.parse::<uuid::Uuid>().ok())
@@ -1143,7 +1141,8 @@ pub(crate) async fn timer_ctx(org_override: Option<&str>) -> eyre::Result<TimerC
     timer::Migrator::up(&conn, None)
         .await
         .map_err(|e| eyre::eyre!("timer migrations: {e}"))?;
-    let store = Store::new(conn, Arc::new(VaultProjectDefaults { vault_root }));
+    let projects_root = ctx.root.projects_dir();
+    let store = Store::new(conn, Arc::new(VaultProjectDefaults { projects_root }));
     Ok(TimerCtx { store, user_id })
 }
 

@@ -334,6 +334,16 @@ pub(crate) async fn run_timer(cmd: TimerCmd, org_override: Option<&str>) -> eyre
         },
         std::path::PathBuf::from,
     );
+    // Where a project's page lives, which is no longer inside the
+    // vault: ADR 0004's Projects tier. `TASK_VAULT_ROOT` still
+    // overrides the vault for fixtures and export, and a fixture that
+    // points the vault somewhere else gets the projects tier beside it
+    // — `<vault>/../projects` — so a test rig with one temp dir keeps
+    // working.
+    let projects_root = data_root.as_ref().map_or_else(
+        || vault_root.join("..").join("projects"),
+        |r| r.org(&slug).projects_dir(),
+    );
     // Unified identity. The org id is the org's *manifest* id (the
     // same value the web UI gets from `.well-known` → `OrgMeta.id`),
     // and the default user is the deterministic "local owner" derived
@@ -414,7 +424,7 @@ pub(crate) async fn run_timer(cmd: TimerCmd, org_override: Option<&str>) -> eyre
                 task_note
             };
             let project_path =
-                resolved_path.unwrap_or_else(|| project_path_for(&vault_root, project_id));
+                resolved_path.unwrap_or_else(|| project_path_for(&projects_root, project_id));
             let session = store
                 .start_timer(StartTimerRequest {
                     user_id,
@@ -562,7 +572,7 @@ pub(crate) async fn run_timer(cmd: TimerCmd, org_override: Option<&str>) -> eyre
                 task_note
             };
             let project_path =
-                resolved_path.unwrap_or_else(|| project_path_for(&vault_root, project_id));
+                resolved_path.unwrap_or_else(|| project_path_for(&projects_root, project_id));
             let (closed, started) = store
                 .switch_timer(StartTimerRequest {
                     user_id,
@@ -627,7 +637,7 @@ pub(crate) async fn run_timer(cmd: TimerCmd, org_override: Option<&str>) -> eyre
                 task_note
             };
             let project_path =
-                resolved_path.unwrap_or_else(|| project_path_for(&vault_root, project_id));
+                resolved_path.unwrap_or_else(|| project_path_for(&projects_root, project_id));
             let session = store
                 .log_session(LogSessionRequest {
                     user_id,
@@ -693,7 +703,7 @@ pub(crate) async fn run_timer(cmd: TimerCmd, org_override: Option<&str>) -> eyre
             // Reassigning the project also refreshes the cached
             // path (resolver-known path first, vault scan second).
             let project_path = project_id.map(|pid| {
-                resolved_path.unwrap_or_else(|| project_path_for(&vault_root, Some(pid)))
+                resolved_path.unwrap_or_else(|| project_path_for(&projects_root, Some(pid)))
             });
             let session = store
                 .update_session(timer_proto::service::UpdateSessionRequest {
@@ -1141,47 +1151,41 @@ pub(crate) fn forward_timer_db_override() {
     }
 }
 
-/// Resolve the project markdown path from its frontmatter
-/// id by scanning `Projects/**/*.md` recursively (projects
-/// conventionally live in their own folder, e.g.
-/// `Projects/<Name>/<Name>.md` — a flat scan misses them and
-/// every session then stores an empty `project_path`).
+/// Resolve a project's page path from its frontmatter id, by walking
+/// the **Projects tier** for `project.md` pages.
+///
+/// The returned string is tier-relative — `crescendum/project.md`, and
+/// `crescendum/track-two/project.md` for a subproject — and it is
+/// stored on every timer session as `project_path`, which is what the
+/// timer UI shows a person and what the finance report groups by.
+///
+/// This used to walk `<vault>/Projects/**/*.md` and take any markdown
+/// that parsed as a project, because a project's page could be
+/// `Projects/Name.md` or `Projects/Name/Name.md` and nobody wanted to
+/// guess which. ADR 0004's Projects tier removes the guess: there is
+/// one page per project and it is always `project.md` at the root of
+/// the project's own directory.
+///
 /// `None` project_id → empty.
 pub(crate) fn project_path_for(
-    vault_root: &std::path::Path,
+    projects_root: &std::path::Path,
     project_id: Option<uuid::Uuid>,
 ) -> String {
     let Some(pid) = project_id else {
         return String::new();
     };
-    let mut dirs = vec![vault_root.join("Projects")];
-    while let Some(dir) = dirs.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    for found in org_proto::walk_projects(projects_root) {
+        let page = found.dir.join(org_proto::PROJECT_PAGE);
+        let Ok(raw) = std::fs::read_to_string(&page) else {
             continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
-                continue;
-            }
-            let Ok(raw) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let rel = path
-                .strip_prefix(vault_root)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let basename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let Ok(p) = project::parse_str(&rel, basename, &raw) else {
-                continue;
-            };
-            if p.id == pid {
-                return rel;
-            }
+        let rel = format!("{}/{}", found.rel, org_proto::PROJECT_PAGE);
+        let basename = found.rel.rsplit('/').next().unwrap_or(&found.rel);
+        let Ok(p) = project::parse_str(&rel, basename, &raw) else {
+            continue;
+        };
+        if p.id == pid {
+            return rel;
         }
     }
     String::new()

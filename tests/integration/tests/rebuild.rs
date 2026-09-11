@@ -158,7 +158,7 @@ async fn what_a_human_wrote_is_a_file_on_disk() {
         .await
         .expect("create the album's project page");
 
-    let page = s.orgs.acme.org_root().join("vault").join(&made.path);
+    let page = s.orgs.acme.org_root().join("projects").join(&made.path);
     let text = std::fs::read_to_string(&page)
         .unwrap_or_else(|e| panic!("the project page is not on disk at {page:?}: {e}"));
     assert!(

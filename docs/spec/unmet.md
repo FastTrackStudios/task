@@ -86,7 +86,49 @@ vocabulary that has to be released to describe someone else's domain.
 
 ## Regressed on purpose, and recorded rather than hidden
 
-*Nothing is in this section.* Both entries that were here — cross-org
+**A project page is not in the vault's index, and three surfaces lose
+it.** ADR 0004's fourth root moved a project out of `vault/Projects/
+<slug>.md` and into `<org>/projects/<slug>/project.md`, which is the
+whole of what makes a project one thing in one place. The cost is
+mechanical and falls where a vault id is the key:
+
+- **`.base` views.** A `.base` executes against one vault id
+  (`vault_live::sync::base_views`), and a project page is served under
+  `project:<slug>` rather than `default`. A user's saved view filtering
+  `type: project` over their vault therefore comes back empty. Nothing
+  in this repository breaks — no `.base` file is committed anywhere —
+  but a person's own vault may hold one, and it will go quiet rather
+  than fail.
+- **`search_vault` and `read_note`**, over MCP and in the app. Both are
+  scoped to the org vault; a project page is not in it.
+- **The vault's link graph.** A `[[wikilink]]` from a note to a project
+  page no longer resolves through the vault's own index.
+
+The replacement is a *reference*, and it is built rather than promised:
+`NodeKind::Project` parses, and `node_homes::LocalHomes` resolves
+`project:crescendum` (and `project:crescendum/track-two`) to the page on
+the tier, across an org boundary, gated by a subscription.
+`tests/integration/tests/projects_tier.rs` is the chapter. What is NOT
+built is the vault-local half — a `[[…]]` in a note that means a project
+— which needs the wikilink resolver to consult the tier the way it
+consults the wiki tier. Recorded here rather than in a marker, because a
+marker would imply the whole of "referenced as needed" is met and only
+the cross-org half is.
+
+**A project page's write does not reach the catalogue as a delta.**
+`project.vault.write-path` binds `vault_live::PageSink` per *vault root*,
+and `FilesBackend::adopt_vault` binds one for the vault. A project shelf
+is adopted as a File Root by `adopt_knowledge_roots` but has no sink, so
+its catalogue hears about a page save through the disk watcher on the
+next sweep rather than synchronously on the write. The rule itself is
+unaffected — it is a claim about the vault, every page still in the vault
+still goes through the port, and `tests/integration/tests/vault_root.rs`
+proves it with a task — but the *project* page lost a property it had.
+
+Closing it needs `ProjectBackend` to write shelf-relative
+(`save_page_at(<shelf>, "project.md")`) rather than tier-relative, so a
+sink bound at the shelf root is the one the write finds. That is a
+contained change and deliberately not folded into the move. Both entries that were here — cross-org
 reach for the Assets tier, and the player reading a frozen song folder —
 came from an intermediate draft of ADR 0004 that filed assets at
 `<vault>/Assets/<Kind>/`, and both are closed by moving the tier out to

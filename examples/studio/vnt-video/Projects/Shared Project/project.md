@@ -1,4 +1,5 @@
 ---
+type: project
 title: Shared Project
 status: active
 project_type: media-production

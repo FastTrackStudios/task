@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
+use org_proto::PROJECT_PAGE;
 use uuid::Uuid;
 use vault_entity::store::VaultEntity;
 
@@ -86,15 +87,61 @@ pub fn delete_project(vault_root: &Path, rel_path: &str) -> Result<(), WriteErro
     vault::delete_page_at(vault_root, rel_path).map_err(|e| WriteError::Io(e.to_string()))
 }
 
-/// Conventional path for a freshly captured project — slug
-/// from the title, dropped under `Projects/`.
+/// Conventional path for a freshly captured project:
+/// `<slug>/project.md`, relative to the Projects tier.
+///
+/// # A project is a directory now, not a file in a folder
+///
+/// It used to be `Projects/<slug>.md` in the vault — one markdown file
+/// among a person's notes, with the project's actual material a File
+/// Root somewhere else entirely. ADR 0004's Projects tier ends that
+/// split: `<org>/projects/<slug>/` *is* the project, and this page sits
+/// at its root beside everything else the project is made of.
+///
+/// The shape is not new. `ProjectService::adopt` has written
+/// `<dir>/project.md` into an adopted tree since adoption existed,
+/// precisely because a tree that holds a project's work should also
+/// hold the statement that it is one. What changed is that every
+/// project gets what an adopted one had, rather than adoption being the
+/// one path that produced a self-describing directory.
 ///
 /// A title that slugifies to nothing falls back to
-/// `Projects/untitled-project.md` — under the folder, like every other
-/// title.
+/// `untitled-project/project.md`.
 #[must_use]
 pub fn default_project_path(title: &str) -> String {
-    Projects::default_path(title, None)
+    child_project_path(None, title)
+}
+
+/// The page path for a project nested inside another —
+/// `<parent-dir>/<slug>/project.md`.
+///
+/// `parent_page` is the parent's own page path
+/// (`crescendum/project.md`); the child lands in a directory beside its
+/// parent's material rather than at the tier root, which is what makes
+/// `cp -r` of the parent carry its subprojects with it.
+///
+/// This is a statement about *files*, not about parentage. Parentage is
+/// `ProjectInfo::parent_id` and nothing reads it off a path —
+/// `project.nesting.explicit` is explicit that *"hardcoded directory
+/// names express no hierarchy and are not consulted"*, and the walk
+/// that finds projects (`org_proto::project_page::walk_projects`) looks
+/// only for pages. A subproject whose page somebody moves to the tier
+/// root is still that project's subproject, and still resolves.
+#[must_use]
+pub fn child_project_path(parent_page: Option<&str>, title: &str) -> String {
+    let slug = vault_entity::slug::slugify(title, Projects::SLUG_FALLBACK);
+    match parent_page.and_then(page_dir) {
+        Some(dir) => format!("{dir}/{slug}/{PROJECT_PAGE}"),
+        None => format!("{slug}/{PROJECT_PAGE}"),
+    }
+}
+
+/// The directory a project page sits in — `crescendum/project.md` →
+/// `crescendum`. `None` for a page at the tier root, which no project
+/// has and a hand-edited tree might.
+#[must_use]
+pub fn page_dir(page: &str) -> Option<&str> {
+    page.rsplit_once('/').map(|(dir, _)| dir)
 }
 
 #[cfg(test)]
@@ -296,14 +343,36 @@ mod tests {
     }
 
     /// The slug rule, and the fallback for a title that slugifies to
-    /// nothing — which lands under `Projects/` like every other title.
-    /// It used to drop the folder and write to the vault root.
+    /// nothing. A project is a directory on the Projects tier now, and
+    /// its page sits at that directory's root.
     #[test]
     fn default_path_slugs_the_title() {
         assert_eq!(
             default_project_path("Mobile  Push!"),
-            "Projects/mobile-push.md"
+            "mobile-push/project.md"
         );
-        assert_eq!(default_project_path("!!!"), "Projects/untitled-project.md");
+        assert_eq!(default_project_path("!!!"), "untitled-project/project.md");
+    }
+
+    /// A subproject's page lands inside its parent's directory, so
+    /// `cp -r` of a project carries its subprojects. The nesting is
+    /// where the files are; the parentage is `parent_id`, and nothing
+    /// reads one off the other.
+    #[test]
+    fn a_child_lands_inside_its_parents_directory() {
+        assert_eq!(
+            child_project_path(Some("crescendum/project.md"), "Track Two"),
+            "crescendum/track-two/project.md"
+        );
+        assert_eq!(
+            child_project_path(Some("crescendum/track-two/project.md"), "B Side"),
+            "crescendum/track-two/b-side/project.md",
+            "nesting is uniform — no level is special"
+        );
+        assert_eq!(
+            child_project_path(None, "Track Two"),
+            "track-two/project.md",
+            "no parent is the tier root"
+        );
     }
 }

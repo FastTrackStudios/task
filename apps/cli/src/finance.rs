@@ -176,6 +176,10 @@ pub(crate) async fn run_finance(cmd: FinanceCmd, org_override: Option<&str>) -> 
         },
         std::path::PathBuf::from,
     );
+    let projects_root = data_root.as_ref().map_or_else(
+        || vault_root.join("..").join("projects"),
+        |r| r.org(&slug).projects_dir(),
+    );
     let vox_url = crate::resolve_org_vox_url(None, &slug);
     let timer_svc: timer_proto::TimerServiceClient = crate::establish_for_url(&vox_url).await?;
     let invoicing: finance_proto::InvoicingClient = crate::establish_for_url(&vox_url).await?;
@@ -238,7 +242,7 @@ pub(crate) async fn run_finance(cmd: FinanceCmd, org_override: Option<&str>) -> 
                             let label = if !r.project_path.is_empty() {
                                 r.project_path.clone()
                             } else if let Some(pid) = r.project_id {
-                                let resolved = project_path_for(&vault_root, Some(pid));
+                                let resolved = project_path_for(&projects_root, Some(pid));
                                 if resolved.is_empty() {
                                     format!("(project {pid})")
                                 } else {
@@ -267,7 +271,7 @@ pub(crate) async fn run_finance(cmd: FinanceCmd, org_override: Option<&str>) -> 
                 let project = if !r.project_path.is_empty() {
                     r.project_path.clone()
                 } else if let Some(pid) = r.project_id {
-                    let resolved = project_path_for(&vault_root, Some(pid));
+                    let resolved = project_path_for(&projects_root, Some(pid));
                     if resolved.is_empty() {
                         format!("(project {pid})")
                     } else {

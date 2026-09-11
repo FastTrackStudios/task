@@ -147,6 +147,29 @@ pub(crate) fn from_parts(
     // persists it to disk. A random per-scan id here broke
     // `get(list()[i].id)` round trips, deep links, and
     // `task.project_id` pointers.
+    //
+    // # The hazard this leaves behind, and it is worth knowing
+    //
+    // The fallback is keyed on the **path**, so an id-less page that
+    // MOVES gets a different id. `task.project_id` pointers, timer
+    // rows, deep links and finance rollups all address a project by
+    // that uuid, so relocating an undeclared page silently detaches
+    // every one of them — silently, because the title stays right and
+    // nothing fails.
+    //
+    // ADR 0004's Projects tier did not trip this: the deployments it
+    // landed on held no project trees to move, so there was no
+    // migration and nothing was relocated. That is luck rather than
+    // safety, and the next thing that moves a page inherits the
+    // problem whole.
+    //
+    // **Anything that relocates a project page must persist its id
+    // first**: read it at the old path, let this fallback derive the
+    // uuid there, and write the page out with an explicit `id:` before
+    // it moves. `write_project` already emits `id:` on every save, so
+    // the cheapest correct migration is a save in place followed by the
+    // move — never a byte copy, which carries the *absence* of an id
+    // to a path that would derive a different one.
     let id = yaml::str_at(&map, "id")
         .and_then(|s| Uuid::parse_str(&s).ok())
         .unwrap_or_else(|| Uuid::new_v5(&Uuid::NAMESPACE_URL, rel_path.as_bytes()));

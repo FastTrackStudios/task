@@ -85,11 +85,7 @@ async fn demo_plants_adopted_roots_with_video_deliverables() -> eyre::Result<()>
                 if *medium != project::Medium::Video {
                     continue;
                 }
-                let dest = org
-                    .path()
-                    .join("files")
-                    .join("Projects")
-                    .join(declared.dir)
+                let dest = task_server::example_org::project_path(&org, declared.dir)
                     .join("Deliverables")
                     .join(format!("{name}.mp4"));
                 assert!(
@@ -110,11 +106,7 @@ async fn demo_plants_adopted_roots_with_video_deliverables() -> eyre::Result<()>
             if *medium != project::Medium::Audio || *scope != project::Scope::WholeProject {
                 continue;
             }
-            let dest = org
-                .path()
-                .join("files")
-                .join("Projects")
-                .join(declared.dir)
+            let dest = task_server::example_org::project_path(&org, declared.dir)
                 .join("Deliverables")
                 .join(format!("{name}.wav"));
             assert!(

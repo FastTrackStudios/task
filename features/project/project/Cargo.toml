@@ -21,6 +21,12 @@ project-proto = { workspace = true }
 # `crate::conventions` on why they are two enums and what keeps them
 # from drifting.
 files-domain = { workspace = true }
+# The org's layout, for one constant and one walk: `PROJECT_PAGE` (the
+# file that makes a directory a project) and `walk_projects`. This crate
+# owns what a project page SAYS; `org-proto` owns where projects LIVE,
+# and it is a layout resolver with no dependency of its own that could
+# come back this way.
+org-proto = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_yaml = { workspace = true }

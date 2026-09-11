@@ -72,8 +72,8 @@ pub fn walk_vault(root: &Path) -> Vec<VaultEntry> {
 }
 
 /// Filter applied during the walk so we don't descend into
-/// directories we know to skip (`.git`, `.obsidian`, …) and
-/// hidden files.
+/// directories we know to skip (`.git`, `.obsidian`, …), hidden
+/// files, or a **nested shelf**.
 fn is_skip(path: &Path, root: &Path) -> bool {
     if path == root {
         return false;
@@ -87,6 +87,14 @@ fn is_skip(path: &Path, root: &Path) -> bool {
     }
     // Conventional vault-trash directory.
     if path.is_dir() && matches!(name, "trash" | "Trash") {
+        return true;
+    }
+    // A directory that declares itself a root of its own belongs to
+    // that root and not to this one — see `crate::shelf_boundary` for
+    // why a file in two roots at once is the worst outcome available.
+    // `filter_entry` does not descend into a rejected directory, so one
+    // check at the boundary prunes the whole subtree.
+    if path.is_dir() && crate::shelf_boundary::is_nested_shelf(root, path) {
         return true;
     }
     false

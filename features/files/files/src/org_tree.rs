@@ -66,6 +66,22 @@ impl FilesBackend {
         self.vault_root().to_path_buf()
     }
 
+    /// The org's Projects tier — a sibling of the vault, like the wiki.
+    ///
+    /// ADR 0004's fourth root. A project used to be a *folder in the
+    /// vault* whose bytes were a File Root somewhere else, and this
+    /// area existed to join the two halves back together. Now there is
+    /// one directory and the join is over the same path on both sides,
+    /// which is why the `Media/` door below resolves to a root at the
+    /// project's own tree rather than at one somebody linked by
+    /// frontmatter.
+    fn projects_root_dir(&self) -> PathBuf {
+        self.vault_root()
+            .parent()
+            .map(|org| org.join("projects"))
+            .unwrap_or_else(|| self.vault_root().join("projects"))
+    }
+
     /// The org's wiki directory — a sibling of the vault under the
     /// org dir (the server roots the wiki slice there too).
     fn wiki_root_dir(&self) -> PathBuf {
@@ -79,10 +95,32 @@ impl FilesBackend {
 
     fn projects_area(&self, rest: &[&str]) -> Result<TreeNode, Error> {
         let vault = self.vault_root_dir();
+        let tier = self.projects_root_dir();
         match rest.split_first() {
-            // `Projects/` — every project folder, both homes.
+            // `Projects/` — every project on the tier, plus whatever
+            // the legacy vault homes still hold.
+            //
+            // Both, because `project.location.composed` says a project
+            // may sit anywhere and no location is privileged: a
+            // deployment mid-migration has projects on the tier AND
+            // projects still in `vault/Projects`, and an explorer that
+            // showed only one of those would report half a studio.
+            // `ProjectHomes::legacy` is documented as a type that
+            // "exists to be deleted"; this is the change that makes
+            // deleting it possible, and it is not the change that does
+            // it — a person with an unmigrated vault still needs to see
+            // their work.
             None => {
                 let mut entries = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for entry in std::fs::read_dir(&tier).into_iter().flatten().flatten() {
+                    if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if seen.insert(name.clone()) {
+                            entries.push(virtual_dir(&name));
+                        }
+                    }
+                }
                 for home in ProjectHomes::legacy().iter() {
                     let Ok(dir) = confined_dir(&vault, &[home]) else {
                         continue;
@@ -90,7 +128,10 @@ impl FilesBackend {
                     for entry in std::fs::read_dir(&dir)? {
                         let entry = entry?;
                         if entry.file_type()?.is_dir() {
-                            entries.push(virtual_dir(&entry.file_name().to_string_lossy()));
+                            let name = entry.file_name().to_string_lossy().into_owned();
+                            if seen.insert(name.clone()) {
+                                entries.push(virtual_dir(&name));
+                            }
                         }
                     }
                 }
@@ -98,14 +139,22 @@ impl FilesBackend {
                 Ok(TreeNode::Listing(entries))
             }
             Some((project, rest)) => {
-                let Some(home) = ProjectHomes::legacy()
-                    .iter()
-                    .find(|h| vault.join(h).join(project).is_dir())
-                    .map(str::to_string)
-                else {
-                    return Err(Error::NotFound(format!("{project}: no such project")));
+                // The tier first, then the legacy homes. A name in both
+                // resolves to the tier — the migration copies rather
+                // than moves, so during one both exist and the tier is
+                // the live copy.
+                let project_dir = if tier.join(project).is_dir() {
+                    tier.join(project)
+                } else {
+                    let Some(home) = ProjectHomes::legacy()
+                        .iter()
+                        .find(|h| vault.join(h).join(project).is_dir())
+                        .map(str::to_string)
+                    else {
+                        return Err(Error::NotFound(format!("{project}: no such project")));
+                    };
+                    vault.join(home).join(project)
                 };
-                let project_dir = vault.join(home).join(project);
                 let media_root = self.project_media_root(project);
 
                 match rest.split_first() {
@@ -185,6 +234,17 @@ impl FilesBackend {
     fn linked_media_roots(&self, project: &str) -> Vec<uuid::Uuid> {
         let vault = self.vault_root_dir();
         let mut out = Vec::new();
+        // The tier first: a project's page is `project.md` at the root
+        // of its own directory now, so there is one candidate rather
+        // than the two spellings the vault homes needed.
+        if let Ok(text) =
+            std::fs::read_to_string(self.projects_root_dir().join(project).join("project.md"))
+        {
+            out.extend(tree::declared_media_roots(&text));
+            if !out.is_empty() {
+                return out;
+            }
+        }
         for home in ProjectHomes::legacy().iter() {
             let dir = vault.join(home).join(project);
             // `<project>/<project>.md` is the folder-form note; the flat

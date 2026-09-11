@@ -139,9 +139,12 @@ async fn an_existing_directory_becomes_a_project_in_place() {
     let alice = s.as_alice().await;
     let projects = alice.projects().await;
 
-    // A tree somebody else made, in the org's vault.
-    let vault = s.orgs.acme.org_root().join("vault");
-    let dir = vault.join("Recordings/Journey");
+    // A tree somebody else made, sitting on the Projects tier. It got
+    // there by sync, by `cp -r`, or because a DAW was pointed at the
+    // folder — the point of adoption is that nothing here was made by
+    // this system, and nothing about it is moved.
+    let tier = s.orgs.acme.org_root().join("projects");
+    let dir = tier.join("Recordings/Journey");
     std::fs::create_dir_all(dir.join("Takes")).expect("mkdir");
     std::fs::write(dir.join("Notes.md"), "# Journey\n\nrecorded in one pass\n")
         .expect("a note somebody wrote");
@@ -185,8 +188,8 @@ async fn adopting_a_tree_that_is_already_a_project_returns_it() {
     let alice = s.as_alice().await;
     let projects = alice.projects().await;
 
-    let vault = s.orgs.acme.org_root().join("vault");
-    std::fs::create_dir_all(vault.join("Recordings/Journey")).expect("mkdir");
+    let tier = s.orgs.acme.org_root().join("projects");
+    std::fs::create_dir_all(tier.join("Recordings/Journey")).expect("mkdir");
 
     let first = projects
         .adopt("Recordings/Journey".into(), "Journey".into())

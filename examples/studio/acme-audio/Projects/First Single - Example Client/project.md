@@ -1,4 +1,5 @@
 ---
+type: project
 title: First Single
 status: active
 project_type: audio-production
