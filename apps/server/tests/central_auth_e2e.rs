@@ -36,7 +36,7 @@ fn issuer() -> Option<String> {
 /// A fresh address per run: the suite must not depend on what a previous
 /// run left behind, and sign-up on an existing address is a conflict
 /// rather than a second session.
-async fn sign_up(base: &str) -> (String, String) {
+async fn sign_up(base: &str) -> SignedUp {
     let email = format!(
         "task-central-{}@example.invalid",
         uuid::Uuid::new_v4().simple()
@@ -58,9 +58,18 @@ async fn sign_up(base: &str) -> (String, String) {
         res.status()
     );
     let v: serde_json::Value = res.json().await.expect("sign-up json");
-    let user_id = v["user"]["id"].as_str().expect("user.id").to_owned();
-    let token = v["token"].as_str().expect("token").to_owned();
-    (user_id, token)
+    SignedUp {
+        user_id: v["user"]["id"].as_str().expect("user.id").to_owned(),
+        token: v["token"].as_str().expect("token").to_owned(),
+        email,
+    }
+}
+
+/// What [`sign_up`] made.
+struct SignedUp {
+    user_id: String,
+    token: String,
+    email: String,
 }
 
 /// The contract: a token the issuer minted resolves to its user.
@@ -74,13 +83,41 @@ async fn a_real_token_resolves_to_its_user() {
         eprintln!("skipping: TASK_CENTRAL_AUTH_URL not set");
         return;
     };
-    let (user_id, token) = sign_up(&base).await;
+    let who = sign_up(&base).await;
+    let (user_id, token) = (who.user_id, who.token);
 
     let auth = CentralAuth::new(&base);
     assert_eq!(
         auth.user_for(&token).await.as_deref(),
         Some(user_id.as_str()),
         "the issuer minted this token and did not recognise it back"
+    );
+}
+
+/// The issuer reports the account's ADDRESS, not just its id.
+///
+/// The whole invite model rests on this one field. An operator writes an
+/// invite against an address; the address that claims it comes from
+/// here and from nowhere else. If the auth server ever stops sending it,
+/// invites silently stop being claimable — everyone keeps being refused
+/// with rows that look correct — so it is worth its own assertion rather
+/// than riding along inside the resolve test.
+#[tokio::test]
+async fn a_real_token_reports_the_address_invites_are_keyed_to() {
+    let Some(base) = issuer() else {
+        eprintln!("skipping: TASK_CENTRAL_AUTH_URL not set");
+        return;
+    };
+    let who = sign_up(&base).await;
+
+    let auth = CentralAuth::new(&base);
+    let identity = auth.profile_for(&who.token).await.expect("resolve");
+    assert_eq!(identity.user_id, who.user_id);
+    assert_eq!(
+        identity.email.as_deref(),
+        Some(who.email.as_str()),
+        "the issuer stopped reporting an address — every pending invite \
+         is now unclaimable"
     );
 }
 
@@ -124,7 +161,8 @@ async fn a_resolved_token_is_not_asked_about_twice() {
         eprintln!("skipping: TASK_CENTRAL_AUTH_URL not set");
         return;
     };
-    let (user_id, token) = sign_up(&base).await;
+    let who = sign_up(&base).await;
+    let (user_id, token) = (who.user_id, who.token);
 
     let auth = CentralAuth::new(&base);
     assert_eq!(

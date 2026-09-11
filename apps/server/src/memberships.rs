@@ -1,9 +1,32 @@
 //! Which orgs a principal belongs to on this server, and with what role.
 //!
-//! One row per `(user_id, org_slug)`. The user id is the HOME org's user
-//! id — the home org's `auth.sqlite` is this server's identity authority
-//! (one account per server), so a principal is
-//! "a user in the home org, plus the orgs it has rows for".
+//! One row per `(user_id, org_slug)`. The user id names a principal and
+//! nothing else — on a server with no central issuer that is the HOME
+//! org's user id (the home org's `auth.sqlite` is then this server's
+//! identity authority), and on a server that delegates identity it is
+//! the ISSUER's user id. Either way a principal is "an id, plus the orgs
+//! it has rows for"; this table never asks which store minted the id.
+//!
+//! ## Invites: one account, no shadow accounts
+//!
+//! The id above is the problem an operator actually hits. Membership is
+//! keyed to a principal, but an operator granting access knows an
+//! EMAIL — and under central auth the principal is a uuid only the
+//! issuer can mint, which this server first learns when that person
+//! signs in. The original answer was to create a local account in every
+//! org so `adopt-principal` had somewhere to read an id out of, which
+//! meant one shadow account per person per org: N accounts pretending
+//! to be one.
+//!
+//! The `invites` table removes them. An operator writes
+//! `(email, org_slug, role)` with no principal at all; the first time a
+//! token resolves to that address the invite becomes a membership keyed
+//! to the real principal and is consumed. One account at the issuer,
+//! many orgs, nothing local to keep in step.
+//!
+//! `adopt-principal` remains the migration path for servers that
+//! already grew those shadow accounts — it reads them and writes the
+//! rows this table wants. Nothing new needs it.
 //!
 //! ## Why this table exists at all
 //!
@@ -71,6 +94,19 @@ impl Memberships {
         ))
         .await
         .wrap_err("create memberships table")?;
+        conn.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE IF NOT EXISTS invites (
+                 email      TEXT NOT NULL,
+                 org_slug   TEXT NOT NULL,
+                 role       TEXT,
+                 created_at INTEGER NOT NULL,
+                 PRIMARY KEY (email, org_slug)
+             )"
+            .to_owned(),
+        ))
+        .await
+        .wrap_err("create invites table")?;
         Ok(Self { conn })
     }
 
@@ -87,9 +123,7 @@ impl Memberships {
     /// so re-running the adopt command is how a role change is applied
     /// — nothing else reads the org's own role column afterwards.
     pub async fn upsert(&self, user_id: Uuid, org_slug: &str, role: Option<&str>) -> Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        let now = now_unix();
         let role_sql = role.map_or_else(|| "NULL".to_owned(), |r| format!("'{}'", esc(r)));
         self.conn
             .execute(Statement::from_string(
@@ -171,6 +205,175 @@ impl Memberships {
             .wrap_err("revoke membership")?;
         Ok(())
     }
+
+    /// Every membership row on this server, `(user_id, org_slug)` order.
+    ///
+    /// Reads the table and nothing else. The older listing walked the
+    /// home org's auth store and printed a row per LOCAL account, which
+    /// made a principal that has no local account — now the ordinary
+    /// case — invisible to the operator inspecting their own server.
+    pub async fn all(&self) -> Result<Vec<(Uuid, Membership)>> {
+        let rows = self
+            .conn
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT user_id, org_slug, role FROM memberships
+                 ORDER BY user_id, org_slug"
+                    .to_owned(),
+            ))
+            .await
+            .wrap_err("list all memberships")?;
+        rows.into_iter()
+            .map(|r| {
+                let raw: String = r.try_get("", "user_id")?;
+                let user_id = raw
+                    .parse::<Uuid>()
+                    .wrap_err_with(|| format!("membership row has a non-uuid user_id `{raw}`"))?;
+                Ok((
+                    user_id,
+                    Membership {
+                        org_slug: r.try_get("", "org_slug")?,
+                        role: r.try_get("", "role")?,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Promise an org to an address nobody has resolved yet.
+    ///
+    /// The whole point of the invites table: an operator naming a person
+    /// knows their EMAIL, and the fence is keyed to a PRINCIPAL — a uuid
+    /// only the issuer can mint and only that person's first sign-in
+    /// reveals to this server. Requiring the operator to carry the uuid
+    /// across by hand is what forced a local shadow account per org
+    /// (something for `adopt-principal` to read an id out of). An invite
+    /// closes that gap without the shadow: write the address now, and
+    /// the principal binds itself on arrival.
+    ///
+    /// Idempotent on `(email, org_slug)`, so re-inviting changes the
+    /// pending role rather than erroring.
+    pub async fn invite(&self, email: &str, org_slug: &str, role: Option<&str>) -> Result<()> {
+        let email = normalize_email(email);
+        let now = now_unix();
+        let role_sql = role.map_or_else(|| "NULL".to_owned(), |r| format!("'{}'", esc(r)));
+        self.conn
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "INSERT INTO invites (email, org_slug, role, created_at)
+                     VALUES ('{}', '{}', {role_sql}, {now})
+                     ON CONFLICT(email, org_slug) DO UPDATE SET role = excluded.role",
+                    esc(&email),
+                    esc(org_slug)
+                ),
+            ))
+            .await
+            .wrap_err_with(|| format!("invite `{email}` to `{org_slug}`"))?;
+        Ok(())
+    }
+
+    /// Withdraw a pending invite. Does nothing to a membership already
+    /// claimed from it — revoking that is [`Self::revoke`].
+    pub async fn withdraw(&self, email: &str, org_slug: &str) -> Result<()> {
+        self.conn
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "DELETE FROM invites WHERE email = '{}' AND org_slug = '{}'",
+                    esc(&normalize_email(email)),
+                    esc(org_slug)
+                ),
+            ))
+            .await
+            .wrap_err("withdraw invite")?;
+        Ok(())
+    }
+
+    /// Every invite still waiting to be claimed.
+    pub async fn pending(&self) -> Result<Vec<(String, Membership)>> {
+        let rows = self
+            .conn
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT email, org_slug, role FROM invites ORDER BY email, org_slug".to_owned(),
+            ))
+            .await
+            .wrap_err("list invites")?;
+        rows.into_iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("", "email")?,
+                    Membership {
+                        org_slug: r.try_get("", "org_slug")?,
+                        role: r.try_get("", "role")?,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Turn every invite held for `email` into a membership for
+    /// `user_id`, and return the orgs that changed hands.
+    ///
+    /// This is the binding moment, and the reason invites are safe: the
+    /// address comes from the ISSUER's answer about a token it just
+    /// validated, never from anything the client said. A caller that
+    /// passed a client-supplied address here would have built an
+    /// open door — see the call site in
+    /// [`crate::central_auth::CentralFallbackResolver`].
+    ///
+    /// An invite for an org where the principal is already a member is
+    /// consumed without changing the existing role: the invite is an
+    /// offer, and a role already held on the server is the newer fact.
+    ///
+    /// Idempotent, and empty is the overwhelmingly common answer — every
+    /// sign-in by an established member finds nothing here.
+    pub async fn claim_for_email(&self, email: &str, user_id: Uuid) -> Result<Vec<String>> {
+        let email = normalize_email(email);
+        let rows = self
+            .conn
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT org_slug, role FROM invites WHERE email = '{}' ORDER BY org_slug",
+                    esc(&email)
+                ),
+            ))
+            .await
+            .wrap_err("read invites to claim")?;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut claimed = Vec::new();
+        for r in rows {
+            let org_slug: String = r.try_get("", "org_slug")?;
+            let role: Option<String> = r.try_get("", "role")?;
+            if self.role_for(user_id, &org_slug).await?.is_none() {
+                self.upsert(user_id, &org_slug, role.as_deref()).await?;
+            }
+            // Consume either way — a claimed invite that stays pending
+            // would re-apply its role on every sign-in and quietly undo
+            // a later role change.
+            self.withdraw(&email, &org_slug).await?;
+            claimed.push(org_slug);
+        }
+        Ok(claimed)
+    }
+}
+
+/// Addresses are compared case-insensitively, because an invite written
+/// by an operator and an address reported by the issuer are typed by
+/// different people and `Cody@` must claim an invite for `cody@`.
+fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
 }
 
 /// Single-quote escaping for the string literals above. Slugs and roles
@@ -267,5 +470,117 @@ mod tests {
             m.role_for(b, "cbu").await.unwrap().unwrap().role,
             Some("member".into())
         );
+    }
+
+    /// The whole point: one account, several orgs, and nothing created
+    /// locally in any of them beforehand.
+    #[tokio::test]
+    async fn an_invite_becomes_a_membership_for_whoever_claims_it() {
+        let (_d, m) = store().await;
+        m.invite("cody@example.app", "cbu", Some("admin"))
+            .await
+            .unwrap();
+        m.invite("cody@example.app", "days-to-praise", None)
+            .await
+            .unwrap();
+
+        // Before the claim the invite grants nothing at all.
+        let cody = Uuid::new_v4();
+        assert!(m.role_for(cody, "cbu").await.unwrap().is_none());
+
+        let claimed = m.claim_for_email("cody@example.app", cody).await.unwrap();
+        assert_eq!(claimed, vec!["cbu", "days-to-praise"]);
+        assert_eq!(
+            m.role_for(cody, "cbu").await.unwrap().unwrap().role,
+            Some("admin".into())
+        );
+        assert!(m.role_for(cody, "days-to-praise").await.unwrap().is_some());
+        assert!(
+            m.pending().await.unwrap().is_empty(),
+            "a claimed invite is consumed"
+        );
+    }
+
+    /// An invite is for one address, and claiming is how the fence gets
+    /// its key — so a different principal arriving at a different
+    /// address must get nothing. This is the test that would fail if
+    /// `claim_for_email` ever stopped filtering by email.
+    #[tokio::test]
+    async fn a_different_address_claims_nothing() {
+        let (_d, m) = store().await;
+        m.invite("cody@example.app", "cbu", Some("admin"))
+            .await
+            .unwrap();
+
+        let someone_else = Uuid::new_v4();
+        let claimed = m
+            .claim_for_email("mallory@example.app", someone_else)
+            .await
+            .unwrap();
+        assert!(claimed.is_empty());
+        assert!(m.role_for(someone_else, "cbu").await.unwrap().is_none());
+        assert_eq!(m.pending().await.unwrap().len(), 1, "still waiting");
+    }
+
+    /// Operators and issuers disagree about capitalisation constantly.
+    #[tokio::test]
+    async fn addresses_match_regardless_of_case() {
+        let (_d, m) = store().await;
+        m.invite("Cody@Example.app", "cbu", None).await.unwrap();
+        let cody = Uuid::new_v4();
+        assert_eq!(
+            m.claim_for_email("cody@example.APP", cody).await.unwrap(),
+            vec!["cbu"]
+        );
+    }
+
+    /// A second sign-in must not re-apply the invited role over a role
+    /// changed since — the invite was an offer, the current row is the
+    /// newer fact.
+    #[tokio::test]
+    async fn claiming_never_overwrites_a_role_held_now() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.upsert(cody, "cbu", Some("admin")).await.unwrap();
+        m.invite("cody@example.app", "cbu", Some("reader"))
+            .await
+            .unwrap();
+
+        m.claim_for_email("cody@example.app", cody).await.unwrap();
+        assert_eq!(
+            m.role_for(cody, "cbu").await.unwrap().unwrap().role,
+            Some("admin".into()),
+            "the invite is consumed, the standing role survives"
+        );
+        assert!(m.pending().await.unwrap().is_empty());
+    }
+
+    /// Withdrawing is for the promise, not for access already granted.
+    #[tokio::test]
+    async fn withdrawing_an_invite_leaves_a_claimed_membership_alone() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.invite("cody@example.app", "cbu", None).await.unwrap();
+        m.claim_for_email("cody@example.app", cody).await.unwrap();
+
+        m.withdraw("cody@example.app", "cbu").await.unwrap();
+        assert!(
+            m.role_for(cody, "cbu").await.unwrap().is_some(),
+            "revoking a granted membership is `revoke`, not `withdraw`"
+        );
+    }
+
+    /// `all()` must see a principal that owns no local account
+    /// anywhere — that is now the ordinary case, and the listing it
+    /// replaced could not.
+    #[tokio::test]
+    async fn listing_reports_every_principal_not_just_local_accounts() {
+        let (_d, m) = store().await;
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        m.upsert(a, "cbu", Some("admin")).await.unwrap();
+        m.upsert(b, "cbu", None).await.unwrap();
+        m.upsert(b, "codywright", None).await.unwrap();
+        assert_eq!(m.all().await.unwrap().len(), 3);
     }
 }

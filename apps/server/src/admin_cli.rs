@@ -42,6 +42,10 @@ pub async fn dispatch() -> eyre::Result<bool> {
         Some("create-user") => create_user(&args[2..]).await.map(|()| true),
         Some("merge-principals") => merge_principals(&args[2..]).await.map(|()| true),
         Some("adopt-principal") => adopt_principal(&args[2..]).await.map(|()| true),
+        Some("grant") => grant(&args[2..]).await.map(|()| true),
+        Some("revoke") => revoke(&args[2..]).await.map(|()| true),
+        Some("invite") => invite(&args[2..]).await.map(|()| true),
+        Some("invites") => show_invites(&args[2..]).await.map(|()| true),
         Some("memberships") => show_memberships(&args[2..]).await.map(|()| true),
         // Dev-only: compiled OUT of release builds entirely, so the
         // deployed (release) server can never seed a known-password
@@ -68,6 +72,15 @@ pub async fn dispatch() -> eyre::Result<bool> {
                  task-server admin set-role --org <slug> --email <address> [--role admin|--clear]\n  \
                  task-server admin create-user --org <slug> --email <address> \\\n    \
                  [--name <display>] [--username <handle>] (reads the password from STDIN)\n  \
+                 task-server admin invite --org <slug> --email <address> [--role <role>]\n    \
+                 (the usual way to add someone: no local account, no uuid — the invite\n     \
+                 becomes a membership the first time that address signs in)\n  \
+                 task-server admin invite --org <slug> --email <address> --withdraw\n  \
+                 task-server admin invites [--email <address>]\n  \
+                 task-server admin grant --org <slug> --principal <uuid> [--role <role>]\n    \
+                 (direct, when the issuer's user id is already known)\n  \
+                 task-server admin revoke --org <slug> --principal <uuid>\n  \
+                 task-server admin memberships [--principal <uuid>]\n  \
                  task-server admin seed [--orgs <a,b,c>] [--email <address>] \\\n    \
                  [--password <pw>] [--no-divergence] (stands up a local multi-org dev vault)\n  \
                  task-server admin demo --org <acme-audio|vnt-video>\n    \
@@ -735,8 +748,16 @@ fn home_org(
         })
 }
 
-/// `admin adopt-principal --email <addr> [--principal <uuid>]` — S1 of
-/// one-account-per-server.
+/// `admin adopt-principal --email <addr> [--principal <uuid>]` — the
+/// MIGRATION verb, for a server that already grew a local account per
+/// person per org.
+///
+/// It is no longer how anybody gets access. `admin invite` is: it needs
+/// no local account and no uuid, because the binding happens when the
+/// person signs in. Reach for this one only to carry existing local
+/// accounts across to membership rows — which is exactly what it does,
+/// and why it still refuses to invent membership for an org that has no
+/// account for the address.
 ///
 /// `--principal` names the id the rows are keyed to, and is **required**
 /// when this server delegates identity to a central issuer: the id a
@@ -870,6 +891,165 @@ async fn adopt_principal(args: &[String]) -> eyre::Result<()> {
 /// The counterpart to `adopt-principal`: what the server will actually
 /// believe about who belongs where, read from the rows rather than
 /// inferred from six auth stores.
+/// Open the memberships store and report which org slugs exist.
+///
+/// The store lives on the home org because it is server-wide state, not
+/// any one org's — but nothing in it is home-org-specific, and in
+/// particular none of these verbs open an org's `auth.sqlite`. That is
+/// the point: a membership no longer needs a local account to hang off.
+async fn open_memberships() -> eyre::Result<(crate::memberships::Memberships, Vec<String>)> {
+    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
+    let orgs = data_root
+        .scan_orgs()
+        .map_err(|e| eyre::eyre!("scan orgs: {e}"))?;
+    let home = home_org(&orgs)?;
+    let store = crate::memberships::Memberships::open(&home.memberships_db()).await?;
+    let slugs = orgs.iter().map(|(r, _)| r.slug().to_owned()).collect();
+    Ok((store, slugs))
+}
+
+/// Refuse a slug this server does not host.
+///
+/// A typo would otherwise write a perfectly valid row for an org that
+/// does not exist, and the only symptom would be the person still being
+/// refused — with a row sitting right there that looks correct.
+fn known_org(slug: &str, slugs: &[String]) -> eyre::Result<()> {
+    if slugs.iter().any(|s| s == slug) {
+        return Ok(());
+    }
+    bail!(
+        "no org `{slug}` on this server. Known: {}",
+        slugs.join(", ")
+    )
+}
+
+/// `admin invite --org <slug> --email <addr> [--role <role>]` — the
+/// ordinary way to give somebody an org.
+///
+/// No local account, no principal uuid, nothing to look up first: the
+/// address is what an operator knows, and the binding to a real
+/// principal happens on that person's first sign-in through the issuer.
+/// `--withdraw` removes a pending invite (a membership already claimed
+/// from one is `admin revoke`).
+async fn invite(args: &[String]) -> eyre::Result<()> {
+    let (Some(slug), Some(email)) = (flag(args, "--org"), flag(args, "--email")) else {
+        bail!("--org and --email are both required");
+    };
+    let (store, slugs) = open_memberships().await?;
+    known_org(&slug, &slugs)?;
+
+    if has(args, "--withdraw") {
+        store.withdraw(&email, &slug).await?;
+        println!("withdrew the invite for {email} to `{slug}`");
+        return Ok(());
+    }
+
+    let role = flag(args, "--role");
+    store.invite(&email, &slug, role.as_deref()).await?;
+    println!(
+        "invited {email} to `{slug}` as {}",
+        role.as_deref().unwrap_or("(member)")
+    );
+    println!();
+    println!(
+        "This becomes a membership the first time {email} signs in through the issuer. \
+         Until then it is a promise and grants nothing."
+    );
+    if crate::central_auth::configured().is_none() {
+        println!();
+        println!(
+            "note: {} is not set on this server, so no token will ever resolve to an \
+             address and this invite can never be claimed. Use `admin grant --principal` \
+             instead, or configure an issuer.",
+            crate::central_auth::CENTRAL_AUTH_URL
+        );
+    }
+    Ok(())
+}
+
+/// `admin invites [--email <addr>]` — what is still waiting to be
+/// claimed.
+async fn show_invites(args: &[String]) -> eyre::Result<()> {
+    let (store, _) = open_memberships().await?;
+    let filter = flag(args, "--email").map(|e| e.trim().to_lowercase());
+    let rows: Vec<_> = store
+        .pending()
+        .await?
+        .into_iter()
+        .filter(|(email, _)| filter.as_ref().is_none_or(|f| f == email))
+        .collect();
+
+    if rows.is_empty() {
+        println!("(no pending invites)");
+        return Ok(());
+    }
+    for (email, m) in rows {
+        println!(
+            "{email:<40} {:<20} role = {}",
+            m.org_slug,
+            m.role.as_deref().unwrap_or("(member)")
+        );
+    }
+    Ok(())
+}
+
+/// `admin grant --org <slug> --principal <uuid> [--role <role>]` — write
+/// the membership row directly.
+///
+/// The primitive under [`invite`], for when the issuer's user id is
+/// already in hand (it is on the person's own `.well-known` answer, and
+/// in the issuer's admin console). Prefer `invite` when it is not:
+/// carrying a uuid by hand is exactly the step that used to demand a
+/// local shadow account.
+async fn grant(args: &[String]) -> eyre::Result<()> {
+    let (Some(slug), Some(raw)) = (flag(args, "--org"), flag(args, "--principal")) else {
+        bail!("--org and --principal are both required");
+    };
+    let principal = raw
+        .trim()
+        .parse::<uuid::Uuid>()
+        .map_err(|e| eyre::eyre!("--principal must be a uuid: {e}"))?;
+    let (store, slugs) = open_memberships().await?;
+    known_org(&slug, &slugs)?;
+
+    let role = flag(args, "--role");
+    store.upsert(principal, &slug, role.as_deref()).await?;
+    println!(
+        "{principal} is now a member of `{slug}` as {}",
+        role.as_deref().unwrap_or("(member)")
+    );
+    Ok(())
+}
+
+/// `admin revoke --org <slug> --principal <uuid>` — remove the row.
+async fn revoke(args: &[String]) -> eyre::Result<()> {
+    let (Some(slug), Some(raw)) = (flag(args, "--org"), flag(args, "--principal")) else {
+        bail!("--org and --principal are both required");
+    };
+    let principal = raw
+        .trim()
+        .parse::<uuid::Uuid>()
+        .map_err(|e| eyre::eyre!("--principal must be a uuid: {e}"))?;
+    let (store, _) = open_memberships().await?;
+    store.revoke(principal, &slug).await?;
+    println!("{principal} is no longer a member of `{slug}`");
+    Ok(())
+}
+
+/// `admin memberships [--principal <uuid>] [--email <addr>]` — who
+/// belongs where.
+///
+/// Reads the memberships table itself. It used to enumerate the home
+/// org's local accounts and print a row per account, which answered a
+/// different question and answered it wrongly once local accounts
+/// stopped being how people get in: a principal invited by address and
+/// claimed on sign-in owns no local account anywhere, and so did not
+/// appear at all.
+///
+/// `--email` is still accepted and is still best-effort, because the
+/// table holds principals rather than addresses: it resolves through
+/// the home org's auth store when there is an account there, and
+/// otherwise says so rather than printing nothing.
 async fn show_memberships(args: &[String]) -> eyre::Result<()> {
     let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
     let orgs = data_root
@@ -879,49 +1059,70 @@ async fn show_memberships(args: &[String]) -> eyre::Result<()> {
     let db = home.memberships_db();
     if !db.exists() {
         println!(
-            "no memberships store yet at {} — run `admin adopt-principal --email <addr>`",
+            "no memberships store yet at {} — run `admin invite --org <slug> --email <addr>`",
             db.display()
         );
         return Ok(());
     }
-
     let store = crate::memberships::Memberships::open_ro(&db).await?;
-    let home_auth = open_org_auth(home.slug()).await?;
 
-    let users = match flag(args, "--email") {
-        Some(email) => {
-            let u = home_auth
+    // Which principals to print.
+    let only: Option<uuid::Uuid> = match (flag(args, "--principal"), flag(args, "--email")) {
+        (Some(raw), _) => Some(
+            raw.trim()
+                .parse::<uuid::Uuid>()
+                .map_err(|e| eyre::eyre!("--principal must be a uuid: {e}"))?,
+        ),
+        (None, Some(email)) => {
+            let home_auth = open_org_auth(home.slug()).await?;
+            let found = home_auth
                 .auth
                 .find_user_by_email(&email)
                 .await
-                .map_err(|e| eyre::eyre!("look up `{email}`: {e:?}"))?
-                .ok_or_else(|| eyre::eyre!("no account with email `{email}` in the home org"))?;
-            vec![u]
+                .map_err(|e| eyre::eyre!("look up `{email}`: {e:?}"))?;
+            match found {
+                Some(u) => Some(u.id),
+                None => bail!(
+                    "no LOCAL account with email `{email}` in the home org `{}`, so this \
+                     address cannot be resolved to a principal here. That is ordinary for \
+                     someone who signs in through the issuer — find their principal in the \
+                     issuer's console and pass `--principal <uuid>`, or list everyone with \
+                     no filter.",
+                    home.slug()
+                ),
+            }
         }
-        None => home_auth
-            .auth
-            .list_users_local_trusted()
-            .await
-            .map_err(|e| eyre::eyre!("list users: {e:?}"))?,
+        (None, None) => None,
     };
 
-    for u in users {
-        let rows = store.for_user(u.id).await?;
-        println!("{}  {}", u.id, u.email.as_deref().unwrap_or("(no email)"));
-        if rows.is_empty() {
-            println!("  (no memberships — not a member of any org on this server)");
+    let rows = store.all().await?;
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|(id, _)| only.is_none_or(|want| want == *id))
+        .collect();
+
+    if rows.is_empty() {
+        match only {
+            Some(id) => println!("{id}\n  (no memberships — not a member of any org here)"),
+            None => println!("(no memberships on this server)"),
         }
-        for r in rows {
-            println!(
-                "  {:<20} role = {}",
-                r.org_slug,
-                r.role.as_deref().unwrap_or("(member)")
-            );
+        return Ok(());
+    }
+
+    let mut current: Option<uuid::Uuid> = None;
+    for (id, m) in rows {
+        if current != Some(id) {
+            println!("{id}");
+            current = Some(id);
         }
+        println!(
+            "  {:<20} role = {}",
+            m.org_slug,
+            m.role.as_deref().unwrap_or("(member)")
+        );
     }
     Ok(())
 }
-
 /// `admin seed` — stand up (or top up) a LOCAL multi-org dev vault with
 /// demo data so a fresh `task-server` has something to sign into and
 /// exercise: an owner account with known credentials in every org, a
@@ -2110,10 +2311,13 @@ fn principal_choice(
                 .map_err(|e| eyre::eyre!("--principal must be a uuid: {e}"))?,
         )),
         (None, Some(issuer)) => bail!(
-            "this server delegates identity to {issuer} — pass the ISSUER's user id \
-             explicitly:\n\n    admin adopt-principal --email {email} --principal <uuid>\n\n\
-             The home org's id is not what a token from that issuer resolves to, so rows \
-             written from it would be invisible to every request."
+            "this server delegates identity to {issuer}, so the home org's id is not what a \
+             token resolves to — rows written from it would be invisible to every \
+             request.\n\nUnless you are migrating existing local accounts, you want:\n\n    \
+             admin invite --org <slug> --email {email}\n\nwhich needs no uuid at all — the \
+             membership is written when {email} first signs in. To migrate, pass the \
+             ISSUER's user id explicitly:\n\n    admin adopt-principal --email {email} \
+             --principal <uuid>"
         ),
         (None, None) => Ok(PrincipalChoice::FromHomeOrg),
     }
