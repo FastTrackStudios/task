@@ -669,9 +669,10 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
                 wide::set("auth.central", "no_token");
                 return Principal::Anonymous;
             };
-            let Some(user_id) = self.central.user_for(token).await else {
+            let Some(profile) = self.central.profile_for(token).await else {
                 return Principal::Anonymous;
             };
+            let user_id = profile.user_id;
 
             // Same fence as the home fallback: knowing who you are is not
             // knowing you belong here.
@@ -679,6 +680,35 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
                 wide::set("auth.central", "unparsable_user_id");
                 return Principal::Anonymous;
             };
+
+            // A principal with no row here may still have been invited
+            // by address. Claiming is attempted only on that miss, so an
+            // established member never pays for it — and the address is
+            // the ISSUER's answer about a token it just validated, never
+            // anything the client said, which is the whole security
+            // argument for binding a membership to it.
+            if matches!(self.memberships.role_for(uuid, &self.slug).await, Ok(None))
+                && let Some(email) = profile.email.as_deref()
+            {
+                match self.memberships.claim_for_email(email, uuid).await {
+                    Ok(claimed) if !claimed.is_empty() => {
+                        wide::set("auth.invites_claimed", claimed.len() as i64);
+                        tracing::info!(
+                            principal = %uuid,
+                            orgs = %claimed.join(","),
+                            "central auth: claimed pending invites on first sign-in"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        // Not fatal: the fence below still decides. A
+                        // failed claim denies, it never admits.
+                        wide::set("auth.central", "claim_failed");
+                        tracing::warn!(error = %e, "central auth: claiming invites failed");
+                    }
+                }
+            }
+
             match self.memberships.role_for(uuid, &self.slug).await {
                 Ok(Some(m)) => {
                     wide::set("auth.central", "member");
@@ -693,7 +723,10 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
                     // this is the message an operator needs when somebody
                     // says "I signed in and it says I'm not signed in":
                     // they are, to the issuer, and this server has no row
-                    // for them. `admin adopt-principal` writes it.
+                    // for them and no invite waiting at their address.
+                    // `admin invite --org <slug> --email <addr>` writes
+                    // one; `admin grant --principal` if the uuid is
+                    // already known.
                     wide::set("auth.central", "not_a_member");
                     tracing::warn!(
                         org.slug = self.slug,
@@ -712,6 +745,148 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
                 }
             }
         })
+    }
+}
+
+/// The claim path, end to end through the resolver.
+///
+/// The store's own tests prove `claim_for_email` moves rows. These prove
+/// the wiring — that the address the claim uses is the ISSUER's, that an
+/// invited principal is admitted on its very first request, and that an
+/// uninvited one still is not. The fence is the thing most expensive to
+/// get wrong, so it is tested where it is actually enforced.
+#[cfg(test)]
+mod claim_tests {
+    use super::{CentralAuth, CentralFallbackResolver};
+    use architect_permissions::{BoxIdentityFuture, IdentityResolver, Principal};
+    use std::sync::Arc;
+
+    /// A local resolver that recognises nobody, so every request falls
+    /// through to the issuer — the case this module exists for.
+    struct NobodyLocal;
+    impl IdentityResolver for NobodyLocal {
+        fn resolve<'a>(&'a self, _: Option<&'a str>) -> BoxIdentityFuture<'a> {
+            Box::pin(async { Principal::Anonymous })
+        }
+    }
+
+    async fn fixture() -> (tempfile::TempDir, Arc<crate::memberships::Memberships>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::memberships::Memberships::open(&dir.path().join("m.sqlite"))
+            .await
+            .unwrap();
+        (dir, Arc::new(store))
+    }
+
+    fn resolver(
+        central: Arc<CentralAuth>,
+        memberships: Arc<crate::memberships::Memberships>,
+        slug: &str,
+    ) -> CentralFallbackResolver<NobodyLocal> {
+        CentralFallbackResolver::new(NobodyLocal, central, memberships, slug)
+    }
+
+    /// One issuer holding one account, cached so nothing reaches out.
+    fn issuer_holding(principal: uuid::Uuid, email: Option<&str>) -> Arc<CentralAuth> {
+        let central = Arc::new(CentralAuth::new("https://auth.example.app"));
+        central.remember_profile_for_test("tok", &principal.to_string(), email);
+        central
+    }
+
+    #[tokio::test]
+    async fn an_invited_address_is_admitted_on_its_first_request() {
+        let (_d, memberships) = fixture().await;
+        memberships
+            .invite("cody@example.app", "cbu", Some("admin"))
+            .await
+            .unwrap();
+
+        let principal = uuid::Uuid::new_v4();
+        let central = issuer_holding(principal, Some("cody@example.app"));
+
+        let who = resolver(central, Arc::clone(&memberships), "cbu")
+            .resolve(Some("tok"))
+            .await;
+        assert!(
+            matches!(&who, Principal::User { user_id } if user_id == &principal.to_string()),
+            "an invite must admit on the first request, not the second: {who:?}"
+        );
+        assert_eq!(
+            memberships
+                .role_for(principal, "cbu")
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Some("admin".into()),
+            "and it must carry the invited role"
+        );
+    }
+
+    /// The fence, unchanged. A real account at the issuer with no invite
+    /// and no row reaches nothing — this is the property that keeps one
+    /// FastTrackStudio account from being a key to every org.
+    #[tokio::test]
+    async fn a_real_account_with_no_invite_is_still_refused() {
+        let (_d, memberships) = fixture().await;
+        memberships
+            .invite("someone-else@example.app", "cbu", None)
+            .await
+            .unwrap();
+
+        let central = issuer_holding(uuid::Uuid::new_v4(), Some("mallory@example.app"));
+        let who = resolver(central, memberships, "cbu")
+            .resolve(Some("tok"))
+            .await;
+        assert!(matches!(who, Principal::Anonymous), "got {who:?}");
+    }
+
+    /// An invite to one org is not an invite to the server.
+    #[tokio::test]
+    async fn an_invite_admits_only_the_org_it_names() {
+        let (_d, memberships) = fixture().await;
+        memberships
+            .invite("cody@example.app", "cbu", None)
+            .await
+            .unwrap();
+
+        let central = issuer_holding(uuid::Uuid::new_v4(), Some("cody@example.app"));
+
+        // The `tombrooksmusic` lane claims the invite (it is keyed by
+        // address, not by org) and must still refuse, because the row it
+        // wrote is for `cbu`.
+        let who = resolver(
+            Arc::clone(&central),
+            Arc::clone(&memberships),
+            "tombrooksmusic",
+        )
+        .resolve(Some("tok"))
+        .await;
+        assert!(matches!(who, Principal::Anonymous), "got {who:?}");
+
+        // And the org it does name still works afterwards.
+        let who = resolver(central, memberships, "cbu")
+            .resolve(Some("tok"))
+            .await;
+        assert!(matches!(who, Principal::User { .. }), "got {who:?}");
+    }
+
+    /// A profile the issuer reported no address for authenticates and
+    /// claims nothing — it must not match an invite by accident.
+    #[tokio::test]
+    async fn an_identity_with_no_address_claims_nothing() {
+        let (_d, memberships) = fixture().await;
+        memberships
+            .invite("cody@example.app", "cbu", None)
+            .await
+            .unwrap();
+
+        let central = issuer_holding(uuid::Uuid::new_v4(), None);
+        let who = resolver(central, Arc::clone(&memberships), "cbu")
+            .resolve(Some("tok"))
+            .await;
+        assert!(matches!(who, Principal::Anonymous), "got {who:?}");
+        assert_eq!(memberships.pending().await.unwrap().len(), 1);
     }
 }
 
