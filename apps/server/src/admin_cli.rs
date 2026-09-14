@@ -47,6 +47,7 @@ pub async fn dispatch() -> eyre::Result<bool> {
         Some("invite") => invite(&args[2..]).await.map(|()| true),
         Some("invites") => show_invites(&args[2..]).await.map(|()| true),
         Some("memberships") => show_memberships(&args[2..]).await.map(|()| true),
+        Some("rename-org") => rename_org(&args[2..]).await.map(|()| true),
         // Dev-only: compiled OUT of release builds entirely, so the
         // deployed (release) server can never seed a known-password
         // admin (PR #295 review). In a release binary `seed` is just an
@@ -81,6 +82,9 @@ pub async fn dispatch() -> eyre::Result<bool> {
                  (direct, when the issuer's user id is already known)\n  \
                  task-server admin revoke --org <slug> --principal <uuid>\n  \
                  task-server admin memberships [--principal <uuid>]\n  \
+                 task-server admin rename-org --from <slug> --to <slug> [--display-name <name>]\n    \
+                 (moves the directory, rewrites the manifest and every File Root path,\n     \
+                 carries membership rows across; restart the server afterwards)\n  \
                  task-server admin seed [--orgs <a,b,c>] [--email <address>] \\\n    \
                  [--password <pw>] [--no-divergence] (stands up a local multi-org dev vault)\n  \
                  task-server admin demo --org <acme-audio|vnt-video>\n    \
@@ -1033,6 +1037,139 @@ async fn revoke(args: &[String]) -> eyre::Result<()> {
     let (store, _) = open_memberships().await?;
     store.revoke(principal, &slug).await?;
     println!("{principal} is no longer a member of `{slug}`");
+    Ok(())
+}
+
+/// `admin rename-org --from <slug> --to <slug> [--display-name <name>]`
+/// — give an organization a new slug, everywhere the old one lives.
+///
+/// The slug is not a label. It is the org's directory name (the
+/// manifest refuses to load if the two disagree), the prefix of every
+/// File Root path the org owns, the key of every membership row, and —
+/// since memberships are mirrored from the identity server — the join
+/// between this server and the issuer. Rename any one of those and not
+/// the others and the org is either unloadable or has no members.
+///
+/// So this does all four in the order that fails safest:
+///
+/// 1. the directory, with `rename(2)` — atomic, and a live server's
+///    open SQLite handles follow the inode, so nothing it holds breaks;
+/// 2. the manifest, so the directory loads under its new name;
+/// 3. every File Root path under the old directory;
+/// 4. the membership and invite rows.
+///
+/// A failure after step 1 leaves the directory renamed and the manifest
+/// still naming the old slug, which the loader rejects loudly at boot —
+/// a visible half-state, never a silent one. The home org is refused:
+/// it is the identity authority, its slug is baked into the memberships
+/// store's location, and there is no version of renaming it that is a
+/// small change.
+///
+/// What this cannot do: the media grant (`TASK_STORAGE_GRANTS`) and the
+/// `/mnt/storage` tree are the deployment's, and the issuer's slug is
+/// the issuer's. Both are named in the output so nobody has to remember
+/// them. Restart the server afterwards — it read the old slug at boot.
+pub async fn rename_org(args: &[String]) -> eyre::Result<()> {
+    let (Some(from), Some(to)) = (flag(args, "--from"), flag(args, "--to")) else {
+        bail!("--from and --to are both required");
+    };
+    let display_name = flag(args, "--display-name");
+    if from == to {
+        bail!("--from and --to are the same slug; nothing to do");
+    }
+    if !to
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        || to.is_empty()
+    {
+        bail!("`{to}` is not a slug: lowercase ASCII letters, digits and `-` only");
+    }
+
+    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
+    let orgs = data_root
+        .scan_orgs()
+        .map_err(|e| eyre::eyre!("scan orgs: {e}"))?;
+    let home = home_org(&orgs)?;
+    let Some((old_root, manifest)) = orgs.iter().find(|(r, _)| r.slug() == from) else {
+        bail!(
+            "no org `{from}` on this server. Known: {}",
+            orgs.iter()
+                .map(|(r, _)| r.slug())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    };
+    if manifest.is_home {
+        bail!(
+            "`{from}` is the home org — this server's identity authority — and is not \
+             renamed by this command. Its slug is baked into where the memberships store \
+             lives; there is no version of renaming it that is a small change."
+        );
+    }
+    let new_root = data_root.org(&to);
+    if new_root.path().exists() {
+        bail!(
+            "`{to}` already exists at {} — refusing to merge two orgs by accident",
+            new_root.path().display()
+        );
+    }
+
+    // 1. The directory. Atomic on one filesystem, and the reason this
+    //    is safe beside a live server: its open SQLite handles are on
+    //    inodes, not names, and follow the move.
+    std::fs::rename(old_root.path(), new_root.path()).wrap_err_with(|| {
+        format!(
+            "rename {} -> {}",
+            old_root.path().display(),
+            new_root.path().display()
+        )
+    })?;
+
+    // 2. The manifest — the loader refuses a slug that disagrees with
+    //    the directory, so from here until this write lands the org is
+    //    loudly unloadable rather than quietly wrong.
+    let mut renamed = manifest.clone();
+    renamed.slug = to.clone();
+    if let Some(name) = &display_name {
+        renamed.display_name = name.clone();
+    }
+    renamed.updated_at = chrono::Utc::now();
+    renamed
+        .write_to_dir(new_root.path())
+        .map_err(|e| eyre::eyre!("write manifest for `{to}`: {e}"))?;
+
+    // 3. Every File Root the org owns records an absolute path under the
+    //    old directory.
+    let roots = files::registry::Registry::open(&new_root.path().join("files"))
+        .map_err(|e| eyre::eyre!("open File Roots for `{to}`: {e}"))?;
+    let moved_roots = roots
+        .rebase_paths(old_root.path(), new_root.path())
+        .map_err(|e| eyre::eyre!("rebase File Root paths: {e}"))?;
+
+    // 4. Membership and invite rows, in one transaction.
+    let store = crate::memberships::Memberships::open(&home.memberships_db()).await?;
+    let (members, invites) = store.rename_org(&from, &to).await?;
+
+    println!("renamed `{from}` -> `{to}`");
+    println!("  directory:   {}", new_root.path().display());
+    println!(
+        "  manifest:    slug = {to}{}",
+        display_name
+            .as_deref()
+            .map_or_else(String::new, |n| format!(", display_name = {n:?}"))
+    );
+    println!("  file roots:  {moved_roots} path(s) rebased");
+    println!("  memberships: {members} row(s), {invites} invite(s) carried across");
+    println!();
+    println!("Still yours to do — this command cannot reach them:");
+    println!(
+        "  - restart the server; it read `{from}` at boot and will not see `{to}` until it does"
+    );
+    println!("  - the media tree and its grant: `/mnt/storage/Task/{from}` and the");
+    println!("    `TASK_STORAGE_GRANTS` entry naming `{from}` live in the deployment, not here");
+    println!("  - the identity server's slug for this org, if memberships are mirrored from one:");
+    println!("    they are joined by slug, so until both sides say `{to}` the mirror writes rows");
+    println!("    under a name this server no longer has");
     Ok(())
 }
 

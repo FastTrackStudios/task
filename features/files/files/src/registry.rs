@@ -90,6 +90,38 @@ impl Registry {
             .cloned()
     }
 
+    /// Move every root whose live tree sits under `from` to the same
+    /// place under `to`, and say how many moved.
+    ///
+    /// Roots record absolute paths, so a directory rename above them —
+    /// an org changing its slug, a data root moving disks — leaves every
+    /// root pointing at a tree that is no longer there. This is the
+    /// repair, done by prefix so one call covers an org's whole set. A
+    /// root that does not start with `from`, or has no path at all, is
+    /// left exactly as it was.
+    ///
+    /// Prefix means *path* prefix: `/data/orgs/ab` must not match
+    /// `/data/orgs/abc/vault`, so the comparison is on components, not
+    /// on the string.
+    pub fn rebase_paths(&self, from: &Path, to: &Path) -> Result<usize> {
+        let mut roots = self.roots.lock().expect("registry lock poisoned");
+        let mut moved = 0;
+        for root in roots.values_mut() {
+            let Some(current) = root.path.as_deref().map(Path::new) else {
+                continue;
+            };
+            let Ok(rest) = current.strip_prefix(from) else {
+                continue;
+            };
+            root.path = Some(to.join(rest).to_string_lossy().into_owned());
+            moved += 1;
+        }
+        if moved > 0 {
+            self.persist(&roots)?;
+        }
+        Ok(moved)
+    }
+
     pub fn list(&self) -> Vec<FileRootInfo> {
         let mut v: Vec<_> = self
             .roots
@@ -165,4 +197,93 @@ pub fn write_root_marker(path: &Path, id: Uuid, name: &str) -> crate::error::Res
 pub fn read_root_marker(dir: &Path) -> Option<RootMarker> {
     let bytes = std::fs::read(dir.join(crate::consts::MARKER_FILE)).ok()?;
     facet_json::from_slice(&bytes).ok()
+}
+
+#[cfg(test)]
+mod rebase_tests {
+    use super::*;
+    use files_proto::RootFlavor;
+
+    fn root(name: &str, path: Option<&str>) -> FileRootInfo {
+        FileRootInfo {
+            id: Uuid::new_v4(),
+            name: name.to_owned(),
+            path: path.map(ToOwned::to_owned),
+            flavor: RootFlavor::Media,
+            created_at: chrono::Utc::now(),
+            project_version: None,
+        }
+    }
+
+    fn paths(reg: &Registry) -> Vec<Option<String>> {
+        let mut v: Vec<_> = reg.list().into_iter().map(|r| r.path).collect();
+        v.sort();
+        v
+    }
+
+    /// The case this exists for: an org's directory moved, every root
+    /// under it follows, and the result is on disk — a second open sees
+    /// it.
+    #[test]
+    fn roots_under_the_old_prefix_move_and_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = Registry::open(dir.path()).unwrap();
+        reg.insert(root("Vault", Some("/data/orgs/old/vault")))
+            .unwrap();
+        reg.insert(root("Wiki", Some("/data/orgs/old/wikis/docs")))
+            .unwrap();
+
+        let moved = reg
+            .rebase_paths(Path::new("/data/orgs/old"), Path::new("/data/orgs/new"))
+            .unwrap();
+        assert_eq!(moved, 2);
+
+        let reopened = Registry::open(dir.path()).unwrap();
+        assert_eq!(
+            paths(&reopened),
+            vec![
+                Some("/data/orgs/new/vault".to_owned()),
+                Some("/data/orgs/new/wikis/docs".to_owned()),
+            ],
+            "the rebase must survive a reopen, or the next boot reads the old paths"
+        );
+    }
+
+    /// `ab` is not a prefix of `abc`. A string comparison would move a
+    /// neighbouring org's roots along with the one being renamed.
+    #[test]
+    fn a_prefix_is_a_path_prefix_not_a_string_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = Registry::open(dir.path()).unwrap();
+        reg.insert(root("Mine", Some("/data/orgs/ab/vault")))
+            .unwrap();
+        reg.insert(root("Theirs", Some("/data/orgs/abc/vault")))
+            .unwrap();
+
+        let moved = reg
+            .rebase_paths(Path::new("/data/orgs/ab"), Path::new("/data/orgs/xy"))
+            .unwrap();
+        assert_eq!(moved, 1);
+        assert!(
+            paths(&reg).contains(&Some("/data/orgs/abc/vault".to_owned())),
+            "the neighbour with the longer name must be untouched"
+        );
+    }
+
+    /// A root with no live tree on this host has nothing to rebase, and
+    /// must not be turned into one that points somewhere.
+    #[test]
+    fn a_root_with_no_path_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = Registry::open(dir.path()).unwrap();
+        reg.insert(root("Structure only", None)).unwrap();
+        reg.insert(root("Elsewhere", Some("/somewhere/else")))
+            .unwrap();
+
+        let moved = reg
+            .rebase_paths(Path::new("/data/orgs/old"), Path::new("/data/orgs/new"))
+            .unwrap();
+        assert_eq!(moved, 0, "nothing matched, nothing moved");
+        assert_eq!(paths(&reg), vec![None, Some("/somewhere/else".to_owned())]);
+    }
 }

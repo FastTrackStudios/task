@@ -82,7 +82,10 @@
 //! fallback to a default role — the absence of a row is the answer.
 
 use eyre::{Context as _, Result};
-use sea_orm::{ConnectionTrait as _, Database, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm::{
+    ConnectionTrait as _, Database, DatabaseBackend, DatabaseConnection, Statement,
+    TransactionTrait as _,
+};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -320,6 +323,48 @@ impl Memberships {
             .await
             .wrap_err("revoke membership")?;
         Ok(())
+    }
+
+    /// Carry every row for one org across to a new slug, memberships and
+    /// pending invites alike. Returns `(memberships, invites)` moved.
+    ///
+    /// The slug is the join key between this table, the org's directory
+    /// and the identity server, so renaming an org without touching this
+    /// table strands every member: the fence looks up the new slug and
+    /// finds rows written under the old one. Done in one transaction so
+    /// a failure part-way cannot leave a person a member of an org that
+    /// no longer exists and not of the one that does.
+    pub async fn rename_org(&self, from: &str, to: &str) -> Result<(usize, usize)> {
+        let txn = self.conn.begin().await.wrap_err("begin rename")?;
+        let members = txn
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "UPDATE memberships SET org_slug = '{}' WHERE org_slug = '{}'",
+                    esc(to),
+                    esc(from)
+                ),
+            ))
+            .await
+            .wrap_err("rename memberships")?
+            .rows_affected();
+        let invites = txn
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "UPDATE invites SET org_slug = '{}' WHERE org_slug = '{}'",
+                    esc(to),
+                    esc(from)
+                ),
+            ))
+            .await
+            .wrap_err("rename invites")?
+            .rows_affected();
+        txn.commit().await.wrap_err("commit rename")?;
+        Ok((
+            usize::try_from(members).unwrap_or(usize::MAX),
+            usize::try_from(invites).unwrap_or(usize::MAX),
+        ))
     }
 
     /// Every membership row on this server, `(user_id, org_slug)` order.
@@ -852,5 +897,77 @@ mod tests {
             m.role_for(cody, "cbu").await.unwrap().is_none(),
             "once the issuer grants a row it owns it, so revocation lands"
         );
+    }
+
+    // ── Renaming an org ──────────────────────────────────────────────
+
+    /// The slug is the key, so renaming the org has to move every row —
+    /// members and pending invites — or the fence finds nothing under
+    /// the new name.
+    #[tokio::test]
+    async fn renaming_carries_memberships_and_invites_across() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        let tom = Uuid::new_v4();
+        m.upsert(cody, "fasttrackstudios", Some("owner"))
+            .await
+            .unwrap();
+        m.sync_from_issuer(tom, &issuer(&[("fasttrackstudios", Some("member"))]))
+            .await
+            .unwrap();
+        m.invite("new@example.app", "fasttrackstudios", Some("admin"))
+            .await
+            .unwrap();
+
+        let (members, invites) = m
+            .rename_org("fasttrackstudios", "fasttrackstudio")
+            .await
+            .unwrap();
+        assert_eq!((members, invites), (2, 1));
+
+        assert!(
+            m.role_for(cody, "fasttrackstudios")
+                .await
+                .unwrap()
+                .is_none(),
+            "nothing is left under the old slug"
+        );
+        assert_eq!(
+            m.role_for(cody, "fasttrackstudio")
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Some("owner".into())
+        );
+        assert!(m.role_for(tom, "fasttrackstudio").await.unwrap().is_some());
+        let pending = m.pending().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].1.org_slug, "fasttrackstudio");
+    }
+
+    /// Other orgs' rows are not the rename's to touch.
+    #[tokio::test]
+    async fn renaming_one_org_leaves_the_others_alone() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.upsert(cody, "fasttrackstudios", None).await.unwrap();
+        m.upsert(cody, "fasttrackaudio", None).await.unwrap();
+
+        m.rename_org("fasttrackstudios", "fasttrackstudio")
+            .await
+            .unwrap();
+
+        assert!(
+            m.role_for(cody, "fasttrackaudio").await.unwrap().is_some(),
+            "a sibling that merely shares a prefix is untouched"
+        );
+    }
+
+    /// A rename of an org nobody belongs to is a no-op, not an error.
+    #[tokio::test]
+    async fn renaming_an_org_with_no_rows_moves_nothing() {
+        let (_d, m) = store().await;
+        assert_eq!(m.rename_org("ghost", "spectre").await.unwrap(), (0, 0));
     }
 }
