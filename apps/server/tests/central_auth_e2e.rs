@@ -101,6 +101,48 @@ async fn a_real_token_resolves_to_its_user() {
     );
 }
 
+/// The issuer answers "which orgs does this token belong to".
+///
+/// This is the endpoint that makes the identity server the authority on
+/// membership instead of every relying party keeping its own table.
+/// Three things have to hold and only a real issuer can show them: the
+/// route exists, the body parses into `(slug, role)` pairs, and — the
+/// one that matters most — "belongs to nothing" comes back as
+/// `Some(vec![])` rather than `None`.
+///
+/// That distinction is the whole safety argument for the mirror. `None`
+/// means *could not ask* and leaves the last known rows standing; an
+/// empty list means the issuer spoke and the answer was nothing, which
+/// clears them. Collapsing the two would either lock people out on a
+/// blip or make revocation silently ineffective.
+#[tokio::test]
+async fn a_fresh_account_belongs_to_no_orgs_and_says_so_clearly() {
+    let Some(base) = issuer() else {
+        eprintln!("skipping: TASK_CENTRAL_AUTH_URL not set");
+        return;
+    };
+    let who = sign_up(&base).await;
+
+    let auth = CentralAuth::new(&base);
+    let orgs = auth
+        .organizations_for(&who.token)
+        .await
+        .expect("the issuer must ANSWER, even to say nothing — `None` is 'could not ask'");
+    assert!(
+        orgs.is_empty(),
+        "a brand new account belongs to nothing, got {orgs:?}"
+    );
+
+    // And a token the issuer never minted gets no answer at all, rather
+    // than an empty list that would clear somebody's mirror.
+    assert!(
+        auth.organizations_for("not-a-token-anyone-issued")
+            .await
+            .is_none(),
+        "a refused lookup must not read as 'belongs to nothing'"
+    );
+}
+
 /// The issuer reports the account's ADDRESS, not just its id.
 ///
 /// The whole invite model rests on this one field. An operator writes an

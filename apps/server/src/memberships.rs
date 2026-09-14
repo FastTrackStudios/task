@@ -7,6 +7,38 @@
 //! the ISSUER's user id. Either way a principal is "an id, plus the orgs
 //! it has rows for"; this table never asks which store minted the id.
 //!
+//! ## Who owns a row: `source`
+//!
+//! When an issuer is configured it is the authority on membership, and
+//! this table is its mirror. Every central sign-in asks
+//! `/auth/organization/list` and [`Memberships::sync_from_issuer`]
+//! writes the answer here, so an org granted there is usable on the very
+//! request that learns of it, and one revoked there is gone on the next.
+//!
+//! Mirroring rather than asking the issuer at each call site is what
+//! keeps the rest of the server simple: discovery's org list, the
+//! operator check and the per-org fence are all keyed to a principal and
+//! hold no token to ask with. They keep reading one table and know
+//! nothing about where the answer came from.
+//!
+//! `source` is what makes the mirror safe to replace wholesale:
+//!
+//! * `issuer` — mirrored. Replaced entirely on each sync, because a
+//!   membership revoked at the issuer must disappear here; an additive
+//!   merge would make revocation silently ineffective.
+//! * `local` — this server's own grant (`admin grant`, a claimed
+//!   invite). No sync touches it, so a self-hosted server with no issuer
+//!   behaves exactly as it always did.
+//!
+//! The effective membership is the union. A row the issuer also grants
+//! becomes `issuer`, so revoking it there does take effect.
+//!
+//! A sync that cannot reach the issuer changes nothing and leaves the
+//! last answer standing. That degrades to a stale grant rather than
+//! signing everyone out of a server whose auth host blinked — the right
+//! trade when the alternative locks out people this server can already
+//! prove belong.
+//!
 //! ## Invites: one account, no shadow accounts
 //!
 //! The id above is the problem an operator actually hits. Membership is
@@ -107,6 +139,24 @@ impl Memberships {
         ))
         .await
         .wrap_err("create invites table")?;
+        // `source` — who granted a row, and therefore who may take it
+        // away. `issuer` rows mirror what the identity server says and
+        // are replaced wholesale on every sync, so a membership revoked
+        // there disappears here too. `local` rows are this server's own
+        // (`admin grant`, a claimed invite) and no sync touches them.
+        //
+        // Added separately from the CREATE above because a data root
+        // that predates it already has the table, and `CREATE TABLE IF
+        // NOT EXISTS` would leave it exactly as it was. The duplicate
+        // column error is the ordinary answer on every boot after the
+        // first, which is why it is the one error worth swallowing.
+        let _ = conn
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE memberships ADD COLUMN source TEXT NOT NULL DEFAULT 'local'"
+                    .to_owned(),
+            ))
+            .await;
         Ok(Self { conn })
     }
 
@@ -129,14 +179,80 @@ impl Memberships {
             .execute(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 format!(
-                    "INSERT INTO memberships (user_id, org_slug, role, created_at)
-                     VALUES ('{user_id}', '{}', {role_sql}, {now})
-                     ON CONFLICT(user_id, org_slug) DO UPDATE SET role = excluded.role",
+                    "INSERT INTO memberships (user_id, org_slug, role, created_at, source)
+                     VALUES ('{user_id}', '{}', {role_sql}, {now}, 'local')
+                     ON CONFLICT(user_id, org_slug) DO UPDATE SET
+                         role = excluded.role, source = 'local'",
                     esc(org_slug)
                 ),
             ))
             .await
             .wrap_err_with(|| format!("upsert membership {user_id} in `{org_slug}`"))?;
+        Ok(())
+    }
+
+    /// Mirror the identity server's answer for one principal.
+    ///
+    /// This is what "the issuer owns memberships" means in practice: the
+    /// rows it grants are written here so that everything already keyed
+    /// to a principal — discovery's org list, the operator check, the
+    /// per-org fence — keeps reading one table and needs to know nothing
+    /// about where the answer came from.
+    ///
+    /// Wholesale, not additive. The set given IS the issuer's set, so a
+    /// membership revoked there has to vanish here on the next sync; an
+    /// additive merge would make revocation silently ineffective, which
+    /// is the worse failure by far. Only `issuer` rows are replaced —
+    /// `admin grant` and claimed invites are this server's own grants
+    /// and survive untouched, so the effective membership is the union.
+    ///
+    /// A role the issuer changed wins over the mirrored copy, because
+    /// the mirror is a cache and the issuer is the authority.
+    pub async fn sync_from_issuer(
+        &self,
+        user_id: Uuid,
+        orgs: &[(String, Option<String>)],
+    ) -> Result<()> {
+        let now = now_unix();
+        let keep: Vec<String> = orgs
+            .iter()
+            .map(|(slug, _)| format!("'{}'", esc(slug)))
+            .collect();
+        // Drop the issuer rows this principal no longer has. An empty
+        // list is meaningful — it means "belongs to nothing there" — so
+        // this runs even then, and `NOT IN ()` is not valid SQL.
+        let prune = if keep.is_empty() {
+            format!("DELETE FROM memberships WHERE user_id = '{user_id}' AND source = 'issuer'")
+        } else {
+            format!(
+                "DELETE FROM memberships WHERE user_id = '{user_id}' AND source = 'issuer' \
+                 AND org_slug NOT IN ({})",
+                keep.join(", ")
+            )
+        };
+        self.conn
+            .execute(Statement::from_string(DatabaseBackend::Sqlite, prune))
+            .await
+            .wrap_err_with(|| format!("prune issuer memberships for {user_id}"))?;
+
+        for (slug, role) in orgs {
+            let role_sql = role
+                .as_deref()
+                .map_or_else(|| "NULL".to_owned(), |r| format!("'{}'", esc(r)));
+            self.conn
+                .execute(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    format!(
+                        "INSERT INTO memberships (user_id, org_slug, role, created_at, source)
+                         VALUES ('{user_id}', '{}', {role_sql}, {now}, 'issuer')
+                         ON CONFLICT(user_id, org_slug) DO UPDATE SET
+                             role = excluded.role, source = 'issuer'",
+                        esc(slug)
+                    ),
+                ))
+                .await
+                .wrap_err_with(|| format!("mirror membership {user_id} in `{slug}`"))?;
+        }
         Ok(())
     }
 
@@ -212,12 +328,12 @@ impl Memberships {
     /// home org's auth store and printed a row per LOCAL account, which
     /// made a principal that has no local account — now the ordinary
     /// case — invisible to the operator inspecting their own server.
-    pub async fn all(&self) -> Result<Vec<(Uuid, Membership)>> {
+    pub async fn all(&self) -> Result<Vec<(Uuid, Membership, String)>> {
         let rows = self
             .conn
             .query_all(Statement::from_string(
                 DatabaseBackend::Sqlite,
-                "SELECT user_id, org_slug, role FROM memberships
+                "SELECT user_id, org_slug, role, source FROM memberships
                  ORDER BY user_id, org_slug"
                     .to_owned(),
             ))
@@ -235,6 +351,7 @@ impl Memberships {
                         org_slug: r.try_get("", "org_slug")?,
                         role: r.try_get("", "role")?,
                     },
+                    r.try_get("", "source")?,
                 ))
             })
             .collect()
@@ -582,5 +699,158 @@ mod tests {
         m.upsert(b, "cbu", None).await.unwrap();
         m.upsert(b, "codywright", None).await.unwrap();
         assert_eq!(m.all().await.unwrap().len(), 3);
+    }
+
+    // ── The issuer as the authority ──────────────────────────────────
+
+    fn issuer(orgs: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
+        orgs.iter()
+            .map(|(s, r)| ((*s).to_owned(), r.map(ToOwned::to_owned)))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_sync_writes_what_the_issuer_says() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.sync_from_issuer(
+            cody,
+            &issuer(&[("codywright", Some("owner")), ("cbu", Some("member"))]),
+        )
+        .await
+        .unwrap();
+
+        let mut slugs: Vec<String> = m
+            .for_user(cody)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.org_slug)
+            .collect();
+        slugs.sort();
+        assert_eq!(slugs, ["cbu", "codywright"]);
+        assert_eq!(
+            m.role_for(cody, "codywright").await.unwrap().unwrap().role,
+            Some("owner".into())
+        );
+    }
+
+    /// The one that matters. A membership revoked at the issuer has to
+    /// disappear here on the next sync — an additive merge would make
+    /// revocation silently ineffective, which is a far worse failure
+    /// than a stale grant.
+    #[tokio::test]
+    async fn a_revoked_org_disappears_on_the_next_sync() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.sync_from_issuer(cody, &issuer(&[("cbu", None), ("codywright", None)]))
+            .await
+            .unwrap();
+        assert_eq!(m.for_user(cody).await.unwrap().len(), 2);
+
+        // The issuer now says only one.
+        m.sync_from_issuer(cody, &issuer(&[("codywright", None)]))
+            .await
+            .unwrap();
+        assert!(
+            m.role_for(cody, "cbu").await.unwrap().is_none(),
+            "a revoked membership must not survive the sync"
+        );
+        assert!(m.role_for(cody, "codywright").await.unwrap().is_some());
+    }
+
+    /// Belonging to nothing is an answer, not an absence — so an empty
+    /// list must clear the mirror rather than be skipped as a no-op.
+    #[tokio::test]
+    async fn an_empty_issuer_answer_clears_the_mirror() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.sync_from_issuer(cody, &issuer(&[("cbu", None)]))
+            .await
+            .unwrap();
+        m.sync_from_issuer(cody, &[]).await.unwrap();
+        assert!(m.for_user(cody).await.unwrap().is_empty());
+    }
+
+    /// This server's own grants are not the issuer's to revoke. An
+    /// `admin grant` or a claimed invite survives every sync, so the
+    /// effective membership is the union of both sources.
+    #[tokio::test]
+    async fn a_local_grant_survives_an_issuer_sync() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.upsert(cody, "tombrooksmusic", Some("admin"))
+            .await
+            .unwrap();
+        m.sync_from_issuer(cody, &issuer(&[("cbu", Some("member"))]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            m.role_for(cody, "tombrooksmusic")
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Some("admin".into()),
+            "the issuer does not own this row"
+        );
+        assert!(m.role_for(cody, "cbu").await.unwrap().is_some());
+
+        // And clearing at the issuer still leaves the local grant.
+        m.sync_from_issuer(cody, &[]).await.unwrap();
+        assert!(m.role_for(cody, "tombrooksmusic").await.unwrap().is_some());
+        assert!(m.role_for(cody, "cbu").await.unwrap().is_none());
+    }
+
+    /// A role changed at the issuer wins over the mirrored copy — the
+    /// mirror is a cache, the issuer is the authority.
+    #[tokio::test]
+    async fn the_issuers_role_wins_over_the_mirrored_one() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.sync_from_issuer(cody, &issuer(&[("cbu", Some("member"))]))
+            .await
+            .unwrap();
+        m.sync_from_issuer(cody, &issuer(&[("cbu", Some("owner"))]))
+            .await
+            .unwrap();
+        assert_eq!(
+            m.role_for(cody, "cbu").await.unwrap().unwrap().role,
+            Some("owner".into())
+        );
+    }
+
+    /// Syncing one principal must not touch another's rows.
+    #[tokio::test]
+    async fn a_sync_is_scoped_to_one_principal() {
+        let (_d, m) = store().await;
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        m.sync_from_issuer(a, &issuer(&[("cbu", None)]))
+            .await
+            .unwrap();
+        m.sync_from_issuer(b, &issuer(&[("cbu", None)]))
+            .await
+            .unwrap();
+        m.sync_from_issuer(a, &[]).await.unwrap();
+        assert!(m.role_for(b, "cbu").await.unwrap().is_some());
+    }
+
+    /// A membership the issuer grants where a local one already exists
+    /// becomes the issuer's, so revoking it there takes effect.
+    #[tokio::test]
+    async fn the_issuer_adopts_a_row_it_also_grants() {
+        let (_d, m) = store().await;
+        let cody = Uuid::new_v4();
+        m.upsert(cody, "cbu", Some("member")).await.unwrap();
+        m.sync_from_issuer(cody, &issuer(&[("cbu", Some("owner"))]))
+            .await
+            .unwrap();
+        m.sync_from_issuer(cody, &[]).await.unwrap();
+        assert!(
+            m.role_for(cody, "cbu").await.unwrap().is_none(),
+            "once the issuer grants a row it owns it, so revocation lands"
+        );
     }
 }
