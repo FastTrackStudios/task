@@ -494,10 +494,23 @@ impl CentralAuth {
     /// server is unreachable".
     async fn ask(&self, token: &str, endpoint: &str, nest: Option<&str>, id_key: &str) -> Verdict {
         let url = format!("{}{endpoint}", self.base_url);
+        // POST, with an empty JSON body.
+        //
+        // The issuer's session surface is generated from a service
+        // declaration now, and every generated method is a POST that
+        // takes its arguments in the body — so `/auth/session` answers
+        // 405 to the GET this used to send, and 405 is not success, so
+        // every central token resolved to `Anonymous`. The one argument
+        // here is the token, which the generated face also accepts as a
+        // bearer header, so the body carries nothing.
+        //
+        // `/oauth2/userinfo` is still hand-written and still answers
+        // both verbs, so one shape serves both endpoints.
         let res = match self
             .http
-            .get(&url)
+            .post(&url)
             .bearer_auth(token)
+            .json(&serde_json::json!({}))
             .timeout(Duration::from_secs(5))
             .send()
             .await

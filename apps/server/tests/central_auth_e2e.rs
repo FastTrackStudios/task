@@ -41,10 +41,17 @@ async fn sign_up(base: &str) -> SignedUp {
         "task-central-{}@example.invalid",
         uuid::Uuid::new_v4().simple()
     );
+    // Wrapped in `input`: the issuer's surface is generated from a
+    // service declaration now, and a generated route decodes its body
+    // into one field per argument. `sign_up_email_password` takes a
+    // single `input: SignUpEmailPassword`, so the payload nests under
+    // that name rather than spreading its fields at the top level.
     let body = serde_json::json!({
-        "email": email,
-        "password": "correct-horse-battery-staple-9271",
-        "name": "Central Auth Test",
+        "input": {
+            "email": email,
+            "password": "correct-horse-battery-staple-9271",
+            "name": "Central Auth Test",
+        }
     });
     let res = reqwest::Client::new()
         .post(format!("{base}/auth/sign-up/email"))

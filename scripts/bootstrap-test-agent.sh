@@ -130,7 +130,7 @@ echo ">> creating the issuer account at $ISSUER…"
 SIGNUP="$(curl -fsS -X POST "$ISSUER/auth/sign-up/email" \
   -H 'content-type: application/json' \
   --data-binary @<(jq -n --arg e "$EMAIL" --arg p "$PASSWORD" --arg n "$NAME" \
-                      '{email:$e, password:$p, name:$n}') 2>/dev/null || true)"
+                      '{input:{email:$e, password:$p, name:$n}}') 2>/dev/null || true)"
 
 PRINCIPAL="$(printf '%s' "$SIGNUP" | jq -r '.user.id // empty' 2>/dev/null || true)"
 TOKEN="$(printf '%s' "$SIGNUP" | jq -r '.token // empty' 2>/dev/null || true)"
@@ -147,7 +147,7 @@ if [ -z "$PRINCIPAL" ]; then
   SIGNIN="$(curl -fsS -X POST "$ISSUER/auth/sign-in/email" \
     -H 'content-type: application/json' \
     --data-binary @<(jq -n --arg e "$EMAIL" --arg p "$PASSWORD" \
-                        '{email:$e, password:$p}') 2>/dev/null || true)"
+                        '{input:{email:$e, password:$p}}') 2>/dev/null || true)"
   PRINCIPAL="$(printf '%s' "$SIGNIN" | jq -r '.user.id // empty' 2>/dev/null || true)"
   TOKEN="$(printf '%s' "$SIGNIN" | jq -r '.token // empty' 2>/dev/null || true)"
 fi
