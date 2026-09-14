@@ -130,6 +130,70 @@ async fn discovery_tags_a_central_principal_by_its_membership_rows() -> eyre::Re
     Ok(())
 }
 
+/// Discovery tags an org the ISSUER grants, with no local row for it.
+///
+/// This is the lane a person meets first. Discovery is what a client
+/// fetches before it has a session — it is how an org picker gets
+/// filled — and it resolves identity through `home_principal`, not
+/// through the org lane's resolver. Mirror the issuer in one and not the
+/// other and a new account is told it belongs to nothing, sees an empty
+/// picker, and never reaches the lane that would have populated the
+/// mirror.
+///
+/// `theirs` here exists only because the issuer says so: nothing wrote a
+/// row for it before this request.
+#[tokio::test(flavor = "multi_thread")]
+async fn discovery_tags_an_org_the_issuer_grants_with_no_local_row() -> eyre::Result<()> {
+    let principal = uuid::Uuid::new_v4();
+    let (base, _tmp) = boot(async |data_root| {
+        // Only the home org, and only so this account is admitted as a
+        // home principal at all.
+        let home = data_root.org("mine");
+        let m = task_server::memberships::Memberships::open(&home.memberships_db())
+            .await
+            .expect("open memberships");
+        m.upsert(principal, "mine", Some("owner"))
+            .await
+            .expect("mine row");
+    })
+    .await?;
+
+    let central = task_server::central_auth::configured().expect("configured");
+    central.remember_for_test(TOKEN, Some(principal.to_string()));
+    // What the issuer would say, without asking it.
+    central.remember_orgs_for_test(
+        TOKEN,
+        Some(vec![
+            ("mine".to_owned(), Some("owner".to_owned())),
+            ("theirs".to_owned(), Some("member".to_owned())),
+        ]),
+    );
+
+    let doc: serde_json::Value = reqwest::Client::new()
+        .get(format!("{base}/.well-known/task-server.json"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    assert_eq!(
+        member_of(&doc, "theirs"),
+        true,
+        "the issuer grants this org and nothing local ever did — discovery \
+         must reflect it on the first request, or the picker is empty for \
+         everyone who has not used the org lane yet"
+    );
+    assert_eq!(member_of(&doc, "mine"), true);
+    assert_eq!(
+        member_of(&doc, "nobodys"),
+        false,
+        "an org the issuer did not list stays refused — mirroring is not a \
+         blanket admission"
+    );
+    Ok(())
+}
+
 /// The identity locker answers a CENTRAL account too.
 ///
 /// `list_links` is the call the web app makes right after sign-in to
