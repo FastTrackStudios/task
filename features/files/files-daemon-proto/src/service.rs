@@ -208,6 +208,28 @@ pub trait DaemonControlService {
     /// could simply have been told.
     async fn set_coordinator(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError>;
 
+    /// Sign this machine in as an account, and keep it that way.
+    ///
+    /// The daemon stores the token, asks the server to enrol this
+    /// machine with every org the account is a member of, admits each
+    /// org's endpoint and pulls what it offers — now, and again on a
+    /// cadence, so an org joined tomorrow appears without anybody
+    /// pairing anything. `server` is the Task server the token belongs
+    /// to (`wss://…`); empty means the daemon's default.
+    ///
+    /// The desktop app calls this after its own sign-in; the CLI verb
+    /// `fts-files-daemon sign-in` is the same call from a shell.
+    async fn sign_in(&self, server: String, token: String) -> Result<DaemonStatus, DaemonError>;
+
+    /// Forget the account. Nothing is unmounted or deleted: the orgs
+    /// already admitted keep syncing until they are forgotten one by
+    /// one; what stops is discovering new ones.
+    async fn sign_out(&self) -> Result<DaemonStatus, DaemonError>;
+
+    /// Run the enrolment round now rather than waiting for the cadence,
+    /// and say what it found. Refused when nobody is signed in.
+    async fn enroll_now(&self) -> Result<Vec<EnrolledOrg>, DaemonError>;
+
     /// Remember to sync with `endpoint_id` once it can be reached.
     ///
     /// "Sync with my laptop" is usually said while the laptop is shut —
@@ -331,4 +353,21 @@ pub trait DaemonControlService {
     /// Live status changes as they happen.
     #[subscribe]
     fn status_events(&self) -> DaemonEvent;
+}
+
+/// One org an enrolment round found the account in, and what the
+/// daemon did about it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct EnrolledOrg {
+    pub slug: String,
+    pub display_name: String,
+    /// The org's endpoint id, now admitted and pulled from. Empty when
+    /// the org has no peering endpoint yet.
+    pub endpoint_id: String,
+    /// Roots taken from it this round, by name. Empty on a round that
+    /// found nothing new.
+    pub took: Vec<String>,
+    /// What went wrong reaching it, if anything.
+    pub error: Option<String>,
 }

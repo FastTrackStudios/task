@@ -121,6 +121,16 @@ fn Root() -> Element {
     // agent is still working.
     tray::use_tray();
 
+    // Sign the sync agent in as whoever this app is signed in as, once
+    // the app is up. With no session yet this says so and does nothing;
+    // the tray item repeats it after a later sign-in.
+    use_hook(|| {
+        spawn(async {
+            let said = sync_service::sign_agent_in().await;
+            tracing::info!("{said}");
+        });
+    });
+
     use_context_provider(|| task_ui_core::window_chrome::WindowChrome {
         drag: Callback::new(|()| dioxus::desktop::window().drag()),
         toggle_maximize: Callback::new(|()| dioxus::desktop::window().toggle_maximized()),

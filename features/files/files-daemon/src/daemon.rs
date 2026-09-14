@@ -216,6 +216,16 @@ struct DaemonInner {
     live: LiveStatus,
     paused: std::sync::atomic::AtomicBool,
     events: EventHub,
+    /// The account this machine syncs as, if somebody signed it in;
+    /// see [`crate::account`].
+    account: crate::account::AccountStore,
+    /// What the last enrolment round learned, for `status`.
+    account_sync: Mutex<Option<crate::model::AccountSync>>,
+    /// The org endpoints the account reached last round — what the
+    /// next round diffs against to know what to forget.
+    account_peers: Mutex<Vec<String>>,
+    /// When the last round ran, so `tick` knows when the next is due.
+    last_enroll: Mutex<Option<std::time::Instant>>,
 }
 
 impl SyncDaemon {
@@ -230,6 +240,14 @@ impl SyncDaemon {
         // an application-support directory" is a poor place for a
         // person's projects and a worse one to have guessed silently.
         let data_dir_for_roots = data_dir.join("roots");
+        let account = crate::account::AccountStore::open(&data_dir);
+        let account_sync = account.load().map(|a| crate::model::AccountSync {
+            server: a.server,
+            last_enrolled_at: None,
+            orgs: Vec::new(),
+            last_error: None,
+        });
+        let account_peers = Self::read_account_peers(&data_dir);
         Ok(Self {
             inner: Arc::new(DaemonInner {
                 backend,
@@ -250,6 +268,10 @@ impl SyncDaemon {
                 },
                 paused: std::sync::atomic::AtomicBool::new(false),
                 events: EventHub::default(),
+                account,
+                account_sync: Mutex::new(account_sync),
+                account_peers: Mutex::new(account_peers),
+                last_enroll: Mutex::new(None),
             }),
         })
     }
@@ -1686,6 +1708,7 @@ impl SyncDaemon {
         if self.is_paused() {
             return;
         }
+        self.maybe_enroll().await;
         // Capture before pulling. The order matters on the machine that
         // has been offline: its own work becomes a commit first, so the
         // reconcile that follows brings the other side's line into a
@@ -2008,6 +2031,7 @@ impl SyncDaemon {
                 .expect("coordinator lock")
                 .is_some(),
             paused: self.is_paused(),
+            account: self.account(),
             roots,
         }
     }
@@ -2074,5 +2098,243 @@ fn flatten(place: &str) -> String {
     match place.split_once('/') {
         Some((_org, rest)) => rest.to_string(),
         None => place.to_string(),
+    }
+}
+
+// ── The account ──────────────────────────────────────────────────────
+
+/// How often a signed-in daemon re-asks the server which orgs the
+/// account is in. Orgs are joined rarely; ten minutes is soon enough for
+/// a new one to appear on its own, and `enroll_now` is there for the
+/// person who cannot wait.
+const ENROLL_EVERY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+impl SyncDaemon {
+    fn account_peers_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+        data_dir.join("account-peers.json")
+    }
+
+    fn read_account_peers(data_dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(Self::account_peers_path(data_dir))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_account_peers(&self, peers: &[String]) {
+        let path = Self::account_peers_path(&self.inner.data_dir);
+        match serde_json::to_string_pretty(peers) {
+            Ok(raw) => {
+                if let Err(e) = std::fs::write(&path, raw) {
+                    tracing::warn!(path = %path.display(), error = %e, "could not record the account's peers");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not encode the account's peers"),
+        }
+        *self.inner.account_peers.lock().expect("account peers lock") = peers.to_vec();
+    }
+
+    /// The account this machine syncs as, if somebody signed it in.
+    #[must_use]
+    pub fn account(&self) -> Option<crate::model::AccountSync> {
+        self.inner
+            .account_sync
+            .lock()
+            .expect("account lock")
+            .clone()
+    }
+
+    /// Sign this machine in. The token is filed (owner-only) and the
+    /// next tick runs an enrolment round straight away; nothing is
+    /// dialled here, so a bad server or a dead token is reported by
+    /// that round rather than blocking the caller.
+    pub fn sign_in(&self, server: &str, token: &str) -> Result<()> {
+        let account = crate::account::Account {
+            server: server.to_owned(),
+            token: token.to_owned(),
+        };
+        self.inner.account.save(&account)?;
+        let server = self
+            .inner
+            .account
+            .load()
+            .map(|a| a.server)
+            .unwrap_or_else(|| crate::account::DEFAULT_SERVER.to_owned());
+        *self.inner.account_sync.lock().expect("account lock") = Some(crate::model::AccountSync {
+            server,
+            last_enrolled_at: None,
+            orgs: Vec::new(),
+            last_error: None,
+        });
+        *self.inner.last_enroll.lock().expect("enroll lock") = None;
+        self.inner.events.publish(self.status());
+        Ok(())
+    }
+
+    /// Forget the account. The orgs already admitted keep syncing until
+    /// they are forgotten one by one (`forget`); what stops is finding
+    /// new ones. Nothing on disk is touched but the token.
+    pub fn sign_out(&self) -> Result<()> {
+        self.inner.account.clear()?;
+        *self.inner.account_sync.lock().expect("account lock") = None;
+        self.inner.events.publish(self.status());
+        Ok(())
+    }
+
+    /// Run an enrolment round if somebody is signed in and one is due.
+    async fn maybe_enroll(&self) {
+        if self.inner.account.load().is_none() {
+            return;
+        }
+        let due = self
+            .inner
+            .last_enroll
+            .lock()
+            .expect("enroll lock")
+            .is_none_or(|at| at.elapsed() >= ENROLL_EVERY);
+        if !due {
+            return;
+        }
+        if let Err(e) = self.enroll_with_account().await {
+            tracing::warn!(error = %e, "files-daemon: the enrolment round failed; will retry");
+        }
+    }
+
+    fn note_enroll_error(&self, error: &str) {
+        if let Some(sync) = self
+            .inner
+            .account_sync
+            .lock()
+            .expect("account lock")
+            .as_mut()
+        {
+            sync.last_error = Some(error.to_owned());
+        }
+        self.inner.events.publish(self.status());
+    }
+
+    /// One enrolment round: ask the account's server which orgs it is
+    /// in, enrol this machine with each, admit every org endpoint that
+    /// answered, take what each offers, and forget the endpoints of orgs
+    /// the account no longer reaches.
+    ///
+    /// # Errors
+    ///
+    /// `NotEnrolled` when nobody is signed in; `Io` when the server
+    /// could not be reached or refused the token. Per-org trouble is
+    /// not an error — it is on the org's row, and the others proceed.
+    #[cfg(feature = "vox")]
+    pub async fn enroll_with_account(&self) -> Result<Vec<crate::service::EnrolledOrg>> {
+        let Some(account) = self.inner.account.load() else {
+            return Err(DaemonError::NotEnrolled(
+                "nobody is signed in — run `fts-files-daemon sign-in`".into(),
+            ));
+        };
+        let Some(endpoint) = self.endpoint_id() else {
+            return Err(DaemonError::Io(
+                "this daemon has no endpoint yet — is peering bound?".into(),
+            ));
+        };
+        *self.inner.last_enroll.lock().expect("enroll lock") = Some(std::time::Instant::now());
+
+        let url = crate::account::server_vox_url(&account.server);
+        let client: files_proto::DeviceEnrollmentServiceClient =
+            match vox::connect_lane(&url).establish().await {
+                Ok(client) => client,
+                Err(e) => {
+                    let why = format!("connecting to {url}: {e}");
+                    self.note_enroll_error(&why);
+                    return Err(DaemonError::Io(why));
+                }
+            };
+        let enrolled = match client
+            .enroll_everywhere(
+                account.token.clone(),
+                endpoint,
+                crate::account::machine_name(),
+            )
+            .await
+        {
+            Ok(enrolled) => enrolled,
+            Err(e) => {
+                let why = format!("enrolling at {url}: {e}");
+                self.note_enroll_error(&why);
+                return Err(DaemonError::Io(why));
+            }
+        };
+
+        let now: Vec<String> = enrolled.iter().map(|e| e.org_endpoint_id.clone()).collect();
+        let previous = self
+            .inner
+            .account_peers
+            .lock()
+            .expect("account peers lock")
+            .clone();
+        let plan = crate::account::reconcile(&previous, &now);
+        for gone in &plan.removed {
+            tracing::info!(endpoint = %gone, "files-daemon: the account left this org — forgetting it");
+            self.dismiss_peer(gone);
+        }
+
+        let under = self.roots_dir();
+        let mut out = Vec::with_capacity(enrolled.len());
+        for org in &enrolled {
+            let mut row = crate::service::EnrolledOrg {
+                slug: org.slug.clone(),
+                display_name: org.display_name.clone(),
+                endpoint_id: org.org_endpoint_id.clone(),
+                took: Vec::new(),
+                error: None,
+            };
+            let endpoint = org.org_endpoint_id.trim();
+            if endpoint.is_empty() {
+                row.error = Some("the org has no peering endpoint yet".into());
+                out.push(row);
+                continue;
+            }
+            self.admit_peer(endpoint);
+            self.remember_peer(endpoint);
+            let has_coordinator = self
+                .inner
+                .coordinator
+                .lock()
+                .expect("coordinator lock")
+                .is_some();
+            if !has_coordinator && let Err(e) = self.set_coordinator_peer(endpoint).await {
+                row.error = Some(format!("coordinator: {e}"));
+            }
+            match self.peer_roots(endpoint).await {
+                Ok(offered) => {
+                    for root in offered {
+                        self.place_offered(&root);
+                        match self.sync_from_peer(endpoint, root.id, vec![], &under).await {
+                            Ok(_) => row.took.push(root.name),
+                            Err(e) => row.error = Some(format!("{}: {e}", root.name)),
+                        }
+                    }
+                }
+                Err(e) => row.error = Some(e.to_string()),
+            }
+            out.push(row);
+        }
+
+        let peers: Vec<String> = now.into_iter().filter(|e| !e.trim().is_empty()).collect();
+        self.save_account_peers(&peers);
+        *self.inner.account_sync.lock().expect("account lock") = Some(crate::model::AccountSync {
+            server: account.server,
+            last_enrolled_at: Some(Utc::now()),
+            orgs: enrolled.iter().map(|e| e.slug.clone()).collect(),
+            last_error: None,
+        });
+        self.inner.events.publish(self.status());
+        Ok(out)
+    }
+
+    /// Without the vox transport there is nothing to dial with.
+    #[cfg(not(feature = "vox"))]
+    pub async fn enroll_with_account(&self) -> Result<Vec<crate::service::EnrolledOrg>> {
+        Err(DaemonError::Io(
+            "this build has no transport to reach the server with".into(),
+        ))
     }
 }

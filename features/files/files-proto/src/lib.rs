@@ -91,6 +91,14 @@ pub use service::curation::{
     curation_service_rpc_service_descriptor as curation_descriptor, layer as curation_layer,
     serve as serve_curation,
 };
+pub use service::enrollment::OrgEnrollment;
+#[cfg(feature = "vox")]
+pub use service::enrollment::{
+    DeviceEnrollmentServiceClient,
+    DeviceEnrollmentServiceRpcDispatcher as DeviceEnrollmentDispatcher,
+    device_enrollment_service_rpc_service_descriptor as device_enrollment_descriptor,
+    layer as device_enrollment_layer, serve as serve_device_enrollment,
+};
 #[cfg(feature = "vox")]
 pub use service::federation::{
     FederationServiceClient, FederationServiceRpcDispatcher as FederationDispatcher,

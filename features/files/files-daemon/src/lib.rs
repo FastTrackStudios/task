@@ -26,6 +26,7 @@
 //! this crate — the tested core is the daemon + control service driven
 //! over an in-process link, exactly the spec's RPC-seam testing rule.
 
+pub mod account;
 mod control;
 mod daemon;
 mod error;

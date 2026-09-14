@@ -46,6 +46,8 @@ mod item {
     pub const FLAT: &str = "task.mount.flat";
     pub const UNMOUNT: &str = "task.unmount";
     pub const CAPTURE: &str = "task.capture";
+    pub const SIGN_IN: &str = "task.sync.sign-in";
+    pub const SIGN_OUT: &str = "task.sync.sign-out";
     pub const QUIT: &str = "task.quit";
 }
 
@@ -94,6 +96,25 @@ fn menu() -> DioxusTrayMenu {
     let _ = tray.append(&MenuItem::with_id(
         MenuId::new(item::CAPTURE),
         "Read what has not been read yet",
+        true,
+        None,
+    ));
+
+    // The account is what decides what is in the tree: signed in, the
+    // agent enrols this machine with every org the account is in and
+    // keeps that current. Done once at startup; here for the person
+    // who signed in after the app started, or signed in as someone
+    // else.
+    let _ = tray.append(&PredefinedMenuItem::separator());
+    let _ = tray.append(&MenuItem::with_id(
+        MenuId::new(item::SIGN_IN),
+        "Sync as the signed-in account",
+        true,
+        None,
+    ));
+    let _ = tray.append(&MenuItem::with_id(
+        MenuId::new(item::SIGN_OUT),
+        "Stop syncing as this account",
         true,
         None,
     ));
@@ -164,6 +185,19 @@ pub fn use_tray() {
 /// put an error, and the `/sync` page shows the same state with room to
 /// explain what went wrong.
 async fn act(id: String) {
+    // The account items need no client of their own: the hand-off
+    // dials the agent itself and says what happened in a sentence.
+    match id.as_str() {
+        item::SIGN_IN => {
+            tracing::info!("tray: {}", crate::sync_service::sign_agent_in().await);
+            return;
+        }
+        item::SIGN_OUT => {
+            tracing::info!("tray: {}", crate::sync_service::sign_agent_out().await);
+            return;
+        }
+        _ => {}
+    }
     let client = match agent().await {
         Ok(client) => client,
         Err(e) => {
@@ -216,10 +250,4 @@ async fn act(id: String) {
 
 /// The agent on this machine, over its local control socket — the same
 /// one the CLI and the app's sync page use.
-async fn agent() -> Result<files_daemon_proto::service::DaemonControlServiceClient, String> {
-    let bind = std::env::var("FTS_FILES_DAEMON_BIND").unwrap_or_else(|_| "127.0.0.1:4055".into());
-    vox::connect_lane(&format!("ws://{bind}/vox"))
-        .establish()
-        .await
-        .map_err(|e| format!("no agent answering on {bind} ({e})"))
-}
+use crate::sync_service::agent;

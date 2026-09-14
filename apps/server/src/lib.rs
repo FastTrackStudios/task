@@ -43,6 +43,7 @@ pub mod memberships;
 // feature's. Without it there is nothing to federate against and the
 // link store keeps its `NoFederation` default, which is the honest
 // answer for a single-org server.
+pub mod device_enrollment;
 #[cfg(feature = "plugin-wiki")]
 pub mod node_homes;
 pub mod notifier;
@@ -3253,6 +3254,16 @@ pub fn server_layer_router(state: &AppState, local_trusted: bool) -> architect::
         .with(
             identity_proto::identity_descriptor(),
             identity_proto::serve_identity(identity),
+        )
+        // Sign in once, see every org: enrol this machine with each org
+        // the account is in, in one call. Explicit session token like the
+        // rest of this lane — it acts across orgs, so no org is its
+        // identity.
+        .with(
+            files_proto::device_enrollment_descriptor(),
+            files_proto::serve_device_enrollment(
+                crate::device_enrollment::DeviceEnrollmentImpl::new(state.clone()),
+            ),
         )
         .with(
             files_storage::storage_admin_descriptor(),

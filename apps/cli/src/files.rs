@@ -344,6 +344,23 @@ pub(crate) enum FilesDeviceCmd {
     /// Cut a machine off: it is refused further sync and wipes its copy
     /// of org content on next contact.
     Revoke { device_id: uuid::Uuid },
+    /// Enrol this machine with EVERY org your account is a member of, in
+    /// one call, and print each org's endpoint id. What the sync agent's
+    /// `sign-in` does on a cadence, for a script or a machine without the
+    /// desktop app.
+    ///
+    /// Needs `fts-files-daemon` on PATH (or `--endpoint`).
+    EnrollAll {
+        /// The endpoint id to enrol. Defaults to this machine's.
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// How the orgs' device lists should name it. Defaults to this
+        /// machine's hostname.
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Ask the local agent a one-line question.
@@ -439,6 +456,57 @@ async fn run_files_device(cmd: FilesDeviceCmd, slug: &str, vox_url: &str) -> eyr
                 .await?;
             println!("revoked {} ({})", device.name, device.id);
             println!("it is refused further sync and wipes its copy on next contact.");
+        }
+        FilesDeviceCmd::EnrollAll {
+            endpoint,
+            name,
+            json,
+        } => {
+            let endpoint = match endpoint {
+                Some(id) => id,
+                None => agent_says(&["id"])?,
+            };
+            let name = name.unwrap_or_else(machine_name);
+            // The server lane takes the session token as an argument
+            // rather than as the lane's identity, because this call acts
+            // across orgs — the token is what says which orgs.
+            let token = crate::session_store::load()?
+                .and_then(|s| s.active_server().map(|e| e.token.clone()))
+                .filter(|t| !t.trim().is_empty())
+                .ok_or_else(|| {
+                    crate::errors::usage("enroll everywhere")
+                        .cause("no stored session")
+                        .hint("run `task auth login` first")
+                        .report()
+                })?;
+            let (enrollment, _at): (files_proto::DeviceEnrollmentServiceClient, String) =
+                crate::establish_server_client(None).await?;
+            let enrolled = enrollment
+                .enroll_everywhere(token, endpoint.clone(), name)
+                .await
+                .map_err(|e| eyre::eyre!("enroll everywhere: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&enrolled).map_err(|e| eyre::eyre!("{e}"))?
+                );
+                return Ok(());
+            }
+            println!("machine      {endpoint}");
+            if enrolled.is_empty() {
+                println!("your account is in no org this server hosts");
+            }
+            for org in &enrolled {
+                let coordinator = if org.org_endpoint_id.is_empty() {
+                    "(no peering endpoint yet)"
+                } else {
+                    org.org_endpoint_id.as_str()
+                };
+                println!("{:<24} {coordinator}", org.slug);
+            }
+            println!();
+            println!("the sync agent takes it from here once it is signed in:");
+            println!("    fts-files-daemon sign-in");
         }
     }
     Ok(())
@@ -1024,4 +1092,15 @@ fn print_patterns(patterns: &[String], json: bool) -> eyre::Result<()> {
 /// reads as a bug rather than as the answer.
 fn placement(root: &files_proto::model::FileRootInfo) -> &str {
     root.path.as_deref().unwrap_or("(structure only)")
+}
+
+/// This machine's name for an org's device list.
+fn machine_name() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "this machine".into())
 }

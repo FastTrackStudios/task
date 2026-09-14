@@ -85,3 +85,67 @@ pub fn ensure_installed() -> String {
         Err(e) => format!("sync agent: could not run the installer ({e})"),
     }
 }
+
+/// Hand the app's sign-in to the sync agent, so the mount shows every
+/// org the account can reach.
+///
+/// The app signs in through the central issuer and holds the session;
+/// the agent is a separate process with none of that. This is the seam:
+/// when the app has a bearer, the agent gets it over the control socket
+/// (`sign_in`), enrols this machine with every org the account is in,
+/// and composes them into the tree. Called once at startup and again
+/// from the tray; a second call with the same token is harmless.
+///
+/// Says what happened in a sentence, for the log and the tray.
+pub async fn sign_agent_in() -> String {
+    let Some(token) = task_ui_core::vox_session::bearer() else {
+        return "sync agent: nobody is signed in to Task yet".into();
+    };
+    let server = task_ui_core::vox_session::vox_url();
+    let client = match agent().await {
+        Ok(client) => client,
+        Err(e) => return format!("sync agent: {e}"),
+    };
+    if let Err(e) = client.sign_in(server, token).await {
+        return format!("sync agent: sign-in refused — {e}");
+    }
+    match client.enroll_now().await {
+        Ok(orgs) => {
+            let named: Vec<String> = orgs.iter().map(|o| o.slug.clone()).collect();
+            let troubled = orgs.iter().filter(|o| o.error.is_some()).count();
+            format!(
+                "sync agent: signed in — {} org(s): {}{}",
+                orgs.len(),
+                named.join(" "),
+                if troubled > 0 {
+                    format!(" ({troubled} with trouble — see the sync page)")
+                } else {
+                    String::new()
+                }
+            )
+        }
+        Err(e) => format!("sync agent: signed in, but enrolment failed — {e}"),
+    }
+}
+
+/// Tell the agent to forget the account. The orgs it already holds keep
+/// syncing until forgotten one by one; what stops is discovering new
+/// ones as this account.
+pub async fn sign_agent_out() -> String {
+    match agent().await {
+        Ok(client) => match client.sign_out().await {
+            Ok(_) => "sync agent: signed out".into(),
+            Err(e) => format!("sync agent: sign-out failed — {e}"),
+        },
+        Err(e) => format!("sync agent: {e}"),
+    }
+}
+
+pub(crate) async fn agent()
+-> Result<files_daemon_proto::service::DaemonControlServiceClient, String> {
+    let bind = std::env::var("FTS_FILES_DAEMON_BIND").unwrap_or_else(|_| "127.0.0.1:4055".into());
+    vox::connect_lane(&format!("ws://{bind}/vox"))
+        .establish()
+        .await
+        .map_err(|e| format!("no agent answering on {bind} ({e})"))
+}

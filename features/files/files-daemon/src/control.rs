@@ -143,6 +143,20 @@ impl DaemonControlService for DaemonControl {
         Ok(())
     }
 
+    async fn sign_in(&self, server: String, token: String) -> Result<DaemonStatus, DaemonError> {
+        self.daemon.sign_in(&server, &token)?;
+        Ok(self.daemon.status())
+    }
+
+    async fn sign_out(&self) -> Result<DaemonStatus, DaemonError> {
+        self.daemon.sign_out()?;
+        Ok(self.daemon.status())
+    }
+
+    async fn enroll_now(&self) -> Result<Vec<crate::service::EnrolledOrg>, DaemonError> {
+        self.daemon.enroll_with_account().await
+    }
+
     async fn admit_peer(&self, endpoint_id: String) -> Result<DaemonStatus, DaemonError> {
         self.daemon.admit_peer(&endpoint_id);
         Ok(self.daemon.status())
