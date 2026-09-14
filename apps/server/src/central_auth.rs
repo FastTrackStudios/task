@@ -722,6 +722,28 @@ pub async fn home_principal(state: &crate::AppState, token: &str) -> Option<uuid
     }
     let central = configured()?;
     let user_id = central.user_for(token).await?.parse::<uuid::Uuid>().ok()?;
+
+    // Mirror the issuer's orgs before reading them, exactly as the org
+    // lane does.
+    //
+    // Without this the two lanes disagree on a person's very first
+    // request, and they disagree in the worst direction. Discovery is
+    // what a client fetches *before* it has a session — it is how an org
+    // picker gets filled — and it arrives here, not through
+    // [`CentralFallbackResolver`]. A new account would be told it
+    // belongs to nothing, see an empty picker, and never reach the org
+    // lane that would have populated the mirror. The same question is
+    // asked by the locker, storage administration and the telemetry
+    // gate.
+    //
+    // A failed sync is not fatal: the rows already mirrored still
+    // decide. See `Memberships::sync_from_issuer`.
+    if let Some(orgs) = central.organizations_for(token).await
+        && let Err(e) = home.memberships.sync_from_issuer(user_id, &orgs).await
+    {
+        tracing::warn!(error = %e, "central auth: mirroring issuer orgs failed");
+    }
+
     match home.memberships.for_user(user_id).await {
         Ok(rows) if !rows.is_empty() => Some(user_id),
         Ok(_) => {
