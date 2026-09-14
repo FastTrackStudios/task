@@ -1098,7 +1098,7 @@ async fn show_memberships(args: &[String]) -> eyre::Result<()> {
     let rows = store.all().await?;
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|(id, _)| only.is_none_or(|want| want == *id))
+        .filter(|(id, _, _)| only.is_none_or(|want| want == *id))
         .collect();
 
     if rows.is_empty() {
@@ -1110,13 +1110,18 @@ async fn show_memberships(args: &[String]) -> eyre::Result<()> {
     }
 
     let mut current: Option<uuid::Uuid> = None;
-    for (id, m) in rows {
+    for (id, m, source) in rows {
         if current != Some(id) {
             println!("{id}");
             current = Some(id);
         }
+        // The source is the operationally useful half. An `issuer` row
+        // is a mirror — editing it here lasts until that person's next
+        // sign-in — where a `local` one is this server's own grant and
+        // permanent. Saying so beats letting somebody discover it by
+        // watching a change evaporate.
         println!(
-            "  {:<20} role = {}",
+            "  {:<20} role = {:<10} [{source}]",
             m.org_slug,
             m.role.as_deref().unwrap_or("(member)")
         );

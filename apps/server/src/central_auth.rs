@@ -94,6 +94,9 @@ pub struct CentralAuth {
     /// exposure as holding it to make the request; it never leaves this
     /// process and is never logged.
     cache: Mutex<HashMap<String, Cached>>,
+    /// Keyed by token, like `cache`, and on the same clock — the orgs
+    /// the issuer says that token belongs to.
+    org_cache: Mutex<HashMap<String, CachedOrgs>>,
     /// The most recent token each user presented, for as long as its
     /// cache entry lives. The permissions gate hands a handler only the
     /// principal; a handler that must act at the issuer *as that
@@ -185,6 +188,19 @@ struct Cached {
     until: Instant,
 }
 
+/// What the issuer said this token's orgs are.
+///
+/// Separate from [`Cached`] rather than a field on it: the two are
+/// fetched by different callers at different moments — a lane that only
+/// needs identity never asks for orgs — and folding them together would
+/// make the cheaper question pay for the more expensive one.
+///
+/// `None` is "could not ask", which is not the same as `Some(vec![])`.
+struct CachedOrgs {
+    orgs: Option<Vec<(String, Option<String>)>>,
+    until: Instant,
+}
+
 /// Who the issuer says a token belongs to.
 ///
 /// The id is the part that has to exist — memberships key on it. Email
@@ -219,6 +235,7 @@ impl CentralAuth {
             base_url: base_url.into(),
             http: reqwest::Client::new(),
             cache: Mutex::new(HashMap::new()),
+            org_cache: Mutex::new(HashMap::new()),
             by_user: Mutex::new(HashMap::new()),
         }
     }
@@ -337,6 +354,129 @@ impl CentralAuth {
         let fresh = self.introspect(token).await;
         self.remember(token, fresh.clone());
         fresh
+    }
+
+    /// The orgs this token belongs to, as `(slug, role)`, straight from
+    /// the identity server.
+    ///
+    /// The slug is the join. It is what an operator types, what this
+    /// server's own org directories are named after, and what the issuer
+    /// records — so the two sides agree without anything having to
+    /// translate ids between them.
+    ///
+    /// `None` is every failure, for the same reason as
+    /// [`Self::user_for`]: an auth server that cannot answer must never
+    /// widen access, and a caller able to tell "no" from "could not ask"
+    /// would be tempted to admit on the second. It is deliberately
+    /// distinct from `Some(vec![])`, which is the issuer saying plainly
+    /// that this account belongs to nothing.
+    ///
+    /// Cached on the same clock as the profile: identity resolves on
+    /// every RPC, so an uncached lookup would put a second round trip in
+    /// front of every call.
+    pub async fn organizations_for(&self, token: &str) -> Option<Vec<(String, Option<String>)>> {
+        if let Some(hit) = self.cached_orgs(token) {
+            return hit;
+        }
+        let fresh = self.fetch_organizations(token).await;
+        self.remember_orgs(token, fresh.clone());
+        fresh
+    }
+
+    async fn fetch_organizations(&self, token: &str) -> Option<Vec<(String, Option<String>)>> {
+        use architect_telemetry::wide;
+
+        let url = format!("{}/auth/organization/list", self.base_url);
+        let res = self
+            .http
+            .post(&url)
+            .bearer_auth(token)
+            .json(&serde_json::json!({}))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?;
+        if !res.status().is_success() {
+            // 404 means this issuer predates the organization surface.
+            // Worth a line, because the effect — nobody belongs to
+            // anything the issuer knows about — reads from the outside
+            // exactly like a permissions problem.
+            if res.status().as_u16() == 404 {
+                wide::set("auth.issuer_orgs", "unsupported");
+                tracing::warn!(
+                    issuer = %self.base_url,
+                    "central auth: issuer has no /auth/organization/list — memberships \
+                     fall back to this server's own rows"
+                );
+            } else {
+                wide::set("auth.issuer_orgs", "declined");
+            }
+            return None;
+        }
+        let body = res.json::<serde_json::Value>().await.ok()?;
+        let orgs: Vec<(String, Option<String>)> = body
+            .as_array()?
+            .iter()
+            .filter_map(|bundle| {
+                let slug = bundle
+                    .get("organization")?
+                    .get("slug")?
+                    .as_str()?
+                    .to_owned();
+                let role = bundle
+                    .get("membership")
+                    .and_then(|m| m.get("role"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned);
+                Some((slug, role))
+            })
+            .collect();
+        wide::set("auth.issuer_orgs", i64::try_from(orgs.len()).unwrap_or(-1));
+        Some(orgs)
+    }
+
+    fn cached_orgs(&self, token: &str) -> Option<Option<Vec<(String, Option<String>)>>> {
+        let mut cache = self.org_cache.lock().ok()?;
+        let entry = cache.get(token)?;
+        if entry.until <= Instant::now() {
+            cache.remove(token);
+            return None;
+        }
+        Some(entry.orgs.clone())
+    }
+
+    fn remember_orgs(&self, token: &str, orgs: Option<Vec<(String, Option<String>)>>) {
+        let Ok(mut cache) = self.org_cache.lock() else {
+            return;
+        };
+        let ttl = if orgs.is_some() {
+            CACHE_TTL
+        } else {
+            NEGATIVE_TTL
+        };
+        // Bounded for the same reason as the profile cache: a flood of
+        // distinct tokens must not grow this map without limit.
+        if cache.len() > 4096 {
+            cache.retain(|_, c| c.until > Instant::now());
+            if cache.len() > 4096 {
+                cache.clear();
+            }
+        }
+        cache.insert(
+            token.to_owned(),
+            CachedOrgs {
+                orgs,
+                until: Instant::now() + ttl,
+            },
+        );
+    }
+
+    /// Seed the org cache, so a test can exercise the sync without a
+    /// network. Not `#[cfg(test)]`, for the same reason as
+    /// [`Self::remember_for_test`].
+    #[doc(hidden)]
+    pub fn remember_orgs_for_test(&self, token: &str, orgs: Option<Vec<(String, Option<String>)>>) {
+        self.remember_orgs(token, orgs);
     }
 
     fn cached(&self, token: &str) -> Option<Option<CentralProfile>> {
@@ -694,6 +834,29 @@ impl<R: IdentityResolver> IdentityResolver for CentralFallbackResolver<R> {
                 return Principal::Anonymous;
             };
 
+            // The identity server owns memberships; this mirrors its
+            // answer before the fence reads it.
+            //
+            // Done here rather than at each call site because everything
+            // downstream — discovery's org list, the operator check, the
+            // per-org fence below — is keyed to a principal and has no
+            // token to ask with. Writing the rows keeps all of it reading
+            // one table and knowing nothing about where the answer came
+            // from.
+            //
+            // A failure is not fatal and must not be: `None` means the
+            // issuer could not be asked (or has no organization surface
+            // at all, which is any issuer older than architect v0.8.3),
+            // and the rows already mirrored stay as they are. That
+            // degrades to a stale answer rather than locking everyone
+            // out of a server whose auth host is briefly unreachable.
+            if let Some(orgs) = self.central.organizations_for(token).await {
+                if let Err(e) = self.memberships.sync_from_issuer(uuid, &orgs).await {
+                    wide::set("auth.central", "sync_failed");
+                    tracing::warn!(error = %e, "central auth: mirroring issuer orgs failed");
+                }
+            }
+
             // A principal with no row here may still have been invited
             // by address. Claiming is attempted only on that miss, so an
             // established member never pays for it — and the address is
@@ -800,9 +963,19 @@ mod claim_tests {
     }
 
     /// One issuer holding one account, cached so nothing reaches out.
+    /// One issuer holding one account and granting no orgs.
+    ///
+    /// Both caches are seeded, and the org one matters as much as the
+    /// profile: resolving now asks the issuer which orgs a token
+    /// belongs to, so an unseeded cache sends a real request to
+    /// `auth.example.app` and every test waits out the timeout. Seeding
+    /// it with an empty list says what these tests mean anyway — the
+    /// issuer grants nothing, so whatever admits a principal below came
+    /// from this server's own rows.
     fn issuer_holding(principal: uuid::Uuid, email: Option<&str>) -> Arc<CentralAuth> {
         let central = Arc::new(CentralAuth::new("https://auth.example.app"));
         central.remember_profile_for_test("tok", &principal.to_string(), email);
+        central.remember_orgs_for_test("tok", Some(Vec::new()));
         central
     }
 
@@ -882,6 +1055,93 @@ mod claim_tests {
             .resolve(Some("tok"))
             .await;
         assert!(matches!(who, Principal::User { .. }), "got {who:?}");
+    }
+
+    /// The point of the whole exercise: the issuer says you are in the
+    /// org, and nothing local had to be told first.
+    ///
+    /// No `admin grant`, no invite, no row of any kind before this
+    /// request — the membership arrives with the answer and the fence
+    /// reads it in the same pass.
+    #[tokio::test]
+    async fn an_org_the_issuer_grants_admits_with_no_local_row_at_all() {
+        let (_d, memberships) = fixture().await;
+        let principal = uuid::Uuid::new_v4();
+        let central = issuer_holding(principal, Some("cody@example.app"));
+        central.remember_orgs_for_test(
+            "tok",
+            Some(vec![("cbu".to_owned(), Some("admin".to_owned()))]),
+        );
+
+        assert!(
+            memberships
+                .role_for(principal, "cbu")
+                .await
+                .unwrap()
+                .is_none(),
+            "nothing local grants this yet"
+        );
+
+        let who = resolver(central, Arc::clone(&memberships), "cbu")
+            .resolve(Some("tok"))
+            .await;
+        assert!(matches!(who, Principal::User { .. }), "got {who:?}");
+        assert_eq!(
+            memberships
+                .role_for(principal, "cbu")
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Some("admin".into()),
+            "and the issuer's role is mirrored, not invented"
+        );
+    }
+
+    /// An org the issuer does NOT list is still refused, even though the
+    /// same request mirrored a different one. The sync is not a blanket
+    /// admission.
+    #[tokio::test]
+    async fn an_org_the_issuer_omits_is_refused() {
+        let (_d, memberships) = fixture().await;
+        let principal = uuid::Uuid::new_v4();
+        let central = issuer_holding(principal, Some("cody@example.app"));
+        central.remember_orgs_for_test("tok", Some(vec![("cbu".to_owned(), None)]));
+
+        let who = resolver(central, memberships, "tombrooksmusic")
+            .resolve(Some("tok"))
+            .await;
+        assert!(matches!(who, Principal::Anonymous), "got {who:?}");
+    }
+
+    /// An issuer that cannot be asked must not lock out a principal
+    /// whose rows were already mirrored. Degrading to a stale answer is
+    /// right here; the alternative is that a blip at the auth host
+    /// signs everybody out of a server that has the answer on disk.
+    #[tokio::test]
+    async fn an_unreachable_org_listing_leaves_the_mirror_standing() {
+        let (_d, memberships) = fixture().await;
+        let principal = uuid::Uuid::new_v4();
+        memberships
+            .sync_from_issuer(principal, &[("cbu".to_owned(), Some("admin".to_owned()))])
+            .await
+            .unwrap();
+
+        let central = issuer_holding(principal, Some("cody@example.app"));
+        // `None` is "could not ask" — distinct from an empty list.
+        central.remember_orgs_for_test("tok", None);
+
+        let who = resolver(central, Arc::clone(&memberships), "cbu")
+            .resolve(Some("tok"))
+            .await;
+        assert!(matches!(who, Principal::User { .. }), "got {who:?}");
+        assert!(
+            memberships
+                .role_for(principal, "cbu")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// A profile the issuer reported no address for authenticates and
