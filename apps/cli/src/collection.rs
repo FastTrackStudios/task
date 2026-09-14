@@ -146,6 +146,12 @@ pub enum SongCmd {
         /// Song title (e.g. `"Great Are You Lord"`).
         #[arg(long)]
         title: String,
+        /// Who wrote or performs it (`"Maroon 5"`). Lands in the song's
+        /// `writers`, which is what a library sorts and searches by
+        /// beside the title — without it every import of a covers set
+        /// is a list of titles with no way to tell whose.
+        #[arg(long)]
+        artist: Option<String>,
         /// Musical key of the default arrangement (`"Bb Minor"`,
         /// `"F# Dorian"`, `"C"`). Defaults to `C Major`.
         #[arg(long)]
@@ -468,6 +474,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
         SongCmd::Add {
             collection,
             title,
+            artist,
             key,
             chart,
             pdf,
@@ -523,7 +530,7 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
                 .upsert_song(SongDoc {
                     slug: String::new(),
                     title: title.clone(),
-                    writers: Vec::new(),
+                    writers: artist.into_iter().collect(),
                     key: key.clone(),
                     tags: Vec::new(),
                     updated_at: String::new(),
