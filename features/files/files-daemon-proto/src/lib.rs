@@ -16,8 +16,8 @@
 pub mod model;
 pub mod service;
 
-pub use model::{DaemonStatus, FileProgress, RootStatus, RootSyncState};
+pub use model::{AccountSync, DaemonStatus, FileProgress, RootStatus, RootSyncState};
 pub use service::{
     DaemonControlService, DaemonControlServiceClient, DaemonControlServiceStream, DaemonError,
-    DaemonEvent, Pulled,
+    DaemonEvent, EnrolledOrg, Pulled,
 };

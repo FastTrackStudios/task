@@ -60,6 +60,7 @@
 
 pub mod access;
 pub mod curation;
+pub mod enrollment;
 pub mod federation;
 pub mod legacy;
 pub mod media;
@@ -80,6 +81,7 @@ pub use legacy::{FilesError, FilesEvent as LegacyFilesEvent, FilesService};
 
 pub use access::AccessService;
 pub use curation::CurationService;
+pub use enrollment::DeviceEnrollmentService;
 pub use federation::FederationService;
 pub use media::MediaService;
 pub use organise::OrganiseService;

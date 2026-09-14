@@ -158,6 +158,28 @@ pub struct MadeBy {
 /// An archive's first capture reads every byte, and on a five-terabyte
 /// tree that is hours. Reporting nothing for hours is indistinguishable
 /// from being hung — so the agent says which root it is on, how far
+/// The account this machine syncs as, once somebody has signed in.
+///
+/// Signing in is what turns "pair me with each org by hand" into "show
+/// me everything my account can see": the daemon holds the token and,
+/// on a cadence, asks the server to enrol this machine with every org
+/// the account is in. What it learned last time is here so a status
+/// line can say it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(C)]
+pub struct AccountSync {
+    /// The server the token belongs to (`wss://…`).
+    pub server: String,
+    /// When the daemon last asked the server which orgs it is in, if
+    /// it has managed to yet.
+    pub last_enrolled_at: Option<DateTime<Utc>>,
+    /// The org slugs the last enrolment answered with — every org the
+    /// account is a member of that has a peering endpoint.
+    pub orgs: Vec<String>,
+    /// Why the last attempt failed, when it did. Cleared by a success.
+    pub last_error: Option<String>,
+}
+
 /// through the backlog it is, and how big the thing in front of it is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Facet)]
 #[repr(C)]
@@ -224,6 +246,10 @@ pub struct DaemonStatus {
     /// a root looks fine and cannot serve its content.
     #[facet(default)]
     pub awaiting_capture: u32,
+    /// Present once somebody has signed the daemon in. See
+    /// [`AccountSync`].
+    #[facet(default)]
+    pub account: Option<AccountSync>,
     /// Global pause — no root syncs while set.
     pub paused: bool,
     /// Every root the daemon is set to sync.

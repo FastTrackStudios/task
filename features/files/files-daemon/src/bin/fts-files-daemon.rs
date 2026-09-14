@@ -174,6 +174,11 @@ fts-files-daemon — the Task file sync agent
     fts-files-daemon capture [--detach]       read what has not been read yet
     fts-files-daemon shares                   every root this machine holds
     fts-files-daemon unshare <root>           stop holding one (the files stay)
+    fts-files-daemon sign-in [--server URL] [--token T]
+                                              sync as an account: every org it is in, now and later
+                                              (token from --token, FTS_FILES_DAEMON_TOKEN, or stdin)
+    fts-files-daemon sign-out                 forget the account (orgs already admitted keep syncing)
+    fts-files-daemon enroll                   ask the server now which orgs the account is in
     fts-files-daemon coordinator <endpoint-id> sync with this org from now on
     fts-files-daemon peer <endpoint-id>       admit a machine, and take what it shares
     fts-files-daemon forget <endpoint-id>     stop admitting a machine, and stop pulling it
@@ -211,7 +216,7 @@ fn run_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>
         Some(
             "status" | "checkpoint" | "share" | "shares" | "unshare" | "peer" | "forget"
             | "resolve" | "mount" | "unmount" | "mounts" | "evict" | "fetch" | "place"
-            | "mount-all" | "capture" | "coordinator" | "keep",
+            | "mount-all" | "capture" | "coordinator" | "keep" | "sign-in" | "sign-out" | "enroll",
         ) => None,
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
@@ -414,6 +419,24 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
             "no coordinator set"
         }
     );
+    match &status.account {
+        None => println!(
+            "account    nobody signed in — `fts-files-daemon sign-in` syncs every org an account is in"
+        ),
+        Some(a) => {
+            println!("account    {}", a.server);
+            match (&a.last_enrolled_at, &a.last_error) {
+                (_, Some(e)) => println!("           last enrolment failed: {e}"),
+                (Some(at), None) => println!(
+                    "           enrolled {}m ago in {} org(s): {}",
+                    (chrono::Utc::now() - *at).num_minutes(),
+                    a.orgs.len(),
+                    a.orgs.join(" ")
+                ),
+                (None, None) => println!("           not enrolled yet — the next tick will"),
+            }
+        }
+    }
     if status.paused {
         println!("paused     everything");
     }
@@ -1061,6 +1084,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .clone();
             return coordinator(&id).await;
         }
+        Some("sign-in") => return sign_in(&args[1..]).await,
+        Some("sign-out") => return sign_out().await,
+        Some("enroll") => return enroll().await,
         Some("peer") => {
             let id = args.get(1).ok_or("peer needs an endpoint id")?.clone();
             return peer(&id).await;
@@ -1376,5 +1402,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         timer.tick().await;
         daemon.tick().await;
+    }
+}
+
+/// Sign the running agent in as an account. The token is read from
+/// `--token`, then `FTS_FILES_DAEMON_TOKEN`, then stdin — never from
+/// the command line by accident, and never echoed back.
+async fn sign_in(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut server = env("FTS_FILES_DAEMON_SERVER").unwrap_or_default();
+    let mut token = env("FTS_FILES_DAEMON_TOKEN");
+    let mut rest = args.iter();
+    while let Some(flag) = rest.next() {
+        let mut value = || {
+            rest.next()
+                .cloned()
+                .ok_or_else(|| format!("{flag} needs a value"))
+        };
+        match flag.as_str() {
+            "--server" => server = value()?,
+            "--token" => token = Some(value()?),
+            other => return Err(format!("sign-in: unknown flag {other}").into()),
+        }
+    }
+    let token = match token {
+        Some(t) if !t.trim().is_empty() => t,
+        _ => {
+            use std::io::Read as _;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            buf
+        }
+    };
+    let token = token.trim().to_owned();
+    if token.is_empty() {
+        return Err("sign-in needs a token (--token, FTS_FILES_DAEMON_TOKEN, or stdin)".into());
+    }
+
+    let client = control().await?;
+    let status = client.sign_in(server, token).await?;
+    match &status.account {
+        Some(a) => println!("signed in  {}", a.server),
+        None => println!("signed in"),
+    }
+    println!("asking the server which orgs the account is in…");
+    print_enrolled(client.enroll_now().await?);
+    Ok(())
+}
+
+async fn sign_out() -> Result<(), Box<dyn std::error::Error>> {
+    control().await?.sign_out().await?;
+    println!("signed out — orgs already admitted keep syncing; `forget` drops one");
+    Ok(())
+}
+
+/// Run the enrolment round now.
+async fn enroll() -> Result<(), Box<dyn std::error::Error>> {
+    print_enrolled(control().await?.enroll_now().await?);
+    Ok(())
+}
+
+fn print_enrolled(rows: Vec<files_daemon::service::EnrolledOrg>) {
+    if rows.is_empty() {
+        println!("the account is in no org this server hosts");
+        return;
+    }
+    for row in rows {
+        let name = if row.display_name.is_empty() {
+            row.slug.clone()
+        } else {
+            format!("{} ({})", row.display_name, row.slug)
+        };
+        match (&row.error, row.took.len()) {
+            (Some(e), 0) => println!("  {name:<40} {e}"),
+            (Some(e), n) => println!("  {name:<40} {n} root(s); {e}"),
+            (None, 0) => println!("  {name:<40} up to date"),
+            (None, n) => println!("  {name:<40} syncing {n} root(s): {}", row.took.join(", ")),
+        }
     }
 }
