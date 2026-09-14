@@ -38,7 +38,11 @@ pub mod ignore;
 pub mod lane;
 mod org_tree;
 pub mod peer;
-mod registry;
+// Public for `task-server admin rename-org`, which has to rebase every
+// root's recorded path when an org's directory moves. Nothing else
+// outside this crate should reach in; the lane owns the registry in
+// normal operation.
+pub mod registry;
 pub mod remotes;
 /// Opening (and reopening) a root's version-store repo. Public so a
 /// test — or a future sibling crate, e.g. the cadence engine (#260) —
