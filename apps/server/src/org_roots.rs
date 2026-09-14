@@ -150,7 +150,10 @@ mod tests {
         files.adopt_vault().unwrap();
 
         let adopted = adopt_knowledge_roots(&files, &org).await;
-        assert_eq!(adopted, 5, "Wiki, two named wikis, Resources, one copy");
+        assert_eq!(
+            adopted, 6,
+            "Wiki, two named wikis, Resources, Assets, one copy"
+        );
 
         let host = SyncHost::new(files.clone()).placing(OrgPlacer::new(org.clone()));
         let mut offered: Vec<(String, bool)> = host
@@ -169,6 +172,7 @@ mod tests {
         assert_eq!(
             offered,
             [
+                ("acme-audio/Assets".to_string(), false),
                 ("acme-audio/Resources".to_string(), true),
                 (
                     "acme-audio/Subscribed/acme.test/music-theory".to_string(),
@@ -205,8 +209,8 @@ mod tests {
         let (_tmp, org, files) = org();
         assert_eq!(
             adopt_knowledge_roots(&files, &org).await,
-            1,
-            "the Wiki tier"
+            2,
+            "the Wiki tier and the Assets shelf"
         );
         assert_eq!(adopt_knowledge_roots(&files, &org).await, 0, "idempotent");
 

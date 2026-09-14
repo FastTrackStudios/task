@@ -84,6 +84,12 @@ pub const WIKI_FOLDER: &str = "Wiki";
 pub const SUBSCRIBED_FOLDER: &str = "Subscribed";
 /// The directory the tree shows as `Resources/`.
 pub const RESOURCES_FOLDER: &str = "Resources";
+
+/// The folder an org's asset shelves show as — `<org>/assets/<kind>/`
+/// (charts, songs, patches, …) is where every app's documents live
+/// (ADR 0004), and a library nobody can open in a file browser is not
+/// a library. Writable: a chart is a markdown file a person edits.
+pub const ASSETS_FOLDER: &str = "Assets";
 /// The directory the tree shows as `Projects/`.
 pub const PROJECTS_FOLDER: &str = "Projects";
 /// The directory the tree shows as `Vault/`.
@@ -116,6 +122,7 @@ impl OrgRoot {
         };
         Some(match parts.as_slice() {
             ["vault"] => TreePlace::writable(shown(&[VAULT_FOLDER])),
+            ["assets"] => TreePlace::writable(shown(&[ASSETS_FOLDER])),
             // The whole tier: Knowledge and LLM ride inside one root.
             ["wiki"] => TreePlace::writable(shown(&[WIKI_FOLDER])),
             // Or either tier adopted on its own — same shown path, so a
@@ -220,6 +227,7 @@ impl OrgRoot {
             push(format!("{WIKI_FOLDER} — {slug}"), tree);
         }
         push(RESOURCES_FOLDER.to_string(), self.resources_dir());
+        push(ASSETS_FOLDER.to_string(), self.assets_dir());
         for (domain, slug, tree) in subscribed_copies(&self.path().join("subscribed")) {
             push(format!("{SUBSCRIBED_FOLDER} — {domain} — {slug}"), tree);
         }
@@ -422,6 +430,7 @@ mod tests {
         assert_eq!(
             places,
             [
+                ("acme-audio/Assets", false),
                 ("acme-audio/Resources", true),
                 ("acme-audio/Subscribed/acme.test/music-theory", true),
                 ("acme-audio/Wiki", false),

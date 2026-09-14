@@ -122,7 +122,19 @@ impl DeviceRoots {
     /// exist yet.
     pub fn open(data_dir: &std::path::Path, roots_dir: &std::path::Path) -> Result<Self> {
         let file = data_dir.join("shared-dirs.json");
-        let mut dirs = vec![Self::ready(roots_dir)?];
+        // Two places a replica may land: the roots directory, and —
+        // when that directory is the mount itself (`mount-all` over the
+        // roots dir, which is how the desktop app runs it) — beside the
+        // store under `<data>/roots`. `SyncDaemon::landing` chooses the
+        // second; without it here, every root taken from an org failed
+        // with "outside the permitted boundary" and the replica stayed an
+        // empty directory. `<data>/daemon` is the sync daemon's own data
+        // directory (`SyncDaemon::open(backend, data_dir.join("daemon"))`),
+        // and `roots` under it is where `landing_for` puts a replica.
+        let mut dirs = vec![
+            Self::ready(roots_dir)?,
+            Self::ready(&data_dir.join("daemon").join("roots"))?,
+        ];
         if let Ok(raw) = std::fs::read_to_string(&file) {
             for saved in serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default() {
                 // A shared folder that has gone away — an unplugged
@@ -184,5 +196,34 @@ impl DeviceRoots {
 impl files::LocationBoundaries for DeviceRoots {
     fn permitted(&self) -> Vec<std::path::PathBuf> {
         self.dirs.read().expect("shared dirs lock").clone()
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::DeviceRoots;
+    use files::LocationBoundaries as _;
+
+    /// A replica may land in the roots directory or, when that directory
+    /// is the mount itself, beside the store under `<data>/roots`. Both
+    /// must be permitted, or every root taken from an org is refused as
+    /// "outside the permitted boundary" and stays an empty directory.
+    #[test]
+    fn the_beside_the_store_landing_is_permitted() {
+        let data = tempfile::tempdir().unwrap();
+        let roots = tempfile::tempdir().unwrap();
+        let shared = DeviceRoots::open(data.path(), roots.path()).unwrap();
+        let permitted = shared.permitted();
+        let landing = data
+            .path()
+            .join("daemon")
+            .join("roots")
+            .canonicalize()
+            .unwrap();
+        assert!(
+            permitted.contains(&landing),
+            "the landing beside the store must be permitted: {permitted:?}"
+        );
+        assert!(permitted.contains(&roots.path().canonicalize().unwrap()));
     }
 }
