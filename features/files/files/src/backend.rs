@@ -3464,11 +3464,10 @@ impl FilesBackend {
         }
 
         let head_commit = pollster::block_on(backend.read_commit(&head))?;
-        let tree_id = head_commit
-            .root_tree
-            .clone()
-            .into_resolved()
-            .map_err(|_| Error::Repo("settling a conflicted head tree is unsupported".into()))?;
+        let tree_id =
+            head_commit.root_tree.clone().into_resolved().map_err(|_| {
+                Error::Repo("settling a conflicted head tree is unsupported".into())
+            })?;
         let merged = jj_lib::merged_tree::MergedTree::resolved(repo.store().clone(), tree_id);
         let mut tx = repo.start_transaction();
         let commit = pollster::block_on(async {
