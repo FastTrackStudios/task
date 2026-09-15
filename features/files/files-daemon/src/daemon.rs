@@ -1909,7 +1909,7 @@ impl SyncDaemon {
         /// cadence.
         const FOOTPRINT_EVERY: u64 = 10;
         let n = TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if n % FOOTPRINT_EVERY != 0 {
+        if !n.is_multiple_of(FOOTPRINT_EVERY) {
             return;
         }
         let (roots, progress, divergent, divergent_total) = {
