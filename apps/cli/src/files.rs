@@ -470,17 +470,26 @@ async fn run_files_device(cmd: FilesDeviceCmd, slug: &str, vox_url: &str) -> eyr
             // The server lane takes the session token as an argument
             // rather than as the lane's identity, because this call acts
             // across orgs — the token is what says which orgs.
-            let token = crate::session_store::load()?
-                .and_then(|s| s.active_server().map(|e| e.token.clone()))
-                .filter(|t| !t.trim().is_empty())
-                .ok_or_else(|| {
-                    crate::errors::usage("enroll everywhere")
-                        .cause("no stored session")
-                        .hint("run `task auth login` first")
-                        .report()
-                })?;
+            //
+            // And the session names the server the account lives on, so
+            // that is the server to enrol with. Dialling the default lane
+            // instead reached a local server that was not running while
+            // the session pointed at production.
+            let no_session = || {
+                crate::errors::usage("enroll everywhere")
+                    .cause("no stored session")
+                    .hint("run `task auth login` first")
+                    .report()
+            };
+            let session = crate::session_store::load()?.ok_or_else(no_session)?;
+            let entry = session.active_server().ok_or_else(no_session)?;
+            let token = entry.token.clone();
+            if token.trim().is_empty() {
+                return Err(no_session());
+            }
+            let server = (entry.url != crate::session_store::LOCAL_URL).then(|| entry.url.clone());
             let (enrollment, _at): (files_proto::DeviceEnrollmentServiceClient, String) =
-                crate::establish_server_client(None).await?;
+                crate::establish_server_client(server.as_deref()).await?;
             let enrolled = enrollment
                 .enroll_everywhere(token, endpoint.clone(), name)
                 .await
