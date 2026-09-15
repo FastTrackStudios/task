@@ -3428,6 +3428,64 @@ impl FilesBackend {
         Ok(out)
     }
 
+    /// Settle a fork whose heads hold **identical trees**, returning
+    /// whether there was one to settle.
+    ///
+    /// This is the one resolution that needs nobody's judgement: there
+    /// is no content to choose between, because every head agrees about
+    /// every path. `divergences` cannot see such a fork at all — it
+    /// reports a path only where the heads disagree — so a root in this
+    /// state looks settled while every later reconcile keeps inheriting
+    /// two heads and building siblings on them.
+    ///
+    /// A root whose heads genuinely disagree is left alone: that is a
+    /// decision about somebody's work, and it belongs to
+    /// `resolve_divergence` and a person.
+    pub(crate) fn settle_identical_heads_inner(&self, root_id: Uuid) -> Result<bool, Error> {
+        let root = self.get_root_info(root_id)?;
+        if root.flavor != RootFlavor::Media {
+            return Ok(false);
+        }
+        let lock = self.root_lock(root_id);
+        let _guard = lock.lock().expect("root lock poisoned");
+        let Some((repo, head)) = self.reload_existing_repo(&root)? else {
+            return Ok(false);
+        };
+        let heads = self.ordered_heads(&repo, &root, &head);
+        if heads.len() < 2 {
+            return Ok(false);
+        }
+        let backend = repo.store().backend();
+        let first = Self::tree_files_of(backend, &heads[0])?;
+        for other in &heads[1..] {
+            if Self::tree_files_of(backend, other)? != first {
+                return Ok(false);
+            }
+        }
+
+        let head_commit = pollster::block_on(backend.read_commit(&head))?;
+        let tree_id = head_commit
+            .root_tree
+            .clone()
+            .into_resolved()
+            .map_err(|_| Error::Repo("settling a conflicted head tree is unsupported".into()))?;
+        let merged = jj_lib::merged_tree::MergedTree::resolved(repo.store().clone(), tree_id);
+        let mut tx = repo.start_transaction();
+        let commit = pollster::block_on(async {
+            tx.repo_mut()
+                .new_commit(heads.clone(), merged)
+                .set_description("settle identical heads".to_string())
+                .write()
+                .await
+        })
+        .map_err(|e| Error::Repo(format!("settling commit: {e}")))?;
+        let commit_id = commit.id().clone();
+        let new_repo = pollster::block_on(tx.commit("settle identical heads"))
+            .map_err(|e| Error::Repo(e.to_string()))?;
+        self.set_heads(root_id, new_repo, commit_id, None);
+        Ok(true)
+    }
+
     /// The root's visible **checkpoint** heads with the journal-line
     /// head first — the stable "side A" every divergence surface
     /// reports. Ephemeral auto-snapshot tips are excluded (PR #291
@@ -3917,6 +3975,19 @@ impl FilesBackend {
 /// the live tree — carry the safety rules (parents-present,
 /// never-clobber-unversioned-work).
 impl FilesBackend {
+    /// Settle a fork whose heads all hold the same tree, returning
+    /// whether one was settled. See
+    /// [`FilesBackend::settle_identical_heads_inner`] for why this needs
+    /// nobody's judgement and a real divergence still does.
+    ///
+    /// # Errors
+    ///
+    /// If the root is unknown or its repo cannot be read or written.
+    pub async fn settle_identical_heads(&self, root_id: Uuid) -> Result<bool, FilesError> {
+        let this = self.clone();
+        blocking(move || this.settle_identical_heads_inner(root_id)).await
+    }
+
     /// The root's visible heads, hex, journal-line first.
     pub fn sync_heads(&self, root_id: Uuid) -> Result<Vec<String>, FilesError> {
         let root = self.get_root_info(root_id).map_err(to_files_error)?;
