@@ -490,3 +490,127 @@ async fn a_fork_with_a_real_disagreement_is_left_alone() {
         "the disagreement should still be reported"
     );
 }
+
+/// Two machines that changed different files rejoin without asking.
+///
+/// This is the ordinary shape of two-way sync, not an edge case: a pull
+/// leaves the peer's head beside our own, and whatever either side does
+/// next grows its own line from there. Nobody disagreed about anything —
+/// one side renamed a file, the other added one somewhere else — so
+/// there is nothing to ask a person and the lines should rejoin.
+///
+/// Left unmerged they never do, and a listing answers from whichever
+/// line it reaches first: which is how a rename shows as both names at
+/// once, and a deleted file comes back on the next refresh.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_lines_that_changed_different_files_merge_themselves() {
+    let (primary, replica, root_id) = rig().await;
+
+    // The replica renames the seeded file. The primary, knowing nothing
+    // of that, adds one of its own.
+    std::fs::rename(
+        replica.tree().join("seed.txt"),
+        replica.tree().join("renamed.txt"),
+    )
+    .unwrap();
+    settle(&replica, root_id).await;
+
+    std::fs::write(primary.tree().join("theirs.txt"), b"theirs").unwrap();
+    primary
+        .backend
+        .checkpoint_now(root_id, None)
+        .await
+        .expect("primary capture");
+
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("pull the peer's line");
+    assert_eq!(
+        replica.backend.sync_heads(root_id).expect("heads").len(),
+        2,
+        "the two machines' work should arrive as two lines"
+    );
+
+    assert!(
+        replica
+            .backend
+            .settle_identical_heads(root_id)
+            .await
+            .expect("settle"),
+        "two lines that touched different files should have merged"
+    );
+    assert_eq!(
+        replica.backend.sync_heads(root_id).expect("heads").len(),
+        1,
+        "the merge should leave one line"
+    );
+
+    // Both sides' work survives, and the rename is a rename — not the
+    // old name resurrected beside the new one.
+    replica
+        .backend
+        .materialize_head(root_id)
+        .expect("materialize the merge");
+    let tree = tree_of(&replica);
+    assert!(
+        tree.contains_key("renamed.txt"),
+        "the replica's rename was lost: {:?}",
+        tree.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !tree.contains_key("seed.txt"),
+        "the old name came back: {:?}",
+        tree.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        tree.contains_key("theirs.txt"),
+        "the peer's file was lost: {:?}",
+        tree.keys().collect::<Vec<_>>()
+    );
+}
+
+/// The same path, changed differently on both sides, is still a dispute.
+///
+/// The merge above must not become a silent winner-picker: when both
+/// machines wrote the same file, nothing in the history says which is
+/// right, and the pair stays for `resolve` and a person.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_same_file_changed_on_both_sides_is_not_merged_away() {
+    let (primary, replica, root_id) = rig().await;
+
+    std::fs::write(replica.tree().join("seed.txt"), b"ours").unwrap();
+    settle(&replica, root_id).await;
+    std::fs::write(primary.tree().join("seed.txt"), b"theirs").unwrap();
+    primary
+        .backend
+        .checkpoint_now(root_id, None)
+        .await
+        .expect("primary capture");
+
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("pull the peer's line");
+
+    assert!(
+        !replica
+            .backend
+            .settle_identical_heads(root_id)
+            .await
+            .expect("settle"),
+        "a real disagreement must not be merged away"
+    );
+    assert_eq!(
+        replica.backend.sync_heads(root_id).expect("heads").len(),
+        2,
+        "the dispute should still be two lines"
+    );
+    assert!(
+        !replica
+            .backend
+            .divergences(root_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the disputed path should be reported"
+    );
+}

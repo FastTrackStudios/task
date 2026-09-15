@@ -3457,10 +3457,31 @@ impl FilesBackend {
         }
         let backend = repo.store().backend();
         let first = Self::tree_files_of(backend, &heads[0])?;
+        let mut identical = true;
         for other in &heads[1..] {
             if Self::tree_files_of(backend, other)? != first {
-                return Ok(false);
+                identical = false;
+                break;
             }
+        }
+        if !identical {
+            // The sides hold different trees, which is not the same as
+            // the sides disagreeing. One machine deleting a file the
+            // other never touched is two different trees and no dispute
+            // at all, and it is the ordinary shape of two-way sync: a
+            // pull leaves the peer's head beside our own, and the next
+            // thing either side does grows its own line from there.
+            //
+            // Left unmerged those lines never rejoin, and a listing
+            // answers from whichever it reaches first — which is how a
+            // rename shows up as both names at once and a deleted file
+            // comes back on the next refresh.
+            //
+            // So: merge them against their common ancestor, and take the
+            // result only if every path resolves without a choice. A
+            // path both sides changed differently is a real dispute and
+            // stays one, for `resolve` and a person to settle.
+            return self.merge_unconflicted_heads(root_id, &root, &repo, &heads);
         }
 
         let head_commit = pollster::block_on(backend.read_commit(&head))?;
@@ -3482,6 +3503,117 @@ impl FilesBackend {
         let new_repo = pollster::block_on(tx.commit("settle identical heads"))
             .map_err(|e| Error::Repo(e.to_string()))?;
         self.set_heads(root_id, new_repo, commit_id, None);
+        Ok(true)
+    }
+
+    /// Rejoin two lines that never actually disagreed.
+    ///
+    /// A three-way merge against the lines' common ancestor, per path,
+    /// on file identity — no content merging, because these are media
+    /// roots where a file is a unit. A path only one side moved away
+    /// from the ancestor takes that side; a path both sides left alone
+    /// stays; a path both sides changed *differently* is a real dispute,
+    /// and the whole merge is abandoned so `resolve` and a person get it
+    /// intact.
+    ///
+    /// Only two heads are merged here. Three lines at once means two
+    /// machines diverged while a third was already diverged, which is
+    /// rare enough to be worth a person's eyes rather than a guess.
+    fn merge_unconflicted_heads(
+        &self,
+        root_id: Uuid,
+        root: &FileRootInfo,
+        repo: &Arc<ReadonlyRepo>,
+        heads: &[CommitId],
+    ) -> Result<bool, Error> {
+        if heads.len() != 2 {
+            return Ok(false);
+        }
+        let backend = repo.store().backend();
+        let ancestors = repo
+            .index()
+            .common_ancestors(
+                std::slice::from_ref(&heads[0]),
+                std::slice::from_ref(&heads[1]),
+            )
+            .map_err(|e| Error::Repo(format!("common ancestor: {e}")))?;
+        // No shared history: two trees that merely share a name. Nothing
+        // here can tell which is the newer truth.
+        let Some(base) = ancestors.first() else {
+            return Ok(false);
+        };
+        let base_files = Self::tree_files_of(backend, base)?;
+        let ours = Self::tree_files_of(backend, &heads[0])?;
+        let theirs = Self::tree_files_of(backend, &heads[1])?;
+
+        // Every path either side knows about, and what to do with it.
+        // `None` is "absent", which is a state like any other — a delete
+        // one side made is a change from the ancestor exactly as an edit
+        // is.
+        let mut take_theirs: Vec<RepoPathBuf> = Vec::new();
+        let paths: BTreeSet<&RepoPathBuf> = ours.keys().chain(theirs.keys()).collect();
+        for path in paths {
+            let o = base_files.get(path);
+            let a = ours.get(path);
+            let b = theirs.get(path);
+            if a == b {
+                continue;
+            }
+            if a == o {
+                take_theirs.push((*path).clone());
+                continue;
+            }
+            if b == o {
+                continue;
+            }
+            return Ok(false);
+        }
+
+        let store = repo.store().clone();
+        let head_commit = pollster::block_on(backend.read_commit(&heads[0]))?;
+        let base_tree_id = head_commit
+            .root_tree
+            .clone()
+            .into_resolved()
+            .map_err(|_| Error::Repo("merging a conflicted head tree is unsupported".into()))?;
+        let their_commit = pollster::block_on(backend.read_commit(&heads[1]))?;
+        let their_tree_id = their_commit
+            .root_tree
+            .clone()
+            .into_resolved()
+            .map_err(|_| Error::Repo("merging a conflicted head tree is unsupported".into()))?;
+        let their_tree = pollster::block_on(backend.read_tree(RepoPath::root(), &their_tree_id))?;
+
+        let mut builder = jj_lib::tree_builder::TreeBuilder::new(store.clone(), base_tree_id);
+        for path in &take_theirs {
+            let value = pollster::block_on(files_store::version::chain::lookup_dyn(
+                backend,
+                &their_tree,
+                path,
+            ))?;
+            match value {
+                Some(v) => builder.set(path.clone(), v),
+                None => builder.remove(path.clone()),
+            }
+        }
+        let merged_tree_id = pollster::block_on(builder.write_tree())
+            .map_err(|e| Error::Repo(format!("merged tree: {e}")))?;
+        let merged = jj_lib::merged_tree::MergedTree::resolved(store, merged_tree_id);
+
+        let mut tx = repo.start_transaction();
+        let commit = pollster::block_on(async {
+            tx.repo_mut()
+                .new_commit(heads.to_vec(), merged)
+                .set_description("merge two lines that did not disagree".to_string())
+                .write()
+                .await
+        })
+        .map_err(|e| Error::Repo(format!("merge commit: {e}")))?;
+        let commit_id = commit.id().clone();
+        let new_repo = pollster::block_on(tx.commit("merge unconflicted heads"))
+            .map_err(|e| Error::Repo(e.to_string()))?;
+        self.set_heads(root_id, new_repo, commit_id, None);
+        let _ = root;
         Ok(true)
     }
 

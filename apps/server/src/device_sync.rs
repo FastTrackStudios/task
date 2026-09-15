@@ -298,6 +298,33 @@ async fn sweep_peer(
                         "device sync: pulled a peer's work"
                     );
                 }
+                // A pull leaves the peer's head beside our own, which is
+                // the design: two lines, settled later. The sync agent
+                // settles the ones that need no decision on the tick
+                // that notices them; the server never did, so every
+                // exchange with a device left another pair behind and
+                // the root's head set only ever grew. A `browse` then
+                // answers from whichever line it reaches first, which is
+                // how a file deleted on a laptop reappears on the next
+                // listing and a rename shows up as both names at once.
+                //
+                // Only the forks whose sides agree are settled here —
+                // identical trees, nothing to choose between. A real
+                // disagreement is still a person's to resolve.
+                match files.settle_identical_heads(root.id).await {
+                    Ok(true) => info!(
+                        peer = %host.0,
+                        root = %root.id,
+                        "device sync: settled a fork whose sides agreed"
+                    ),
+                    Ok(false) => {}
+                    Err(e) => warn!(
+                        peer = %host.0,
+                        root = %root.id,
+                        error = %e,
+                        "device sync: could not settle heads"
+                    ),
+                }
             }
             Err(e) => warn!(
                 peer = %host.0,
