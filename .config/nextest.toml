@@ -31,6 +31,17 @@ slow-timeout = { period = "10s", terminate-after = 3 }
 filter = 'package(files) and binary(cadence)'
 slow-timeout = { period = "10s", terminate-after = 3 }
 
+# `mount_writeback` drives a REAL inotify watcher against a virtual
+# clock: it writes in a replica's tree and then loops, offering the
+# cadence a pass at a time, until the watcher's hint has landed and the
+# capture has reached the peer. That handshake is what the test is for —
+# the whole point is that nobody types `checkpoint` — and it costs a
+# handful of filesystem round trips per operation, seven operations
+# deep. Under the default 2s/x2 it is killed mid-matrix.
+[[profile.default.overrides]]
+filter = 'package(files-sync) and binary(mount_writeback)'
+slow-timeout = { period = "20s", terminate-after = 3 }
+
 # The daemon's peering tests bind real iroh endpoints and dial between
 # them, and one of them exists to prove a dial to an absent machine
 # *gives up* — which takes the dial timeout (5s, matching
