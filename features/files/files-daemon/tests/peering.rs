@@ -533,3 +533,82 @@ async fn dialling_a_machine_that_is_not_there_gives_up() {
         "the dial did not give up within its own timeout"
     );
 }
+
+/// A rename made between the write and the end of quiescence survives a
+/// pull that lands in the meantime.
+///
+/// `tick` captures local work before it pulls, but `backend.tick()`
+/// captures only what the cadence calls *due*, and the cadence waits for
+/// quiescence on purpose. Inside that window the change exists on disk
+/// and nowhere else, and a pull materialises the peer's tree over it.
+///
+/// A modified file hid this: the peer's tree holds the same path, so the
+/// materialise rewrites content the next capture picks up regardless. A
+/// rename does not survive it. The old name is absent locally and
+/// present in the peer's tree, so it comes back; the new name is in no
+/// tree at all, so it is pruned — and the rename is gone, quietly, with
+/// the tree looking healthy afterwards.
+///
+/// The clock never advances here: that is the point. Quiescence has NOT
+/// passed when the pull arrives.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rename_survives_a_pull_that_beats_quiescence() {
+    let server = Machine::open().await;
+    let laptop = Machine::open().await;
+    let album = server.with_album(b"the rough mix").await;
+
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    laptop.daemon.admit_peer(&server.endpoint_id);
+    laptop
+        .daemon
+        .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("take the album");
+    laptop.daemon.tick().await;
+    assert_eq!(laptop.read("mix.wav"), b"the rough mix");
+
+    // The watcher is what a signed-in agent runs, and the hint it emits
+    // is what tells the cadence this root has uncommitted work.
+    laptop.backend.enable_watching().await;
+    std::fs::rename(
+        laptop.album_tree().join("mix.wav"),
+        laptop.album_tree().join("final-mix.wav"),
+    )
+    .expect("rename in the replica");
+
+    let hinted = tokio::time::timeout(Duration::from_secs(60), async {
+        while !laptop.backend.cadence().session_open(album) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    assert!(
+        hinted.is_ok(),
+        "the rename never reached the cadence engine as a hint"
+    );
+
+    // The pull, arriving mid-session. Nothing advances the clock.
+    laptop.daemon.tick().await;
+
+    assert!(
+        !laptop.album_tree().join("mix.wav").exists(),
+        "the pull put the old name back — the rename was lost"
+    );
+    assert_eq!(
+        laptop.read("final-mix.wav"),
+        b"the rough mix",
+        "the pull pruned the renamed file"
+    );
+
+    // And it is a commit, so the other side can have it.
+    server
+        .daemon
+        .sync_from_peer(&laptop.endpoint_id, album, vec![], &server.dir)
+        .await
+        .expect("the server pulls the laptop");
+    server.daemon.tick().await;
+    assert!(
+        server.album_tree().join("final-mix.wav").exists(),
+        "the rename never reached the other machine"
+    );
+}
