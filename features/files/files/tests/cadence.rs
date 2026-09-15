@@ -769,3 +769,50 @@ async fn a_corrupt_journal_costs_labels_not_the_root() {
 
     harness.shutdown().await;
 }
+
+/// A replica adopted *after* watching was switched on is watched too.
+///
+/// `enable_watching` walks the roots that exist when it runs and sets a
+/// flag for the ones that arrive later. `create_root` and the marked-root
+/// adoption both honour that flag; `adopt_replica` did not — so on a sync
+/// agent, every root taken from a peer after startup had no watcher, its
+/// local edits never became cadence activity, and nothing it held was
+/// ever captured. The pull worked; the push had nothing to send. A
+/// restart hid it, because then the replica existed when `enable_watching`
+/// ran.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replica_adopted_after_watching_starts_is_watched() {
+    let harness = Harness::start(CadenceConfig::default()).await;
+    harness.backend.enable_watching().await;
+
+    // The replica lands in its own tree, the way a pull places one.
+    let replica_dir = harness._data_dir.path().join("taken-from-a-peer");
+    std::fs::create_dir_all(&replica_dir).unwrap();
+    let root_id = Uuid::new_v4();
+    harness
+        .backend
+        .adopt_replica(
+            root_id,
+            "taken-from-a-peer",
+            replica_dir.to_str().unwrap(),
+            RootFlavor::Media,
+        )
+        .expect("adopt replica");
+
+    // No explicit `watch_root`: the flag is what has to carry it.
+    std::fs::write(replica_dir.join("overdub.wav"), b"work done offline").unwrap();
+    let opened = tokio::time::timeout(Duration::from_secs(10), async {
+        while !harness.backend.cadence().session_open(root_id) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    assert!(
+        opened.is_ok(),
+        "an edit in a replica adopted after startup never reached the cadence engine, \
+         so it would never be captured and never sync back"
+    );
+
+    harness.backend.unwatch_root(root_id);
+    harness.shutdown().await;
+}

@@ -197,15 +197,26 @@ async fn create_browse_chain_checkpoint_over_rpc() {
     assert_eq!(chain[0].commit_id, cp2.commit_id, "newest first");
     assert_eq!(chain[1].commit_id, cp1.commit_id);
 
-    // A checkpoint with no live-tree changes still succeeds (a new
-    // commit — the certifying scan itself is the event), but writes
-    // nothing: `changed_paths` is empty (its own documented contract),
-    // and no new chain entry appears.
+    // A checkpoint with no live-tree changes still succeeds and still
+    // writes nothing — `changed_paths` is empty, no new chain entry —
+    // and it now leaves the head exactly where it was.
+    //
+    // It used to mint a fresh commit, on the reasoning that the
+    // certifying scan is itself the event worth recording. That event is
+    // recorded, in the root's journal, which is where an audit of "we
+    // scanned and found nothing" belongs. Keeping it in the commit graph
+    // instead was what forked replicas: two machines whose cadences both
+    // came round on an unchanged root minted two *different* empty
+    // commits on the same parent, and every path underneath was then
+    // reported as "two machines changed".
     let cp3 = client
         .checkpoint_now(root.id, None)
         .await
         .expect("checkpoint_now rpc");
-    assert_ne!(cp3.commit_id, cp2.commit_id, "still a new commit");
+    assert_eq!(
+        cp3.commit_id, cp2.commit_id,
+        "a no-op checkpoint leaves the head where it is"
+    );
     assert!(
         cp3.changed_paths.is_empty(),
         "a no-op checkpoint changes nothing: {:?}",
@@ -652,10 +663,15 @@ async fn concurrent_checkpoints_on_same_root_do_not_race() {
         let info = t.await.expect("checkpoint task panicked");
         commit_ids.insert(info.commit_id);
     }
-    assert_eq!(
-        commit_ids.len(),
-        N,
-        "every concurrent checkpoint produced a distinct commit"
+    // Not "N distinct commits": a checkpoint that finds nothing left to
+    // record now returns the head rather than minting an empty commit,
+    // and under this race that is the honest answer — a writer whose
+    // file was already swept into the previous capture has nothing of
+    // its own to commit. Every checkpoint still succeeded, and the real
+    // proof is below.
+    assert!(
+        !commit_ids.is_empty() && commit_ids.len() <= N,
+        "every concurrent checkpoint reported a commit it could name: {commit_ids:?}"
     );
 
     // The real proof: every writer's file is reachable through the

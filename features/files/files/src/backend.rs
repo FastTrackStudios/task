@@ -3888,6 +3888,23 @@ impl FilesBackend {
         self.registry.insert(root.clone())?;
         self.set_heads(root_id, repo, head, None);
         self.ignore_of(&root)?;
+        // Watched like any other root that arrives after watching was
+        // switched on — the same clause `create_root` and the marked-root
+        // adoption carry. Without it a sync agent watched only the roots
+        // it already had when it started: every root taken from a peer
+        // afterwards sat unwatched, its local edits never became cadence
+        // activity, and so nothing it held was ever captured. The pull
+        // half worked, the push half had nothing to send, and a restart
+        // hid the whole thing by making the replica old enough to be
+        // caught by `enable_watching`'s opening walk.
+        if self
+            .watch_new_roots
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            if let Err(err) = self.watch_root(root.id) {
+                tracing::warn!(root_id = %root.id, ?err, "files: replica not watched");
+            }
+        }
         self.publish(FilesEvent::RootCreated(root.clone()));
         Ok(root)
     }

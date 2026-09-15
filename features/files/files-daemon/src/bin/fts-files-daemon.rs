@@ -27,6 +27,8 @@
 //! | `FTS_FILES_DAEMON_COORDINATOR` | the peer to sync with: an iroh **endpoint id**, or a `ws://` URL for a local dev server | — |
 //! | `FTS_FILES_DAEMON_ROOTS` | where newly adopted roots land | `<data>/roots` |
 //! | `FTS_FILES_DAEMON_SYNC_ALL` | take everything the coordinator offers | `1` |
+//! | `FTS_FILES_DAEMON_QUIESCE_SECS` | quiet before local edits become a checkpoint a peer can pull | `60` |
+//! | `FTS_FILES_DAEMON_SNAPSHOT_SECS` | debounce between mid-session snapshots | `600` |
 //!
 //! # Why the coordinator is an endpoint id and not a URL
 //!
@@ -1227,10 +1229,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // quiescence) are tuned for a session's *version history* being
     // legible — one save point per session, not one per keystroke — and
     // on a machine whose whole job is to get work to another machine
-    // that is a long time to hold it. So both are settable, and neither
-    // is silently changed.
+    // that is a long time to hold it.
+    //
+    // So this agent takes a shorter quiescence than the product default,
+    // and says so rather than changing it quietly. Thirty minutes is the
+    // right answer for "how should a mix session read back six months
+    // from now" and the wrong one for a folder somebody edits expecting
+    // it to arrive: a file saved in the mount stayed on this machine for
+    // half an hour, which reads as sync being broken rather than
+    // deliberate. A minute of quiet is still nowhere near per-keystroke
+    // — it is one checkpoint per burst of editing — and the debounce is
+    // left alone, so a long working session still snapshots on the
+    // product's rhythm. Both remain settable.
+    const SYNC_QUIESCENCE_SECS: i64 = 60;
     let cadence = {
         let mut config = files::CadenceConfig::default();
+        config.quiescence = chrono::TimeDelta::seconds(SYNC_QUIESCENCE_SECS);
         if let Some(secs) = env("FTS_FILES_DAEMON_SNAPSHOT_SECS").and_then(|s| s.parse().ok()) {
             config.snapshot_debounce = chrono::TimeDelta::seconds(secs);
         }
