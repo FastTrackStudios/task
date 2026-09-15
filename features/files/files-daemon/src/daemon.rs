@@ -1779,6 +1779,7 @@ impl SyncDaemon {
         if !captured.is_empty() {
             tracing::debug!(count = captured.len(), "files-daemon: captured local work");
         }
+        self.capture_before_pulling().await;
 
         // Machines somebody named while they were asleep. Cheap when
         // there are none, which is the ordinary case.
@@ -2107,6 +2108,57 @@ impl SyncDaemon {
     pub async fn checkpoint_now(&self, root_id: Uuid) -> Result<()> {
         self.inner.backend.checkpoint_now(root_id, None).await?;
         Ok(())
+    }
+
+    /// Commit local work that the cadence has not got round to yet, for
+    /// every root about to be pulled into.
+    ///
+    /// [`Self::tick`] above says capture comes before the pull, and
+    /// means it — but `backend.tick()` captures only what the cadence
+    /// calls *due*, and the cadence deliberately waits for quiescence so
+    /// that a recording storm becomes one commit rather than three
+    /// hundred. Between the write and the end of that window the change
+    /// exists only on disk, and the pull that lands in the meantime
+    /// materialises the peer's tree straight over it.
+    ///
+    /// A modified file survived that, which is why this went unnoticed:
+    /// the peer's tree holds the same path, so materialising rewrites
+    /// content that the next capture picks up anyway. A **rename** did
+    /// not. The old path is missing locally and present in the peer's
+    /// tree, so it is restored; the new path is in no tree at all, so it
+    /// is pruned. The rename is gone, and with it any content that only
+    /// lived under the new name — silently, with the tree looking
+    /// healthy afterwards.
+    ///
+    /// So: an open session means there is uncommitted local work, and
+    /// anything about to be overwritten is committed first. The cost is
+    /// that a root being edited while a peer is also moving gets its
+    /// session cut at the tick rather than at quiescence — a few more
+    /// commits in the chain. The alternative is losing the edit, and a
+    /// chain with an extra commit in it is not a defect.
+    async fn capture_before_pulling(&self) {
+        let pending: Vec<Uuid> = {
+            let roots = self.inner.roots.lock().expect("roots lock");
+            roots
+                .iter()
+                .filter(|(_, root)| !root.paused && !root.peers.is_empty())
+                .map(|(id, _)| *id)
+                .filter(|id| self.inner.backend.cadence().session_open(*id))
+                .collect()
+        };
+        for root_id in pending {
+            match self.inner.backend.checkpoint_now(root_id, None).await {
+                Ok(_) => tracing::debug!(
+                    %root_id,
+                    "files-daemon: committed local work before pulling"
+                ),
+                Err(e) => tracing::warn!(
+                    %root_id,
+                    error = %e,
+                    "files-daemon: could not commit local work before pulling"
+                ),
+            }
+        }
     }
 
     /// The daemon's whole status, snapshotting live per-file progress.
