@@ -870,3 +870,134 @@ async fn a_capture_pass_does_not_claim_the_files_a_pull_just_wrote() {
         "a replica that only pulled is in dispute with itself: {divergent:?}"
     );
 }
+
+/// A *watched* replica — the shape a sync agent actually runs, now that
+/// a replica is watched like any other root — pulls, then edits, and
+/// ends up on one line: the capture that follows a local edit descends
+/// from the head the pull brought in, rather than forking a sibling off
+/// it.
+///
+/// This is the half the pull-only test above cannot see. Watching a
+/// replica means the pull's own materialising writes reach the watcher
+/// as filesystem events; if those were captured as *local* work, every
+/// file a pull wrote would come back as a second head and the root would
+/// be in dispute with itself over content both sides already agree on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watched_replica_that_edits_stays_on_one_line() {
+    let (primary, replica, root_id) = rig().await;
+    replica.backend.enable_watching().await;
+
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("first pull");
+    let pulled = replica.backend.sync_heads(root_id).expect("heads");
+    assert_eq!(pulled.len(), 1, "the pull leaves one head: {pulled:?}");
+
+    // Let the watcher deliver whatever the pull's writes produced, then
+    // capture. A capture with nothing local to say must not move the
+    // head at all.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    replica
+        .backend
+        .checkpoint_now(root_id, None)
+        .await
+        .expect("capture after the pull");
+    let settled = replica.backend.sync_heads(root_id).expect("heads");
+    assert_eq!(
+        settled, pulled,
+        "capturing after a pull invented local work out of the pull's own writes"
+    );
+    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    assert!(
+        divergent.is_empty(),
+        "a watched replica forked over content it had just been given: {divergent:?}"
+    );
+
+    // Now a genuine local edit: one head still, descending from the
+    // pulled one, and the primary can fast-forward onto it.
+    std::fs::write(
+        replica._dir.path().join("session").join("overdub.wav"),
+        vec![0x33u8; 8 * 1024],
+    )
+    .unwrap();
+    replica
+        .backend
+        .checkpoint_now(root_id, Some("overdub".into()))
+        .await
+        .expect("capture the edit");
+    let after = replica.backend.sync_heads(root_id).expect("heads");
+    assert_eq!(after.len(), 1, "a local edit forked the replica: {after:?}");
+    assert_ne!(after, pulled, "the edit should have moved the head");
+    assert!(
+        replica
+            .backend
+            .divergences(root_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a local edit on a watched replica must not be a divergence"
+    );
+
+    // The proof it descends rather than forks: the primary pulls it back
+    // as a fast-forward and ends up undivided.
+    reconcile(&primary.backend, &replica.client, root_id)
+        .await
+        .expect("pull back");
+    let divergent = primary.backend.divergences(root_id).await.unwrap();
+    assert!(
+        divergent.is_empty(),
+        "the replica's edit reached the primary as a fork, not a descendant: {divergent:?}"
+    );
+}
+
+/// Two agents that capture with nothing to capture end up in dispute
+/// over content they agree on completely.
+///
+/// A checkpoint with no changed paths still wrote a commit, so a
+/// replica that pulled head `H` and then ran its cadence sat on an empty
+/// `H'`, while the peer's own cadence sat on an equally empty `H''`.
+/// Same tree, different commit, both children of `H` — siblings, and a
+/// root in dispute with itself over every path it holds. That is the
+/// shape a machine holding thousands of pulled files reports as
+/// thousands of "two machines changed" paths, none of which anybody
+/// edited.
+#[tokio::test(flavor = "multi_thread")]
+async fn captures_with_nothing_to_capture_do_not_fork_the_root() {
+    let (primary, replica, root_id) = rig().await;
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("first pull");
+    let agreed = replica.backend.sync_heads(root_id).expect("heads");
+
+    // Neither side touches a file; both cadences come round.
+    primary
+        .backend
+        .checkpoint_now(root_id, None)
+        .await
+        .expect("primary idle capture");
+    replica
+        .backend
+        .checkpoint_now(root_id, None)
+        .await
+        .expect("replica idle capture");
+
+    assert_eq!(
+        replica.backend.sync_heads(root_id).expect("heads"),
+        agreed,
+        "an idle capture moved the replica's head with nothing to record"
+    );
+    assert_eq!(
+        primary.backend.sync_heads(root_id).expect("heads"),
+        agreed,
+        "an idle capture moved the primary's head with nothing to record"
+    );
+
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("second pull");
+    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    assert!(
+        divergent.is_empty(),
+        "two idle captures put the root in dispute over content both sides agree on: {divergent:?}"
+    );
+}

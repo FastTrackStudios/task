@@ -141,7 +141,7 @@ async fn write_checkpoint_async(capture: Capture<'_>) -> Result<CheckpointResult
     } = capture;
     let store = repo.store().clone();
     let content = ContentStore::for_repo(repo, backend)?;
-    let mut builder = TreeBuilder::new(store.clone(), base_tree_id);
+    let mut builder = TreeBuilder::new(store.clone(), base_tree_id.clone());
     let mut changed_paths = Vec::new();
     let mut requeued_paths = Vec::new();
     let mut present: BTreeSet<RepoPathBuf> = BTreeSet::new();
@@ -297,6 +297,28 @@ async fn write_checkpoint_async(capture: Capture<'_>) -> Result<CheckpointResult
         .write_tree()
         .await
         .map_err(|e| Error::Repo(format!("write_tree: {e}")))?;
+
+    // Nothing to record, so nothing is written. A capture that commits
+    // an unchanged tree looks harmless on one machine — an empty commit
+    // in the history — and is corrosive between two: a replica that
+    // pulled head `H` and then ran its cadence sits on an empty `H'`,
+    // the peer's own idle cadence sits on an equally empty `H''`, and
+    // the next reconcile finds two children of `H` holding identical
+    // trees. That is a fork, and every path under it is reported as
+    // "two machines changed" — thousands of disputes over content
+    // nobody touched, on roots that had only ever been pulled.
+    //
+    // The parent is returned as the capture's commit, which is the
+    // truthful answer to "where is this root's checkpoint": exactly
+    // where it was.
+    if new_tree_id == base_tree_id {
+        return Ok(CheckpointResult {
+            repo: Arc::clone(repo),
+            commit_id: parent_id,
+            changed_paths,
+            requeued_paths,
+        });
+    }
     let merged_tree = MergedTree::resolved(store, new_tree_id);
 
     let mut tx = repo.start_transaction();

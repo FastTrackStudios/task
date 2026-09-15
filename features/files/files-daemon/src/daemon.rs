@@ -1868,6 +1868,22 @@ impl SyncDaemon {
                 .get(&root_id)
                 .is_some_and(|s| s.divergence_known);
             if heads_imported > 0 || first_look {
+                // A fork whose heads agree about every path is settled
+                // here rather than reported: there is nothing to choose
+                // between, `divergences` cannot see it (it lists only
+                // paths the heads disagree about), and left alone it
+                // keeps every later reconcile building siblings on two
+                // heads. A fork with real disagreement is untouched —
+                // that is somebody's work, and a person settles it.
+                match self.inner.backend.settle_identical_heads(root_id).await {
+                    Ok(true) => {
+                        tracing::info!(%root_id, "files-daemon: settled a fork whose sides agreed");
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(%root_id, error = %e, "files-daemon: could not settle heads");
+                    }
+                }
                 let divergent: Vec<String> = self
                     .inner
                     .backend
