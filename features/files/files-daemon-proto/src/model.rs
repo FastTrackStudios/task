@@ -95,6 +95,17 @@ pub struct RootStatus {
     /// needing attention invisible — and the tree quietly showing one
     /// side of it.
     pub divergent: Vec<String>,
+    /// How many paths diverge in total, of which [`Self::divergent`]
+    /// carries the first screenful.
+    ///
+    /// The list is capped because a status snapshot is cloned per root
+    /// per tick and queued for every subscriber: a root with thousands
+    /// of conflicted paths made each snapshot as large as the conflict,
+    /// to say something a person reads the top of and acts on. The
+    /// count is what a surface needs to say "and 3,887 more".
+    #[serde(default)]
+    #[facet(default)]
+    pub divergent_total: u32,
     /// Cumulative counters for the pull in flight (or the last one).
     pub chunks_fetched: u64,
     pub chunks_skipped: u64,

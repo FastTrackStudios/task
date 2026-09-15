@@ -53,6 +53,19 @@ vox = { workspace = true, optional = true }
 axum = { workspace = true, features = ["ws"], optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 
+# `sign-in` dials the server's account lane over `wss://`. vox-websocket
+# never enables tokio-tungstenite's TLS features itself, so without these
+# the dial fails with "TLS support not compiled in" — which is exactly what
+# the first sign-in against task.fasttrackstudio.app did. Same trick as
+# ui-core and the CLI: the flags unify TLS into the shared
+# tokio-tungstenite instance.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio-tungstenite = { version = "0.29", default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-webpki-roots",
+] }
+
 [dev-dependencies]
 architect = { workspace = true, features = ["local"] }
 tempfile = { workspace = true }
@@ -65,16 +78,3 @@ libc = "0.2"
 
 [lints]
 workspace = true
-
-# The account sign-in dials the server's lane over `wss://`. vox's
-# websocket link never enables tokio-tungstenite's TLS features itself
-# (the same trap `ui-core` and the CLI document), so without this table
-# the daemon built fine and then answered every `sign-in` with "TLS
-# support not compiled in". Naming the features here unifies them into
-# the one shared tokio-tungstenite the link uses.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio-tungstenite = { version = "0.29", default-features = false, features = [
-    "connect",
-    "handshake",
-    "rustls-tls-webpki-roots",
-] }

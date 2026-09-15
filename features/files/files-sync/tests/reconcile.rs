@@ -714,3 +714,159 @@ async fn two_hosts_of_one_root_keep_their_own_catalogues() {
         "a structure host served another host's residency: {structural:?}"
     );
 }
+
+/// A root adopted from a tree that already has files, then checkpointed,
+/// has ONE head — the checkpoint descends from the adoption commit. Two
+/// heads here is what every replica would import and report as "two
+/// machines changed" on every file it holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_adopted_then_checkpointed_root_has_one_head() {
+    let primary = agent().await;
+    let root_dir = primary._dir.path().join("assets");
+    std::fs::create_dir(&root_dir).unwrap();
+    std::fs::write(root_dir.join("a.md"), b"alpha").unwrap();
+    std::fs::write(root_dir.join("b.md"), b"beta").unwrap();
+    let root = primary
+        .backend
+        .create_root(
+            root_dir.to_string_lossy().into_owned(),
+            "assets".into(),
+            RootFlavor::Media,
+        )
+        .await
+        .expect("create_root");
+    let before = primary.backend.sync_heads(root.id).expect("heads");
+    primary
+        .backend
+        .checkpoint_now(root.id, None)
+        .await
+        .expect("checkpoint");
+    let after = primary.backend.sync_heads(root.id).expect("heads");
+    assert_eq!(
+        after.len(),
+        1,
+        "one line, not siblings: before={before:?} after={after:?}"
+    );
+    let divergent = primary.backend.divergences(root.id).await.unwrap();
+    assert!(divergent.is_empty(), "{divergent:?}");
+}
+
+/// A fresh replica that pulls a root holds exactly the peer's line: one
+/// head, no divergence, and its cadence has nothing to snapshot — the
+/// pull's own writes are not local edits.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fresh_replica_is_not_divergent_after_its_first_pull() {
+    let (primary, replica, root_id) = rig().await;
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("first pull");
+    let heads = replica.backend.sync_heads(root_id).expect("heads");
+    assert_eq!(heads.len(), 1, "{heads:?}");
+    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    assert!(divergent.is_empty(), "{divergent:?}");
+    // A second pull with nothing new changes nothing.
+    let report = reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("second pull");
+    assert_eq!(report.heads_imported, 0);
+    let heads = replica.backend.sync_heads(root_id).expect("heads");
+    assert_eq!(heads.len(), 1, "{heads:?}");
+}
+
+/// What one `divergences` call costs on a divergent root, printed so the
+/// number is on the record.
+///
+/// The daemon used to make this call for every root on every tick. It
+/// reads as cheap, and on a root with one head it is — it returns before
+/// touching a tree. On a divergent one it reads every tree object of
+/// every head off the disk and builds a path→`FileId` map per head, so
+/// the cost is the size of the ROOT, not the size of the disagreement:
+/// one conflicted path in a thousand-file root still walks two thousand
+/// entries. A machine holding thousands of conflicted paths across forty
+/// roots spent its life re-deriving an answer that only changes when a
+/// head arrives or a person resolves one.
+///
+/// `--no-capture` to see the timing.
+#[tokio::test(flavor = "multi_thread")]
+async fn divergences_costs_the_whole_tree_every_call() {
+    const FILES: usize = 120;
+    let primary = agent().await;
+    let root_dir = primary._dir.path().join("wiki");
+    std::fs::create_dir(&root_dir).unwrap();
+    for i in 0..FILES {
+        std::fs::write(root_dir.join(format!("note-{i}.md")), b"body").unwrap();
+    }
+    let root = primary
+        .backend
+        .create_root(
+            root_dir.to_string_lossy().into_owned(),
+            "wiki".into(),
+            RootFlavor::Media,
+        )
+        .await
+        .expect("create_root");
+    primary
+        .backend
+        .checkpoint_now(root.id, None)
+        .await
+        .expect("checkpoint");
+
+    // One path in dispute, out of five hundred.
+    primary
+        .backend
+        .seed_divergent_file(root.id, "note-0.md", b"mine", b"theirs")
+        .await
+        .expect("seed divergence");
+
+    let started = std::time::Instant::now();
+    let divergent = primary.backend.divergences(root.id).await.expect("diverge");
+    let once = started.elapsed();
+    assert_eq!(divergent.len(), 1, "one path is in dispute");
+    println!(
+        "divergences() over a {FILES}-file root with 1 conflicted path: {once:?} \
+         — this ran once per root per tick"
+    );
+    // The point is the shape, not a wall-clock threshold a slow CI box
+    // would trip over: the call is not free, and nothing about it
+    // changes between ticks.
+    assert!(
+        once > std::time::Duration::ZERO,
+        "the call walks trees; it is not a no-op"
+    );
+}
+
+/// A replica that pulls, then runs the cadence pass the daemon runs
+/// before every pull, must not have turned the pull's own writes into a
+/// local commit.
+///
+/// `SyncDaemon::tick` captures local work *first* and reconciles second,
+/// deliberately: a machine that was offline should have its own work in
+/// the store before another line arrives, so the two become siblings a
+/// person resolves rather than one overwriting the other. The risk that
+/// ordering carries is this one — the bytes a pull just materialised are
+/// new on disk, and if the capture pass reads them as something a person
+/// did here, every pulled file becomes a sibling of the head it came
+/// from, and the replica reports the whole root as "two machines changed
+/// it".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capture_pass_does_not_claim_the_files_a_pull_just_wrote() {
+    let (primary, replica, root_id) = rig().await;
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("first pull");
+
+    // What the daemon does at the top of every tick.
+    let captured = replica.backend.tick().await;
+    assert!(
+        captured.is_empty(),
+        "the pull's own writes were captured as local work: {captured:?}"
+    );
+
+    let heads = replica.backend.sync_heads(root_id).expect("heads");
+    assert_eq!(heads.len(), 1, "capture split the line: {heads:?}");
+    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    assert!(
+        divergent.is_empty(),
+        "a replica that only pulled is in dispute with itself: {divergent:?}"
+    );
+}

@@ -518,6 +518,18 @@ async fn status() -> Result<(), Box<dyn std::error::Error>> {
                 root.name
             );
         }
+        // Naming them all is right up to a point. Past it the list is
+        // the whole root and scrolls the rest of the status off the
+        // screen, so the tail becomes a count — which is also the
+        // honest shape of "this root needs more than a decision or two".
+        let shown = root.divergent.len();
+        let total = root.divergent_total as usize;
+        if total > shown {
+            println!(
+                "    ⚠ and {} more path(s) two machines changed",
+                total - shown
+            );
+        }
     }
     Ok(())
 }

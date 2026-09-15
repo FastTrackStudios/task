@@ -78,6 +78,17 @@ struct Choice {
     peer: String,
 }
 
+/// How many mid-transfer files one root reports, and how many
+/// conflicted paths it names.
+///
+/// Both lists are a display: a person reads the first screenful and
+/// acts. Carrying every entry made each status snapshot as large as the
+/// root is big — and a snapshot is cloned per root per tick and queued
+/// for every subscriber, so a machine holding thousands of conflicted
+/// paths was moving megabytes per tick to say the same thing. The
+/// totals below the cap keep the counts honest.
+const PROGRESS_SHOWN: usize = 64;
+
 /// The mutable per-root status the observer writes and `status` reads.
 #[derive(Default)]
 struct RootRuntimeStatus {
@@ -87,8 +98,41 @@ struct RootRuntimeStatus {
     chunks_skipped: u64,
     last_synced_at: Option<chrono::DateTime<Utc>>,
     last_error: Option<String>,
-    /// Paths this root's heads disagree about, as of the last pull.
+    /// Paths this root's heads disagree about, as of the last pull —
+    /// at most [`PROGRESS_SHOWN`] of them; `divergent_total` is how
+    /// many there are.
     divergent: Vec<String>,
+    divergent_total: u32,
+    /// Whether the divergence set has been derived since this process
+    /// started. Recomputing it is expensive, so it happens once and
+    /// then only when a head arrives or a person resolves one.
+    divergence_known: bool,
+}
+
+impl RootRuntimeStatus {
+    /// Record the divergent paths, keeping the head of the list and the
+    /// true count.
+    fn set_divergent(&mut self, mut paths: Vec<String>) {
+        self.divergent_total = u32::try_from(paths.len()).unwrap_or(u32::MAX);
+        paths.truncate(PROGRESS_SHOWN);
+        self.divergent = paths;
+        self.divergence_known = true;
+    }
+}
+
+/// This process's resident size in bytes, or `None` where the kernel
+/// does not publish one.
+///
+/// A background service that grows is the hardest kind of bug to catch
+/// after the fact: by the time somebody notices the number, the history
+/// that explains it is gone. Reporting it beside the table sizes on a
+/// cadence means the log already holds the shape of the growth when the
+/// question gets asked.
+fn resident_bytes() -> Option<u64> {
+    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    // `statm` counts pages; 4 KiB is the page size everywhere this runs.
+    Some(pages.saturating_mul(4096))
 }
 
 /// The shared status map the [`SyncObserver`] mutates during a pull and
@@ -118,7 +162,16 @@ impl SyncObserver for LiveStatus {
     ) {
         let mut map = self.roots.lock().expect("status lock");
         let s = map.entry(root_id).or_default();
-        // Most-recently-touched first; a re-touch moves to the front.
+        // Most-recently-touched first; a re-touch moves to the front,
+        // and the list is a window rather than the whole scan.
+        //
+        // It used to keep every file a pull touched. Two costs came with
+        // that: the `retain` + `insert(0, …)` below are each O(n), so a
+        // root with n files spent O(n²) moving its own progress list
+        // around — 11 million element moves for a few thousand files —
+        // and `status` clones the list per root per tick. A screenful is
+        // what a progress display can show; the rest was work nobody
+        // ever read.
         s.files.retain(|f| f.path != path);
         s.files.insert(
             0,
@@ -131,6 +184,7 @@ impl SyncObserver for LiveStatus {
                 done: false,
             },
         );
+        s.files.truncate(PROGRESS_SHOWN);
     }
 
     fn file_progress(&self, root_id: Uuid, path: &str, chunks_done: usize, bytes_done: u64) {
@@ -164,6 +218,12 @@ impl SyncObserver for LiveStatus {
             Some(e) => {
                 s.state = RootSyncState::Error;
                 s.last_error = Some(e.to_string());
+                // A failed pull ends the transfer as surely as a
+                // successful one. Leaving the list behind pinned a
+                // whole scan's worth of entries for as long as the root
+                // stayed broken — and a root that cannot pull is
+                // exactly the one that stays broken for days.
+                s.files.clear();
             }
         }
     }
@@ -1743,8 +1803,14 @@ impl SyncDaemon {
                 continue;
             }
             let observer = self.inner.live.clone();
+            // Whether this pull brought a head that was not already
+            // here. Only then can the divergence set have changed, and
+            // recomputing it is the most expensive thing in the loop —
+            // see below.
+            let mut heads_imported = 0_u32;
             match reconcile_with_progress(&self.inner.backend, &peer, root_id, &observer).await {
                 Ok(report) => {
+                    heads_imported = report.heads_imported;
                     if let Some(s) = self
                         .inner
                         .live
@@ -1778,37 +1844,94 @@ impl SyncDaemon {
             }
 
             // What the two sides disagree about, after the pull that
-            // could have introduced it. Cheap when there is nothing to
-            // say — a root with one visible head returns immediately
-            // without walking a tree — and the only moment this can
-            // change is right here, so it is not worth a surface of its
-            // own.
-            let divergent: Vec<String> = self
-                .inner
-                .backend
-                .divergences(root_id)
-                .await
-                .map(|d| d.into_iter().map(|info| info.path.to_string()).collect())
-                .unwrap_or_default();
-            if !divergent.is_empty() {
-                tracing::warn!(
-                    %root_id,
-                    paths = divergent.len(),
-                    "files-daemon: two machines changed the same files — waiting for a decision"
-                );
-            }
-            if let Some(s) = self
+            // could have introduced it.
+            //
+            // Only after a pull that actually imported a head, and once
+            // for a root this process has not looked at yet. It reads
+            // as cheap — "a root with one visible head returns
+            // immediately" — and for a root that is NOT divergent it is.
+            // For one that is, it reads every tree object of every head
+            // off the disk and builds a path→FileId map per head, then
+            // unions them. That is O(whole tree) per head, and doing it
+            // on every tick of every divergent root is how a background
+            // service comes to spend its life re-deriving an answer that
+            // cannot have changed: a divergence is settled by a person
+            // calling `resolve`, or by a new head arriving, and nothing
+            // else. A machine holding a few thousand conflicted paths
+            // was walking millions of tree entries a minute for it.
+            let first_look = !self
                 .inner
                 .live
                 .roots
                 .lock()
                 .expect("status lock")
-                .get_mut(&root_id)
-            {
-                s.divergent = divergent;
+                .get(&root_id)
+                .is_some_and(|s| s.divergence_known);
+            if heads_imported > 0 || first_look {
+                let divergent: Vec<String> = self
+                    .inner
+                    .backend
+                    .divergences(root_id)
+                    .await
+                    .map(|d| d.into_iter().map(|info| info.path.to_string()).collect())
+                    .unwrap_or_default();
+                if !divergent.is_empty() {
+                    tracing::warn!(
+                        %root_id,
+                        paths = divergent.len(),
+                        "files-daemon: two machines changed the same files — waiting for a decision"
+                    );
+                }
+                if let Some(s) = self
+                    .inner
+                    .live
+                    .roots
+                    .lock()
+                    .expect("status lock")
+                    .get_mut(&root_id)
+                {
+                    s.set_divergent(divergent);
+                }
             }
             self.inner.events.publish(self.status());
         }
+        self.report_footprint();
+    }
+
+    /// Say how big this process and its tables have got, every so often.
+    ///
+    /// Once every [`FOOTPRINT_EVERY`] ticks rather than every tick: the
+    /// line is for reading a trend out of a day's log, and one every
+    /// thirty seconds would bury the events that explain the trend.
+    fn report_footprint(&self) {
+        static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        /// Ticks between footprint lines — ~5 minutes at the default
+        /// cadence.
+        const FOOTPRINT_EVERY: u64 = 10;
+        let n = TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !n.is_multiple_of(FOOTPRINT_EVERY) {
+            return;
+        }
+        let (roots, progress, divergent, divergent_total) = {
+            let live = self.inner.live.roots.lock().expect("status lock");
+            live.values().fold((0, 0, 0, 0_u64), |acc, s| {
+                (
+                    acc.0 + 1,
+                    acc.1 + s.files.len(),
+                    acc.2 + s.divergent.len(),
+                    acc.3 + u64::from(s.divergent_total),
+                )
+            })
+        };
+        tracing::info!(
+            resident_bytes = resident_bytes().unwrap_or_default(),
+            roots,
+            progress_rows = progress,
+            divergent_rows = divergent,
+            divergent_total,
+            peers = self.inner.roots.lock().expect("roots lock").len(),
+            "files-daemon: footprint"
+        );
     }
 
     /// Settle one divergent path by keeping every side.
@@ -1831,6 +1954,19 @@ impl SyncDaemon {
                 files_proto::model::DivergenceChoice::KeepBoth,
             )
             .await?;
+        // A person just settled one. That is the other way the set can
+        // change, so the next tick re-derives it rather than repeating
+        // a list that still names the path they resolved.
+        if let Some(s) = self
+            .inner
+            .live
+            .roots
+            .lock()
+            .expect("status lock")
+            .get_mut(&root_id)
+        {
+            s.divergence_known = false;
+        }
         self.inner.events.publish(self.status());
         Ok(())
     }
@@ -1989,6 +2125,7 @@ impl SyncDaemon {
                     slice: cfg.slice.clone(),
                     files: rs.map(|s| s.files.clone()).unwrap_or_default(),
                     divergent: rs.map(|s| s.divergent.clone()).unwrap_or_default(),
+                    divergent_total: rs.map_or(0, |s| s.divergent_total),
                     chunks_fetched: rs.map_or(0, |s| s.chunks_fetched),
                     chunks_skipped: rs.map_or(0, |s| s.chunks_skipped),
                     last_synced_at: rs.and_then(|s| s.last_synced_at),
@@ -2336,5 +2473,55 @@ impl SyncDaemon {
         Err(DaemonError::Io(
             "this build has no transport to reach the server with".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod footprint_tests {
+    use super::{PROGRESS_SHOWN, RootRuntimeStatus, resident_bytes};
+
+    /// A root with more conflicts than fit on a screen keeps the first
+    /// screenful and the true count. The count is what a surface needs
+    /// to say "and N more"; the list is what a person acts on.
+    #[test]
+    fn divergent_paths_are_capped_but_counted() {
+        let mut s = RootRuntimeStatus::default();
+        let many: Vec<String> = (0..4000).map(|i| format!("charts/{i}.md")).collect();
+        s.set_divergent(many);
+        assert_eq!(s.divergent.len(), PROGRESS_SHOWN);
+        assert_eq!(s.divergent_total, 4000);
+        assert_eq!(
+            s.divergent[0], "charts/0.md",
+            "the head of the list is kept"
+        );
+        assert!(s.divergence_known, "a derived set is not re-derived");
+    }
+
+    /// Fewer conflicts than the cap are all carried, and the count
+    /// still matches — a surface can use one rule for both.
+    #[test]
+    fn a_short_divergence_list_is_carried_whole() {
+        let mut s = RootRuntimeStatus::default();
+        s.set_divergent(vec!["a.md".into(), "b.md".into()]);
+        assert_eq!(s.divergent.len(), 2);
+        assert_eq!(s.divergent_total, 2);
+    }
+
+    /// An empty set is still a derived answer: the tick that found
+    /// nothing must not leave the root looking unexamined, or every
+    /// later tick re-walks the tree to learn the same thing.
+    #[test]
+    fn deriving_an_empty_set_still_counts_as_knowing() {
+        let mut s = RootRuntimeStatus::default();
+        assert!(!s.divergence_known);
+        s.set_divergent(Vec::new());
+        assert!(s.divergence_known);
+        assert_eq!(s.divergent_total, 0);
+    }
+
+    #[test]
+    fn resident_size_is_readable_on_this_platform() {
+        let rss = resident_bytes().expect("/proc/self/statm");
+        assert!(rss > 0, "a running process has a resident size");
     }
 }
