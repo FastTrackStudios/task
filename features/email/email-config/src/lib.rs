@@ -136,6 +136,73 @@ pub enum TlsMode {
     Implicit,
     /// Plain socket, upgrade with STARTTLS (port 143 / 587).
     Starttls,
+    /// STARTTLS against a certificate we cannot verify.
+    ///
+    /// This exists for one thing: a **local mail bridge**. Proton Mail
+    /// has no IMAP of its own — you run Proton Mail Bridge, which
+    /// decrypts locally and re-serves the mailbox on `127.0.0.1:1143`
+    /// under a certificate it generates on that machine. No CA has
+    /// signed it and no CA ever will, so ordinary verification can only
+    /// fail.
+    ///
+    /// Skipping verification is safe *here* and nowhere else: the
+    /// connection never leaves the loopback interface, so there is no
+    /// network position from which to substitute a certificate. The
+    /// backends enforce exactly that — this mode is **refused for any
+    /// host that is not loopback**, which is what keeps it from becoming
+    /// a convenient way to silence a genuine certificate error on a real
+    /// remote server.
+    StarttlsSelfSigned,
     /// Plaintext. Tests / loopback only.
     None,
+}
+
+/// Does this host name a loopback interface?
+///
+/// Gates [`TlsMode::StarttlsSelfSigned`] in every backend, so it lives
+/// here beside the mode rather than being written twice.
+///
+/// String comparison on purpose: the name is what the TLS handshake
+/// will be told, and `localhost` resolving elsewhere — a hosts-file
+/// entry, a search domain — is precisely the case this should refuse
+/// rather than accept. A host that has to be resolved first is not one
+/// we can call loopback.
+#[must_use]
+pub fn is_loopback_host(host: &str) -> bool {
+    if host == "localhost" {
+        return true;
+    }
+    // Accept a bracketed IPv6 literal the way a URL would write it.
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
+}
+
+#[cfg(test)]
+mod loopback_tests {
+    use super::is_loopback_host;
+
+    #[test]
+    fn only_the_local_machine_counts_as_loopback() {
+        for host in ["127.0.0.1", "127.0.1.1", "::1", "[::1]", "localhost"] {
+            assert!(is_loopback_host(host), "{host} is loopback");
+        }
+        // The whole safety argument for skipping verification is that
+        // the bytes never reach a network. A name that resolves — even
+        // one that looks local — is off the table, because what it
+        // resolves to is not ours to decide.
+        for host in [
+            "imap.gmail.com",
+            "192.168.1.10",
+            "10.0.0.1",
+            "localhost.evil.test",
+            "127.0.0.1.evil.test",
+            "",
+        ] {
+            assert!(!is_loopback_host(host), "{host} must not pass as loopback");
+        }
+    }
 }

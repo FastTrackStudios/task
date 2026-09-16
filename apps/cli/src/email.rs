@@ -109,6 +109,32 @@ pub(crate) enum EmailCmd {
         #[command(flatten)]
         password: PasswordArgs,
     },
+    /// Add a Proton Mail account through Proton Mail Bridge.
+    ///
+    /// Proton has no IMAP of its own: mail is encrypted to keys the
+    /// server cannot use, so nothing on the far side can speak IMAP for
+    /// you. Bridge is the answer — it runs on this machine, decrypts
+    /// locally, and re-serves the mailbox on `127.0.0.1:1143`. The
+    /// password below is the one Bridge prints, not your Proton
+    /// password, and it only works from this machine.
+    AddProton {
+        /// Your Proton address.
+        address: String,
+        /// Account id. Defaults to the address.
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        display_name: Option<String>,
+        /// Bridge's IMAP port. Bridge's default is 1143; it picks
+        /// another if that one is taken (`bridge --cli` → `info`).
+        #[arg(long, default_value_t = 1143)]
+        imap_port: u16,
+        /// Bridge's SMTP port. Default 1025.
+        #[arg(long, default_value_t = 1025)]
+        smtp_port: u16,
+        #[command(flatten)]
+        password: PasswordArgs,
+    },
     /// Remove an account's configuration.
     Remove {
         /// Account id.
@@ -418,6 +444,62 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
             println!();
             println!("You do NOT need to enable IMAP — Google made it always-on and removed");
             println!("the setting; there is no toggle on Forwarding and POP/IMAP any more.");
+            println!();
+            println!("Then check it before restarting the server:");
+            println!("  task email test {id}");
+            Ok(())
+        }
+
+        EmailCmd::AddProton {
+            address,
+            id,
+            display_name,
+            imap_port,
+            smtp_port,
+            password,
+        } => {
+            let id = id.unwrap_or_else(|| address.clone());
+            let secret = password.resolve(&id)?;
+            let cfg = AccountConfig {
+                id: email_proto::AccountId(id.clone()),
+                name: id.clone(),
+                address: address.clone(),
+                display_name,
+                backend: BackendKind::Imap {
+                    host: "127.0.0.1".into(),
+                    port: imap_port,
+                    // Bridge signs its own certificate. Accepted only
+                    // because the host is loopback; the backends refuse
+                    // this mode anywhere else.
+                    tls: TlsMode::StarttlsSelfSigned,
+                    username: address.clone(),
+                    password: secret.clone(),
+                    submit: Some(SmtpConfig {
+                        host: "127.0.0.1".into(),
+                        port: smtp_port,
+                        tls: TlsMode::StarttlsSelfSigned,
+                        username: address.clone(),
+                        password: secret,
+                    }),
+                },
+                signature: None,
+                folder_aliases: FolderAliases::new(),
+            };
+            write_account(&root, &id, &cfg)?;
+            println!();
+            println!("Proton Mail Bridge has to be running on THIS machine for the account");
+            println!("to work — it is what turns Proton into something IMAP can read.");
+            println!();
+            println!("  1. Install and sign in:  https://proton.me/mail/bridge");
+            println!("     (Bridge needs a paid Proton plan.)");
+            println!("  2. Get the bridge password — it is NOT your Proton password:");
+            println!("       bridge --cli");
+            println!("       > info {address}");
+            println!("  3. Feed that password to this command, e.g.");
+            println!("       task email add-proton {address} --password-stdin");
+            println!();
+            println!("If Bridge chose different ports, pass --imap-port / --smtp-port;");
+            println!("`info` prints the ones it settled on.");
             println!();
             println!("Then check it before restarting the server:");
             println!("  task email test {id}");

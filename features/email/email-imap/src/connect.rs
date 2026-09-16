@@ -3,7 +3,7 @@
 //! the backend doesn't branch on `TlsMode`.
 
 use async_imap::{Client, Session};
-use email_config::TlsMode;
+use email_config::{TlsMode, is_loopback_host};
 use email_secret::SecretValue;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -48,6 +48,15 @@ pub enum ConnectError {
     #[allow(dead_code)]
     #[error("plaintext IMAP is refused (tests/loopback only)")]
     PlaintextRefused,
+    /// `TlsMode::StarttlsSelfSigned` aimed at something that is not a
+    /// local bridge. Skipping verification is only defensible because
+    /// the traffic cannot leave the machine; pointed anywhere else it is
+    /// just a disabled check.
+    #[error(
+        "{0} is not a loopback address — an unverified certificate is only accepted for a local \
+         mail bridge (Proton Mail Bridge on 127.0.0.1)"
+    )]
+    SelfSignedOffLoopback(String),
 }
 
 /// How long a TCP connect to an IMAP host may take before it is reported
@@ -93,7 +102,11 @@ pub async fn connect_and_login(
 /// the implicit-TLS path uses. The caller wraps the result in a
 /// fresh `Client` and proceeds to `LOGIN`.
 #[cfg(not(feature = "test-plaintext"))]
-async fn starttls_upgrade(host: &str, tcp: TcpStream) -> Result<ImapStream, ConnectError> {
+async fn starttls_upgrade(
+    host: &str,
+    tcp: TcpStream,
+    accept_self_signed: bool,
+) -> Result<ImapStream, ConnectError> {
     let mut plain = Client::new(tcp);
     // The greeting is the first untagged line on the connection;
     // it must be consumed before any command is sent.
@@ -111,7 +124,16 @@ async fn starttls_upgrade(host: &str, tcp: TcpStream) -> Result<ImapStream, Conn
         .await
         .map_err(|e| ConnectError::Tls(format!("STARTTLS command: {e}")))?;
     let tcp = plain.into_inner();
-    let connector = async_native_tls::TlsConnector::new();
+    let mut connector = async_native_tls::TlsConnector::new();
+    if accept_self_signed {
+        // The caller has already established that `host` is loopback.
+        // The bridge's certificate is self-signed and its name is
+        // whatever the bridge chose, so both checks have to go — there
+        // is nothing for either of them to succeed against.
+        connector = connector
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true);
+    }
     connector
         .connect(host, tcp)
         .await
@@ -132,7 +154,13 @@ async fn build_client(
                 .await
                 .map_err(|e| ConnectError::Tls(e.to_string()))?
         }
-        TlsMode::Starttls => starttls_upgrade(host, tcp).await?,
+        TlsMode::Starttls => starttls_upgrade(host, tcp, false).await?,
+        TlsMode::StarttlsSelfSigned => {
+            if !is_loopback_host(host) {
+                return Err(ConnectError::SelfSignedOffLoopback(host.to_owned()));
+            }
+            starttls_upgrade(host, tcp, true).await?
+        }
         TlsMode::None => return Err(ConnectError::PlaintextRefused),
     };
     Ok(Client::new(stream))
@@ -152,7 +180,7 @@ async fn build_client(
         TlsMode::Implicit => Err(ConnectError::Tls(
             "test-plaintext build: implicit TLS not available".into(),
         )),
-        TlsMode::Starttls => Err(ConnectError::Tls(
+        TlsMode::Starttls | TlsMode::StarttlsSelfSigned => Err(ConnectError::Tls(
             "test-plaintext build: STARTTLS not available".into(),
         )),
     }
