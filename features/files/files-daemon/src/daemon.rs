@@ -1768,6 +1768,14 @@ impl SyncDaemon {
         if self.is_paused() {
             return;
         }
+        // Ticks since this process started, for the slow beats below —
+        // the work that is right to do regularly and wrong to do every
+        // time round.
+        static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        /// Ticks between attempts to settle a root already known to be
+        /// carrying a fork. See the use site.
+        const FORK_RETRY_EVERY: u64 = 10;
+        let tick_no = TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.maybe_enroll().await;
         // Capture before pulling. The order matters on the machine that
         // has been offline: its own work becomes a commit first, so the
@@ -1860,15 +1868,32 @@ impl SyncDaemon {
             // calling `resolve`, or by a new head arriving, and nothing
             // else. A machine holding a few thousand conflicted paths
             // was walking millions of tree entries a minute for it.
-            let first_look = !self
-                .inner
-                .live
-                .roots
-                .lock()
-                .expect("status lock")
-                .get(&root_id)
-                .is_some_and(|s| s.divergence_known);
-            if heads_imported > 0 || first_look {
+            let (first_look, carrying_a_fork) = {
+                let roots = self.inner.live.roots.lock().expect("status lock");
+                let state = roots.get(&root_id);
+                (
+                    !state.is_some_and(|s| s.divergence_known),
+                    state.is_some_and(|s| s.divergent_total > 0),
+                )
+            };
+            // A root that is already carrying a fork is retried on a slow
+            // beat as well.
+            //
+            // The two triggers above are about *new* information — a head
+            // arrived, or this is the first look — and a machine that has
+            // been forked since before it was upgraded has neither. Its
+            // backlog would sit there for as long as the root stayed
+            // quiet, which for an archive is forever. Measured on a real
+            // machine: 3,550 disputed paths fell to 3,391 on the pass
+            // that noticed them and then stopped, because nothing arrived
+            // to trigger another.
+            //
+            // Slow on purpose: settling reads both sides' trees, which is
+            // the cost the divergence cache exists to avoid paying every
+            // tick. Once every ten ticks is nothing on an idle machine
+            // and clears a backlog over an afternoon.
+            let retry_fork = carrying_a_fork && tick_no.is_multiple_of(FORK_RETRY_EVERY);
+            if heads_imported > 0 || first_look || retry_fork {
                 // A fork whose heads agree about every path is settled
                 // here rather than reported: there is nothing to choose
                 // between, `divergences` cannot see it (it lists only
