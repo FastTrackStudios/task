@@ -138,6 +138,16 @@ Rules live in `docs/spec/`; coverage is tracked with `t[impl]`/`t[verify]`
 markers and the gaps in `docs/spec/unmet.md`. When you meet a rule, update
 both.
 
+## Iterating on sync
+
+Two-machine behaviour — the files daemon, replicas, pulls, forks — does
+not reproduce by reading code, and chasing it through production costs
+half an hour a round trip. Put a seeded server and a sync agent on one
+desk instead: `features/files/docs/iterating-on-sync.md` sets both up in
+about two minutes, says which log lines carry the answer, and lists the
+traps (a replica that arrives unwatched, a pull that beats the cadence,
+and `just ci` failing because the demo server is still holding :18080).
+
 ## Observability
 
 The span is the wide event: enrich it with `architect_telemetry::wide::set`,
