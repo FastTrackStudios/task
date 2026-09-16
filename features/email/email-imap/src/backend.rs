@@ -893,6 +893,9 @@ impl EmailSync for Backend {
 }
 
 fn map_connect_err(e: ConnectError) -> EmailSyncError {
+    // Rendered before the match consumes `e`, for the arms that want
+    // the variant's own wording rather than a rewrite of it.
+    let described = e.to_string();
     match e {
         ConnectError::Tcp(s) | ConnectError::Greeting(s) => EmailSyncError::Network(s),
         ConnectError::Tls(s) => EmailSyncError::Network(format!("tls: {s}")),
@@ -901,6 +904,11 @@ fn map_connect_err(e: ConnectError) -> EmailSyncError {
             EmailSyncError::Unsupported("starttls not yet implemented".into())
         }
         ConnectError::PlaintextRefused => EmailSyncError::Unsupported("plaintext refused".into()),
+        // A misconfiguration, not a transport failure: the account asks
+        // to skip certificate verification against a host that is not
+        // this machine. Carry the whole message — it names the host and
+        // says what the mode is actually for.
+        ConnectError::SelfSignedOffLoopback(_) => EmailSyncError::Unsupported(described),
     }
 }
 

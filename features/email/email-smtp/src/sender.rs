@@ -2,7 +2,7 @@
 //! codebase stays library-agnostic — if we ever swap submission
 //! providers (Postmark API, etc), only this module changes.
 
-use email_config::{SmtpConfig, TlsMode};
+use email_config::{SmtpConfig, TlsMode, is_loopback_host};
 use email_proto::{Addr, Draft};
 use email_secret::SecretError;
 use mail_send::{SmtpClientBuilder, mail_builder::MessageBuilder};
@@ -28,6 +28,15 @@ pub enum SendError {
     StarttlsUnsupported,
     #[error("plaintext SMTP is refused (tests/loopback only)")]
     PlaintextRefused,
+    /// `TlsMode::StarttlsSelfSigned` aimed off the local machine. The
+    /// skipped check is the only thing standing between the account's
+    /// password and whoever answers, so it is refused rather than
+    /// weakened.
+    #[error(
+        "{0} is not a loopback address — an unverified certificate is only accepted for a local \
+         mail bridge (Proton Mail Bridge on 127.0.0.1)"
+    )]
+    SelfSignedOffLoopback(String),
 }
 
 /// One configured SMTP submission endpoint.
@@ -91,6 +100,20 @@ impl SmtpSender {
             TlsMode::Starttls => SmtpClientBuilder::new(self.config.host.clone(), self.config.port)
                 .implicit_tls(false)
                 .credentials(creds),
+            // A local bridge (Proton Mail Bridge on 127.0.0.1:1025)
+            // mints its own certificate, so verification cannot
+            // succeed. Refused off loopback — see `TlsMode` — because
+            // there the skipped check is the only thing that was
+            // protecting the credentials we are about to send.
+            TlsMode::StarttlsSelfSigned => {
+                if !is_loopback_host(&self.config.host) {
+                    return Err(SendError::SelfSignedOffLoopback(self.config.host.clone()));
+                }
+                SmtpClientBuilder::new(self.config.host.clone(), self.config.port)
+                    .implicit_tls(false)
+                    .allow_invalid_certs()
+                    .credentials(creds)
+            }
             TlsMode::None => {
                 #[cfg(feature = "test-plaintext")]
                 {
@@ -137,7 +160,7 @@ impl SmtpSender {
             // Both implicit TLS and STARTTLS resolve to a
             // TLS-wrapped client via `connect()`; the builder
             // above already encoded which handshake to run.
-            TlsMode::Implicit | TlsMode::Starttls => {
+            TlsMode::Implicit | TlsMode::Starttls | TlsMode::StarttlsSelfSigned => {
                 let mut client = builder
                     .connect()
                     .await
