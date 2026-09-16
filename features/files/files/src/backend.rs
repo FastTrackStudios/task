@@ -3526,25 +3526,34 @@ impl FilesBackend {
         repo: &Arc<ReadonlyRepo>,
         heads: &[CommitId],
     ) -> Result<bool, Error> {
-        if heads.len() != 2 {
+        if heads.len() < 2 {
             return Ok(false);
         }
+        // Exactly two lines per pass, even when there are more. Three
+        // lines is two machines diverging while a third already had, and
+        // a real machine collects them: the roots this was first run
+        // against were carrying three apiece. Folding the first pair
+        // leaves one fewer, and the next pass takes the next pair, so a
+        // pile-up drains over a few beats without any one merge having
+        // to reason about three ancestries at once.
+        let (ours_head, theirs_head) = (heads[0].clone(), heads[1].clone());
         let backend = repo.store().backend();
         let ancestors = repo
             .index()
             .common_ancestors(
-                std::slice::from_ref(&heads[0]),
-                std::slice::from_ref(&heads[1]),
+                std::slice::from_ref(&ours_head),
+                std::slice::from_ref(&theirs_head),
             )
             .map_err(|e| Error::Repo(format!("common ancestor: {e}")))?;
         // No shared history: two trees that merely share a name. Nothing
         // here can tell which is the newer truth.
         let Some(base) = ancestors.first() else {
+            tracing::warn!(%root_id, "files: not merging — the lines share no history");
             return Ok(false);
         };
         let base_files = Self::tree_files_of(backend, base)?;
-        let ours = Self::tree_files_of(backend, &heads[0])?;
-        let theirs = Self::tree_files_of(backend, &heads[1])?;
+        let ours = Self::tree_files_of(backend, &ours_head)?;
+        let theirs = Self::tree_files_of(backend, &theirs_head)?;
 
         // Every path either side knows about, and what to do with it.
         // `None` is "absent", which is a state like any other — a delete
@@ -3566,17 +3575,28 @@ impl FilesBackend {
             if b == o {
                 continue;
             }
+            // Debug, not warn: the daemon already reports the dispute
+            // once per root with a path count. This is the extra detail
+            // you want when asking *why* a particular path is stuck.
+            tracing::debug!(
+                %root_id,
+                path = %path.as_internal_file_string(),
+                ours = ?a.map(|id| id.hex()),
+                theirs = ?b.map(|id| id.hex()),
+                ancestor = ?o.map(|id| id.hex()),
+                "files: not merging — both sides changed this path"
+            );
             return Ok(false);
         }
 
         let store = repo.store().clone();
-        let head_commit = pollster::block_on(backend.read_commit(&heads[0]))?;
+        let head_commit = pollster::block_on(backend.read_commit(&ours_head))?;
         let base_tree_id = head_commit
             .root_tree
             .clone()
             .into_resolved()
             .map_err(|_| Error::Repo("merging a conflicted head tree is unsupported".into()))?;
-        let their_commit = pollster::block_on(backend.read_commit(&heads[1]))?;
+        let their_commit = pollster::block_on(backend.read_commit(&theirs_head))?;
         let their_tree_id = their_commit
             .root_tree
             .clone()
@@ -3603,7 +3623,7 @@ impl FilesBackend {
         let mut tx = repo.start_transaction();
         let commit = pollster::block_on(async {
             tx.repo_mut()
-                .new_commit(heads.to_vec(), merged)
+                .new_commit(vec![ours_head.clone(), theirs_head.clone()], merged)
                 .set_description("merge two lines that did not disagree".to_string())
                 .write()
                 .await

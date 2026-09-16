@@ -614,3 +614,89 @@ async fn the_same_file_changed_on_both_sides_is_not_merged_away() {
         "the disputed path should be reported"
     );
 }
+
+/// Three lines drain a pair at a time.
+///
+/// Two machines diverging while a third already had is not exotic: the
+/// roots this was first run against were each carrying three. Folding
+/// the first pair leaves one fewer, and the pass after that takes the
+/// next, so a pile-up drains over a few beats without any one merge
+/// having to reason about three ancestries at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn three_lines_drain_a_pair_at_a_time() {
+    let (primary, replica, root_id) = rig().await;
+
+    // One line from the replica's own work.
+    std::fs::write(replica.tree().join("ours.txt"), b"ours").unwrap();
+    settle(&replica, root_id).await;
+
+    // Two more from the primary, each landing as its own head: a
+    // checkpoint, pulled, then another checkpoint, pulled again, with
+    // the replica growing its own line in between.
+    std::fs::write(primary.tree().join("theirs-one.txt"), b"one").unwrap();
+    primary
+        .backend
+        .checkpoint_now(root_id, None)
+        .await
+        .expect("first primary capture");
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("pull the first line");
+
+    std::fs::write(replica.tree().join("ours-again.txt"), b"again").unwrap();
+    settle(&replica, root_id).await;
+    std::fs::write(primary.tree().join("theirs-two.txt"), b"two").unwrap();
+    primary
+        .backend
+        .checkpoint_now(root_id, None)
+        .await
+        .expect("second primary capture");
+    reconcile(&replica.backend, &primary.client, root_id)
+        .await
+        .expect("pull the second line");
+
+    let heads = replica.backend.sync_heads(root_id).expect("heads").len();
+    assert!(
+        heads >= 2,
+        "expected a pile-up to settle, got {heads} line(s)"
+    );
+
+    // Each pass folds one pair. Enough passes and one line is left.
+    for _ in 0..heads {
+        if replica.backend.sync_heads(root_id).expect("heads").len() == 1 {
+            break;
+        }
+        assert!(
+            replica
+                .backend
+                .settle_identical_heads(root_id)
+                .await
+                .expect("settle"),
+            "a pass that had lines to fold should have folded some"
+        );
+    }
+    assert_eq!(
+        replica.backend.sync_heads(root_id).expect("heads").len(),
+        1,
+        "the lines never drained to one"
+    );
+
+    // Nobody's work was dropped on the way.
+    replica
+        .backend
+        .materialize_head(root_id)
+        .expect("materialize");
+    let tree = tree_of(&replica);
+    for expected in [
+        "ours.txt",
+        "ours-again.txt",
+        "theirs-one.txt",
+        "theirs-two.txt",
+    ] {
+        assert!(
+            tree.contains_key(expected),
+            "{expected} was lost folding three lines: {:?}",
+            tree.keys().collect::<Vec<_>>()
+        );
+    }
+}
