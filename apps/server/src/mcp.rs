@@ -3922,7 +3922,9 @@ fn call_tool(
                 };
                 match org.email_links.link(&message_id, target, by) {
                     Ok(_) => linked.push(json!({ "kind": kind, "id": id })),
-                    Err(e) => failed.push(json!({ "kind": kind, "id": id, "error": e.to_string() })),
+                    Err(e) => {
+                        failed.push(json!({ "kind": kind, "id": id, "error": e.to_string() }))
+                    }
                 }
             };
             attach("task", created.id.to_string());
