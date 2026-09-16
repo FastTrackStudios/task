@@ -107,6 +107,40 @@ struct RootRuntimeStatus {
     /// started. Recomputing it is expensive, so it happens once and
     /// then only when a head arrives or a person resolves one.
     divergence_known: bool,
+    /// Consecutive failed pulls. Drives the backoff below; reset by any
+    /// pull that succeeds.
+    failed_pulls: u32,
+}
+
+/// Ticks to wait before retrying a root whose pull keeps failing:
+/// doubling from one, capped at an hour of default ticks.
+///
+/// Counted in ticks rather than seconds so it follows whatever cadence
+/// the daemon is running at — a test driving ticks by hand backs off in
+/// the same shape as a service on its thirty-second beat.
+fn backoff_ticks(failures: u32) -> u64 {
+    /// An hour at the default thirty-second tick.
+    const CEILING: u64 = 120;
+    1u64.checked_shl(failures.saturating_sub(1).min(31))
+        .unwrap_or(CEILING)
+        .min(CEILING)
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::backoff_ticks;
+
+    /// One failure retries next tick; the wait then doubles and stops at
+    /// an hour, so a peer that comes back is picked up within a window
+    /// rather than never.
+    #[test]
+    fn the_wait_doubles_and_then_holds() {
+        assert_eq!(backoff_ticks(1), 1);
+        assert_eq!(backoff_ticks(2), 2);
+        assert_eq!(backoff_ticks(3), 4);
+        assert_eq!(backoff_ticks(8), 120, "capped at an hour of ticks");
+        assert_eq!(backoff_ticks(u32::MAX), 120, "and stays there");
+    }
 }
 
 impl RootRuntimeStatus {
@@ -1811,6 +1845,43 @@ impl SyncDaemon {
             if paused {
                 continue;
             }
+            // Again, for this root, a moment before its own pull.
+            //
+            // The pass above ran before any of them, so a root pulled
+            // late in a long sweep has had every other root's network
+            // time to be edited in. Catching it here costs a lock and a
+            // scan on a root with pending work, and nothing at all on
+            // one without.
+            // A root that keeps failing is tried less often.
+            //
+            // Two roots on the machine this was written against had been
+            // failing every thirty seconds for a day and a half with the
+            // same store-side error — not a transient, and not something
+            // this end can fix. Each attempt is a dial, a heads rpc and a
+            // log line, so a permanently broken root costs more traffic
+            // and more noise than a healthy one, and buries the failures
+            // worth reading.
+            //
+            // Doubling from one tick to at most an hour, counted in
+            // ticks. Any success resets it, so a peer that comes back is
+            // picked up within one window rather than needing a restart.
+            let skip = {
+                let roots = self.inner.live.roots.lock().expect("status lock");
+                let failures = roots.get(&root_id).map_or(0, |s| s.failed_pulls);
+                failures > 0 && !tick_no.is_multiple_of(backoff_ticks(failures))
+            };
+            if skip {
+                continue;
+            }
+            if self.inner.backend.cadence().session_open(root_id) {
+                if let Err(e) = self.inner.backend.checkpoint_now(root_id, None).await {
+                    tracing::warn!(
+                        %root_id,
+                        error = %e,
+                        "files-daemon: could not commit local work before pulling"
+                    );
+                }
+            }
             let observer = self.inner.live.clone();
             // Whether this pull brought a head that was not already
             // here. Only then can the divergence set have changed, and
@@ -1830,10 +1901,24 @@ impl SyncDaemon {
                     {
                         s.chunks_fetched = u64::from(report.chunks_fetched);
                         s.chunks_skipped = u64::from(report.chunks_skipped);
+                        s.failed_pulls = 0;
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(%root_id, error = %e, "files-daemon: pull failed");
+                    let failures = {
+                        let mut roots = self.inner.live.roots.lock().expect("status lock");
+                        let entry = roots.entry(root_id).or_default();
+                        entry.failed_pulls = entry.failed_pulls.saturating_add(1);
+                        entry.failed_pulls
+                    };
+                    // Loud the first few times, then at the rate the
+                    // backoff retries — a broken root should be findable
+                    // in the log without drowning it.
+                    if failures <= 3 {
+                        tracing::warn!(%root_id, failures, error = %e, "files-daemon: pull failed");
+                    } else {
+                        tracing::debug!(%root_id, failures, error = %e, "files-daemon: pull failed");
+                    }
                     // A client is a live connection, and the peer at the
                     // other end restarts, sleeps, changes networks. The
                     // stored client is then dead for good: every tick
