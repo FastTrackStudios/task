@@ -139,7 +139,16 @@ async fn mcp_surface_end_to_end() {
             "core tool `{core}` missing: {names:?}"
         );
     }
-    for denied in ["read_email", "list_envelopes", "list_email_accounts"] {
+    for denied in [
+        "read_email",
+        "list_envelopes",
+        "list_email_accounts",
+        "link_email",
+        "linked_emails",
+        "email_to_task",
+        "file_email",
+        "flag_email",
+    ] {
         assert!(
             !names.contains(&denied),
             "email tool `{denied}` listed despite the deny-list"
