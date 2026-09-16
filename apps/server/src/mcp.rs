@@ -877,6 +877,130 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                 )
             },
         },
+        // ── Filing mail into the work it belongs to ──────────────
+        //
+        // The link is the point. Mail is where commitments arrive,
+        // and a task that doesn't say which message it came from
+        // sends the reader back to search their inbox for it.
+        ToolDef {
+            name: "link_email",
+            plugin: "email",
+            description: "Attach a message to something in Task — a task, project, note or \
+                          person — so the work and the conversation that caused it stay \
+                          connected. Idempotent: linking the same pair twice is harmless. The \
+                          link is keyed on the Message-ID, so it survives the mail being \
+                          archived, moved or re-synced.",
+            schema: || {
+                obj(
+                    json!({
+                        "message_id": s_("Message id from list_envelopes or read_email."),
+                        "kind": s_("What you're attaching it to: 'task', 'project', 'note' or 'person'."),
+                        "id": s_("That entity's id — a task UUID, a project id, a vault path."),
+                    }),
+                    &["message_id", "kind", "id"],
+                )
+            },
+        },
+        ToolDef {
+            name: "unlink_email",
+            plugin: "email",
+            description: "Detach a message from one entity. Removing a link that isn't there \
+                          succeeds. Other links on the same message are untouched.",
+            schema: || {
+                obj(
+                    json!({
+                        "message_id": s_("Message id."),
+                        "kind": s_("Entity kind the link points at."),
+                        "id": s_("Entity id the link points at."),
+                    }),
+                    &["message_id", "kind", "id"],
+                )
+            },
+        },
+        ToolDef {
+            name: "email_links",
+            plugin: "email",
+            description: "Everything one message is attached to. Call before filing a message \
+                          so you don't duplicate work someone already did.",
+            schema: || {
+                obj(
+                    json!({ "message_id": s_("Message id.") }),
+                    &["message_id"],
+                )
+            },
+        },
+        ToolDef {
+            name: "linked_emails",
+            plugin: "email",
+            description: "Every message attached to one task, project, note or person — 'all \
+                          the mail on this project'. Pass `account` to get subjects and dates \
+                          back instead of bare ids.",
+            schema: || {
+                obj(
+                    json!({
+                        "kind": s_("'task', 'project', 'note' or 'person'."),
+                        "id": s_("That entity's id."),
+                        "account": s_("Account id — enriches each result with subject, from and date."),
+                    }),
+                    &["kind", "id"],
+                )
+            },
+        },
+        ToolDef {
+            name: "email_to_task",
+            plugin: "email",
+            description: "Turn a message into a task and link the two in one step — the normal \
+                          way to act on mail. The task's title defaults to the subject. Pass \
+                          `project` to file it under a project and link the message there too, \
+                          so the project shows the conversation behind the work.",
+            schema: || {
+                obj(
+                    json!({
+                        "account": s_("Account id."),
+                        "message_id": s_("The message to act on."),
+                        "title": s_("Task title. Defaults to the message subject."),
+                        "project": s_("Project id to file the task under, and link the message to."),
+                        "due": s_("Due date, YYYY-MM-DD."),
+                        "priority": s_("'low', 'normal', 'high' or 'critical'."),
+                    }),
+                    &["account", "message_id"],
+                )
+            },
+        },
+        ToolDef {
+            name: "file_email",
+            plugin: "email",
+            description: "Move a message to another folder — archiving it, or filing it where \
+                          the user keeps that kind of mail. Folder names come from \
+                          list_email_accounts.",
+            schema: || {
+                obj(
+                    json!({
+                        "account": s_("Account id."),
+                        "message_id": s_("Message to move."),
+                        "folder": s_("Destination folder name."),
+                    }),
+                    &["account", "message_id", "folder"],
+                )
+            },
+        },
+        ToolDef {
+            name: "flag_email",
+            plugin: "email",
+            description: "Mark a message read/unread or flagged/unflagged. Use it to clear mail \
+                          you have triaged, so the unread count means something.",
+            schema: || {
+                obj(
+                    json!({
+                        "account": s_("Account id."),
+                        "message_id": s_("Message to mark."),
+                        "seen": b_("true marks it read, false marks it unread."),
+                        "flagged": b_("true stars it, false unstars it."),
+                    }),
+                    &["account", "message_id"],
+                )
+            },
+        },
     ]);
     v.extend(chart_tool_catalog());
     v.extend(patch_tool_catalog());
@@ -2584,7 +2708,7 @@ fn call_tool(
     #[cfg(not(feature = "plugin-wiki"))]
     let _ = principal;
     use contacts_proto::Contacts as _;
-    use email_proto::EmailSync as _;
+    use email_proto::{EmailLinks as _, EmailSync as _};
     use goal::GoalService as _;
     use inbox_proto::Inbox as _;
     use milestone::MilestoneService as _;
@@ -3687,6 +3811,174 @@ fn call_tool(
             }))
         }
 
+        // ── Filing mail into the work it belongs to ──────────────
+        "link_email" => {
+            let message_id = required_str(args, "message_id")?;
+            let target = link_target(args)?;
+            let link = org
+                .email_links
+                .link(&message_id, target, principal.unwrap_or("agent"))
+                .map_err(email_err)?;
+            Ok(link_json(&link))
+        }
+
+        "unlink_email" => {
+            let message_id = required_str(args, "message_id")?;
+            let target = link_target(args)?;
+            org.email_links
+                .unlink(&message_id, target)
+                .map_err(email_err)?;
+            Ok(json!({ "unlinked": true, "message_id": message_id }))
+        }
+
+        "email_links" => {
+            let message_id = required_str(args, "message_id")?;
+            let links = org
+                .email_links
+                .links_for_message(&message_id)
+                .map_err(email_err)?;
+            let out: Vec<Value> = links.iter().map(link_json).collect();
+            Ok(json!({ "message_id": message_id, "count": out.len(), "links": out }))
+        }
+
+        "linked_emails" => {
+            let target = link_target(args)?;
+            let links = org
+                .email_links
+                .links_for_target(target)
+                .map_err(email_err)?;
+            // Bare ids are useless to a reader; with an account we can
+            // say what each message actually is. A missing message is
+            // not an error — the link outlives the mailbox.
+            let account = arg_str(args, "account");
+            let out: Vec<Value> = links
+                .iter()
+                .map(|l| {
+                    let mut row = link_json(l);
+                    if let Some(acct) = &account {
+                        if let Ok(msg) = org.email.fetch_message(acct, &l.message_id) {
+                            let env = &msg.envelope;
+                            row["subject"] = json!(env.subject);
+                            row["from"] = json!(env.from);
+                            row["date_ms"] = json!(env.date_ms);
+                        }
+                    }
+                    row
+                })
+                .collect();
+            Ok(json!({
+                "kind": required_str(args, "kind")?,
+                "id": required_str(args, "id")?,
+                "count": out.len(),
+                "messages": out,
+            }))
+        }
+
+        "email_to_task" => {
+            let account = required_str(args, "account")?;
+            let message_id = required_str(args, "message_id")?;
+            let msg = org
+                .email
+                .fetch_message(&account, &message_id)
+                .map_err(email_err)?;
+            let title = arg_str(args, "title")
+                .unwrap_or_else(|| msg.envelope.subject.clone())
+                .trim()
+                .to_owned();
+            let title = if title.is_empty() {
+                "(no subject)".to_owned()
+            } else {
+                title
+            };
+            let project = arg_str(args, "project");
+            // Round-trip through the same quick-add parser the app
+            // uses, so `[[project]]` lands in `projects` exactly as a
+            // typed capture would.
+            let text = match &project {
+                Some(p) => format!("{title} [[{p}]]"),
+                None => title.clone(),
+            };
+            let mut draft = task::capture(&text);
+            if let Some(due) = arg_str(args, "due") {
+                draft.due = Some(due);
+            }
+            if let Some(priority) = arg_str(args, "priority") {
+                draft.priority = priority;
+            }
+            let created = org
+                .tasks
+                .create(draft)
+                .map_err(|e| backend_err("task", &title, &e))?;
+
+            // The task exists either way; a link that fails should say
+            // so rather than lose the task the user asked for.
+            let by = principal.unwrap_or("agent");
+            let mut linked = Vec::new();
+            let mut failed = Vec::new();
+            let mut attach = |kind: &str, id: String| {
+                let target = email_proto::LinkTarget {
+                    kind: kind.to_owned(),
+                    id: id.clone(),
+                };
+                match org.email_links.link(&message_id, target, by) {
+                    Ok(_) => linked.push(json!({ "kind": kind, "id": id })),
+                    Err(e) => {
+                        failed.push(json!({ "kind": kind, "id": id, "error": e.to_string() }))
+                    }
+                }
+            };
+            attach("task", created.id.to_string());
+            if let Some(p) = project {
+                attach("project", p);
+            }
+
+            let mut out = task_json(&created);
+            out["message_id"] = json!(message_id);
+            out["linked"] = json!(linked);
+            if !failed.is_empty() {
+                out["link_failures"] = json!(failed);
+            }
+            Ok(out)
+        }
+
+        "file_email" => {
+            let account = required_str(args, "account")?;
+            let message_id = required_str(args, "message_id")?;
+            let folder = required_str(args, "folder")?;
+            org.email
+                .move_message(&account, &message_id, &folder)
+                .map_err(email_err)?;
+            Ok(json!({ "moved": true, "message_id": message_id, "folder": folder }))
+        }
+
+        "flag_email" => {
+            let account = required_str(args, "account")?;
+            let message_id = required_str(args, "message_id")?;
+            let mut delta = email_proto::FlagDelta::default();
+            // Absent means "leave it alone"; only a present boolean moves a flag.
+            for (key, flag) in [("seen", "\\Seen"), ("flagged", "\\Flagged")] {
+                match args.get(key).and_then(Value::as_bool) {
+                    Some(true) => delta.add.push(flag.to_owned()),
+                    Some(false) => delta.remove.push(flag.to_owned()),
+                    None => {}
+                }
+            }
+            if delta.add.is_empty() && delta.remove.is_empty() {
+                return Err(ToolFailure::Message(
+                    "pass `seen` or `flagged` — with neither there is nothing to change".into(),
+                ));
+            }
+            let (added, removed) = (delta.add.clone(), delta.remove.clone());
+            org.email
+                .set_flags(&account, &message_id, delta)
+                .map_err(email_err)?;
+            Ok(json!({
+                "message_id": message_id,
+                "added": added,
+                "removed": removed,
+            }))
+        }
+
         // ── Discovery ────────────────────────────────────────────
         //
         // Why discovery but no generic `invoke_service`: vox's wire
@@ -4686,6 +4978,38 @@ fn bare_addr(email: String) -> email_proto::Addr {
     email_proto::Addr { name: None, email }
 }
 
+/// The `kind` + `id` pair every link tool takes.
+///
+/// `kind` stays free-form on the wire — a new entity type shouldn't
+/// need a proto revision — but the tools name the four that exist, so
+/// a model that invents `"tasks"` is told rather than silently writing
+/// a link nothing will ever read back.
+fn link_target(args: &Value) -> Result<email_proto::LinkTarget, ToolFailure> {
+    const KNOWN: [&str; 4] = ["task", "project", "note", "person"];
+    let kind = required_str(args, "kind")?;
+    if !KNOWN.contains(&kind.as_str()) {
+        return Err(ToolFailure::Message(format!(
+            "`{kind}` is not a linkable kind — use one of {}",
+            KNOWN.join(", ")
+        )));
+    }
+    Ok(email_proto::LinkTarget {
+        kind,
+        id: required_str(args, "id")?,
+    })
+}
+
+fn link_json(l: &email_proto::MessageLink) -> Value {
+    json!({
+        "message_id": l.message_id,
+        "kind": l.target.kind,
+        "id": l.target.id,
+        "linked_at_ms": l.linked_at_ms,
+        "linked_by": l.linked_by,
+        "tags": l.user_tags,
+    })
+}
+
 /// Email backend errors, with the one common capability gap named
 /// instead of debug-dumped.
 fn email_err(e: email_proto::EmailSyncError) -> ToolFailure {
@@ -5063,6 +5387,69 @@ mod tests {
         assert_eq!(arg_str(&args, "text").as_deref(), Some("hi"));
         assert_eq!(arg_str(&args, "blank"), None);
         assert!(required_str(&args, "blank").is_err());
+    }
+
+    #[test]
+    fn a_link_target_names_a_kind_the_reverse_lookup_can_find() {
+        let Ok(ok) = link_target(&json!({ "kind": "project", "id": "rockstars" })) else {
+            panic!("project is linkable");
+        };
+        assert_eq!(ok.kind, "project");
+        assert_eq!(ok.id, "rockstars");
+
+        // The failure this rejects is silent: `kind` is free-form on
+        // the wire, so a plural or a synonym would write a row that
+        // linked_emails — which queries the exact kind — never returns.
+        let Err(ToolFailure::Message(msg)) = link_target(&json!({ "kind": "tasks", "id": "x" }))
+        else {
+            panic!("a kind nothing queries must be refused");
+        };
+        assert!(msg.contains("tasks"), "{msg}");
+        assert!(msg.contains("task, project, note, person"), "{msg}");
+    }
+
+    #[test]
+    fn a_link_reports_both_ends_and_who_made_it() {
+        let row = link_json(&email_proto::MessageLink {
+            message_id: "abc@example.test".into(),
+            target: email_proto::LinkTarget {
+                kind: "task".into(),
+                id: "9f1".into(),
+            },
+            linked_at_ms: 1_700_000_000_000,
+            linked_by: "claude".into(),
+            user_tags: vec!["invoice".into()],
+        });
+        assert_eq!(row["message_id"], "abc@example.test");
+        assert_eq!(row["kind"], "task");
+        assert_eq!(row["id"], "9f1");
+        // Provenance is what lets a bulk auto-link be audited or undone
+        // without touching the links a person made by hand.
+        assert_eq!(row["linked_by"], "claude");
+        assert_eq!(row["tags"][0], "invoice");
+    }
+
+    #[test]
+    fn every_mail_filing_tool_belongs_to_the_email_plugin() {
+        // If one of these were mis-tagged it would stay visible in an
+        // org that has mail switched off, and fail at call time instead
+        // of being absent — the gate the catalog is supposed to apply.
+        let catalog = tool_catalog();
+        for name in [
+            "link_email",
+            "unlink_email",
+            "email_links",
+            "linked_emails",
+            "email_to_task",
+            "file_email",
+            "flag_email",
+        ] {
+            let tool = catalog
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("`{name}` missing from the catalog"));
+            assert_eq!(tool.plugin, "email", "`{name}` is not gated on mail");
+        }
     }
 
     #[test]

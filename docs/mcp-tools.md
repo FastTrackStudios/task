@@ -121,6 +121,29 @@ mail client. (The org's current maildir backend reports drafts as
 unsupported until its phase-3 write path lands; the tools surface that
 error verbatim.)
 
+#### Filing mail into the work it belongs to
+
+| tool | does | wire permit |
+|---|---|---|
+| `link_email` | attach a message to a task, project, note or person | write `email/links/**` |
+| `unlink_email` | detach one link; others on the message survive | audited write `email/links/**` |
+| `email_links` | everything one message is attached to | read `email/links/**` |
+| `linked_emails` | every message on one entity — "all the mail on this project" | read `email/links/**` |
+| `email_to_task` | make a task from a message and link the two in one step | write `task/**` + `email/links/**` |
+| `file_email` | move a message to another folder | write `email/**` (`email/move_message`) |
+| `flag_email` | mark read/unread, flagged/unflagged | write `email/**` (`email/set_flags`) |
+
+Links are keyed on the **Message-ID**, never on a folder and UID, so
+filing a message and then archiving it does not break the trail back to
+the conversation. `linked_by` records who made each link — `"user"`, a
+rule, or the agent's principal — which is what lets a bulk auto-link be
+audited, or undone, without disturbing the ones a person made by hand.
+
+`kind` is free-form on the wire so a new entity type needs no proto
+revision, but the tools accept only `task`, `project`, `note` and
+`person`: a link written under a kind nothing queries is invisible, and
+being refused beats being silently dropped.
+
 ### Cluster telemetry (account lane only, operator only)
 
 Listed on `POST /mcp` **only when** `TASK_TELEMETRY_TEMPO_URL` and/or
