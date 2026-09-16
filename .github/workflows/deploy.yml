@@ -151,7 +151,17 @@ jobs:
           url="https://task.starcommand.live"
           want="${GITHUB_SHA}"
           echo "waiting for $url to serve $want"
-          for i in $(seq 1 60); do
+          # 100 polls at 15s is 25 minutes, inside the job's 30.
+          #
+          # It was 60 — fifteen minutes — and that is under what a roll
+          # actually takes: argocd-image-updater notices the new digest on
+          # its own poll interval, and the deployment's Recreate strategy
+          # then stops the old pod before starting the new one, pulling a
+          # few hundred megabytes in between. Two consecutive deploys in
+          # this series rolled perfectly and were still reported failed
+          # because the window closed first, and a red deploy that means
+          # nothing is one everybody learns to scroll past.
+          for i in $(seq 1 100); do
             web="$(curl -sf --max-time 10 "$url/version.json" | sed -n 's/.*"rev":"\([^"]*\)".*/\1/p' || true)"
             srv="$(curl -sf --max-time 10 "$url/.well-known/task-server.json" | sed -n 's/.*"build":"\([^"]*\)".*/\1/p' || true)"
             echo "  poll $i: web=${web:-?} server=${srv:-?}"
