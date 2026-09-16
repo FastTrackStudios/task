@@ -3,7 +3,7 @@
 //! the backend doesn't branch on `TlsMode`.
 
 use async_imap::{Client, Session};
-use email_config::{TlsMode, is_loopback_host};
+use email_config::TlsMode;
 use email_secret::SecretValue;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -52,6 +52,7 @@ pub enum ConnectError {
     /// local bridge. Skipping verification is only defensible because
     /// the traffic cannot leave the machine; pointed anywhere else it is
     /// just a disabled check.
+    #[allow(dead_code)]
     #[error(
         "{0} is not a loopback address — an unverified certificate is only accepted for a local \
          mail bridge (Proton Mail Bridge on 127.0.0.1)"
@@ -146,6 +147,8 @@ async fn build_client(
     tcp: TcpStream,
     tls: TlsMode,
 ) -> Result<Client<ImapStream>, ConnectError> {
+    use email_config::is_loopback_host;
+
     let stream = match tls {
         TlsMode::Implicit => {
             let connector = async_native_tls::TlsConnector::new();
