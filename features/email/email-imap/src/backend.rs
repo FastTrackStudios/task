@@ -349,8 +349,10 @@ impl Backend {
             let header = fetch.header().unwrap_or(&[]).to_vec();
             let flags: Vec<String> = fetch.flags().map(|f| format!("{f:?}")).collect();
             let size = u64::from(fetch.size.unwrap_or(0));
-            // IMAP UID isn't a Message-ID, but we use it as a
-            // stable secondary key when the header lacks one.
+            // IMAP UID isn't a Message-ID, and this is only reached for
+            // the rare message whose header carries none — the parser
+            // prefers the real one. It used to be the other way round,
+            // which quietly keyed every link on a UID.
             let uid_synth = fetch.uid.map(|u| format!("<uid-{u}@imap.local>"));
             let uid = fetch.uid;
             match parse::envelope_from_bytes(&header, folder, flags, uid_synth, size) {
