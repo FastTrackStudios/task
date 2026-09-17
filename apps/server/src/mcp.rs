@@ -3897,7 +3897,13 @@ fn call_tool(
         "email_to_task" => {
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
-            let msg = org
+            // The mailbox is personal, like the links: read it from the
+            // caller's own org, not from whichever org the task is being
+            // created in. Reading `org` here made this tool work only
+            // inside the one org that happens to hold the mail, which is
+            // the opposite of the point — mail arrives in one place and
+            // the work it creates belongs all over.
+            let msg = links
                 .email
                 .fetch_message(&account, &message_id)
                 .map_err(email_err)?;
@@ -3985,7 +3991,8 @@ fn call_tool(
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
             let folder = required_str(args, "folder")?;
-            org.email
+            links
+                .email
                 .move_message(&account, &message_id, &folder)
                 .map_err(email_err)?;
             Ok(json!({ "moved": true, "message_id": message_id, "folder": folder }))
@@ -4009,7 +4016,8 @@ fn call_tool(
                 ));
             }
             let (added, removed) = (delta.add.clone(), delta.remove.clone());
-            org.email
+            links
+                .email
                 .set_flags(&account, &message_id, delta)
                 .map_err(email_err)?;
             Ok(json!({
