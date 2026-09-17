@@ -100,6 +100,7 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     let assets = org_root.assets_dir();
     let projects = org_root.projects_dir();
     let repos = repos_dir(org_root);
+    let mail = mail_dir(org_root);
 
     // `Dir::files` is one level deep, so walk the whole subtree.
     let mut planted = Planted::default();
@@ -114,8 +115,10 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
         &assets,
         &projects,
         &repos,
+        &mail,
         &mut planted,
     )?;
+    complete_mail_accounts(&mail)?;
     #[cfg(feature = "plugin-fasttrackstudio")]
     plant_collections(org_root, slug);
     #[cfg(feature = "plugin-wiki")]
@@ -170,6 +173,42 @@ pub fn repos_dir(org_root: &org_proto::OrgRoot) -> std::path::PathBuf {
     org_root.path().join("repos")
 }
 
+/// Where the example's mail accounts are planted: `<org>/mail/`.
+///
+/// Beside the vault, not inside it. A mailbox inside `vault/` is inside
+/// a File Root, and the next materialise deletes anything there that is
+/// not in the canonical tree — which on prod silently took a configured
+/// account away twice on 2026-09-17. `AppState` reads this same
+/// location (see its `mail_root`), so the seed and the server agree on
+/// where a mailbox lives.
+#[must_use]
+pub fn mail_dir(org_root: &org_proto::OrgRoot) -> std::path::PathBuf {
+    org_root.path().join("mail")
+}
+
+/// Give every planted account the maildir directories git cannot carry.
+///
+/// A maildir is `{cur,new,tmp}`, and git stores no empty directory —
+/// `tmp` holds nothing in a fixture, so it cannot be committed, and
+/// `email_maildir::is_maildir` wants `cur` and `new` both present
+/// before it will treat the directory as an account at all. Creating
+/// them here keeps the committed mailbox to the messages themselves.
+fn complete_mail_accounts(mail: &Path) -> std::io::Result<()> {
+    let Ok(entries) = std::fs::read_dir(mail) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let account = entry.path();
+        if !account.is_dir() {
+            continue;
+        }
+        for sub in ["cur", "new", "tmp"] {
+            std::fs::create_dir_all(account.join(sub))?;
+        }
+    }
+    Ok(())
+}
+
 /// What an install actually did.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Planted {
@@ -190,6 +229,7 @@ fn plant(
     assets: &Path,
     projects: &Path,
     repos: &Path,
+    mail: &Path,
     planted: &mut Planted,
 ) -> std::io::Result<()> {
     for file in dir.files() {
@@ -234,6 +274,12 @@ fn plant(
             // `Repos/<name>/…` → `repos/<name>/…`: plain files here;
             // `plant_repo_wikis` makes each a git repository afterwards.
             Some("Repos") => repos.join(rel.strip_prefix("Repos").unwrap_or(rel)),
+            // `Mail/<account>/…` → `<org>/mail/<account>/…`: one
+            // directory per account, each a maildir, each optionally
+            // carrying the `account.json` the server reads for the
+            // address and folder aliases. Beside the vault rather than
+            // in it — see `mail_dir`.
+            Some("Mail") => mail.join(rel.strip_prefix("Mail").unwrap_or(rel)),
             // `Projects/<Dir>/…` → `<org>/projects/<slug>/…` — ADR
             // 0004's fourth root, one directory per project, holding
             // the whole of it.
@@ -267,7 +313,8 @@ fn plant(
     }
     for child in dir.dirs() {
         plant(
-            child, slug, vault, wiki, wikis, files, resources, assets, projects, repos, planted,
+            child, slug, vault, wiki, wikis, files, resources, assets, projects, repos, mail,
+            planted,
         )?;
     }
     Ok(())
@@ -1355,6 +1402,65 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
 #[cfg(test)]
 mod declared_tests {
     use super::*;
+
+    /// Every committed mail account is one a maildir backend will open.
+    ///
+    /// `email_maildir::is_maildir` wants `cur` and `new` to be present,
+    /// and git stores no empty directory — so an account committed with
+    /// its messages only in `cur` reads as "not a mailbox", the account
+    /// vanishes from `accounts()`, and the mail chapter fails a long
+    /// way from the cause. `complete_mail_accounts` makes `tmp` at
+    /// plant time; the other two have to be carried, which means each
+    /// needs at least one committed message.
+    #[test]
+    fn every_committed_mail_account_is_a_maildir() {
+        for (slug, _) in ORGS {
+            let Some(mail) = STUDIO.get_dir(format!("{slug}/Mail")) else {
+                continue;
+            };
+            for account in mail.dirs() {
+                let name = account.path().display();
+                for sub in ["cur", "new"] {
+                    let dir = account.path().join(sub);
+                    assert!(
+                        STUDIO.get_dir(&dir).is_some_and(|d| d.files().count() > 0),
+                        "{name}: `{sub}/` is missing or empty, so git carries no such \
+                         directory and the account will not open as a maildir"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every committed message carries a real Message-ID.
+    ///
+    /// The link store is keyed on it. A message without one gets a
+    /// synthesised id derived from its bytes (`parse::synth_message_id`)
+    /// — stable enough to look fine in a listing, and different on any
+    /// mailbox that re-encoded the message, so a link made against it
+    /// would resolve here and nowhere else.
+    #[test]
+    fn every_committed_message_has_a_message_id() {
+        for (slug, _) in ORGS {
+            let Some(mail) = STUDIO.get_dir(format!("{slug}/Mail")) else {
+                continue;
+            };
+            for account in mail.dirs() {
+                for folder in account.dirs() {
+                    for msg in folder.files() {
+                        let body = String::from_utf8_lossy(msg.contents());
+                        assert!(
+                            body.lines().any(|l| {
+                                l.to_ascii_lowercase().starts_with("message-id:") && l.contains('@')
+                            }),
+                            "{}: no Message-ID header",
+                            msg.path().display()
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn every_declared_project_has_its_tree() {

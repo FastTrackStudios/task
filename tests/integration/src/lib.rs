@@ -98,6 +98,7 @@
 //! | `charts.rs`        | another app keeps its work here, and a library is a collection |
 //! | `setlist.rs`       | a performance that draws on somebody else's library |
 //! | `content_ref.rs`   | the manifest is in `resources/`, the bytes are in a root |
+//! | `mail.rs`          | a message becomes work, and the trail stays private |
 //!
 //! These are tests rather than a script that prints `ok`, because a
 //! printed `ok` is only as honest as the eye reading it. A test that

@@ -248,6 +248,25 @@ impl Session {
         self.establish().await
     }
 
+    /// The mailbox — accounts, folders, envelopes, one message.
+    ///
+    /// Served from a maildir on the org's own disk, which is what lets
+    /// this suite have mail at all: an account is a directory, so the
+    /// seeded world can carry one and no chapter needs a mail server.
+    pub async fn email(&self) -> email_proto::EmailSyncClient {
+        self.establish().await
+    }
+
+    /// Messages as linkable objects — "every email on this project".
+    ///
+    /// Its own lane and its own permit table, deliberately: "can read
+    /// the mailbox" and "can see what mail is attached to this project"
+    /// are different grants, and a chapter that could only reach one
+    /// through the other could not tell them apart.
+    pub async fn email_links(&self) -> email_proto::EmailLinksClient {
+        self.establish().await
+    }
+
     /// The replica lane: the commit graph and the chunks under it.
     ///
     /// A peer host calls this, not a person — but it is signed with a
@@ -345,4 +364,6 @@ signable!(
     collection_proto::CollectionServiceClient,
     links_proto::LinksServiceClient,
     vault_proto::VaultSyncClient,
+    email_proto::EmailSyncClient,
+    email_proto::EmailLinksClient,
 );

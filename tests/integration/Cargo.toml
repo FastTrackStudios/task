@@ -35,6 +35,11 @@ resources-proto = { workspace = true, features = ["vox"] }
 vault-proto = { workspace = true, features = ["vox"] }
 collection-proto = { workspace = true, features = ["vox"] }
 links-proto = { workspace = true, features = ["vox"] }
+# The mail lane: the mailbox itself (`EmailSync`) and the links that
+# attach a message to work elsewhere (`EmailLinks`). `mail.rs` needs
+# both — what a link says is only checkable against the message it
+# names.
+email-proto = { workspace = true, features = ["vox"] }
 task = { workspace = true }
 project = { workspace = true }
 pollster = { workspace = true }

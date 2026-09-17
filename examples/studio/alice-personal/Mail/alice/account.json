@@ -1,0 +1,10 @@
+{
+  "id": "alice",
+  "name": "Alice Nguyen",
+  "address": "alice@alice.test",
+  "display_name": "Alice Nguyen",
+  "backend": {
+    "kind": "maildir",
+    "root": "."
+  }
+}
