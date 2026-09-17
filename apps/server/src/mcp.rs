@@ -896,6 +896,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "message_id": s_("Message id from list_envelopes or read_email."),
                         "kind": s_("What you're attaching it to: 'task', 'project', 'note' or 'person'."),
                         "id": s_("That entity's id — a task UUID, a project id, a vault path."),
+                        "target_org": s_("Org the entity belongs to. Defaults to the org you are acting in. Name it when filing mail against another org's work — the link is recorded privately against you either way."),
                     }),
                     &["message_id", "kind", "id"],
                 )
@@ -912,6 +913,7 @@ pub fn tool_catalog() -> Vec<ToolDef> {
                         "message_id": s_("Message id."),
                         "kind": s_("Entity kind the link points at."),
                         "id": s_("Entity id the link points at."),
+                        "target_org": s_("Org the entity belongs to. Defaults to the org you are acting in. Name it when filing mail against another org's work — the link is recorded privately against you either way."),
                     }),
                     &["message_id", "kind", "id"],
                 )
@@ -933,14 +935,17 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             name: "linked_emails",
             plugin: "email",
             description: "Every message attached to one task, project, note or person — 'all \
-                          the mail on this project'. Pass `account` to get subjects and dates \
-                          back instead of bare ids.",
+                          the mail on this project'. Answers from YOUR links only: mail is \
+                          personal, so another member of the same org asking this about the \
+                          same project sees their own trail, not yours. Pass `account` to get \
+                          subjects and dates back instead of bare ids.",
             schema: || {
                 obj(
                     json!({
                         "kind": s_("'task', 'project', 'note' or 'person'."),
                         "id": s_("That entity's id."),
                         "account": s_("Account id — enriches each result with subject, from and date."),
+                        "target_org": s_("Org the entity belongs to. Defaults to the org you are acting in. Name it when filing mail against another org's work — the link is recorded privately against you either way."),
                     }),
                     &["kind", "id"],
                 )
@@ -950,9 +955,12 @@ pub fn tool_catalog() -> Vec<ToolDef> {
             name: "email_to_task",
             plugin: "email",
             description: "Turn a message into a task and link the two in one step — the normal \
-                          way to act on mail. The task's title defaults to the subject. Pass \
-                          `project` to file it under a project and link the message there too, \
-                          so the project shows the conversation behind the work.",
+                          way to act on mail. The task's title defaults to the subject, and it \
+                          is assigned to you, so it lands in your list rather than everyone's. \
+                          Pass `org` to create it in another organisation — the link is still \
+                          recorded privately against you. Pass `project` to file it under a \
+                          project and link the message there too, so the project shows the \
+                          conversation behind the work.",
             schema: || {
                 obj(
                     json!({
@@ -1942,8 +1950,18 @@ async fn mcp_dispatch(
             // value instead.
             let principal = mcp_principal(&org, &headers).await;
             let called = name.to_string();
+            // Email links live in the person's own org, never in the org
+            // being acted on. That is what keeps them private: a project
+            // can live in a shared org while the links pointing at it sit
+            // somewhere only their owner can read. Falls back to the
+            // acting org on a server with no home org marked, which is
+            // the single-org case where the two are the same thing.
+            let links_org = state
+                .home_slug()
+                .and_then(|slug| state.org(&slug))
+                .unwrap_or_else(|| org.clone());
             let dispatched = tokio::task::spawn_blocking(move || {
-                call_tool(&org, principal.as_deref(), &called, &args)
+                call_tool(&org, &links_org, principal.as_deref(), &called, &args)
             })
             .await;
             let outcome = match dispatched {
@@ -2699,6 +2717,7 @@ fn backend_err(what: &str, subject: &str, e: &impl std::fmt::Debug) -> ToolFailu
 #[allow(clippy::too_many_lines)]
 fn call_tool(
     org: &crate::OrgAppState,
+    links: &crate::OrgAppState,
     principal: Option<&str>,
     name: &str,
     args: &Value,
@@ -3721,7 +3740,7 @@ fn call_tool(
         "read_email" => {
             let account = required_str(args, "account")?;
             let message_id = required_str(args, "message_id")?;
-            let msg = org
+            let msg = links
                 .email
                 .fetch_message(&account, &message_id)
                 .map_err(email_err)?;
@@ -3814,8 +3833,8 @@ fn call_tool(
         // ── Filing mail into the work it belongs to ──────────────
         "link_email" => {
             let message_id = required_str(args, "message_id")?;
-            let target = link_target(args)?;
-            let link = org
+            let target = link_target(args, &org.slug)?;
+            let link = links
                 .email_links
                 .link(&message_id, target, principal.unwrap_or("agent"))
                 .map_err(email_err)?;
@@ -3824,8 +3843,9 @@ fn call_tool(
 
         "unlink_email" => {
             let message_id = required_str(args, "message_id")?;
-            let target = link_target(args)?;
-            org.email_links
+            let target = link_target(args, &org.slug)?;
+            links
+                .email_links
                 .unlink(&message_id, target)
                 .map_err(email_err)?;
             Ok(json!({ "unlinked": true, "message_id": message_id }))
@@ -3833,17 +3853,17 @@ fn call_tool(
 
         "email_links" => {
             let message_id = required_str(args, "message_id")?;
-            let links = org
+            let rows = links
                 .email_links
                 .links_for_message(&message_id)
                 .map_err(email_err)?;
-            let out: Vec<Value> = links.iter().map(link_json).collect();
+            let out: Vec<Value> = rows.iter().map(link_json).collect();
             Ok(json!({ "message_id": message_id, "count": out.len(), "links": out }))
         }
 
         "linked_emails" => {
-            let target = link_target(args)?;
-            let links = org
+            let target = link_target(args, &org.slug)?;
+            let rows = links
                 .email_links
                 .links_for_target(target)
                 .map_err(email_err)?;
@@ -3851,12 +3871,12 @@ fn call_tool(
             // say what each message actually is. A missing message is
             // not an error — the link outlives the mailbox.
             let account = arg_str(args, "account");
-            let out: Vec<Value> = links
+            let out: Vec<Value> = rows
                 .iter()
                 .map(|l| {
                     let mut row = link_json(l);
                     if let Some(acct) = &account {
-                        if let Ok(msg) = org.email.fetch_message(acct, &l.message_id) {
+                        if let Ok(msg) = links.email.fetch_message(acct, &l.message_id) {
                             let env = &msg.envelope;
                             row["subject"] = json!(env.subject);
                             row["from"] = json!(env.from);
@@ -3905,6 +3925,22 @@ fn call_tool(
             if let Some(priority) = arg_str(args, "priority") {
                 draft.priority = priority;
             }
+            // Assigned to whoever asked, not left unowned.
+            //
+            // The point of a shared org is that several people work in
+            // it, and an unassigned task shows up in everyone's list —
+            // so mail-derived work would bury the rest of the team in
+            // items only one person can act on. The caller's principal
+            // is the honest owner: this task exists because a message
+            // arrived in *their* mailbox.
+            if let Some(who) = principal {
+                if let Ok(agent) = parse_agent(&format!("human:{who}")) {
+                    draft
+                        .workflow
+                        .get_or_insert_with(Default::default)
+                        .assignees = task::model::AgentRefList(vec![agent]);
+                }
+            }
             let created = org
                 .tasks
                 .create(draft)
@@ -3919,8 +3955,12 @@ fn call_tool(
                 let target = email_proto::LinkTarget {
                     kind: kind.to_owned(),
                     id: id.clone(),
+                    // The org the task was just created in — the link
+                    // has to name it, because it is recorded in the
+                    // caller's personal store, not this org's.
+                    org: org.slug.clone(),
                 };
-                match org.email_links.link(&message_id, target, by) {
+                match links.email_links.link(&message_id, target, by) {
                     Ok(_) => linked.push(json!({ "kind": kind, "id": id })),
                     Err(e) => {
                         failed.push(json!({ "kind": kind, "id": id, "error": e.to_string() }))
@@ -4984,7 +5024,7 @@ fn bare_addr(email: String) -> email_proto::Addr {
 /// need a proto revision — but the tools name the four that exist, so
 /// a model that invents `"tasks"` is told rather than silently writing
 /// a link nothing will ever read back.
-fn link_target(args: &Value) -> Result<email_proto::LinkTarget, ToolFailure> {
+fn link_target(args: &Value, acting_org: &str) -> Result<email_proto::LinkTarget, ToolFailure> {
     const KNOWN: [&str; 4] = ["task", "project", "note", "person"];
     let kind = required_str(args, "kind")?;
     if !KNOWN.contains(&kind.as_str()) {
@@ -4996,6 +5036,11 @@ fn link_target(args: &Value) -> Result<email_proto::LinkTarget, ToolFailure> {
     Ok(email_proto::LinkTarget {
         kind,
         id: required_str(args, "id")?,
+        // Defaults to the org the call is acting in, which is what
+        // "link this to that project" means when nobody says otherwise.
+        // Naming it explicitly is for the case where you are reading
+        // mail in one org and filing it against another's work.
+        org: arg_str(args, "target_org").unwrap_or_else(|| acting_org.to_owned()),
     })
 }
 
@@ -5004,6 +5049,7 @@ fn link_json(l: &email_proto::MessageLink) -> Value {
         "message_id": l.message_id,
         "kind": l.target.kind,
         "id": l.target.id,
+        "org": l.target.org,
         "linked_at_ms": l.linked_at_ms,
         "linked_by": l.linked_by,
         "tags": l.user_tags,
@@ -5391,16 +5437,33 @@ mod tests {
 
     #[test]
     fn a_link_target_names_a_kind_the_reverse_lookup_can_find() {
-        let Ok(ok) = link_target(&json!({ "kind": "project", "id": "rockstars" })) else {
+        let Ok(ok) = link_target(
+            &json!({ "kind": "project", "id": "rockstars" }),
+            "codywright",
+        ) else {
             panic!("project is linkable");
         };
         assert_eq!(ok.kind, "project");
         assert_eq!(ok.id, "rockstars");
+        // Unqualified means the org the call is acting in, not "any org".
+        assert_eq!(ok.org, "codywright");
+
+        // And naming another org is the whole point: mail is personal,
+        // projects belong to organisations, so filing a message against
+        // someone else's work has to be sayable.
+        let Ok(elsewhere) = link_target(
+            &json!({ "kind": "project", "id": "p1", "target_org": "tombrooksmusic" }),
+            "codywright",
+        ) else {
+            panic!("an explicit target org is linkable");
+        };
+        assert_eq!(elsewhere.org, "tombrooksmusic");
 
         // The failure this rejects is silent: `kind` is free-form on
         // the wire, so a plural or a synonym would write a row that
         // linked_emails — which queries the exact kind — never returns.
-        let Err(ToolFailure::Message(msg)) = link_target(&json!({ "kind": "tasks", "id": "x" }))
+        let Err(ToolFailure::Message(msg)) =
+            link_target(&json!({ "kind": "tasks", "id": "x" }), "codywright")
         else {
             panic!("a kind nothing queries must be refused");
         };
@@ -5415,6 +5478,7 @@ mod tests {
             target: email_proto::LinkTarget {
                 kind: "task".into(),
                 id: "9f1".into(),
+                org: "tombrooksmusic".into(),
             },
             linked_at_ms: 1_700_000_000_000,
             linked_by: "claude".into(),
@@ -5423,6 +5487,9 @@ mod tests {
         assert_eq!(row["message_id"], "abc@example.test");
         assert_eq!(row["kind"], "task");
         assert_eq!(row["id"], "9f1");
+        // The org has to survive to the reader, or "which project is
+        // this" is unanswerable from the row.
+        assert_eq!(row["org"], "tombrooksmusic");
         // Provenance is what lets a bulk auto-link be audited or undone
         // without touching the links a person made by hand.
         assert_eq!(row["linked_by"], "claude");
