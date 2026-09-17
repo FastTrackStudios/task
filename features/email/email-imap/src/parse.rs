@@ -9,15 +9,30 @@ pub fn envelope_from_bytes(
     bytes: &[u8],
     folder: &str,
     flags: Vec<String>,
-    message_id_override: Option<String>,
+    message_id_fallback: Option<String>,
     size: u64,
 ) -> Result<Envelope, EmailSyncError> {
     let parsed = MessageParser::default()
         .parse_headers(bytes)
         .ok_or_else(|| EmailSyncError::Parse("mail-parser refused headers".into()))?;
 
-    let message_id = message_id_override
-        .or_else(|| parsed.message_id().map(std::string::ToString::to_string))
+    // The header's own Message-ID first, and it is not a close call.
+    //
+    // This used to prefer the caller's value, which the IMAP backend
+    // fills with `<uid-N@imap.local>` — so in practice every envelope
+    // came back keyed on the UID, because a UID is always present. That
+    // is (folder, uid) wearing a Message-ID's clothes, and links are
+    // keyed on Message-ID precisely so that filing a message and then
+    // archiving it does not break the trail. Observed against Gmail on
+    // 2026-09-17: `list_envelopes` reported `<uid-40909@imap.local>`
+    // for a message whose real id was `nLDq…@notifications.google.com`.
+    //
+    // The caller's value stays as what its name now says: a fallback for
+    // the genuinely id-less message, ahead of hashing the bytes.
+    let message_id = parsed
+        .message_id()
+        .map(std::string::ToString::to_string)
+        .or(message_id_fallback)
         .unwrap_or_else(|| synth_message_id(bytes));
 
     let subject = parsed.subject().unwrap_or("").to_string();
@@ -210,9 +225,50 @@ Date: Mon, 14 Nov 2023 12:00:00 +0000\r\n\
     }
 
     #[test]
-    fn override_message_id_wins() {
-        let env = envelope_from_bytes(HEADERS, "INBOX", Vec::new(), Some("<override>".into()), 0)
-            .unwrap();
-        assert_eq!(env.message_id, "<override>");
+    fn the_headers_own_message_id_beats_the_fallback() {
+        // The IMAP backend passes `<uid-N@imap.local>` here for every
+        // message, because a UID is always present. This test used to
+        // assert the opposite — that the caller's value won — and that
+        // is exactly how every envelope ended up keyed on a UID.
+        //
+        // Links are keyed on Message-ID so that filing a message and
+        // then archiving it does not break the trail. A UID is a
+        // position in a folder; preferring it puts the trail back on
+        // the thing it was designed to survive.
+        let env = envelope_from_bytes(
+            HEADERS,
+            "INBOX",
+            Vec::new(),
+            Some("<uid-40909@imap.local>".into()),
+            0,
+        )
+        .unwrap();
+        assert!(
+            env.message_id.contains("a@example.com"),
+            "header id must win, got {}",
+            env.message_id
+        );
+    }
+
+    #[test]
+    fn the_fallback_is_used_only_when_the_header_has_no_id() {
+        const NO_ID: &[u8] = b"\
+From: Alice <alice@example.com>\r\n\
+Subject: Hello\r\n\
+\r\n";
+        let env = envelope_from_bytes(
+            NO_ID,
+            "INBOX",
+            Vec::new(),
+            Some("<uid-7@imap.local>".into()),
+            0,
+        )
+        .unwrap();
+        assert_eq!(env.message_id, "<uid-7@imap.local>");
+
+        // And with neither, the content hash — never an empty id, which
+        // would collapse every id-less message onto one link row.
+        let env = envelope_from_bytes(NO_ID, "INBOX", Vec::new(), None, 0).unwrap();
+        assert!(env.message_id.starts_with("<sha-"), "{}", env.message_id);
     }
 }
