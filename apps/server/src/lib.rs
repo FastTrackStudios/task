@@ -1347,9 +1347,44 @@ pub(crate) async fn build_org_state(
         // `EmailSync::send` work end to end. An org with no
         // `Mail/` tree just serves an empty account list — the
         // `/email` UI tolerates that.
+        // The mail root sits BESIDE the vault, not inside it.
+        //
+        // It used to be `<org>/vault/Mail`, and the vault is a File Root
+        // under files-sync. A file written straight onto disk there is
+        // not in the canonical tree, so the next materialise removes it:
+        // an `account.json` placed by hand survived until the next sync
+        // and then vanished, taking the account with it. Observed twice
+        // on prod 2026-09-17 — the account listed fine, the pod rolled,
+        // and the mailbox was simply gone, with the directory and its
+        // index left behind.
+        //
+        // Capturing before the pull would only narrow the race, not
+        // close it, and mail configuration is not vault content anyway:
+        // nobody wants an IMAP endpoint syncing to their laptop as a
+        // note. Outside the root there is no race to lose.
+        //
+        // An install that already has `vault/Mail` keeps using it, so
+        // this does not strand anyone's existing accounts; the warning
+        // says what to do about it.
         #[cfg(feature = "plugin-email")]
-        let mail_root = std::env::var("TASK_SERVER_MAIL_ROOT")
-            .map_or_else(|_| vault_root.join("Mail"), PathBuf::from);
+        let mail_root = std::env::var("TASK_SERVER_MAIL_ROOT").map_or_else(
+            |_| {
+                let beside = org_root.path().join("mail");
+                let legacy = vault_root.join("Mail");
+                if !beside.exists() && legacy.exists() {
+                    tracing::warn!(
+                        legacy = %legacy.display(),
+                        beside = %beside.display(),
+                        "mail accounts live inside the synced vault, where a sync can delete \
+                         them — move the directory beside the vault to make them durable"
+                    );
+                    legacy
+                } else {
+                    beside
+                }
+            },
+            PathBuf::from,
+        );
         #[cfg(feature = "plugin-email")]
         let (mail_accounts, mail_configs) = discover_mail_accounts(&mail_root);
         // Every account gets a product store, remote ones included.
