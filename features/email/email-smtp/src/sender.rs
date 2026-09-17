@@ -114,6 +114,15 @@ impl SmtpSender {
                     .allow_invalid_certs()
                     .credentials(creds)
             }
+            // Same handshake, no host check — the account has asserted
+            // this network is trusted, which is not a thing this code can
+            // verify. See `TlsMode::StarttlsTrustedNetwork`.
+            TlsMode::StarttlsTrustedNetwork => {
+                SmtpClientBuilder::new(self.config.host.clone(), self.config.port)
+                    .implicit_tls(false)
+                    .allow_invalid_certs()
+                    .credentials(creds)
+            }
             TlsMode::None => {
                 #[cfg(feature = "test-plaintext")]
                 {
@@ -160,7 +169,10 @@ impl SmtpSender {
             // Both implicit TLS and STARTTLS resolve to a
             // TLS-wrapped client via `connect()`; the builder
             // above already encoded which handshake to run.
-            TlsMode::Implicit | TlsMode::Starttls | TlsMode::StarttlsSelfSigned => {
+            TlsMode::Implicit
+            | TlsMode::Starttls
+            | TlsMode::StarttlsSelfSigned
+            | TlsMode::StarttlsTrustedNetwork => {
                 let mut client = builder
                     .connect()
                     .await

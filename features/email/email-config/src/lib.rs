@@ -153,6 +153,29 @@ pub enum TlsMode {
     /// a convenient way to silence a genuine certificate error on a real
     /// remote server.
     StarttlsSelfSigned,
+    /// STARTTLS against an unverifiable certificate, on a host the
+    /// operator has deliberately chosen to trust.
+    ///
+    /// The case this exists for is a bridge that is not on this machine.
+    /// Proton Mail Bridge can run as its own workload — a pod in a
+    /// cluster, a box on a home network — with the mail server reaching
+    /// it across that network. Bridge still mints its own certificate,
+    /// and it keeps that certificate inside an encrypted vault with no
+    /// headless way to export it, so there is nothing to pin and
+    /// verification cannot be made to succeed.
+    ///
+    /// **This one cannot be enforced, and that is the difference.**
+    /// Loopback is checkable: the bytes provably never reach a network.
+    /// "This network is trustworthy" is not something code can confirm,
+    /// and a hostname cannot be classified without resolving it — which
+    /// is the very step whose answer would have to be trusted. So the
+    /// safety is the operator's judgement, and the variant is named for
+    /// what it assumes so that assumption is legible in the account file
+    /// instead of hiding behind a flag that reads like a detail.
+    ///
+    /// Use it for a private network you control. Aimed at a public
+    /// server it sends the account's password to whoever answers.
+    StarttlsTrustedNetwork,
     /// Plaintext. Tests / loopback only.
     None,
 }
@@ -184,6 +207,25 @@ pub fn is_loopback_host(host: &str) -> bool {
 #[cfg(test)]
 mod loopback_tests {
     use super::is_loopback_host;
+
+    #[test]
+    fn the_two_unverified_modes_are_distinguishable_on_the_wire() {
+        // They serialize differently on purpose. An account file is where
+        // the trust decision has to be readable months later, and
+        // "starttls_self_signed" (provably not a network) must not be
+        // mistaken for "starttls_trusted_network" (somebody's judgement).
+        let local = serde_json::to_string(&super::TlsMode::StarttlsSelfSigned).expect("encode");
+        let remote =
+            serde_json::to_string(&super::TlsMode::StarttlsTrustedNetwork).expect("encode");
+        assert_eq!(local, "\"starttls_self_signed\"");
+        assert_eq!(remote, "\"starttls_trusted_network\"");
+        assert_ne!(local, remote);
+
+        // And an old config keeps meaning what it meant.
+        let back: super::TlsMode =
+            serde_json::from_str("\"starttls_self_signed\"").expect("decode legacy");
+        assert_eq!(back, super::TlsMode::StarttlsSelfSigned);
+    }
 
     #[test]
     fn only_the_local_machine_counts_as_loopback() {

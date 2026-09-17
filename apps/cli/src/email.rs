@@ -132,6 +132,16 @@ pub(crate) enum EmailCmd {
         /// Bridge's SMTP port. Default 1025.
         #[arg(long, default_value_t = 1025)]
         smtp_port: u16,
+        /// Where Bridge is listening. Defaults to this machine.
+        ///
+        /// Give it a real host when Bridge runs somewhere else — its own
+        /// pod in a cluster, a box on your network. Doing so changes the
+        /// TLS posture and the command says so: Bridge's certificate is
+        /// unverifiable either way, but off loopback that is a network
+        /// you are choosing to trust rather than one that provably is not
+        /// a network at all.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
         #[command(flatten)]
         password: PasswordArgs,
     },
@@ -456,28 +466,37 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
             display_name,
             imap_port,
             smtp_port,
+            host,
             password,
         } => {
             let id = id.unwrap_or_else(|| address.clone());
             let secret = password.resolve(&id)?;
+            // Bridge's certificate is self-signed wherever it runs, so
+            // verification fails either way. What changes with the host is
+            // what that costs: on loopback the traffic cannot reach a
+            // network, so there is no position to substitute a certificate
+            // from. Anywhere else it is a judgement about the network, and
+            // the account file should say which of the two it is.
+            let tls = if email_config::is_loopback_host(&host) {
+                TlsMode::StarttlsSelfSigned
+            } else {
+                TlsMode::StarttlsTrustedNetwork
+            };
             let cfg = AccountConfig {
                 id: email_proto::AccountId(id.clone()),
                 name: id.clone(),
                 address: address.clone(),
                 display_name,
                 backend: BackendKind::Imap {
-                    host: "127.0.0.1".into(),
+                    host: host.clone(),
                     port: imap_port,
-                    // Bridge signs its own certificate. Accepted only
-                    // because the host is loopback; the backends refuse
-                    // this mode anywhere else.
-                    tls: TlsMode::StarttlsSelfSigned,
+                    tls,
                     username: address.clone(),
                     password: secret.clone(),
                     submit: Some(SmtpConfig {
-                        host: "127.0.0.1".into(),
+                        host: host.clone(),
                         port: smtp_port,
-                        tls: TlsMode::StarttlsSelfSigned,
+                        tls,
                         username: address.clone(),
                         password: secret,
                     }),
@@ -487,7 +506,15 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
             };
             write_account(&root, &id, &cfg)?;
             println!();
-            println!("Proton Mail Bridge has to be running on THIS machine for the account");
+            if matches!(tls, TlsMode::StarttlsTrustedNetwork) {
+                println!("NOTE: Bridge is at {host}, not on this machine.");
+                println!("Its certificate is self-signed and cannot be verified, and off");
+                println!("loopback nothing can check that for you — this account now trusts");
+                println!("the network between here and there. Right for a private network");
+                println!("you control; wrong for anything reachable from outside it.");
+                println!();
+            }
+            println!("Proton Mail Bridge has to be running and signed in for this account");
             println!("to work — it is what turns Proton into something IMAP can read.");
             println!();
             println!("  1. Install and sign in:  https://proton.me/mail/bridge");
