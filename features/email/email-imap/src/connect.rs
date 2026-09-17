@@ -164,6 +164,11 @@ async fn build_client(
             }
             starttls_upgrade(host, tcp, true).await?
         }
+        // No check, because there is no check to make: the account has
+        // said this host is trusted and nothing here can second-guess
+        // that. See `TlsMode::StarttlsTrustedNetwork` for why the
+        // loopback rule cannot be generalised to it.
+        TlsMode::StarttlsTrustedNetwork => starttls_upgrade(host, tcp, true).await?,
         TlsMode::None => return Err(ConnectError::PlaintextRefused),
     };
     Ok(Client::new(stream))
@@ -183,8 +188,8 @@ async fn build_client(
         TlsMode::Implicit => Err(ConnectError::Tls(
             "test-plaintext build: implicit TLS not available".into(),
         )),
-        TlsMode::Starttls | TlsMode::StarttlsSelfSigned => Err(ConnectError::Tls(
-            "test-plaintext build: STARTTLS not available".into(),
-        )),
+        TlsMode::Starttls | TlsMode::StarttlsSelfSigned | TlsMode::StarttlsTrustedNetwork => Err(
+            ConnectError::Tls("test-plaintext build: STARTTLS not available".into()),
+        ),
     }
 }
