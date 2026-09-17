@@ -194,6 +194,13 @@ pub(crate) enum EmailCmd {
         /// Any other entity kind, as `kind:id`.
         #[arg(long, group = "target")]
         entity: Option<String>,
+        /// Org the entity belongs to. Empty means this org.
+        ///
+        /// Mail is personal and projects belong to organisations, so a
+        /// link often has to reach across. The link itself stays in your
+        /// own store either way, which is what keeps it yours.
+        #[arg(long)]
+        target_org: Option<String>,
         /// Who is making the link — `user` (default), `rule`, or an
         /// agent name. Recorded so a bulk auto-link can be audited or
         /// undone without touching manual ones.
@@ -211,6 +218,13 @@ pub(crate) enum EmailCmd {
         note: Option<String>,
         #[arg(long, group = "target")]
         entity: Option<String>,
+        /// Org the entity belongs to. Empty means this org.
+        ///
+        /// Mail is personal and projects belong to organisations, so a
+        /// link often has to reach across. The link itself stays in your
+        /// own store either way, which is what keeps it yours.
+        #[arg(long)]
+        target_org: Option<String>,
     },
     /// List links — either everything a message is attached to, or
     /// every message attached to a target.
@@ -227,6 +241,13 @@ pub(crate) enum EmailCmd {
         note: Option<String>,
         #[arg(long, group = "target")]
         entity: Option<String>,
+        /// Org the entity belongs to. Empty means this org.
+        ///
+        /// Mail is personal and projects belong to organisations, so a
+        /// link often has to reach across. The link itself stays in your
+        /// own store either way, which is what keeps it yours.
+        #[arg(long)]
+        target_org: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -240,23 +261,30 @@ fn target_from(
     task: Option<String>,
     note: Option<String>,
     entity: Option<String>,
+    org: Option<String>,
 ) -> eyre::Result<email_proto::LinkTarget> {
+    // Empty means "the org holding the link store", which is the right
+    // default for a link made from inside that org.
+    let org = org.unwrap_or_default();
     if let Some(id) = project {
         return Ok(email_proto::LinkTarget {
             kind: "project".into(),
             id,
+            org,
         });
     }
     if let Some(id) = task {
         return Ok(email_proto::LinkTarget {
             kind: "task".into(),
             id,
+            org,
         });
     }
     if let Some(id) = note {
         return Ok(email_proto::LinkTarget {
             kind: "note".into(),
             id,
+            org,
         });
     }
     if let Some(raw) = entity {
@@ -269,6 +297,7 @@ fn target_from(
         return Ok(email_proto::LinkTarget {
             kind: kind.into(),
             id: id.into(),
+            org,
         });
     }
     eyre::bail!("pass one of --project / --task / --note / --entity")
@@ -546,9 +575,10 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
             task,
             note,
             entity,
+            target_org,
             by,
         } => {
-            let target = target_from(project, task, note, entity)?;
+            let target = target_from(project, task, note, entity, target_org)?;
             let client =
                 crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
             let link = client
@@ -567,8 +597,9 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
             task,
             note,
             entity,
+            target_org,
         } => {
-            let target = target_from(project, task, note, entity)?;
+            let target = target_from(project, task, note, entity, target_org)?;
             let client =
                 crate::establish_client::<email_proto::EmailLinksClient>(None, &slug).await?;
             client
@@ -584,6 +615,7 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
             task,
             note,
             entity,
+            target_org,
             json,
         } => {
             let client =
@@ -594,7 +626,7 @@ pub(crate) async fn run_email(cmd: EmailCmd, org_override: Option<&str>) -> eyre
                     .await
                     .map_err(|e| eyre::eyre!("links: {e:?}"))?,
                 None => {
-                    let target = target_from(project, task, note, entity)?;
+                    let target = target_from(project, task, note, entity, target_org)?;
                     client
                         .links_for_target(target)
                         .await
@@ -837,6 +869,9 @@ async fn to_task(
             email_proto::LinkTarget {
                 kind: "task".into(),
                 id: created.id.to_string(),
+                // The CLI acts inside one org, so empty — "this org" —
+                // is the right qualifier for a task it just created here.
+                org: String::new(),
             },
             "user".to_owned(),
         )
@@ -849,6 +884,7 @@ async fn to_task(
                 email_proto::LinkTarget {
                     kind: "project".into(),
                     id: p.clone(),
+                    org: String::new(),
                 },
                 "user".to_owned(),
             )

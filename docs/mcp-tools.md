@@ -125,13 +125,29 @@ error verbatim.)
 
 | tool | does | wire permit |
 |---|---|---|
-| `link_email` | attach a message to a task, project, note or person | write `email/links/**` |
+| `link_email` | attach a message to a task, project, note or person, in any org | write `email/links/**` |
 | `unlink_email` | detach one link; others on the message survive | audited write `email/links/**` |
 | `email_links` | everything one message is attached to | read `email/links/**` |
 | `linked_emails` | every message on one entity — "all the mail on this project" | read `email/links/**` |
-| `email_to_task` | make a task from a message and link the two in one step | write `task/**` + `email/links/**` |
+| `email_to_task` | make a task from a message, assign it to you, and link the two | write `task/**` + `email/links/**` |
 | `file_email` | move a message to another folder | write `email/**` (`email/move_message`) |
 | `flag_email` | mark read/unread, flagged/unflagged | write `email/**` (`email/set_flags`) |
+
+**Links live in the caller's own org, never in the org being acted on.**
+That is what makes mail personal while projects are shared: a link
+pointing at a TomBrooksMusic project is recorded in *your* org's store,
+which nobody else in TomBrooksMusic can read. `linked_emails` therefore
+answers per-person — the same question about the same project returns
+your trail to you and their trail to them, with no per-person access
+rules to enforce, because the separation is where the data sits. The
+server resolves the store from `is_home`, falling back to the acting org
+on a single-org deployment.
+
+`target_org` on the link tools says which org the entity belongs to,
+defaulting to the org you are acting in. `email_to_task` sets it to
+whichever org it created the task in, and assigns that task to the
+caller so mail-derived work lands in one person's list rather than
+everyone's.
 
 Links are keyed on the **Message-ID**, never on a folder and UID, so
 filing a message and then archiving it does not break the trail back to

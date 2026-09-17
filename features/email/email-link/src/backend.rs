@@ -40,6 +40,7 @@ impl LinkBackend {
 
 fn to_entity(target: &LinkTarget) -> EntityRef {
     EntityRef::new(EntityKind::new(target.kind.clone()), target.id.clone())
+        .in_org(target.org.clone())
 }
 
 fn to_wire(link: &EmailLink) -> MessageLink {
@@ -48,6 +49,7 @@ fn to_wire(link: &EmailLink) -> MessageLink {
         target: LinkTarget {
             kind: link.entity.kind.as_str().to_owned(),
             id: link.entity.id.clone(),
+            org: link.entity.org.clone(),
         },
         linked_at_ms: link.linked_at.map_or(0, |t| t.timestamp_millis()),
         linked_by: link.linked_by.clone().unwrap_or_else(|| "user".to_owned()),
@@ -121,6 +123,7 @@ mod tests {
         LinkTarget {
             kind: "project".into(),
             id: id.into(),
+            org: String::new(),
         }
     }
 
@@ -167,6 +170,7 @@ mod tests {
             LinkTarget {
                 kind: "task".into(),
                 id: "t-1".into(),
+                org: String::new(),
             },
             "user",
         )

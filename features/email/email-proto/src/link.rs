@@ -26,6 +26,21 @@ pub struct LinkTarget {
     /// The entity's id in its own service's terms — a task UUID, a
     /// project id, a vault path.
     pub id: String,
+    /// Which organisation the entity belongs to. Empty means the org
+    /// that holds the link store.
+    ///
+    /// Mail belongs to a person; projects belong to organisations.
+    /// The two live in different vaults, so without this a link could
+    /// only ever reach inside the org holding the store — forcing a
+    /// choice between copying one mailbox into every org or not
+    /// filing mail against shared work at all.
+    ///
+    /// Naming the org instead lets the links stay in the owner's own
+    /// org, which is what keeps them private: other members of the
+    /// org a project lives in have no access to the store the links
+    /// are in, so "every email on this project" answers for you and
+    /// is empty for them, with no per-person access rules to enforce.
+    pub org: String,
 }
 
 /// One message↔entity link.
