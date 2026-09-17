@@ -40,7 +40,25 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REGISTRY: registry.starcommand.live:30050
+  # starcommand's NodePort registry, by address rather than by name.
+  #
+  # `registry.starcommand.live` resolves on the runner through a
+  # `networking.hosts` pin in THEBATTLESHIP's config, and that pin points
+  # at 10.10.10.1 — the direct 10G link between the two machines. Since
+  # starcommand rebooted on 2026-09-16 nothing crosses that link: both
+  # ends report the interface up with carrier, ICMP is 100% lost in both
+  # directions, and an ARP entry never gets past PROBE, so the fault is
+  # the switch or the cabling rather than either host.
+  #
+  # Every deploy since then died in "Push images" with
+  # `dial tcp 10.10.10.1:30050: connect: no route to host` — four of the
+  # last seven runs. The message names blob reuse and a container
+  # registry, so it reads like a registry fault; it is a dead cable.
+  #
+  # 192.168.1.112 is the same machine over the 1G LAN. Restore the
+  # hostname once the 10G path is back: pushing a few hundred megabytes
+  # of image is exactly what that link was for.
+  REGISTRY: 192.168.1.112:30050
   # Newer skopeo rejects the host's v1 registries.conf; we name the
   # registry explicitly everywhere, so use an empty (valid) config.
   CONTAINERS_REGISTRIES_CONF: /dev/null
