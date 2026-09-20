@@ -122,6 +122,22 @@ impl SourceKind {
         }
     }
 
+    /// The kind that publishes into `tier`, the inverse of
+    /// [`Self::tier_dir`].
+    ///
+    /// Here rather than at a caller because a table written out twice is
+    /// a table that comes apart: anything that keys a source by
+    /// `"<tier>/<slug>"` on disk — the publisher's grants, the
+    /// subscriber's peers — has to read that key back, and reading it
+    /// back through the same match that wrote it is what keeps the two
+    /// directions agreeing.
+    #[must_use]
+    pub fn from_tier_dir(tier: &str) -> Option<Self> {
+        [Self::Wiki, Self::Resource, Self::Assets, Self::Projects]
+            .into_iter()
+            .find(|kind| kind.tier_dir() == tier)
+    }
+
     /// The noun a refusal uses: "acme.test has no *song shelf* `songs`".
     #[must_use]
     pub const fn noun(self) -> &'static str {
@@ -375,6 +391,19 @@ mod tests {
         assert_eq!(SourceKind::Wiki.tier_dir(), "wikis");
         assert_eq!(SourceKind::Resource.tier_dir(), "resources");
         assert_eq!(SourceKind::Assets.tier_dir(), "assets");
+    }
+
+    #[test]
+    fn a_tier_directory_reads_back_as_the_kind_that_wrote_it() {
+        for kind in [
+            SourceKind::Wiki,
+            SourceKind::Resource,
+            SourceKind::Assets,
+            SourceKind::Projects,
+        ] {
+            assert_eq!(SourceKind::from_tier_dir(kind.tier_dir()), Some(kind));
+        }
+        assert_eq!(SourceKind::from_tier_dir("vault"), None);
     }
 
     #[test]

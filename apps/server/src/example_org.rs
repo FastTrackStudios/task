@@ -724,9 +724,14 @@ pub fn wiki_slug(title: &str) -> String {
 /// `features/wiki/spec/wiki.md` says an org holds a *set* of wikis and
 /// that a vault is not one of them. A seed with a single wiki cannot
 /// show the difference between those claims and the one-wiki world
-/// that preceded them, so the example carries five across three orgs —
-/// three owned by the studio, two personal, spanning all three
-/// visibilities.
+/// that preceded them, so the example carries six across all three orgs
+/// — three owned by the audio studio, one by the video company, two
+/// personal, spanning all three visibilities.
+///
+/// The video company's is the one that is not on the reader's disk. In
+/// the demo ACME and VNT are two servers, so `vnt.test/post-production`
+/// is the seed's cross-server subscription: reaching it goes through a
+/// grant, a peer table and a dial rather than a sibling directory.
 ///
 /// Two of the studio's three are a *pair*: `Audio Production` is
 /// curated and `Studio Research` is the agent's working wiki that feeds
@@ -786,6 +791,15 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
                        wiki whose pages reach Audio Production only by promotion, which \
                        copies rather than moves and refuses a type the target's schema \
                        does not declare",
+    },
+    DeclaredWiki {
+        org: "vnt-video",
+        title: "Post Production",
+        visibility: Visibility::Unlisted,
+        demonstrates: "the source of a **cross-server** subscription: the one declared \
+                       wiki owned by the other company, which in the demo runs as its \
+                       own server — so ACME reaching it exercises the peer table, the \
+                       grant and the dialler rather than a sibling directory",
     },
     DeclaredWiki {
         org: "alice-personal",

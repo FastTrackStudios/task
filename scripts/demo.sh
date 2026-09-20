@@ -20,6 +20,7 @@
 #   ./demo.sh web      # run the web app against ACME
 #   ./demo.sh desktop  # run the desktop app against ACME
 #   ./demo.sh daemon   # a laptop: the sync agent, replicating ACME's projects
+#   ./demo.sh federate # ACME subscribes to VNT's wiki, across the two servers
 #   ./demo.sh ids      # print each org's endpoint id
 #   ./demo.sh telemetry       # local OTLP backend (Grafana/Tempo/Loki/Prom)
 #   ./demo.sh telemetry-stop  # stop it (data survives; rm to wipe)
@@ -198,6 +199,73 @@ serve() {
   wait
 }
 
+# ACME subscribes to VNT's Post Production wiki — across the two
+# servers, through the product's own lanes.
+#
+# This is the one thing on the demo desk that cannot be planted, and the
+# reason is the reason it is interesting: a cross-server subscription
+# needs the publisher's *endpoint id*, and an endpoint id does not exist
+# until that server has booted once. So it is a step after `serve`
+# rather than part of `plant`.
+#
+# Three acts, and they are the three a person does:
+#
+#   1. VNT mints a grant for one wiki   (`wiki sources grant`)
+#   2. ACME writes down where VNT is and what reads it (`… trust`)
+#   3. ACME takes the source on and pulls it  (`… subscribe`, `… refresh`)
+#
+# Nothing here is a demo shortcut: the same three commands work between
+# two servers on two continents. What the script does for you is carry
+# the secret between them, which in life is an email.
+#
+# Sessions land under $DEMO_ROOT, not in your own `session.json` — one
+# per server, because these are two different accounts on two different
+# servers and the CLI holds one active profile at a time.
+federate() {
+  require_planted
+  local vnt_id secret
+  vnt_id="$(id_of vnt vnt-video)"
+  if [ -z "$vnt_id" ]; then
+    echo "VNT has not bound an endpoint yet — run '$0 serve' once first" >&2
+    exit 1
+  fi
+  cd "$REPO_ROOT"
+  cargo build --quiet -p task-cli --bin task
+
+  # `task` as a given account on a given server, with its own session
+  # dir. `$1` is the demo session name; the rest is the command line.
+  demo_task() {
+    local who="$1"; shift
+    XDG_DATA_HOME="$DEMO_ROOT/cli/$who" TASK_PASSWORD="$PASSWORD" \
+      ./target/debug/task "$@"
+  }
+
+  echo ">> VNT: signing in as Victor and granting read on post-production"
+  mkdir -p "$DEMO_ROOT/cli/vnt" "$DEMO_ROOT/cli/acme"
+  demo_task vnt auth login --server "ws://127.0.0.1:$VNT_PORT/vox" \
+    --org vnt-video --email victor@vnt.test >/dev/null
+  secret="$(demo_task vnt wiki sources grant post-production --kind wiki \
+    | awk '/^secret/ { print $2; exit }')"
+  if [ -z "$secret" ]; then
+    echo "VNT minted no secret — is '$0 serve' running?" >&2
+    exit 1
+  fi
+
+  echo ">> ACME: signing in as Alice and recording the grant"
+  demo_task acme auth login --server "ws://127.0.0.1:$ACME_PORT/vox" \
+    --org acme-audio --email alice@acme.test >/dev/null
+  demo_task acme wiki sources trust vnt.test/post-production \
+    --kind wiki --endpoint "$vnt_id" --secret "$secret"
+  demo_task acme wiki sources subscribe vnt.test/post-production --kind wiki
+  demo_task acme wiki sources refresh vnt.test/post-production
+
+  echo
+  echo ">> the copy is on ACME's disk:"
+  echo "   $DEMO_ROOT/acme/orgs/acme-audio/subscribed/vnt.test/post-production"
+  echo ">> revoke it from VNT with:  wiki sources revoke post-production"
+  echo "   the copy keeps reading; what ends is the refreshing."
+}
+
 # A third machine on the demo desk: the sync agent, holding replicas of
 # ACME's projects the way a laptop would.
 #
@@ -301,8 +369,9 @@ for cmd in "$@"; do
     desktop) desktop ;;
     daemon) daemon ;;
     ids)   ids ;;
+    federate) federate ;;
     telemetry) telemetry ;;
     telemetry-stop) telemetry_stop ;;
-    *) echo "unknown: $cmd (want plant|fresh|serve|web|desktop|daemon|ids|telemetry|telemetry-stop)" >&2; exit 1 ;;
+    *) echo "unknown: $cmd (want plant|fresh|serve|web|desktop|daemon|federate|ids|telemetry|telemetry-stop)" >&2; exit 1 ;;
   esac
 done

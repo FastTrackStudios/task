@@ -33,6 +33,11 @@ pub mod debug_profile;
 pub mod demo_cli;
 pub mod device_sync;
 pub mod example_org;
+// Subscribing across a server boundary: the peer table plus the dialler
+// that reads a source through it. Wiki-shaped, so it lives and dies with
+// the wiki feature like the resolver it wraps.
+#[cfg(feature = "plugin-wiki")]
+pub mod federated_orgs;
 pub mod identity_mgmt;
 pub mod iroh_host;
 pub mod link_sync;
@@ -192,6 +197,13 @@ pub struct OrgAppState {
     /// subscriptions too and is not a wiki.
     #[cfg(feature = "plugin-wiki")]
     pub subscriptions: wiki_live::subscriptions_backend::SubscriptionsBackend,
+    /// How this org reaches a source on another server: the endpoint it
+    /// dials from, and the connections it holds open. The same cell the
+    /// subscription resolver reads, so
+    /// [`attach_wiki_peering`](crate::attach_wiki_peering) filling it
+    /// makes every already-built resolver able to dial.
+    #[cfg(feature = "plugin-wiki")]
+    pub wiki_dialler: std::sync::Arc<federated_orgs::Dialler>,
     /// The Edit lane over this org's wikis (`wiki.edit.*`): requests,
     /// claims, landings. Its tracker is this org's task board, so every
     /// request is an issue here too.
@@ -1099,9 +1111,18 @@ pub(crate) async fn build_org_state(
 
         // The subscription service, over the same store the boot sweep
         // just topped up. `LocalOrgs` resolves a source published by
-        // another org on this data root; a peer's is the same
-        // materialize call against a vox client, which is why the
-        // resolver is a trait rather than a match.
+        // another org on this data root; `FederatedOrgs` adds the one
+        // other place a source can be — another server, named in this
+        // org's peer table — and reads it through the same materialize
+        // call, which is why the resolver is a trait rather than a match.
+        //
+        // The dialler is held on the org state as well, because the
+        // endpoint it dials from does not exist yet: it is bound after
+        // `AppState`, and `attach_wiki_peering` fills this same cell.
+        // Until then a remote source says it cannot be reached, which is
+        // what a deployment without peering should say.
+        #[cfg(feature = "plugin-wiki")]
+        let wiki_dialler = std::sync::Arc::new(federated_orgs::Dialler::default());
         #[cfg(feature = "plugin-wiki")]
         let subscriptions = {
             let orgs_dir = org_root
@@ -1110,9 +1131,14 @@ pub(crate) async fn build_org_state(
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| org_root.path().to_path_buf());
             let domains = wiki_domains(&orgs_dir, std::env::var("TASK_WIKI_DOMAINS").ok());
-            let upstream = std::sync::Arc::new(wiki_live::subscriptions_backend::LocalOrgs::new(
+            let local = wiki_live::subscriptions_backend::LocalOrgs::new(
                 orgs_dir.parent().unwrap_or(org_root.path()).to_path_buf(),
                 domains,
+            );
+            let upstream = std::sync::Arc::new(federated_orgs::FederatedOrgs::new(
+                local,
+                org_root.path().to_path_buf(),
+                wiki_dialler.clone(),
             ));
             wiki_live::subscriptions_backend::SubscriptionsBackend::new(
                 org_root.path().to_path_buf(),
@@ -2023,6 +2049,8 @@ pub(crate) async fn build_org_state(
             shelf_registry,
             #[cfg(feature = "plugin-wiki")]
             subscriptions,
+            #[cfg(feature = "plugin-wiki")]
+            wiki_dialler,
             #[cfg(feature = "plugin-wiki")]
             edits,
             projects,
@@ -4319,6 +4347,27 @@ pub fn org_router_guarded(
         router,
         bearer,
     )
+}
+
+/// Give an org's wiki subscriptions a way to reach other servers.
+///
+/// The subscription resolver was built during `AppState::new`, before
+/// any endpoint existed, holding an empty cell where the endpoint goes.
+/// This fills it — and because the cell is shared by `Arc`, every
+/// resolver already handed to a backend can dial from that moment on.
+///
+/// Its counterpart on the files lane is [`attach_peering`], and the
+/// difference in shape is the difference in what they install: that one
+/// replaces a port the backend holds by value (hence `&mut`), while this
+/// one hands a live endpoint to a cell the backend is already reading.
+///
+/// A server that never calls this dials nothing, and a subscription to
+/// another server's source says exactly that on refresh rather than
+/// reporting a missing source. That is the state of a deployment with
+/// peering off, and it is the honest answer for one.
+#[cfg(feature = "plugin-wiki")]
+pub fn attach_wiki_peering(org: &OrgAppState, endpoint: architect::iroh_link::iroh::Endpoint) {
+    org.wiki_dialler.attach(endpoint);
 }
 
 /// Give an org's Files backend a way to reach other servers.

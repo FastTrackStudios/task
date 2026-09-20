@@ -778,6 +778,148 @@ pub(crate) enum WikiCmd {
     /// how an Editor reviews and lands it (`wiki.edit.*`).
     #[command(subcommand)]
     Edits(WikiEditsCmd),
+    /// Subscriptions — what this org's vault and wikis read from
+    /// elsewhere, and what it lets elsewhere read.
+    #[command(subcommand)]
+    Sources(WikiSourcesCmd),
+}
+
+/// `task wiki sources …` — the subscription lane over vox.
+///
+/// Three groups of verbs, and the split is worth knowing before reading
+/// the list:
+///
+/// - **What this org holds**: `list`, `discover`, `subscribe`,
+///   `unsubscribe`, `refresh`. Same surface whether the source is a
+///   sibling org on this disk or a wiki on another server
+///   (`wiki.subscribe.federated`).
+/// - **What this org publishes**: `grant` and `revoke`, which mint and
+///   withdraw the secret another *server* reads one source with. A
+///   subscriber on this same data root needs neither.
+/// - **What this org has been granted**: `trust`, `distrust`, `trusted`.
+///   A grant is inert until it is written down, and writing it down is
+///   what makes a domain on another server resolve to somewhere dialable.
+///
+/// Carrying a grant from `grant` to `trust` is a message — an email, a
+/// ticket, a line read down a phone. The lane deliberately has no
+/// delivery mechanism, the same stance `files offer` takes.
+#[derive(Subcommand)]
+pub(crate) enum WikiSourcesCmd {
+    /// What a subscriber holds, declined entries included.
+    List {
+        /// `vault` (the default), `wiki:<slug>`, `assets:<kind>` or
+        /// `project:<path>`.
+        #[arg(long, default_value = "vault")]
+        subscriber: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Sources this server can see that are open to subscription.
+    Discover {
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Take on a source, by `<domain>/<slug>`.
+    Subscribe {
+        /// `vnt.test/post-production`.
+        qualified: String,
+        /// `wiki` (the default), `resource`, `assets` or `projects`.
+        #[arg(long, default_value = "wiki")]
+        kind: String,
+        #[arg(long, default_value = "vault")]
+        subscriber: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Drop a source. A core subscription is declined rather than
+    /// removed; a copy holding unpushed work refuses without `--force`.
+    Unsubscribe {
+        qualified: String,
+        #[arg(long, default_value = "vault")]
+        subscriber: String,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Bring one subscribed source's local copy up to date.
+    Refresh {
+        qualified: String,
+        #[arg(long, default_value = "vault")]
+        subscriber: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Publisher side.** Mint the secret another server reads one of
+    /// this org's sources with, and print the grant to carry over.
+    Grant {
+        slug: String,
+        #[arg(long, default_value = "wiki")]
+        kind: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Publisher side.** Withdraw a grant. Binds on the subscriber's
+    /// next call; their copy keeps resolving (`wiki.life.orphan`).
+    Revoke {
+        slug: String,
+        #[arg(long, default_value = "wiki")]
+        kind: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Subscriber side.** Record a grant received from another server:
+    /// where that domain is, and the secret that reads one source there.
+    Trust {
+        /// `<domain>/<slug>` — as the publisher names it.
+        qualified: String,
+        /// The publisher's endpoint id. No host, no port: `task wiki
+        /// sources grant` prints it, and `demo ids` prints it for the
+        /// demo servers.
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        secret: String,
+        #[arg(long, default_value = "wiki")]
+        kind: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Subscriber side.** Forget a grant: stop refreshing that source.
+    /// The copy already held is untouched.
+    Distrust {
+        qualified: String,
+        #[arg(long, default_value = "wiki")]
+        kind: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// **Subscriber side.** Every grant this org holds, without the
+    /// secrets — those never leave the server that was given them.
+    Trusted {
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 /// `task wiki edits …` — the Edit lane over vox.
@@ -2381,6 +2523,7 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
         WikiCmd::ResearchPlans(c) => run_wiki_research_plans(c).await,
         WikiCmd::Watch(c) => run_wiki_watch(c).await,
         WikiCmd::Edits(c) => run_wiki_edits(c).await,
+        WikiCmd::Sources(c) => run_wiki_sources(c).await,
         WikiCmd::Page(c) => run_wiki_page(c).await,
         WikiCmd::Promote {
             from_wiki,
@@ -4287,6 +4430,261 @@ async fn run_wiki_research_plans(cmd: WikiResearchCmd) -> eyre::Result<()> {
 
 /// The Edits service over vox, plus one read of the Pages service so
 /// `open` can name the version it is against.
+/// `task wiki sources …` — subscriptions, grants and the peer table.
+///
+/// The one lane a person drives from both ends: a publisher mints a grant
+/// here and a subscriber records one here, on two different servers, with
+/// the same binary.
+async fn run_wiki_sources(cmd: WikiSourcesCmd) -> eyre::Result<()> {
+    use wiki_proto::service::subscriptions::{SourceGrant, SubscriptionsClient};
+    use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
+
+    async fn client(
+        org: Option<String>,
+        server: Option<String>,
+    ) -> eyre::Result<SubscriptionsClient> {
+        let slug = resolve_active_org(org)?;
+        establish_for_url(&resolve_org_vox_url(server, &slug)).await
+    }
+
+    /// `wiki` / `resource` / `assets` / `projects`, by their tier
+    /// directory names too, so a person who has seen the disk can type
+    /// what they saw.
+    fn kind_of(s: &str) -> eyre::Result<SourceKind> {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
+            "wiki" | "wikis" => SourceKind::Wiki,
+            "resource" | "resources" => SourceKind::Resource,
+            "assets" | "asset" => SourceKind::Assets,
+            "project" | "projects" => SourceKind::Projects,
+            other => eyre::bail!(
+                "`{other}` is not a source kind: want wiki, resource, assets or projects"
+            ),
+        })
+    }
+
+    /// The subscriber key, in the same spelling `Subscriber::key` writes
+    /// on disk — so what a person reads in `subscriptions.json` is what
+    /// they can type back.
+    fn subscriber_of(s: &str) -> eyre::Result<Subscriber> {
+        Subscriber::from_key(s.trim()).ok_or_else(|| {
+            eyre::eyre!(
+                "`{s}` is not a subscriber: want vault, wiki:<slug>, assets:<kind> or \
+                 project:<path>"
+            )
+        })
+    }
+
+    /// `<domain>/<slug>` — and for a project the slug is a path, so only
+    /// the first segment is the domain.
+    fn split_qualified(qualified: &str) -> eyre::Result<(String, String)> {
+        qualified
+            .split_once('/')
+            .filter(|(d, s)| !d.is_empty() && !s.is_empty())
+            .map(|(d, s)| (d.to_owned(), s.to_owned()))
+            .ok_or_else(|| eyre::eyre!("`{qualified}` is not a source name: want <domain>/<slug>"))
+    }
+
+    match cmd {
+        WikiSourcesCmd::List {
+            subscriber,
+            org,
+            server,
+        } => {
+            let held = client(org, server)
+                .await?
+                .list_subscriptions(subscriber_of(&subscriber)?)
+                .await?;
+            if held.is_empty() {
+                println!("nothing subscribed");
+            }
+            for h in held {
+                let state = if h.subscription.declined {
+                    "declined"
+                } else if h.files == 0 {
+                    "never refreshed"
+                } else {
+                    "held"
+                };
+                println!(
+                    "{:<40} {:<8} {:<15} {} file(s){}",
+                    h.subscription.qualified(),
+                    h.subscription.kind.noun(),
+                    state,
+                    h.files,
+                    if h.subscription.core { "  [core]" } else { "" }
+                );
+            }
+        }
+        WikiSourcesCmd::Discover { org, server } => {
+            let found = client(org, server).await?.discover().await?;
+            if found.is_empty() {
+                println!("nothing open to subscription here");
+            }
+            for s in found {
+                println!("{:<40} {:<8} {}", s.qualified(), s.kind.noun(), s.title);
+            }
+        }
+        WikiSourcesCmd::Subscribe {
+            qualified,
+            kind,
+            subscriber,
+            org,
+            server,
+        } => {
+            let (domain, slug) = split_qualified(&qualified)?;
+            let kind = kind_of(&kind)?;
+            client(org, server)
+                .await?
+                .subscribe(
+                    subscriber_of(&subscriber)?,
+                    Subscription {
+                        domain,
+                        slug: slug.clone(),
+                        kind,
+                        title: slug,
+                        core: false,
+                        declined: false,
+                        selection: Default::default(),
+                    },
+                )
+                .await?;
+            println!("subscribed to {qualified}");
+            println!("nothing has been copied yet — `task wiki sources refresh {qualified}`");
+        }
+        WikiSourcesCmd::Unsubscribe {
+            qualified,
+            subscriber,
+            force,
+            org,
+            server,
+        } => {
+            client(org, server)
+                .await?
+                .unsubscribe(subscriber_of(&subscriber)?, qualified.clone(), force)
+                .await?;
+            println!("dropped {qualified}");
+        }
+        WikiSourcesCmd::Refresh {
+            qualified,
+            subscriber,
+            org,
+            server,
+        } => {
+            let report = client(org, server)
+                .await?
+                .refresh_subscription(subscriber_of(&subscriber)?, qualified)
+                .await?;
+            println!(
+                "{}: {} pulled, {} already in sync",
+                report.qualified, report.pulled, report.in_sync
+            );
+            for p in &report.local_only {
+                println!("  local only  {p}");
+            }
+            for p in &report.conflicted {
+                println!("  conflicted  {p}");
+            }
+        }
+        WikiSourcesCmd::Grant {
+            slug,
+            kind,
+            org,
+            server,
+        } => {
+            let slug_org = resolve_active_org(org.clone())?;
+            let secret = client(org, server)
+                .await?
+                .grant_source_read(kind_of(&kind)?, slug.clone())
+                .await?;
+            println!("secret  {secret}");
+            println!();
+            println!(
+                "Carry that to the subscriber, with this org's domain and endpoint id, and \
+                 they record it with:"
+            );
+            println!(
+                "  task wiki sources trust <domain>/{slug} --kind {kind} \\\n    \
+                 --endpoint <this server's endpoint id> --secret {secret}"
+            );
+            println!();
+            println!(
+                "The endpoint id is in `<data root>/orgs/{slug_org}/iroh-endpoint-id`; \
+                 `just demo ids` prints it for the demo servers."
+            );
+        }
+        WikiSourcesCmd::Revoke {
+            slug,
+            kind,
+            org,
+            server,
+        } => {
+            client(org, server)
+                .await?
+                .revoke_source_read(kind_of(&kind)?, slug.clone())
+                .await?;
+            println!("revoked read on {slug}");
+            println!(
+                "It binds on their next call. The copy they already hold keeps resolving — \
+                 what ends is the refreshing."
+            );
+        }
+        WikiSourcesCmd::Trust {
+            qualified,
+            endpoint,
+            secret,
+            kind,
+            org,
+            server,
+        } => {
+            let (domain, slug) = split_qualified(&qualified)?;
+            client(org, server)
+                .await?
+                .trust_source(SourceGrant {
+                    domain,
+                    endpoint,
+                    kind: kind_of(&kind)?,
+                    slug,
+                    secret,
+                })
+                .await?;
+            println!("recorded the grant for {qualified}");
+            println!(
+                "Nothing has been dialled. Subscribe to it, then refresh: \
+                 `task wiki sources subscribe {qualified} --kind {kind}`"
+            );
+        }
+        WikiSourcesCmd::Distrust {
+            qualified,
+            kind,
+            org,
+            server,
+        } => {
+            let (domain, slug) = split_qualified(&qualified)?;
+            client(org, server)
+                .await?
+                .distrust_source(domain, kind_of(&kind)?, slug)
+                .await?;
+            println!("forgot the grant for {qualified}");
+        }
+        WikiSourcesCmd::Trusted { org, server } => {
+            let trusted = client(org, server).await?.trusted_sources().await?;
+            if trusted.is_empty() {
+                println!("no grants held — every source this org reads is on its own server");
+            }
+            for t in trusted {
+                println!(
+                    "{}/{:<30} {:<8} at {}",
+                    t.domain,
+                    t.slug,
+                    t.kind.noun(),
+                    t.endpoint
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn run_wiki_edits(cmd: WikiEditsCmd) -> eyre::Result<()> {
     use wiki_proto::config::ProposerGate;
     use wiki_proto::service::edits::{EditRequest, EditsClient, NewEditRequest, PageChange};

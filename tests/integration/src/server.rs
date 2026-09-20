@@ -217,6 +217,14 @@ impl Server {
             endpoint.id().to_string(),
             Arc::new(IrohRemotes::new(endpoint.clone())),
         );
+        // The wiki lane dials from the same endpoint, installed the same
+        // way and for the same reason: a subscription to another server's
+        // source calls back as this org, so the id the publisher granted
+        // is the id it sees connecting. A harness that skipped this would
+        // have every cross-server refresh report an unreachable peer
+        // while the in-process resolver passed — the exact failure the
+        // comment on `attach_peering` records.
+        task_server::attach_wiki_peering(&org, endpoint.clone());
         let backend = org.files.clone();
 
         // Served the way a deployment serves it: one wrapped router per
@@ -326,6 +334,14 @@ impl Server {
             endpoint.id().to_string(),
             Arc::new(IrohRemotes::new(endpoint.clone())),
         );
+        // The wiki lane dials from the same endpoint, installed the same
+        // way and for the same reason: a subscription to another server's
+        // source calls back as this org, so the id the publisher granted
+        // is the id it sees connecting. A harness that skipped this would
+        // have every cross-server refresh report an unreachable peer
+        // while the in-process resolver passed — the exact failure the
+        // comment on `attach_peering` records.
+        task_server::attach_wiki_peering(&org, endpoint.clone());
         let backend = org.files.clone();
 
         let serving = endpoint.clone();

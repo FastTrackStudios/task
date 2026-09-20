@@ -182,6 +182,11 @@ async fn bind_org(
         .org(slug)
         .ok_or_else(|| eyre::eyre!("org vanished between listing and binding"))?;
     crate::attach_peering(&mut org, id.clone(), IrohRemotes::port(endpoint.clone()));
+    // And the wiki lane dials from the same endpoint, for the same
+    // reason: a subscription to another org's source calls back as this
+    // org, so the id the publisher sees is the id it granted.
+    #[cfg(feature = "plugin-wiki")]
+    crate::attach_wiki_peering(&org, endpoint.clone());
     state
         .orgs
         .write()

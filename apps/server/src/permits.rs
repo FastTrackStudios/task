@@ -900,6 +900,16 @@ const WIKI_SUBSCRIPTIONS: ServicePermits = ServicePermits {
         // of act somebody later needs to find in a log.
         MethodPermit::new("grant_source_read", Action::WRITE, "wiki/subscriptions/**").audited(),
         MethodPermit::new("revoke_source_read", Action::WRITE, "wiki/subscriptions/**").audited(),
+        // The subscriber's half of the same relationship, and a member's
+        // decision on the same terms: taking another organisation's
+        // writing into this one is not something a stranger arranges, and
+        // recording a credential for it is exactly the act somebody later
+        // needs to find in a log. Emphatically *not* on the public
+        // surface — a caller who could write here could point a domain at
+        // a server of their own choosing.
+        MethodPermit::new("trust_source", Action::WRITE, "wiki/subscriptions/**").audited(),
+        MethodPermit::new("distrust_source", Action::WRITE, "wiki/subscriptions/**").audited(),
+        MethodPermit::new("trusted_sources", Action::READ, "wiki/subscriptions/**"),
     ],
 };
 #[cfg(feature = "plugin-wiki")]
