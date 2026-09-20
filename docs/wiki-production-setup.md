@@ -116,11 +116,46 @@ the wiki shows the change once a sync sees it merged.
 
 Cody's vault subscribes to the two studio wikis so `[[Ionian]]`-style
 references resolve from personal notes (`wiki.subscribe.resolution`).
-The web app's Wiki page has a Subscriptions tab for this; there is no
-CLI subcommand yet. Over the wire it is `Subscriptions::subscribe` with
-subscriber `vault` and the qualified source
-(`fasttrackstudio.app/music-theory`, `fasttrackstudio.app/audio-production`);
-`Subscriptions::discover` lists every public wiki on the server.
+The web app's Wiki page has a Subscriptions tab, and the CLI has the whole
+lane under `task wiki sources`:
+
+```bash
+task wiki sources discover --org codywright --server $S
+task wiki sources subscribe fasttrackstudio.app/music-theory --org codywright --server $S
+task wiki sources refresh   fasttrackstudio.app/music-theory --org codywright --server $S
+task wiki sources list --org codywright --server $S
+```
+
+Every org above is on **one** server, so a subscription resolves the
+publisher off the same disk and needs nothing else.
+
+### A source on another server
+
+Two extra facts, because the publisher is not on the subscriber's disk:
+where its domain is, and a secret it minted. The publisher grants, the
+subscriber records it, and carrying the secret between them is a message
+— the lane has no delivery mechanism, deliberately.
+
+```bash
+# on the publishing server, as a member of the publishing org
+task wiki sources grant post-production --kind wiki --org vnt-video --server $PUB
+#   → secret  <uuid>, and the endpoint id to pair it with
+#     (`<data root>/orgs/<slug>/iroh-endpoint-id`)
+
+# on the subscribing server, as a member of the subscribing org
+task wiki sources trust vnt.test/post-production --kind wiki \
+  --endpoint <publisher endpoint id> --secret <uuid> --org acme-audio --server $SUB
+task wiki sources subscribe vnt.test/post-production --kind wiki --org acme-audio --server $SUB
+task wiki sources refresh   vnt.test/post-production --org acme-audio --server $SUB
+```
+
+`task wiki sources revoke` (publisher) and `distrust` (subscriber) each
+end the refreshing without touching the copy already held
+(`wiki.life.orphan`). Only wikis cross a server boundary today; an asset
+shelf or a project says so plainly rather than reporting an orphan.
+
+`just demo federate` runs exactly these commands against the two demo
+servers, which is the cheapest way to watch the whole loop.
 
 ## What is deliberately not here
 

@@ -26,7 +26,9 @@ use std::sync::Arc;
 
 use wiki_proto::WikiError;
 use wiki_proto::config::Visibility;
-use wiki_proto::service::subscriptions::{HeldSubscription, RefreshReport, Subscriptions};
+use wiki_proto::service::subscriptions::{
+    HeldSubscription, RefreshReport, SourceGrant, Subscriptions, TrustedSource,
+};
 use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
 
 use crate::materialize;
@@ -111,6 +113,13 @@ impl SubscriptionsBackend {
     /// This org's grant table — who may read which of its sources.
     fn grants(&self) -> crate::source_grants::SourceGrants {
         crate::source_grants::SourceGrants::open(&self.org_root)
+    }
+
+    /// This org's peer table — which other servers it can reach, and
+    /// with which secret. The other direction of the same relationship
+    /// [`Self::grants`] holds one side of.
+    fn peers(&self) -> crate::source_peers::SourcePeers {
+        crate::source_peers::SourcePeers::open(&self.org_root)
     }
 
     fn published_root(
@@ -820,8 +829,72 @@ impl Subscriptions for SubscriptionsBackend {
         // is what makes serving a stranger's string safe here: the slug
         // was confined by `source_root` on the way in, and the path is
         // confined by the backend on the way out.
-        vault_proto::VaultSync::get_file(&backend, slug, path)
+        vault_proto::VaultSync::get_file(&backend, slug, path).map_err(|e| match e {
+            // A file listed a moment ago and gone now is a race, not a
+            // failure, and the subscriber's refresh treats the two
+            // differently. Flattening it into `Io` on the way out would
+            // make a page deleted mid-refresh look like an outage.
+            vault_proto::VaultSyncError::NotFound => WikiError::NotFound(path.to_owned()),
+            other => WikiError::Io(other.to_string()),
+        })
+    }
+
+    /// The receiving half of `grant_source_read`: two facts written
+    /// down, and nothing dialled. Recording a grant is not subscribing
+    /// and not reaching out — the first refresh of a source that names
+    /// this domain is the first call that leaves the building.
+    fn trust_source(&self, grant: SourceGrant) -> Result<(), WikiError> {
+        // All four parts, checked here rather than at the first refresh.
+        // A grant missing one is a copy-paste that went wrong, and the
+        // failure it would otherwise produce — "not reachable from
+        // here", days later, on a source somebody believes they set up —
+        // names the network instead of the typo.
+        for (what, value) in [
+            ("domain", grant.domain.as_str()),
+            ("endpoint", grant.endpoint.as_str()),
+            ("slug", grant.slug.as_str()),
+            ("secret", grant.secret.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(WikiError::Io(format!(
+                    "a source grant needs its {what}: without all four of domain, endpoint, \
+                     slug and secret there is nothing here that could reach anything"
+                )));
+            }
+        }
+        architect_telemetry::wide::set(
+            "wiki.subscribe.trusted",
+            format!("{}/{}", grant.domain, grant.slug),
+        );
+        self.peers()
+            .trust(
+                grant.domain.trim(),
+                grant.endpoint.trim(),
+                grant.kind,
+                grant.slug.trim(),
+                grant.secret.trim(),
+            )
             .map_err(|e| WikiError::Io(e.to_string()))
+    }
+
+    fn distrust_source(&self, domain: &str, kind: SourceKind, slug: &str) -> Result<(), WikiError> {
+        self.peers()
+            .distrust(domain, kind, slug)
+            .map_err(|e| WikiError::Io(e.to_string()))
+    }
+
+    fn trusted_sources(&self) -> Result<Vec<TrustedSource>, WikiError> {
+        Ok(self
+            .peers()
+            .trusted()
+            .into_iter()
+            .map(|(domain, endpoint, kind, slug)| TrustedSource {
+                domain,
+                endpoint,
+                kind,
+                slug,
+            })
+            .collect())
     }
 }
 

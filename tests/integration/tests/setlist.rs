@@ -45,13 +45,32 @@
 //! `LocalHomes` — the only [`links::NodeHomes`] that exists — answers
 //! for orgs on the reader's own data root, which is what `admin seed`
 //! and the demo produce. A qualified reference to an org on *another
-//! server* parses and does not resolve, and the ADR records that as the
-//! next piece of work rather than a caveat. Both halves are asserted
-//! here: the guest org boots beside ACME on ACME's disk
+//! server* parses and does not resolve. Both halves are asserted here:
+//! the guest org boots beside ACME on ACME's disk
 //! ([`integration::server::Server::start_beside`]) and resolves; VNT is
 //! a company on a different machine, holds a real chart, and stays
 //! unreachable — including to a subscription, which is refused rather
 //! than left to fail later.
+//!
+//! That second half is narrower than it was, and the narrowing is worth
+//! stating so the assertion below is not read as more than it is.
+//! Subscribing **across** a server boundary is built now:
+//! `tests/integration/tests/cross_server_wiki.rs` has ACME take on a
+//! wiki VNT publishes, refresh it over the wire, and keep the copy when
+//! the grant is withdrawn. Two things are still true here anyway, for two
+//! different reasons:
+//!
+//! - a **chart** is an asset-group document, and only a wiki crosses a
+//!   boundary today — the byte-tree kinds are walked from a `&Path`, and
+//!   a remote one says so rather than reporting an orphan;
+//! - and the refusal below is a subscription this server holds **no grant
+//!   for**, which is exactly when `LocalOrgs` is still the authority and
+//!   still answers for its own disk. A grant is what tells "there is no
+//!   such thing here" apart from "that thing is somewhere else".
+//!
+//! Resolving a *reference* into another server's org is a third piece
+//! again, and nothing implements it: the peer table carries a copy, not a
+//! `NodeHomes`. That is the boundary this chapter now records.
 
 use collection_proto::{CollectionKind, Placement};
 use integration::client::Session;
@@ -394,12 +413,19 @@ async fn an_org_on_another_server_parses_and_does_not_resolve() {
         answers[0].reach,
         Reach::NotPermitted,
         "a reference to another server's org resolved — `LocalHomes` only \
-         answers for orgs on the reader's own data root, and the remote \
-         upstream is the next piece of work (ADR 0003)"
+         answers for orgs on the reader's own data root. Subscribing across \
+         a boundary exists (`cross_server_wiki.rs`); teaching `NodeHomes` to \
+         answer from what a subscription brought back does not (ADR 0003)"
     );
 
     // And the subscription that would admit it is refused where it is
     // asked for, rather than accepted and left to fail on every read.
+    //
+    // ACME holds no grant for this source, so `LocalOrgs` is still the
+    // authority: it recognises the domain (`wiki_domains` names every
+    // example org), looks beside its own orgs, and says there is no such
+    // shelf. Recording a grant is what moves the question to VNT — see
+    // `cross_server_wiki.rs`, which does exactly that for a wiki.
     let refused = alice
         .wiki_subscriptions()
         .await

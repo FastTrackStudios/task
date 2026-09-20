@@ -253,14 +253,30 @@ the ability to *address* something in another organisation, which is not the
 same as the ability to read it, and the distinction is the reason this is
 safe to ship before remote upstreams exist.
 
-**The remote upstream becomes the next constraint.** `LocalOrgs` resolves
-sources published by other organisations on the same data root, which is what
-the demo and the suite exercise. A qualified reference to an organisation on
-*another server* will parse, and will not resolve, until `trait Upstream`
-grows the remote implementation its own docs describe as "the same
-materialize call against a `VaultSyncClient`". That is the honest boundary of
-this decision, and it is the next piece of work rather than a caveat hidden
-in it.
+**The remote upstream was the next constraint, and a wiki now crosses.**
+`LocalOrgs` resolves sources published by other organisations on the same data
+root, which is what the demo and the suite exercised first.
+`task_server::federated_orgs` adds the other place a source can be: a peer
+table (`wiki_live::source_peers`) says where a domain is and holds the secret
+the publisher minted for one source, and the refresh reads it over the wire
+through the same `materialize::refresh`. `tests/integration/tests/
+cross_server_wiki.rs` is the chapter; two servers on two disks, subscribed,
+refreshed, then revoked.
+
+Two halves of the original boundary remain, and they are different pieces of
+work rather than one unfinished one:
+
+- **Byte trees.** Only a wiki goes through the vault engine. Assets, Projects
+  and Resource are walked from a `&Path`, and a remote one names the missing
+  walker rather than reporting an orphan. The alternative this ADR already
+  prefers is the files lane: publish the manifest, put the bytes in a File
+  Root, carry them by `offer`/`accept` — which `remote_assets.rs` proves end
+  to end, and which may make a second walker unnecessary.
+- **Qualified references.** `node_homes::LocalHomes` answers only for orgs on
+  the reader's own data root, so `vnt.test/chart:reel-theme` still parses and
+  does not resolve for a reader on another server, even one holding a copy.
+  `tests/integration/tests/setlist.rs` pins that, and it is the honest
+  boundary now.
 
 **Ignition and Signal have no server-side home yet.** Neither appears
 anywhere in the tree today. The node kinds and capabilities here are the

@@ -866,9 +866,19 @@ Production so `[[Ionian]]` resolves from a vault note; a private journal note in
 `alice-personal`'s vault referencing a private wiki, a personal wiki and the
 Resource, none of which can reference it back; one open Edit Request from a cast
 member holding no Editor role; one auto-approved Editor change; a repo-sourced
-wiki over a small committed repository; and VNT subscribed to ACME's Audio
-Production across the two demo servers, so `wiki.subscribe.federated` is
+wiki over a small committed repository; and ACME subscribed to VNT's **Post
+Production** across the two demo servers, so `wiki.subscribe.federated` is
 exercised against a second server rather than asserted.
+
+That last one is the seed's only source that is not on the reader's disk, and
+it is the reason it runs the other way round from the sentence this paragraph
+used to carry: VNT owns the wiki (`example_org::DECLARED_WIKIS`, unlisted) and
+ACME reads it. Planting cannot finish the job, because a cross-server
+subscription needs the publisher's endpoint id and an endpoint id does not
+exist until that server has booted — so `just demo federate` is the step after
+`serve`, and it is the same three commands a person runs in life: the
+publisher grants, the subscriber records the grant, the subscriber
+subscribes.
 
 `wiki.promote.*` is the one family of rules about *two* wikis at once, so it
 cannot be exercised against a single planted wiki. Studio Research and Audio

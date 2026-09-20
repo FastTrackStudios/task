@@ -43,6 +43,54 @@ pub struct RefreshReport {
     pub conflicted: Vec<String>,
 }
 
+/// What one server hands another so it can subscribe across a boundary.
+///
+/// The wiki lane's `Offer`, and deliberately the same shape: everything
+/// the subscriber needs and nothing it does not. It learns where the
+/// publishing domain is, which source it may read there, and the secret
+/// to present — not the publisher's other sources, its members, or
+/// anything about the source's neighbours on the tier.
+///
+/// Inert, like an `Offer`: it carries no session and grants nothing until
+/// the receiver records it, so it can travel by any means — a message, a
+/// ticket, somebody reading it down a phone — without this lane growing a
+/// delivery mechanism.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "vox", derive(facet::Facet))]
+#[repr(C)]
+pub struct SourceGrant {
+    /// The domain the source is published under — the name a
+    /// subscription carries (`wiki.ref.format`).
+    pub domain: String,
+    /// The publisher's endpoint id, to dial. A bare id: no host, no
+    /// port, no certificate, which is the whole of what a deployment is
+    /// given and the whole of what it needs.
+    pub endpoint: String,
+    pub kind: crate::subscription::SourceKind,
+    pub slug: String,
+    /// Presented on every call back to the publisher. Minted by
+    /// [`Subscriptions::grant_source_read`] and revocable there; holding
+    /// it is the whole of the subscriber's authority.
+    pub secret: String,
+}
+
+/// A recorded grant, without its secret.
+///
+/// What a member asking "what can we reach from here" is asking about: a
+/// relationship. The secret stays on the server's disk — handing it back
+/// over the wire would turn a read of this org's own state into a way to
+/// carry its credentials elsewhere, and the publisher's side answers the
+/// same question the same way (nothing reads `granted.json` back).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "vox", derive(facet::Facet))]
+#[repr(C)]
+pub struct TrustedSource {
+    pub domain: String,
+    pub endpoint: String,
+    pub kind: crate::subscription::SourceKind,
+    pub slug: String,
+}
+
 #[architect::rpc]
 pub trait Subscriptions {
     /// Everything a subscriber holds, declined entries included — a
@@ -211,4 +259,62 @@ pub trait Subscriptions {
         kind: crate::subscription::SourceKind,
         slug: &str,
     ) -> Result<(), WikiError>;
+
+    /// **Subscriber side.** Record a grant received from another server:
+    /// where that domain is, and the secret that reads one source there.
+    ///
+    /// The receiving half of [`Self::grant_source_read`], and the mirror
+    /// of `FederationService::accept` — a grant is inert until the
+    /// receiver writes it down, and writing it down is what makes the
+    /// domain resolve to something dialable. Without this a subscription
+    /// to another server's source parses, stands, and refreshes from
+    /// nowhere: `LocalOrgs` looks for an org of that name on this disk,
+    /// and a publisher on another server is not on this disk.
+    ///
+    /// A member's decision, so a member's call: choosing to pull another
+    /// organisation's writing into this one's is not something a
+    /// stranger gets to arrange.
+    ///
+    /// Idempotent per source. A second grant naming a different endpoint
+    /// for the same domain is a correction — a domain is at one place —
+    /// rather than a second peer.
+    ///
+    /// Recording a grant subscribes to nothing: [`Self::subscribe`] is
+    /// still the call that takes a source on, and it is still the
+    /// subscriber's own state (`wiki.subscribe.reference`).
+    ///
+    /// # Errors
+    ///
+    /// [`WikiError`] when the grant is incomplete — a domain, an
+    /// endpoint, a slug and a secret are all four load-bearing — or when
+    /// the table cannot be written.
+    fn trust_source(&self, grant: SourceGrant) -> Result<(), WikiError>;
+
+    /// **Subscriber side.** Forget a grant: stop being able to refresh
+    /// that source.
+    ///
+    /// The copy on disk is untouched and goes on resolving
+    /// (`wiki.life.orphan`) — the same thing that happens when the
+    /// publisher revokes, which is the point. A subscriber can walk away
+    /// without asking the publisher, and a publisher can revoke without
+    /// asking the subscriber, and neither loses what is already written.
+    ///
+    /// # Errors
+    ///
+    /// [`WikiError`] when the table cannot be written. Forgetting a
+    /// grant this org does not hold succeeds.
+    fn distrust_source(
+        &self,
+        domain: &str,
+        kind: crate::subscription::SourceKind,
+        slug: &str,
+    ) -> Result<(), WikiError>;
+
+    /// **Subscriber side.** Every grant this org holds, without the
+    /// secrets — see [`TrustedSource`].
+    ///
+    /// # Errors
+    ///
+    /// [`WikiError`] when the table cannot be read.
+    fn trusted_sources(&self) -> Result<Vec<TrustedSource>, WikiError>;
 }

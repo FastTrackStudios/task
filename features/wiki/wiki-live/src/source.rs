@@ -87,9 +87,10 @@ pub enum Source {
     Local(PathBuf),
     /// A publisher on another server, reached over the wire.
     ///
-    /// Serves the wiki path today. The byte-tree kinds need a remote
-    /// walker, which is a different piece of work and says so where a
-    /// refresh meets one, rather than failing as if the source were
-    /// missing.
+    /// Built by `task_server::federated_orgs`, which is where dialling
+    /// lives — this crate has no transport and should not grow one. It
+    /// serves the wiki path. The byte-tree kinds need a remote walker,
+    /// which is a different piece of work and says so where a refresh
+    /// meets one, rather than failing as if the source were missing.
     Remote(Arc<dyn SourceVault>),
 }

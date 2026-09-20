@@ -175,6 +175,7 @@ dev-seed *ARGS="seed":
 #   just demo web          # the web app pointed at ACME (:8766)
 #   just demo desktop      # the desktop app pointed at ACME
 #   just demo daemon       # a laptop: the sync agent replicating ACME
+#   just demo federate     # ACME subscribes to VNT's wiki, across the two servers
 #   just demo ids          # each org's endpoint id
 #   just demo telemetry    # local Grafana/Tempo/Loki/Prom; serve+desktop attach
 demo *ARGS="plant":

@@ -200,7 +200,7 @@ which `docs/spec/scenario-album.md` already says.
 
 ## Declared, not built
 
-**`features/wiki/spec/wiki.md` — 25 of 57 rules.** The spec was written
+**`features/wiki/spec/wiki.md` — 26 of 57 rules.** The spec was written
 ahead of the work; `tracey query . uncovered` now lists the ids below and
 that is correct, not drift. The reference format the spec rests on is
 `docs/adr/0002-wiki-reference-format.md`; the vocabulary is in
@@ -212,16 +212,30 @@ Editors, a proposer gate and an optional repository source in
 `wiki.access.directory`, `wiki.boundary.no-subscribe`); subscriptions
 that materialise a source and refuse what the source does not admit
 (`wiki.subscribe.{reference,editability,local-copy,local-authority,
-refresh,resolution,transitive}`, `wiki.core.*`); the Edit lane and
+refresh,resolution,transitive,federated}`, `wiki.core.*`); the Edit lane and
 repo-sourced wikis (below); and `wiki.ref.{format,block}`. What remains,
 grouped:
 
 - **Promotion, local presence and the rest of subscription** —
   `wiki.boundary.role`, `wiki.promote.*`, `wiki.local.mount`,
-  `wiki.subscribe.{working-copy,no-ceremony,push,inherit,federated}`.
+  `wiki.subscribe.{working-copy,no-ceremony,push,inherit}`.
   Local copies are meant to be editable jj working states under
   `Task/Wikis/<id>`, and a push from one is an Edit Request; today a copy
   is a plain materialised tree and the lane is reached over vox only.
+
+  `wiki.subscribe.federated` now lands **met for wikis**: a source on
+  another server subscribes, refreshes and orphans through the same
+  surface as a local one (`task_server::federated_orgs`,
+  `wiki_live::source_peers`, `tests/integration/tests/
+  cross_server_wiki.rs`). What is deliberately still local-only is the
+  byte-tree kinds — Assets, Projects and Resource are walked from a
+  `&Path`, and a remote one names the missing walker rather than
+  reporting an orphan. ADR 0003's alternative for those is the route
+  `remote_assets.rs` proves: publish the manifest, put the bytes in a
+  File Root, carry them by `offer`/`accept`. A *reference* into another
+  server's org is a third thing again and still unresolved —
+  `node_homes::LocalHomes` answers only for orgs on the reader's own data
+  root, which `tests/integration/tests/setlist.rs` pins.
 - **Linking and references** — `wiki.link.*`, `wiki.ref.{picker,stamp,
   redirect}`: backlinks across wikis, rename repair from history, the
   editor's picker, staleness from the stamp, and the org-registry redirect.
