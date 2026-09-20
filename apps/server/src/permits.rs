@@ -850,10 +850,58 @@ table!(WIKI_EDITS, "wiki-edits", "wiki/edits/**", [
     wa "grant_editor", wa "revoke_editor", wa "set_proposer_gate",
 ]);
 #[cfg(feature = "plugin-wiki")]
-table!(WIKI_SUBSCRIPTIONS, "wiki-subscriptions", "wiki/subscriptions/**", [
-    rd "list_subscriptions", wr "subscribe", wr "unsubscribe",
-    wr "refresh_subscription", rd "core_set", rd "discover",
-]);
+// Hand-written rather than `table!` because the last two methods do not
+// share the others' resource, and the difference is the whole point.
+//
+// `source_manifest` and `source_file` are the **publisher side**: the
+// calls a subscriber on another server makes to find out what a source
+// holds and to fetch one file of it. That caller has no session here and
+// no membership row — it is another server, not a person — so a permit on
+// `wiki/subscriptions/**` would refuse it before anything about the
+// source was consulted, and cross-server subscription could not exist.
+//
+// So they sit on `public/**`, exactly as `browse_offered` /
+// `read_offered` / `fetch_offered` do one lane over, and for the same
+// reason: the far side's authority is not a role in this org.
+//
+// **What decides access is the source's own declaration**, checked inside
+// the backend by the same `Upstream::admits` that decides it for a
+// subscriber on this data root (`wiki.access.visibility`). A private wiki
+// is refused. An unlisted one is served to a caller that names it, which
+// is what unlisted means. An asset shelf or a project is served because
+// publishing it *is* putting it on the tier — already recorded in
+// `admits` as "world-readable to anyone who can name it".
+//
+// The permit says "this is a read". The source says "by whom". Putting
+// the second half in the permit table instead would mean two rules for
+// one question, and the one that drifts open is the one nobody notices.
+//
+// `.audited()` for the same reason the offer lane keeps it: somebody
+// else's content is leaving the building, and that is worth a line
+// whether or not the call was allowed.
+const WIKI_SUBSCRIPTIONS: ServicePermits = ServicePermits {
+    service: "wiki-subscriptions",
+    methods: &[
+        MethodPermit::new("list_subscriptions", Action::READ, "wiki/subscriptions/**"),
+        MethodPermit::new("subscribe", Action::WRITE, "wiki/subscriptions/**"),
+        MethodPermit::new("unsubscribe", Action::WRITE, "wiki/subscriptions/**"),
+        MethodPermit::new(
+            "refresh_subscription",
+            Action::WRITE,
+            "wiki/subscriptions/**",
+        ),
+        MethodPermit::new("core_set", Action::READ, "wiki/subscriptions/**"),
+        MethodPermit::new("discover", Action::READ, "wiki/subscriptions/**"),
+        MethodPermit::new("source_manifest", Action::READ, "public/wiki-source").audited(),
+        MethodPermit::new("source_file", Action::READ, "public/wiki-source").audited(),
+        // Issuing and revoking read access is a member's decision, so
+        // these stay off the public surface — and audited, because
+        // handing another server a key to a source is exactly the kind
+        // of act somebody later needs to find in a log.
+        MethodPermit::new("grant_source_read", Action::WRITE, "wiki/subscriptions/**").audited(),
+        MethodPermit::new("revoke_source_read", Action::WRITE, "wiki/subscriptions/**").audited(),
+    ],
+};
 #[cfg(feature = "plugin-wiki")]
 table!(WIKI_INGEST, "wiki-ingest", "wiki/ingest/**", [
     wr "enqueue_ingest", rd "list_ingest", wr "claim_next_ingest", wr "record_analysis",
@@ -2237,9 +2285,29 @@ mod tests {
         // binds on the next call of any kind. The other six methods on
         // that service — `offer`, `withdraw`, `accept`, `forget` and
         // the two reads — stay on `files/**`.
+        // `SubscriptionsRpc` is here on exactly the same terms, for its
+        // two `source_*` methods and nothing else. A subscriber on
+        // another server is a server rather than a person: it holds no
+        // session and no membership row, so the coarse gate can only say
+        // "not a member". What authenticates the call is a secret the
+        // publisher minted for one source (`grant_source_read`) and can
+        // revoke, checked at one chokepoint before anything about the
+        // source is consulted — so a revocation binds on the next call,
+        // and a caller cannot use a refusal to learn whether an unlisted
+        // source exists. Visibility still authorises the source on top of
+        // that, by the same `admits` a local subscriber goes through.
+        //
+        // The other six methods on that service stay on
+        // `wiki/subscriptions/**`, including the two that issue and
+        // revoke grants: deciding who may read is a member's call.
         assert_eq!(
             public,
-            vec!["AuthService", "FederationService", "PermissionsService"],
+            vec![
+                "AuthService",
+                "FederationService",
+                "PermissionsService",
+                "SubscriptionsRpc"
+            ],
             "the anonymous surface changed — every entry must be a service \
              that authenticates its own callers",
         );

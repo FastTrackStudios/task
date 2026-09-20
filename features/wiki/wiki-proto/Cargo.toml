@@ -22,6 +22,13 @@ architect = { workspace = true }
 # comment. Default features off: the vox half of `org-proto` is a
 # server concern and this crate has a wasm-clean baseline.
 org-proto = { path = "../../org/org-proto", default-features = false }
+# `Manifest` and `FileBytes`, for the publisher-side source reads on
+# `Subscriptions`. Borrowed rather than redeclared: a subscriber feeds
+# them straight to `plan_sync`, and a second pair of near-identical
+# payload types is how two lanes come to disagree about what a hash is.
+# vault-proto is a leaf — nothing there depends on wiki — so this adds no
+# cycle.
+vault-proto = { path = "../../vault/vault-proto", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
@@ -33,7 +40,12 @@ fake = { version = "4", optional = true, features = ["derive", "chrono", "uuid"]
 
 [features]
 default = ["vox"]
-vox = ["dep:vox", "dep:vox-types", "architect/vox"]
+# `vault-proto/vox` because the publisher-side source reads return its
+# `Manifest` and `FileBytes`, and those need their vox `Reborrow` impls
+# to cross the wire. Feature unification hides a missing entry here
+# whenever anything else in the build turns vault-proto's vox on, so it
+# is stated rather than relied upon.
+vox = ["dep:vox", "dep:vox-types", "architect/vox", "vault-proto/vox"]
 server = ["architect/server-seaorm", "dep:sea-orm"]
 fake = ["dep:fake", "architect/fake"]
 full = ["vox", "server", "fake"]

@@ -97,4 +97,118 @@ pub trait Subscriptions {
     /// and private wikis are absent — subscribing to an unlisted one
     /// takes its reference, and to a private one is refused.
     fn discover(&self) -> Result<Vec<Subscription>, WikiError>;
+
+    /// **Publisher side.** Every file of a source this org publishes,
+    /// with its hash — what a subscriber on another server needs before
+    /// it can work out which files it is missing.
+    ///
+    /// # Why the publisher's own lane, and not a new one
+    ///
+    /// `LocalOrgs` resolves a source by reading the publisher's
+    /// directory, which works precisely because both orgs are on one
+    /// data root. Across servers there is no such directory, and the
+    /// gap was never the copying — [`materialize::refresh`] has always
+    /// been generic over its source — it was that nothing on the far
+    /// side would answer "what have you got".
+    ///
+    /// This answers it, on the service that already owns the question.
+    /// `discover` is the same shape one step earlier: it already tells a
+    /// stranger which sources exist and already honours visibility in
+    /// doing so, so the lane, the mount and the permit table are the
+    /// ones that were going to gate this anyway.
+    ///
+    /// # What decides access
+    ///
+    /// Two things, and both must hold.
+    ///
+    /// **`secret` authenticates the caller.** The publisher minted it
+    /// for one source with [`Self::grant_source_read`] and can revoke it
+    /// with [`Self::revoke_source_read`]; holding it is the whole of the
+    /// subscriber's authority, exactly as an `Offer`'s secret is on the
+    /// files lane. This matters more than it looks: these two methods
+    /// are reachable without a session, because the caller is another
+    /// server rather than a person and has no role here — and the rule
+    /// for that surface is that a service on it authenticates its own
+    /// callers. Visibility alone would not; it authorises the
+    /// *resource* and would let anyone ask.
+    ///
+    /// **Visibility authorises the source** (`wiki.access.visibility`),
+    /// checked by the same `admits` that decides it for a subscriber on
+    /// the publisher's own data root. A grant does not override it: a
+    /// wiki turned private stops answering even to a secret already
+    /// issued, which is what makes narrowing take effect on copies
+    /// already held.
+    ///
+    /// # Errors
+    ///
+    /// [`WikiError`] when the secret grants no such source, when the
+    /// source does not exist here, or when its visibility refuses.
+    fn source_manifest(
+        &self,
+        kind: crate::subscription::SourceKind,
+        slug: &str,
+        secret: &str,
+    ) -> Result<vault_proto::Manifest, WikiError>;
+
+    /// **Publisher side.** One file of a published source.
+    ///
+    /// Gated exactly as [`Self::source_manifest`] is, and deliberately
+    /// one file per call: a refresh fetches only what its `Selection`
+    /// admits and what it does not already hold, so the shape that
+    /// keeps a shared library usable — names cross, gigabytes do not —
+    /// is the shape of the call.
+    ///
+    /// # Errors
+    ///
+    /// [`WikiError`] when the secret grants no such source, when the
+    /// source or the path is not found, or when visibility refuses.
+    fn source_file(
+        &self,
+        kind: crate::subscription::SourceKind,
+        slug: &str,
+        path: &str,
+        secret: &str,
+    ) -> Result<vault_proto::FileBytes, WikiError>;
+
+    /// **Publisher side.** Mint a secret letting another server read one
+    /// of this org's sources, and return it.
+    ///
+    /// A write, and member-gated like every other write here: issuing
+    /// read access to somebody else's server is the publisher's
+    /// decision, made by a person who is already inside the org.
+    /// Carrying the result to the subscriber is a message, not a
+    /// protocol — the same stance `FederationService::offer` takes, and
+    /// for the same reason: an inert capability can travel by any means
+    /// without the lane growing a delivery mechanism.
+    ///
+    /// Idempotent per source: asking twice returns one secret rather
+    /// than accumulating grants nobody can enumerate back to a
+    /// subscriber.
+    ///
+    /// # Errors
+    ///
+    /// [`WikiError`] when this org publishes no such source.
+    fn grant_source_read(
+        &self,
+        kind: crate::subscription::SourceKind,
+        slug: &str,
+    ) -> Result<String, WikiError>;
+
+    /// **Publisher side.** Revoke a source read grant.
+    ///
+    /// Binds on the subscriber's next call, because the secret is
+    /// checked on every one — the only ordering a revocation across a
+    /// server boundary can honestly promise, stated the same way
+    /// `FederationService::withdraw` states it. The copy the subscriber
+    /// already holds stays on their disk and goes on resolving
+    /// (`wiki.life.orphan`); what ends is the refreshing.
+    ///
+    /// # Errors
+    ///
+    /// [`WikiError`] when the grant cannot be written.
+    fn revoke_source_read(
+        &self,
+        kind: crate::subscription::SourceKind,
+        slug: &str,
+    ) -> Result<(), WikiError>;
 }
