@@ -277,11 +277,22 @@ work rather than one unfinished one:
   tree in a File Root, carry it by `offer`/`accept`, which `remote_assets.rs`
   proves end to end. A **Resource** is installed into a corpus library rather
   than pulled file by file. Each refusal names its route.
-- **Qualified references.** `node_homes::LocalHomes` answers only for orgs on
-  the reader's own data root, so `vnt.test/chart:reel-theme` still parses and
-  does not resolve for a reader on another server, even one holding a copy.
-  `tests/integration/tests/setlist.rs` pins that, and it is the honest
-  boundary now.
+- **Qualified references** now resolve across a server boundary too, and from
+  the only place they honestly can: the reader's own copy.
+  `node_homes::LocalHomes` looks in `subscribed/<domain>/<library>/` when the
+  publishing org is not on this data root, so `acme.test/song:track-one`
+  resolves for a reader who subscribed to `acme.test/songs` and is refused for
+  one who did not — `Reach::Reachable` either way it is reachable, because
+  `wiki.subscribe.federated` says location changes latency and nothing a
+  reader can observe. The answer names the reader's org and the copy's path,
+  which keeps the invariant every caller relies on: `org` and `rel_path` join
+  to the file.
+
+  What remains unresolved is a reference to a **project** on another server,
+  and it is the byte-tree decision above showing through rather than a second
+  gap: a project does not cross as a subscription, so there is no copy to
+  answer from. Those bytes arrive as a File Root, and reaching them is a files
+  question rather than a naming one.
 
 **Ignition and Signal have no server-side home yet.** Neither appears
 anywhere in the tree today. The node kinds and capabilities here are the
