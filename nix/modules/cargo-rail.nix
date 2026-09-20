@@ -16,11 +16,14 @@
 # rust-version is relaxed 1.95 → 1.94: rail's floor was a policy bump,
 # not a feature need, and the crate compiles fine on 1.94.
 #
-# Going to 1.96 would drop this patch (and the kstring 2.0.2 pin in
-# Cargo.toml), but it is not free: rust-overlay follows dioxus-flake,
-# whose newest stable is 1.94.1, so upgrading means un-following the hub
-# that keeps `dx` and rustc in lockstep. Bump dioxus-flake first, then
-# both workarounds can go.
+# This patch outlived the reason recorded for it, which said to bump
+# dioxus-flake and then drop it. The workspace toolchain has since gone
+# to 1.98.1 (rust-overlay is our own input now) and the patch still has
+# to stay, because **rail is not built with the workspace toolchain**:
+# it is `pkgsDx.rustPlatform`, so its floor is whatever rustc the
+# dedicated `nixpkgs-dx` pin carries, and ours moving says nothing about
+# that one. Check `pkgsDx` before removing this. The kstring 2.0.2 pin
+# the old note mentioned is already gone.
 { ... }:
 {
   perSystem = { pkgs, lib, config, ... }:

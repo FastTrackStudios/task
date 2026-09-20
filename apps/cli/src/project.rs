@@ -898,11 +898,12 @@ pub(crate) async fn run_project(cmd: ProjectCmd) -> eyre::Result<()> {
                 .iter()
                 .filter(|t| matches!(task::Status::from_str(&t.status), Some(task::Status::Done)))
                 .count();
-            let pct: i16 = if total == 0 {
-                -1
-            } else {
-                i16::try_from((done * 100) / total).unwrap_or(100)
-            };
+            // `-1` is the no-tasks sentinel, not a percentage — so the
+            // division being impossible and the rollup being absent are
+            // the same answer.
+            let pct: i16 = (done * 100)
+                .checked_div(total)
+                .map_or(-1, |p| i16::try_from(p).unwrap_or(100));
             // Persist the rollup.
             let mut p = proj.clone();
             p.progress_percent = pct;

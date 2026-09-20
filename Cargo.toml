@@ -217,7 +217,17 @@ exclude = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+# The floor clippy already lints against. These two disagreed — 1.87
+# here, 1.90 in clippy.toml — and clippy reports the disagreement as a
+# warning, which `just ci-clippy` turns into an error with `-D warnings`.
+# So the gate failed on every branch for a reason no branch introduced.
+#
+# 1.90 rather than 1.87 because 1.90 is the later statement of intent:
+# 1.87 arrived with the monorepo import and clippy.toml's 1.90 with the
+# workspace refactor a day after. Nothing here has ever been built on
+# 1.87 — the toolchain is pinned, now at 1.98.1 — so the lower number
+# was a claim no run has tested rather than a floor anybody held.
+rust-version = "1.90"
 authors = ["FastTrack Studio"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/FastTrackStudios/task"

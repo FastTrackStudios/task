@@ -353,7 +353,7 @@ impl VersionService for FilesBackend {
         FilesService::checkpoint_now(
             self,
             root_id.get(),
-            Some(format!("restore {} to {}", path, &target.commit_id)),
+            Some(format!("restore {path} to {}", target.commit_id)),
         )
         .await
         .map_err(fault)?;

@@ -45,9 +45,9 @@
     in
     {
       # Rust toolchain — the FTS-wide pin (rust-toolchain.toml says the
-      # same: 1.94.0 + wasm32), with the iOS/Intel targets on darwin for
+      # same: 1.98.1 + wasm32), with the iOS/Intel targets on darwin for
       # apps/mobile and the macOS desktop builds.
-      fts.rustToolchain = pkgs.rust-bin.stable."1.94.0".default.override {
+      fts.rustToolchain = pkgs.rust-bin.stable."1.98.1".default.override {
         extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
         targets = [ "wasm32-unknown-unknown" ]
           ++ lib.optionals pkgs.stdenv.isDarwin [

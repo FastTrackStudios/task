@@ -280,11 +280,9 @@ fn pull<U: SourceVault + ?Sized>(
             id: id.to_owned(),
             source: vault_sync_client::SyncError::Remote(source),
         })?;
-    vault_sync_client::write_file(root, path, &bytes.0).map_err(|source| {
-        MaterializeError::Sync {
-            id: id.to_owned(),
-            source,
-        }
+    vault_sync_client::write_file(root, path, &bytes.0).map_err(|source| MaterializeError::Sync {
+        id: id.to_owned(),
+        source,
     })
 }
 

@@ -52,8 +52,8 @@ impl FileProgress {
     /// needs the bar. Bytes move the whole way down either path.
     #[must_use]
     pub fn percent(&self) -> u8 {
-        if self.logical_bytes > 0 {
-            return ((self.bytes_done * 100) / self.logical_bytes).min(100) as u8;
+        if let Some(pct) = (self.bytes_done * 100).checked_div(self.logical_bytes) {
+            return pct.min(100) as u8;
         }
         if self.chunks_total == 0 {
             return 100;
