@@ -10833,6 +10833,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "collection-proto",
+ "email-proto",
  "files",
  "files-domain",
  "files-store",

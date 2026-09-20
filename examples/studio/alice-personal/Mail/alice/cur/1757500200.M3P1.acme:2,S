@@ -1,0 +1,12 @@
+Message-ID: <masters-due-friday@example-client.test>
+From: Example Client <hello@example-client.test>
+To: Alice Nguyen <alice@alice.test>
+Subject: Masters due Friday for the label review
+Date: Wed, 10 Sep 2026 16:02:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+One more thing — the label moved their review up. They need final
+masters by Friday, not the following Tuesday.
+
+Sorry for the short notice.

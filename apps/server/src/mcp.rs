@@ -3919,12 +3919,29 @@ fn call_tool(
             let project = arg_str(args, "project");
             // Round-trip through the same quick-add parser the app
             // uses, so `[[project]]` lands in `projects` exactly as a
-            // typed capture would.
+            // typed capture would, and a date the sender wrote becomes
+            // the task's due date.
             let text = match &project {
                 Some(p) => format!("{title} [[{p}]]"),
                 None => title.clone(),
             };
             let mut draft = task::capture(&text);
+            // …but the title stays the subject, word for word.
+            //
+            // Quick-add *removes* what it recognises: "Masters due
+            // Friday for the label review" captures as a task due
+            // Friday titled "Masters due for the label review". That is
+            // right for a line somebody typed — they typed "Friday" to
+            // mean the date, and having said it once do not want it
+            // twice — and wrong for a subject, which the *sender* wrote
+            // as prose. Every date word, `#tag` and `@context` that
+            // happens to appear in it would be silently eaten, and the
+            // subject is the one thing a person uses to recognise the
+            // message this task came from.
+            //
+            // So keep the parse (the due date is a real gain) and put
+            // the title back.
+            draft.title = title.clone();
             if let Some(due) = arg_str(args, "due") {
                 draft.due = Some(due);
             }
