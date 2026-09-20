@@ -47,12 +47,32 @@
 //! bring a foreign song library down onto disk where
 //! `refresh_resource` never could.
 //!
+//! # A publisher on another server answers from the reader's own copy
+//!
+//! The subscription lane crosses a server boundary now
+//! (`task_server::federated_orgs`), which means a reader can hold a
+//! foreign library without the publishing org being on this disk at all.
+//! So resolution looks in two places: the publisher's own tree where
+//! there is one, and `subscribed/<domain>/<library>/` — the copy a
+//! refresh wrote — where there is not.
+//!
+//! Nothing about the rule above changes. The copy exists *because* the
+//! reader subscribed, so "a subscription is what authorises" is still the
+//! whole of it; what is new is that the subscription no longer has to be
+//! to somebody on the same machine. A reader with no subscription reaches
+//! nothing, and the copy is not consulted, because there is none.
+//!
 //! # What is deliberately not distinguished
 //!
 //! [`Reach::NotPermitted`] covers both "you are not subscribed" and, for
 //! an unsubscribed reader, "there is nothing there". Telling an outsider
 //! which slugs exist is exactly the enumeration a private source
 //! refuses, and `wiki.access.visibility` already draws that line.
+//!
+//! [`Reach::UnknownDomain`] is now the answer only when this deployment
+//! knows no org of that domain **and** the reader holds no subscription to
+//! it. With a subscription the domain is known by a better authority than
+//! the map: the reader took it on.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -111,11 +131,48 @@ pub fn library_of(kind: NodeKind) -> Option<&'static str> {
 /// the album, or take one song out of it, and the slug says which.
 pub const PROJECTS_TIER: &str = "projects";
 
-/// Resolves qualified references against the orgs this deployment holds.
+/// Whether a stranger's string may be joined onto a path here.
 ///
-/// The local half of federation, and the only half that exists: a domain
-/// naming an org on another server parses and does not resolve, which is
-/// the boundary ADR 0003 records rather than hides.
+/// A reference is written by anybody — its domain and its id are strings
+/// that arrive from another organisation, a copied setlist, a page
+/// somebody typed — and resolution joins both onto directories inside this
+/// data root. `..`, an absolute path (which `Path::join` honours by
+/// *discarding* everything to its left), a bare `.`, a Windows separator:
+/// any of them turns "resolve a reference" into "read somewhere nobody
+/// published".
+///
+/// One segment, then, and nothing that is not a name. Not
+/// [`org_proto::wiki_slug`], because a domain legitimately contains dots
+/// and that function would rewrite `vnt.test` into `vnt-test`; the
+/// property needed here is narrower and is exactly traversal.
+///
+/// A refusal here is [`Reach::NotFound`] or a skipped candidate rather
+/// than an error: a reference that cannot name anything does not name
+/// anything, and saying more would tell the writer which shapes are
+/// interesting.
+fn is_one_safe_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s != "."
+        && s != ".."
+        && !s.contains('/')
+        && !s.contains('\\')
+        && !s.contains('\0')
+}
+
+/// Resolves qualified references against everything this data root holds
+/// — the orgs on it, and the copies its subscriptions brought down.
+///
+/// Both halves answer the same question and neither widens access. A
+/// publisher on this disk answers from its own tree, which is the live
+/// one. A publisher on another server answers from **the reader's copy**,
+/// which exists only because the reader subscribed — so the rule is
+/// unchanged: a reference addresses, a subscription authorises.
+///
+/// `Reach::Reachable` for both, deliberately. `wiki.subscribe.federated`
+/// says that whether a source is local, on a peer or on the central
+/// deployment "changes latency and nothing else a reader or writer can
+/// observe", and a third reach value would be exactly such an
+/// observation.
 pub struct LocalHomes {
     data_root: PathBuf,
     /// Domain → org slug. A name, not an address (`wiki.ref.redirect`),
@@ -184,6 +241,11 @@ impl LocalHomes {
     /// which tier answered — `assets/charts/hosanna.md` against
     /// `resources/patches/warm-pad/patch.md`.
     fn locate(&self, org: &str, library: &str, node: &NodeRef) -> Option<(String, PathBuf)> {
+        // The id is a stranger's string and this is where it meets a
+        // directory — see [`is_one_safe_segment`].
+        if !is_one_safe_segment(&node.id) {
+            return None;
+        }
         let org_dir = self.data_root.join("orgs").join(org);
         if matches!(node.kind, NodeKind::Chart | NodeKind::Song) {
             let rel = format!("{}.md", node.id);
@@ -209,17 +271,21 @@ impl NodeHomes for LocalHomes {
     fn resolve(&self, node: &NodeRef) -> ResolvedNode {
         let refused = |reach| ResolvedNode::refused(node.clone(), reach);
 
-        let Some(org) = self.domains.get(&node.domain) else {
-            return refused(Reach::UnknownDomain);
-        };
+        // The publishing org, **if this deployment hosts it**. It may not,
+        // and that is no longer the end of the question: a subscription to
+        // a source on another server leaves a copy on this disk, and a
+        // reference the reader subscribed to resolves from that copy
+        // (`wiki.subscribe.resolution`). So an unknown domain is only a
+        // refusal once there is no subscription either.
+        let org = self.domains.get(&node.domain);
         // An org may hold a reference qualified with its own domain —
         // written by someone reading it from elsewhere, or carried in by
         // a copied setlist. That is not a foreign reference.
-        if org == &self.reader_org {
+        if org.is_some_and(|o| o == &self.reader_org) {
             return ResolvedNode {
                 node: node.clone(),
                 reach: Reach::Local,
-                org: org.clone(),
+                org: self.reader_org.clone(),
                 title: String::new(),
                 rel_path: String::new(),
             };
@@ -228,7 +294,17 @@ impl NodeHomes for LocalHomes {
         // step earlier: the subscription slug IS the project's id, and
         // the content is that project's declaring page. See
         // [`PROJECTS_TIER`] on why it does not go through `library_of`.
+        //
+        // No copy branch here, and that is the byte-tree decision showing
+        // through: a project does not cross as a subscription, because a
+        // project *is* its media and a subscription carries names. So the
+        // only project a reference can reach is one published on this data
+        // root; the rest is a File Root, which is a different question
+        // from resolving a name.
         if node.kind == NodeKind::Project {
+            let Some(org) = org else {
+                return refused(Reach::UnknownDomain);
+            };
             if !self.subscribes_to(&node.domain, &node.id) {
                 return refused(Reach::NotPermitted);
             }
@@ -252,18 +328,89 @@ impl NodeHomes for LocalHomes {
             return refused(Reach::NotPermitted);
         };
         if !self.subscribes_to(&node.domain, library) {
-            return refused(Reach::NotPermitted);
+            // Unqualified by a subscription, the two answers differ in
+            // what they admit knowing: a domain this deployment has never
+            // heard of, against one it hosts and will not open.
+            return refused(if org.is_some() {
+                Reach::NotPermitted
+            } else {
+                Reach::UnknownDomain
+            });
         }
-        match self.locate(org, library, node) {
-            Some((rel_path, _)) => ResolvedNode {
+        // The publisher's own tree first, where there is one: it is the
+        // live copy, and a reader on the same disk should see an edit the
+        // moment it lands rather than at their next refresh.
+        if let Some(org) = org
+            && let Some((rel_path, _)) = self.locate(org, library, node)
+        {
+            return ResolvedNode {
                 node: node.clone(),
                 reach: Reach::Reachable,
                 org: org.clone(),
                 title: String::new(),
                 rel_path,
+            };
+        }
+        // Then the reader's own copy, which is the whole of what a
+        // subscription to another server leaves behind. `Reachable` and
+        // not a third state on purpose: `wiki.subscribe.federated` says
+        // whether a source is local, on a peer or on the central
+        // deployment changes latency "and nothing else a reader or writer
+        // can observe".
+        match self.subscribed_copy(library, node) {
+            Some(rel_path) => ResolvedNode {
+                node: node.clone(),
+                reach: Reach::Reachable,
+                org: self.reader_org.clone(),
+                title: String::new(),
+                rel_path,
             },
+            // Subscribed and nothing there: either the source does not
+            // hold it, or nothing has been refreshed yet. Both are "the
+            // reader may look, and there is nothing at that address",
+            // which is what `NotFound` says.
             None => refused(Reach::NotFound),
         }
+    }
+}
+
+impl LocalHomes {
+    /// The reader's own copy of a foreign library, when a subscription
+    /// brought one down: `subscribed/<domain>/<library>/…`.
+    ///
+    /// The same candidate names [`Self::locate`] tries, because the copy
+    /// is the publisher's tree — a refresh writes what the manifest said,
+    /// not a renamed version of it.
+    ///
+    /// Returned **relative to the reader's own org root**, which is where
+    /// the content actually is. That is the invariant every caller of
+    /// `ResolvedNode` relies on: `org` names whose root, `rel_path` names
+    /// the place inside it, and joining the two reaches the file. For a
+    /// publisher on another server the two together name the copy, and
+    /// they have to, because the publisher's root is not on this disk.
+    fn subscribed_copy(&self, library: &str, node: &NodeRef) -> Option<String> {
+        // Two stranger's strings here rather than one: the copy is
+        // addressed by the publishing *domain*, so the domain is joined
+        // onto a path too. Both are checked.
+        if !is_one_safe_segment(&node.domain) || !is_one_safe_segment(&node.id) {
+            return None;
+        }
+        let base = self
+            .reader_root
+            .join("subscribed")
+            .join(&node.domain)
+            .join(library);
+        let candidates = match node.kind {
+            NodeKind::Chart | NodeKind::Song => {
+                vec![format!("{}.md", node.id), format!("{}.kf", node.id)]
+            }
+            _ => vec![node.id.clone(), format!("{}.md", node.id)],
+        };
+        candidates.into_iter().find_map(|name| {
+            base.join(&name)
+                .exists()
+                .then(|| format!("subscribed/{}/{library}/{name}", node.domain))
+        })
     }
 }
 
@@ -352,6 +499,137 @@ mod tests {
         assert_eq!(
             resolved.rel_path, "projects/example-album/project.md",
             "the answer names the publisher's own path, as every other kind's does"
+        );
+    }
+
+    /// A reference into an org this deployment does **not** host resolves
+    /// from the reader's own copy — and only because the reader
+    /// subscribed.
+    ///
+    /// The boundary ADR 0003 recorded, moved. Three states in order, which
+    /// is the only way to show that the subscription is what does the
+    /// work: no subscription and an unknown domain (nothing is admitted,
+    /// and nothing is admitted to *knowing*); subscribed with nothing
+    /// pulled yet; subscribed with the copy on disk.
+    ///
+    /// t[verify wiki.subscribe.resolution] — across a server boundary.
+    #[test]
+    fn a_reference_to_another_server_resolves_from_the_readers_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        // `vnt.test` is deliberately absent from the map: this deployment
+        // hosts no org of that domain, which is the whole point.
+        let mut domains = HashMap::new();
+        domains.insert("acme.test".to_owned(), "reader".to_owned());
+        let reader = tmp.path().join("orgs/reader");
+        std::fs::create_dir_all(&reader).unwrap();
+        let homes = LocalHomes::new(tmp.path().to_path_buf(), domains, "reader", reader.clone());
+
+        let node = NodeRef::new(NodeKind::Song, "reel-theme").in_domain("vnt.test");
+        assert_eq!(
+            homes.resolve(&node).reach,
+            Reach::UnknownDomain,
+            "with no subscription this deployment has never heard of that domain"
+        );
+
+        let store = wiki_live::subscriptions::SubscriptionStore::open(&reader);
+        store
+            .subscribe(
+                &Subscriber::Vault,
+                wiki_proto::subscription::Subscription {
+                    domain: "vnt.test".to_owned(),
+                    slug: "songs".to_owned(),
+                    kind: SourceKind::Assets,
+                    title: "VNT songs".to_owned(),
+                    core: false,
+                    declined: false,
+                    selection: org_proto::Selection::All,
+                },
+            )
+            .expect("hold a subscription");
+        assert_eq!(
+            homes.resolve(&node).reach,
+            Reach::NotFound,
+            "subscribed and nothing refreshed yet: the reader may look, and \
+             there is nothing at that address"
+        );
+
+        // What a refresh writes: the publisher's tree, under the address a
+        // reference already uses.
+        let copy = reader.join("subscribed/vnt.test/songs");
+        std::fs::create_dir_all(&copy).unwrap();
+        std::fs::write(copy.join("reel-theme.md"), "---\ntitle: Reel Theme\n---\n").unwrap();
+
+        let resolved = homes.resolve(&node);
+        assert_eq!(resolved.reach, Reach::Reachable);
+        assert_eq!(
+            resolved.org, "reader",
+            "the content is in the reader's own root, because that is where \
+             the copy is — `org` and `rel_path` still join to the file"
+        );
+        assert_eq!(resolved.rel_path, "subscribed/vnt.test/songs/reel-theme.md");
+        assert!(
+            tmp.path()
+                .join("orgs")
+                .join(&resolved.org)
+                .join(&resolved.rel_path)
+                .is_file(),
+            "the answer must name a file that is actually there"
+        );
+    }
+
+    /// A reference whose id or domain would climb out of the tree names
+    /// nothing, on either route.
+    ///
+    /// The id has been joined onto a path here since before this module
+    /// resolved anything remote, and the subscription gate is not what
+    /// stops it: a reader may hold a perfectly ordinary subscription and
+    /// still write `song:../../../vault/Private`. What stops it is the
+    /// name having to be a name.
+    #[test]
+    fn a_reference_that_would_climb_out_of_the_tree_resolves_to_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut domains = HashMap::new();
+        domains.insert("acme.test".to_owned(), "acme".to_owned());
+        let reader = tmp.path().join("orgs/reader");
+        std::fs::create_dir_all(&reader).unwrap();
+        // Something worth reaching, one level above the library.
+        std::fs::create_dir_all(tmp.path().join("orgs/acme/assets")).unwrap();
+        std::fs::write(tmp.path().join("orgs/acme/assets/secret.md"), "private\n").unwrap();
+        std::fs::create_dir_all(reader.join("subscribed/acme.test")).unwrap();
+        std::fs::write(reader.join("subscribed/acme.test/secret.md"), "private\n").unwrap();
+        let homes = LocalHomes::new(tmp.path().to_path_buf(), domains, "reader", reader.clone());
+
+        let store = wiki_live::subscriptions::SubscriptionStore::open(&reader);
+        for domain in ["acme.test", "vnt.test"] {
+            store
+                .subscribe(
+                    &Subscriber::Vault,
+                    wiki_proto::subscription::Subscription {
+                        domain: domain.to_owned(),
+                        slug: "songs".to_owned(),
+                        kind: SourceKind::Assets,
+                        title: "songs".to_owned(),
+                        core: false,
+                        declined: false,
+                        selection: org_proto::Selection::All,
+                    },
+                )
+                .expect("hold a subscription");
+        }
+
+        // The publisher's own tree, reached through a subscribed library.
+        let climbing = NodeRef::new(NodeKind::Song, "../secret").in_domain("acme.test");
+        assert_eq!(homes.resolve(&climbing).reach, Reach::NotFound);
+        // And the copy route, where the domain is a path segment too.
+        let sideways = NodeRef::new(NodeKind::Song, "secret").in_domain("..");
+        assert_eq!(
+            homes.resolve(&sideways).reach,
+            Reach::UnknownDomain,
+            "`..` is no domain, subscribed or not"
+        );
+        assert!(
+            !is_one_safe_segment("/etc"),
+            "an absolute path is not a name"
         );
     }
 

@@ -1,14 +1,19 @@
 #![allow(clippy::large_futures)]
-//! Chapter — **one company subscribes to a wiki on another company's
-//! server**, and the copy goes on reading when the grant is withdrawn.
+//! Chapter — **two companies on two servers subscribe to each other's
+//! sources**, and each copy goes on reading when the grant is withdrawn.
 //!
-//! This is the half of ADR 0003 that `setlist.rs` records as the
-//! boundary: a reference to an org on another server parses and does not
-//! resolve, because `LocalOrgs` answers only for orgs on the reader's own
-//! data root. `song_library.rs` is the sibling chapter on one disk —
-//! `start_beside` puts both orgs under one root, which is the
-//! arrangement `admin seed` produces and the one every federated chapter
-//! before this used.
+//! This is the half of ADR 0003 that `setlist.rs` recorded as the
+//! boundary: a source on another server was unreachable because
+//! `LocalOrgs` answers only for orgs on the reader's own data root.
+//! `song_library.rs` is the sibling chapter on one disk — `start_beside`
+//! puts both orgs under one root, which is the arrangement `admin seed`
+//! produces and the one every federated chapter before this used.
+//!
+//! The chapter runs both directions on purpose: ACME takes VNT's wiki,
+//! VNT takes ACME's song library, and a reference into that library
+//! resolves from VNT's own copy. One direction would leave "it works when
+//! the publisher is the org that happens to hold the seed's wikis" as an
+//! untested assumption.
 //!
 //! [`integration::orgs::Orgs`] is two servers on two disks, so it is the
 //! only harness in which "another server" means anything, and this is the
@@ -53,6 +58,7 @@
 //! than a surprise.
 
 use integration::scenario::Scenario;
+use links_proto::{NodeKind, NodeRef, Reach};
 use wiki_proto::service::subscriptions::SourceGrant;
 use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
 
@@ -394,6 +400,114 @@ async fn an_asset_shelf_crosses_a_boundary_and_leaves_an_oversized_take_behind()
         !copy.join("Stems/lead vocal.wav").exists(),
         "a 9 MiB take was pulled through a subscription — ADR 0003 says \
          names cross and gigabytes do not"
+    );
+
+    // ── and now the reference resolves ───────────────────────────────
+    //
+    // The boundary `setlist.rs` records, crossed: `acme.test/song:track-one`
+    // is a reference into an org that is **not on VNT's disk**, and it
+    // resolves — from VNT's own copy, which exists only because VNT
+    // subscribed. The rule is untouched: a reference addresses, a
+    // subscription authorises.
+    let resolved = victor
+        .links()
+        .await
+        .resolve_nodes(vec![
+            NodeRef::new(NodeKind::Song, "track-one").in_domain(ACME_DOMAIN),
+        ])
+        .await
+        .expect("resolve")
+        .pop()
+        .expect("one answer per node");
+    assert_eq!(
+        resolved.reach,
+        Reach::Reachable,
+        "a subscribed song on another server should resolve: {resolved:?}"
+    );
+    assert_eq!(
+        resolved.rel_path, "subscribed/acme.test/songs/track-one.md",
+        "the answer names the copy the refresh wrote"
+    );
+    assert!(
+        s.orgs.vnt.org_root().join(&resolved.rel_path).is_file(),
+        "and that path has to be a file that is actually there"
+    );
+}
+
+/// The same reference, with the subscription dropped: back to a refusal.
+///
+/// The security claim of the qualified form, and it is only a claim until
+/// something watches it *change*. `setlist.rs` does this for two orgs on
+/// one disk; this is the same watch across a server boundary, where the
+/// bytes are on the reader's own disk the whole time — so what is being
+/// tested is genuinely the subscription and not the absence of a file.
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_the_subscription_takes_the_reference_away_again() {
+    let s = Scenario::open().await;
+    let alice = s.as_alice().await;
+    let victor = s.as_victor().await;
+
+    let secret = alice
+        .wiki_subscriptions()
+        .await
+        .grant_source_read(SourceKind::Assets, SONGS.to_owned())
+        .await
+        .expect("ACME grants read on its song shelf");
+    let subs = victor.wiki_subscriptions().await;
+    subs.trust_source(SourceGrant {
+        domain: ACME_DOMAIN.to_owned(),
+        endpoint: s.orgs.acme.endpoint.id().to_string(),
+        kind: SourceKind::Assets,
+        slug: SONGS.to_owned(),
+        secret,
+    })
+    .await
+    .expect("recorded");
+    let shelf = Subscription {
+        domain: ACME_DOMAIN.into(),
+        slug: SONGS.into(),
+        kind: SourceKind::Assets,
+        title: SONGS.into(),
+        core: false,
+        declined: false,
+        selection: Default::default(),
+    };
+    subs.subscribe(Subscriber::Vault, shelf.clone())
+        .await
+        .expect("subscribe");
+    subs.refresh_subscription(Subscriber::Vault, format!("{ACME_DOMAIN}/{SONGS}"))
+        .await
+        .expect("refresh");
+
+    let song = NodeRef::new(NodeKind::Song, "track-one").in_domain(ACME_DOMAIN);
+    let reach = |who: integration::client::Session, node: NodeRef| async move {
+        who.links()
+            .await
+            .resolve_nodes(vec![node])
+            .await
+            .expect("resolve")
+            .pop()
+            .expect("one answer")
+            .reach
+    };
+    assert_eq!(
+        reach(s.as_victor().await, song.clone()).await,
+        Reach::Reachable
+    );
+
+    // `force`, because the copy is upstream's content and VNT has not
+    // pushed anything — the check exists for local work, and there is
+    // none.
+    subs.unsubscribe(Subscriber::Vault, format!("{ACME_DOMAIN}/{SONGS}"), true)
+        .await
+        .expect("drop the subscription");
+
+    assert_eq!(
+        reach(s.as_victor().await, song).await,
+        Reach::NotPermitted,
+        "the reference outlived the subscription that authorised it — the \
+         copy is still on disk, which is exactly why this has to be \
+         decided by the subscription and not by the filesystem"
     );
 }
 

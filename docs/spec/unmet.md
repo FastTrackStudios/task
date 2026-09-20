@@ -232,9 +232,12 @@ grouped:
   behind — so a **project** does not cross as a subscription (it *is* its
   media; those bytes go by File Root and `offer`/`accept`, per ADR 0003)
   and a **Resource** is installed rather than pulled. A *reference* into
-  another server's org is a different thing again and still unresolved:
-  `node_homes::LocalHomes` answers only for orgs on the reader's own data
-  root, which `tests/integration/tests/setlist.rs` pins.
+  another server's org resolves as well, from the copy the subscription
+  left behind (`node_homes::LocalHomes`), and is refused without one —
+  which is the rule `tests/integration/tests/setlist.rs` pins. A
+  `project:` reference across a boundary is the one that still does not
+  resolve, because a project does not cross as a subscription and there is
+  therefore no copy to answer from.
 - **Linking and references** — `wiki.link.*`, `wiki.ref.{picker,stamp,
   redirect}`: backlinks across wikis, rename repair from history, the
   editor's picker, staleness from the stamp, and the org-registry redirect.

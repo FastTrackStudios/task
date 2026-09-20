@@ -66,12 +66,17 @@
 //!   such thing here" apart from "that thing is somewhere else" — and
 //!   `cross_server_wiki.rs` takes VNT's shelf the other way round, with
 //!   one;
-//! - and resolving the reference would need more than the bytes anyway,
-//!   which is the next point.
+//! - and a chart is an asset-shelf document, so what VNT would have to
+//!   grant is its `charts` shelf — which nobody here did.
 //!
-//! Resolving a *reference* into another server's org is a third piece
-//! again, and nothing implements it: the peer table carries a copy, not a
-//! `NodeHomes`. That is the boundary this chapter now records.
+//! Resolving a reference into another server's org **does** work now, from
+//! the copy a subscription left behind (`node_homes::LocalHomes` looks in
+//! `subscribed/<domain>/<library>/` when the publishing org is not on this
+//! disk). `cross_server_wiki.rs` watches it appear and watches dropping
+//! the subscription take it away again. So what this chapter records is no
+//! longer a missing capability; it is the rule holding: **a reference
+//! addresses, a subscription authorises**, and VNT granted this reader
+//! nothing.
 
 use collection_proto::{CollectionKind, Placement};
 use integration::client::Session;
@@ -413,10 +418,11 @@ async fn an_org_on_another_server_parses_and_does_not_resolve() {
     assert_eq!(
         answers[0].reach,
         Reach::NotPermitted,
-        "a reference to another server's org resolved — `LocalHomes` only \
-         answers for orgs on the reader's own data root. Subscribing across \
-         a boundary exists (`cross_server_wiki.rs`); teaching `NodeHomes` to \
-         answer from what a subscription brought back does not (ADR 0003)"
+        "a reference to another server's org resolved on no subscription. \
+         A subscribed one does resolve now — `cross_server_wiki.rs` follows \
+         `acme.test/song:track-one` from VNT's own copy — and that is the \
+         point: the subscription is what authorises, so without one the \
+         answer is still a refusal (ADR 0003)"
     );
 
     // And the subscription that would admit it is refused where it is
