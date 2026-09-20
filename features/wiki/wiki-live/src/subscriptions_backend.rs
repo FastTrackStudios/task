@@ -82,7 +82,115 @@ pub trait Upstream: Send + Sync + 'static {
         let _ = subscriber_org;
         Vec::new()
     }
+
+    /// The domain `org` publishes under, when this resolver knows one.
+    ///
+    /// Needed to serve this org's *own* sources: the gate is
+    /// [`Self::admits`], which is keyed by a [`Subscription`], and a
+    /// subscription names its source by domain. So answering "may a
+    /// stranger read this" means naming ourselves the way a stranger
+    /// would — and that name is a lookup rather than a fact the backend
+    /// holds, because a domain is a name and not an address
+    /// (`wiki.ref.redirect`).
+    fn domain_of(&self, org: &str) -> Option<String> {
+        let _ = org;
+        None
+    }
 }
+
+/// One source this org publishes, checked and located.
+///
+/// The publisher-side half of a cross-server subscription, and the whole
+/// of its access control. Both reads go through here so there is exactly
+/// one answer to "may a stranger read this", and it is
+/// [`Upstream::admits`] — the same call, with the same code, that decides
+/// it for a subscriber on this data root. A second implementation of the
+/// same question is how two rules come to disagree, and the one that
+/// drifts open is the one nobody notices.
+impl SubscriptionsBackend {
+    /// This org's grant table — who may read which of its sources.
+    fn grants(&self) -> crate::source_grants::SourceGrants {
+        crate::source_grants::SourceGrants::open(&self.org_root)
+    }
+
+    fn published_root(
+        &self,
+        kind: SourceKind,
+        slug: &str,
+        secret: &str,
+    ) -> Result<PathBuf, WikiError> {
+        // The caller, before the resource. A secret that grants nothing
+        // is refused without saying whether the source exists, because
+        // the answer to "is there an unlisted wiki called X" is not one
+        // an unauthenticated caller should be able to collect by asking
+        // repeatedly.
+        if !self.grants().admits(kind, slug, secret) {
+            return Err(WikiError::Io(
+                "no grant for that source: a subscriber on another server reads it only with \
+                 a secret the publisher minted for it"
+                    .to_owned(),
+            ));
+        }
+        let domain = self.upstream.domain_of(&self.org_slug).ok_or_else(|| {
+            WikiError::Io(format!(
+                "`{}` publishes under no domain here, so it has nothing a subscriber could \
+                 name — set one before expecting another server to reach it",
+                self.org_slug
+            ))
+        })?;
+        let asked = Subscription {
+            domain,
+            slug: slug.to_owned(),
+            kind,
+            title: String::new(),
+            core: false,
+            declined: false,
+            selection: Default::default(),
+        };
+        match self.upstream.admits(REMOTE_CALLER, &asked) {
+            Admission::Admitted => {}
+            Admission::Refused(why) => return Err(WikiError::Io(why)),
+            // This resolver does not serve the domain we just asked it
+            // about *ourselves*, which means the domain map and the org
+            // it belongs to have come apart. Not an orphan — an orphan
+            // is a source that is somewhere else — so it is said rather
+            // than reported as a missing file.
+            Admission::Unknown => {
+                return Err(WikiError::Io(format!(
+                    "`{}` does not resolve its own domain, so it cannot say whether \
+                     `{slug}` is published",
+                    self.org_slug
+                )));
+            }
+        }
+        match self.upstream.source(&asked) {
+            Some(Source::Local(root)) => Ok(root),
+            // Admitted and then not locatable is this server being asked
+            // to relay somebody else's source. It declines rather than
+            // fetching on the caller's behalf: a subscription is between
+            // the subscriber and the publisher, and a middle hop would
+            // make this org's admission stand in for the real one's.
+            Some(Source::Remote(_)) => Err(WikiError::Io(format!(
+                "`{slug}` is published by another server, not this one; subscribe to it there"
+            ))),
+            None => Err(WikiError::Io(format!(
+                "`{}` has no {} `{slug}`",
+                self.org_slug,
+                kind.noun()
+            ))),
+        }
+    }
+}
+
+/// The `subscriber_org` a caller from another server is judged as.
+///
+/// Not a slug any org can have, so [`Upstream::admits`] takes its
+/// outsider branch: `org == subscriber_org` is the clause that lets a
+/// member reach their own org's unlisted wikis, and a remote caller has
+/// not proved membership of anything. Judging them as an outsider is the
+/// conservative reading and the only one available — the far side's
+/// claim about which org it speaks for is a claim.
+const REMOTE_CALLER: &str = "";
 
 /// An [`Upstream`] that resolves sources published by orgs on this
 /// same data root — which is what the demo and the suite exercise.
@@ -105,7 +213,7 @@ impl LocalOrgs {
     }
 
     /// The domain an org publishes under, when this resolver knows one.
-    fn domain_of(&self, org: &str) -> Option<&str> {
+    fn domain_for(&self, org: &str) -> Option<&str> {
         self.domains
             .iter()
             .find(|(_, slug)| slug.as_str() == org)
@@ -197,6 +305,10 @@ impl LocalOrgs {
 impl Upstream for LocalOrgs {
     fn source(&self, subscription: &Subscription) -> Option<Source> {
         self.local_root(subscription).map(Source::Local)
+    }
+
+    fn domain_of(&self, org: &str) -> Option<String> {
+        self.domain_for(org).map(str::to_owned)
     }
 
     /// t[impl wiki.access.visibility] — private is a refusal for
@@ -319,7 +431,7 @@ impl Upstream for LocalOrgs {
             let Some(slug) = org.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            let Some(domain) = self.domain_of(&slug) else {
+            let Some(domain) = self.domain_for(&slug) else {
                 continue;
             };
             // Not `else { continue }`: an org may hold asset shelves
@@ -653,6 +765,63 @@ impl Subscriptions for SubscriptionsBackend {
 
     fn discover(&self) -> Result<Vec<Subscription>, WikiError> {
         Ok(self.upstream.discover(&self.org_slug))
+    }
+
+    /// t[impl wiki.access.visibility] — across a server boundary, by the
+    /// same rule and the same code as within one.
+    fn source_manifest(
+        &self,
+        kind: SourceKind,
+        slug: &str,
+        secret: &str,
+    ) -> Result<vault_proto::Manifest, WikiError> {
+        let root = self.published_root(kind, slug, secret)?;
+        let backend =
+            vault_live::Backend::single(slug, root).map_err(|e| WikiError::Io(e.to_string()))?;
+        vault_proto::VaultSync::manifest(&backend, slug).map_err(|e| WikiError::Io(e.to_string()))
+    }
+
+    fn grant_source_read(&self, kind: SourceKind, slug: &str) -> Result<String, WikiError> {
+        // Minting proves the source exists and is publishable before
+        // handing out a secret for it, so a typo'd slug fails here
+        // rather than at the subscriber's first refresh.
+        let probe = self
+            .grants()
+            .grant(kind, slug)
+            .map_err(|e| WikiError::Io(e.to_string()))?;
+        match self.published_root(kind, slug, &probe) {
+            Ok(_) => Ok(probe),
+            Err(e) => {
+                // Do not leave a grant for something that cannot be
+                // served; it would read as access nobody can use.
+                let _ = self.grants().revoke(kind, slug);
+                Err(e)
+            }
+        }
+    }
+
+    fn revoke_source_read(&self, kind: SourceKind, slug: &str) -> Result<(), WikiError> {
+        self.grants()
+            .revoke(kind, slug)
+            .map_err(|e| WikiError::Io(e.to_string()))
+    }
+
+    fn source_file(
+        &self,
+        kind: SourceKind,
+        slug: &str,
+        path: &str,
+        secret: &str,
+    ) -> Result<vault_proto::FileBytes, WikiError> {
+        let root = self.published_root(kind, slug, secret)?;
+        let backend =
+            vault_live::Backend::single(slug, root).map_err(|e| WikiError::Io(e.to_string()))?;
+        // `get_file` confines `path` to the root it was opened on, which
+        // is what makes serving a stranger's string safe here: the slug
+        // was confined by `source_root` on the way in, and the path is
+        // confined by the backend on the way out.
+        vault_proto::VaultSync::get_file(&backend, slug, path)
+            .map_err(|e| WikiError::Io(e.to_string()))
     }
 }
 
