@@ -1,4 +1,23 @@
+# Must match `rust-version` in the workspace Cargo.toml. When they
+# disagree, clippy warns about the disagreement itself — which `just
+# ci-clippy` promotes to an error with `-D warnings`, failing the gate on
+# every branch for a reason no branch introduced.
 msrv = "1.90"
 
 # Common patterns we accept across the workspace.
 allow-comparison-to-zero = true
+
+# `result_large_err` fires on `Result<_, axum::Response>`, which is 128
+# bytes and therefore exactly on the default threshold.
+#
+# That return type is the axum idiom, not an oversight: a handler helper
+# that fails returns the HTTP response it wants sent, so the error *is* a
+# response. Boxing it to satisfy the lint would put a `Box::new` at every
+# construction and an unbox before every return to axum, to shrink a
+# value built once per *failed request* — a path where 128 bytes is not
+# the cost worth optimising. The lint is aimed at an `Err` so large it
+# bloats every `Ok` on a hot path, which this is not.
+#
+# Raised rather than allowed, so an error type that is genuinely, newly
+# enormous still gets caught.
+large-error-threshold = 256

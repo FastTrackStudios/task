@@ -20,11 +20,27 @@
     import-tree.url = "github:vic/import-tree";
 
     # Shared Dioxus toolchain hub — every FTS Dioxus repo follows its
-    # nixpkgs / rust-overlay pins so `dx` and the Rust toolchain stay
-    # in lockstep.
+    # nixpkgs pin so the package set stays in lockstep.
     dioxus-flake.url = "github:FastTrackStudios/Dioxus-Flake";
     nixpkgs.follows = "dioxus-flake/nixpkgs";
-    rust-overlay.follows = "dioxus-flake/rust-overlay";
+
+    # rust-overlay is OURS, and deliberately not `dioxus-flake`'s.
+    #
+    # It followed the hub, on the reasoning that `dx` and rustc should
+    # move together. The effect was that the Rust toolchain could only
+    # advance when the hub did: rust-overlay sat at 2026-04-05 and
+    # pinned us to 1.94.0 while stable reached 1.98.1 five months later,
+    # and `rust-toolchain.toml` recorded the consequence as "moving past
+    # it means bumping dioxus-flake, not editing this file".
+    #
+    # The lockstep argument does not actually apply here, because `dx`
+    # does not come from the hub either — it is sourced from the
+    # dedicated `nixpkgs-dx` pin below, at the version the workspace
+    # Cargo.lock wants (see nix/modules/dx.nix). So following the hub
+    # for rust-overlay bought no coupling we needed and cost us the
+    # ability to take a compiler release.
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
     flake-parts.url = "github:hercules-ci/flake-parts";
 
     # crane — cargo-in-nix builds for the deployable images (task-server

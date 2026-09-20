@@ -544,14 +544,13 @@ impl Subscriptions for SubscriptionsBackend {
                 // does — the question is whether the copy holds work
                 // upstream has not seen, and `refresh_subscription`
                 // reports that without writing anything back either way.
-                let upstream: Option<Arc<dyn SourceVault>> =
-                    match self.upstream.source(&held) {
-                        Some(Source::Local(root)) => vault_live::Backend::single(&held.slug, root)
-                            .ok()
-                            .map(|b| Arc::new(b) as _),
-                        Some(Source::Remote(vault)) => Some(vault),
-                        None => None,
-                    };
+                let upstream: Option<Arc<dyn SourceVault>> = match self.upstream.source(&held) {
+                    Some(Source::Local(root)) => vault_live::Backend::single(&held.slug, root)
+                        .ok()
+                        .map(|b| Arc::new(b) as _),
+                    Some(Source::Remote(vault)) => Some(vault),
+                    None => None,
+                };
                 if let Some(upstream) = upstream {
                     if let Ok(report) =
                         materialize::refresh_subscription(upstream.as_ref(), &self.org_root, &held)

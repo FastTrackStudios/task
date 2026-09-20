@@ -79,11 +79,8 @@ fn find_closing(s: &str) -> Option<CloseMarker> {
                 body_start: i + 3,
             });
         }
-        // Advance to next line.
-        match rest.find('\n') {
-            Some(off) => i += off + 1,
-            None => return None,
-        }
+        // Advance to next line. No newline left means no close marker.
+        i += rest.find('\n')? + 1;
     }
     None
 }

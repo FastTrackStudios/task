@@ -452,7 +452,7 @@ fn ProjectCard(
 ) -> Element {
     let pid = project.id.to_string();
     let detail = Route::ProjectDetailRoute { id: pid.clone() };
-    let pct = if total == 0 { 0 } else { done * 100 / total };
+    let pct = (done * 100).checked_div(total).unwrap_or(0);
 
     // Card art: the deliverable itself. `image:` frontmatter wins when
     // someone set one; otherwise the first frame of the project's video

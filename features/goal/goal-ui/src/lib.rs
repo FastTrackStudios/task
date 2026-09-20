@@ -296,10 +296,7 @@ fn collect_descendants(parent_id: Uuid, all: &[Goal]) -> Vec<Goal> {
 fn depth_of(id: Uuid, all: &[Goal]) -> usize {
     let mut depth = 0usize;
     let mut current = id;
-    loop {
-        let Some(g) = all.iter().find(|g| g.id == current) else {
-            break;
-        };
+    while let Some(g) = all.iter().find(|g| g.id == current) {
         match g.parent_id {
             Some(p) => {
                 depth += 1;

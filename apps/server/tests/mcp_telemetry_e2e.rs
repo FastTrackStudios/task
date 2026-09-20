@@ -88,7 +88,7 @@ async fn fake_logs(
         "data": { "resultType": "streams", "result": [{
             "stream": { "namespace": "task", "container": "task-server" },
             "values": [
-                ["1756720800000000000", format!("\u{1b}[33mWARN\u{1b}[0m central auth: issuer_unreachable")],
+                ["1756720800000000000", "\u{1b}[33mWARN\u{1b}[0m central auth: issuer_unreachable"],
                 ["1756720801000000000", format!("echo: {echoed}")]
             ]
         }]}

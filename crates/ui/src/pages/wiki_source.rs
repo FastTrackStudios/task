@@ -225,14 +225,11 @@ fn mmss(total: u64) -> String {
 
 /// YouTube video id out of the provenance `media:` URL.
 fn youtube_id(media: &str) -> Option<String> {
-    let (marker, rest) = if let Some(i) = media.find("v=") {
-        ("v=", &media[i + 2..])
-    } else if let Some(i) = media.find("youtu.be/") {
-        ("youtu.be/", &media[i + 9..])
+    let rest = if let Some(i) = media.find("v=") {
+        &media[i + 2..]
     } else {
-        return None;
+        &media[media.find("youtu.be/")? + 9..]
     };
-    let _ = marker;
     let id: String = rest
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
