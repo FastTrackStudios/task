@@ -291,7 +291,21 @@ impl SyncSummary {
 
 /// Resolve and write `path` under `vault_root`, refusing `..`
 /// segments to keep the writer from escaping.
-fn write_file(vault_root: &Path, path: &str, bytes: &[u8]) -> Result<(), SyncError> {
+/// Write one pulled file into a local copy, refusing a path that tries
+/// to climb out of it.
+///
+/// Public because a subscription refresh pulls without being able to
+/// push (`wiki_live::materialize`), so it cannot go through
+/// [`apply_one`] — and the `..` check here is the one that matters most
+/// in that case, since the manifest it is walking was written by
+/// another organisation. One copy of that check, called from both
+/// paths, rather than two that can drift apart.
+///
+/// # Errors
+///
+/// [`SyncError::BadPath`] for a path containing a `..` segment, or
+/// [`SyncError::Io`] if the write or its parent directories fail.
+pub fn write_file(vault_root: &Path, path: &str, bytes: &[u8]) -> Result<(), SyncError> {
     if path.split(['/', '\\']).any(|seg| seg == "..") {
         return Err(SyncError::BadPath(path.to_owned()));
     }

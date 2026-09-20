@@ -48,6 +48,7 @@ mod raw;
 pub mod repo_source;
 pub mod reviews;
 mod snapshot;
+pub mod source;
 mod source_watcher;
 mod state;
 pub mod subscriptions;

@@ -9,8 +9,10 @@
 //! Refresh needs an upstream to pull from, and where that comes from
 //! differs per source: a wiki in the same org is a local directory, a
 //! peer's is a vox client. So the backend takes an [`Upstream`]
-//! resolver rather than assuming either — the materialize layer
-//! already works against anything implementing `VaultSync`.
+//! resolver rather than assuming either — the materialize layer works
+//! against anything implementing [`crate::source::SourceVault`], which
+//! a local backend satisfies for free and a remote one by bridging two
+//! read calls onto the wire.
 //!
 //! The upstream is also where **visibility** is enforced
 //! (`wiki.access.visibility`). A subscription is the subscriber's own
@@ -28,6 +30,7 @@ use wiki_proto::service::subscriptions::{HeldSubscription, RefreshReport, Subscr
 use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
 
 use crate::materialize;
+use crate::source::{Source, SourceVault};
 use crate::subscriptions::SubscriptionStore;
 
 /// What a source says to a would-be subscriber.
@@ -47,18 +50,25 @@ pub enum Admission {
 
 /// How to reach the far side of a subscription.
 ///
-/// Returning `None` from [`Self::local_root`] means "this source is not
+/// Returning `None` from [`Self::source`] means "this source is not
 /// reachable from here", which is an orphan rather than an error: a
 /// subscribed copy goes on resolving from disk when its home is
 /// unreachable (`wiki.life.orphan`), so a refresh that cannot dial is a
 /// refusal to refresh, not a broken subscription.
 pub trait Upstream: Send + Sync + 'static {
-    /// The local directory serving this source, when it is one.
+    /// Where this source is, when it is anywhere this resolver can see.
     ///
-    /// Only local upstreams for now. A remote one is the same
-    /// materialize call against a `VaultSyncClient`, and the shape
-    /// here is what will carry it.
-    fn local_root(&self, subscription: &Subscription) -> Option<PathBuf>;
+    /// [`Source::Local`] is a publisher on this same data root;
+    /// [`Source::Remote`] is one on another server, carrying the two
+    /// read calls a refresh makes.
+    ///
+    /// This was `local_root(&self, …) -> Option<PathBuf>`, whose doc
+    /// claimed "a remote one is the same materialize call against a
+    /// `VaultSyncClient`, and the shape here is what will carry it".
+    /// It could not: a `PathBuf` names a directory on this disk and
+    /// nothing else, so the remote half had nowhere to go and went
+    /// unwritten. Naming the two cases is what carries it.
+    fn source(&self, subscription: &Subscription) -> Option<Source>;
 
     /// Whether the source admits `subscriber_org`.
     fn admits(&self, subscriber_org: &str, subscription: &Subscription) -> Admission {
@@ -168,11 +178,25 @@ impl LocalOrgs {
     }
 }
 
-impl Upstream for LocalOrgs {
-    fn local_root(&self, subscription: &Subscription) -> Option<PathBuf> {
+impl LocalOrgs {
+    /// The directory serving this source on this disk.
+    ///
+    /// Kept as an inherent method, not merely the trait's answer: the
+    /// tests below assert what it refuses — a slug that climbs out of
+    /// the tier directory, a vault masquerading as a wiki — and those
+    /// are claims about path handling rather than about the `Upstream`
+    /// shape.
+    #[must_use]
+    pub fn local_root(&self, subscription: &Subscription) -> Option<PathBuf> {
         let org = self.domains.get(&subscription.domain)?;
         let root = self.source_root(org, subscription)?;
         root.is_dir().then_some(root)
+    }
+}
+
+impl Upstream for LocalOrgs {
+    fn source(&self, subscription: &Subscription) -> Option<Source> {
+        self.local_root(subscription).map(Source::Local)
     }
 
     /// t[impl wiki.access.visibility] — private is a refusal for
@@ -516,11 +540,21 @@ impl Subscriptions for SubscriptionsBackend {
                 .into_iter()
                 .find(|s| s.qualified() == qualified)
             {
-                if let Some(root) = self.upstream.local_root(&held) {
-                    let upstream = vault_live::Backend::single(&held.slug, root)
-                        .map_err(|e| WikiError::Io(e.to_string()))?;
+                // A remote source answers this the same way a local one
+                // does — the question is whether the copy holds work
+                // upstream has not seen, and `refresh_subscription`
+                // reports that without writing anything back either way.
+                let upstream: Option<Arc<dyn SourceVault>> =
+                    match self.upstream.source(&held) {
+                        Some(Source::Local(root)) => vault_live::Backend::single(&held.slug, root)
+                            .ok()
+                            .map(|b| Arc::new(b) as _),
+                        Some(Source::Remote(vault)) => Some(vault),
+                        None => None,
+                    };
+                if let Some(upstream) = upstream {
                     if let Ok(report) =
-                        materialize::refresh_subscription(&upstream, &self.org_root, &held)
+                        materialize::refresh_subscription(upstream.as_ref(), &self.org_root, &held)
                     {
                         if report.has_local_work() {
                             return Err(WikiError::Io(format!(
@@ -559,29 +593,50 @@ impl Subscriptions for SubscriptionsBackend {
         architect_telemetry::wide::set("wiki.subscribe.source", qualified.to_owned());
         self.admitted(&held)?;
 
-        let root = self.upstream.local_root(&held).ok_or_else(|| {
+        let source = self.upstream.source(&held).ok_or_else(|| {
             // Orphaned rather than broken: the copy still reads.
             WikiError::Io(format!(
                 "`{qualified}` is not reachable from here; the local copy still resolves"
             ))
         })?;
-        let out = match held.kind {
-            SourceKind::Wiki => {
-                let upstream = vault_live::Backend::single(&held.slug, root)
+        let out = match (&source, held.kind) {
+            (Source::Local(root), SourceKind::Wiki) => {
+                let upstream = vault_live::Backend::single(&held.slug, root.clone())
                     .map_err(|e| WikiError::Io(e.to_string()))?;
                 materialize::refresh_subscription(&upstream, &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
             }
+            // A wiki is markdown, and markdown is what the vault lane
+            // carries — so this is the one kind that crosses a server
+            // boundary today, with `refresh_subscription` unchanged.
+            (Source::Remote(vault), SourceKind::Wiki) => {
+                materialize::refresh_subscription(vault.as_ref(), &self.org_root, &held)
+                    .map_err(|e| WikiError::Io(e.to_string()))?
+            }
             // A corpus, not a wiki: copied whole into the library the
             // reader opens (`materialize::resource_copy_dir`).
-            SourceKind::Resource => materialize::refresh_resource(&root, &self.org_root, &held)
-                .map_err(|e| WikiError::Io(e.to_string()))?,
+            (Source::Local(root), SourceKind::Resource) => {
+                materialize::refresh_resource(root, &self.org_root, &held)
+                    .map_err(|e| WikiError::Io(e.to_string()))?
+            }
             // Any file, any size — so the byte walker rather than the
             // vault engine, which carries markdown only and would drop
             // a shelf's stems on the floor without saying so.
-            SourceKind::Assets | SourceKind::Projects => {
-                materialize::refresh_assets(&root, &self.org_root, &held)
+            (Source::Local(root), SourceKind::Assets | SourceKind::Projects) => {
+                materialize::refresh_assets(root, &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
+            }
+            // And that byte walker is exactly what does not exist over
+            // the wire yet. Said plainly, because the alternative is
+            // reporting it as an orphan — which would read as "the
+            // publisher is unreachable" and send somebody to check a
+            // network that is fine.
+            (Source::Remote(_), kind) => {
+                return Err(WikiError::Io(format!(
+                    "`{qualified}` publishes {kind:?} from another server, and only a wiki \
+                     crosses a server boundary today: the other kinds are byte trees, and \
+                     the walker that reads one over the wire is not built yet"
+                )));
             }
         };
         Ok(RefreshReport {
