@@ -1,5 +1,21 @@
 # Working in this repo
 
+## What this is for
+
+Task is the backend the sibling apps share, and the nearest goal is that
+**a musician signs in on any machine and their work is there**: every
+chart, every track and DAW session, every guitar rig patch and its
+downloads. Keyflow, Session, Signal and Ignition are clients of this
+store, not stores of their own.
+
+Read `VISION.md` § "The rig loads from the cloud" before designing
+anything in this space, and `docs/adr/0003-task-as-the-shared-backend.md`
+(with `0004` for what it revised) for the decisions already made. The one
+rule that decides most arguments: **the manifest says what a thing is,
+the File Root holds what it weighs** — identity and metadata under
+`resources/` or the vault, bytes in a File Root, so subscribing to a
+library moves names rather than gigabytes.
+
 ## The dev loop: server + webapp, owned by you
 
 You (the agent) own the lifecycle of the demo processes: launch them

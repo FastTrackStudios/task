@@ -41,8 +41,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use vault_proto::VaultSync;
 use vault_sync_client::{SyncOp, index_local, plan_sync};
+
+use crate::source::SourceVault;
 
 /// Path → sha as of the last successful refresh.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -142,8 +143,10 @@ pub fn base_path(org_root: &Path, domain: &str, slug: &str) -> PathBuf {
 /// Bring a subscribed source's local copy up to date with `upstream`.
 ///
 /// `upstream_id` is the source's id on the far side — its wiki slug.
-/// The same call serves an in-process backend and a vox client, since
-/// both implement [`VaultSync`].
+/// The same call serves a publisher on this disk and one on another
+/// server, since both implement [`SourceVault`] — the local backend for
+/// free, via its `VaultSync` impl, and the remote one by bridging two
+/// read calls onto the wire.
 ///
 /// t[impl wiki.subscribe.local-copy] — after this returns, the copy
 /// resolves with the network down, because everything upstream had is
@@ -158,7 +161,7 @@ pub fn base_path(org_root: &Path, domain: &str, slug: &str) -> PathBuf {
 ///
 /// A failure reading the upstream manifest, fetching a file, or
 /// writing the local copy.
-pub fn refresh<U: VaultSync>(
+pub fn refresh<U: SourceVault + ?Sized>(
     upstream: &U,
     upstream_id: &str,
     local_root: &Path,
@@ -197,7 +200,7 @@ pub fn refresh<U: VaultSync>(
     for op in plan_sync(&local, &manifest) {
         match &op {
             SyncOp::Pull { path, remote_sha } => {
-                apply(upstream, upstream_id, local_root, &op)?;
+                pull(upstream, upstream_id, local_root, path)?;
                 out.pulled += 1;
                 next.0.insert(path.clone(), remote_sha.clone());
             }
@@ -226,15 +229,7 @@ pub fn refresh<U: VaultSync>(
                     // Local is untouched since the last refresh, so
                     // the difference is upstream's news and arrives.
                     Some(based) if based == local_sha => {
-                        apply(
-                            upstream,
-                            upstream_id,
-                            local_root,
-                            &SyncOp::Pull {
-                                path: path.clone(),
-                                remote_sha: remote_sha.clone(),
-                            },
-                        )?;
+                        pull(upstream, upstream_id, local_root, path)?;
                         out.pulled += 1;
                         next.0.insert(path.clone(), remote_sha.clone());
                     }
@@ -262,15 +257,34 @@ pub fn refresh<U: VaultSync>(
     Ok(out)
 }
 
-fn apply<U: VaultSync>(
+/// Bring one file down from upstream into the local copy.
+///
+/// This used to be `vault_sync_client::apply_one`, which dispatches on
+/// a whole [`SyncOp`] and can push as well as pull. Both call sites here
+/// only ever passed it a `Pull`, and a refresh must never do anything
+/// else — so it takes the path directly and the surface it needs is two
+/// read methods ([`SourceVault`]) rather than the whole of `VaultSync`.
+///
+/// The `..` check that mattered stays where it was: `write_file` is
+/// public for exactly this caller, so a manifest written by another
+/// organisation is screened by the same code the push path uses.
+fn pull<U: SourceVault + ?Sized>(
     upstream: &U,
     id: &str,
     root: &Path,
-    op: &SyncOp,
+    path: &str,
 ) -> Result<(), MaterializeError> {
-    vault_sync_client::apply_one(upstream, id, root, op).map_err(|source| MaterializeError::Sync {
-        id: id.to_owned(),
-        source,
+    let bytes = upstream
+        .get_file(id, path)
+        .map_err(|source| MaterializeError::Sync {
+            id: id.to_owned(),
+            source: vault_sync_client::SyncError::Remote(source),
+        })?;
+    vault_sync_client::write_file(root, path, &bytes.0).map_err(|source| {
+        MaterializeError::Sync {
+            id: id.to_owned(),
+            source,
+        }
     })
 }
 
@@ -323,7 +337,7 @@ fn is_source_bookkeeping(path: &str) -> bool {
 /// # Errors
 ///
 /// As [`refresh`].
-pub fn refresh_subscription<U: vault_proto::VaultSync>(
+pub fn refresh_subscription<U: SourceVault + ?Sized>(
     upstream: &U,
     org_root: &Path,
     subscription: &wiki_proto::Subscription,

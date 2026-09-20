@@ -129,6 +129,55 @@ timecode-ranged comment renders as a waveform marker). Actions are
 
 ## Where it's going
 
+### The rig loads from the cloud
+
+The nearest concrete goal, and the one the sibling apps exist to serve:
+**a musician sits down at any machine, signs in, and their work is
+there** — not a folder they remembered to copy, and not a link to a
+file that lives somewhere else.
+
+Three things have to sync and stay organised for that to be true:
+
+- **Charts.** Every chart for every song, editable in Keyflow and
+  readable from a setlist. A chart is a *vault document* (ADR 0004), so
+  it gets collaborative editing, search and linking — not an opaque blob
+  in a bucket.
+- **Tracks and DAW sessions.** The recorded work itself: sessions,
+  takes, renders and stems, living on the Projects tier
+  (`<org>/projects/<slug>/`) with the session file as bytes in a File
+  Root. This is the part that cannot be "a reference to somebody else's
+  system", because opening a session means the media has to actually be
+  on the disk.
+- **Guitar rig settings and their downloads.** Patches, sample
+  libraries, impulse responses — the tone. The manifest is identity and
+  metadata under `resources/`; the audio is bytes in a File Root
+  (ADR 0003, decision 3).
+
+The split in that last point is the load-bearing idea and it applies to
+all three: **the manifest says what a thing is, the File Root holds what
+it weighs.** Subscribing to somebody's sample library moves a list of
+names, not gigabytes; `files.sync.selective` then brings the bytes for
+the slice this machine cares about, and brings a session's media *with*
+the session rather than streaming it in on first play and glitching.
+
+What makes this one system rather than four is that none of the apps owns
+the store. A song is the join: Keyflow renders its chart, Session puts it
+in a setlist, Signal loads the patch attached to it, Ignition runs its
+cues, and each is an ordinary OIDC client reaching Task through the same
+permit table as Task's own web app (ADR 0003, decision 4). A library is a
+`Collection` over node references; a setlist that draws on a guest
+musician's library is one qualified reference
+(`guest.example/song:hosanna`) beside a local one.
+
+Honest gaps, as of this writing:
+
+- A qualified reference to an organisation on **another server** parses
+  and does not resolve. `Upstream` resolves sources on one data root;
+  the remote implementation is the next piece of work.
+- **Signal and Ignition have no server-side home yet.** The node kinds
+  and capabilities are the sockets they plug into; the plugins are still
+  to be written.
+
 ### Workflows
 
 Workflows define the stages, checklists, and process for a *type* of
