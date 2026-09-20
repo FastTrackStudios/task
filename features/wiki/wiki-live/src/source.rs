@@ -79,18 +79,19 @@ impl<T: VaultSync + Send + Sync> SourceVault for T {
 pub enum Source {
     /// A publisher on this same data root — its directory.
     ///
-    /// Still a path rather than a [`SourceVault`], because three of the
-    /// four source kinds are byte trees that a refresh walks directly
-    /// (`materialize::refresh_assets`), and only a wiki goes through the
-    /// vault engine. Handing those a markdown-shaped reader would drop
-    /// a shelf's stems on the floor.
+    /// Still a path rather than a [`SourceVault`], because a publisher on
+    /// this disk is cheaper to read as a tree: `materialize::refresh_assets`
+    /// copies a shelf or a corpus file by file with no round trip and no
+    /// size to bound, which is exactly what the wire cannot offer.
     Local(PathBuf),
     /// A publisher on another server, reached over the wire.
     ///
     /// Built by `task_server::federated_orgs`, which is where dialling
     /// lives — this crate has no transport and should not grow one. It
-    /// serves the wiki path. The byte-tree kinds need a remote walker,
-    /// which is a different piece of work and says so where a refresh
-    /// meets one, rather than failing as if the source were missing.
+    /// serves a wiki and an asset shelf: the vault manifest carries any
+    /// file, so what limits it is size rather than kind
+    /// (`materialize::REMOTE_FILE_LIMIT`). A project's media and a
+    /// Resource's corpus take other routes, and a refresh says which
+    /// rather than failing as if the source were missing.
     Remote(Arc<dyn SourceVault>),
 }

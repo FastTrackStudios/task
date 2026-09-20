@@ -60,13 +60,14 @@
 //! the grant is withdrawn. Two things are still true here anyway, for two
 //! different reasons:
 //!
-//! - a **chart** is an asset-group document, and only a wiki crosses a
-//!   boundary today — the byte-tree kinds are walked from a `&Path`, and
-//!   a remote one says so rather than reporting an orphan;
-//! - and the refusal below is a subscription this server holds **no grant
+//! - the refusal below is a subscription this server holds **no grant
 //!   for**, which is exactly when `LocalOrgs` is still the authority and
 //!   still answers for its own disk. A grant is what tells "there is no
-//!   such thing here" apart from "that thing is somewhere else".
+//!   such thing here" apart from "that thing is somewhere else" — and
+//!   `cross_server_wiki.rs` takes VNT's shelf the other way round, with
+//!   one;
+//! - and resolving the reference would need more than the bytes anyway,
+//!   which is the next point.
 //!
 //! Resolving a *reference* into another server's org is a third piece
 //! again, and nothing implements it: the peer table carries a copy, not a

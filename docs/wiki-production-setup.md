@@ -151,8 +151,15 @@ task wiki sources refresh   vnt.test/post-production --org acme-audio --server $
 
 `task wiki sources revoke` (publisher) and `distrust` (subscriber) each
 end the refreshing without touching the copy already held
-(`wiki.life.orphan`). Only wikis cross a server boundary today; an asset
-shelf or a project says so plainly rather than reporting an orphan.
+(`wiki.life.orphan`).
+
+A wiki and an asset shelf both cross — pass `--kind assets` for a shelf.
+What a subscription will not carry is a large file: a fetch is one whole
+file in one message, so anything over 8 MiB is reported and left where it
+is. A **project** is refused for the same reason (a project is its media
+— reach it as a File Root, offered and accepted) and a **Resource** is
+installed into a corpus library rather than pulled across. Each refusal
+names its route.
 
 `just demo federate` runs exactly these commands against the two demo
 servers, which is the cheapest way to watch the whole loop.

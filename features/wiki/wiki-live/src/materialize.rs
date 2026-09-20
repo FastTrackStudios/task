@@ -167,6 +167,74 @@ pub fn refresh<U: SourceVault + ?Sized>(
     local_root: &Path,
     base_at: &Path,
 ) -> Result<Refreshed, MaterializeError> {
+    refresh_taking(
+        upstream,
+        upstream_id,
+        local_root,
+        base_at,
+        &Take::everything(),
+    )
+}
+
+/// Which of a source's files a refresh will take.
+///
+/// A wiki takes all of them: every page is content and a page is a few
+/// kilobytes. A shelf is where both halves of this matter — a
+/// subscription may name part of one (ADR 0004 decision 1a), and a shelf
+/// is "any file, at any size", which over a wire is a different
+/// proposition from a shelf on this disk.
+#[derive(Debug, Clone, Copy)]
+pub struct Take<'a> {
+    /// What the subscription asked for (`files.sync.selective`, at the
+    /// organisation scope).
+    pub selection: &'a org_proto::Selection,
+    /// The largest single file this refresh will fetch.
+    ///
+    /// A bound rather than a preference, and the reason is ADR 0003's
+    /// rule: **subscribing moves names, not gigabytes.** Every fetch
+    /// here is one whole file in one message, so a source that holds a
+    /// forty-gigabyte camera original would not be slow, it would be a
+    /// server trying to put forty gigabytes in a frame. Bytes at that
+    /// size cross as a File Root — published once, offered, accepted,
+    /// pulled in chunks by the lane that owns resumption and renditions
+    /// — and a file over this bound is reported rather than attempted so
+    /// a person can see which route it needs.
+    pub max_bytes: u64,
+}
+
+impl Take<'_> {
+    /// The whole source, at any size — a local refresh, and every wiki.
+    #[must_use]
+    pub const fn everything() -> Self {
+        Self {
+            selection: &org_proto::Selection::All,
+            max_bytes: u64::MAX,
+        }
+    }
+}
+
+/// The largest single file a refresh **over the wire** will fetch.
+///
+/// Eight mebibytes: comfortably more than any document a shelf holds —
+/// a chart, a song, a patch, a lighting cue are kilobytes — and far
+/// less than a take, a stem or a camera original. So the bound falls
+/// exactly where ADR 0003 puts the boundary between what a subscription
+/// carries and what a File Root carries, rather than at a number chosen
+/// for the transport.
+pub const REMOTE_FILE_LIMIT: u64 = 8 << 20;
+
+/// [`refresh`], taking only what `take` admits.
+///
+/// # Errors
+///
+/// As [`refresh`].
+pub fn refresh_taking<U: SourceVault + ?Sized>(
+    upstream: &U,
+    upstream_id: &str,
+    local_root: &Path,
+    base_at: &Path,
+    take: &Take<'_>,
+) -> Result<Refreshed, MaterializeError> {
     std::fs::create_dir_all(local_root).map_err(|source| MaterializeError::Io {
         path: local_root.display().to_string(),
         source,
@@ -186,6 +254,19 @@ pub fn refresh<U: SourceVault + ?Sized>(
     // Editor list or open requests would present someone else's state
     // as its own. Pages only.
     manifest.files.retain(|f| !is_source_bookkeeping(&f.path));
+    // Then what this subscription asked for, and what it can carry.
+    // Both are counted into `skipped` and neither is fetched: the
+    // decision is made against the manifest, before a byte crosses,
+    // which is the only place a size bound can be honoured.
+    let mut skipped = 0usize;
+    manifest.files.retain(|f| {
+        let admitted =
+            take.selection.admits(org_proto::facet_of(&f.path)) && f.size <= take.max_bytes;
+        if !admitted {
+            skipped += 1;
+        }
+        admitted
+    });
     let local = index_local(local_root).map_err(|source| MaterializeError::Sync {
         id: upstream_id.to_owned(),
         source,
@@ -253,6 +334,7 @@ pub fn refresh<U: SourceVault + ?Sized>(
     }
     out.local_only.sort();
     out.conflicted.sort();
+    out.skipped = skipped;
     save_base(base_at, &next, upstream_id)?;
     Ok(out)
 }
@@ -345,6 +427,51 @@ pub fn refresh_subscription<U: SourceVault + ?Sized>(
     refresh(upstream, &subscription.slug, &copy, &base)
 }
 
+/// Refresh a subscribed **asset shelf** whose publisher is on another
+/// server.
+///
+/// The same engine as a wiki, which is the finding this is built on: a
+/// vault manifest is content-agnostic — `vault_live`'s walk hashes every
+/// file it meets, markdown or not — so the wire path carries a shelf's
+/// documents without knowing they are documents. What it must not carry
+/// is size, and [`Take::max_bytes`] is where that is decided.
+///
+/// # Why the local path still walks bytes instead of using this
+///
+/// [`refresh_assets`] stays a direct tree copy for a publisher on this
+/// disk, and the reason is no longer "the vault engine would drop the
+/// stems" — it would not. It is that a local copy has no per-file round
+/// trip and no reason to bound anything: copying a forty-gigabyte take
+/// between two directories on one disk is a copy, while fetching it in
+/// one message is not a thing a server should attempt. Two routes,
+/// because the two situations differ in what they can afford, and each
+/// says which it is.
+///
+/// t[impl wiki.subscribe.federated] — for an asset shelf: same
+/// subscription, same copy directory, same base snapshot, same report.
+///
+/// # Errors
+///
+/// As [`refresh`].
+pub fn refresh_remote_shelf<U: SourceVault + ?Sized>(
+    upstream: &U,
+    org_root: &Path,
+    subscription: &wiki_proto::Subscription,
+) -> Result<Refreshed, MaterializeError> {
+    let copy = assets_copy_dir(org_root, &subscription.domain, &subscription.slug);
+    let base = base_path(org_root, &subscription.domain, &subscription.slug);
+    refresh_taking(
+        upstream,
+        &subscription.slug,
+        &copy,
+        &base,
+        &Take {
+            selection: &subscription.selection,
+            max_bytes: REMOTE_FILE_LIMIT,
+        },
+    )
+}
+
 /// Where an org keeps a subscribed **Resource**: its corpus library,
 /// `<org>/resources/<slug>/` — the same place `admin bible install`
 /// puts an edition, and the only place the scripture store reads.
@@ -413,13 +540,19 @@ pub fn assets_copy_dir(org_root: &Path, domain: &str, kind: &str) -> PathBuf {
 ///
 /// # Why the byte walker and not the vault sync engine
 ///
-/// `refresh` rides `vault_sync_client`, which carries the vault's file
-/// set — markdown and `.base` — because that is what a wiki is. An
-/// asset shelf is explicitly "any file, any directory, at any size"
+/// An asset shelf is explicitly "any file, any directory, at any size"
 /// (ADR 0004): a song document beside a `.kf`, a session file, a stem.
-/// Materialising it through the vault engine would silently drop every
-/// file that is not markdown, and a song library arriving without its
-/// songs is the worst available failure — it looks like it worked.
+/// This walks the tree and copies it, which for a publisher on the same
+/// disk costs one read and one write per file and is bounded by nothing.
+///
+/// An earlier version of this comment said the vault engine would
+/// "silently drop every file that is not markdown". That is not true and
+/// it is worth correcting rather than deleting, because the false version
+/// is what kept a remote shelf unbuilt: `vault_live`'s manifest walk
+/// hashes **every** file it meets. What the vault engine cannot afford is
+/// *size* — one whole file per message — which is a limit on the wire and
+/// not on this disk. So [`refresh_remote_shelf`] uses the engine with a
+/// bound, and this stays the local route.
 ///
 /// The shelf is still registered for CRDT on **both** sides, which is
 /// the part that surprises: collaboration follows registration, and
@@ -610,6 +743,85 @@ mod tests {
         .unwrap();
         assert_eq!(again.pulled, 0);
         assert_eq!(again.in_sync, 2);
+    }
+
+    /// The finding the remote-shelf path rests on: the vault engine's
+    /// manifest is content-agnostic. A `.kf`, a `.wav`, a file with no
+    /// extension at all — all of it crosses, and a shelf arriving without
+    /// its documents was never the risk the old comment claimed.
+    #[test]
+    fn the_vault_engine_carries_every_file_and_not_only_markdown() {
+        let (_up, backend) = upstream_with(&[
+            ("track-one.md", "# Track One\n"),
+            ("track-one.kf", "| C | G |\n"),
+            ("stem.wav", "RIFF....not really\n"),
+            ("LICENCE", "all rights reserved\n"),
+        ]);
+        let local = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let out = refresh(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+        )
+        .unwrap();
+        assert_eq!(out.pulled, 4, "a file was dropped by kind: {out:?}");
+        for name in ["track-one.md", "track-one.kf", "stem.wav", "LICENCE"] {
+            assert!(local.path().join(name).is_file(), "{name} did not arrive");
+        }
+    }
+
+    /// A file too big to put in one message is **reported**, not
+    /// attempted — and nothing else in the shelf is held up by it.
+    ///
+    /// t[verify wiki.subscribe.federated] — for a shelf: what crosses is
+    /// the documents, and the bound is where ADR 0003's "names, not
+    /// gigabytes" rule is actually enforced rather than hoped for.
+    #[test]
+    fn a_file_over_the_bound_is_skipped_and_the_rest_of_the_shelf_arrives() {
+        let big = "x".repeat(4096);
+        let (_up, backend) = upstream_with(&[
+            ("track-one.md", "# Track One\n"),
+            ("Stems/lead vocal.wav", big.as_str()),
+        ]);
+        let local = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let out = refresh_taking(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+            &Take {
+                selection: &org_proto::Selection::All,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.pulled, 1, "the document should have come down: {out:?}");
+        assert_eq!(out.skipped, 1, "the oversized take should be counted");
+        assert!(local.path().join("track-one.md").is_file());
+        assert!(
+            !local.path().join("Stems/lead vocal.wav").exists(),
+            "an oversized file was fetched anyway"
+        );
+        // And it is not mistaken for the subscriber's own work on the
+        // next pass, which is what would happen if it had been skipped
+        // *after* being planned.
+        let again = refresh_taking(
+            &backend,
+            "music-theory",
+            local.path(),
+            &base.path().join("b.json"),
+            &Take {
+                selection: &org_proto::Selection::All,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
+        assert_eq!(again.in_sync, 1);
+        assert_eq!(again.skipped, 1);
+        assert!(!again.has_local_work(), "{again:?}");
     }
 
     /// t[verify wiki.subscribe.local-copy] — after a refresh the copy
