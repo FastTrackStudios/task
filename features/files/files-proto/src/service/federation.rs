@@ -103,6 +103,38 @@ pub struct Remote {
     pub accepted_at: DateTime<Utc>,
 }
 
+/// The root here that stands for `origin_root` there.
+///
+/// # Why this is the missing half of a binding
+///
+/// An asset's manifest says where its bytes are with a
+/// `ContentRef { root_id, path }` (ADR 0003), and that `root_id` is the
+/// root's id *in the organisation that wrote it*. Carry the manifest
+/// across a server boundary — which is the whole point of it being
+/// small — and the id arrives naming a root the reader does not have.
+/// Used as a local `RootId` it resolves to nothing, which reads as
+/// "the file is missing" rather than "this is somebody else's id".
+///
+/// [`Remote::origin_root`] is exactly the fact needed to fix that, and
+/// was recorded from the start; what was missing was anything that
+/// looked a root up *by* it. So an app holding a foreign reference and
+/// an accepted offer of the root it names can get from one to the other,
+/// and every lane after that point is addressing an ordinary local root
+/// — which is what `files.topology.federation` promises when it says an
+/// accepted offer arrives "as a first-class item".
+///
+/// `None` means no offer of that root has been accepted here. That is
+/// the honest answer and not an error: the reference is still a valid
+/// address, it just is not reachable yet, and the fix is an offer rather
+/// than a retry.
+#[must_use]
+pub fn adopted_from(remotes: &[Remote], origin_root: RootId) -> Option<RootId> {
+    remotes
+        .iter()
+        .find(|r| r.origin_root == origin_root)
+        .map(|r| r.root_id)
+}
+
 /// A bounded window of an object, for a relayed read.
 ///
 /// Half-open: `[offset, offset + len)`. `len` is what keeps a relay's
@@ -223,4 +255,60 @@ pub trait FederationService {
         secret: String,
         path: RootPath,
     ) -> Result<Vec<crate::model::BrowseEntry>, FilesFault>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn remote(origin_root: RootId, local: RootId) -> Remote {
+        Remote {
+            root_id: local,
+            origin: EndpointId("peer".into()),
+            origin_root,
+            name: "Session".into(),
+            capabilities: vec![Capability::Read],
+            reachable: true,
+            accepted_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn a_foreign_root_resolves_to_the_offer_accepted_for_it() {
+        let theirs = RootId::generate();
+        let ours = RootId::generate();
+        // A second remote, so the lookup has to match on `origin_root`
+        // rather than just returning whatever it holds.
+        let others = remote(RootId::generate(), RootId::generate());
+        let remotes = vec![others, remote(theirs, ours)];
+
+        assert_eq!(adopted_from(&remotes, theirs), Some(ours));
+    }
+
+    /// Unaccepted is `None`, and specifically not the local id that
+    /// happens to be spelled the same way.
+    ///
+    /// The failure this rules out: treating a foreign `root_id` as local
+    /// because both are `RootId`s and nothing in the type says which
+    /// server minted it. That resolves to "no such root" — a missing
+    /// file, when the truth is an unaccepted offer.
+    #[test]
+    fn a_root_nobody_offered_is_not_found_rather_than_guessed() {
+        let ours = RootId::generate();
+        let remotes = vec![remote(RootId::generate(), ours)];
+
+        assert_eq!(adopted_from(&remotes, RootId::generate()), None);
+        assert_eq!(
+            adopted_from(&remotes, ours),
+            None,
+            "matched on the local id: a root we accepted is not the same \
+             root as the one it stands for, and confusing them would make \
+             a local id resolve a reference that names somebody else's"
+        );
+    }
+
+    #[test]
+    fn no_remotes_is_none_not_a_panic() {
+        assert_eq!(adopted_from(&[], RootId::generate()), None);
+    }
 }

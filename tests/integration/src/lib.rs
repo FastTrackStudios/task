@@ -98,6 +98,7 @@
 //! | `charts.rs`        | another app keeps its work here, and a library is a collection |
 //! | `setlist.rs`       | a performance that draws on somebody else's library |
 //! | `content_ref.rs`   | the manifest is in `resources/`, the bytes are in a root |
+//! | `remote_assets.rs` | a session's audio, read from the server that holds it |
 //! | `mail.rs`          | a message becomes work, and the trail stays private |
 //!
 //! These are tests rather than a script that prints `ok`, because a
