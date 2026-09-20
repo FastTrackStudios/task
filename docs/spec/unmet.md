@@ -223,17 +223,16 @@ grouped:
   `Task/Wikis/<id>`, and a push from one is an Edit Request; today a copy
   is a plain materialised tree and the lane is reached over vox only.
 
-  `wiki.subscribe.federated` now lands **met for wikis**: a source on
-  another server subscribes, refreshes and orphans through the same
+  `wiki.subscribe.federated` now lands **met**: a wiki or an asset shelf
+  on another server subscribes, refreshes and orphans through the same
   surface as a local one (`task_server::federated_orgs`,
   `wiki_live::source_peers`, `tests/integration/tests/
-  cross_server_wiki.rs`). What is deliberately still local-only is the
-  byte-tree kinds — Assets, Projects and Resource are walked from a
-  `&Path`, and a remote one names the missing walker rather than
-  reporting an orphan. ADR 0003's alternative for those is the route
-  `remote_assets.rs` proves: publish the manifest, put the bytes in a
-  File Root, carry them by `offer`/`accept`. A *reference* into another
-  server's org is a third thing again and still unresolved —
+  cross_server_wiki.rs`). The line is size, not kind — a remote refresh
+  is bounded by `materialize::REMOTE_FILE_LIMIT` and reports what it left
+  behind — so a **project** does not cross as a subscription (it *is* its
+  media; those bytes go by File Root and `offer`/`accept`, per ADR 0003)
+  and a **Resource** is installed rather than pulled. A *reference* into
+  another server's org is a different thing again and still unresolved:
   `node_homes::LocalHomes` answers only for orgs on the reader's own data
   root, which `tests/integration/tests/setlist.rs` pins.
 - **Linking and references** — `wiki.link.*`, `wiki.ref.{picker,stamp,

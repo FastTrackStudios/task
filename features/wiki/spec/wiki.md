@@ -870,10 +870,12 @@ wiki over a small committed repository; and ACME subscribed to VNT's **Post
 Production** across the two demo servers, so `wiki.subscribe.federated` is
 exercised against a second server rather than asserted.
 
-That last one is the seed's only source that is not on the reader's disk, and
+That last one is the seed's only *wiki* that is not on the reader's disk, and
 it is the reason it runs the other way round from the sentence this paragraph
 used to carry: VNT owns the wiki (`example_org::DECLARED_WIKIS`, unlisted) and
-ACME reads it. Planting cannot finish the job, because a cross-server
+ACME reads it. The shelf goes the other way — VNT takes ACME's `songs` shelf,
+which is what a shared library is for — so the demo shows both directions and
+both kinds that cross. Planting cannot finish the job, because a cross-server
 subscription needs the publisher's endpoint id and an endpoint id does not
 exist until that server has booted — so `just demo federate` is the step after
 `serve`, and it is the same three commands a person runs in life: the

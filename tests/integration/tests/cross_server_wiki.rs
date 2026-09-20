@@ -32,15 +32,25 @@
 //! generic over its source, so the same call that copies a sibling org's
 //! wiki off disk copies this one off the wire.
 //!
-//! # What is deliberately still refused
+//! # A shelf crosses as well, and the line is size rather than kind
 //!
-//! An asset shelf or a project on another server. Those are byte trees
-//! walked from a `&Path`, and the refresh says so plainly rather than
-//! reporting an orphan — ADR 0003's answer for them is the route the
-//! files lane proves in `remote_assets.rs`: publish the manifest, put the
-//! bytes in a File Root, carry them by `offer`/`accept`. The last test
-//! here pins that refusal so it stays a stated decision and not a
-//! surprise.
+//! A vault manifest is content-agnostic — the walk hashes every file it
+//! meets, markdown or not — so an asset shelf's **documents** ride the
+//! same engine. What a subscription cannot carry is a take: every fetch
+//! is one whole file in one message, and ADR 0003's rule is that
+//! subscribing moves names and not gigabytes. So a remote shelf refresh
+//! is bounded (`materialize::REMOTE_FILE_LIMIT`) and reports what it left
+//! behind.
+//!
+//! A **project** is refused outright, and that is the same rule reaching
+//! its conclusion rather than a missing walker: a project *is* its media.
+//! Those bytes cross as a File Root — offered, accepted, pulled in chunks
+//! by the lane that owns resumption and renditions — which is what
+//! `remote_assets.rs` proves. A **Resource** is refused too: an edition is
+//! installed into a corpus library, not pulled file by file.
+//!
+//! The last two tests pin both, so each stays a stated decision rather
+//! than a surprise.
 
 use integration::scenario::Scenario;
 use wiki_proto::service::subscriptions::SourceGrant;
@@ -51,6 +61,12 @@ use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
 /// in no directory and subscribable by anyone holding the reference.
 const POST_PRODUCTION: &str = "post-production";
 const VNT_DOMAIN: &str = "vnt.test";
+
+/// ACME's song shelf, and ACME's domain — the other direction, which is
+/// the one the sibling apps need: a shared library of songs and charts,
+/// read by whoever is working on the job.
+const SONGS: &str = "songs";
+const ACME_DOMAIN: &str = "acme.test";
 
 /// ACME's private wiki. Private is a refusal for outsiders, and the
 /// refusal is the interesting half of `wiki.access.visibility`.
@@ -290,12 +306,104 @@ async fn a_private_wiki_cannot_be_granted_to_another_server_at_all() {
     assert!(granted.is_err(), "the second ask is refused the same way");
 }
 
-/// The byte-tree kinds are still refused across a boundary, and say why.
+/// An asset shelf crosses too — its documents, not its stems.
+///
+/// The other direction from the wiki test above, and the direction the
+/// sibling apps need: VNT takes ACME's song library, which is what a
+/// shared library *is* for. `song_library.rs` is this chapter on one
+/// disk; the only thing that differs here is where the two read calls
+/// land.
+///
+/// t[verify wiki.subscribe.federated] — for an asset shelf.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_asset_shelf_crosses_a_boundary_and_leaves_an_oversized_take_behind() {
+    let s = Scenario::open().await;
+    let alice = s.as_alice().await;
+    let victor = s.as_victor().await;
+
+    // ACME's songs shelf is planted by the seed — two song documents,
+    // `example_org::DECLARED_ASSETS`. A take is dropped on it here, far
+    // over the wire bound, because "a shelf holds documents *and*
+    // somebody's stems" is the ordinary case and the interesting one:
+    // the documents must arrive anyway.
+    let shelf = s.orgs.acme.org_root().join("assets").join(SONGS);
+    assert!(
+        shelf.join("track-one.md").is_file(),
+        "the seed plants ACME's song shelf"
+    );
+    std::fs::create_dir_all(shelf.join("Stems")).expect("a stems folder");
+    std::fs::write(shelf.join("Stems/lead vocal.wav"), vec![7u8; 9 << 20])
+        .expect("a take bigger than a subscription carries");
+
+    let secret = alice
+        .wiki_subscriptions()
+        .await
+        .grant_source_read(SourceKind::Assets, SONGS.to_owned())
+        .await
+        .expect("a shelf is published by existing on the tier");
+
+    let subs = victor.wiki_subscriptions().await;
+    subs.trust_source(SourceGrant {
+        domain: ACME_DOMAIN.to_owned(),
+        endpoint: s.orgs.acme.endpoint.id().to_string(),
+        kind: SourceKind::Assets,
+        slug: SONGS.to_owned(),
+        secret,
+    })
+    .await
+    .expect("VNT records the grant");
+    subs.subscribe(
+        Subscriber::Vault,
+        Subscription {
+            domain: ACME_DOMAIN.into(),
+            slug: SONGS.into(),
+            kind: SourceKind::Assets,
+            title: SONGS.into(),
+            core: false,
+            declined: false,
+            selection: Default::default(),
+        },
+    )
+    .await
+    .expect("subscribe to the song library");
+
+    let report = subs
+        .refresh_subscription(Subscriber::Vault, format!("{ACME_DOMAIN}/{SONGS}"))
+        .await
+        .expect("the shelf's documents cross");
+    assert!(
+        report.pulled >= 2,
+        "both song documents should have come down: {report:?}"
+    );
+
+    let copy = s
+        .orgs
+        .vnt
+        .org_root()
+        .join("subscribed")
+        .join(ACME_DOMAIN)
+        .join(SONGS);
+    let song = std::fs::read_to_string(copy.join("track-one.md"))
+        .expect("ACME's song document is on VNT's disk now");
+    assert!(!song.trim().is_empty(), "the document arrived empty");
+
+    // And the take did not come with it. Not an error and not a silent
+    // omission: a subscription carries names, and the bytes of a take
+    // cross as a File Root (`remote_assets.rs`).
+    assert!(
+        !copy.join("Stems/lead vocal.wav").exists(),
+        "a 9 MiB take was pulled through a subscription — ADR 0003 says \
+         names cross and gigabytes do not"
+    );
+}
+
+/// A project is still refused across a boundary, and says why.
 ///
 /// Not an orphan, which would read as "the publisher is unreachable" and
-/// send somebody to check a network that is fine. The refusal names the
-/// missing walker, and ADR 0003's alternative — a File Root and an offer
-/// — is what `remote_assets.rs` proves instead.
+/// send somebody to check a network that is fine. And not a missing
+/// walker either: a project *is* its media, so the refusal names the
+/// route those bytes take instead — a File Root, offered and accepted,
+/// which is what `remote_assets.rs` proves.
 #[tokio::test]
 async fn a_project_on_another_server_names_the_gap_rather_than_reporting_an_orphan() {
     let s = Scenario::open().await;
@@ -343,7 +451,8 @@ async fn a_project_on_another_server_names_the_gap_rather_than_reporting_an_orph
         .await
         .expect_err("only a wiki crosses a server boundary today");
     assert!(
-        refused.to_string().contains("not built yet"),
-        "the refusal should name the missing walker rather than the network: {refused}"
+        refused.to_string().contains("File Root"),
+        "the refusal should name the route a project's bytes take rather than \
+         the network: {refused}"
     );
 }

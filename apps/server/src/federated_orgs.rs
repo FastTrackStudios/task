@@ -43,15 +43,23 @@
 //! be misused"; it is "misusing it fails loudly instead of quietly
 //! stopping".
 //!
-//! # Only wikis cross, and that is a decision rather than a gap
+//! # What crosses, and why the line is size rather than kind
 //!
-//! `SourceKind::Wiki` goes through the vault engine, which carries
-//! markdown — so a wiki is what crosses here. The byte-tree kinds
-//! (Assets, Projects, Resource) are walked directly from a `&Path` by
-//! `materialize::refresh_assets`, and the refresh says so plainly when it
-//! meets a remote one. ADR 0003's answer for those is the route the
-//! files lane already proves: publish the manifest, put the bytes in a
-//! File Root, and let `offer`/`accept` carry them.
+//! A wiki and an asset **shelf** cross, both through the vault engine —
+//! whose manifest turns out to be content-agnostic: the walk hashes every
+//! file it meets, markdown or not. So a shelf's documents ride the same
+//! two read calls a wiki's pages do, bounded by
+//! `materialize::REMOTE_FILE_LIMIT`, and what the bound leaves behind is
+//! reported rather than attempted.
+//!
+//! A **project** is refused, and that is the same rule reaching its
+//! conclusion rather than a missing walker: a project *is* its media, and
+//! ADR 0003's rule is that subscribing moves names and not gigabytes.
+//! Bytes at that size cross as a File Root — offered, accepted, pulled in
+//! chunks by the lane that owns resumption and renditions — which
+//! `tests/integration/tests/remote_assets.rs` proves end to end. A
+//! **Resource** is refused for its own reason: an edition is installed
+//! into a corpus library, not pulled across file by file.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -287,8 +295,8 @@ impl SourceVault for RemoteSource {
 /// subscribes through the same surface as one in the same org: same id
 /// shape, same staleness reporting, same resolution. What differs is
 /// where the two read calls land, and nothing above this knows. Holds for
-/// `SourceKind::Wiki`; the byte-tree kinds say plainly that their walker
-/// does not exist over the wire (see the module docs).
+/// a wiki and for an asset shelf; a project and a Resource say plainly
+/// which route they take instead (see the module docs).
 ///
 /// Local first, always. A domain that names an org on this data root is
 /// served from disk — no dial, no secret, and the publisher's own

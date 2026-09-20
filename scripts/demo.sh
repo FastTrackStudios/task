@@ -20,7 +20,7 @@
 #   ./demo.sh web      # run the web app against ACME
 #   ./demo.sh desktop  # run the desktop app against ACME
 #   ./demo.sh daemon   # a laptop: the sync agent, replicating ACME's projects
-#   ./demo.sh federate # ACME subscribes to VNT's wiki, across the two servers
+#   ./demo.sh federate # the two servers subscribe to each other's sources
 #   ./demo.sh ids      # print each org's endpoint id
 #   ./demo.sh telemetry       # local OTLP backend (Grafana/Tempo/Loki/Prom)
 #   ./demo.sh telemetry-stop  # stop it (data survives; rm to wipe)
@@ -199,8 +199,9 @@ serve() {
   wait
 }
 
-# ACME subscribes to VNT's Post Production wiki — across the two
-# servers, through the product's own lanes.
+# The two companies subscribe to each other across the two servers,
+# through the product's own lanes: ACME takes VNT's Post Production wiki,
+# VNT takes ACME's song library.
 #
 # This is the one thing on the demo desk that cannot be planted, and the
 # reason is the reason it is interesting: a cross-server subscription
@@ -223,10 +224,11 @@ serve() {
 # servers and the CLI holds one active profile at a time.
 federate() {
   require_planted
-  local vnt_id secret
+  local vnt_id acme_id secret
   vnt_id="$(id_of vnt vnt-video)"
-  if [ -z "$vnt_id" ]; then
-    echo "VNT has not bound an endpoint yet — run '$0 serve' once first" >&2
+  acme_id="$(id_of acme acme-audio)"
+  if [ -z "$vnt_id" ] || [ -z "$acme_id" ]; then
+    echo "both servers must have bound an endpoint — run '$0 serve' once first" >&2
     exit 1
   fi
   cd "$REPO_ROOT"
@@ -259,10 +261,31 @@ federate() {
   demo_task acme wiki sources subscribe vnt.test/post-production --kind wiki
   demo_task acme wiki sources refresh vnt.test/post-production
 
+  # And the other direction, which is the one the sibling apps need: VNT
+  # takes ACME's song library. A shelf crosses the same way a wiki does —
+  # its documents do. What it will not carry is a take: a fetch is one
+  # whole file in one message, so anything over
+  # `materialize::REMOTE_FILE_LIMIT` is reported and left where it is,
+  # and those bytes cross as a File Root instead.
   echo
-  echo ">> the copy is on ACME's disk:"
+  echo ">> ACME: granting read on the songs shelf"
+  secret="$(demo_task acme wiki sources grant songs --kind assets \
+    | awk '/^secret/ { print $2; exit }')"
+  if [ -z "$secret" ]; then
+    echo "ACME minted no secret for the songs shelf" >&2
+    exit 1
+  fi
+  echo ">> VNT: recording it and taking the library"
+  demo_task vnt wiki sources trust acme.test/songs \
+    --kind assets --endpoint "$acme_id" --secret "$secret"
+  demo_task vnt wiki sources subscribe acme.test/songs --kind assets
+  demo_task vnt wiki sources refresh acme.test/songs
+
+  echo
+  echo ">> the copies are on each server's disk:"
   echo "   $DEMO_ROOT/acme/orgs/acme-audio/subscribed/vnt.test/post-production"
-  echo ">> revoke it from VNT with:  wiki sources revoke post-production"
+  echo "   $DEMO_ROOT/vnt/orgs/vnt-video/subscribed/acme.test/songs"
+  echo ">> revoke either side with:  wiki sources revoke <slug>"
   echo "   the copy keeps reading; what ends is the refreshing."
 }
 

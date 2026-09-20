@@ -746,16 +746,41 @@ impl Subscriptions for SubscriptionsBackend {
                 materialize::refresh_assets(root, &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
             }
-            // And that byte walker is exactly what does not exist over
-            // the wire yet. Said plainly, because the alternative is
-            // reporting it as an orphan — which would read as "the
-            // publisher is unreachable" and send somebody to check a
-            // network that is fine.
-            (Source::Remote(_), kind) => {
+            // A shelf crosses too, through the vault engine with a size
+            // bound: its documents are kilobytes, and the heavy content
+            // an asset names lives in a File Root
+            // (`materialize::refresh_remote_shelf`). What the bound
+            // refuses is reported, not attempted.
+            (Source::Remote(vault), SourceKind::Assets) => {
+                materialize::refresh_remote_shelf(vault.as_ref(), &self.org_root, &held)
+                    .map_err(|e| WikiError::Io(e.to_string()))?
+            }
+            // A project does not cross as a subscription, and that is a
+            // decision rather than a missing walker: a project *is* its
+            // media — camera originals, stems, session files — and ADR
+            // 0003's rule is that subscribing moves names and not
+            // gigabytes. The route for those bytes exists and is proven:
+            // publish the manifest, put the tree in a File Root, and
+            // carry it by `offer` / `accept`, which is the lane that owns
+            // chunking, resumption and renditions.
+            (Source::Remote(_), SourceKind::Projects) => {
                 return Err(WikiError::Io(format!(
-                    "`{qualified}` publishes {kind:?} from another server, and only a wiki \
-                     crosses a server boundary today: the other kinds are byte trees, and \
-                     the walker that reads one over the wire is not built yet"
+                    "`{qualified}` is a project on another server: a project is its media, \
+                     and a subscription carries names rather than gigabytes. Reach it as a \
+                     File Root instead — the publisher offers the tree and this org accepts \
+                     it, after which every files lane addresses it like a local root."
+                )));
+            }
+            // A Resource is a corpus somebody installs, not a tree a
+            // subscriber pulls file by file: an edition is thousands of
+            // small files and a licence, and `admin bible install` is
+            // what puts one in a library. Said plainly for the same
+            // reason as above.
+            (Source::Remote(_), SourceKind::Resource) => {
+                return Err(WikiError::Io(format!(
+                    "`{qualified}` is a Resource on another server: an edition is installed \
+                     into a corpus library rather than pulled across as a subscription \
+                     (`admin bible install`), so there is nothing here to refresh"
                 )));
             }
         };
