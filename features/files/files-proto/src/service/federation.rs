@@ -127,12 +127,73 @@ pub struct Remote {
 /// the honest answer and not an error: the reference is still a valid
 /// address, it just is not reachable yet, and the fix is an offer rather
 /// than a retry.
+///
+/// # Prefer [`FederationService::resolve_content`] to read bytes
+///
+/// This answers *which root*, and that is not enough to read a file. An
+/// offer grants a subtree, so the manifest's path has to be rebased onto
+/// the accepted root — and [`Remote`] does not carry the offered path, so
+/// nothing working from it can do that correctly. Two offers of different
+/// subtrees of one root also both match here, first one winning.
+/// `resolve_content` answers from the record that kept the subtree, and
+/// picks the most specific offer that actually contains the path.
 #[must_use]
 pub fn adopted_from(remotes: &[Remote], origin_root: RootId) -> Option<RootId> {
     remotes
         .iter()
         .find(|r| r.origin_root == origin_root)
         .map(|r| r.root_id)
+}
+
+/// A foreign content reference, resolved: where its bytes are **here**.
+///
+/// Both halves are local and ordinary — a root every lane addresses
+/// without knowing it came from an offer, and a path inside it — so what
+/// a caller does next is exactly what it would do with its own file.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[repr(C)]
+pub struct LocalContent {
+    pub root_id: RootId,
+    pub path: RootPath,
+}
+
+/// One accepted offer as far as resolving content is concerned: which
+/// origin root it stands for, which subtree of it was offered, and the
+/// root here it became.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedSubtree {
+    pub origin_root: RootId,
+    pub offered: RootPath,
+    pub local_root: RootId,
+}
+
+/// Resolve `origin_root` / `path` against what this server has accepted.
+///
+/// The logic behind [`FederationService::resolve_content`], kept pure so
+/// the one rule that matters can be tested without a backend: **the most
+/// specific offer that contains the path wins**. Offers nest — somebody
+/// may be given a whole session and, separately, one folder inside it —
+/// and whichever is narrower is the grant that was meant for this file.
+/// Ties cannot happen for one path: two offers of the same subtree of the
+/// same root differ only in id, and either reaches the same bytes.
+///
+/// Component-wise throughout ([`RootPath::relative_to`]), so an offer of
+/// `Audio Files` never matches `Audio Files 2/take.wav`.
+#[must_use]
+pub fn resolve_content_ref(
+    accepted: impl IntoIterator<Item = AcceptedSubtree>,
+    origin_root: RootId,
+    path: &RootPath,
+) -> Option<LocalContent> {
+    accepted
+        .into_iter()
+        .filter(|a| a.origin_root == origin_root)
+        .filter_map(|a| {
+            let inside = path.relative_to(&a.offered)?;
+            Some((a.offered.components().count(), a.local_root, inside))
+        })
+        .max_by_key(|(depth, _, _)| *depth)
+        .map(|(_, root_id, path)| LocalContent { root_id, path })
 }
 
 /// A bounded window of an object, for a relayed read.
@@ -209,6 +270,43 @@ pub trait FederationService {
 
     /// Remotes this server has accepted.
     async fn remotes(&self) -> Result<Vec<Remote>, FilesFault>;
+
+    /// Where a **foreign** content reference's bytes are, here.
+    ///
+    /// The receiving half of an asset whose manifest crossed a server
+    /// boundary. A manifest names its bytes as `ContentRef { root_id,
+    /// path }` in the *publisher's* terms (ADR 0003). This turns that pair
+    /// into one this server can read: the accepted root that stands for
+    /// `origin_root`, and `path` rebased inside it.
+    ///
+    /// # Why this is a call and not a client-side helper
+    ///
+    /// Because the rebase needs a fact only the server holds. An offer
+    /// grants a **subtree** — offer `Audio Files` and the receiver's root
+    /// begins there, so the manifest's `Audio Files/lead-vocal.wav` is
+    /// `lead-vocal.wav` inside it. [`Remote`] does not carry the offered
+    /// path, so an app working from [`Self::remotes`] and
+    /// [`adopted_from`] could not rebase at all, and two offers of
+    /// different subtrees of one root would both match with the first one
+    /// winning — handing back a file from the wrong folder. This answers
+    /// with the most specific offer that actually contains `path`.
+    ///
+    /// Every app needs it the same way — Signal loading a sample's audio,
+    /// Session a take, Keyflow nothing yet — and a browser app reaches it
+    /// with one call through `task-dial` instead of reimplementing it.
+    ///
+    /// # `None` is an answer
+    ///
+    /// No accepted offer of that root, or none whose subtree holds `path`:
+    /// the reference is a valid address that is not reachable from here,
+    /// and the fix is an offer rather than a retry. Not an error, and
+    /// deliberately not "not found" — the file is exactly where the
+    /// manifest says, on a server this org has not been let into.
+    async fn resolve_content(
+        &self,
+        origin_root: RootId,
+        path: RootPath,
+    ) -> Result<Option<LocalContent>, FilesFault>;
 
     /// Stop tracking a remote. The origin keeps its content; this only
     /// forgets the way back to it.
@@ -310,5 +408,100 @@ mod tests {
     #[test]
     fn no_remotes_is_none_not_a_panic() {
         assert_eq!(adopted_from(&[], RootId::generate()), None);
+    }
+
+    fn path(p: &str) -> RootPath {
+        RootPath::parse(p).unwrap()
+    }
+
+    fn offered(origin_root: RootId, subtree: &str, local_root: RootId) -> AcceptedSubtree {
+        AcceptedSubtree {
+            origin_root,
+            offered: path(subtree),
+            local_root,
+        }
+    }
+
+    /// The rebase: the offer began at `Audio Files`, so that is where the
+    /// receiver's root begins, and the manifest's path loses that prefix.
+    #[test]
+    fn a_path_inside_the_offered_subtree_is_rebased_onto_the_accepted_root() {
+        let theirs = RootId::generate();
+        let ours = RootId::generate();
+        let resolved = resolve_content_ref(
+            [offered(theirs, "Audio Files", ours)],
+            theirs,
+            &path("Audio Files/lead-vocal.wav"),
+        );
+        assert_eq!(
+            resolved,
+            Some(LocalContent {
+                root_id: ours,
+                path: path("lead-vocal.wav")
+            })
+        );
+    }
+
+    /// Outside the offered subtree is unreachable — including the folder
+    /// *beside* it whose name merely starts the same way, which is what a
+    /// string strip would have handed over.
+    #[test]
+    fn a_path_outside_the_offered_subtree_is_unreachable_not_rebased() {
+        let theirs = RootId::generate();
+        let ours = RootId::generate();
+        let accepted = [offered(theirs, "Audio Files", ours)];
+        for outside in ["Session.rpp", "Audio Files 2/take.wav", "Bounces/mix.wav"] {
+            assert_eq!(
+                resolve_content_ref(accepted.clone(), theirs, &path(outside)),
+                None,
+                "`{outside}` was resolved into an offer that does not contain it"
+            );
+        }
+    }
+
+    /// Nested offers: the narrower grant is the one meant for the file.
+    /// Two offers of one root both match the same path, and picking the
+    /// first — what `adopted_from` would do — could send a read through
+    /// the wider grant with a path that belongs to the narrower one.
+    #[test]
+    fn the_most_specific_offer_that_contains_the_path_wins() {
+        let theirs = RootId::generate();
+        let whole = RootId::generate();
+        let kicks = RootId::generate();
+        let accepted = [
+            offered(theirs, "", whole),
+            offered(theirs, "Samples/Kicks", kicks),
+        ];
+        assert_eq!(
+            resolve_content_ref(accepted.clone(), theirs, &path("Samples/Kicks/room.wav")),
+            Some(LocalContent {
+                root_id: kicks,
+                path: path("room.wav")
+            })
+        );
+        // And a file only the wider grant covers still resolves through it.
+        assert_eq!(
+            resolve_content_ref(accepted, theirs, &path("Samples/Snares/crack.wav")),
+            Some(LocalContent {
+                root_id: whole,
+                path: path("Samples/Snares/crack.wav")
+            })
+        );
+    }
+
+    /// A different origin root with an identical subtree name is not a
+    /// match. Offers are scoped to the root they were minted on.
+    #[test]
+    fn an_offer_of_another_root_never_resolves_this_one() {
+        let theirs = RootId::generate();
+        let unrelated = RootId::generate();
+        assert_eq!(
+            resolve_content_ref(
+                [offered(unrelated, "Audio Files", RootId::generate())],
+                theirs,
+                &path("Audio Files/lead-vocal.wav"),
+            ),
+            None
+        );
     }
 }

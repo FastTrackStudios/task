@@ -38,7 +38,10 @@ use files_proto::id::{GrantId, RootId};
 use files_proto::model::BrowseEntry;
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
-use files_proto::service::federation::{ByteRange, EndpointId, FederationService, Offer, Remote};
+use files_proto::service::federation::{
+    AcceptedSubtree, ByteRange, EndpointId, FederationService, LocalContent, Offer, Remote,
+    resolve_content_ref,
+};
 use files_proto::service::media::ByteTicket;
 use uuid::Uuid;
 
@@ -403,6 +406,32 @@ impl FederationService for FilesBackend {
             let mut v: Vec<_> = f.remotes.values().map(|a| a.remote.clone()).collect();
             v.sort_by(|a, b| a.name.cmp(&b.name));
             v
+        }))
+    }
+
+    /// Answered from the accepted records, which kept the offered subtree
+    /// all along (`Accepted::path`) — it was only never exposed. The
+    /// resolution rule itself is `files_proto`'s, pure and tested there.
+    async fn resolve_content(
+        &self,
+        origin_root: RootId,
+        path: RootPath,
+    ) -> Result<Option<LocalContent>, FilesFault> {
+        // A path that arrived over the wire bypassed `RootPath::parse`;
+        // one that would climb out is not a reference to anything.
+        let path = path
+            .validate()
+            .map_err(|e| FilesFault::invalid(e.to_string()))?;
+        Ok(read(self, |f| {
+            resolve_content_ref(
+                f.remotes.values().map(|a| AcceptedSubtree {
+                    origin_root: a.remote.origin_root,
+                    offered: a.path.clone(),
+                    local_root: a.remote.root_id,
+                }),
+                origin_root,
+                &path,
+            )
         }))
     }
 

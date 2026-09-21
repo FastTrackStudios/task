@@ -139,6 +139,26 @@ macro_rules! rel_path {
                     || self.0 == other.0
                     || self.0.starts_with(&format!("{}/", other.0))
             }
+
+            /// `self` with `base` taken off the front, or `None` when
+            /// `self` does not lie within `base`.
+            ///
+            /// Component-wise, like [`Self::is_within`], so `Audio Files`
+            /// is not a prefix of `Audio Files 2/take.wav` — the mistake a
+            /// string strip makes, and the one that would hand somebody
+            /// a file from the folder beside the one they were offered.
+            #[must_use]
+            pub fn relative_to(&self, base: &Self) -> Option<Self> {
+                if !self.is_within(base) {
+                    return None;
+                }
+                if base.is_root() {
+                    return Some(self.clone());
+                }
+                Some(Self(
+                    self.0[base.0.len()..].trim_start_matches('/').to_string(),
+                ))
+            }
         }
 
         impl fmt::Display for $name {

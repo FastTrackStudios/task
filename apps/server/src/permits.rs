@@ -639,6 +639,13 @@ const FILES_FEDERATION: ServicePermits = ServicePermits {
         MethodPermit::new("offered", Action::READ, "files/**"),
         MethodPermit::new("accept", Action::WRITE, "files/**").audited(),
         MethodPermit::new("remotes", Action::READ, "files/**"),
+        // A member reading what their own org has already accepted: the
+        // answer is a local root and a path, both things this org holds.
+        // Nothing crosses to the origin, so it is a read on this org's
+        // files and nothing more — and emphatically not on the public
+        // surface, where a stranger could use it to learn which foreign
+        // roots this org has been let into.
+        MethodPermit::new("resolve_content", Action::READ, "files/**"),
         MethodPermit::new("forget", Action::WRITE, "files/**").audited(),
         MethodPermit::new("browse_offered", Action::READ, "public/files-offer").audited(),
         MethodPermit::new("read_offered", Action::READ, "public/files-offer").audited(),
