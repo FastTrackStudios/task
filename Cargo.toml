@@ -772,6 +772,10 @@ opt-level = 1
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
+# EXPERIMENT (measuring): workspace crates unoptimised in test builds only.
+[profile.test]
+opt-level = 0
+
 # Escape hatch: full DWARF for stepping in gdb/lldb.
 [profile.dev-dbg]
 inherits = "dev"
