@@ -772,8 +772,21 @@ opt-level = 1
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
-# EXPERIMENT (measuring): workspace crates unoptimised in test builds only.
-[profile.test]
+# The integration suite's own crate, unoptimised in test builds.
+#
+# It is harness code — boot two servers, sign people in, assert — and forty
+# chapters of it in one crate (tests/integration/tests/it/). After an edit
+# below the server that crate recompiles, and at `opt-level = 1` each
+# recompile is also an optimisation pass nothing needs.
+#
+# Deliberately NOT every workspace crate. That was measured first and it
+# broke a test: `files-sync`'s `mount_writeback` runs a real inotify watcher
+# against a virtual cadence, and unoptimised code missed its window — 4
+# failures in 5 alone at opt 0, 5 passes in 5 at opt 1, same load — and
+# optimising only the `files*` crates back did not fix it (3 of 6), so the
+# timing-sensitive code reaches further than a list could safely name. The
+# servers these chapters boot live in other crates and stay optimised.
+[profile.test.package.integration]
 opt-level = 0
 
 # Escape hatch: full DWARF for stepping in gdb/lldb.

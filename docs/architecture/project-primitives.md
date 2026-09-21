@@ -6,7 +6,7 @@ migration rather than a feature and the spec now records what it needs. The thre
 blocking decisions were answered — the word is "part", capabilities read
 both fields and write one, and nothing is created automatically. See
 `features/project/spec/project.md` § Decided for the reasoning, and
-`tests/integration/tests/parts.rs` for what is asserted.
+`tests/integration/tests/it/parts.rs` for what is asserted.
 
 Each slice added rules the spec was missing, which is the pattern worth
 noting: promotion needed `project.part.listing` and

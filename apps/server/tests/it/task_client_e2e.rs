@@ -27,8 +27,7 @@
 use project::ProjectServiceClient;
 use task_client::{Config, TaskClient};
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn one_client_type_two_transports() {

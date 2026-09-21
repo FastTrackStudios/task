@@ -425,7 +425,7 @@ adopt_vault` makes the org vault a File Root in place at server boot and binds
 a sink for it; from then on a page save is a Files write — atomic in the tree,
 a catalogue delta, a cadence hint — and a vault with no sink bound writes to
 the filesystem as before. The on-disk result is unchanged: the same markdown at
-the same path, which `tests/integration/tests/vault_root.rs` checks byte for
+the same path, which `tests/integration/tests/it/vault_root.rs` checks byte for
 byte.
 
 The "one choke point" claim had been optimistic. `project::write` was not the

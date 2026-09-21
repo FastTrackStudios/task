@@ -9,7 +9,7 @@
 //! > visibility rules, materialisation and reference resolution that
 //! > already exist for wikis.
 //!
-//! `tests/integration/tests/setlist.rs` is the sibling chapter and asks
+//! `tests/integration/tests/it/setlist.rs` is the sibling chapter and asks
 //! a different question: whether a *reference* into another org may be
 //! followed, and whether dropping the subscription takes that away.
 //! This one asks what happens after it may — whether the bytes actually

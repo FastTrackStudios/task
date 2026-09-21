@@ -57,7 +57,7 @@ process".
 
 All four use the same password. They are defined once, in
 `apps/server/src/example_org.rs`, and the integration suite hires the
-same four from the same list — so what `tests/integration/tests/people.rs`
+same four from the same list — so what `tests/integration/tests/it/people.rs`
 proves about Casey is true of the Casey you can log in as.
 
 Casey is the one to look at. `Comment` without `Download` is a client who
@@ -159,7 +159,7 @@ wire the integration suite drives. The script sets `TASK_IROH_PEER_DIR`
 so the app resolves ids to addresses the way the two servers resolve
 each other's, with no internet. `TASK_VOX_FORCE_WS=1` pins the app back
 to the WebSocket while the transport is young;
-`tests/integration/tests/ui_iroh.rs` is the chapter that proves the
+`tests/integration/tests/it/ui_iroh.rs` is the chapter that proves the
 whole path with no URL configured at all.
 
 To point either app at VNT instead, override the URL by hand:

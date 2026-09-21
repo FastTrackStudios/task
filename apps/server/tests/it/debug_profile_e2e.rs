@@ -7,8 +7,7 @@
 //! would race each other on both. One test, like `mcp_telemetry_e2e`.
 
 // Every e2e binary compiles the whole of `support`; each uses a subset.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use serde_json::Value;
 

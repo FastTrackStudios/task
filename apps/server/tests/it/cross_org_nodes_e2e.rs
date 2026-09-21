@@ -12,8 +12,7 @@
 //! It also pins the property that makes a cross-org setlist usable at
 //! all: one unreachable item does not fail the batch.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use links_proto::{LinksServiceClient, NodeKind, NodeRef, Reach};
 

@@ -18,8 +18,7 @@ use vault_proto::{IfMatch, VaultGraphClient, VaultSyncClient};
 
 // Each binary uses a slice of the shared boot helpers; "unused"
 // here means "this binary did not need that one".
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 async fn boot_server() -> eyre::Result<(String, tempfile::TempDir)> {
     support::boot_ws().await

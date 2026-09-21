@@ -19,8 +19,7 @@
 
 // This binary uses the boot helpers only; the seed constants are for
 // the vault suites.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use resources_proto::{ContentRef, LightingDoc, PatchDoc, ResourcesServiceClient, SampleDoc};
 

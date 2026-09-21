@@ -23,8 +23,7 @@ use wiki_proto::{WikiChange, WikiEvent};
 
 // Each binary uses a slice of the shared boot helpers; "unused"
 // here means "this binary did not need that one".
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 const WIKI: &str = "music-theory";
 const WIKI_VAULT: &str = "wiki:music-theory";

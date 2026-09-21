@@ -14,8 +14,7 @@ use architect::Scope;
 use project::ProjectServiceClient;
 
 // Not every binary uses every helper the shared module offers.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_transport_round_trip() {

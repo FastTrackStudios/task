@@ -11,7 +11,7 @@ tree after one part made the other four look like exceptions.
 
 ## Who reads this
 
-- `tests/integration/tests/studio.rs` runs the tree reader over it, which
+- `tests/integration/tests/it/studio.rs` runs the tree reader over it, which
   is what it was first committed for.
 - `task-server admin demo` plants it as real orgs on real servers.
   `apps/server/src/example_org.rs` owns the translation from this layout

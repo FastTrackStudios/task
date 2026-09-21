@@ -59,7 +59,7 @@
 //! ADR 0003's rule is that subscribing moves names and not gigabytes.
 //! Bytes at that size cross as a File Root — offered, accepted, pulled in
 //! chunks by the lane that owns resumption and renditions — which
-//! `tests/integration/tests/remote_assets.rs` proves end to end.
+//! `tests/integration/tests/it/remote_assets.rs` proves end to end.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

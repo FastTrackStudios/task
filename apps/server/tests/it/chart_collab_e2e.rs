@@ -47,8 +47,7 @@
 //! `AssetShelf::put` can use `IfMatch::Force`, and why
 //! `chart::refresh_document` rewrites the smallest region it can.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

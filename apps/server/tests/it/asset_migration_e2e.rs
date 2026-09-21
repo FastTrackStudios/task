@@ -36,8 +36,7 @@
 //! So it copies, leaves a breadcrumb saying so, and the gaps are
 //! recorded in `docs/spec/unmet.md` rather than closed by a deletion.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use resources_proto::ResourcesServiceClient;
 

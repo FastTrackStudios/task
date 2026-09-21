@@ -15,8 +15,7 @@
 //! had the project.
 
 // Every e2e binary compiles the whole of `support`; each uses a subset.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

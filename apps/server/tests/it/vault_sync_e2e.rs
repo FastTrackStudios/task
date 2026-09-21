@@ -21,8 +21,7 @@ use vox::VoxError;
 
 // Each binary uses a slice of the shared boot helpers; "unused"
 // here means "this binary did not need that one".
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 /// Boot over the example studio — see `support`. The vault the tests
 /// write into already holds [`support::EXAMPLE_PAGE`], which is the

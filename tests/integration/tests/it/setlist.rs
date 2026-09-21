@@ -55,7 +55,7 @@
 //! That second half is narrower than it was, and the narrowing is worth
 //! stating so the assertion below is not read as more than it is.
 //! Subscribing **across** a server boundary is built now:
-//! `tests/integration/tests/cross_server_wiki.rs` has ACME take on a
+//! `tests/integration/tests/it/cross_server_wiki.rs` has ACME take on a
 //! wiki VNT publishes, refresh it over the wire, and keep the copy when
 //! the grant is withdrawn. Two things are still true here anyway, for two
 //! different reasons:
