@@ -556,9 +556,11 @@ impl SubscriptionsBackend {
                 &subscription.domain,
                 &subscription.slug,
             ),
-            SourceKind::Resource => {
-                materialize::resource_copy_dir(&self.org_root, &subscription.slug)
-            }
+            SourceKind::Resource => materialize::resource_copy_dir(
+                &self.org_root,
+                &subscription.domain,
+                &subscription.slug,
+            ),
             // Beside the subscribed wikis, addressed by the reference
             // that names it — see `materialize::assets_copy_dir`.
             SourceKind::Assets | SourceKind::Projects => materialize::assets_copy_dir(
@@ -733,12 +735,30 @@ impl Subscriptions for SubscriptionsBackend {
                 materialize::refresh_subscription(vault.as_ref(), &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
             }
-            // A corpus, not a wiki: copied whole into the library the
-            // reader opens (`materialize::resource_copy_dir`).
+            // A Resource — a corpus, or a library of manifests; the tier
+            // holds both — copied into the directory the reader opens
+            // (`materialize::resource_copy_dir`). Upstream wins on a
+            // difference, because nothing is ever written into one.
             (Source::Local(root), SourceKind::Resource) => {
-                materialize::refresh_resource(root, &self.org_root, &held)
+                materialize::refresh_local_resource(root, &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
             }
+            // And it crosses a server boundary on the same terms a shelf
+            // does. Signal's patch library and its sample library are
+            // manifests of a few kilobytes each — ADR 0003 chose this
+            // tier for them *because* a subscription could carry them —
+            // and the bytes they name travel as a File Root.
+            //
+            // This was refused once, on the grounds that an edition is
+            // installed rather than pulled. True of `resources/bible/`
+            // and of nothing else on the tier.
+            (Source::Remote(vault), SourceKind::Resource) => materialize::refresh_resource(
+                vault.as_ref(),
+                &self.org_root,
+                &held,
+                materialize::REMOTE_FILE_LIMIT,
+            )
+            .map_err(|e| WikiError::Io(e.to_string()))?,
             // A shelf takes one route wherever its publisher is, and the
             // route is the wiki's: the vault engine, a base snapshot, and
             // a subscriber's own edits kept and reported. The only thing
@@ -782,18 +802,6 @@ impl Subscriptions for SubscriptionsBackend {
                      and a subscription carries names rather than gigabytes. Reach it as a \
                      File Root instead — the publisher offers the tree and this org accepts \
                      it, after which every files lane addresses it like a local root."
-                )));
-            }
-            // A Resource is a corpus somebody installs, not a tree a
-            // subscriber pulls file by file: an edition is thousands of
-            // small files and a licence, and `admin bible install` is
-            // what puts one in a library. Said plainly for the same
-            // reason as above.
-            (Source::Remote(_), SourceKind::Resource) => {
-                return Err(WikiError::Io(format!(
-                    "`{qualified}` is a Resource on another server: an edition is installed \
-                     into a corpus library rather than pulled across as a subscription \
-                     (`admin bible install`), so there is nothing here to refresh"
                 )));
             }
         };
@@ -1052,7 +1060,8 @@ mod tests {
     /// t[verify wiki.resource.subscribe] — the platform's Resource is
     /// served from its publisher's corpus library, admits an outsider
     /// with no config to consult, and refreshes into the subscriber's
-    /// own library where the reader looks.
+    /// copy directory, beside every other subscribed source rather than
+    /// mixed into what this org installed for itself.
     #[test]
     fn a_resource_is_served_from_the_corpus_library() {
         let (dir, upstream) = world();
@@ -1083,7 +1092,7 @@ mod tests {
         assert_eq!(report.pulled, 1);
         assert!(
             dir.path()
-                .join("orgs/alice/resources/bible/WEB/JHN.usfm")
+                .join("orgs/alice/subscribed/acme.test/bible/WEB/JHN.usfm")
                 .is_file()
         );
         let held = alice.list_subscriptions(Subscriber::Vault).unwrap();
@@ -1093,7 +1102,7 @@ mod tests {
             .expect("held");
         assert_eq!(
             mine.files, 1,
-            "presence counts the corpus, not a subscribed/ dir"
+            "presence counts the copy this subscription actually wrote"
         );
     }
 

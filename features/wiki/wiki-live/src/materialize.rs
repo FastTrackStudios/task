@@ -188,6 +188,8 @@ pub struct Take<'a> {
     /// What the subscription asked for (`files.sync.selective`, at the
     /// organisation scope).
     pub selection: &'a org_proto::Selection,
+    /// Who wins when both sides hold a file and they differ.
+    pub divergence: Divergence,
     /// The largest single file this refresh will fetch.
     ///
     /// A bound rather than a preference, and the reason is ADR 0003's
@@ -203,14 +205,46 @@ pub struct Take<'a> {
 }
 
 impl Take<'_> {
-    /// The whole source, at any size — a local refresh, and every wiki.
+    /// The whole source, at any size, keeping whatever the subscriber
+    /// wrote — a local refresh, and every wiki.
     #[must_use]
     pub const fn everything() -> Self {
         Self {
             selection: &org_proto::Selection::All,
             max_bytes: u64::MAX,
+            divergence: Divergence::Keep,
         }
     }
+}
+
+/// What a refresh does about a file both sides hold and disagree about.
+///
+/// The one place the kinds of source genuinely differ, so it is said in
+/// the type rather than by which function a caller happened to reach for.
+/// It used to be the latter — a second copier existed largely to express
+/// [`Self::Upstream`] — and a policy expressed as a choice of function is
+/// a policy that drifts the moment somebody adds a third caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Divergence {
+    /// The subscriber's version stays, and the difference is reported —
+    /// `local_only` when only they moved, `conflicted` when both did.
+    ///
+    /// For anything a subscriber may write in: a wiki's pages, a shelf's
+    /// documents. `wiki.subscribe.refresh` is explicit that local work is
+    /// never overwritten and a conflict is never decided by clock.
+    Keep,
+    /// Upstream wins and the local file is replaced.
+    ///
+    /// For a Resource only, and it follows from that rule rather than
+    /// from convenience: nothing is ever written into one
+    /// (`wiki.resource.no-annotations`), so a file that differs is not
+    /// somebody's work — it is a stale or damaged copy, and keeping it
+    /// would be keeping corruption and calling it a conflict.
+    ///
+    /// A file only the subscriber holds is still kept and reported
+    /// either way: an edition installed here that the publisher does not
+    /// carry is not a difference of opinion about one file.
+    Upstream,
 }
 
 /// The largest single file a refresh **over the wire** will fetch.
@@ -306,6 +340,18 @@ pub fn refresh_taking<U: SourceVault + ?Sized>(
                 remote_sha,
                 ..
             } => {
+                // A source nobody may write into has no conflicts to
+                // have: a file that differs is a stale or damaged copy,
+                // and upstream is the only authority there is. Decided
+                // before the base is consulted, because the base could
+                // only say *when* the copy went wrong, and the answer
+                // would be the same either way.
+                if take.divergence == Divergence::Upstream {
+                    pull(upstream, upstream_id, local_root, path)?;
+                    out.pulled += 1;
+                    next.0.insert(path.clone(), remote_sha.clone());
+                    continue;
+                }
                 match base.0.get(path.as_str()) {
                     // Local is untouched since the last refresh, so
                     // the difference is upstream's news and arrives.
@@ -502,52 +548,108 @@ pub fn refresh_shelf<U: SourceVault + ?Sized>(
         &Take {
             selection: &subscription.selection,
             max_bytes,
+            // A shelf is a thing people type into, so their typing stays.
+            divergence: Divergence::Keep,
         },
     )
 }
 
-/// Where an org keeps a subscribed **Resource**: its corpus library,
-/// `<org>/resources/<slug>/` — the same place `admin bible install`
-/// puts an edition, and the only place the scripture store reads.
+/// Where an org keeps a subscribed **Resource**:
+/// `<org>/subscribed/<domain>/<slug>/`, beside every other subscribed
+/// source.
 ///
-/// Not `subscribed/…` like a wiki, deliberately. A wiki's copy is
-/// markdown that file-sync clients show and a person may annotate; a
-/// Resource's copy is a corpus that readers open by canonical address
-/// (`wiki.resource.addressing`), and putting it anywhere the reader
-/// does not look would be a copy nobody can read.
+/// It used to be `<org>/resources/<slug>/` — the org's own corpus
+/// library, the same directory `admin bible install` writes into — on the
+/// argument that a reader opens a Resource by canonical address and would
+/// not find a copy anywhere else. That argument was about scripture and
+/// it does not survive the tier's other occupants: `resources/patches/`
+/// and `resources/samples/` are app libraries, and merging a publisher's
+/// into this org's own would put two organisations' slugs in one
+/// directory, where [`Divergence::Upstream`] would let theirs overwrite
+/// yours. One copy directory per publishing domain is what keeps a
+/// subscription from editing the subscriber's own library.
+///
+/// What a reader loses is found again by looking in both places:
+/// `scripture::Store::load_resource_roots` takes the installed corpus
+/// *and* the subscribed copies, with the installed one winning.
 #[must_use]
-pub fn resource_copy_dir(org_root: &Path, slug: &str) -> PathBuf {
-    org_root.join("resources").join(slug)
+pub fn resource_copy_dir(org_root: &Path, domain: &str, slug: &str) -> PathBuf {
+    local_copy_dir(org_root, domain, slug)
 }
 
-/// Bring a subscribed Resource's corpus up to date from `upstream_root`,
-/// the publishing org's `resources/<slug>` directory.
+/// Bring a subscribed Resource up to date — the corpus *or* the library
+/// of manifests, because the tier holds both.
 ///
 /// t[impl wiki.resource.subscribe] — a Resource is subscribed to on the
-/// same terms as a wiki: it has a local presence, it refreshes, and
-/// what arrives is what the publisher holds.
+/// same terms as a wiki: it has a local presence, it refreshes, and what
+/// arrives is what the publisher holds.
 ///
-/// Every file upstream has lands here byte-for-byte; a file the
-/// subscriber already holds identically is `in_sync`; a file that
-/// differs is overwritten, because nothing is ever written into a
-/// Resource (`wiki.resource.no-annotations`) so a difference can only
-/// be a stale or corrupt copy. Files only the subscriber has — an
-/// edition installed here that the publisher does not carry — are kept
-/// and reported `local_only`, never deleted.
+/// [`Divergence::Upstream`], which is the whole of what makes this
+/// different from a shelf: nothing is ever written into a Resource
+/// (`wiki.resource.no-annotations`), so a file that differs is a stale or
+/// damaged copy and upstream replaces it. A file only the subscriber
+/// holds — an edition installed here that the publisher does not carry —
+/// is still kept and reported.
 ///
-/// The vault engine is not used: it carries markdown, and a corpus is
-/// USFM, JSON, whatever the Resource's format is.
+/// # Two things live on this tier and only one of them is a corpus
+///
+/// `resources/bible/` is an edition somebody installs. `resources/patches/`
+/// and `resources/samples/` are libraries of **manifests** — what a patch
+/// *is*, what a sample *is*, kilobytes each, with the bytes they name
+/// living in a File Root. ADR 0003 says so in as many words: small enough
+/// that a subscription carries every one of them across an org boundary.
+///
+/// That distinction was missed once, and it mattered: a blanket refusal
+/// of remote Resources meant Signal could not share a patch library with
+/// another organisation, for a reason that was only ever true of
+/// scripture. There is no distinction in the code because there does not
+/// need to be one — a corpus and a library refresh identically, and
+/// `max_bytes` is what keeps either honest over a wire.
 ///
 /// # Errors
 ///
-/// Any failure reading upstream or writing the copy.
-pub fn refresh_resource(
+/// As [`refresh`].
+pub fn refresh_resource<U: SourceVault + ?Sized>(
+    upstream: &U,
+    org_root: &Path,
+    subscription: &wiki_proto::Subscription,
+    max_bytes: u64,
+) -> Result<Refreshed, MaterializeError> {
+    let copy = resource_copy_dir(org_root, &subscription.domain, &subscription.slug);
+    let base = base_path(org_root, &subscription.domain, &subscription.slug);
+    refresh_taking(
+        upstream,
+        &subscription.slug,
+        &copy,
+        &base,
+        &Take {
+            selection: &subscription.selection,
+            max_bytes,
+            divergence: Divergence::Upstream,
+        },
+    )
+}
+
+/// [`refresh_resource`] from a publisher on this disk.
+///
+/// The local door, exactly as [`refresh_local_shelf`] is for a shelf, and
+/// here for the same reason: opening the engine over a path is one
+/// answer, given once.
+///
+/// # Errors
+///
+/// As [`refresh`], plus a failure opening the publisher's directory.
+pub fn refresh_local_resource(
     upstream_root: &Path,
     org_root: &Path,
     subscription: &wiki_proto::Subscription,
 ) -> Result<Refreshed, MaterializeError> {
-    let copy = resource_copy_dir(org_root, &subscription.slug);
-    refresh_tree(upstream_root, &copy, &subscription.selection)
+    let upstream = vault_live::Backend::single(&subscription.slug, upstream_root.to_path_buf())
+        .map_err(|source| MaterializeError::Io {
+            path: upstream_root.display().to_string(),
+            source: std::io::Error::other(source),
+        })?;
+    refresh_resource(&upstream, org_root, subscription, u64::MAX)
 }
 
 /// Where an org keeps a subscribed **asset shelf**:
@@ -693,11 +795,16 @@ fn walk_files(root: &Path) -> Result<Vec<String>, (PathBuf, std::io::Error)> {
 mod tests {
     use super::*;
 
-    /// t[verify wiki.resource.subscribe] — a Resource refreshes into
-    /// the corpus library whole, a second refresh finds it in sync, and
-    /// an edition only the subscriber holds is kept and named.
+    /// t[verify wiki.resource.subscribe] — a Resource refreshes into the
+    /// subscriber's copy directory whole, a second refresh finds it in
+    /// sync, and what this org installed for *itself* is untouched.
+    ///
+    /// That last clause is why the copy moved out of `resources/<slug>/`:
+    /// an installed edition and a subscribed one are two different
+    /// people's decisions, and a refresh that could reach the first would
+    /// be a subscription editing its subscriber's own library.
     #[test]
-    fn a_resource_lands_in_the_corpus_library_and_keeps_local_editions() {
+    fn a_resource_lands_beside_the_other_copies_and_spares_what_was_installed() {
         let up = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(up.path().join("WEB")).unwrap();
         std::fs::write(up.path().join("WEB/JHN.usfm"), "\\id JHN\n").unwrap();
@@ -718,21 +825,77 @@ mod tests {
             selection: Default::default(),
         };
 
-        let first = refresh_resource(up.path(), org.path(), &sub).unwrap();
+        let first = refresh_local_resource(up.path(), org.path(), &sub).unwrap();
         assert_eq!(first.pulled, 1);
         assert_eq!(first.in_sync, 0);
-        assert_eq!(first.local_only, vec!["BSB/JHN.usfm".to_owned()]);
+        assert!(
+            first.local_only.is_empty(),
+            "the installed edition is in another directory entirely, so it \
+             is not this subscription's business: {first:?}"
+        );
         assert_eq!(
-            std::fs::read_to_string(org.path().join("resources/bible/WEB/JHN.usfm")).unwrap(),
+            std::fs::read_to_string(org.path().join("subscribed/acme.test/bible/WEB/JHN.usfm"))
+                .unwrap(),
             "\\id JHN\n"
         );
 
-        let again = refresh_resource(up.path(), org.path(), &sub).unwrap();
+        let again = refresh_local_resource(up.path(), org.path(), &sub).unwrap();
         assert_eq!(again.pulled, 0);
         assert_eq!(again.in_sync, 1);
+        assert_eq!(
+            std::fs::read_to_string(org.path().join("resources/bible/BSB/JHN.usfm")).unwrap(),
+            "\\id JHN bsb\n",
+            "a refresh reached into what this org installed for itself"
+        );
+    }
+
+    /// The other half of the Resource policy: a file that differs is
+    /// **replaced**, because nothing may write into a Resource — while a
+    /// file only the subscriber holds is still kept and named.
+    ///
+    /// Both halves in one test on purpose. "Upstream wins" and "your
+    /// files are never deleted" sound like they disagree, and the shape
+    /// that makes both true is the shape a corpus is actually in.
+    ///
+    /// t[verify wiki.resource.no-annotations] — a difference in a
+    /// Resource is a damaged copy rather than somebody's work.
+    #[test]
+    fn a_resource_that_differs_is_replaced_and_a_local_edition_is_kept() {
+        let up = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(up.path().join("WEB")).unwrap();
+        std::fs::write(up.path().join("WEB/JHN.usfm"), "\\id JHN good\n").unwrap();
+        let org = tempfile::tempdir().unwrap();
+        let sub = wiki_proto::Subscription {
+            domain: "acme.test".into(),
+            slug: "bible".into(),
+            kind: wiki_proto::subscription::SourceKind::Resource,
+            title: "Bible".into(),
+            core: true,
+            declined: false,
+            selection: Default::default(),
+        };
+        refresh_local_resource(up.path(), org.path(), &sub).unwrap();
+
+        let copy = resource_copy_dir(org.path(), &sub.domain, &sub.slug);
+        std::fs::write(copy.join("WEB/JHN.usfm"), "\\id JHN TRUNCATED").unwrap();
+        std::fs::create_dir_all(copy.join("BSB")).unwrap();
+        std::fs::write(copy.join("BSB/JHN.usfm"), "\\id JHN bsb\n").unwrap();
+
+        let out = refresh_local_resource(up.path(), org.path(), &sub).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(copy.join("WEB/JHN.usfm")).unwrap(),
+            "\\id JHN good\n",
+            "a damaged corpus file was kept as if it were somebody's work"
+        );
+        assert_eq!(out.pulled, 1);
         assert!(
-            org.path().join("resources/bible/BSB/JHN.usfm").is_file(),
-            "kept"
+            out.conflicted.is_empty(),
+            "a Resource has no conflicts to have: {out:?}"
+        );
+        assert_eq!(
+            out.local_only,
+            vec!["BSB/JHN.usfm".to_owned()],
+            "an edition the publisher does not carry was not kept: {out:?}"
         );
     }
 
@@ -881,6 +1044,7 @@ mod tests {
             &Take {
                 selection: &org_proto::Selection::All,
                 max_bytes: 1024,
+                divergence: Divergence::Keep,
             },
         )
         .unwrap();
@@ -902,6 +1066,7 @@ mod tests {
             &Take {
                 selection: &org_proto::Selection::All,
                 max_bytes: 1024,
+                divergence: Divergence::Keep,
             },
         )
         .unwrap();

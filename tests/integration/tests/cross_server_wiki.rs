@@ -51,8 +51,8 @@
 //! its conclusion rather than a missing walker: a project *is* its media.
 //! Those bytes cross as a File Root — offered, accepted, pulled in chunks
 //! by the lane that owns resumption and renditions — which is what
-//! `remote_assets.rs` proves. A **Resource** is refused too: an edition is
-//! installed into a corpus library, not pulled file by file.
+//! `remote_assets.rs` proves. A **Resource** crosses like a shelf; see
+//! `sibling_apps.rs`, where Signal's patch library does.
 //!
 //! The last two tests pin both, so each stays a stated decision rather
 //! than a surprise.

@@ -231,7 +231,8 @@ grouped:
   is bounded by `materialize::REMOTE_FILE_LIMIT` and reports what it left
   behind — so a **project** does not cross as a subscription (it *is* its
   media; those bytes go by File Root and `offer`/`accept`, per ADR 0003)
-  and a **Resource** is installed rather than pulled. A *reference* into
+  and a **Resource** library crosses too (Signal's patches and samples are
+  manifests, which is what that tier is for). A *reference* into
   another server's org resolves as well, from the copy the subscription
   left behind (`node_homes::LocalHomes`), and is refused without one —
   which is the rule `tests/integration/tests/setlist.rs` pins. A

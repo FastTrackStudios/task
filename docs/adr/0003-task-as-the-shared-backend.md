@@ -266,17 +266,29 @@ refreshed, then revoked.
 Two halves of the original boundary remain, and they are different pieces of
 work rather than one unfinished one:
 
-- **A project's media, and a corpus.** An asset *shelf* crosses — its
-  documents ride the same engine, because a vault manifest turns out to be
-  content-agnostic (the walk hashes every file, markdown or not), bounded by
-  `materialize::REMOTE_FILE_LIMIT` so this decision's own rule is enforced
-  rather than hoped for: a fetch is one whole file in one message, and names
-  cross while gigabytes do not. A **project** therefore does not cross as a
-  subscription at all, because a project *is* its media; those bytes go the
-  files-lane route this ADR already prefers — publish the manifest, put the
-  tree in a File Root, carry it by `offer`/`accept`, which `remote_assets.rs`
-  proves end to end. A **Resource** is installed into a corpus library rather
-  than pulled file by file. Each refusal names its route.
+- **A project's media.** An asset *shelf* and a *Resource* library both
+  cross — their documents ride the same engine, because a vault manifest
+  turns out to be content-agnostic (the walk hashes every file, markdown or
+  not), bounded by `materialize::REMOTE_FILE_LIMIT` so this decision's own
+  rule is enforced rather than hoped for: a fetch is one whole file in one
+  message, and names cross while gigabytes do not. That the Resource tier
+  crosses is this decision holding: `resources/patches/` and
+  `resources/samples/` are manifests, filed there *because* a subscription
+  could carry them, and Signal sharing a rig with another organisation is the
+  sentence they were filed for. A blanket refusal of remote Resources was
+  briefly in place, on an argument only ever true of scripture.
+
+  A **project** does not cross as a subscription at all, because a project
+  *is* its media; those bytes go the files-lane route this ADR already
+  prefers — publish the manifest, put the tree in a File Root, carry it by
+  `offer`/`accept`, which `remote_assets.rs` proves end to end. The refusal
+  names that route.
+
+  Every subscribed source lands in one directory shape,
+  `subscribed/<domain>/<slug>/`, so two publishers' libraries cannot collide
+  and neither can overwrite what the subscriber holds of their own. A
+  Resource included: the scripture reader gained a second root rather than
+  the copy being mixed into the reader's installed editions.
 - **Qualified references** now resolve across a server boundary too, and from
   the only place they honestly can: the reader's own copy.
   `node_homes::LocalHomes` looks in `subscribed/<domain>/<library>/` when the

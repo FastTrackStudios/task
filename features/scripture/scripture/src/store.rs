@@ -60,6 +60,30 @@ pub struct Store {
     media_links: Option<(links::Store, PathBuf)>,
 }
 
+/// Every edition directory directly under one Bible root, sorted.
+///
+/// A root that is not there is not an error: most orgs install nothing,
+/// and a subscription that has never refreshed has no directory yet.
+fn edition_dirs(bible_root: &Path) -> Result<Vec<PathBuf>, LoadError> {
+    let entries = match std::fs::read_dir(bible_root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(LoadError::Io {
+                path: bible_root.display().to_string(),
+                source,
+            });
+        }
+    };
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
 impl Store {
     /// Build from already-loaded bibles (tests, custom wiring).
     #[must_use]
@@ -210,30 +234,56 @@ impl Store {
         self
     }
 
+    /// Load every translation subdirectory of several Bible roots.
+    ///
+    /// An org holds scripture in two places and the difference is who put
+    /// it there. `<org>/resources/bible/` is what this org installed —
+    /// `admin bible install`, its own copy, its own business.
+    /// `<org>/subscribed/<domain>/bible/` is what a **subscription**
+    /// brought down, and it lands there because that is where every
+    /// subscribed source lands: one copy directory for all of them, per
+    /// domain, so two publishers' editions cannot collide and neither can
+    /// overwrite what this org installed for itself.
+    ///
+    /// Earlier roots win: an edition somebody installed here is the one
+    /// this org reads, and a subscribed edition of the same id is an
+    /// alternative rather than a replacement. A missing root is not an
+    /// error, which is the ordinary case — most orgs install nothing.
+    ///
+    /// # Errors
+    ///
+    /// A root that exists and cannot be read, or an edition that will not
+    /// parse.
+    pub fn load_resource_roots<'a>(
+        roots: impl IntoIterator<Item = &'a Path>,
+    ) -> Result<Self, LoadError> {
+        let mut bibles: Vec<Bible> = Vec::new();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for root in roots {
+            for path in edition_dirs(root)? {
+                let id = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                bibles.push(Bible::load_dir(&path, id)?);
+            }
+        }
+        Ok(Self::from_bibles(bibles))
+    }
+
     /// Load every translation subdirectory of a Bible resource root
     /// (e.g. `<org>/resources/bible/`). A missing root yields an empty
     /// store rather than an error.
+    ///
+    /// # Errors
+    ///
+    /// A root that exists and cannot be read, or an edition that will not
+    /// parse.
     pub fn load_resource_root(bible_root: &Path) -> Result<Self, LoadError> {
-        let mut bibles = Vec::new();
-        let entries = match std::fs::read_dir(bible_root) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::from_bibles([])),
-            Err(source) => {
-                return Err(LoadError::Io {
-                    path: bible_root.display().to_string(),
-                    source,
-                });
-            }
-        };
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let id = entry.file_name().to_string_lossy().into_owned();
-            bibles.push(Bible::load_dir(&path, id)?);
-        }
-        Ok(Self::from_bibles(bibles))
+        Self::load_resource_roots([bible_root])
     }
 
     fn api_translation(&self, id: &str) -> Option<&ApiTranslation> {
