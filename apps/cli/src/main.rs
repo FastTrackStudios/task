@@ -1131,7 +1131,7 @@ fn org_on_disk(slug: &str) -> bool {
 /// way — architect's "inject remote vs local, one client".
 async fn establish_client<C>(server: Option<String>, slug: &str) -> eyre::Result<C>
 where
-    C: vox_core::FromVoxLane,
+    C: vox_core::FromVoxLane + 'static,
 {
     client(server.as_deref())
         .org(slug)
@@ -1145,7 +1145,7 @@ where
 /// documented on [`task_client::TaskClient::org_at`].
 async fn establish_for_url<C>(url: &str) -> eyre::Result<C>
 where
-    C: vox_core::FromVoxLane,
+    C: vox_core::FromVoxLane + 'static,
 {
     client(None).org_at(url).await.map_err(client_error)
 }
@@ -1156,7 +1156,7 @@ where
 /// (`(embedded)` in-process).
 async fn establish_server_client<C>(server: Option<&str>) -> eyre::Result<(C, String)>
 where
-    C: vox_core::FromVoxLane,
+    C: vox_core::FromVoxLane + 'static,
 {
     client(server).server().await.map_err(client_error)
 }
