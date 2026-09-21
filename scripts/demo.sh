@@ -201,7 +201,8 @@ serve() {
 
 # The two companies subscribe to each other across the two servers,
 # through the product's own lanes: ACME takes VNT's Post Production wiki,
-# VNT takes ACME's song library.
+# VNT takes ACME's song library and its patch library — a wiki, a shelf
+# and a Resource, which is every kind that crosses.
 #
 # This is the one thing on the demo desk that cannot be planted, and the
 # reason is the reason it is interesting: a cross-server subscription
@@ -281,10 +282,28 @@ federate() {
   demo_task vnt wiki sources subscribe acme.test/songs --kind assets
   demo_task vnt wiki sources refresh acme.test/songs
 
+  # And Signal's half: the patch library, which is a Resource rather than
+  # a shelf — manifests of a few kilobytes, with whatever bytes a patch
+  # names living in a File Root. Same four verbs; only `--kind` differs.
+  echo
+  echo ">> ACME: granting read on the patches library"
+  secret="$(demo_task acme wiki sources grant patches --kind resource \
+    | awk '/^secret/ { print $2; exit }')"
+  if [ -z "$secret" ]; then
+    echo "ACME minted no secret for the patches library" >&2
+    exit 1
+  fi
+  echo ">> VNT: recording it and taking the rigs"
+  demo_task vnt wiki sources trust acme.test/patches \
+    --kind resource --endpoint "$acme_id" --secret "$secret"
+  demo_task vnt wiki sources subscribe acme.test/patches --kind resource
+  demo_task vnt wiki sources refresh acme.test/patches
+
   echo
   echo ">> the copies are on each server's disk:"
   echo "   $DEMO_ROOT/acme/orgs/acme-audio/subscribed/vnt.test/post-production"
   echo "   $DEMO_ROOT/vnt/orgs/vnt-video/subscribed/acme.test/songs"
+  echo "   $DEMO_ROOT/vnt/orgs/vnt-video/subscribed/acme.test/patches"
   echo ">> revoke either side with:  wiki sources revoke <slug>"
   echo "   the copy keeps reading; what ends is the refreshing."
 }

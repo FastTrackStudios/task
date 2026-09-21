@@ -1798,43 +1798,59 @@ pub(crate) async fn build_org_state(
             scripture::Lexicon::load_dir(&org_root.resources_dir().join("lexicon").join("strongs"))
                 .map_err(|e| eyre::eyre!("load lexicon: {e}"))?;
         #[cfg(feature = "plugin-scripture")]
-        let scripture =
-            scripture::Store::load_resource_root(&org_root.resources_dir().join("bible"))
-                .map_err(|e| eyre::eyre!("load scripture: {e}"))?
-                // The vault powers per-verse backlinks: notes that link
-                // `[[John 3:16]]` surface in the reader.
-                .with_vault(vault_root.clone())
-                // So do media sources: a sermon whose captions name a
-                // verse (`sermon:<slug>#t:<secs> → verse:<osis>`, minted
-                // by the sermon sync) is listed at the moment it said it.
-                .with_media_links(links.clone(), org_root.resources_dir())
-                .with_api(scripture_api)
-                .with_lexicon(scripture_lexicon)
-                // Original-language editions (TAGNT/TAHOT/SBLGNT/OSHB),
-                // loaded lazily per edition on first interlinear request.
-                .with_originals_root(org_root.resources_dir().join("original"))
-                // Versification mappings reconcile Hebrew vs English
-                // verse numbering for the interlinear.
-                .with_versification(
-                    scripture::Versification::load_dir(
-                        &org_root.resources_dir().join("versification"),
-                    )
-                    .map_err(|e| eyre::eyre!("load versification: {e}"))?,
-                )
-                // OpenBible cross-references + topical tags (CC BY,
-                // vote-weighted), lazy-loaded on first query.
-                .with_crossref(
-                    org_root
-                        .resources_dir()
-                        .join("crossref")
-                        .join("cross_references.txt"),
-                )
-                .with_topics(
-                    org_root
-                        .resources_dir()
-                        .join("topics")
-                        .join("topic-votes.txt"),
+        // Two places hold editions and the difference is who put them
+        // there: this org installed the first, a subscription brought the
+        // second (`materialize::resource_copy_dir`). Installed wins.
+        #[cfg(feature = "plugin-scripture")]
+        let bible_roots = {
+            let mut roots = vec![org_root.resources_dir().join("bible")];
+            if let Ok(domains) = std::fs::read_dir(org_root.path().join("subscribed")) {
+                roots.extend(
+                    domains
+                        .filter_map(Result::ok)
+                        .map(|d| d.path().join("bible"))
+                        .filter(|p| p.is_dir()),
                 );
+            }
+            roots
+        };
+        #[cfg(feature = "plugin-scripture")]
+        let scripture = scripture::Store::load_resource_roots(
+            bible_roots.iter().map(std::path::PathBuf::as_path),
+        )
+        .map_err(|e| eyre::eyre!("load scripture: {e}"))?
+        // The vault powers per-verse backlinks: notes that link
+        // `[[John 3:16]]` surface in the reader.
+        .with_vault(vault_root.clone())
+        // So do media sources: a sermon whose captions name a
+        // verse (`sermon:<slug>#t:<secs> → verse:<osis>`, minted
+        // by the sermon sync) is listed at the moment it said it.
+        .with_media_links(links.clone(), org_root.resources_dir())
+        .with_api(scripture_api)
+        .with_lexicon(scripture_lexicon)
+        // Original-language editions (TAGNT/TAHOT/SBLGNT/OSHB),
+        // loaded lazily per edition on first interlinear request.
+        .with_originals_root(org_root.resources_dir().join("original"))
+        // Versification mappings reconcile Hebrew vs English
+        // verse numbering for the interlinear.
+        .with_versification(
+            scripture::Versification::load_dir(&org_root.resources_dir().join("versification"))
+                .map_err(|e| eyre::eyre!("load versification: {e}"))?,
+        )
+        // OpenBible cross-references + topical tags (CC BY,
+        // vote-weighted), lazy-loaded on first query.
+        .with_crossref(
+            org_root
+                .resources_dir()
+                .join("crossref")
+                .join("cross_references.txt"),
+        )
+        .with_topics(
+            org_root
+                .resources_dir()
+                .join("topics")
+                .join("topic-votes.txt"),
+        );
         // Ordered-collection store — Library / Setlist / Show / Playlist.
         // JSONL at `<org>/collections.jsonl` (override via
         // `TASK_SERVER_COLLECTIONS_PATH`, mirroring the vault-root override

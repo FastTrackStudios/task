@@ -48,14 +48,18 @@
 //! `materialize::REMOTE_FILE_LIMIT`, and what the bound leaves behind is
 //! reported rather than attempted.
 //!
+//! A **Resource** crosses on the same terms, and it has to: the tier
+//! holds scripture *and* the app libraries — `resources/patches/`,
+//! `resources/samples/` — which ADR 0003 put there precisely because a
+//! subscription could carry them. Signal sharing a rig with another
+//! organisation is that sentence.
+//!
 //! A **project** is refused, and that is the same rule reaching its
 //! conclusion rather than a missing walker: a project *is* its media, and
 //! ADR 0003's rule is that subscribing moves names and not gigabytes.
 //! Bytes at that size cross as a File Root — offered, accepted, pulled in
 //! chunks by the lane that owns resumption and renditions — which
-//! `tests/integration/tests/remote_assets.rs` proves end to end. A
-//! **Resource** is refused for its own reason: an edition is installed
-//! into a corpus library, not pulled across file by file.
+//! `tests/integration/tests/remote_assets.rs` proves end to end.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

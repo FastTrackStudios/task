@@ -153,13 +153,19 @@ task wiki sources refresh   vnt.test/post-production --org acme-audio --server $
 end the refreshing without touching the copy already held
 (`wiki.life.orphan`).
 
-A wiki and an asset shelf both cross — pass `--kind assets` for a shelf.
-What a subscription will not carry is a large file: a fetch is one whole
-file in one message, so anything over 8 MiB is reported and left where it
-is. A **project** is refused for the same reason (a project is its media
-— reach it as a File Root, offered and accepted) and a **Resource** is
-installed into a corpus library rather than pulled across. Each refusal
-names its route.
+A wiki, an asset shelf and a Resource library all cross — pass `--kind
+assets` for a shelf, `--kind resource` for a library of manifests
+(`patches`, `samples`, `bible`). What a subscription will not carry is a
+large file: a fetch is one whole file in one message, so anything over
+8 MiB is reported and left where it is. A **project** is refused for
+exactly that reason — a project is its media, so reach it as a File Root,
+offered and accepted — and the refusal names that route.
+
+Every subscribed source lands in one place: `subscribed/<domain>/<slug>/`
+in the subscriber's org. A Resource included, which means a subscribed
+Bible sits beside a subscribed wiki rather than mixing into the editions
+this org installed for itself; the scripture reader loads both, with the
+installed one winning.
 
 `just demo federate` runs exactly these commands against the two demo
 servers, which is the cheapest way to watch the whole loop.
