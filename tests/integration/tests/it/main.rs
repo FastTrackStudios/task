@@ -55,6 +55,7 @@ mod rebuild;
 mod remote_assets;
 mod restart;
 mod review;
+mod rockstars_adult_jam;
 mod scale;
 mod search;
 mod setlist;

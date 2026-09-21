@@ -1,0 +1,51 @@
+BALLROOM BLITZ - SWEET
+4/4
+
+intro 2
+|: Em / | % :|x2
+
+vs 6
+|: Am / | % | Em / | % :|x2
+    | Em // r2 |: r1 :|x3
+
+pre 6
+| Em / | F#m / | Am / | !C / |
+    | Em / | % |
+
+ch 4
+| F#m_2 Am_2 | !B_2 Em_2 | F#m_2 Am_2 | !B_2 !D_2 |
+
+interlude 1
+\ChordLength /
+|: Em_2 !D_2 :|x4
+
+[Re-intro] 1
+| r1 |
+
+vs 6
+|: Am / | % | Em / | % :|x2
+    | Em // r2 |: r1 :|x3
+
+pre 6
+| Em / | F#m / | Am / | !C / |
+    | Em / | % |
+
+ch 4
+| F#m_2 Am_2 | !B_2 Em_2 | F#m_2 Am_2 | !B_2 !D_2 |
+
+[Bass Interlude] 1
+\ChordLength /
+|: Em_2 !D_2 :|x10
+
+[Prechorus] 1
+| r1 |
+
+ch 4
+| F#m_2 Am_2 | !B_2 Em_2 | F#m_2 Am_2 | !B_2 !D_2 |
+
+interlude 1
+\ChordLength /
+|: Em_2 !D_2 :|x4
+
+out 3
+|: Em_2 !D_2 :|x4: Em / | % :|x8

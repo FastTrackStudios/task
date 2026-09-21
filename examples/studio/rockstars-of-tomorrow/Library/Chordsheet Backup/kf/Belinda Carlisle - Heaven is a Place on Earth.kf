@@ -1,0 +1,43 @@
+Heaven is a Place on Earth - Belinda Carlisle
+4/4
+
+intro 10
+| C#m_2 !A_2 | !B_2 C#m_2 | !C# // | s2 r2 |
+    | C#m_2 !A_2 | !B_2 C#m_2 | !E_2 !A_2 | !B // r2 |
+    | !E_2 !A_2 | ^"This chord is on a 2/4 measure." !E / |
+
+ch 8
+| C#m_2 !A_2 | !B_2 C#m_2 | !E_2 !A_2 | !B_2 C#m_2 |
+    | C#m_2 !A_2 | !B_2 C#m_2 | !E_2 !A_2 | !B / |
+
+vs 6
+| C#m / | % |: !E / | !B / |
+    | !A / | !B / :|x2
+
+[Prechorus] 7
+|: !G / | !A / :|x2 F#m / | !G / |
+    | Em_2 F#m_2 | !G / | !A / |
+
+ch 10
+| C#m_2 !A_2 | !B_2 C#m_2 | !E_2 !A_2 | !B_2 C#m_2 |
+    | !A // |: !B_2 C#m_2 | !E_2 !A_2 :|x2 !B_2 C#m_2 |
+    | !E_2 !A_2 | !B / |
+
+interlude 8
+|: !E / | % | C#m / | % |
+    | !A / | % | !B / | % :|x2
+
+[Prechorus] 7
+|: !G / | !A / :|x2 F#m / | !G / |
+    | Em_2 F#m_2 | !G / | !A / |
+
+[Drum Breakdown] 9
+| C#m_2 !A_2 | !B_2 C#m_2 | !E_2 !A_2 | !B_2 C#m_2 |
+    | !A // | !B_2 C#m_2 | !E / | ^"2/4" !E / |
+    | !A / |
+
+ch 12
+\ChordLength //
+| D#m_2 !B_2 | !C#_2 D#m_2 | !F#_2 !B_2 | C#m_2 D#m_2 |
+    | !B | C#m_2 D#m_2 | !B | !C#_2 D#m_2 |
+    | F#m_2 !B_2 | !C#_2 D#m_2 |: !F#_2 !B_2 | !C#_2 D#m_2 :|x4

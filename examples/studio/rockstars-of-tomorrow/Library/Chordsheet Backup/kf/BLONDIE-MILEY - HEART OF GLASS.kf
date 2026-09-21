@@ -1,0 +1,49 @@
+HEART OF GLASS - BLONDIE/MILEY
+4/4
+
+intro 4
+| ^"SWELL ON E" !E / | r1 | r1 | r1 |
+
+vs 4
+|: !E / | !C# / | C#m / | !E / :|x2
+
+intro 3
+| !E / | r1 | r1 |
+
+vs 5
+\ChordLength /
+|: !E | !C# | C#m | !E :|x2
+    | !E_4 !F#_4 !G_4 !G#_4 |
+
+ch 8
+| !A / | r1 | !E / | r1 |
+    | !A / | r1 | !F# / | !B / |
+
+intro 4
+| !E / | r1 | r1 | r1 |
+
+vs 5
+\ChordLength /
+|: !E | !C# | C#m | !E :|x2
+    | !E_4 !F#_4 !G_4 !G#_4 |
+
+ch 8
+| !A / | r1 | !E / | r1 |
+    | !A / | r1 | !E / | !E_4 !F#_4 !G_4 !G#_4 |
+
+solo 8
+| ^"7/8 TIME CHANGE" !A / | r1 | !E / | r1 |
+    | !A / | r1 | !E / | !E_4 !F#_4 !G_4 !G#_4 |
+
+ch 8
+| !A / | r1 | !E / | r1 |
+    | !A / | r1 | !F# / | !B / |
+
+inst 4
+|: !E / | r1 | r1 | r1 :|x2
+
+vs 4
+|: !E / | !C# / | C#m / | !E / :|x2
+
+intro 4
+|: !E / | r1 | r1 :|x2 ^"STOP" |

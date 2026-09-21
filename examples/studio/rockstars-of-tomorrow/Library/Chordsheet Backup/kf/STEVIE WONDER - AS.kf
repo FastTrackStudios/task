@@ -1,0 +1,31 @@
+AS - STEVIE WONDER
+4/4
+
+intro 2
+|: Bmaj7_2 B7_2 | Emaj7 / :|x2
+
+vs 15
+| Bmaj7_2 B7_2 | Emaj7 / | Bmaj7_2 B7_2 | Amaj7 / |
+    | Bmaj7_2 B7_2 | Emaj7 / | G#m7_2 D#7/A#_2 | G#m7_4 C#m7_4 F#7_2 |
+    | Bmaj7_2 B7_2 | Emaj7 / | Bmaj7_2 B7_2 | Amaj7 / |
+    | Bmaj7_2 B7_2 | Emaj7 / | G#m7_2 D#7/A#_2 |
+
+ch 5
+\ChordLength //
+|: G#m7_2 D#7/A#_2 | !B_2 !C#_2 :|x3 G#m7_2 D#7/A#_2 | !B_2 !C#_2 |
+    | !B_2 !F_2 |
+
+br 8
+| !E / | !B / | !E / | !D / |
+    | !E / | !B / | !C# / | !Eb / |
+
+vs 15
+| Bmaj7_2 B7_2 | Emaj7 / | Bmaj7_2 B7_2 | Amaj7 / |
+    | Bmaj7_2 B7_2 | Emaj7 / | G#m7_2 D#7/A#_2 | G#m7_4 C#m7_4 F#7_2 |
+    | Bmaj7_2 B7_2 | Emaj7 / | Bmaj7_2 B7_2 | Amaj7 / |
+    | Bmaj7_2 B7_2 | Emaj7 / | G#m7_2 D#7/A#_2 |
+
+out 5
+\ChordLength //
+|: G#m7_2 D#7/A#_2 | !B_2 !C#_2 :|x3 G#m7_2 D#7/A#_2 | !B_2 !C#_2 |
+    | !B_2 !F_2 |

@@ -55,8 +55,9 @@ PEERS="$DEMO_ROOT/peers"
 # The cast the app's pickers offer, and the account it boots signed in
 # as (the first entry — Alice). Format `email:password:Name:username`,
 # comma-separated; read by debug builds only (crates/ui/src/auth.rs,
-# `TASK_DEMO_CAST`). ACME's server seeds exactly these three — Victor
-# lives on VNT's, so he is not in a roster pointed at ACME.
+# `TASK_DEMO_CAST`). ACME's data root seeds exactly these four — Riley
+# in the Rockstars of Tomorrow org beside ACME, the rest in ACME itself.
+# Victor lives on VNT's, so he is not in a roster pointed at ACME.
 PASSWORD="correct-horse-battery-staple"
 
 # ── local telemetry ──────────────────────────────────────────────────
@@ -110,7 +111,7 @@ telemetry_env() {
     echo ">> telemetry: collector on :$OTLP_PORT — exporting traces/logs/metrics"
   fi
 }
-DEMO_CAST="alice@acme.test:$PASSWORD:Alice:alice,sam@acme.test:$PASSWORD:Sam:sam,casey@client.test:$PASSWORD:Casey:casey"
+DEMO_CAST="alice@acme.test:$PASSWORD:Alice:alice,sam@acme.test:$PASSWORD:Sam:sam,casey@client.test:$PASSWORD:Casey:casey,riley@rockstars.test:$PASSWORD:Riley:riley"
 
 plant() {
   echo ">> planting the example studio → $DEMO_ROOT"
@@ -126,6 +127,13 @@ plant() {
   # nothing personal to subscribe from.
   ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/acme" \
       cargo run --quiet -p task-server -- admin demo --org alice-personal )
+  echo
+  # Rockstars of Tomorrow, also on ACME's data root, so Keyflow — which
+  # the demo points at ACME's server — reaches it: the Adult Jam library
+  # (204 charts from a chordsheet.com backup), setlists drawn from it, and
+  # shows made of those setlists. Sign in as Riley.
+  ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/acme" \
+      cargo run --quiet -p task-server -- admin demo --org rockstars-of-tomorrow )
   echo
   echo ">> planted. next: '$0 serve' in one terminal, '$0 web' in another."
 }

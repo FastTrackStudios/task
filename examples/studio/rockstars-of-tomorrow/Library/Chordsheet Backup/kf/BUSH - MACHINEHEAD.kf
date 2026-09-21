@@ -1,0 +1,17 @@
+MACHINEHEAD - BUSH
+4/4
+
+intro 9
+|: ^"GUITAR RIFF" !C#_4 !Eb_4 !E_4 !F#_4 :|x2 ^"HIT" !C# / | r1 | ^"BAND IN" !A / |
+    | r1 | !C# / | r1 | !A / |
+    | r1 |
+
+vs 4
+|: !C# / | r1 | !A / | r1 :|x2
+
+ch 2
+\ChordLength //
+|: !E_2 !B_2 | !C#_2 !A_2 :|x2
+
+[Post] 2
+|: F#m / | !A / :|x2

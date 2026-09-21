@@ -1,0 +1,33 @@
+My Hero - Foo Fighters
+4/4
+
+intro 8
+| ^"DRUMS" | r1 | ^"BASS" | r1 |
+    | ^"GUITAR" | r1 |: !E_2 C#m_2 :|x4 ^"F# F# C# B Ab A" F#5_2 !A_2 |
+
+vs 1
+\ChordLength //
+|: !E_2 C#m_2 :|x8
+
+ch 6
+|: !A / | !A / | !E / | !E / :|x2
+    | F#5_2 !A_2 | r1 |
+
+vs 1
+\ChordLength //
+|: !E_2 C#m_2 :|x8
+
+ch 6
+|: !A / | !A / | !E / | !E / :|x2
+    | F#5_2 !A_2 | r1 |
+
+br 4
+|: !E / | !E_2 !C#_2 :|x2: ^"BUILD SECOND TIME" !E / | r1 :|x2
+
+vs 1
+\ChordLength //
+|: !E_2 C#m_2 :|x8
+
+[Double Chorus] 6
+|: !A / | !A / | !E / | !E / :|x2
+    | F#5_2 !A_2 | r1 |

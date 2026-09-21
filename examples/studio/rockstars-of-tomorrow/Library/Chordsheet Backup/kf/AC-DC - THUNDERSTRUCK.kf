@@ -1,0 +1,28 @@
+THUNDERSTRUCK - AC/DC
+4/4
+
+intro 5
+| ^"Counts are 1/2 time 67 BPM" | r1 | ^"DRUMS" | ^"BASS" !B / |
+    | ^"R.GTR" !B / |
+
+vs 5
+| !B / | r1 |: !B_4 !A_4 !E_2 | !A_4 !A_4 !E_2 :|x4
+    | !B // |
+
+vs 2
+\ChordLength //
+| !B | !B_2 !B_2 |
+
+hits 2
+| !B_4 !A_4 !E_2 |: !A_4 !B_4 !A_4 !E_4 :|x3
+
+ch 5
+|: !B_8 !A_8 !E_4 !A_4 !E_4 :|x4 !B / | !B / | ^"I was shaken.." !B / |
+    | !B / |
+
+solo 3
+\ChordLength /
+|: !E_4 !B_4 !A_4 !E_4 :|x4: !B_2 !A_2 :|x4 r1 |
+
+ch 4
+|: !B_8 !A_8 !E_4 !A_4 !E_4 :|x4: !B_4 !E_4 !B_4 !E_4 :|x4: !B_8 !A_8 !E_4 !A_4 !E_4 :|x8 ^"Ending" !B_4 !B_4 !B_2 |

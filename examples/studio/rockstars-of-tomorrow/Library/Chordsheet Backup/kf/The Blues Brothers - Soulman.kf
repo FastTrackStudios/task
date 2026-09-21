@@ -1,0 +1,31 @@
+Soulman - The Blues Brothers
+4/4
+
+intro 4
+| !E / | !D / | !G / | !A_2 !B_2 |
+
+vs 2
+\ChordLength //
+|: !E_2 !A_2 | !E_2 !A_2 :|x6
+
+ch 8
+| !E / | !D / | !E / | % |
+    | % | !D / | !E / | !A_4 !C#_4 !E_4 !B_4 |
+
+vs 2
+\ChordLength //
+|: !E_2 !A_2 | !E_2 !A_2 :|x6
+
+ch 8
+| !E / | !D / | !E / | % |
+    | % | !D / | !E / | !A_4 !C#_4 !E_4 !B_4 |
+
+br 5
+| !C / | !G / | !A / | !B / |
+    | !C / |
+
+intro 4
+| !F / | !D# / | !G# / | !A#_4 !D_4 !F_4 !C_4 |
+
+ch 2
+|: !F_2 !A#_2 | !F_2 !A#_2 :|x6

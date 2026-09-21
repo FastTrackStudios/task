@@ -11,7 +11,7 @@
 //!
 //! # Keyflow's calls, not a paraphrase of them
 //!
-//! [`Keyflow`] below is a line-for-line mirror of keyflow's
+//! [`Keyflow`] (`integration::keyflow`) is a line-for-line mirror of keyflow's
 //! `apps/web/src/library/vox.rs`: the same RPCs, with the same arguments
 //! in the same shapes — a song created with an empty slug so the server
 //! derives it, a chart that names its song as a `song:<slug>` token, a
@@ -22,9 +22,9 @@
 //! before Keyflow fails in a browser.
 //!
 //! Keyflow has no setlists of its own yet — that is Session's half of the
-//! job — so [`Setlists`] is the same primitive under the kind the seed
-//! already uses (`"setlist"`): a collection whose items are the *same*
-//! references the song lists hold.
+//! job — so setlists here go through `integration::keyflow::Collections`:
+//! the same primitive, under the kind the seed already uses (`"setlist"`),
+//! holding the *same* references the song lists hold.
 //!
 //! # By reference is the claim, so it is tested by change
 //!
@@ -35,205 +35,14 @@
 //! setlist still has it; and restarts the server to check that what a
 //! person arranged is what comes back, in the order they arranged it.
 
-use collection_proto::{Collection, CollectionKind, Placement};
+use collection_proto::{Collection, CollectionKind};
 use integration::client::Session;
+use integration::keyflow::{Chart, Collections, Keyflow, ids};
 use integration::scenario::Scenario;
 use links_proto::NodeRef;
-use resources_proto::{ChartDoc, ChartSummary, SongDoc};
 
-/// Keyflow's `SONGLIST_KIND`.
-const SONGLIST: &str = "songlist";
 /// What the seed, and Session, call a setlist.
 const SETLIST: &str = "setlist";
-
-/// The chart to open for a song that names no arrangement: the one the
-/// server marks default, else the first. Keyflow's `default_chart`,
-/// verbatim — the fallback is there for imported libraries, where a
-/// song's only chart may carry no flag.
-fn default_chart(charts: &[ChartSummary]) -> Option<&ChartSummary> {
-    charts
-        .iter()
-        .find(|chart| chart.is_default)
-        .or_else(|| charts.first())
-}
-
-/// Keyflow, as a client of Task. One method per call keyflow's library
-/// makes; nothing here is a convenience Keyflow does not have.
-struct Keyflow<'a> {
-    who: &'a Session,
-    org: String,
-}
-
-impl Keyflow<'_> {
-    /// `create_song`: an empty slug so the server derives it, and the
-    /// title and key trimmed the way the editor's fields are.
-    async fn create_song(&self, title: &str, key: &str) -> String {
-        self.who
-            .resources()
-            .await
-            .upsert_song(SongDoc {
-                slug: String::new(),
-                title: title.trim().to_owned(),
-                writers: Vec::new(),
-                key: key.trim().to_owned(),
-                tags: Vec::new(),
-                updated_at: String::new(),
-            })
-            .await
-            .unwrap_or_else(|e| panic!("Keyflow creates `{title}`: {e:?}"))
-            .slug
-    }
-
-    /// `save_chart`: the chart names its song as a `song:<slug>` token.
-    /// `slug` empty for a new chart; the stored slug to save an edit.
-    async fn save_chart(&self, chart: Chart<'_>) -> String {
-        self.who
-            .resources()
-            .await
-            .upsert_chart(ChartDoc {
-                slug: chart.slug.to_owned(),
-                title: chart.title.to_owned(),
-                source: chart.source.to_owned(),
-                key: chart.key.to_owned(),
-                song: NodeRef::song(chart.song).to_token(),
-                arrangement: chart.arrangement.to_owned(),
-                is_default: chart.make_default,
-                updated_at: "2026-09-21T09:00:00Z".to_owned(),
-                ..Default::default()
-            })
-            .await
-            .unwrap_or_else(|e| panic!("Keyflow saves `{}`: {e:?}", chart.title))
-            .slug
-    }
-
-    async fn list_charts(&self, song: &str) -> Vec<ChartSummary> {
-        self.who
-            .resources()
-            .await
-            .list_charts(song.to_owned())
-            .await
-            .expect("list charts")
-    }
-
-    /// What tapping a song does: its charts, the default one, its source.
-    async fn open_song(&self, song: &str) -> ChartDoc {
-        let charts = self.list_charts(song).await;
-        let chart = default_chart(&charts)
-            .unwrap_or_else(|| panic!("`{song}` has no chart to open"))
-            .slug
-            .clone();
-        self.who
-            .resources()
-            .await
-            .chart(chart.clone())
-            .await
-            .unwrap_or_else(|e| panic!("open `{chart}`: {e:?}"))
-    }
-
-    async fn list_songlists(&self) -> Vec<Collection> {
-        self.who
-            .collections()
-            .await
-            .list(self.org.clone(), Some(CollectionKind::new(SONGLIST)))
-            .await
-            .expect("list song lists")
-    }
-
-    async fn create_songlist(&self, title: &str) -> Collection {
-        self.who
-            .collections()
-            .await
-            .create(
-                self.org.clone(),
-                title.trim().to_owned(),
-                CollectionKind::new(SONGLIST),
-            )
-            .await
-            .unwrap_or_else(|e| panic!("create `{title}`: {e:?}"))
-    }
-
-    async fn add_to_songlist(&self, list: &str, song: &str) -> Collection {
-        self.who
-            .collections()
-            .await
-            .add_item(Placement {
-                collection_id: list.to_owned(),
-                node: NodeRef::song(song),
-                after: None,
-            })
-            .await
-            .unwrap_or_else(|e| panic!("add `{song}` to a list: {e:?}"))
-    }
-
-    async fn remove_from_songlist(&self, list: &str, song: &str) -> Collection {
-        self.who
-            .collections()
-            .await
-            .remove_item(list.to_owned(), NodeRef::song(song))
-            .await
-            .unwrap_or_else(|e| panic!("remove `{song}` from a list: {e:?}"))
-    }
-}
-
-/// One chart as the editor saves it.
-struct Chart<'a> {
-    slug: &'a str,
-    title: &'a str,
-    song: &'a str,
-    arrangement: &'a str,
-    key: &'a str,
-    source: &'a str,
-    make_default: bool,
-}
-
-/// Setlists — the same primitive under the seed's kind, holding the same
-/// references the song lists do.
-struct Setlists<'a> {
-    who: &'a Session,
-    org: String,
-}
-
-impl Setlists<'_> {
-    async fn create(&self, title: &str) -> Collection {
-        self.who
-            .collections()
-            .await
-            .create(
-                self.org.clone(),
-                title.to_owned(),
-                CollectionKind::new(SETLIST),
-            )
-            .await
-            .unwrap_or_else(|e| panic!("create setlist `{title}`: {e:?}"))
-    }
-
-    /// Put `node` in the setlist straight after `after`, or at the end.
-    async fn place(&self, setlist: &str, node: NodeRef, after: Option<NodeRef>) -> Collection {
-        self.who
-            .collections()
-            .await
-            .add_item(Placement {
-                collection_id: setlist.to_owned(),
-                node,
-                after,
-            })
-            .await
-            .expect("place a song in the setlist")
-    }
-
-    async fn reorder(&self, setlist: &str, node: NodeRef, after: Option<NodeRef>) -> Collection {
-        self.who
-            .collections()
-            .await
-            .reorder(Placement {
-                collection_id: setlist.to_owned(),
-                node,
-                after,
-            })
-            .await
-            .expect("reorder the setlist")
-    }
-}
 
 async fn get(who: &Session, id: &str) -> Collection {
     who.collections()
@@ -246,7 +55,7 @@ async fn get(who: &Session, id: &str) -> Collection {
 
 /// The song slugs a collection holds, in its order.
 fn songs(c: &Collection) -> Vec<String> {
-    c.items.iter().map(|i| i.node.id.clone()).collect()
+    ids(c)
 }
 
 /// A small, real library: six songs across two traditions, one of them
@@ -282,7 +91,7 @@ async fn keyflow_stores_charts_organises_them_into_lists_and_setlists_draw_on_th
         who: &alice,
         org: org.clone(),
     };
-    let setlists = Setlists {
+    let setlists = Collections {
         who: &alice,
         org: org.clone(),
     };
@@ -384,26 +193,34 @@ async fn keyflow_stores_charts_organises_them_into_lists_and_setlists_draw_on_th
     // Sunday morning: an opener, two hymns, a contemporary closer — each
     // pulled out of the list it lives in, which is how a person builds
     // one: open a list, pick from it.
-    let morning = setlists.create("Sunday Morning").await;
+    let morning = setlists.create("Sunday Morning", SETLIST).await;
     let opener = get(&alice, &openers.id).await.items[0].node.clone();
     let hymn_items = get(&alice, &hymns.id).await.items;
     let closer = get(&alice, &modern.id).await.items[1].node.clone();
-    setlists.place(&morning.id, opener.clone(), None).await;
+    setlists
+        .place(&morning.id, opener.clone(), None)
+        .await
+        .expect("place in the setlist");
     setlists
         .place(
             &morning.id,
             hymn_items[0].node.clone(),
             Some(opener.clone()),
         )
-        .await;
+        .await
+        .expect("place in the setlist");
     setlists
         .place(
             &morning.id,
             hymn_items[1].node.clone(),
             Some(hymn_items[0].node.clone()),
         )
-        .await;
-    let built = setlists.place(&morning.id, closer.clone(), None).await;
+        .await
+        .expect("place in the setlist");
+    let built = setlists
+        .place(&morning.id, closer.clone(), None)
+        .await
+        .expect("place in the setlist");
     assert_eq!(
         songs(&built),
         vec![
@@ -434,11 +251,15 @@ async fn keyflow_stores_charts_organises_them_into_lists_and_setlists_draw_on_th
     );
 
     // Sunday evening reuses a song: one song, two setlists, one chart.
-    let evening = setlists.create("Sunday Evening").await;
+    let evening = setlists.create("Sunday Evening", SETLIST).await;
     setlists
         .place(&evening.id, NodeRef::song(&slug["Way Maker"]), None)
-        .await;
-    setlists.place(&evening.id, opener.clone(), None).await;
+        .await
+        .expect("place in the setlist");
+    setlists
+        .place(&evening.id, opener.clone(), None)
+        .await
+        .expect("place in the setlist");
 
     let all_setlists = alice
         .collections()
@@ -566,7 +387,7 @@ async fn a_library_and_its_setlists_come_back_in_order_after_a_restart() {
             who: &alice,
             org: org.clone(),
         };
-        let setlists = Setlists {
+        let setlists = Collections {
             who: &alice,
             org: org.clone(),
         };
@@ -590,11 +411,14 @@ async fn a_library_and_its_setlists_come_back_in_order_after_a_restart() {
         for song in &songs_in_order {
             keyflow.add_to_songlist(&list.id, song).await;
         }
-        let set = setlists.create("Rehearsal").await;
+        let set = setlists.create("Rehearsal", SETLIST).await;
         // Deliberately not the list's order, so "came back sorted by
         // something else" cannot pass by accident.
         for song in songs_in_order.iter().rev() {
-            setlists.place(&set.id, NodeRef::song(song), None).await;
+            setlists
+                .place(&set.id, NodeRef::song(song), None)
+                .await
+                .expect("place in the setlist");
         }
         let set = setlists
             .reorder(&set.id, NodeRef::song(&songs_in_order[1]), None)

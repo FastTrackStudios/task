@@ -1,0 +1,50 @@
+Thats Not How This Work's - Charlie Puth
+4/4
+
+intro 4
+| F#m // | !E_2 !A_2 | !D // | !A // |
+
+vs 5
+|: F#m // | !E_2 !A_2 | !D // | [1] !A // :|x2
+    | [2] !A_2 !E_2 |
+
+pre 6
+| F#m // | C#7 // | !A // | B7 // |
+    | !D / | Dm / |
+
+ch 8
+\ChordLength //
+|: F#m | !E | DM7 | C#m7 |
+    | F#m_2 !E_2 | !A | Bm7_2 !A_2 | DM7 :|x2
+
+post 8
+\ChordLength //
+| F#m | !E | !A | !D |
+    | F#m_2 !E_2 | !A | Bm_2 !A_2 | !D_2 !E_2 |
+
+vs 5
+|: F#m // | !E_2 !A_2 | !D // | [1] !A // :|x2
+    | [2] !A_2 !E_2 |
+
+pre 6
+| F#m // | C#7 // | !A // | B7 // |
+    | !D / | Dm / |
+
+ch 8
+\ChordLength //
+|: F#m | !E | DM7 | C#m7 |
+    | F#m_2 !E_2 | !A | Bm7_2 !A_2 | DM7 :|x2
+
+br 7
+| Bm / | F#m // | !E // | Bm // |
+    | !A // | Dm / | % |
+
+[Down Chorus Second Repeat Skip The] 8
+\ChordLength //
+|: F#m | !E | DM7 | C#m7 |
+    | ^"BAND IN" F#m_2 !E_2 | !A | Bm7_2 !A_2 | DM7 :|x2
+
+post 9
+| F#m // | !E // | !A // | !D // |
+    | F#m_2 !E_2 | !A // | Bm_2 !A_2 | !D_2 !E_2 |
+    | !A / |

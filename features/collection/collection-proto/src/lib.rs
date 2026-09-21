@@ -17,6 +17,13 @@
 //! [`CollectionKind`] for the full argument and for the normalisation
 //! rule that keeps two spellings of one word from splitting a store.
 //!
+//! A collection may hold **other collections**, through a
+//! `collection:<id>` reference ([`NodeKind::Collection`]) — which is all a
+//! show is: an ordered collection of setlists. Nesting adds nothing but that
+//! kind; ordering, membership and by-reference semantics are the ones every
+//! collection already has. The one rule it adds is enforced by the store: a
+//! collection can never come to contain itself, directly or through a chain.
+//!
 //! The item reference type is reused wholesale from `links_proto`
 //! ([`NodeRef`] + [`NodeKind`], which already knows `Song`). The sibling
 //! `collection` crate owns the backing JSONL store and the lexorank
