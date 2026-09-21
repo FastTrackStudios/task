@@ -153,17 +153,35 @@ async fn a_foreign_content_ref_reaches_its_bytes_through_the_accepted_root() {
         "resolved to a different root than the one just accepted"
     );
 
+    // ── and the path, rebased by the server that knows the subtree ───
+    //
+    // The offer was of `Audio Files`, so the accepted root begins there
+    // and the manifest's `Audio Files/lead-vocal.wav` is `lead-vocal.wav`
+    // inside it. This chapter used to strip that prefix by hand — which
+    // only worked because its author knew what had been offered. An app
+    // does not: `Remote` does not carry the offered path. So the server,
+    // which kept it, does the rebase, and the app asks once.
+    let resolved = victor
+        .federation()
+        .await
+        .resolve_content(
+            foreign,
+            RootPath::parse(&bound.path).expect("the manifest's path"),
+        )
+        .await
+        .expect("resolve")
+        .expect("VNT accepted an offer containing this path");
+    assert_eq!(resolved.root_id, local, "resolved into a different root");
+    assert_eq!(resolved.path.as_str(), "lead-vocal.wav", "rebased wrongly");
+
     // ── and the bytes are really there ───────────────────────────────
     //
     // Through the ordinary media lane, against what is now an ordinary
-    // root. The offer was of `Audio Files`, so the path inside the
-    // accepted root is relative to what was offered — the receiver never
-    // learns the subtree's parents.
-    let inside = RootPath::parse("lead-vocal.wav").expect("path within the offered subtree");
+    // root.
     let ticket = victor
         .media()
         .await
-        .read(local, inside)
+        .read(resolved.root_id, resolved.path)
         .await
         .expect("a ticket for the take on the accepted root");
     // `Some` is half the claim: the length is optional because a relayed
@@ -202,5 +220,191 @@ async fn an_unoffered_root_is_unreachable_rather_than_missing() {
         adopted_from(&remotes, acme_session),
         None,
         "VNT resolved a root nobody offered it"
+    );
+    // And the server-side resolver says the same, over the wire: `None`,
+    // not a fault and not a path to nothing.
+    assert_eq!(
+        victor
+            .federation()
+            .await
+            .resolve_content(
+                acme_session,
+                RootPath::parse("Audio Files/lead-vocal.wav").expect("path"),
+            )
+            .await
+            .expect("resolving is not an error"),
+        None,
+        "an unoffered root resolved"
+    );
+}
+
+/// **Signal's journey, whole**: a sample library taken by subscription
+/// from another server, and the audio its manifest names reached by
+/// offer — the two halves ADR 0003 split an asset into, rejoined on the
+/// far side in one call.
+///
+/// `sibling_apps.rs` proves the manifest half crosses (the patch library
+/// lands and resolves). This is what an app does next with a *sample*:
+/// read the `ContentRef` out of the copy, and play what it points at.
+///
+/// # The subtree is the point
+///
+/// ACME offers `Samples/Kicks`, not the whole library root. So a kick
+/// resolves — rebased onto the accepted root — and a snare in the folder
+/// beside it does **not**, even though VNT holds both manifests. Holding
+/// a manifest is holding a name; the offer is what grants the bytes, and
+/// only the bytes it covers.
+///
+/// t[verify files.topology.federation] — the receiving side reaches
+/// exactly the offered subtree through an ordinary root.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_subscribed_sample_plays_from_the_offered_subtree_and_nothing_beside_it() {
+    use wiki_proto::service::subscriptions::SourceGrant;
+    use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
+
+    const KICK: &[u8] = b"RIFF....WAVEfmt room kick, take two";
+    let s = Scenario::open().await;
+    let alice = s.as_alice().await;
+    let victor = s.as_victor().await;
+
+    // ── ACME's sample folder: kicks and snares, adopted as one root ──
+    let tree = s.orgs.acme.tree().join("Samples");
+    std::fs::create_dir_all(tree.join("Kicks")).expect("kicks");
+    std::fs::create_dir_all(tree.join("Snares")).expect("snares");
+    std::fs::write(tree.join("Kicks/room-kick.wav"), KICK).expect("the kick");
+    std::fs::write(tree.join("Snares/crack.wav"), b"RIFF....snare").expect("the snare");
+    let samples_root = integration::orgs::adopt(&s.orgs.acme, "Samples").await;
+    files::service::access::AccessService::grant(
+        &s.orgs.acme.backend,
+        s.people.alice.subject.clone(),
+        samples_root,
+        RootPath::root(),
+        task_server::example_org::Holds::Owner.capabilities(),
+    )
+    .await
+    .expect("ACME grants Alice the samples");
+
+    // ── Signal declares both, each bound to its audio ────────────────
+    let resources = alice.resources().await;
+    for (title, path) in [
+        ("Room Kick", "Kicks/room-kick.wav"),
+        ("Crack Snare", "Snares/crack.wav"),
+    ] {
+        resources
+            .upsert_sample(sample(
+                title,
+                ContentRef {
+                    root_id: samples_root.to_string(),
+                    path: path.into(),
+                },
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("declare {title}: {e:?}"));
+    }
+
+    // ── VNT takes the sample library across the boundary ─────────────
+    let secret = alice
+        .wiki_subscriptions()
+        .await
+        .grant_source_read(SourceKind::Resource, "samples".to_owned())
+        .await
+        .expect("ACME grants read on its sample library");
+    let subs = victor.wiki_subscriptions().await;
+    subs.trust_source(SourceGrant {
+        domain: "acme.test".to_owned(),
+        endpoint: s.orgs.acme.endpoint.id().to_string(),
+        kind: SourceKind::Resource,
+        slug: "samples".to_owned(),
+        secret,
+    })
+    .await
+    .expect("VNT records the grant");
+    subs.subscribe(
+        Subscriber::Vault,
+        Subscription {
+            domain: "acme.test".into(),
+            slug: "samples".into(),
+            kind: SourceKind::Resource,
+            title: "samples".into(),
+            core: false,
+            declined: false,
+            selection: Default::default(),
+        },
+    )
+    .await
+    .expect("subscribe");
+    subs.refresh_subscription(Subscriber::Vault, "acme.test/samples".to_owned())
+        .await
+        .expect("the manifests cross");
+
+    // The copy carries ACME's root id, exactly as written — which is the
+    // whole reason a resolver is needed: here, that id names nothing.
+    let copy = s
+        .orgs
+        .vnt
+        .org_root()
+        .join("subscribed/acme.test/samples/room-kick/sample.md");
+    let manifest = std::fs::read_to_string(&copy)
+        .unwrap_or_else(|e| panic!("{} should be on VNT's disk: {e}", copy.display()));
+    assert!(
+        manifest.contains(&samples_root.to_string()),
+        "the manifest arrived without the ContentRef that names its audio: {manifest}"
+    );
+
+    // ── ACME offers the kicks, and only the kicks ────────────────────
+    let offer = alice
+        .federation()
+        .await
+        .offer(
+            samples_root,
+            RootPath::parse("Kicks").expect("the offered subtree"),
+            EndpointId(s.orgs.vnt.endpoint.id().to_string()),
+            vec![Capability::Read],
+        )
+        .await
+        .expect("ACME offers its kick folder");
+    let accepted = victor
+        .federation()
+        .await
+        .accept(offer)
+        .await
+        .expect("VNT accepts");
+
+    // ── the kick: one call from manifest to playable bytes ───────────
+    let federation = victor.federation().await;
+    let kick = federation
+        .resolve_content(
+            samples_root,
+            RootPath::parse("Kicks/room-kick.wav").expect("path"),
+        )
+        .await
+        .expect("resolve")
+        .expect("the kick is inside what was offered");
+    assert_eq!(kick.root_id, accepted.root_id);
+    assert_eq!(kick.path.as_str(), "room-kick.wav");
+    let ticket = victor
+        .media()
+        .await
+        .read(kick.root_id, kick.path)
+        .await
+        .expect("a ticket for the kick");
+    assert_eq!(
+        ticket.length,
+        Some(KICK.len() as u64),
+        "not the kick's bytes"
+    );
+
+    // ── the snare: a manifest VNT holds, bytes it was never offered ──
+    assert_eq!(
+        federation
+            .resolve_content(
+                samples_root,
+                RootPath::parse("Snares/crack.wav").expect("path"),
+            )
+            .await
+            .expect("resolving is not an error"),
+        None,
+        "a file outside the offered subtree resolved — holding a manifest \
+         is holding a name, and the offer is what grants the bytes"
     );
 }

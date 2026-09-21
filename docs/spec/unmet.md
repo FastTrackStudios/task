@@ -232,7 +232,12 @@ grouped:
   behind — so a **project** does not cross as a subscription (it *is* its
   media; those bytes go by File Root and `offer`/`accept`, per ADR 0003)
   and a **Resource** library crosses too (Signal's patches and samples are
-  manifests, which is what that tier is for). A *reference* into
+  manifests, which is what that tier is for). The bytes a manifest names
+  are reached by offer, and `FederationService::resolve_content` rejoins
+  the two halves in one call: a foreign `ContentRef` in, a local root and
+  a path rebased onto the offered subtree out — or `None` for a file
+  outside what was offered, which is the case a hand-written rebase gets
+  wrong. A *reference* into
   another server's org resolves as well, from the copy the subscription
   left behind (`node_homes::LocalHomes`), and is refused without one —
   which is the rule `tests/integration/tests/setlist.rs` pins. A
