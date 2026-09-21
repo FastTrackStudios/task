@@ -24,24 +24,20 @@
 //! `IrohRemotes` of the wiki lane, and it is in the crate that already
 //! owns dialling, serving and endpoints.
 //!
-//! # The sync/async bridge, and the invariant it rests on
+//! # One bridge, on the rare path
 //!
-//! `SourceVault` is sync, because `materialize::refresh` is; the
-//! generated `SubscriptionsClient` is async. [`RemoteSource`] bridges
-//! with `Handle::block_on`, which is legal **only off a reactor thread**
-//! — and that is exactly where a `SubscriptionsBackend` method runs:
-//! `wiki-live` enables `architect/dispatch-tokio`, so every sync method
-//! of that backend is marshalled onto a `spawn_blocking` thread, where
-//! blocking is what the thread is for.
+//! `SourceVault` is sync because the refresh engine is; the generated
+//! `SubscriptionsClient` is async. Something has to bridge, and the
+//! choice is *which side*: a refresh's disk work is the common path and
+//! belongs on a blocking thread, its wire work is the rare one. So the
+//! engine stays sync — dispatched onto `spawn_blocking` by
+//! `architect/dispatch-tokio`, where blocking is what the thread is for —
+//! and [`RemoteSource::block_on`] carries the wire across.
 //!
-//! That invariant was implicit when this bridge was proposed, and an
-//! implicit invariant is how somebody later gets a deadlock instead of
-//! an error. So [`RemoteSource::block_on`] states it and checks the one
-//! case it can tell apart — a single-threaded runtime, whose only thread
-//! would be the one parked — and leaves the rest to tokio, which panics
-//! rather than hanging. The property being defended is not "this cannot
-//! be misused"; it is "misusing it fails loudly instead of quietly
-//! stopping".
+//! Inverting it was considered and is worse: an async engine would put
+//! every local refresh's tree scan on the reactor, or else hop through
+//! `spawn_blocking` once per file to get off it again, to spare one call
+//! on the path that leaves the building.
 //!
 //! # What crosses, and why the line is size rather than kind
 //!
@@ -212,15 +208,12 @@ pub struct RemoteSource {
 impl RemoteSource {
     /// Run one call to the publisher, from a thread that may block.
     ///
-    /// See the module docs for the invariant. What can be checked is
-    /// checked: a **single-threaded** runtime driving this call is
-    /// driving it on its only thread, so blocking there is a deadlock in
-    /// waiting and is refused with the reason. On a multi-threaded
-    /// runtime a caller that is genuinely inside a poll gets tokio's own
-    /// panic ("Cannot start a runtime from within a runtime"), which the
-    /// dispatcher turns into a failed call — loud, which is the property
-    /// that matters. A `spawn_blocking` thread, where every
-    /// `SubscriptionsBackend` method actually runs, passes both.
+    /// The invariant: a caller must be off the reactor, which every
+    /// dispatched `SubscriptionsBackend` method is. Misuse fails loudly
+    /// rather than hanging — a single-threaded runtime is refused here
+    /// with the reason (its only thread is the one that would park), and
+    /// a reactor thread on a multi-threaded runtime gets tokio's own
+    /// panic, which the dispatcher turns into a failed call.
     fn block_on<T>(
         &self,
         call: impl std::future::Future<Output = Result<T, VaultSyncError>>,
