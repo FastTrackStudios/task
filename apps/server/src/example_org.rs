@@ -1132,6 +1132,22 @@ pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
     },
     DeclaredCollection {
         org: "acme-audio",
+        title: "Sunday Songs",
+        // Keyflow's word, exactly: `SONGLIST_KIND` in keyflow's
+        // `apps/web/src/library/vox.rs`. Its library page lists
+        // collections of this kind and nothing else, so without this row
+        // a demo user signing into Keyflow against the seed would see a
+        // library with no lists in it and nothing to build a setlist from.
+        kind: "songlist",
+        items: &[("song", "track-one"), ("song", "track-two")],
+        demonstrates: "Keyflow's library organised the way a worship leader keeps one — \
+                       songs gathered into named lists, by reference, so a song sits in \
+                       as many lists as it belongs to and opening it from any of them \
+                       opens its default chart. `tests/integration/tests/it/\
+                       keyflow_library.rs` builds setlists by drawing on lists like this",
+    },
+    DeclaredCollection {
+        org: "acme-audio",
         title: "Thursday Rehearsal",
         // The point of this row is the word. `rehearsal-pool` is not a
         // kind Task has ever enumerated, and after ADR 0004 there is no
