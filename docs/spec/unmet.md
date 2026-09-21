@@ -158,7 +158,7 @@ missing followed from that one move:
 
 | what was missing | what serves it now |
 |---|---|
-| a cross-org materialiser for assets | `wiki_live::materialize::refresh_assets`, reached by `SourceKind::Assets` — the byte walker rather than the vault engine, because a shelf holds any file and the markdown-only engine would have dropped the rest without saying so |
+| a cross-org materialiser for assets | `wiki_live::materialize::refresh_shelf`, reached by `SourceKind::Assets` — the vault engine, local and remote alike, differing only in what one fetch may weigh. (It was a byte walker, on the belief that the engine carried markdown only. The engine hashes every file it meets; the walker's real difference was that it overwrote a subscriber's edits, which is what routing both cases through one call fixed.) |
 | `links::NodeHomes` naming a path something serves | `node_homes::LocalHomes::locate` returns `assets/<group>/<slug>.md`, which is exactly what a subscription materialises |
 | a test that the reach exists | `tests/integration/tests/song_library.rs` (both halves: whole shelf, and part of one), `demo_plant::the_planted_song_shelf_is_subscribable_across_orgs` |
 | the assertion that pinned the gap | `tests/integration/tests/setlist.rs` — its `assert!(refused.is_err())` on a chart-library subscription is now `.expect("a chart library is a shelf, and a shelf is subscribable")` |

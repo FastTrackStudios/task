@@ -35,7 +35,7 @@
 //! That assertion is inverted below, and the inversion is the whole
 //! point of moving the shelf out of the vault. `assets/` is a sibling
 //! root, an asset group is a shelf, a shelf is subscribable, and
-//! `wiki_live::materialize::refresh_assets` brings it down onto disk.
+//! `wiki_live::materialize::refresh_shelf` brings it down onto disk.
 //! The security claim is untouched: the vault-refusal rule in
 //! `LocalOrgs::admits` is the same code it always was, because an asset
 //! group is not a vault.

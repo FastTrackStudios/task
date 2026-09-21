@@ -427,36 +427,70 @@ pub fn refresh_subscription<U: SourceVault + ?Sized>(
     refresh(upstream, &subscription.slug, &copy, &base)
 }
 
-/// Refresh a subscribed **asset shelf** whose publisher is on another
-/// server.
+/// Refresh a subscribed shelf whose publisher is **on this disk**.
 ///
-/// The same engine as a wiki, which is the finding this is built on: a
+/// [`refresh_shelf`] over the publisher's directory, with no bound: a
+/// copy between two directories has no message to fit in. Here rather
+/// than at each caller because opening the engine over a path is the
+/// answer to "which door does a local shelf use", and a caller that
+/// answered it for itself is a caller that could answer it differently —
+/// which is how the two routes came to disagree in the first place.
+///
+/// # Errors
+///
+/// As [`refresh`], plus a failure opening the publisher's directory.
+pub fn refresh_local_shelf(
+    upstream_root: &Path,
+    org_root: &Path,
+    subscription: &wiki_proto::Subscription,
+) -> Result<Refreshed, MaterializeError> {
+    let upstream = vault_live::Backend::single(&subscription.slug, upstream_root.to_path_buf())
+        .map_err(|source| MaterializeError::Io {
+            path: upstream_root.display().to_string(),
+            source: std::io::Error::other(source),
+        })?;
+    refresh_shelf(&upstream, org_root, subscription, u64::MAX)
+}
+
+/// Refresh a subscribed **asset shelf** — the one route, wherever the
+/// publisher is.
+///
+/// The same engine a wiki uses, which is the finding this rests on: a
 /// vault manifest is content-agnostic — `vault_live`'s walk hashes every
-/// file it meets, markdown or not — so the wire path carries a shelf's
-/// documents without knowing they are documents. What it must not carry
-/// is size, and [`Take::max_bytes`] is where that is decided.
+/// file it meets, markdown or not — so a shelf's documents cross without
+/// the engine knowing they are documents.
 ///
-/// # Why the local path still walks bytes instead of using this
+/// `max_bytes` is the whole of the difference between a publisher on this
+/// disk and one on another server. Locally it is `u64::MAX`: a copy
+/// between two directories has no message to fit in. Over the wire it is
+/// [`REMOTE_FILE_LIMIT`], because every fetch is one whole file in one
+/// message and ADR 0003's rule is that subscribing moves names and not
+/// gigabytes. What the bound leaves behind is counted into
+/// [`Refreshed::skipped`], never attempted.
 ///
-/// [`refresh_assets`] stays a direct tree copy for a publisher on this
-/// disk, and the reason is no longer "the vault engine would drop the
-/// stems" — it would not. It is that a local copy has no per-file round
-/// trip and no reason to bound anything: copying a forty-gigabyte take
-/// between two directories on one disk is a copy, while fetching it in
-/// one message is not a thing a server should attempt. Two routes,
-/// because the two situations differ in what they can afford, and each
-/// says which it is.
+/// # Why one route rather than two
 ///
+/// There were two, and they disagreed about the thing a subscriber cares
+/// most about: the byte walker overwrote a file the subscriber had
+/// edited, and this one keeps it and reports it. A subscriber cannot see
+/// which route they are on — the publisher being on the same disk is not
+/// a fact about their copy — so the two answers were one behaviour that
+/// varied by accident. Now the promise is the same for every shelf:
+/// `wiki.subscribe.refresh`, local work kept and named.
+///
+/// t[impl wiki.subscribe.local-copy] — after this returns the shelf
+/// resolves with the network down.
 /// t[impl wiki.subscribe.federated] — for an asset shelf: same
 /// subscription, same copy directory, same base snapshot, same report.
 ///
 /// # Errors
 ///
 /// As [`refresh`].
-pub fn refresh_remote_shelf<U: SourceVault + ?Sized>(
+pub fn refresh_shelf<U: SourceVault + ?Sized>(
     upstream: &U,
     org_root: &Path,
     subscription: &wiki_proto::Subscription,
+    max_bytes: u64,
 ) -> Result<Refreshed, MaterializeError> {
     let copy = assets_copy_dir(org_root, &subscription.domain, &subscription.slug);
     let base = base_path(org_root, &subscription.domain, &subscription.slug);
@@ -467,7 +501,7 @@ pub fn refresh_remote_shelf<U: SourceVault + ?Sized>(
         &base,
         &Take {
             selection: &subscription.selection,
-            max_bytes: REMOTE_FILE_LIMIT,
+            max_bytes,
         },
     )
 }
@@ -531,39 +565,42 @@ pub fn assets_copy_dir(org_root: &Path, domain: &str, kind: &str) -> PathBuf {
     local_copy_dir(org_root, domain, kind)
 }
 
-/// Bring a subscribed **asset shelf** up to date from `upstream_root`,
-/// the publishing org's `assets/<kind>/` directory.
+/// Bring a subscribed **project** up to date from `upstream_root`, the
+/// publishing org's `projects/<name>/` directory.
 ///
-/// t[impl wiki.subscribe.local-copy] — after this returns the shelf
-/// resolves with the network down, because everything upstream had is
-/// on disk.
+/// t[impl wiki.subscribe.local-copy] — after this returns the project
+/// resolves with the network down, because everything upstream had is on
+/// disk.
 ///
-/// # Why the byte walker and not the vault sync engine
+/// # The one subscribed tree that is not the vault engine, and why
 ///
-/// An asset shelf is explicitly "any file, any directory, at any size"
-/// (ADR 0004): a song document beside a `.kf`, a session file, a stem.
-/// This walks the tree and copies it, which for a publisher on the same
-/// disk costs one read and one write per file and is bounded by nothing.
+/// A shelf used to come through here too, and that was the source of a
+/// disagreement worth remembering: this walker **overwrites** a file that
+/// differs, while the engine keeps the subscriber's version and reports
+/// it. Which one a subscriber got depended on whether the publisher
+/// happened to be on the same disk — a distinction nobody who edited a
+/// file can see. So a shelf goes through [`refresh_shelf`] now, local or
+/// remote, and gets a wiki's promise about local work either way.
 ///
-/// An earlier version of this comment said the vault engine would
-/// "silently drop every file that is not markdown". That is not true and
-/// it is worth correcting rather than deleting, because the false version
-/// is what kept a remote shelf unbuilt: `vault_live`'s manifest walk
-/// hashes **every** file it meets. What the vault engine cannot afford is
-/// *size* — one whole file per message — which is a limit on the wire and
-/// not on this disk. So [`refresh_remote_shelf`] uses the engine with a
-/// bound, and this stays the local route.
+/// A project does not, and the reason is subtree boundaries rather than
+/// cost. `vault_live`'s walk prunes at a **nested shelf** — a directory
+/// carrying a shelf marker, which for the Projects tier is precisely a
+/// sub-project's `project.md`. Routing a project through the engine would
+/// therefore stop copying sub-projects, which is arguably the intended
+/// model (`Depth::Surface`: a subscriber who took the album holds a
+/// *reference* to the song, not its bytes) and is emphatically a
+/// different change from fixing an overwrite. It is named here rather
+/// than made silently.
 ///
-/// The shelf is still registered for CRDT on **both** sides, which is
-/// the part that surprises: collaboration follows registration, and
-/// each org registers its own copy. What crosses the boundary is bytes
-/// and a base snapshot, exactly as for a wiki; what does not cross is a
-/// Loro document, which was never true of wikis either.
+/// The copy is still registered for CRDT on **both** sides, which is the
+/// part that surprises: collaboration follows registration, and each org
+/// registers its own copy. What crosses is bytes; what does not cross is
+/// a Loro document, which was never true of wikis either.
 ///
 /// # Errors
 ///
 /// Any failure reading upstream or writing the copy.
-pub fn refresh_assets(
+pub fn refresh_project(
     upstream_root: &Path,
     org_root: &Path,
     subscription: &wiki_proto::Subscription,
@@ -743,6 +780,55 @@ mod tests {
         .unwrap();
         assert_eq!(again.pulled, 0);
         assert_eq!(again.in_sync, 2);
+    }
+
+    /// A subscriber's edit to a shelf document survives a refresh, and
+    /// is reported — the same promise a wiki's copy makes, and the same
+    /// one `wiki.subscribe.refresh` makes for every subscribed source.
+    ///
+    /// This is the claim that a shelf's two refresh routes disagreed
+    /// about: the manifest path kept a divergent file and named it, and
+    /// the byte walker overwrote it. Which one a subscriber got depended
+    /// on whether the publisher happened to be on the same disk, which is
+    /// not a distinction a person who edited a file can see.
+    ///
+    /// t[verify wiki.subscribe.refresh] — for an asset shelf.
+    #[test]
+    fn a_subscribers_edit_to_a_shelf_document_is_kept_and_reported() {
+        let up = tempfile::tempdir().unwrap();
+        std::fs::write(up.path().join("track-one.md"), "# Track One\nupstream\n").unwrap();
+        let org = tempfile::tempdir().unwrap();
+        let sub = wiki_proto::Subscription {
+            domain: "acme.test".into(),
+            slug: "songs".into(),
+            kind: wiki_proto::subscription::SourceKind::Assets,
+            title: "songs".into(),
+            core: false,
+            declined: false,
+            selection: Default::default(),
+        };
+
+        // The same call the backend makes for a publisher on this disk.
+        let first = refresh_local_shelf(up.path(), org.path(), &sub).unwrap();
+        assert_eq!(first.pulled, 1);
+
+        // The subscriber annotates their copy — a key correction, a note
+        // in the margin. Ordinary use of a shelf you subscribe to.
+        let copy = assets_copy_dir(org.path(), &sub.domain, &sub.slug).join("track-one.md");
+        std::fs::write(&copy, "# Track One\nupstream\n\nWe play this in D.\n").unwrap();
+
+        let again = refresh_local_shelf(up.path(), org.path(), &sub).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&copy).unwrap(),
+            "# Track One\nupstream\n\nWe play this in D.\n",
+            "the subscriber's edit was overwritten by a refresh"
+        );
+        assert_eq!(
+            again.local_only,
+            vec!["track-one.md".to_owned()],
+            "and it has to be *reported*, or the subscriber cannot tell \
+             their copy has diverged: {again:?}"
+        );
     }
 
     /// The finding the remote-shelf path rests on: the vault engine's

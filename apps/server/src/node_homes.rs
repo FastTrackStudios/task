@@ -43,7 +43,7 @@
 //! (`wiki.boundary.no-subscribe`), so a chart inside one was resolvable
 //! and unfetchable — a `Reach::Reachable` naming a path nothing served.
 //! Moving the shelf out of the vault is what makes the two halves agree
-//! again, and it is why `wiki_live::materialize::refresh_assets` can
+//! again, and it is why `wiki_live::materialize::refresh_shelf` can
 //! bring a foreign song library down onto disk where
 //! `refresh_resource` never could.
 //!
@@ -743,7 +743,7 @@ mod tests {
     /// explaining that nothing served the path it *did* start with —
     /// the regression ADR 0004 said should not have landed. It names an
     /// asset group now, which is a shelf a subscription materialises
-    /// (`wiki_live::materialize::refresh_assets`), so resolving and
+    /// (`wiki_live::materialize::refresh_shelf`), so resolving and
     /// fetching agree again.
     #[test]
     fn a_chart_resolves_off_its_asset_shelf_and_names_a_reachable_path() {

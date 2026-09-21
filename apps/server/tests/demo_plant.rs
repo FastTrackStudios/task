@@ -867,7 +867,9 @@ async fn the_planted_song_shelf_is_subscribable_across_orgs() -> eyre::Result<()
     let root = upstream
         .local_root(&subscription)
         .expect("the shelf is reachable on this data root");
-    let out = wiki_live::materialize::refresh_assets(&root, alice.path(), &subscription)?;
+    // The one shelf route, and the same call the backend makes for a
+    // publisher on this disk.
+    let out = wiki_live::materialize::refresh_local_shelf(&root, alice.path(), &subscription)?;
     eyre::ensure!(out.pulled > 0, "a fresh subscription pulls the shelf");
     eyre::ensure!(out.skipped == 0, "a whole-shelf selection skips nothing");
 
