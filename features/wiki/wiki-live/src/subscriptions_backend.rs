@@ -739,20 +739,33 @@ impl Subscriptions for SubscriptionsBackend {
                 materialize::refresh_resource(root, &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
             }
-            // Any file, any size — so the byte walker rather than the
-            // vault engine, which carries markdown only and would drop
-            // a shelf's stems on the floor without saying so.
-            (Source::Local(root), SourceKind::Assets | SourceKind::Projects) => {
-                materialize::refresh_assets(root, &self.org_root, &held)
+            // A shelf takes one route wherever its publisher is, and the
+            // route is the wiki's: the vault engine, a base snapshot, and
+            // a subscriber's own edits kept and reported. The only thing
+            // the two cases differ in is what one fetch may weigh —
+            // nothing on this disk, `REMOTE_FILE_LIMIT` over a wire —
+            // because that is the only thing that actually differs.
+            //
+            // They used to differ in more, and it was not on purpose: the
+            // local route overwrote a file the subscriber had edited.
+            (Source::Local(root), SourceKind::Assets) => {
+                materialize::refresh_local_shelf(root, &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
             }
-            // A shelf crosses too, through the vault engine with a size
-            // bound: its documents are kilobytes, and the heavy content
-            // an asset names lives in a File Root
-            // (`materialize::refresh_remote_shelf`). What the bound
-            // refuses is reported, not attempted.
-            (Source::Remote(vault), SourceKind::Assets) => {
-                materialize::refresh_remote_shelf(vault.as_ref(), &self.org_root, &held)
+            (Source::Remote(vault), SourceKind::Assets) => materialize::refresh_shelf(
+                vault.as_ref(),
+                &self.org_root,
+                &held,
+                materialize::REMOTE_FILE_LIMIT,
+            )
+            .map_err(|e| WikiError::Io(e.to_string()))?,
+            // A project keeps the byte walker, and `refresh_project` says
+            // why: the engine prunes at a nested shelf, which on the
+            // Projects tier is exactly a sub-project. Changing what a
+            // subscriber of a parent project receives is a different
+            // decision from fixing an overwrite.
+            (Source::Local(root), SourceKind::Projects) => {
+                materialize::refresh_project(root, &self.org_root, &held)
                     .map_err(|e| WikiError::Io(e.to_string()))?
             }
             // A project does not cross as a subscription, and that is a

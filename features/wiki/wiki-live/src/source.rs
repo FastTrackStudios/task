@@ -79,10 +79,14 @@ impl<T: VaultSync + Send + Sync> SourceVault for T {
 pub enum Source {
     /// A publisher on this same data root — its directory.
     ///
-    /// Still a path rather than a [`SourceVault`], because a publisher on
-    /// this disk is cheaper to read as a tree: `materialize::refresh_assets`
-    /// copies a shelf or a corpus file by file with no round trip and no
-    /// size to bound, which is exactly what the wire cannot offer.
+    /// Still a path rather than a [`SourceVault`], because two kinds are
+    /// read as a tree and not through the engine: a **Resource** is
+    /// copied whole into the corpus library a reader opens, and a
+    /// **project** is walked by `materialize::refresh_project`, whose docs
+    /// give the reason (the engine prunes at a nested shelf, which on the
+    /// Projects tier is a sub-project). A shelf used to be a third; it is
+    /// not any more, and this enum will collapse on the day those two are
+    /// not either.
     Local(PathBuf),
     /// A publisher on another server, reached over the wire.
     ///
