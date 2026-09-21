@@ -296,7 +296,7 @@ impl TaskClient {
     /// over either transport, which is the entire point.
     pub async fn org<C>(&self, slug: &str) -> Result<C>
     where
-        C: vox_core::FromVoxLane,
+        C: vox_core::FromVoxLane + 'static,
     {
         let url = self.org_vox_url(slug);
         self.org_at(&url).await
@@ -338,7 +338,7 @@ impl TaskClient {
     /// both.
     pub async fn org_at<C>(&self, url: &str) -> Result<C>
     where
-        C: vox_core::FromVoxLane,
+        C: vox_core::FromVoxLane + 'static,
     {
         let slug = transport::slug_of(url);
         if self.is_embedded() {
@@ -351,7 +351,9 @@ impl TaskClient {
             if self.config.use_session {
                 transport::dial_authenticated(url).await
             } else {
-                vox::connect_lane(url).establish().await
+                // The same dial with no identity offered, so a signed-out
+                // caller's errors have the shape a signed-in caller's do.
+                task_dial::establish_at(url, None).await
             }
         };
         match Box::pin(dial).await {
@@ -367,7 +369,7 @@ impl TaskClient {
                 }
                 Err(Error::Connect {
                     url: url.to_owned(),
-                    cause: format!("{e:?}"),
+                    cause: e,
                 })
             }
         }
@@ -386,7 +388,7 @@ impl TaskClient {
     /// [`org`]: Self::org
     pub async fn server<C>(&self) -> Result<(C, String)>
     where
-        C: vox_core::FromVoxLane,
+        C: vox_core::FromVoxLane + 'static,
     {
         if self.is_embedded() {
             let emb = embedded().await?;
@@ -434,7 +436,7 @@ impl TaskClient {
     /// it via configuration; this reaches it directly.
     pub async fn in_process<C>(&self, slug: &str) -> Result<C>
     where
-        C: vox_core::FromVoxLane,
+        C: vox_core::FromVoxLane + 'static,
     {
         let emb = embedded().await?;
         emb.state

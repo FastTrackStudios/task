@@ -14,6 +14,8 @@ repository.workspace = true
 # handshake request (the session token rides the upgrade) and hands the
 # finished stream to `WsLink::new`, which `connect_lane` has no seam for.
 vox = { workspace = true, features = ["transport-websocket", "transport-websocket-tls"] }
+# The dial, shared with the web app and with any app outside this repo.
+task-dial.workspace = true
 vox-core = { workspace = true }
 vox-websocket = { workspace = true }
 # Never enabled by vox-websocket itself; this direct dependency exists

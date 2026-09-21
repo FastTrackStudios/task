@@ -54,245 +54,28 @@
 
 use crate::vox_session::vox_url;
 
-/// The subprotocol every dial offers and the server selects. Offering any
-/// subprotocol makes the server's echo mandatory, so this is what lets the
-/// bearer subprotocol below be added without breaking the handshake.
-///
-/// Mirrors `task_server::VOX_SUBPROTOCOL` — duplicated rather than
-/// imported because the web client must not depend on the server crate.
-#[cfg(any(target_arch = "wasm32", test))]
-const VOX_SUBPROTOCOL: &str = "vox.v1";
-
-/// Prefix of the subprotocol carrying the session token
-/// (`task_server::VOX_BEARER_SUBPROTOCOL_PREFIX`).
-#[cfg(any(target_arch = "wasm32", test))]
-const VOX_BEARER_SUBPROTOCOL_PREFIX: &str = "vox.bearer.";
-
 /// Establish a client of type `C` against `url`, presenting `bearer` at
 /// the handshake — no caching. Shared by every public helper; cross-target.
 ///
-/// ## Why the identity rides the handshake
+/// The dial itself is [`task_dial::establish_at`]: the browser's
+/// cancel-safe socket, the native `Authorization` handshake, and the
+/// subprotocol rule that carries a token where a browser can set no
+/// headers. All of that used to live here, which is why the web app had a
+/// working browser dial while every other application hand-rolled one —
+/// and the cancel-safety is exactly the part a hand-rolled version gets
+/// wrong, which kills the page rather than the request.
 ///
-/// vox middleware is per *typed client*, keyed to a service descriptor
-/// (`Caller::call` skips middleware entirely when no service is attached,
-/// and generated clients attach their own descriptor inside
-/// `from_vox_lane`), so there is no per-call choke point here to hang a
-/// token on — every one of the ~117 client constructions would have to
-/// remember, and a forgotten one fails OPEN and silently. One connection
-/// per endpoint is now genuinely true (see the module docs), so the token
-/// is presented ONCE, at establish, and the server applies it to every
-/// call on that connection.
+/// What stays here is the **caching** above it (see the module docs): one
+/// root per endpoint, single-flighted, revalidated on every access. That
+/// is a UI policy, not a property of dialling.
 async fn establish_at<C>(url: &str, bearer: Option<&str>) -> Result<C, String>
 where
     C: vox_core::FromVoxLane + 'static,
 {
-    use vox_core::initiator_on;
     if url.is_empty() {
         return Err("no vox URL configured (set TASK_VOX_URL[_WEB])".to_owned());
     }
-    #[cfg(target_arch = "wasm32")]
-    let link = dial_ws(url, bearer).await?;
-    #[cfg(not(target_arch = "wasm32"))]
-    let link = dial_ws_native(url, bearer).await?;
-    initiator_on(link)
-        .establish::<C>()
-        .await
-        .map_err(|e| format!("establish `{url}`: {e:?}"))
-}
-
-/// The subprotocol list a dial offers: always [`VOX_SUBPROTOCOL`], plus
-/// `vox.bearer.<token>` when signed in.
-///
-/// The token deliberately does NOT ride a URL query parameter — those land
-/// in every proxy and access log on the path. Session tokens are
-/// base64url-no-pad, and the issuer's redirect-flow tokens are JWT-shaped
-/// (base64url segments joined by `.`); both fit the RFC 7230 token
-/// charset a subprotocol value must use, so no extra encoding is needed.
-/// The dot matters: the OAuth token was being dropped for containing
-/// one, so a person who signed in through the issuer's redirect dialled
-/// every socket anonymously and saw "not a member" on every screen. A
-/// token containing anything outside that charset is still dropped
-/// rather than sent as a malformed header that would fail the whole
-/// handshake.
-///
-/// Browser-only: native presents the identity as an `Authorization`
-/// header instead (see [`dial_ws_native`] for why symmetry is a trap).
-/// `cfg(test)` keeps it compiled for the unit tests, which run natively.
-#[cfg(any(target_arch = "wasm32", test))]
-fn subprotocols(bearer: Option<&str>) -> Vec<String> {
-    let mut protos = vec![VOX_SUBPROTOCOL.to_owned()];
-    if let Some(token) = bearer.filter(|t| {
-        !t.is_empty()
-            && t.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
-    }) {
-        protos.push(format!("{VOX_BEARER_SUBPROTOCOL_PREFIX}{token}"));
-    }
-    protos
-}
-
-/// Native dial. Unlike a browser, a native client controls its handshake
-/// request, so the token goes in a plain `Authorization: Bearer` header —
-/// the same channel the HTTP surface (`/blobs`, `/media`, the watch
-/// bridge) already accepts.
-///
-/// This replaces `WsLink::connect`, which takes only a URL. It builds the
-/// same `tokio_tungstenite` stream and hands it to the public
-/// `WsLink::new`.
-///
-/// ## Why native offers NO subprotocol
-///
-/// Symmetry with the browser dial would be nice, and costs an outage.
-/// tungstenite is stricter than RFC 6455 here: the spec lets a server that
-/// selects no subprotocol simply omit the response header (§4.2.2, and
-/// browsers accept that), but tungstenite treats "I offered, you didn't
-/// echo" as a **handshake failure**
-/// (`SubProtocolError::NoSubProtocol`). So a native client offering
-/// `vox.bearer.…` cannot talk to any peer that doesn't echo it — an older
-/// task-server, or an ingress/proxy that drops the header. The
-/// `Authorization` header needs no negotiation and has none of that
-/// coupling, so native uses it alone.
-#[cfg(not(target_arch = "wasm32"))]
-async fn dial_ws_native(
-    url: &str,
-    bearer: Option<&str>,
-) -> Result<vox_websocket::WsLink<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, String>
-{
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-
-    let mut request = url
-        .into_client_request()
-        .map_err(|e| format!("ws request `{url}`: {e:?}"))?;
-    if let Some(token) = bearer.filter(|t| !t.is_empty()) {
-        if let Ok(value) = format!("Bearer {token}").parse() {
-            request.headers_mut().insert("authorization", value);
-        }
-    }
-    let (stream, _response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("ws connect `{url}`: {e:?}"))?;
-    Ok(vox_websocket::WsLink::new(stream))
-}
-
-/// Cancel-safe browser WebSocket dial (wasm replacement for
-/// `vox_websocket::WsLink::connect`).
-///
-/// `WsLink::connect`'s dial phase is not cancel-safe: it attaches
-/// `onopen`/`onerror` wasm-bindgen closures to the connecting socket and
-/// only detaches them on the *success* path. On the error path — and,
-/// worse, when the connect **future is dropped mid-dial** (the app-root
-/// supervisor restarts the moment org discovery lands and its signal
-/// dependency fires) — the closures drop while still attached to a
-/// socket that hasn't finished failing. The browser then delivers the
-/// socket's `error`/`close` event into the freed closure, surfacing as
-/// an uncaught `closure invoked recursively or after being dropped`.
-///
-/// This dial keeps the connect-phase closures in a guard whose `Drop`
-/// **detaches them from the socket first** (and closes a socket we're
-/// abandoning), so no event can ever reach a dropped closure — drop
-/// order inside one synchronous Rust drop can't be interleaved with
-/// browser event dispatch. On success the guard detaches and hands the
-/// open socket to `WsLink::new`, which installs the steady-state
-/// handlers it owns.
-#[cfg(target_arch = "wasm32")]
-async fn dial_ws(url: &str, bearer: Option<&str>) -> Result<vox_websocket::WsLink, String> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen::closure::Closure;
-
-    /// Connect-phase state: the socket plus its temporary handlers.
-    /// Detaches the handlers before the closure fields drop; closes the
-    /// socket unless the dial completed and ownership moved to `WsLink`.
-    struct Dial {
-        ws: web_sys::WebSocket,
-        _onopen: Closure<dyn FnMut()>,
-        _onerror: Closure<dyn FnMut(web_sys::Event)>,
-        _onclose: Closure<dyn FnMut(web_sys::CloseEvent)>,
-        keep_open: bool,
-    }
-    impl Drop for Dial {
-        fn drop(&mut self) {
-            // Detach FIRST — after these lines the browser holds no
-            // reference into the closures, so dropping them (field drop,
-            // right after this body) is always safe.
-            self.ws.set_onopen(None);
-            self.ws.set_onerror(None);
-            self.ws.set_onclose(None);
-            if !self.keep_open {
-                // Abandoned dial (error or caller cancellation): tear the
-                // socket down so it doesn't keep connecting in the void.
-                let _ = self.ws.close();
-            }
-        }
-    }
-
-    // The browser's ONE lever on a WebSocket handshake: a browser cannot
-    // set request headers, and the token must not ride the URL, so the
-    // subprotocol list is where identity goes (see `subprotocols`).
-    let protocols = js_sys::Array::new();
-    for proto in subprotocols(bearer) {
-        protocols.push(&wasm_bindgen::JsValue::from_str(&proto));
-    }
-    let ws = web_sys::WebSocket::new_with_str_sequence(url, &protocols)
-        .map_err(|e| format!("WebSocket::new `{url}`: {e:?}"))?;
-    ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
-
-    let (tx, rx) = futures_channel::oneshot::channel::<Result<(), String>>();
-    let tx = Rc::new(RefCell::new(Some(tx)));
-
-    // FnMut (not `Closure::once`) so a stray double-fire can't trip
-    // wasm-bindgen's invoked-after-consumed check; the oneshot's
-    // take() makes later fires no-ops.
-    let tx_open = Rc::clone(&tx);
-    let onopen = Closure::wrap(Box::new(move || {
-        if let Some(tx) = tx_open.borrow_mut().take() {
-            let _ = tx.send(Ok(()));
-        }
-    }) as Box<dyn FnMut()>);
-    let tx_error = Rc::clone(&tx);
-    let err_url = url.to_owned();
-    let onerror = Closure::wrap(Box::new(move |_: web_sys::Event| {
-        if let Some(tx) = tx_error.borrow_mut().take() {
-            let _ = tx.send(Err(format!("WebSocket open failed: `{err_url}`")));
-        }
-    }) as Box<dyn FnMut(web_sys::Event)>);
-    // `close` can arrive without a preceding `error` (clean rejection);
-    // without this handler such a dial would hang forever.
-    let tx_close = Rc::clone(&tx);
-    let close_url = url.to_owned();
-    let onclose = Closure::wrap(Box::new(move |e: web_sys::CloseEvent| {
-        if let Some(tx) = tx_close.borrow_mut().take() {
-            let _ = tx.send(Err(format!(
-                "WebSocket closed during open: `{close_url}` (code {})",
-                e.code()
-            )));
-        }
-    }) as Box<dyn FnMut(web_sys::CloseEvent)>);
-
-    ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
-    ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-    ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
-
-    let mut dial = Dial {
-        ws,
-        _onopen: onopen,
-        _onerror: onerror,
-        _onclose: onclose,
-        keep_open: false,
-    };
-
-    // Cancellation-safe await: dropping this future drops `dial`, whose
-    // Drop detaches the handlers and closes the half-open socket.
-    rx.await.map_err(|_| "dial cancelled".to_owned())??;
-
-    // Success: keep the socket, detach the connect-phase handlers (the
-    // guard's Drop), and let WsLink install its own.
-    dial.keep_open = true;
-    let ws = dial.ws.clone();
-    drop(dial);
-    Ok(vox_websocket::WsLink::new(ws))
+    task_dial::establish_at(url, bearer).await
 }
 
 /// Untyped root lane — retains the raw [`vox_core::Caller`] plus the
@@ -705,49 +488,9 @@ where
 
 #[cfg(test)]
 mod subprotocol_tests {
-    use super::{VOX_SUBPROTOCOL, subprotocols};
-
-    #[test]
-    fn anonymous_offers_only_the_plain_protocol() {
-        assert_eq!(subprotocols(None), vec![VOX_SUBPROTOCOL.to_owned()]);
-        assert_eq!(subprotocols(Some("")), vec![VOX_SUBPROTOCOL.to_owned()]);
-    }
-
-    #[test]
-    fn signed_in_appends_the_bearer_protocol() {
-        // A real session token's shape: base64url, no padding.
-        assert_eq!(
-            subprotocols(Some("Zm9v-ba_r9")),
-            vec!["vox.v1".to_owned(), "vox.bearer.Zm9v-ba_r9".to_owned()]
-        );
-    }
-
-    /// The issuer's redirect flow hands back a JWT: three base64url
-    /// segments joined by dots. It must ride the handshake whole.
-    #[test]
-    fn a_jwt_shaped_token_is_offered() {
-        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abc-DEF_123";
-        assert_eq!(
-            subprotocols(Some(jwt)),
-            vec![VOX_SUBPROTOCOL.to_owned(), format!("vox.bearer.{jwt}")]
-        );
-    }
-
-    #[test]
-    fn a_token_outside_the_subprotocol_charset_is_dropped() {
-        // Not a silent downgrade for real tokens — `generate_token`
-        // produces base64url-no-pad, which always passes. This guards
-        // the case where something else ends up in the holder: sending
-        // it raw would produce a malformed header and fail the ENTIRE
-        // handshake, so the page would go dark rather than degrade.
-        for bad in ["has space", "has,comma", "base64+pad=", "quote\"d"] {
-            assert_eq!(
-                subprotocols(Some(bad)),
-                vec![VOX_SUBPROTOCOL.to_owned()],
-                "{bad:?} should not be offered as a subprotocol"
-            );
-        }
-    }
+    //! The subprotocol rule itself moved to `task-dial` with the dial it
+    //! belongs to, and its tests went with it. What is left here is the
+    //! URL handling this module still owns.
 
     #[test]
     fn link_passwords_survive_url_hostile_characters() {

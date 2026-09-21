@@ -294,6 +294,10 @@ ci-clippy: css
 
 ci-wasm: css
     cargo check --target wasm32-unknown-unknown -p task-app-web
+    # The browser dial is what an app outside this repo depends on, so the
+    # gate checks it on its own too: `task-app-web` would keep compiling
+    # if `task-dial` grew a native-only dependency behind a cfg.
+    cargo check --target wasm32-unknown-unknown -p task-dial
 
 ci-docs:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps

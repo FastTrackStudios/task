@@ -25,6 +25,7 @@ members = [
     "crates/player-ui",
     "crates/plugin",
     "crates/task-client",
+    "crates/task-dial",
     "crates/ui",
     "crates/ui-core",
     "crates/widgets",
@@ -397,6 +398,9 @@ task = { path = "features/task/task", default-features = false }
 task-proto = { path = "features/task/task-proto", default-features = false }
 task-ui = { path = "features/task/task-ui" }
 task-client = { path = "crates/task-client", default-features = false }
+# The dial itself, wasm and native — what a browser app depends on when
+# it wants typed clients and none of `task-client`'s native machinery.
+task-dial = { path = "crates/task-dial" }
 task-server = { path = "apps/server" }
 threads = { path = "features/threads/threads" }
 threads-db = { path = "features/threads/threads-db" }

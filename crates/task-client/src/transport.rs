@@ -163,62 +163,35 @@ pub fn session_bearer_for(url: &str) -> Option<String> {
 /// Dial `url` and establish `C`, presenting the stored session identity
 /// on the handshake.
 ///
-/// `vox::connect_lane` takes only a URL, and vox middleware is per typed
-/// client (keyed to a service descriptor) rather than per connection — so
-/// there is no choke point on the call path to hang a token on. The
-/// identity therefore rides the WebSocket upgrade, as the web client does
-/// it (`task_ui_core::vox_clients`), and the server applies it to every
-/// call on the connection. Without this a client reaches the permission
-/// gate as `principal=anonymous` on every RPC — fine while the gate is
+/// The dial is [`task_dial::establish_at`] — one dial for every Task
+/// client, browser or native. What this adds is the *policy* this crate
+/// owns: which token, from the session file, for this URL
+/// ([`session_bearer_for`]). A dial with no stored session presents none
+/// and reaches the server as `anonymous`, which is a real answer rather
+/// than an error: the public surface exists.
+///
+/// # Why the identity rides the handshake at all
+///
+/// vox middleware is per typed client, keyed to a service descriptor,
+/// rather than per connection — so there is no choke point on the call
+/// path to hang a token on. The identity therefore rides the WebSocket
+/// upgrade and the server applies it to every call on the connection.
+/// Without it a client reaches the permission gate as
+/// `principal=anonymous` on every RPC: fine while the gate is
 /// observe-only, refused the moment `TASK_ENFORCE_PERMISSIONS=1`.
 ///
-/// The token goes in `Authorization`, NOT the `vox.bearer.…` subprotocol
-/// the browser uses: tungstenite fails the handshake outright when it
-/// offers a subprotocol the peer doesn't echo, which would make a native
-/// client unable to reach an older server or anything behind a proxy that
-/// drops the header. See `dial_ws_native` in task-ui-core.
+/// **`wss://` callers must install a rustls `CryptoProvider` first** —
+/// see `task_dial::dial_ws_native`. `apps/cli`'s `main()` installs `ring`
+/// explicitly; anything else linking this crate for TLS must do the same.
 ///
-/// **wss:// callers must install a rustls `CryptoProvider` first.** A
-/// binary whose graph unifies both `ring` and `aws-lc-rs` leaves rustls
-/// unable to choose, and the failure surfaces here as an opaque connect
-/// error. `apps/cli`'s `main()` installs `ring` explicitly; anything
-/// else linking this crate for TLS must do the same.
-pub async fn dial_authenticated<C>(url: &str) -> Result<C, vox_core::ConnectionError>
+/// # Errors
+///
+/// The dial or the vox handshake failing, as a message.
+pub async fn dial_authenticated<C>(url: &str) -> Result<C, String>
 where
-    C: vox_core::FromVoxLane,
+    C: vox_core::FromVoxLane + 'static,
 {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-
-    // A tokenless dial stays on the stock path — identical behaviour to
-    // an unauthenticated client, including its error shapes.
-    let Some(token) = session_bearer_for(url) else {
-        return vox::connect_lane(url).establish().await;
-    };
-    let request = {
-        let build = || {
-            let mut request = url.into_client_request().ok()?;
-            request
-                .headers_mut()
-                .insert("authorization", format!("Bearer {token}").parse().ok()?);
-            Some(request)
-        };
-        build()
-    };
-    // An unrepresentable URL or header is not an auth problem; let the
-    // stock path produce its usual error for it.
-    let Some(request) = request else {
-        return vox::connect_lane(url).establish().await;
-    };
-    match tokio_tungstenite::connect_async(request).await {
-        Ok((stream, _response)) => {
-            vox_core::initiator_on(vox_websocket::WsLink::new(stream))
-                .establish::<C>()
-                .await
-        }
-        // Report through the stock path so the caller's error hint (and
-        // the embedded fallback above it) still applies.
-        Err(_) => vox::connect_lane(url).establish().await,
-    }
+    task_dial::establish_at(url, session_bearer_for(url).as_deref()).await
 }
 
 #[cfg(test)]

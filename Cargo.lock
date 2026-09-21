@@ -21018,6 +21018,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "task-dial",
  "task-server",
  "tempfile",
  "tokio",
@@ -21026,6 +21027,20 @@ dependencies = [
  "vox",
  "vox-core",
  "vox-websocket",
+]
+
+[[package]]
+name = "task-dial"
+version = "0.1.0"
+dependencies = [
+ "futures-channel",
+ "js-sys",
+ "tokio",
+ "tokio-tungstenite",
+ "vox-core",
+ "vox-websocket",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -21395,6 +21410,7 @@ dependencies = [
  "pollster 0.4.0",
  "serde",
  "serde_json",
+ "task-dial",
  "task-plugin",
  "tokio",
  "tokio-tungstenite",

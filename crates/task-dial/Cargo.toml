@@ -1,0 +1,44 @@
+[package]
+name = "task-dial"
+description = "One authenticated vox dial, two transports: a browser WebSocket and a native one. What an app outside this repo needs in order to reach a Task server, and nothing else."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The vox runtime and the WebSocket link. `WsLink::new` takes a socket
+# somebody else opened, which is the seam this crate exists to fill: both
+# dials build their own socket so the identity can ride the handshake.
+vox-core.workspace = true
+vox-websocket.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser dial. `js_sys::Array` is the subprotocol list — a browser
+# sets no request headers, so that list is where the token goes.
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "WebSocket",
+    "BinaryType",
+    "Event",
+    "CloseEvent",
+] }
+# The oneshot the connect-phase handlers resolve.
+futures-channel.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The native dial. `vox-websocket` never enables tokio-tungstenite's TLS
+# itself, so naming the features here unifies `wss://` support into the
+# shared instance — the same declaration `apps/cli` and `ui-core` carry.
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-webpki-roots",
+] }
+
+[lints]
+workspace = true

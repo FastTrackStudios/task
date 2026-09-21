@@ -27,6 +27,10 @@ task-plugin.workspace = true
 # Vox runtime + the WebSocket transport the per-org connection root dials.
 vox-core.workspace = true
 vox-websocket.workspace = true
+# The dial, shared with every other Task client: the browser's
+# cancel-safe socket and the native handshake both live there now, so a
+# UI crate is not where an external app has to look for them.
+task-dial.workspace = true
 
 # `media_grant` — the signed-URL grants any media-URL-building surface
 # (stem player, review player) mints and caches here.
