@@ -75,7 +75,6 @@
 //! password and expiry — neither is a parameter on this trait.
 
 use facet::Facet;
-use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use files_proto::error::FilesFault;
@@ -104,45 +103,44 @@ const ALL: [Capability; 7] = [
 
 // ── Identity ───────────────────────────────────────────────────────
 
-/// The principal this process speaks for.
-///
-/// Minted once per process, exactly as `super::version::this_principal`
-/// is and for the same reason: no method on this trait carries a caller.
-/// Public because the resolution it feeds is public — a test, and later
-/// a dispatcher, has to be able to name the subject the trait methods
-/// use.
+/// The principal this process speaks for — what an in-process call, with
+/// no gate and no caller, acts as. One id for every lane; see
+/// [`crate::lane::caller::process_principal`].
 #[must_use]
 pub fn this_principal() -> PrincipalId {
-    static ME: OnceLock<PrincipalId> = OnceLock::new();
-    *ME.get_or_init(PrincipalId::generate)
+    crate::lane::caller::process_principal()
 }
 
-/// WHO is asking, as the access lane names subjects.
-///
-/// Three answers, and the middle one is the load-bearing one:
-///
-/// - **A signed-in person** → their own subject, so their grants decide.
-///   The id is the account's, not a second identity invented here: a
-///   grant made to a person and a session held by that person have to
-///   name the same principal or the grant governs nobody.
-/// - **No caller at all** → the process itself, which is what
-///   [`this_principal`] has always meant. An in-process call has no wire
-///   and no gate in front of it; it is the server acting on its own
-///   behalf, and that is the case the owner shortcut exists for. Every
-///   call that arrives over a transport passes through
-///   `org_router_guarded`, so "no caller" is not reachable from outside.
-/// - **Anything else** → no subject. A host, a share guest and a service
-///   are all callers with credentials and none of them is a person with
-///   grants, so resolving them to *some* subject could only be a guess.
+/// WHO is asking, as the access lane names subjects — a person (or the
+/// process) by their own id, and nobody for a host, guest or service.
+/// See [`crate::lane::caller`] for why.
 fn calling_subject() -> Option<Subject> {
-    match architect::permissions_gate::caller() {
-        None => Some(Subject::Person(this_principal())),
-        Some(architect_permissions::Principal::User { user_id }) => user_id
-            .parse::<uuid::Uuid>()
-            .ok()
-            .map(|id| Subject::Person(PrincipalId::new(id))),
-        Some(_) => None,
-    }
+    crate::lane::caller::subject()
+}
+
+/// The caller's subject and what they hold at `path`: their role's
+/// baseline united with their grants.
+///
+/// Outside every grant a caller with a baseline still holds the
+/// baseline — the role reaches every path — while one without either
+/// gets `resolved`'s absence.
+async fn caller_holds(
+    backend: &FilesBackend,
+    root_id: RootId,
+    path: &RootPath,
+) -> Result<(Subject, Vec<Capability>), FilesFault> {
+    let me = calling_subject().ok_or_else(|| {
+        FilesFault::invalid("this caller is not a person, so it holds no capabilities")
+    })?;
+    let baseline = crate::lane::caller::baseline(backend).await;
+    let granted = match resolved(backend, &me, root_id, path) {
+        Ok(caps) => caps,
+        Err(FilesFault::PathNotFound(_)) if !baseline.is_empty() => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    let mut caps = baseline;
+    caps.extend(granted);
+    Ok((me, canonical(caps)))
 }
 
 /// Whether a subject is the process's own principal.
@@ -333,13 +331,9 @@ impl FilesBackend {
         }
     }
 
-    /// Refuse unless the **caller** may do `capability` at `path`.
-    ///
-    /// The one every other lane calls. `authorise` takes an explicit
-    /// subject and is the right shape for the access lane's own methods,
-    /// where the subject is an argument; a lane acting on a request has
-    /// no subject to pass and must not invent one, so it asks about
-    /// whoever is on the other end.
+    /// Refuse unless the **caller** may do `capability` at `path` — role
+    /// baseline or grant. The one every other lane calls; see
+    /// [`crate::lane::caller::authorise`].
     ///
     /// `files.access.granularity` is why this is per path rather than per
     /// root: a client holding `Deliverables` and nothing else must be
@@ -347,19 +341,28 @@ impl FilesBackend {
     /// distinguish "you may not" from "there is nothing there" — see
     /// [`resolved`], which fails the lookup rather than returning an
     /// empty capability set.
-    pub fn authorise_caller(
+    pub async fn authorise_caller(
         &self,
         root_id: RootId,
         path: &RootPath,
         capability: Capability,
     ) -> Result<(), FilesFault> {
-        let Some(me) = calling_subject() else {
-            return Err(FilesFault::denied(
-                format!("{capability:?}"),
-                path.clone().validate()?,
-            ));
-        };
-        self.authorise(&me, root_id, path, capability)
+        crate::lane::caller::authorise(self, root_id, path, capability).await
+    }
+
+    /// Whether `subject` holds any live grant anywhere in `root_id` — the
+    /// "can they name this root at all" question a root listing asks.
+    #[must_use]
+    pub fn holds_anything_in(&self, subject: &Subject, root_id: RootId) -> bool {
+        if is_owner(subject) {
+            return true;
+        }
+        let now = Utc::now();
+        read_state(self, |s| {
+            s.grants
+                .iter()
+                .any(|g| g.root_id == root_id && g.subject == *subject && is_live(g, now))
+        })
     }
 
     // t[impl files.access.granularity]
@@ -409,6 +412,26 @@ impl FilesBackend {
         // answers `PathNotFound` there, which is the same absence the
         // grantee would see.
         let held = resolved(self, granter, root_id, &path)?;
+        self.grant_holding(held, granter, subject, root_id, path, capabilities)
+    }
+
+    /// The attenuation half of [`Self::grant_as`], for a granter whose
+    /// holdings are already known — the caller, whose role baseline
+    /// counts as much as their grants do.
+    fn grant_holding(
+        &self,
+        held: Vec<Capability>,
+        granter: &Subject,
+        subject: Subject,
+        root_id: RootId,
+        path: RootPath,
+        capabilities: Vec<Capability>,
+    ) -> Result<Grant, FilesFault> {
+        if capabilities.is_empty() {
+            return Err(FilesFault::invalid(
+                "a grant with no capabilities conveys nothing — revoke instead",
+            ));
+        }
         if !held.contains(&Capability::Share) {
             return Err(FilesFault::denied("Share", path));
         }
@@ -447,13 +470,15 @@ impl AccessService for FilesBackend {
         // grant is policy about a name, and requiring the folder to
         // exist would make granting fail on a root whose content has not
         // yet synced to this device.
-        self.grant_as(
-            &Subject::Person(this_principal()),
-            subject,
-            root_id,
-            path,
-            capabilities,
-        )
+        //
+        // The granter is whoever is asking, attenuated by everything they
+        // hold — an owner's role conveys `Share` without a grant to
+        // bootstrap from, which is how the first grant on a root gets
+        // made by a person rather than by the server.
+        crate::lane::root_or_fault(self, root_id)?;
+        let path = path.validate()?;
+        let (me, held) = caller_holds(self, root_id, &path).await?;
+        self.grant_holding(held, &me, subject, root_id, path, capabilities)
     }
 
     // t[impl files.access.internal-sharing] — revocation binds on the next
@@ -465,12 +490,8 @@ impl AccessService for FilesBackend {
         // already satisfied. Saying so is more useful than an error the
         // caller cannot act on.
         let existing = existing.ok_or(FilesFault::GrantRevoked(grant))?;
-        self.authorise(
-            &Subject::Person(this_principal()),
-            existing.root_id,
-            &existing.path,
-            Capability::Share,
-        )?;
+        crate::lane::caller::authorise(self, existing.root_id, &existing.path, Capability::Share)
+            .await?;
         with_state(self, |s| s.grants.retain(|g| g.id != grant));
         Ok(())
     }
@@ -485,6 +506,14 @@ impl AccessService for FilesBackend {
     ) -> Result<Vec<Grant>, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.map(|p| p.validate()).transpose()?;
+        // Who can see a path is itself something only a sharer may ask.
+        crate::lane::caller::authorise(
+            self,
+            root_id,
+            path.as_ref().unwrap_or(&RootPath::root()),
+            Capability::Share,
+        )
+        .await?;
         let now = Utc::now();
         Ok(read_state(self, |s| {
             s.grants
@@ -502,10 +531,14 @@ impl AccessService for FilesBackend {
         // process principal on every call, which made it the one method
         // that became *wrong* rather than merely incomplete the moment a
         // second user appeared on a server.
-        let me = calling_subject().ok_or_else(|| {
-            FilesFault::invalid("this caller is not a person, so it holds no capabilities")
-        })?;
-        self.effective_for(&me, root_id, &path)
+        crate::lane::root_or_fault(self, root_id)?;
+        let path = path.validate()?;
+        let (_, capabilities) = caller_holds(self, root_id, &path).await?;
+        Ok(Effective {
+            root_id,
+            path,
+            capabilities,
+        })
     }
 
     // t[impl files.access.internal-sharing] — the outward lane, kept
@@ -524,9 +557,10 @@ impl AccessService for FilesBackend {
                 "a link conveying nothing is not a link",
             ));
         }
-        let me = Subject::Person(this_principal());
-        self.authorise(&me, root_id, &path, Capability::Share)?;
-        let held = resolved(self, &me, root_id, &path)?;
+        let (_, held) = caller_holds(self, root_id, &path).await?;
+        if !held.contains(&Capability::Share) {
+            return Err(FilesFault::denied("Share", path));
+        }
         if let Some(over) = capabilities.iter().find(|c| !held.contains(c)) {
             // A link cannot convey more than its issuer holds, for the
             // same reason a grant cannot: otherwise `Share` is a
@@ -562,6 +596,14 @@ impl AccessService for FilesBackend {
         share: ShareId,
         disabled: bool,
     ) -> Result<ShareLink, FilesFault> {
+        let (root_id, path) = read_state(self, |s| {
+            s.shares
+                .iter()
+                .find(|l| l.id == share)
+                .map(|l| (l.root_id, l.path.clone()))
+        })
+        .ok_or_else(|| FilesFault::invalid(format!("no such share link: {share}")))?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Share).await?;
         with_state(self, |s| {
             let link = s
                 .shares
@@ -574,7 +616,7 @@ impl AccessService for FilesBackend {
     }
 
     async fn shares(&self, root_id: RootId) -> Result<Vec<ShareLink>, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_root(self, root_id, Capability::Share).await?;
         // Disabled links included: a paused link is one a human has to
         // be able to find in order to resume it, and omitting it would
         // make pausing look like deleting.

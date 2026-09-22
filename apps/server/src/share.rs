@@ -26,7 +26,9 @@ use std::sync::Mutex;
 use axum::extract::{Path as AxPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use files::FilesService as _;
+use files::service::{
+    CurationService as _, MediaService as _, RootsService as _, VersionService as _,
+};
 use futures_util::TryStreamExt as _;
 use sha2::{Digest, Sha256};
 use share_proto::{
@@ -444,7 +446,7 @@ impl ShareService for ShareServiceImpl {
                 ));
             };
             let root = files
-                .get_root(*root_id)
+                .get(files::RootId::new(*root_id))
                 .await
                 .map_err(|e| ShareError::Invalid(format!("root: {e}")))?;
             if root.flavor != files::RootFlavor::Media {
@@ -659,7 +661,11 @@ impl ShareService for ShareServiceImpl {
         let _ = std::fs::remove_file(&src);
         // The cadence engine sees the arrival like any other save; a
         // hint makes the capture prompt.
-        let _ = files.hint_activity(root_id, vec![dest_rel]).await;
+        if let Ok(path) = files::RootPath::parse(&dest_rel) {
+            let _ = files
+                .hint_activity(files::RootId::new(root_id), vec![path])
+                .await;
+        }
         Ok(())
     }
 }
@@ -813,7 +819,7 @@ async fn files_scope(
             // Resolve the curated entity to its exact change — the
             // whole point of a Named Version link (AC 2). The
             // `VersionRef` carries the root too; no org-wide scan.
-            let version = org.files.resolve_named_version(id).await.map_err(|e| {
+            let version = org.files.named_version(id).await.map_err(|e| {
                 (StatusCode::NOT_FOUND, format!("named version: {e}")).into_response()
             })?;
             Ok(Some(FilesScope {
@@ -932,13 +938,21 @@ pub async fn share_rendition_handler(
         return (StatusCode::NOT_FOUND, "this link serves one file").into_response();
     }
     let full = join_scope(&scope.subpath, &rel);
-    let rendition = match &scope.at {
-        Some(commit) => {
+    let rendition = match files::RootPath::parse(&full) {
+        Ok(path) => {
             org.files
-                .rendition_at(scope.root_id, full, commit.clone(), wire_kind)
+                .rendition_info(
+                    files::RootId::new(scope.root_id),
+                    path,
+                    wire_kind,
+                    scope
+                        .at
+                        .as_deref()
+                        .map(files::id::VersionId::from_commit_hex),
+                )
                 .await
         }
-        None => org.files.rendition(scope.root_id, full, wire_kind).await,
+        Err(e) => Err(e.into()),
     };
     let info = match rendition {
         Ok(info) => info,
@@ -1070,7 +1084,7 @@ pub async fn share_guest_vox_handler(
         Err(e) => return (StatusCode::NOT_FOUND, format!("review: {e}")).into_response(),
     };
     org.shares.log_access(&token, "guest", "");
-    let guest = crate::share_guest::GuestFilesService::new(
+    let guest = crate::share_guest::GuestLanes::new(
         org.files.clone(),
         review.clone(),
         org.shares.clone(),
@@ -1086,12 +1100,22 @@ pub async fn share_guest_vox_handler(
         &link,
         review.root_id,
     );
-    // The stream sibling rides too — the review page's live comment
-    // subscription works over the guest lane, fed by the service's own
-    // filtered event mirror (never the org-wide hub).
+    // Exactly the lanes the review surface needs, each served by the
+    // one link-scoped binding: the review and its comments, its file's
+    // chain, its renditions — and the stream sibling, so the review
+    // page's live comment subscription works over the guest lane,
+    // filtered to this review (never the org-wide stream).
     let router = architect::LayerRouter::new()
-        .merge(files::files_service_layer(guest.clone()))
-        .merge(files_proto::files_service_stream_layer(guest))
+        .with(
+            files::review_descriptor(),
+            files::serve_review(guest.clone()),
+        )
+        .with(
+            files::version_descriptor(),
+            files::serve_version(guest.clone()),
+        )
+        .with(files::media_descriptor(), files::serve_media(guest.clone()))
+        .merge(files::tree_stream_layer(guest))
         .with(
             media_proto::attachment_media_descriptor(),
             media_proto::AttachmentMediaDispatcher::new(media),
@@ -1265,10 +1289,18 @@ async fn render_browse(
             }
         },
     };
-    let listing = org
-        .files
-        .browse_at(scope.root_id, commit, full.clone())
-        .await;
+    let listing = match files::RootPath::parse(&full) {
+        Ok(path) => {
+            org.files
+                .browse_at(
+                    files::RootId::new(scope.root_id),
+                    path,
+                    files::id::VersionId::from_commit_hex(&commit),
+                )
+                .await
+        }
+        Err(e) => Err(e.into()),
+    };
     let base = format!("/org/{slug}/share/{token}");
     let pw = pw_suffix(q);
     match listing {

@@ -1,0 +1,33 @@
+HOUSE OF WOLVES - MY CHEMICAL ROMANCE
+4/4
+
+intro 8
+\ChordLength /
+| ^"DRUM INTRO" | r1 | r1 | r1 |
+    | ^"BAND IN" !E_4 !D_4 !C_4 !B_4 | !E_4 !D_4 !C_4 !B_4 | !E_4 !F#_4 !G_4 !F#_4 | !E_4 !D_4 !C_4 !B_4 |
+
+vs 4
+\ChordLength //
+|: ^"Second time WALK BASS" Em_2 !C_2 | !F#_2 !B_2 | Em_2 !C_2 | !A_2 !B_2 :|x2
+
+pre 2
+| !B_2 !C_2 | !C_4 !D_4 !Eb_2 |
+
+ch 4
+|: !E / | !C / | !G / | ^"BACK TO TOP \"BAND IN\"" !B / :|x2
+
+br 9
+|: ^"DT-TWICE" Em_4 !G_4 !A_2 :|x4 r1 | ^"DT-TWICE" Em_4 !G_4 !A_2 | r1 |
+    | ^"DT-TWICE" !B_4 !D_4 !E_2 | !E / | !B_2 !A_2 | !B_2 !D_2 |
+    | !B / |
+
+ch 4
+|: !E / | !C / | !G / | !B / :|x2
+
+ch 8
+| !E / | !C / | !G / | !B / |
+    | !E / | !C / | !G / | ^"STOP" !B / |
+
+intro 4
+\ChordLength /
+| !E_4 !D_4 !C_4 !B_4 | !E_4 !D_4 !C_4 !B_4 | !E_4 !F#_4 !G_4 !F#_4 | !E_4 !D_4 !C_4 !B_4 |

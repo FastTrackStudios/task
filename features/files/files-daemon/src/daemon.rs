@@ -15,11 +15,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use files::{FilesBackend, FilesService as _};
+use files::service::roots::{AdoptRequest, RootsService as _};
+use files::service::sync::SyncService as _;
+use files::service::version::{Resolution, VersionService as _};
+use files::{FilesBackend, RootId};
 use files_sync::{SyncObserver, SyncServiceClient, reconcile_with_progress};
 use uuid::Uuid;
 
-use crate::error::{DaemonError, Result};
+use crate::error::{DaemonError, Result, from_files, root_path};
 use crate::identity::DeviceIdentity;
 use crate::model::{DaemonStatus, FileProgress, RootStatus, RootSyncState};
 
@@ -609,7 +612,7 @@ impl SyncDaemon {
         let tree = self
             .inner
             .backend
-            .get_root(root_id)
+            .get(RootId::new(root_id))
             .await?
             .path
             .ok_or_else(|| {
@@ -743,7 +746,7 @@ impl SyncDaemon {
 
     /// Every root this machine holds, shared or synced.
     pub async fn shares(&self) -> Result<Vec<files_proto::model::FileRootInfo>> {
-        Ok(self.inner.backend.list_roots().await?)
+        Ok(self.inner.backend.list().await?)
     }
 
     /// Share a folder from this machine: version it, checkpoint it, and
@@ -809,17 +812,24 @@ impl SyncDaemon {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.to_string_lossy().into_owned())
         });
+        // Registered without the adoption's own hashing pass: the capture
+        // below (or the deferred one `capture: false` remembers) is this
+        // agent's, and a second capture racing it would only duplicate it.
         let root = self
             .inner
             .backend
-            .create_root(
-                path.to_string_lossy().into_owned(),
+            .adopt(AdoptRequest {
+                path: path.to_string_lossy().into_owned(),
                 name,
-                files_proto::model::RootFlavor::Media,
-            )
+                flavor: files_proto::model::RootFlavor::Media,
+                hash_content: false,
+            })
             .await?;
         if capture {
-            self.inner.backend.checkpoint_now(root.id, None).await?;
+            self.inner
+                .backend
+                .checkpoint(RootId::new(root.id), None)
+                .await?;
         } else {
             // Remembered, because `capture` has no other way to know: a
             // root's repo exists the moment it is registered, so there
@@ -830,7 +840,7 @@ impl SyncDaemon {
         // Watched from here on, so later edits are captured without
         // anyone asking — the same thing `start_capture` does for the
         // roots that already existed.
-        self.inner.backend.watch_root(root.id)?;
+        self.inner.backend.watch_root(root.id).map_err(from_files)?;
         self.inner.events.publish(self.status());
         Ok(root)
     }
@@ -1211,7 +1221,7 @@ impl SyncDaemon {
             let error = self
                 .inner
                 .backend
-                .checkpoint_now(id, None)
+                .checkpoint(RootId::new(id), None)
                 .await
                 .err()
                 .map(|e| e.to_string());
@@ -1316,7 +1326,10 @@ impl SyncDaemon {
     /// over.
     pub fn unshare(&self, root_id: Uuid) -> Result<()> {
         self.remove_sync_choice(root_id);
-        self.inner.backend.forget_root(root_id)?;
+        self.inner
+            .backend
+            .forget_root(root_id)
+            .map_err(from_files)?;
         self.inner.events.publish(self.status());
         Ok(())
     }
@@ -1349,7 +1362,7 @@ impl SyncDaemon {
             let path = self
                 .inner
                 .backend
-                .get_root(root.id)
+                .get(RootId::new(root.id))
                 .await
                 .ok()
                 .and_then(|r| r.path)
@@ -1484,7 +1497,7 @@ impl SyncDaemon {
         under: &std::path::Path,
     ) -> Result<DaemonStatus> {
         let peer = self.dial(endpoint_id).await?;
-        let name = match self.inner.backend.get_root(root_id).await {
+        let name = match self.inner.backend.get(RootId::new(root_id)).await {
             Ok(local) => local.name,
             Err(_) => {
                 let remote = Self::remote_roots(&peer)
@@ -1499,14 +1512,17 @@ impl SyncDaemon {
                 self.place_offered(&remote);
                 let tree = self.landing_for(under, &remote);
                 std::fs::create_dir_all(&tree).map_err(|e| DaemonError::Io(e.to_string()))?;
-                self.inner.backend.adopt_replica(
-                    root_id,
-                    &remote.name,
-                    tree.to_str().ok_or_else(|| {
-                        DaemonError::BadRequest(format!("{} is not utf-8", tree.display()))
-                    })?,
-                    remote.flavor,
-                )?;
+                self.inner
+                    .backend
+                    .adopt_replica(
+                        root_id,
+                        &remote.name,
+                        tree.to_str().ok_or_else(|| {
+                            DaemonError::BadRequest(format!("{} is not utf-8", tree.display()))
+                        })?,
+                        remote.flavor,
+                    )
+                    .map_err(from_files)?;
                 remote.name
             }
         };
@@ -1528,7 +1544,7 @@ impl SyncDaemon {
             .expect("coordinator lock")
             .clone()
             .ok_or_else(|| DaemonError::BadRequest("daemon has no coordinator set".into()))?;
-        let name = self.inner.backend.get_root(root_id).await?.name;
+        let name = self.inner.backend.get(RootId::new(root_id)).await?.name;
         self.set_sync_choice(root_id, &name, slice, peer).await?;
         Ok(self.status())
     }
@@ -1566,7 +1582,7 @@ impl SyncDaemon {
         // hydrates everything.
         self.inner
             .backend
-            .set_hydration_policy(root_id, slice.clone())
+            .set_residency(RootId::new(root_id), slice.clone())
             .await?;
         let mut roots = self.inner.roots.lock().expect("roots lock");
         let entry = roots.entry(root_id).or_insert_with(|| SyncedRoot {
@@ -1874,7 +1890,12 @@ impl SyncDaemon {
                 continue;
             }
             if self.inner.backend.cadence().session_open(root_id) {
-                if let Err(e) = self.inner.backend.checkpoint_now(root_id, None).await {
+                if let Err(e) = self
+                    .inner
+                    .backend
+                    .checkpoint(RootId::new(root_id), None)
+                    .await
+                {
                     tracing::warn!(
                         %root_id,
                         error = %e,
@@ -1998,7 +2019,7 @@ impl SyncDaemon {
                 let divergent: Vec<String> = self
                     .inner
                     .backend
-                    .divergences(root_id)
+                    .divergences(RootId::new(root_id))
                     .await
                     .map(|d| d.into_iter().map(|info| info.path.to_string()).collect())
                     .unwrap_or_default();
@@ -2070,15 +2091,32 @@ impl SyncDaemon {
     /// name. Keeping both puts each side on the disk under its own name
     /// (`<stem> (divergent n).<ext>`), where the file can be opened and
     /// the real decision made by whoever knows what is in it — which is
-    /// the app's job, and `resolve_divergence`'s `Pick` is how it does
-    /// it.
+    /// the app's job, and `resolve_divergence`'s keep-mine / keep-theirs
+    /// is how it does it.
     pub async fn keep_both(&self, root_id: Uuid, path: String) -> Result<()> {
+        // The lane names a divergence by one side's version, so find the
+        // path's before settling it.
+        let divergence = self
+            .inner
+            .backend
+            .divergences(RootId::new(root_id))
+            .await?
+            .into_iter()
+            .find(|d| d.path == path)
+            .ok_or_else(|| DaemonError::NotFound(format!("{path} is not divergent")))?;
+        let side = divergence
+            .sides
+            .first()
+            .ok_or_else(|| DaemonError::NotFound(format!("{path} is not divergent")))?;
         self.inner
             .backend
             .resolve_divergence(
-                root_id,
-                path,
-                files_proto::model::DivergenceChoice::KeepBoth,
+                RootId::new(root_id),
+                files::id::VersionId::from_commit_hex(&side.commit_id),
+                Resolution::KeepBoth {
+                    mine: String::new(),
+                    theirs: String::new(),
+                },
             )
             .await?;
         // A person just settled one. That is the other way the set can
@@ -2100,7 +2138,10 @@ impl SyncDaemon {
 
     /// Hydrate one path on demand (issue #263).
     pub async fn hydrate(&self, root_id: Uuid, path: String) -> Result<()> {
-        self.inner.backend.hydrate(root_id, path).await?;
+        self.inner
+            .backend
+            .hydrate(RootId::new(root_id), vec![root_path(&path)?], true)
+            .await?;
         Ok(())
     }
 
@@ -2129,9 +2170,13 @@ impl SyncDaemon {
     ) -> Result<crate::service::KeptReport> {
         self.inner
             .backend
-            .set_hydration_policy(root_id, patterns)
+            .set_residency(RootId::new(root_id), patterns)
             .await?;
-        let report = self.inner.backend.apply_hydration_policy(root_id).await?;
+        let report = self
+            .inner
+            .backend
+            .apply_residency(RootId::new(root_id))
+            .await?;
         self.inner.events.publish(self.status());
         Ok(crate::service::KeptReport {
             hydrated: report.hydrated.len() as u32,
@@ -2198,7 +2243,7 @@ impl SyncDaemon {
 
     /// The patterns this root keeps resident, empty for "everything".
     pub async fn kept(&self, root_id: Uuid) -> Result<Vec<String>> {
-        Ok(self.inner.backend.hydration_policy(root_id).await?)
+        Ok(self.inner.backend.residency(RootId::new(root_id)).await?)
     }
 
     /// Give a file's bytes back to the disk, leaving the file itself.
@@ -2210,13 +2255,19 @@ impl SyncDaemon {
     /// the content is in the version store and on the peers; what is
     /// released is the resident copy.
     pub async fn dehydrate(&self, root_id: Uuid, path: String) -> Result<()> {
-        self.inner.backend.dehydrate(root_id, path).await?;
+        self.inner
+            .backend
+            .hydrate(RootId::new(root_id), vec![root_path(&path)?], false)
+            .await?;
         Ok(())
     }
 
     /// Checkpoint one synced root's live tree now.
     pub async fn checkpoint_now(&self, root_id: Uuid) -> Result<()> {
-        self.inner.backend.checkpoint_now(root_id, None).await?;
+        self.inner
+            .backend
+            .checkpoint(RootId::new(root_id), None)
+            .await?;
         Ok(())
     }
 
@@ -2257,7 +2308,12 @@ impl SyncDaemon {
                 .collect()
         };
         for root_id in pending {
-            match self.inner.backend.checkpoint_now(root_id, None).await {
+            match self
+                .inner
+                .backend
+                .checkpoint(RootId::new(root_id), None)
+                .await
+            {
                 Ok(_) => tracing::debug!(
                     %root_id,
                     "files-daemon: committed local work before pulling"

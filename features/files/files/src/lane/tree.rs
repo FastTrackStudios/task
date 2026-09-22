@@ -8,7 +8,7 @@
 //! folder whose holding location is down has to list rather than appear
 //! empty (`files.catalogue.offline`).
 //!
-//! The live half delegates to the legacy `FilesService` methods, which
+//! The live half delegates to the backend's own listing, which
 //! already carry the confinement guard, the internals-hiding rules and
 //! the on-disk stub probe. Re-deriving any of that here would be a second
 //! implementation of the same rules, and the second one is the one that
@@ -49,6 +49,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::error::FilesError;
 use chrono::{DateTime, Utc};
 use files_domain::catalogue::{Catalogue, Change};
 use files_proto::error::FilesFault;
@@ -57,9 +58,8 @@ use files_proto::model::{BrowseEntry, FileRootInfo, RootFlavor, TreeNode};
 use files_proto::path::{RootPath, TreePath};
 use files_proto::service::access::Capability;
 use files_proto::service::tree::{
-    CatalogueDelta, CatalogueEntry, Cursor, EntryKind, Freshness, Hydration, TreeService,
+    CatalogueDelta, CatalogueEntry, Cursor, EntryKind, Freshness, Hydration, TreeEvent, TreeService,
 };
-use files_proto::{FilesError, FilesService};
 use jj_lib::gitignore::GitIgnoreFile;
 use jj_lib::repo_path::RepoPathBuf;
 
@@ -676,7 +676,8 @@ impl TreeService for FilesBackend {
         // answers "is this a member of the org", which is not the same
         // question — `files.access.granularity` puts access on the
         // content, so a client granted one folder is refused at the next.
-        self.authorise_caller(root_id, &path, Capability::Read)?;
+        self.authorise_caller(root_id, &path, Capability::Read)
+            .await?;
         self.listing_of(root_id, path).await
     }
 
@@ -685,7 +686,7 @@ impl TreeService for FilesBackend {
     /// about what the namespace contains.
     async fn resolve(&self, path: TreePath) -> Result<TreeNode, FilesFault> {
         let path = path.validate()?;
-        <Self as FilesService>::tree_browse(self, path.as_str().to_string())
+        self.tree_browse(path.as_str().to_string())
             .await
             .map_err(|e| match e {
                 FilesError::NotFound(_) => FilesFault::TreePathNotFound(path.clone()),
@@ -700,7 +701,8 @@ impl TreeService for FilesBackend {
     // t[impl files.catalogue.offline] — answered from structure, no filesystem
     async fn entry(&self, root_id: RootId, path: RootPath) -> Result<CatalogueEntry, FilesFault> {
         let path = path.validate()?;
-        self.authorise_caller(root_id, &path, Capability::Read)?;
+        self.authorise_caller(root_id, &path, Capability::Read)
+            .await?;
         let this = self.clone();
         let wanted = path.clone();
         crate::lane::blocking(move || {
@@ -721,10 +723,14 @@ impl TreeService for FilesBackend {
         root_id: RootId,
         cursor: Option<Cursor>,
     ) -> Result<CatalogueDelta, FilesFault> {
+        let narrow = self.catalogue_scope(root_id).await?;
         let from = cursor.unwrap_or_else(|| Cursor("0".to_string()));
         let this = self.clone();
-        crate::lane::blocking(move || Ok(with_catalogue(&this, root_id, |cat| page(cat, &from))))
-            .await?
+        let delta = crate::lane::blocking(move || {
+            Ok(with_catalogue(&this, root_id, |cat| page(cat, &from)))
+        })
+        .await??;
+        Ok(self.narrowed(root_id, narrow.as_ref(), delta))
     }
 
     /// Everything after `cursor` — the reconnect path, which never
@@ -735,9 +741,13 @@ impl TreeService for FilesBackend {
         root_id: RootId,
         cursor: Cursor,
     ) -> Result<CatalogueDelta, FilesFault> {
+        let narrow = self.catalogue_scope(root_id).await?;
         let this = self.clone();
-        crate::lane::blocking(move || Ok(with_catalogue(&this, root_id, |cat| page(cat, &cursor))))
-            .await?
+        let delta = crate::lane::blocking(move || {
+            Ok(with_catalogue(&this, root_id, |cat| page(cat, &cursor)))
+        })
+        .await??;
+        Ok(self.narrowed(root_id, narrow.as_ref(), delta))
     }
 
     /// What a view reads to say "as of" instead of implying now.
@@ -748,12 +758,18 @@ impl TreeService for FilesBackend {
     /// is the silent staleness the spec forbids.
     // t[impl files.catalogue.staleness]
     async fn freshness(&self) -> Result<Vec<Freshness>, FilesFault> {
+        let mut visible = Vec::new();
+        for root in self.registry_list() {
+            let id = RootId::new(root.id);
+            if crate::lane::caller::can_see_root(self, id).await {
+                visible.push(id);
+            }
+        }
         let this = self.clone();
         crate::lane::blocking(move || {
             let now = Utc::now();
             let mut out = Vec::new();
-            for root in this.registry_list() {
-                let id = RootId::new(root.id);
+            for id in visible {
                 // A root released between the list and the read is not an
                 // error for the others — it simply has no freshness.
                 if let Ok(f) = with_catalogue(&this, id, |cat| cat.freshness(now)) {
@@ -767,6 +783,52 @@ impl TreeService for FilesBackend {
 }
 
 impl FilesBackend {
+    /// How much of a root's catalogue the caller may see: `None` for all
+    /// of it, `Some(subject)` for the parts their grants cover, or a
+    /// refusal when they hold nothing in the root at all.
+    ///
+    /// A catalogue is the whole tree's structure, so handing a client
+    /// granted one folder the full listing would tell them every name
+    /// outside it — the leak `files.access.granularity` exists to stop.
+    async fn catalogue_scope(
+        &self,
+        root_id: RootId,
+    ) -> Result<Option<files_proto::service::access::Subject>, FilesFault> {
+        if crate::lane::caller::authorise_root(self, root_id, Capability::Read)
+            .await
+            .is_ok()
+        {
+            return Ok(None);
+        }
+        match crate::lane::caller::subject() {
+            Some(me) if self.holds_anything_in(&me, root_id) => Ok(Some(me)),
+            _ => Err(FilesFault::RootNotFound(root_id)),
+        }
+    }
+
+    /// A catalogue page cut down to what `narrow` may read. Ancestors of
+    /// a granted folder stay, as directories: a path you hold has to be
+    /// reachable from the root in the listing that shows it.
+    fn narrowed(
+        &self,
+        root_id: RootId,
+        narrow: Option<&files_proto::service::access::Subject>,
+        mut delta: CatalogueDelta,
+    ) -> CatalogueDelta {
+        let Some(me) = narrow else {
+            return delta;
+        };
+        let may = |path: &RootPath| {
+            self.authorise(me, root_id, path, Capability::Read).is_ok()
+                || (self
+                    .effective_for(me, root_id, path)
+                    .is_ok_and(|e| e.capabilities.is_empty()))
+        };
+        delta.changed.retain(|e| may(&e.path));
+        delta.removed.retain(|p| may(p));
+        delta
+    }
+
     /// The listing itself, with no question of who is asking.
     ///
     /// A trait method rather than an inherent one only because it lives
@@ -810,10 +872,10 @@ impl FilesBackend {
             return self.browse_catalogued(root_id, &path);
         }
 
-        let mut listed =
-            <Self as FilesService>::browse(self, root_id.get(), path.as_str().to_string())
-                .await
-                .map_err(|e| fault_of(e, &path))?;
+        let mut listed = self
+            .browse_live(root_id.get(), path.as_str().to_string())
+            .await
+            .map_err(|e| fault_of(e, &path))?;
 
         // The Ignore set governs listings, not only captures.
         //
@@ -911,31 +973,55 @@ pub(crate) fn note_write(
     removed: &[RootPath],
 ) {
     let root_id = RootId::new(root.id);
+    let now = Utc::now();
+    // Resolved once, for the catalogue and the live stream alike. A
+    // touched path that is gone was moved away or deleted; the caller
+    // may not have distinguished the two, so it is resolved here rather
+    // than requiring them to.
+    let mut changed = Vec::new();
+    let mut gone: Vec<RootPath> = removed.to_vec();
+    for path in touched {
+        match record_of(root, path, now) {
+            Some(entry) => changed.push(entry),
+            None => gone.push(path.clone()),
+        }
+    }
+
     let updated = {
         let mut guard = catalogues().lock().expect("catalogue lock poisoned");
-        let Some(cat) = guard.get_mut(&key_of(backend, root_id)) else {
-            return;
-        };
-        let now = Utc::now();
-
-        for path in removed {
-            cat.remove(path);
-        }
-        for path in touched {
-            // A touched path that is gone was moved away or deleted; the
-            // caller may not have distinguished the two, so resolve it
-            // here rather than requiring them to.
-            match record_of(root, path, now) {
-                Some(entry) => cat.upsert(entry),
-                None => cat.remove(path),
+        guard.get_mut(&key_of(backend, root_id)).map(|cat| {
+            for path in &gone {
+                cat.remove(path);
             }
-        }
-        cat.clone()
+            for entry in &changed {
+                cat.upsert(entry.clone());
+            }
+            cat.clone()
+        })
     };
+    let cursor = updated
+        .as_ref()
+        .map_or_else(|| Cursor("0".to_string()), Catalogue::cursor);
     // Outside the lock, and unconditional: a durable copy that lags the
     // served one is worse than none, because a restart would answer
     // confidently with a tree that is one write out of date.
-    persist(backend, root_id, &updated);
+    if let Some(updated) = &updated {
+        persist(backend, root_id, updated);
+    }
+    // Every lane write passes through here, so this is where the live
+    // stream hears about structure — whether or not anyone has built
+    // this root's catalogue yet.
+    if !changed.is_empty() || !gone.is_empty() {
+        crate::lane::events::publish(
+            backend,
+            files_proto::service::FilesEvent::Tree(TreeEvent::Changed(CatalogueDelta {
+                changed,
+                removed: gone,
+                cursor,
+                more: false,
+            })),
+        );
+    }
 }
 
 #[cfg(test)]

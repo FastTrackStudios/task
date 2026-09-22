@@ -6,7 +6,7 @@
      the single registry the router, permit gate, and schema stamps derive from.
      Served live at `GET /org/{slug}/api`. -->
 
-111 services mounted: 88 plain RPC, 23 `#[subscribe]` streams. Every method lists its permit — the `<action>` on `<resource>` the permissions gate checks (see `apps/server/src/permits.rs`). `audited` methods emit an audit line even when allowed. A `stream` method takes a `Tx` sink and pushes to the caller instead of returning once.
+113 services mounted: 90 plain RPC, 23 `#[subscribe]` streams. Every method lists its permit — the `<action>` on `<resource>` the permissions gate checks (see `apps/server/src/permits.rs`). `audited` methods emit an audit line even when allowed. A `stream` method takes a `Tx` sink and pushes to the caller instead of returning once.
 
 ## `auth` (AuthService)
 
@@ -370,65 +370,15 @@ Plugin: `core` — schema stamp: `17f8a666e6a2a9b3`
 |---|---|---|---|
 | `events` | `sink` | `read` on `workstreams/**` | stream |
 
-## `files` (FilesService)
-
-Plugin: `core` — schema stamp: `8647f4291f9cf1c0`
-
-| method | args | permit | notes |
-|---|---|---|---|
-| `create_root` | `path`, `name`, `flavor` | `write` on `files/**` | — |
-| `list_roots` | — | `read` on `files/**` | — |
-| `get_root` | `id` | `read` on `files/**` | — |
-| `browse` | `root_id`, `subpath` | `read` on `files/**` | — |
-| `drive_browse` | `path` | `read` on `files/**` | — |
-| `tree_browse` | `path` | `read` on `files/**` | — |
-| `chain` | `root_id`, `path` | `read` on `files/**` | — |
-| `checkpoint_now` | `root_id`, `description` | `write` on `files/**` | — |
-| `hint_activity` | `root_id`, `paths` | `write` on `files/**` | — |
-| `snapshots` | `root_id` | `read` on `files/**` | — |
-| `ignore_set` | `root_id` | `read` on `files/**` | — |
-| `set_ignore_set` | `root_id`, `patterns` | `write` on `files/**` | — |
-| `name_version` | `root_id`, `commit_id`, `name` | `write` on `files/**` | — |
-| `list_named_versions` | `root_id` | `read` on `files/**` | — |
-| `resolve_named_version` | `id` | `read` on `files/**` | — |
-| `unname_version` | `id` | `write` on `files/**` | audited |
-| `start_project_version` | `root_id`, `label` | `write` on `files/**` | — |
-| `list_project_versions` | `root_id` | `read` on `files/**` | — |
-| `restart_project_version` | `root_id`, `mode`, `label` | `write` on `files/**` | audited |
-| `browse_at` | `root_id`, `commit_id`, `subpath` | `read` on `files/**` | — |
-| `copy_forward` | `root_id`, `commit_id`, `paths` | `write` on `files/**` | audited |
-| `gc_root` | `root_id`, `keep_newer_secs` | `write` on `files/**` | audited |
-| `dehydrate` | `root_id`, `path` | `write` on `files/**` | audited |
-| `hydrate` | `root_id`, `path` | `write` on `files/**` | — |
-| `hydration_policy` | `root_id` | `read` on `files/**` | — |
-| `set_hydration_policy` | `root_id`, `patterns` | `write` on `files/**` | — |
-| `apply_hydration_policy` | `root_id` | `write` on `files/**` | audited |
-| `divergences` | `root_id` | `read` on `files/**` | — |
-| `resolve_divergence` | `root_id`, `path`, `choice` | `write` on `files/**` | audited |
-| `rendition` | `root_id`, `path`, `kind` | `read` on `files/**` | — |
-| `rendition_at` | `root_id`, `path`, `commit_id`, `kind` | `read` on `files/**` | — |
-| `find_review` | `root_id`, `file_path` | `read` on `files/**` | — |
-| `review_for_file` | `root_id`, `file_path` | `comment` on `files/**` | — |
-| `list_reviews` | `root_id` | `read` on `files/**` | — |
-| `review_comments` | `review_id` | `read` on `files/**` | — |
-| `add_review_comment` | `review_id`, `comment` | `comment` on `files/**` | — |
-| `delete_review_comment` | `id` | `write` on `files/**` | audited |
-
-## `files-stream` (FilesServiceStream) — stream
-
-Plugin: `core` — schema stamp: `7e4188c059889b46`
-
-| method | args | permit | notes |
-|---|---|---|---|
-| `events` | `sink` | `read` on `files/**` | stream |
-
 ## `files-roots` (RootsService)
 
-Plugin: `core` — schema stamp: `fcc51ced0d9a66c8`
+Plugin: `core` — schema stamp: `ea25ae0da11f5a2d`
 
 | method | args | permit | notes |
 |---|---|---|---|
 | `adopt` | `request` | `write` on `files/**` | — |
+| `create` | `request` | `write` on `files/**` | — |
+| `browse_area` | `path` | `write` on `files/**` | — |
 | `resume_adoption` | `root_id` | `write` on `files/**` | — |
 | `pause_adoption` | `root_id` | `write` on `files/**` | — |
 | `adoption_progress` | `root_id` | `read` on `files/**` | — |
@@ -479,7 +429,7 @@ Plugin: `core` — schema stamp: `db526db319220972`
 
 ## `files-version` (VersionService)
 
-Plugin: `core` — schema stamp: `0f726632221d3e05`
+Plugin: `core` — schema stamp: `9e03861e828acd6f`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -492,10 +442,14 @@ Plugin: `core` — schema stamp: `0f726632221d3e05`
 | `resolve_divergence` | `root_id`, `version`, `resolution` | `write` on `files/**` | audited |
 | `restore` | `root_id`, `path`, `version` | `write` on `files/**` | audited |
 | `keep_snapshot` | `root_id`, `snapshot` | `write` on `files/**` | — |
+| `browse_at` | `root_id`, `path`, `version` | `read` on `files/**` | — |
+| `copy_forward` | `root_id`, `version`, `paths` | `write` on `files/**` | — |
+| `hint_activity` | `root_id`, `paths` | `write` on `files/**` | — |
+| `collect` | `root_id`, `keep_newer_secs` | `write` on `files/**` | audited |
 
 ## `files-curation` (CurationService)
 
-Plugin: `core` — schema stamp: `8656dec04fba5098`
+Plugin: `core` — schema stamp: `578176a115cfe9b9`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -503,13 +457,14 @@ Plugin: `core` — schema stamp: `8656dec04fba5098`
 | `unname_version` | `root_id`, `version` | `write` on `files/**` | audited |
 | `named_versions` | `root_id`, `path` | `read` on `files/**` | — |
 | `resolve_name` | `root_id`, `name` | `read` on `files/**` | — |
+| `named_version` | `id` | `read` on `files/**` | — |
 | `start_project_version` | `root_id`, `name` | `write` on `files/**` | — |
 | `project_versions` | `root_id` | `read` on `files/**` | — |
 | `restart_project_version` | `root_id`, `project_version`, `mode` | `write` on `files/**` | audited |
 
 ## `files-sync` (SyncService)
 
-Plugin: `core` — schema stamp: `b2bf1fcccd0763d9`
+Plugin: `core` — schema stamp: `2df8d6e56abc4d0d`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -521,6 +476,9 @@ Plugin: `core` — schema stamp: `b2bf1fcccd0763d9`
 | `subscribe` | `root_id`, `facets` | `write` on `files/**` | — |
 | `pin` | `root_id`, `paths`, `pinned` | `write` on `files/**` | — |
 | `hydrate` | `root_id`, `paths`, `resident` | `write` on `files/**` | audited |
+| `residency` | `root_id` | `read` on `files/**` | — |
+| `set_residency` | `root_id`, `patterns` | `write` on `files/**` | — |
+| `apply_residency` | `root_id` | `write` on `files/**` | — |
 | `devices` | — | `read` on `files/**` | — |
 | `enroll_device` | `endpoint`, `name` | `write` on `files/**` | audited |
 | `coordinator` | — | `read` on `files/**` | — |
@@ -569,7 +527,7 @@ Plugin: `core` — schema stamp: `79adf0779c9ab38c`
 
 ## `files-federation` (FederationService)
 
-Plugin: `core` — schema stamp: `e7babcb3f93fe801`
+Plugin: `core` — schema stamp: `a52f1e00be920367`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -578,14 +536,15 @@ Plugin: `core` — schema stamp: `e7babcb3f93fe801`
 | `offered` | — | `read` on `files/**` | — |
 | `accept` | `offer` | `write` on `files/**` | audited |
 | `remotes` | — | `read` on `files/**` | — |
+| `resolve_content` | `origin_root`, `path` | `read` on `files/**` | — |
 | `forget` | `root_id` | `write` on `files/**` | audited |
 | `read_offered` | `secret`, `path` | `read` on `public/files-offer` | audited |
-| `fetch_offered` | `secret`, `token`, `range` | `read` on `public/files-offer` | audited |
+| `open_relay` | `secret`, `token` | `read` on `public/files-offer` | audited |
 | `browse_offered` | `secret`, `path` | `read` on `public/files-offer` | audited |
 
 ## `files-media` (MediaService)
 
-Plugin: `core` — schema stamp: `549c6b8f83b05140`
+Plugin: `core` — schema stamp: `bec9f9ed87527cd6`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -594,6 +553,7 @@ Plugin: `core` — schema stamp: `549c6b8f83b05140`
 | `read_content` | `content` | `read` on `files/**` | — |
 | `renditions` | `root_id`, `path` | `read` on `files/**` | — |
 | `rendition` | `root_id`, `path`, `kind` | `read` on `files/**` | — |
+| `rendition_info` | `root_id`, `path`, `kind`, `at` | `read` on `files/**` | — |
 | `handoff` | `name`, `target`, `items` | `write` on `files/**` | — |
 
 ## `files-media-stream` (MediaServiceStream) — stream
@@ -603,6 +563,14 @@ Plugin: `core` — schema stamp: `058d6a5c85afaac2`
 | method | args | permit | notes |
 |---|---|---|---|
 | `bytes` | `request`, `sink` | `download` on `files/**` | stream, audited |
+
+## `files-tree-stream` (TreeServiceStream) — stream
+
+Plugin: `core` — schema stamp: `06b19df9d7f54547`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `events` | `root_id`, `sink` | `read` on `files/**` | stream |
 
 ## `files-search` (SearchService)
 
@@ -617,7 +585,7 @@ Plugin: `core` — schema stamp: `0a7795144f0ae614`
 
 ## `files-review` (ReviewService)
 
-Plugin: `core` — schema stamp: `f628aa2d4d23af71`
+Plugin: `core` — schema stamp: `88b08950d884aea0`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -628,6 +596,8 @@ Plugin: `core` — schema stamp: `f628aa2d4d23af71`
 | `comment` | `comment` | `comment` on `files/**` | — |
 | `delete_comment` | `comment` | `write` on `files/**` | audited |
 | `for_file` | `root_id`, `path` | `read` on `files/**` | — |
+| `find` | `root_id`, `path` | `read` on `files/**` | — |
+| `reviews` | `root_id` | `read` on `files/**` | — |
 
 ## `storage` (StorageService)
 
@@ -930,7 +900,7 @@ Plugin: `scripture` — schema stamp: `464df04f44aeb954`
 
 ## `links` (LinksServiceRpc)
 
-Plugin: `core` — schema stamp: `c5c32de59903f282`
+Plugin: `core` — schema stamp: `2ade4f3a49e25a76`
 
 | method | args | permit | notes |
 |---|---|---|---|
@@ -939,6 +909,7 @@ Plugin: `core` — schema stamp: `c5c32de59903f282`
 | `get` | `id` | `read` on `links/**` | — |
 | `links_for` | `node` | `read` on `links/**` | — |
 | `graph` | `min_confidence`, `include_private` | `read` on `links/**` | — |
+| `resolve_nodes` | `nodes` | `read` on `links/**` | — |
 
 ## `collection` (CollectionServiceRpc)
 
@@ -955,11 +926,35 @@ Plugin: `fasttrackstudio` — schema stamp: `0ce252dab5a62852`
 
 ## `resources` (ResourcesServiceRpc)
 
-Plugin: `core` — schema stamp: `b324784fa40b557b`
+Plugin: `core` — schema stamp: `4aa3def03c39c253`
 
 | method | args | permit | notes |
 |---|---|---|---|
 | `transcript` | `rel_path` | `read` on `resources/**` | — |
+| `upsert_sermon` | `sermon` | `write` on `resources/**` | — |
+| `list_sermons` | — | `read` on `resources/**` | — |
+| `sermon` | `slug` | `read` on `resources/**` | — |
+| `relocate_sermons` | `folder`, `wiki` | `write` on `resources/**` | audited |
+| `upsert_song` | `song` | `write` on `resources/**` | — |
+| `song` | `slug` | `read` on `resources/**` | — |
+| `list_songs` | — | `read` on `resources/**` | — |
+| `delete_song` | `slug` | `write` on `resources/**` | audited |
+| `upsert_chart` | `chart` | `write` on `resources/**` | — |
+| `chart` | `slug` | `read` on `resources/**` | — |
+| `list_charts` | `song` | `read` on `resources/**` | — |
+| `delete_chart` | `slug` | `write` on `resources/**` | audited |
+| `upsert_patch` | `patch` | `write` on `resources/**` | — |
+| `patch` | `slug` | `read` on `resources/**` | — |
+| `list_patches` | — | `read` on `resources/**` | — |
+| `delete_patch` | `slug` | `write` on `resources/**` | audited |
+| `upsert_sample` | `sample` | `write` on `resources/**` | — |
+| `sample` | `slug` | `read` on `resources/**` | — |
+| `list_samples` | — | `read` on `resources/**` | — |
+| `delete_sample` | `slug` | `write` on `resources/**` | audited |
+| `upsert_lighting` | `lighting` | `write` on `resources/**` | — |
+| `lighting` | `slug` | `read` on `resources/**` | — |
+| `list_lighting` | — | `read` on `resources/**` | — |
+| `delete_lighting` | `slug` | `write` on `resources/**` | audited |
 
 ## `invoicing` (InvoicingRpc)
 
@@ -1049,6 +1044,63 @@ Plugin: `wiki` — schema stamp: `f3e7b11714a44bd6`
 | `list_pages` | `wiki_id` | `read` on `wiki/pages/**` | — |
 | `read_page` | `wiki_id`, `path` | `read` on `wiki/pages/**` | — |
 | `write_page` | `wiki_id`, `path`, `markdown`, `base_sha256` | `write` on `wiki/pages/**` | — |
+
+## `wiki-subscriptions` (SubscriptionsRpc)
+
+Plugin: `wiki` — schema stamp: `a19833a0e7dc98f1`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `list_subscriptions` | `subscriber` | `read` on `wiki/subscriptions/**` | — |
+| `subscribe` | `subscriber`, `subscription` | `write` on `wiki/subscriptions/**` | — |
+| `unsubscribe` | `subscriber`, `qualified`, `force` | `write` on `wiki/subscriptions/**` | — |
+| `refresh_subscription` | `subscriber`, `qualified` | `write` on `wiki/subscriptions/**` | — |
+| `core_set` | — | `read` on `wiki/subscriptions/**` | — |
+| `discover` | — | `read` on `wiki/subscriptions/**` | — |
+| `source_manifest` | `kind`, `slug`, `secret` | `read` on `public/wiki-source` | audited |
+| `source_file` | `kind`, `slug`, `path`, `secret` | `read` on `public/wiki-source` | audited |
+| `grant_source_read` | `kind`, `slug` | `write` on `wiki/subscriptions/**` | audited |
+| `revoke_source_read` | `kind`, `slug` | `write` on `wiki/subscriptions/**` | audited |
+| `trust_source` | `grant` | `write` on `wiki/subscriptions/**` | audited |
+| `distrust_source` | `domain`, `kind`, `slug` | `write` on `wiki/subscriptions/**` | audited |
+| `trusted_sources` | — | `read` on `wiki/subscriptions/**` | — |
+
+## `wiki-registry` (RegistryRpc)
+
+Plugin: `wiki` — schema stamp: `337048e04ba33578`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `list_wikis` | — | `read` on `wiki/registry/**` | — |
+| `describe_wiki` | `wiki_id` | `read` on `wiki/registry/**` | — |
+| `create_wiki` | `new` | `write` on `wiki/registry/**` | audited |
+| `set_visibility` | `wiki_id`, `visibility` | `write` on `wiki/registry/**` | audited |
+| `set_title` | `wiki_id`, `title` | `write` on `wiki/registry/**` | — |
+| `delete_wiki` | `wiki_id` | `write` on `wiki/registry/**` | audited |
+| `refresh_source` | `wiki_id` | `write` on `wiki/registry/**` | — |
+| `local_changes` | `wiki_id` | `read` on `wiki/registry/**` | — |
+| `push_changes` | `wiki_id`, `title`, `body` | `write` on `wiki/registry/**` | audited |
+
+## `wiki-edits` (EditsRpc)
+
+Plugin: `wiki` — schema stamp: `c07f5838dd219cdf`
+
+| method | args | permit | notes |
+|---|---|---|---|
+| `open_edit_request` | `wiki_id`, `request` | `write` on `wiki/edits/**` | — |
+| `list_edit_requests` | `wiki_id`, `include_resolved` | `read` on `wiki/edits/**` | — |
+| `get_edit_request` | `wiki_id`, `id` | `read` on `wiki/edits/**` | — |
+| `diff_edit_request` | `wiki_id`, `id` | `read` on `wiki/edits/**` | — |
+| `revise_edit_request` | `wiki_id`, `id`, `changes` | `write` on `wiki/edits/**` | — |
+| `claim_edit_request` | `wiki_id`, `id` | `write` on `wiki/edits/**` | — |
+| `release_edit_request` | `wiki_id`, `id` | `write` on `wiki/edits/**` | — |
+| `accept_edit_request` | `wiki_id`, `id` | `write` on `wiki/edits/**` | audited |
+| `reject_edit_request` | `wiki_id`, `id`, `reason` | `write` on `wiki/edits/**` | audited |
+| `return_edit_request` | `wiki_id`, `id`, `reason` | `write` on `wiki/edits/**` | audited |
+| `editors` | `wiki_id` | `read` on `wiki/edits/**` | — |
+| `grant_editor` | `wiki_id`, `principal` | `write` on `wiki/edits/**` | audited |
+| `revoke_editor` | `wiki_id`, `principal` | `write` on `wiki/edits/**` | audited |
+| `set_proposer_gate` | `wiki_id`, `gate` | `write` on `wiki/edits/**` | audited |
 
 ## `wiki-ingest` (IngestRpc)
 

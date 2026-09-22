@@ -16,7 +16,7 @@ says which and why.
 The five `wiki.promote.*` rules are new and all five land met: the
 planner is `wiki_proto::promote` (unit-tested against both schema
 dialects), the composition is `task wiki promote`, and
-`tests/integration/tests/wiki_promote.rs` verifies all five over the org
+`tests/integration/tests/it/wiki_promote.rs` verifies all five over the org
 router against the seeded Studio Research / Audio Production pair. One
 honest caveat, recorded here rather than in a marker: a promotion is two
 `write_page` calls with no transaction across them, so a crash between
@@ -44,6 +44,39 @@ other lacks — see that module on why a duplication that cannot drift
 silently is a different thing from a duplication.
 
 ## Met in part
+
+### `files.access.role-baseline`
+
+> What a caller may do is their org role united with their grants …
+> Every lane checks.
+
+Every lane checks, as the caller the gate resolved (`files::lane::caller`),
+and `tests/integration/tests/it/app_store.rs` proves it over the router: a
+member creates and saves, a client holding one granted folder is refused a
+root and hears nothing of it on the live stream. The v1 `FilesService`,
+which checked nothing per path, is deleted — there is one Files API. Three
+things stay open, each its own piece of work:
+
+- **Device identity is still per process.** The sync lane keys subscriptions
+  and pins to `this_device()`; a restarted device reads back an empty
+  subscription. A device principal does not reach the lanes yet.
+- **Upload sessions are process-lifetime.** `pending` is now per person, but a
+  server restart forgets open sessions (progress in a media root survives in
+  the chunk store; a software root re-sends).
+- **Roles are cached for ten seconds** (`memberships::FilesRoles::TTL`), so a
+  revoked membership stops conveying on the Files lanes within that window
+  rather than on the next request.
+
+A `VersionId` carries a commit's leading 128 bits and resolves as a prefix
+through the root's index, so the lanes cannot name or pin a commit that was
+never indexed. Every commit the lanes write is indexed; only a commit placed
+in the store by hand or by a replica ahead of its index is out of reach until
+it is imported.
+
+A software root's etag is `blake3:<hex>` of its bytes, since it has no chunk
+store; `MediaService::read_content` cannot resolve one, so a pinned
+`ContentRef` into a software root can say it moved but cannot fetch the old
+bytes.
 
 ### `project.capability.conventions`
 
@@ -108,7 +141,7 @@ The replacement is a *reference*, and it is built rather than promised:
 `NodeKind::Project` parses, and `node_homes::LocalHomes` resolves
 `project:crescendum` (and `project:crescendum/track-two`) to the page on
 the tier, across an org boundary, gated by a subscription.
-`tests/integration/tests/projects_tier.rs` is the chapter. What is NOT
+`tests/integration/tests/it/projects_tier.rs` is the chapter. What is NOT
 built is the vault-local half — a `[[…]]` in a note that means a project
 — which needs the wikilink resolver to consult the tier the way it
 consults the wiki tier. Recorded here rather than in a marker, because a
@@ -122,7 +155,7 @@ is adopted as a File Root by `adopt_knowledge_roots` but has no sink, so
 its catalogue hears about a page save through the disk watcher on the
 next sweep rather than synchronously on the write. The rule itself is
 unaffected — it is a claim about the vault, every page still in the vault
-still goes through the port, and `tests/integration/tests/vault_root.rs`
+still goes through the port, and `tests/integration/tests/it/vault_root.rs`
 proves it with a task — but the *project* page lost a property it had.
 
 Closing it needs `ProjectBackend` to write shelf-relative
@@ -160,8 +193,8 @@ missing followed from that one move:
 |---|---|
 | a cross-org materialiser for assets | `wiki_live::materialize::refresh_shelf`, reached by `SourceKind::Assets` — the vault engine, local and remote alike, differing only in what one fetch may weigh. (It was a byte walker, on the belief that the engine carried markdown only. The engine hashes every file it meets; the walker's real difference was that it overwrote a subscriber's edits, which is what routing both cases through one call fixed.) |
 | `links::NodeHomes` naming a path something serves | `node_homes::LocalHomes::locate` returns `assets/<group>/<slug>.md`, which is exactly what a subscription materialises |
-| a test that the reach exists | `tests/integration/tests/song_library.rs` (both halves: whole shelf, and part of one), `demo_plant::the_planted_song_shelf_is_subscribable_across_orgs` |
-| the assertion that pinned the gap | `tests/integration/tests/setlist.rs` — its `assert!(refused.is_err())` on a chart-library subscription is now `.expect("a chart library is a shelf, and a shelf is subscribable")` |
+| a test that the reach exists | `tests/integration/tests/it/song_library.rs` (both halves: whole shelf, and part of one), `demo_plant::the_planted_song_shelf_is_subscribable_across_orgs` |
+| the assertion that pinned the gap | `tests/integration/tests/it/setlist.rs` — its `assert!(refused.is_err())` on a chart-library subscription is now `.expect("a chart library is a shelf, and a shelf is subscribable")` |
 
 The second entry — **the player still reads the frozen song folders** —
 closes for a different reason, and it is worth stating exactly rather
@@ -174,7 +207,7 @@ nobody types into. What made the entry a regression was that the
 *document* had moved somewhere unreachable, so the two halves of a song
 could no longer be brought back together across an org boundary. They
 can: the document is on a subscribable shelf and the media is on the
-tier `/media` serves. `tests/integration/tests/setlist.rs` asserts both
+tier `/media` serves. `tests/integration/tests/it/setlist.rs` asserts both
 in one breath, which is the only way a tier rule is checkable at all.
 
 **What is still open, and is not a regression.** `/org/{slug}/media/`
@@ -240,7 +273,7 @@ grouped:
   wrong. A *reference* into
   another server's org resolves as well, from the copy the subscription
   left behind (`node_homes::LocalHomes`), and is refused without one —
-  which is the rule `tests/integration/tests/setlist.rs` pins. A
+  which is the rule `tests/integration/tests/it/setlist.rs` pins. A
   `project:` reference across a boundary is the one that still does not
   resolve, because a project does not cross as a subscription and there is
   therefore no copy to answer from.
@@ -259,7 +292,7 @@ grouped:
   Request *is* a `TaskInfo` row (`task_server::wiki_tracker`), and
   `wiki.edit.{request,tracked,editor,auto-approve,reviewable,rebase,
   claim,gate}` are implemented and verified in `wiki-live`'s unit tests,
-  `tests/integration/tests/wiki_edits.rs` and `apps/server/tests/
+  `tests/integration/tests/it/wiki_edits.rs` and `apps/server/tests/
   demo_plant.rs`. Not yet: a request opened on a *peer* reaching the
   home's Editors — the backend accepts only at the wiki's home, but no
   relay carries a request there. Also open: an org admin bootstrapping
@@ -368,7 +401,7 @@ path is a port now: `vault_live::PageSink`, bound per vault root, with the
 filesystem as the default. `FilesBackend::adopt_vault` makes the org vault
 a File Root at server boot and binds a Files-backed sink; a page save is
 then a Files write (atomic in the tree, catalogue delta, cadence hint) and
-the on-disk result is unchanged. `tests/integration/tests/vault_root.rs`
+the on-disk result is unchanged. `tests/integration/tests/it/vault_root.rs`
 is the chapter. The "one choke point" claim turned out to be optimistic —
 `task`, `goal`, `milestone` and `workstream` wrote with `std::fs::write`
 and every backend deleted and moved with `remove_file`/`rename` — and all
@@ -377,7 +410,7 @@ of those go through the port now.
 **`files.device.ingest`** — a source is declared once and swept on a
 timer, idempotent on a content hash, which is the one key that survives a
 rename, a remount, a restart and a re-registration.
-`tests/integration/tests/ingest.rs` is one test per item on that list.
+`tests/integration/tests/it/ingest.rs` is one test per item on that list.
 That closed `scenario.album.ingest`, so all 25 stages are verified.
 
 `vault.index.lookup`, `vault.index.parse-once`, `vault.index.incremental`,
@@ -418,6 +451,6 @@ the default 4s budget; `.config/nextest.toml` gives `integration`,
 binaries used to boot against whatever `TASK_DATA_ROOT` resolved to — on
 a developer machine, the real `~/.task`, whose orgs they raced on and
 once wrote adoption markers into. They now boot a sandboxed data root
-seeded with `examples/studio` (`apps/server/tests/support/mod.rs`), so
+seeded with `examples/studio` (`apps/server/tests/it/support/mod.rs`), so
 the world they assert against is the repo's example studio and nothing
 else.

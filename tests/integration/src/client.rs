@@ -141,13 +141,31 @@ impl Session {
         self.establish().await
     }
 
-    /// The live event stream — `FilesService`'s `#[subscribe]` sibling.
-    ///
-    /// Its own lane and its own connection, which is the point: what
-    /// this chapter asserts is that a client which did *not* make a
-    /// change hears about it.
-    pub async fn files_stream(&self) -> files::FilesServiceStreamClient {
+    /// The upload lane — resumable, conditional saves.
+    pub async fn uploads(&self) -> files::UploadServiceClient {
         self.establish().await
+    }
+
+    /// The live stream — `TreeService::events`, every lane on one
+    /// subscription, filtered to what this person may read.
+    ///
+    /// Its own lane and its own connection, which is the point: what a
+    /// live chapter asserts is that a client which did *not* make a
+    /// change hears about it.
+    pub async fn tree_stream(&self) -> files_proto::TreeServiceStreamClient {
+        self.establish().await
+    }
+
+    /// The Files lanes the way an app holds them — `files_client`, over
+    /// this person's own connections.
+    pub async fn files_client(&self) -> files_client::FilesClient {
+        files_client::FilesClient::new(
+            self.establish().await,
+            self.establish().await,
+            self.establish().await,
+            self.establish().await,
+            self.establish().await,
+        )
     }
 
     /// The search lane — extraction and region hits.
@@ -341,7 +359,9 @@ macro_rules! signable {
 }
 
 signable!(
-    files::FilesServiceStreamClient,
+    files::UploadServiceClient,
+    files_proto::TreeServiceStreamClient,
+    files_proto::MediaServiceStreamClient,
     files::OrganiseServiceClient,
     files::SearchServiceClient,
     ReviewServiceClient,

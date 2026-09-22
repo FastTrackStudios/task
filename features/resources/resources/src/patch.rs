@@ -30,6 +30,7 @@ pub const APP_OWNED: &[&str] = &[
     "tags",
     "content_root",
     "content_path",
+    "content_id",
     "updated_at",
 ];
 
@@ -65,10 +66,7 @@ fn owned_values(patch: &PatchDoc) -> Vec<Owned> {
         ("rig", patch.rig.clone().into()),
         ("tags", asset::strings(&patch.tags)),
     ];
-    v.extend(asset::content_keys(
-        &patch.content.root_id,
-        &patch.content.path,
-    ));
+    v.extend(asset::content_keys(&patch.content));
     v.push(("updated_at", patch.updated_at.clone().into()));
     v
 }
@@ -146,6 +144,7 @@ mod tests {
         p.content = ContentRef {
             root_id: "acme-library".into(),
             path: "Patches/Warm Analog Pad.hlx".into(),
+            ..Default::default()
         };
         let md = render_manifest(&p, "warm-analog-pad").unwrap();
         let r = parse_manifest(&md).unwrap();

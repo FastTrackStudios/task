@@ -1,0 +1,43 @@
+Going Under - Evanscence
+4/4
+
+intro 5
+\ChordLength /
+|: !B / !B / !B / r4 | % :|x3 r1 |: !B / !B / !B / r4 |
+    | % :|x3
+
+pre 4
+| !G / | !A / | Em / | % |
+
+ch 3
+|: Bm_2 !G_2 | !D_2 !A_2 :|x4 !B / !B / !B / r4 |
+
+vs 2
+\ChordLength /
+|: !B / !B / !B / r4 | % :|x3
+
+pre 4
+| !G / | !A / | Em / | % |
+
+ch 2
+\ChordLength //
+|: Bm_2 !G_2 | !D_2 !A_2 :|x3
+
+br 6
+| !G / | !F# / | Bm / | % |
+    | !G / | !F# / !F# / r2 |
+
+[Guitar Solo] 2
+\ChordLength //
+|: Bm_2 !G_2 | !D_2 !A_2 :|x2
+
+pre 4
+| !G / | !A / | Em / | !G / |
+
+ch 2
+\ChordLength //
+|: Bm_2 !G_2 | !D_2 !A_2 :|x3
+
+out 1
+\ChordLength /
+| !B / !B / !B / r4 |

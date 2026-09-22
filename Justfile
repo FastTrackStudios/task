@@ -298,6 +298,9 @@ ci-wasm: css
     # gate checks it on its own too: `task-app-web` would keep compiling
     # if `task-dial` grew a native-only dependency behind a cfg.
     cargo check --target wasm32-unknown-unknown -p task-dial
+    # Likewise the Files client apps use as their store — a browser app
+    # needs it as much as the dial.
+    cargo check --target wasm32-unknown-unknown -p files-client
 
 ci-docs:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps

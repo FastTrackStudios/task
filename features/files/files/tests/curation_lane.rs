@@ -17,8 +17,8 @@ use files::FilesBackend;
 use files_proto::id::{ProjectVersionId, RootId, VersionId};
 use files_proto::model::{RestartMode, RootFlavor};
 use files_proto::service::curation::CurationService;
-use files_proto::service::legacy::FilesService as LegacyFiles;
 use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::version::VersionService;
 use files_proto::{FilesFault, RootPath};
 
 /// A media root with two files, adopted and ready to checkpoint.
@@ -68,14 +68,14 @@ impl Rig {
     /// it — the leading 128 bits of its commit id, which is how a
     /// caller reading a chain entry would mint one.
     async fn checkpoint(&self, why: &str) -> VersionId {
-        let info = LegacyFiles::checkpoint_now(&self.backend, self.root.get(), Some(why.into()))
+        let info = VersionService::checkpoint(&self.backend, self.root, Some(why.into()))
             .await
             .expect("checkpoint");
         version_of(&info.commit_id)
     }
 
     async fn names(&self) -> Vec<String> {
-        CurationService::named_versions(&self.backend, self.root, None)
+        CurationService::named_versions(&self.backend, Some(self.root), None)
             .await
             .expect("named_versions")
             .into_iter()
@@ -189,24 +189,26 @@ async fn names_filter_to_one_path_through_its_chain() {
         .expect("name second");
 
     let kick = RootPath::parse("stems/kick.wav").unwrap();
-    let on_kick: Vec<String> = CurationService::named_versions(&rig.backend, rig.root, Some(kick))
-        .await
-        .expect("named_versions for a path")
-        .into_iter()
-        .map(|n| n.name)
-        .collect();
+    let on_kick: Vec<String> =
+        CurationService::named_versions(&rig.backend, Some(rig.root), Some(kick))
+            .await
+            .expect("named_versions for a path")
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
     assert!(
         on_kick.contains(&"kick v2".to_string()),
         "the commit that changed the file is in its chain: {on_kick:?}"
     );
 
     let mix = RootPath::parse("mix.wav").unwrap();
-    let on_mix: Vec<String> = CurationService::named_versions(&rig.backend, rig.root, Some(mix))
-        .await
-        .expect("named_versions for a path")
-        .into_iter()
-        .map(|n| n.name)
-        .collect();
+    let on_mix: Vec<String> =
+        CurationService::named_versions(&rig.backend, Some(rig.root), Some(mix))
+            .await
+            .expect("named_versions for a path")
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
     assert!(
         !on_mix.contains(&"kick v2".to_string()),
         "a checkpoint that never touched mix.wav is not one of its versions: {on_mix:?}"
@@ -236,7 +238,7 @@ async fn absent_roots_and_absent_versions_are_different_faults() {
     let rig = rig().await;
     let ghost = RootId::generate();
 
-    match CurationService::named_versions(&rig.backend, ghost, None)
+    match CurationService::named_versions(&rig.backend, Some(ghost), None)
         .await
         .expect_err("no such root")
     {

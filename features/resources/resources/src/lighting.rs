@@ -34,6 +34,7 @@ pub const APP_OWNED: &[&str] = &[
     "cues",
     "content_root",
     "content_path",
+    "content_id",
     "updated_at",
 ];
 
@@ -80,10 +81,7 @@ fn owned_values(lighting: &LightingDoc) -> Vec<Owned> {
         ("scope", lighting.scope.clone().into()),
         ("cues", asset::strings(&lighting.cues)),
     ];
-    v.extend(asset::content_keys(
-        &lighting.content.root_id,
-        &lighting.content.path,
-    ));
+    v.extend(asset::content_keys(&lighting.content));
     v.push(("updated_at", lighting.updated_at.clone().into()));
     v
 }
@@ -186,6 +184,7 @@ mod tests {
         l.content = ContentRef {
             root_id: "acme-library".into(),
             path: "Shows/Sunday Set.m3d".into(),
+            ..Default::default()
         };
         let r = parse_manifest(&render_manifest(&l, "sunday-set").unwrap()).unwrap();
         assert_eq!(r.content_root, "acme-library");

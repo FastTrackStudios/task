@@ -209,7 +209,7 @@ Legend: ✅ have · 🟡 partial · ❌ missing · 🚫 deliberately not doing
 ### Phase 1 — make it a file manager
 
 1. **Write RPCs** — `mkdir`, `rename`, `move`, `copy`, `delete` on
-   `FilesService`, transactional and checkpoint-aware so jj wraps each in
+   `WriteService`, transactional and checkpoint-aware so jj wraps each in
    one operation. Add the `permits.rs` entries in the same commit or they
    fail closed in prod.
 2. **Upload over vox** — chunked and resumable, plus conflict handling

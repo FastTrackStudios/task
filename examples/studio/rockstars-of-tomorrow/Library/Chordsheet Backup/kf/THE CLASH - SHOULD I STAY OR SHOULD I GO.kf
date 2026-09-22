@@ -1,0 +1,30 @@
+SHOULD I STAY OR SHOULD I GO - THE CLASH
+4/4
+
+intro 2
+\ChordLength //
+|: !D_2 !G_2 | !D // r2 :|x3
+
+vs 10
+|: !D_2 !G_2 | !D // r2 :|x3 !G_2 !F_2 | !G // r2 |
+    | !D_2 !G_2 | !D // r2 | !A / | !A // r2 |
+    | !D_2 !G_2 | !D // r2 |
+
+ch 9
+|: !D_2 !G_2 | !D / :|x2 !G_2 !F_2 | !G / |
+    | !D_2 !G_2 | !D / | !A / | !A_4 !D_4 !G_2 |
+    | !D // r2 |
+
+vs 10
+|: !D_2 !G_2 | !D // r2 :|x2 !G_2 !F_2 | !G // r2 |
+    | !D_2 !G_2 | !D // r2 | !A / | !A // r2 |
+    | !D_2 !G_2 | !D // r2 |
+
+intro 2
+\ChordLength //
+|: !D_2 !G_2 | !D // r2 :|x3
+
+[Double Chorus] 11
+|: !D_2 !G_2 | !D / :|x2 !G_2 !F_2 | !G / |
+    | !D_2 !G_2 | !D / | !A / | ^"Play this at the end of chorus the first time around" !A / |
+    | !A / | ^"Play this at the end of chorus the second time around for outro" !A_4 !D_4 !G_2 | !D // r2 |

@@ -59,6 +59,39 @@ use include_dir::{Dir, include_dir};
 /// The committed example studio, compiled into the binary.
 static STUDIO: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../examples/studio");
 
+/// One committed file's bytes, by its path under `examples/studio/`.
+#[must_use]
+pub fn studio_file(path: &str) -> Option<&'static [u8]> {
+    STUDIO.get_file(path).map(include_dir::File::contents)
+}
+
+/// Where the seed keeps its bound sample: a root made through
+/// `RootsService::create`, as an app makes one, and the file saved into
+/// it through the upload lane, by `demo_cli` at plant time.
+pub const BOUND_SAMPLE: BoundSample = BoundSample {
+    org: "acme-audio",
+    root_dir: "signal/samples",
+    root_name: "Signal samples",
+    path: "Loops/Single master.wav",
+    source: "acme-audio/Resources/songs/single-master/Single master.wav",
+    slug: "single-master-loop",
+};
+
+/// The seed's bound sample — see [`BOUND_SAMPLE`].
+#[derive(Debug, Clone, Copy)]
+pub struct BoundSample {
+    pub org: &'static str,
+    /// Relative to the org's files area, as `RootsService::create` takes it.
+    pub root_dir: &'static str,
+    pub root_name: &'static str,
+    /// Root-relative path the audio is saved at.
+    pub path: &'static str,
+    /// The committed file whose bytes are saved.
+    pub source: &'static str,
+    /// The sample manifest bound to it.
+    pub slug: &'static str,
+}
+
 /// The orgs the example describes, in the order a demo should boot them.
 ///
 /// ACME first: it is the one that owns the audio work, holds the
@@ -68,6 +101,10 @@ pub const ORGS: &[(&str, &str)] = &[
     ("acme-audio", "ACME Audio"),
     ("vnt-video", "VNT Video"),
     ("alice-personal", "Alice Personal"),
+    // A jam program's library at real size — see `CHORDSHEET_LIBRARIES`.
+    // Planted beside ACME, like Alice's own org, so Keyflow reaches it
+    // through the one server the demo points at.
+    ("rockstars-of-tomorrow", "Rockstars of Tomorrow"),
 ];
 
 /// Whether the example describes this org.
@@ -119,6 +156,9 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
         &mut planted,
     )?;
     complete_mail_accounts(&mail)?;
+    // Before the declared collections: a setlist declared over a library
+    // names songs this import creates.
+    plant_chordsheet_library(org_root, slug);
     #[cfg(feature = "plugin-fasttrackstudio")]
     plant_collections(org_root, slug);
     #[cfg(feature = "plugin-wiki")]
@@ -406,6 +446,15 @@ pub const CAST: &[Member] = &[
         org: "acme-audio",
         holds: Holds::Client,
         scope: "Deliverables",
+    },
+    // Runs the jam program: the person who signs into Keyflow and finds
+    // the Adult Jam library, its setlists and its shows.
+    Member {
+        email: "riley@rockstars.test",
+        name: "Riley",
+        org: "rockstars-of-tomorrow",
+        holds: Holds::Owner,
+        scope: "",
     },
 ];
 
@@ -1039,6 +1088,18 @@ pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
     DeclaredAsset {
         org: "acme-audio",
         tier: AssetTier::Resources,
+        library: "samples",
+        slug: "single-master-loop",
+        manifest: "single-master-loop/sample.md",
+        body: "single-master-loop/sample.json",
+        demonstrates: "the bound twin: at plant time the seed makes a root through \
+                       `RootsService::create`, saves the audio through the upload lane with \
+                       `files_client`, and pins the manifest to exactly those bytes — Task \
+                       as an app's store, reachable from the planted world",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        tier: AssetTier::Resources,
         library: "lighting",
         slug: "album-launch-show",
         manifest: "album-launch-show/show.md",
@@ -1132,6 +1193,87 @@ pub const DECLARED_COLLECTIONS: &[DeclaredCollection] = &[
     },
     DeclaredCollection {
         org: "acme-audio",
+        title: "Sunday Songs",
+        // Keyflow's word, exactly: `SONGLIST_KIND` in keyflow's
+        // `apps/web/src/library/vox.rs`. Its library page lists
+        // collections of this kind and nothing else, so without this row
+        // a demo user signing into Keyflow against the seed would see a
+        // library with no lists in it and nothing to build a setlist from.
+        kind: "songlist",
+        items: &[("song", "track-one"), ("song", "track-two")],
+        demonstrates: "Keyflow's library organised the way a worship leader keeps one — \
+                       songs gathered into named lists, by reference, so a song sits in \
+                       as many lists as it belongs to and opening it from any of them \
+                       opens its default chart. `tests/integration/tests/it/\
+                       keyflow_library.rs` builds setlists by drawing on lists like this",
+    },
+    // Rockstars of Tomorrow: setlists drawn from the Adult Jam library,
+    // then shows made of setlists. Every song here is one the chordsheet
+    // import plants (`CHORDSHEET_LIBRARIES`); `declared_tests` holds that.
+    DeclaredCollection {
+        org: "rockstars-of-tomorrow",
+        title: "Opening Set",
+        kind: "setlist",
+        items: &[
+            ("song", "mr-brightside"),
+            ("song", "livin-on-a-prayer"),
+            ("song", "jessies-girl"),
+            ("song", "uptown-funk"),
+        ],
+        demonstrates: "a setlist drawn from a song list: every entry is a song the Adult \
+                       Jam list already holds, referenced rather than copied",
+    },
+    DeclaredCollection {
+        org: "rockstars-of-tomorrow",
+        title: "Grunge Set",
+        kind: "setlist",
+        items: &[
+            ("song", "come-as-you-are"),
+            ("song", "basket-case"),
+            ("song", "kryptonite"),
+            ("song", "somebody-told-me"),
+        ],
+        demonstrates: "a second setlist from the same library — a song list is where \
+                       setlists are picked from, not a setlist itself",
+    },
+    DeclaredCollection {
+        org: "rockstars-of-tomorrow",
+        title: "Closing Set",
+        kind: "setlist",
+        items: &[
+            ("song", "rolling-in-the-deep"),
+            ("song", "africa"),
+            ("song", "dont-stop-believin"),
+            ("song", "thunderstruck"),
+        ],
+        demonstrates: "the set a show ends on, and one that more than one show uses",
+    },
+    DeclaredCollection {
+        org: "rockstars-of-tomorrow",
+        title: "Spring Showcase",
+        kind: "show",
+        // By title: a collection's id is minted when it is created — see
+        // `plant_collections`.
+        items: &[
+            ("collection", "Opening Set"),
+            ("collection", "Grunge Set"),
+            ("collection", "Closing Set"),
+        ],
+        demonstrates: "a show is a collection of setlists, in running order — the \
+                       `collection:` node kind, and nothing else new: the same ordering, \
+                       the same references, one level up",
+    },
+    DeclaredCollection {
+        org: "rockstars-of-tomorrow",
+        title: "Summer Block Party",
+        kind: "show",
+        items: &[("collection", "Opening Set"), ("collection", "Closing Set")],
+        demonstrates: "two shows sharing setlists: a setlist tightened for the spring \
+                       showcase is tightened for the block party too, because neither show \
+                       holds a copy of it",
+    },
+    DeclaredCollection {
+        org: "acme-audio",
         title: "Thursday Rehearsal",
         // The point of this row is the word. `rehearsal-pool` is not a
         // kind Task has ever enumerated, and after ADR 0004 there is no
@@ -1193,6 +1335,14 @@ fn plant_collections(org_root: &org_proto::OrgRoot, slug: &str) {
             return;
         }
     };
+    // Title → id, for a declared item that names another collection. A
+    // collection's id is minted when it is created, so a declaration
+    // cannot know it; it names the sibling by title instead, and a show
+    // is declared after the setlists it holds so they exist by then.
+    let mut ids: std::collections::HashMap<String, String> = held
+        .iter()
+        .map(|c| (c.title.clone(), c.id.clone()))
+        .collect();
     for d in declared {
         if held.iter().any(|c| c.title == d.title) {
             continue;
@@ -1209,18 +1359,240 @@ fn plant_collections(org_root: &org_proto::OrgRoot, slug: &str) {
                 continue;
             }
         };
+        ids.insert(made.title.clone(), made.id.clone());
         for (kind, id) in d.items {
             let Some(kind) = NodeKind::parse(kind) else {
                 tracing::warn!(collection = d.title, "`{kind}` is not a node kind");
                 continue;
             };
+            // A collection is named by title in a declaration; see `ids`.
+            let id = if kind == NodeKind::Collection {
+                match ids.get(*id) {
+                    Some(real) => real.clone(),
+                    None => {
+                        tracing::warn!(
+                            collection = d.title,
+                            item = id,
+                            "names no collection declared before it"
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                (*id).to_owned()
+            };
             if let Err(e) = store.add_item(Placement {
                 collection_id: made.id.clone(),
-                node: NodeRef::new(kind, *id),
+                node: NodeRef::new(kind, &id),
                 after: None,
             }) {
-                tracing::warn!(collection = d.title, item = id, "not collected: {e}");
+                tracing::warn!(collection = d.title, item = %id, "not collected: {e}");
             }
+        }
+    }
+}
+
+// ── Chordsheet libraries ─────────────────────────────────────────────
+
+/// A chord-chart backup the seed imports into an org's library.
+///
+/// The backup is committed as the tool that made it left it — a
+/// `manifest.json` and a `kf/` folder of Keyflow source — and lands in the
+/// org's files like any other folder on a disk. Planting then turns it into
+/// what Keyflow would have made of it had somebody imported it by hand: a
+/// song per entry, a chart per song, and one song list holding them all.
+#[derive(Debug, Clone, Copy)]
+pub struct ChordsheetLibrary {
+    pub org: &'static str,
+    /// The backup folder, relative to the org's directory in the example.
+    pub backup: &'static str,
+    /// The song list every imported song goes into.
+    pub songlist: &'static str,
+    /// One line on what this library exists in the seed to prove.
+    pub demonstrates: &'static str,
+}
+
+/// Every chordsheet library the example plants.
+pub const CHORDSHEET_LIBRARIES: &[ChordsheetLibrary] = &[ChordsheetLibrary {
+    org: "rockstars-of-tomorrow",
+    backup: "Library/Chordsheet Backup",
+    songlist: "Adult Jam",
+    demonstrates: "a real working library at a real size — 204 charts from a jam program's \
+                   chordsheet.com backup, in one song list, with setlists drawn from it \
+                   and a show that holds those setlists. The one-song examples elsewhere in \
+                   the seed prove each mechanism; this is what they are for",
+}];
+
+/// One entry of a backup's `manifest.json` — the fields the import reads.
+#[derive(Debug, serde::Deserialize)]
+struct BackupEntry {
+    title: String,
+    artist: String,
+    source_file: String,
+}
+
+/// One imported song: its document, its chart, and both slugs.
+#[derive(Debug, Clone)]
+pub struct ImportedSong {
+    pub song_slug: String,
+    pub song: resources_proto::SongDoc,
+    pub chart_slug: String,
+    pub chart: resources_proto::ChartDoc,
+}
+
+/// What a backup imports as, in manifest order — pure, so the planter and
+/// the seed's own tests derive the same slugs.
+///
+/// Slugs come from the lane's own rules (`resources::song::slug_for`,
+/// `resources::chart::slug_for`) and are derived **from the manifest
+/// alone**, never from what is already on disk. That is what makes a
+/// re-plant name the same songs: seeding the taken-list from disk would
+/// see this function's own earlier output and mint `-2` duplicates of
+/// every song. Two entries that share a title (two different "Holiday"s)
+/// are told apart exactly as they would be by an import through the
+/// lane.
+///
+/// # Errors
+///
+/// A backup that is not in the example, a manifest that will not parse, or
+/// an entry whose `.kf` is missing.
+pub fn chordsheet_songs(lib: &ChordsheetLibrary) -> Result<Vec<ImportedSong>, String> {
+    let dir = format!("{}/{}", lib.org, lib.backup);
+    let manifest = STUDIO
+        .get_file(format!("{dir}/manifest.json"))
+        .ok_or_else(|| format!("{dir}: no manifest.json"))?;
+    let entries: Vec<BackupEntry> = serde_json::from_slice(manifest.contents())
+        .map_err(|e| format!("{dir}/manifest.json: {e}"))?;
+
+    let (mut songs_taken, mut charts_taken) = (Vec::new(), Vec::new());
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let stem = entry
+            .source_file
+            .rsplit_once('.')
+            .map_or(entry.source_file.as_str(), |(stem, _)| stem);
+        let kf = STUDIO
+            .get_file(format!("{dir}/kf/{stem}.kf"))
+            .ok_or_else(|| format!("{dir}: no kf/{stem}.kf for `{}`", entry.title))?;
+        let source = String::from_utf8_lossy(kf.contents()).into_owned();
+
+        let song = resources_proto::SongDoc {
+            slug: String::new(),
+            title: entry.title.trim().to_owned(),
+            writers: vec![entry.artist.trim().to_owned()],
+            key: String::new(),
+            tags: Vec::new(),
+            updated_at: "2026-09-21T00:00:00Z".to_owned(),
+        };
+        let song_slug = resources::song::slug_for(&songs_taken, &song);
+        songs_taken.push(song_slug.clone());
+
+        // As Keyflow saves one: the source verbatim, the song named by
+        // token, and — being each song's only chart — its default.
+        let chart = resources_proto::ChartDoc {
+            title: song.title.clone(),
+            source,
+            song: links::NodeRef::song(&song_slug).to_token(),
+            is_default: true,
+            updated_at: song.updated_at.clone(),
+            ..Default::default()
+        };
+        let chart_slug = resources::chart::slug_for(&charts_taken, &chart);
+        charts_taken.push(chart_slug.clone());
+
+        out.push(ImportedSong {
+            song_slug,
+            song,
+            chart_slug,
+            chart,
+        });
+    }
+    Ok(out)
+}
+
+/// Import an org's chordsheet library into its song and chart shelves, and
+/// gather it into its song list.
+///
+/// Documents are rendered by the chart and song lanes' own renderers and
+/// written onto the shelves the lanes write to, which is how the rest of
+/// the seed plants its charts — committed documents on the shelf — without
+/// a second copy of the server's wiring. Idempotent like the rest of the
+/// plant: a document already there is left alone (somebody may have edited
+/// the chart since), and the song list is created only if the org has no
+/// list of that title.
+fn plant_chordsheet_library(org_root: &org_proto::OrgRoot, slug: &str) {
+    for lib in CHORDSHEET_LIBRARIES.iter().filter(|l| l.org == slug) {
+        let songs = match chordsheet_songs(lib) {
+            Ok(songs) => songs,
+            Err(e) => {
+                tracing::warn!(org.slug = %slug, "chordsheet library not planted: {e}");
+                continue;
+            }
+        };
+        let song_shelf = org_root.asset_shelf_dir(resources_proto::assets::SONGS_KIND);
+        let chart_shelf = org_root.asset_shelf_dir(resources_proto::assets::CHARTS_KIND);
+        for s in &songs {
+            let targets = [
+                (
+                    song_shelf.join(resources_proto::assets::song_path(&s.song_slug)),
+                    resources::song::render_document(&s.song, &s.song_slug)
+                        .map_err(|e| e.to_string()),
+                ),
+                (
+                    chart_shelf.join(resources_proto::assets::chart_path(&s.chart_slug)),
+                    resources::chart::render_document(&s.chart, &s.chart_slug)
+                        .map_err(|e| e.to_string()),
+                ),
+            ];
+            for (path, doc) in targets {
+                if path.exists() {
+                    continue;
+                }
+                let written = doc.and_then(|doc| {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                    }
+                    std::fs::write(&path, doc).map_err(|e| e.to_string())
+                });
+                if let Err(e) = written {
+                    tracing::warn!(path = %path.display(), "not planted: {e}");
+                }
+            }
+        }
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        plant_songlist(org_root, slug, lib.songlist, &songs);
+    }
+}
+
+/// The song list a chordsheet library gathers into, created once.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn plant_songlist(org_root: &org_proto::OrgRoot, slug: &str, title: &str, songs: &[ImportedSong]) {
+    use collection::{CollectionKind, CollectionService as _, NodeRef, Placement};
+
+    let store = collection::Store::open(collections_path(org_root));
+    let held = store.list(slug.to_owned(), None).unwrap_or_default();
+    if held.iter().any(|c| c.title == title) {
+        return;
+    }
+    // Keyflow's word for it — `SONGLIST_KIND` in keyflow's library.
+    let list = match store.create(
+        slug.to_owned(),
+        title.to_owned(),
+        CollectionKind::new("songlist"),
+    ) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::warn!(org.slug = %slug, list = title, "not created: {e}");
+            return;
+        }
+    };
+    for s in songs {
+        if let Err(e) = store.add_item(Placement {
+            collection_id: list.id.clone(),
+            node: NodeRef::song(&s.song_slug),
+            after: None,
+        }) {
+            tracing::warn!(list = title, song = %s.song_slug, "not listed: {e}");
         }
     }
 }
@@ -1992,6 +2364,49 @@ mod declared_tests {
     /// rows, which is exactly the state ADR 0003 says is *legible* and
     /// therefore exactly the state a demo cannot be made of.
     #[test]
+    fn every_chordsheet_library_imports_whole_and_names_every_song_once() {
+        for lib in CHORDSHEET_LIBRARIES {
+            assert!(
+                ORGS.iter().any(|(slug, _)| *slug == lib.org),
+                "{}: org `{}` is not one the example plants",
+                lib.songlist,
+                lib.org
+            );
+            let songs = chordsheet_songs(lib)
+                .unwrap_or_else(|e| panic!("{}: the backup does not import: {e}", lib.songlist));
+            let manifest: Vec<serde_json::Value> = serde_json::from_slice(
+                STUDIO
+                    .get_file(format!("{}/{}/manifest.json", lib.org, lib.backup))
+                    .expect("manifest")
+                    .contents(),
+            )
+            .expect("manifest parses");
+            assert_eq!(
+                songs.len(),
+                manifest.len(),
+                "{}: an entry of the backup was dropped on import",
+                lib.songlist
+            );
+            let unique: std::collections::HashSet<&str> =
+                songs.iter().map(|s| s.song_slug.as_str()).collect();
+            assert_eq!(
+                unique.len(),
+                songs.len(),
+                "{}: two entries imported as one song — a title shared across \
+                 artists must still be two songs",
+                lib.songlist
+            );
+            assert!(
+                songs
+                    .iter()
+                    .all(|s| s.chart.is_default && !s.chart.source.trim().is_empty()),
+                "{}: every song's only chart is its default, with its source",
+                lib.songlist
+            );
+        }
+    }
+
+    #[test]
     fn every_declared_collection_references_something_the_seed_plants() {
         use links::NodeKind;
         for c in DECLARED_COLLECTIONS {
@@ -2035,12 +2450,28 @@ mod declared_tests {
                 // something planted, and the slug is the identity a
                 // `chart:<slug>` reference carries. Which tier that
                 // something is on is the previous test's question.
-                let planted = if kind == NodeKind::Song {
-                    STUDIO
-                        .get_file(format!("{}/Resources/songs/{id}/manifest.json", c.org))
-                        .is_some()
-                } else {
-                    assets_of(c.org).any(|a| a.slug == *id)
+                let planted = match kind {
+                    // A song with media is a folder with a manifest; a song
+                    // from a chordsheet library is one the import plants.
+                    NodeKind::Song => {
+                        STUDIO
+                            .get_file(format!("{}/Resources/songs/{id}/manifest.json", c.org))
+                            .is_some()
+                            || CHORDSHEET_LIBRARIES
+                                .iter()
+                                .filter(|l| l.org == c.org)
+                                .filter_map(|l| chordsheet_songs(l).ok())
+                                .flatten()
+                                .any(|s| s.song_slug == *id)
+                    }
+                    // A collection is named by title, and must be declared
+                    // *earlier* in the same org: that is the order the
+                    // planter creates them in and resolves titles against.
+                    NodeKind::Collection => DECLARED_COLLECTIONS
+                        .iter()
+                        .take_while(|other| !std::ptr::eq(*other, c))
+                        .any(|other| other.org == c.org && other.title == *id),
+                    _ => assets_of(c.org).any(|a| a.slug == *id),
                 };
                 assert!(
                     planted,

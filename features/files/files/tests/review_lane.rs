@@ -22,9 +22,10 @@ use files_proto::id::{CommentId, ReviewId, RootId, ShareId, VersionId};
 use files_proto::model::{RenditionKind, RootFlavor};
 use files_proto::path::RootPath;
 use files_proto::service::access::{Capability, ShareLink};
-use files_proto::service::legacy::FilesService;
 use files_proto::service::media::Region;
 use files_proto::service::review::{NewComment, ReviewService};
+use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::version::VersionService;
 
 /// A media root holding one checkpointed video, which is the minimum a
 /// review needs: `for_file` refuses a path the checkpoint head does not
@@ -36,18 +37,23 @@ async fn rig() -> (tempfile::TempDir, FilesBackend, RootId) {
     std::fs::create_dir(&root_dir).unwrap();
     std::fs::write(root_dir.join("cut.mov"), vec![0x11u8; 2048]).unwrap();
 
-    let root = FilesService::create_root(
+    let root = RootsService::adopt(
         &backend,
-        root_dir.to_string_lossy().into_owned(),
-        "session".into(),
-        RootFlavor::Media,
+        AdoptRequest {
+            path: root_dir.to_string_lossy().into_owned(),
+            name: "session".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        },
     )
     .await
-    .expect("create root");
-    FilesService::checkpoint_now(&backend, root.id, None)
+    .expect("adopt root");
+    let root_id = RootId::new(root.id);
+    backend.settled(root_id).await;
+    VersionService::checkpoint(&backend, root_id, None)
         .await
         .expect("checkpoint");
-    (dir, backend, RootId::new(root.id))
+    (dir, backend, root_id)
 }
 
 fn path(raw: &str) -> RootPath {
@@ -56,7 +62,7 @@ fn path(raw: &str) -> RootPath {
 
 /// The head version of `cut.mov`, as the client watching it would name it.
 async fn head_version(backend: &FilesBackend, root_id: RootId) -> (VersionId, String) {
-    let chain = FilesService::chain(backend, root_id.get(), "cut.mov".into())
+    let chain = VersionService::chain(backend, root_id, path("cut.mov"))
         .await
         .expect("chain");
     let commit = chain[0].commit_id.clone();
@@ -171,7 +177,7 @@ async fn a_comment_stays_attached_to_the_version_it_was_made_against() {
 
     // A new version of the file lands…
     std::fs::write(tmp.path().join("session/cut.mov"), vec![0x22u8; 4096]).unwrap();
-    FilesService::checkpoint_now(&backend, root_id.get(), None)
+    VersionService::checkpoint(&backend, root_id, None)
         .await
         .expect("second checkpoint");
     let (v2, v2_hex) = head_version(&backend, root_id).await;
@@ -235,18 +241,19 @@ async fn a_guest_cannot_post_as_an_org_member() {
     let review = ReviewId::new(backend.for_file(root_id, path("cut.mov")).await.unwrap().id);
     let (version, _) = head_version(&backend, root_id).await;
 
-    let posted = backend
-        .comment(NewComment {
-            review,
-            version,
-            region: Region::Whole,
-            body: "looks good".into(),
-            // The name of a real member of the org.
-            author: "Cody".into(),
-            strokes: Vec::new(),
-        })
-        .await
-        .expect("comment");
+    // The gate resolves a link holder to a guest; in process, the lane is
+    // told it is acting for a link the same way the guest mount tells it.
+    let posted = files::lane::caller::on_behalf_of_link(backend.comment(NewComment {
+        review,
+        version,
+        region: Region::Whole,
+        body: "looks good".into(),
+        // The name of a real member of the org.
+        author: "Cody".into(),
+        strokes: Vec::new(),
+    }))
+    .await
+    .expect("comment");
 
     assert_eq!(posted.author, "Cody (guest)");
     assert!(
@@ -363,7 +370,7 @@ async fn a_link_never_creates_the_review_it_points_at() {
         .expect_err("no review exists yet");
     assert!(matches!(err, FilesFault::Invalid(_)), "got {err:?}");
     assert!(
-        FilesService::list_reviews(&backend, Some(root_id.get()))
+        ReviewService::reviews(&backend, Some(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -373,7 +380,7 @@ async fn a_link_never_creates_the_review_it_points_at() {
 
 // ── What is honestly not implemented ───────────────────────────────
 
-/// Pins the three methods this lane cannot answer faithfully. Each is a
+/// Pins the methods this lane cannot answer faithfully. Each is a
 /// fault naming what is missing rather than an approximation, and each
 /// stays that way until the thing it names exists.
 #[tokio::test(flavor = "multi_thread")]
@@ -402,16 +409,42 @@ async fn the_unimplementable_methods_say_so_rather_than_faking_it() {
         ),
         other => panic!("expected Internal, got {other:?}"),
     }
+}
 
-    // "One's own" needs an identity, and a link identifies a review
-    // rather than a person — deleting on the id alone would let any link
-    // holder remove an org member's feedback.
-    let deleted = backend
+/// Deleting is a member's act, by someone who may comment on the file —
+/// a guest never reaches it, because a link identifies a review rather
+/// than a person. A comment that does not exist is refused, never
+/// reported as removed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_removes_a_comment_and_a_missing_one_is_refused() {
+    let (_tmp, backend, root_id) = rig().await;
+    let review = ReviewId::new(backend.for_file(root_id, path("cut.mov")).await.unwrap().id);
+    let (version, _) = head_version(&backend, root_id).await;
+
+    let placed = backend
+        .comment(NewComment {
+            review,
+            version,
+            region: Region::Whole,
+            body: "trim the head".into(),
+            author: "Cody".into(),
+            strokes: Vec::new(),
+        })
+        .await
+        .expect("comment");
+
+    let removed = backend
+        .delete_comment(CommentId::new(placed.id))
+        .await
+        .expect("delete");
+    assert_eq!(removed.id, placed.id, "the removed comment comes back");
+    assert!(
+        backend.comments(review).await.unwrap().is_empty(),
+        "and is gone from the review"
+    );
+
+    backend
         .delete_comment(CommentId::generate())
         .await
-        .expect_err("no guest identity");
-    assert!(
-        matches!(&deleted, FilesFault::Internal(m) if m.contains("not yet implemented")),
-        "got {deleted:?}"
-    );
+        .expect_err("no such comment");
 }

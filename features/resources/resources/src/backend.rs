@@ -887,6 +887,7 @@ impl ResourcesBackend {
         ContentRef {
             root_id: r.resource.content_root.clone(),
             path: r.resource.content_path.clone(),
+            content: r.resource.content_id.clone(),
         }
     }
 
@@ -2724,6 +2725,7 @@ mod tests {
             content: ContentRef {
                 root_id: "acme-library".into(),
                 path: "Samples/Kicks/Room Kick.wav".into(),
+                ..Default::default()
             },
             updated_at: "2026-09-05T10:00:00Z".into(),
         }

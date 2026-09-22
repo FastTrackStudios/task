@@ -20,6 +20,9 @@ path = "src/lib.rs"
 architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
 files-sync = { workspace = true }
+# The client an app holds — the chapter an app's store is proved through.
+files-client = { workspace = true }
+files-proto = { workspace = true, features = ["vox"] }
 task-proto = { workspace = true }
 # The wiki lane: registry, pages, subscriptions and Edit Requests, all
 # reached as a signed-in person on the org router.
@@ -60,6 +63,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # own rather than this harness's `Session`.
 task-ui-core = { workspace = true }
 serde_json = { workspace = true }
+# `large_media.rs` checks that gigabytes arrive intact by hashing them as
+# they stream past, rather than holding them to compare.
+blake3 = { workspace = true }
 # `wiki_promote.rs` stamps a promotion with an explicit instant so the
 # rendered documents are a pure function of their inputs.
 chrono = { workspace = true }

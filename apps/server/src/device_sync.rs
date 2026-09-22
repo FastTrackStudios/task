@@ -281,7 +281,9 @@ async fn sweep_peer(
     };
 
     for root in offered {
-        if files::FilesService::get_root(files, root.id).await.is_err()
+        if files::service::RootsService::get(files, files::RootId::new(root.id))
+            .await
+            .is_err()
             && !adopt_offered(files, org_root, host, &root)
         {
             continue;

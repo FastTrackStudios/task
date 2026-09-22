@@ -1,21 +1,26 @@
 //! `FilesBackend::sync_ingest_path` called repeatedly from inside one
 //! runtime. Reported (docs/spec/unmet.md) to stall on the third call.
 
-use files::{FilesBackend, FilesService, RootFlavor};
+use files::service::roots::{AdoptRequest, RootsService};
+use files::{FilesBackend, RootFlavor, RootId};
 
 async fn rig() -> (tempfile::TempDir, FilesBackend, uuid::Uuid) {
     let data = tempfile::tempdir().expect("data tempdir");
     let backend = FilesBackend::new(data.path(), data.path().join("vault")).expect("backend");
     let root_dir = data.path().join("session");
     std::fs::create_dir(&root_dir).unwrap();
-    let root = backend
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "Session".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create root");
+    let root = RootsService::adopt(
+        &backend,
+        AdoptRequest {
+            path: root_dir.to_string_lossy().into_owned(),
+            name: "Session".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        },
+    )
+    .await
+    .expect("adopt root");
+    backend.settled(RootId::new(root.id)).await;
     (data, backend, root.id)
 }
 

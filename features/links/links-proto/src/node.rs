@@ -131,6 +131,27 @@ pub enum NodeKind {
     ///
     /// The anchor addresses inside the project's page, like a note's.
     Project,
+    /// A collection — `id` is the collection's id. What lets a collection
+    /// hold *other collections*: a show is an ordered collection of
+    /// setlists, a festival an ordered collection of shows.
+    ///
+    /// # Why a kind and not a nested type
+    ///
+    /// A collection already holds an ordered list of references, and the
+    /// only thing a show needs that a setlist does not have is the ability
+    /// to name a setlist. Giving collections a reference to themselves is
+    /// the whole of that, and nesting then costs nothing: the same
+    /// lexorank ordering, the same `add_item`/`reorder`/`remove_item`, the
+    /// same by-reference semantics — a setlist edited after it was put in a
+    /// show is edited in the show, because the show never held a copy.
+    ///
+    /// Nothing here says "show" or "setlist". Those are an app's words
+    /// (`CollectionKind` is a string the caller picks — ADR 0004 decision
+    /// 2), and this kind names the primitive, not its consumers.
+    ///
+    /// Declared **last** so every existing kind keeps its discriminant on
+    /// the wire.
+    Collection,
 }
 
 impl NodeKind {
@@ -152,6 +173,7 @@ impl NodeKind {
             Self::Sample => "sample",
             Self::Lighting => "lighting",
             Self::Project => "project",
+            Self::Collection => "collection",
         }
     }
 
@@ -173,6 +195,7 @@ impl NodeKind {
             "sample" => Self::Sample,
             "lighting" => Self::Lighting,
             "project" => Self::Project,
+            "collection" => Self::Collection,
             _ => return None,
         })
     }

@@ -11,6 +11,23 @@
 //! expiring, or re-passwording a link cuts off already-connected
 //! guests at their next request, exactly like the HTTP routes.
 //!
+//! What the guest router mounts, and nothing else:
+//!
+//! - `ReviewService` — `scope` from the link; the review, its comments
+//!   and commenting, limited to the linked review and file.
+//!   `delete_comment` is refused: a link identifies a review, not a
+//!   person, so "one's own comment" cannot be established.
+//! - `VersionService` — `chain` for the linked file, for the review
+//!   page's version switcher. Every other method is refused.
+//! - `MediaService` — `rendition_info` for the linked file.
+//! - `TreeService`'s stream sibling — `events`, filtered to this
+//!   review's comments and its root's checkpoints.
+//!
+//! Every allowed call checks the link's scope FIRST and only then
+//! reaches the backend, inside [`files::lane::caller::on_behalf_of_link`]
+//! — the lanes hold nothing for a guest, and that is the one sanctioned
+//! way to act for a link whose scope has been checked here.
+//!
 //! Attribution (AC 1) is constrained at the boundary: every comment is
 //! stamped with the link (`via_link`) server-side, and the visitor's
 //! chosen display name is suffixed `(guest)` — an anonymous link
@@ -18,37 +35,53 @@
 
 use std::sync::Arc;
 
-use files::{FilesError, FilesService};
+use files::lane::caller::on_behalf_of_link;
+use files::service::media::{ByteTicket, Handoff, HandoffItem, HandoffTarget, Region};
+use files::service::review::{GuestScope, NewComment};
+use files::service::tree::TreeServiceStreamSource;
+use files::service::version::{Occupancy, Resolution};
+use files::service::{MediaService, ReviewService, VersionService};
+use files::{FilesFault, RootId, RootPath};
+use files_proto::id::{CommentId, ContentId, ReviewId, SnapshotId, VersionId};
+use files_proto::service::review::ReviewEvent;
+use files_proto::service::version::VersionEvent;
 use files_proto::{
-    BrowseEntry, ChainEntry, CheckpointInfo, DivergenceChoice, DivergenceInfo, FileRootInfo,
-    FilesEvent, GcReport, NamedVersion, NewReviewComment, ProjectVersion, RenditionInfo,
-    RenditionKind, RestartMode, Review, ReviewComment, RootFlavor, SnapshotInfo, VersionRef,
+    BrowseEntry, ChainEntry, CheckpointInfo, DivergenceInfo, FilesEvent, GcReport,
+    NewReviewComment, RenditionInfo, RenditionKind, Review, ReviewComment, SnapshotInfo,
 };
 use media_proto::{AttachmentMediaService, MediaChunk, MediaError, MediaGrant, MediaInfo};
 use uuid::Uuid;
 
 use crate::share::{ShareStore, StoredLink};
 
-fn denied<T>() -> Result<T, FilesError> {
-    Err(FilesError::BadRequest(
-        "not available on a guest review link".into(),
+/// The refusal for everything a review link does not reach.
+fn denied<T>(method: &str) -> Result<T, FilesFault> {
+    Err(FilesFault::denied(
+        format!("{method} (not available on a guest review link)"),
+        RootPath::root(),
     ))
 }
 
-/// Aborts the guest event forwarder when the last clone of the lane's
-/// services drops (the socket closed).
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
+/// Where in the media a comment sits, in the seconds the review store
+/// records — the same narrowing the review lane applies to a member's
+/// comment. `Page` and `Bytes` are refused rather than flattened to
+/// zero: a note on page 4 silently landing at 0:00 is worse than being
+/// told it cannot be carried yet.
+fn timecode_of(region: &Region) -> Result<f64, FilesFault> {
+    #[allow(clippy::cast_precision_loss)]
+    let secs = |ms: u64| ms as f64 / 1000.0;
+    match *region {
+        Region::Time { start_ms, .. } => Ok(secs(start_ms)),
+        Region::Rect { at_ms, .. } => Ok(at_ms.map_or(0.0, secs)),
+        Region::Whole => Ok(0.0),
+        Region::Page { .. } | Region::Bytes { .. } => Err(FilesFault::invalid(
+            "a review comment anchors to a moment in the media",
+        )),
     }
 }
 
-/// The Files surface a Review guest sees: the review, its comments,
-/// its file's chain and renditions — nothing else in the org.
-#[derive(Clone)]
-pub struct GuestFilesService {
+/// What one guest connection is bound to at upgrade.
+struct Bound {
     files: files::FilesBackend,
     review: Review,
     /// Live-revocation seam: the link is re-resolved from here on every
@@ -61,15 +94,18 @@ pub struct GuestFilesService {
     password_at_connect: Option<String>,
     /// Stamped onto every comment (AC 1) — "label (token-prefix)".
     attribution: String,
-    /// The guest's own event hub: a filtered mirror of the org hub
-    /// (this review's comments + this root's checkpoints), so the
-    /// review page's live subscription works without leaking org-wide
-    /// events to an anonymous visitor.
-    hub: architect::PubSub<FilesEvent>,
-    _forwarder: Arc<AbortOnDrop>,
 }
 
-impl GuestFilesService {
+/// The Files lanes a Review guest sees: the review, its comments, its
+/// file's chain and renditions, and a filtered live stream — nothing
+/// else in the org. One value implements every mounted lane, so the
+/// router holds one binding per connection.
+#[derive(Clone)]
+pub struct GuestLanes {
+    bound: Arc<Bound>,
+}
+
+impl GuestLanes {
     pub fn new(
         files: files::FilesBackend,
         review: Review,
@@ -81,64 +117,15 @@ impl GuestFilesService {
             link.label,
             &link.token[..8.min(link.token.len())]
         );
-        // The filtered event mirror: subscribe to the org's stream
-        // in-process and republish only what this guest may see.
-        //
-        // The subscription MUST ride a vox link (`LocalServer`, the
-        // notifier's pattern): a bare paired `vox::channel()` Tx has no
-        // sink until a transport binds it, so `PubSub::attach`ing one
-        // directly never delivers — `try_send` reports Full forever
-        // and the event sits in the hub mailbox.
-        let hub = architect::PubSub::sliding(64);
-        let guest_hub = hub.clone();
-        let (review_id, root_id) = (review.id, review.root_id);
-        let stream_backend = files.clone();
-        let forwarder = tokio::spawn(async move {
-            let scope = architect::Scope::new();
-            let local = architect::LocalServer::serve(
-                architect::LayerRouter::new()
-                    .merge(files_proto::files_service_stream_layer(stream_backend)),
-                scope.clone(),
-            );
-            let Ok(client) = local
-                .establish::<files_proto::FilesServiceStreamClient>()
-                .await
-            else {
-                tracing::warn!("share guest: event mirror could not establish");
-                return;
-            };
-            let (tx, mut rx) = vox::channel::<FilesEvent>();
-            let call = tokio::spawn(async move { client.events(tx).await });
-            while let Ok(Some(msg)) = rx.recv().await {
-                // `SelfRef` has no owned extraction; `map` lends the
-                // value, so cloning out is sound — events own their
-                // data.
-                let mut owned: Option<FilesEvent> = None;
-                let _ = msg.map(|ev| owned = Some(ev.clone()));
-                let Some(event) = owned else { continue };
-                let visible = match &event {
-                    FilesEvent::ReviewCommentAdded(c) | FilesEvent::ReviewCommentDeleted(c) => {
-                        c.review_id == review_id
-                    }
-                    FilesEvent::Checkpointed(info) => info.root_id == root_id,
-                    _ => false,
-                };
-                if visible {
-                    guest_hub.publish(event);
-                }
-            }
-            call.abort();
-            scope.close().await;
-        });
         Self {
-            files,
-            review,
-            shares,
-            token: link.token.clone(),
-            password_at_connect: link.password_sha256.clone(),
-            attribution,
-            hub,
-            _forwarder: Arc::new(AbortOnDrop(forwarder)),
+            bound: Arc::new(Bound {
+                files,
+                review,
+                shares,
+                token: link.token.clone(),
+                password_at_connect: link.password_sha256.clone(),
+                attribution,
+            }),
         }
     }
 
@@ -147,81 +134,138 @@ impl GuestFilesService {
     /// Also the guest lane's wide-event seam: architect's per-RPC span
     /// is the wide event; these fields mark it as guest traffic (shape
     /// only — never the token).
-    fn live_link(&self) -> Result<StoredLink, FilesError> {
+    fn live_link(&self) -> Result<StoredLink, FilesFault> {
         use architect_telemetry::wide;
         wide::set("share.guest", true);
-        let Some(link) = self.shares.resolve(&self.token) else {
+        let revoked = || FilesFault::invalid("this link has been revoked");
+        let Some(link) = self.bound.shares.resolve(&self.bound.token) else {
             wide::set("share.outcome", "revoked");
-            return Err(FilesError::BadRequest("this link has been revoked".into()));
+            return Err(revoked());
         };
         wide::set("share.label", link.label.clone());
-        if link.disabled
-            || link.expired(chrono::Utc::now().timestamp())
-            || link.password_sha256 != self.password_at_connect
-        {
+        if !self.still_valid(&link) {
             wide::set("share.outcome", "revoked");
-            return Err(FilesError::BadRequest("this link has been revoked".into()));
+            return Err(revoked());
         }
         wide::set("share.outcome", "ok");
         Ok(link)
     }
 
-    fn in_scope(&self, root_id: Uuid, path: &str) -> bool {
-        root_id == self.review.root_id && path == self.review.file_path
+    fn still_valid(&self, link: &StoredLink) -> bool {
+        !link.disabled
+            && !link.expired(chrono::Utc::now().timestamp())
+            && link.password_sha256 == self.bound.password_at_connect
+    }
+
+    fn review(&self) -> &Review {
+        &self.bound.review
+    }
+
+    fn review_id(&self) -> ReviewId {
+        ReviewId::new(self.bound.review.id)
+    }
+
+    fn root_id(&self) -> RootId {
+        RootId::new(self.bound.review.root_id)
+    }
+
+    fn in_scope(&self, root_id: RootId, path: &RootPath) -> bool {
+        root_id.get() == self.bound.review.root_id && path.as_str() == self.bound.review.file_path
+    }
+
+    /// The linked file, as the lanes address it.
+    fn file(&self) -> Result<RootPath, FilesFault> {
+        Ok(RootPath::parse(&self.bound.review.file_path)?)
+    }
+
+    /// Refuse anything but the linked file.
+    fn scoped(&self, method: &str, root_id: RootId, path: &RootPath) -> Result<(), FilesFault> {
+        self.live_link()?;
+        if self.in_scope(root_id, path) {
+            Ok(())
+        } else {
+            Err(FilesFault::denied(
+                format!("{method} (a guest review link reaches only its own file)"),
+                path.clone(),
+            ))
+        }
+    }
+
+    /// Refuse anything but the linked review.
+    fn scoped_review(&self, method: &str, review: ReviewId) -> Result<StoredLink, FilesFault> {
+        let link = self.live_link()?;
+        if review == self.review_id() {
+            Ok(link)
+        } else {
+            denied(method)
+        }
+    }
+
+    /// Whether a live event is this guest's business: this review's
+    /// comments and this root's checkpoints, never anything org-wide.
+    fn visible(&self, event: &FilesEvent) -> bool {
+        match event {
+            FilesEvent::Review(ReviewEvent::CommentAdded(c) | ReviewEvent::CommentDeleted(c)) => {
+                c.review_id == self.bound.review.id
+            }
+            FilesEvent::Version(VersionEvent::Checkpointed(info)) => {
+                info.root_id == self.bound.review.root_id
+            }
+            _ => false,
+        }
     }
 }
 
-impl FilesService for GuestFilesService {
-    // ── the review's own surface ──────────────────────────────────
+// ── The review's own surface ───────────────────────────────────────
 
-    async fn find_review(
-        &self,
-        root_id: Uuid,
-        file_path: String,
-    ) -> Result<Option<Review>, FilesError> {
-        self.live_link()?;
-        Ok(self
-            .in_scope(root_id, &file_path)
-            .then(|| self.review.clone()))
-    }
-
-    async fn review_for_file(
-        &self,
-        root_id: Uuid,
-        file_path: String,
-    ) -> Result<Review, FilesError> {
-        // Get, never create: the review already exists (the link was
-        // minted on it), and a guest must not mint vault entities.
-        self.live_link()?;
-        if self.in_scope(root_id, &file_path) {
-            Ok(self.review.clone())
-        } else {
-            denied()
-        }
-    }
-
-    async fn review_comments(&self, review_id: Uuid) -> Result<Vec<ReviewComment>, FilesError> {
-        self.live_link()?;
-        if review_id != self.review.id {
-            return denied();
-        }
-        self.files.review_comments(review_id).await
-    }
-
-    async fn add_review_comment(
-        &self,
-        review_id: Uuid,
-        comment: NewReviewComment,
-    ) -> Result<ReviewComment, FilesError> {
+impl ReviewService for GuestLanes {
+    /// What this link permits — the guest's first call, resolved from
+    /// the link itself so the entry page needs nothing in its URL but
+    /// the token.
+    async fn scope(&self) -> Result<GuestScope, FilesFault> {
         let link = self.live_link()?;
-        if review_id != self.review.id {
-            return denied();
-        }
+        let caps = link.capabilities();
+        Ok(GuestScope {
+            review: self.review_id(),
+            can_comment: caps.comment,
+            can_download: caps.download,
+            expires_at: (link.expires_unix > 0)
+                .then(|| chrono::DateTime::from_timestamp(link.expires_unix, 0))
+                .flatten(),
+        })
+    }
+
+    async fn review(&self, review: ReviewId) -> Result<Review, FilesFault> {
+        self.scoped_review("review", review)?;
+        Ok(self.review().clone())
+    }
+
+    async fn playback(
+        &self,
+        review: ReviewId,
+        version: VersionId,
+    ) -> Result<ByteTicket, FilesFault> {
+        self.scoped_review("playback", review)?;
+        let files = self.bound.files.clone();
+        on_behalf_of_link(async move { ReviewService::playback(&files, review, version).await })
+            .await
+    }
+
+    async fn comments(&self, review: ReviewId) -> Result<Vec<ReviewComment>, FilesFault> {
+        self.scoped_review("comments", review)?;
+        let files = self.bound.files.clone();
+        on_behalf_of_link(async move { ReviewService::comments(&files, review).await }).await
+    }
+
+    async fn comment(&self, comment: NewComment) -> Result<ReviewComment, FilesFault> {
+        let link = self.scoped_review("comment", comment.review)?;
         if !link.capabilities().comment {
-            return Err(FilesError::BadRequest(
-                "this link is view-only — commenting is not enabled".into(),
+            return Err(FilesFault::denied(
+                "Comment (this link is view-only — commenting is not enabled)",
+                self.file()?,
             ));
         }
+        let timecode_secs = timecode_of(&comment.region)?;
         // Identity is constrained at the boundary: whatever name the
         // visitor typed, it can't read as an org member's.
         let name = comment.author.trim();
@@ -230,220 +274,259 @@ impl FilesService for GuestFilesService {
         } else {
             format!("{name} (guest)")
         };
-        let comment = NewReviewComment { author, ..comment };
-        self.files
-            .add_review_comment_via(review_id, comment, self.attribution.clone())
-            .await
+        // Straight to the backend's attributed entry point rather than
+        // through the lane's `comment`: the lane cannot see the link, so
+        // it can only stamp "a guest link", and the owner needs to know
+        // WHICH link said this.
+        let files = self.bound.files.clone();
+        let attribution = self.bound.attribution.clone();
+        let review_id = comment.review.get();
+        let added = NewReviewComment {
+            timecode_secs,
+            author,
+            body: comment.body,
+            commit_id: comment.version.commit_prefix(),
+            annotation: comment.strokes,
+        };
+        on_behalf_of_link(async move {
+            files
+                .add_review_comment_via(review_id, added, attribution)
+                .await
+        })
+        .await
+        .map_err(|e| FilesFault::invalid(e.to_string()))
     }
 
-    async fn chain(&self, root_id: Uuid, path: String) -> Result<Vec<ChainEntry>, FilesError> {
+    /// Refused: a link identifies a review, not a person, and two
+    /// visitors holding one link are indistinguishable.
+    async fn delete_comment(&self, _comment: CommentId) -> Result<ReviewComment, FilesFault> {
+        denied("delete_comment")
+    }
+
+    async fn for_file(&self, root_id: RootId, path: RootPath) -> Result<Review, FilesFault> {
+        // Get, never create: the review already exists (the link was
+        // minted on it), and a guest must not mint vault entities.
+        self.scoped("for_file", root_id, &path)?;
+        Ok(self.review().clone())
+    }
+
+    async fn find(&self, root_id: RootId, path: RootPath) -> Result<Option<Review>, FilesFault> {
         self.live_link()?;
-        if !self.in_scope(root_id, &path) {
-            return denied();
-        }
-        self.files.chain(root_id, path).await
+        Ok(self.in_scope(root_id, &path).then(|| self.review().clone()))
+    }
+
+    /// The guest's "what can I see": exactly the one review this link
+    /// scopes to — never the org's list.
+    async fn reviews(&self, _root_id: Option<RootId>) -> Result<Vec<Review>, FilesFault> {
+        self.live_link()?;
+        Ok(vec![self.review().clone()])
+    }
+}
+
+// ── History: the linked file's chain, nothing more ─────────────────
+
+impl VersionService for GuestLanes {
+    async fn chain(&self, root_id: RootId, path: RootPath) -> Result<Vec<ChainEntry>, FilesFault> {
+        self.scoped("chain", root_id, &path)?;
+        let files = self.bound.files.clone();
+        on_behalf_of_link(async move { VersionService::chain(&files, root_id, path).await }).await
+    }
+
+    async fn checkpoint(
+        &self,
+        _root_id: RootId,
+        _description: Option<String>,
+    ) -> Result<CheckpointInfo, FilesFault> {
+        denied("checkpoint")
+    }
+
+    async fn snapshots(
+        &self,
+        _root_id: RootId,
+        _limit: Option<u32>,
+    ) -> Result<Vec<SnapshotInfo>, FilesFault> {
+        denied("snapshots")
+    }
+
+    async fn hold(&self, _root_id: RootId, _path: RootPath) -> Result<Occupancy, FilesFault> {
+        denied("hold")
+    }
+
+    async fn occupancy(
+        &self,
+        _root_id: RootId,
+        _path: RootPath,
+    ) -> Result<Vec<Occupancy>, FilesFault> {
+        denied("occupancy")
+    }
+
+    async fn divergences(&self, _root_id: RootId) -> Result<Vec<DivergenceInfo>, FilesFault> {
+        denied("divergences")
+    }
+
+    async fn resolve_divergence(
+        &self,
+        _root_id: RootId,
+        _version: VersionId,
+        _resolution: Resolution,
+    ) -> Result<DivergenceInfo, FilesFault> {
+        denied("resolve_divergence")
+    }
+
+    async fn restore(
+        &self,
+        _root_id: RootId,
+        _path: RootPath,
+        _version: VersionId,
+    ) -> Result<ChainEntry, FilesFault> {
+        denied("restore")
+    }
+
+    async fn keep_snapshot(
+        &self,
+        _root_id: RootId,
+        _snapshot: SnapshotId,
+    ) -> Result<CheckpointInfo, FilesFault> {
+        denied("keep_snapshot")
+    }
+
+    async fn browse_at(
+        &self,
+        _root_id: RootId,
+        _path: RootPath,
+        _version: VersionId,
+    ) -> Result<Vec<BrowseEntry>, FilesFault> {
+        denied("browse_at")
+    }
+
+    async fn copy_forward(
+        &self,
+        _root_id: RootId,
+        _version: VersionId,
+        _paths: Vec<RootPath>,
+    ) -> Result<Vec<RootPath>, FilesFault> {
+        denied("copy_forward")
+    }
+
+    async fn hint_activity(
+        &self,
+        _root_id: RootId,
+        _paths: Vec<RootPath>,
+    ) -> Result<u32, FilesFault> {
+        denied("hint_activity")
+    }
+
+    async fn collect(
+        &self,
+        _root_id: RootId,
+        _keep_newer_secs: Option<u64>,
+    ) -> Result<GcReport, FilesFault> {
+        denied("collect")
+    }
+}
+
+// ── Media: the linked file's renditions, nothing more ──────────────
+
+impl MediaService for GuestLanes {
+    async fn read(&self, _root_id: RootId, _path: RootPath) -> Result<ByteTicket, FilesFault> {
+        denied("read")
+    }
+
+    async fn read_at(
+        &self,
+        _root_id: RootId,
+        _path: RootPath,
+        _version: VersionId,
+    ) -> Result<ByteTicket, FilesFault> {
+        denied("read_at")
+    }
+
+    async fn read_content(&self, _content: ContentId) -> Result<ByteTicket, FilesFault> {
+        denied("read_content")
+    }
+
+    async fn renditions(
+        &self,
+        _root_id: RootId,
+        _path: RootPath,
+    ) -> Result<Vec<RenditionInfo>, FilesFault> {
+        denied("renditions")
     }
 
     async fn rendition(
         &self,
-        root_id: Uuid,
-        path: String,
+        _root_id: RootId,
+        _path: RootPath,
+        _kind: RenditionKind,
+    ) -> Result<ByteTicket, FilesFault> {
+        denied("rendition")
+    }
+
+    /// The record a player needs to address a rendition on the media
+    /// route — at the current content or at a version the switcher
+    /// picked. Only the linked file's.
+    async fn rendition_info(
+        &self,
+        root_id: RootId,
+        path: RootPath,
         kind: RenditionKind,
-    ) -> Result<RenditionInfo, FilesError> {
-        self.live_link()?;
-        if !self.in_scope(root_id, &path) {
-            return denied();
-        }
-        self.files.rendition(root_id, path, kind).await
+        at: Option<VersionId>,
+    ) -> Result<RenditionInfo, FilesFault> {
+        self.scoped("rendition_info", root_id, &path)?;
+        let files = self.bound.files.clone();
+        on_behalf_of_link(async move {
+            MediaService::rendition_info(&files, root_id, path, kind, at).await
+        })
+        .await
     }
 
-    async fn rendition_at(
+    async fn handoff(
         &self,
-        root_id: Uuid,
-        path: String,
-        commit_id: String,
-        kind: RenditionKind,
-    ) -> Result<RenditionInfo, FilesError> {
-        self.live_link()?;
-        if !self.in_scope(root_id, &path) {
-            return denied();
-        }
-        self.files
-            .rendition_at(root_id, path, commit_id, kind)
-            .await
-    }
-
-    // ── everything else: refused ──────────────────────────────────
-
-    /// Even root-scoped: version LABELS of the root's other files are
-    /// the org's curation vocabulary, not the guest's business — the
-    /// review switcher simply renders without stars on the guest lane.
-    async fn list_named_versions(
-        &self,
-        _root_id: Option<Uuid>,
-    ) -> Result<Vec<NamedVersion>, FilesError> {
-        denied()
-    }
-
-    async fn create_root(
-        &self,
-        _path: String,
         _name: String,
-        _flavor: RootFlavor,
-    ) -> Result<FileRootInfo, FilesError> {
-        denied()
-    }
-    async fn list_roots(&self) -> Result<Vec<FileRootInfo>, FilesError> {
-        denied()
-    }
-    async fn get_root(&self, _id: Uuid) -> Result<FileRootInfo, FilesError> {
-        denied()
-    }
-    async fn browse(
-        &self,
-        _root_id: Uuid,
-        _subpath: String,
-    ) -> Result<Vec<BrowseEntry>, FilesError> {
-        denied()
-    }
-    async fn drive_browse(&self, _path: String) -> Result<Vec<BrowseEntry>, FilesError> {
-        denied()
-    }
-
-    async fn tree_browse(&self, _path: String) -> Result<files_proto::TreeNode, FilesError> {
-        // The org tree spans the whole vault/wiki — nothing a
-        // review-scoped guest may see.
-        denied()
-    }
-    async fn checkpoint_now(
-        &self,
-        _root_id: Uuid,
-        _message: Option<String>,
-    ) -> Result<CheckpointInfo, FilesError> {
-        denied()
-    }
-    async fn hint_activity(&self, _root_id: Uuid, _paths: Vec<String>) -> Result<u32, FilesError> {
-        denied()
-    }
-    async fn snapshots(&self, _root_id: Uuid) -> Result<Vec<SnapshotInfo>, FilesError> {
-        denied()
-    }
-    async fn ignore_set(&self, _root_id: Uuid) -> Result<Vec<String>, FilesError> {
-        denied()
-    }
-    async fn set_ignore_set(
-        &self,
-        _root_id: Uuid,
-        _patterns: Vec<String>,
-    ) -> Result<Vec<String>, FilesError> {
-        denied()
-    }
-    async fn name_version(
-        &self,
-        _root_id: Uuid,
-        _commit_id: String,
-        _name: String,
-    ) -> Result<NamedVersion, FilesError> {
-        denied()
-    }
-    async fn resolve_named_version(&self, _id: Uuid) -> Result<VersionRef, FilesError> {
-        denied()
-    }
-    async fn unname_version(&self, _id: Uuid) -> Result<(), FilesError> {
-        denied()
-    }
-    async fn start_project_version(
-        &self,
-        _root_id: Uuid,
-        _label: Option<String>,
-    ) -> Result<ProjectVersion, FilesError> {
-        denied()
-    }
-    async fn list_project_versions(
-        &self,
-        _root_id: Uuid,
-    ) -> Result<Vec<ProjectVersion>, FilesError> {
-        denied()
-    }
-    async fn gc_root(
-        &self,
-        _root_id: Uuid,
-        _keep_secs: Option<u64>,
-    ) -> Result<GcReport, FilesError> {
-        denied()
-    }
-    async fn dehydrate(&self, _root_id: Uuid, _path: String) -> Result<BrowseEntry, FilesError> {
-        denied()
-    }
-    async fn hydrate(&self, _root_id: Uuid, _path: String) -> Result<BrowseEntry, FilesError> {
-        denied()
-    }
-    async fn hydration_policy(&self, _root_id: Uuid) -> Result<Vec<String>, FilesError> {
-        denied()
-    }
-    async fn set_hydration_policy(
-        &self,
-        _root_id: Uuid,
-        _patterns: Vec<String>,
-    ) -> Result<Vec<String>, FilesError> {
-        denied()
-    }
-    async fn apply_hydration_policy(
-        &self,
-        _root_id: Uuid,
-    ) -> Result<files_proto::HydrationReport, FilesError> {
-        denied()
-    }
-    async fn restart_project_version(
-        &self,
-        _root_id: Uuid,
-        _mode: RestartMode,
-        _label: Option<String>,
-    ) -> Result<ProjectVersion, FilesError> {
-        denied()
-    }
-    async fn browse_at(
-        &self,
-        _root_id: Uuid,
-        _commit_id: String,
-        _subpath: String,
-    ) -> Result<Vec<BrowseEntry>, FilesError> {
-        denied()
-    }
-    async fn copy_forward(
-        &self,
-        _root_id: Uuid,
-        _commit_id: String,
-        _paths: Vec<String>,
-    ) -> Result<Vec<String>, FilesError> {
-        denied()
-    }
-    async fn divergences(&self, _root_id: Uuid) -> Result<Vec<DivergenceInfo>, FilesError> {
-        denied()
-    }
-    async fn resolve_divergence(
-        &self,
-        _root_id: Uuid,
-        _path: String,
-        _choice: DivergenceChoice,
-    ) -> Result<CheckpointInfo, FilesError> {
-        denied()
-    }
-    /// The guest's "what can I see" call: exactly the one review this
-    /// link scopes to — the entry page resolves its (root, file) from
-    /// here rather than carrying them in the URL.
-    async fn list_reviews(&self, _root_id: Option<Uuid>) -> Result<Vec<Review>, FilesError> {
-        self.live_link()?;
-        Ok(vec![self.review.clone()])
-    }
-    async fn delete_review_comment(&self, _id: Uuid) -> Result<(), FilesError> {
-        denied()
+        _target: HandoffTarget,
+        _items: Vec<HandoffItem>,
+    ) -> Result<Handoff, FilesFault> {
+        denied("handoff")
     }
 }
 
-impl files_proto::service::legacy::FilesServiceStreamSource for GuestFilesService {
-    fn events_hub(&self) -> &architect::PubSub<FilesEvent> {
-        &self.hub
+// ── Live: this review's comments and its root's checkpoints ────────
+
+impl TreeServiceStreamSource for GuestLanes {
+    /// The org's stream, filtered in process to what this guest may see.
+    /// Narrowing to any root but the review's own hears nothing. The link
+    /// is re-checked per event, so a revoked link goes quiet mid-stream
+    /// exactly as its calls start failing.
+    fn events_attach(&self, root_id: Option<RootId>, sink: architect::vox::Tx<FilesEvent>) {
+        if self.live_link().is_err() || root_id.is_some_and(|r| r != self.root_id()) {
+            return;
+        }
+        let this = self.clone();
+        let mut rx = self.bound.files.subscribe_events();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let live = this
+                            .bound
+                            .shares
+                            .resolve(&this.bound.token)
+                            .is_some_and(|link| this.still_valid(&link));
+                        if !live {
+                            return;
+                        }
+                        if !this.visible(&event) {
+                            continue;
+                        }
+                        if sink.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
     }
 }
 

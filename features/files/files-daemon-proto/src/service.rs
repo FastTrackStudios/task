@@ -20,14 +20,35 @@ use crate::model::DaemonStatus;
 /// mapping call — pays for the split in noise at hundreds of call sites.
 /// `files-proto` is a wire contract like this one, so the dependency
 /// costs a client nothing.
-impl From<files_proto::FilesError> for DaemonError {
-    fn from(e: files_proto::FilesError) -> Self {
+///
+/// The fault's own text rides along as the message: it already names
+/// what was missing or refused, which is all a local caller shows.
+impl From<files_proto::FilesFault> for DaemonError {
+    fn from(e: files_proto::FilesFault) -> Self {
+        use files_proto::FilesFault as F;
+        let message = e.to_string();
         match e {
-            files_proto::FilesError::NotFound(m) => DaemonError::NotFound(m),
-            files_proto::FilesError::AlreadyExists(m) | files_proto::FilesError::BadRequest(m) => {
-                DaemonError::BadRequest(m)
+            F::RootNotFound(_)
+            | F::PathNotFound(_)
+            | F::TreePathNotFound(_)
+            | F::VersionNotFound(_)
+            | F::UploadNotFound(_)
+            | F::ReviewNotFound(_)
+            | F::DeviceNotFound(_) => DaemonError::NotFound(message),
+            F::Io(_) | F::Store(_) | F::Internal(_) | F::Unavailable { .. } => {
+                DaemonError::Io(message)
             }
-            files_proto::FilesError::Io(m) => DaemonError::Io(m),
+            F::Exists { .. }
+            | F::AlreadyRoot(_)
+            | F::BadPath(_)
+            | F::NotADirectory(_)
+            | F::NotAFile(_)
+            | F::IntoSelf { .. }
+            | F::Invalid(_)
+            | F::Denied { .. }
+            | F::GrantRevoked(_)
+            | F::NotHydrated(_)
+            | F::Stale { .. } => DaemonError::BadRequest(message),
         }
     }
 }

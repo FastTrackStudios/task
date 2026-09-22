@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collection_proto::{
-    Collection, CollectionError, CollectionItem, CollectionKind, CollectionService, NodeRef,
-    Placement,
+    Collection, CollectionError, CollectionItem, CollectionKind, CollectionService, NodeKind,
+    NodeRef, Placement,
 };
 use vault_live::lexorank;
 
@@ -96,6 +96,37 @@ fn rank_after(items: &[CollectionItem], after: Option<&NodeRef>) -> String {
     }
 }
 
+/// Whether `from` is `target`, or holds it — through any chain of
+/// `collection:` references on this store.
+///
+/// Walks only local references: a collection in another organisation is
+/// not in this store to walk, and a loop would need this org to hold an
+/// edge back into itself through somebody else's store — which is theirs
+/// to refuse. A reference to a collection that does not exist is a dead
+/// end, not an error; ADR 0003 treats a dangling reference as a legible
+/// state for every kind, and this one is no different.
+fn reaches(collections: &[Collection], from: &str, target: &str) -> bool {
+    let mut stack = vec![from.to_owned()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = stack.pop() {
+        if id == target {
+            return true;
+        }
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        if let Some(c) = collections.iter().find(|c| c.id == id) {
+            stack.extend(
+                c.items
+                    .iter()
+                    .filter(|it| it.node.kind == NodeKind::Collection && it.node.is_local())
+                    .map(|it| it.node.id.clone()),
+            );
+        }
+    }
+    false
+}
+
 /// A rank strictly greater than every current item (or `first()` when empty).
 fn append_rank(items: &[CollectionItem]) -> String {
     match items.last() {
@@ -153,6 +184,25 @@ impl CollectionService for Store {
 
     fn add_item(&self, placement: Placement) -> Result<Collection, CollectionError> {
         let mut inner = self.inner.lock().expect("collection store poisoned");
+        // A collection may hold other collections — a show holds setlists
+        // — and that is the one way this store can grow a loop. Refused
+        // here, where the edge is made, so no reader walking a show ever
+        // has to defend itself against one.
+        if placement.node.kind == NodeKind::Collection
+            && placement.node.is_local()
+            && reaches(
+                &inner.collections,
+                &placement.node.id,
+                &placement.collection_id,
+            )
+        {
+            return Err(CollectionError::BadRequest(format!(
+                "`{}` already contains `{}`, directly or through the collections \
+                 it holds, so adding it would make a collection that contains \
+                 itself",
+                placement.node.id, placement.collection_id
+            )));
+        }
         let c = inner.find_mut(&placement.collection_id)?;
         if c.items.iter().any(|it| it.node == placement.node) {
             return Err(CollectionError::BadRequest(format!(
@@ -421,6 +471,99 @@ mod tests {
         };
         s.add_item(p.clone()).unwrap();
         assert!(matches!(s.add_item(p), Err(CollectionError::BadRequest(_))));
+    }
+
+    fn coll(id: &str) -> NodeRef {
+        NodeRef::new(NodeKind::Collection, id)
+    }
+
+    fn put(s: &Store, into: &str, node: NodeRef) -> Result<Collection, CollectionError> {
+        s.add_item(Placement {
+            collection_id: into.to_owned(),
+            node,
+            after: None,
+        })
+    }
+
+    /// A show is a collection of setlists, in order — nesting with no new
+    /// machinery, and by reference: a song added to a setlist after the
+    /// setlist went into the show is in the show.
+    #[test]
+    fn a_show_holds_its_setlists_in_order_and_by_reference() {
+        let s = store();
+        let show = s
+            .create("acme".into(), "Friday".into(), CollectionKind::new("show"))
+            .unwrap();
+        let early = s
+            .create(
+                "acme".into(),
+                "Early Set".into(),
+                CollectionKind::new("setlist"),
+            )
+            .unwrap();
+        let late = s
+            .create(
+                "acme".into(),
+                "Late Set".into(),
+                CollectionKind::new("setlist"),
+            )
+            .unwrap();
+        put(&s, &show.id, coll(&early.id)).unwrap();
+        let held = put(&s, &show.id, coll(&late.id)).unwrap();
+        assert_eq!(nodes(&held), vec![early.id.clone(), late.id.clone()]);
+
+        put(&s, &late.id, NodeRef::song("encore")).unwrap();
+        let late_now = s
+            .get(&held.items[1].node.id)
+            .unwrap()
+            .expect("the show names a real setlist");
+        assert_eq!(nodes(&late_now), vec!["encore".to_owned()]);
+    }
+
+    /// The loop the new kind makes possible is refused where it would be
+    /// made — directly, and through a chain — so nothing that walks a
+    /// show has to defend itself against one.
+    #[test]
+    fn a_collection_can_never_come_to_contain_itself() {
+        let s = store();
+        let festival = s
+            .create(
+                "acme".into(),
+                "Festival".into(),
+                CollectionKind::new("festival"),
+            )
+            .unwrap();
+        let show = s
+            .create("acme".into(), "Friday".into(), CollectionKind::new("show"))
+            .unwrap();
+        let set = s
+            .create("acme".into(), "Set".into(), CollectionKind::new("setlist"))
+            .unwrap();
+
+        assert!(
+            matches!(
+                put(&s, &set.id, coll(&set.id)),
+                Err(CollectionError::BadRequest(_))
+            ),
+            "a collection was allowed to hold itself"
+        );
+
+        put(&s, &festival.id, coll(&show.id)).unwrap();
+        put(&s, &show.id, coll(&set.id)).unwrap();
+        assert!(
+            matches!(
+                put(&s, &set.id, coll(&festival.id)),
+                Err(CollectionError::BadRequest(_))
+            ),
+            "a loop through two collections was allowed"
+        );
+
+        // A dangling reference is not a loop, and stays legible — the
+        // same stance ADR 0003 takes for every other kind.
+        put(&s, &set.id, coll("no-such-collection")).unwrap();
+        // Nor is a collection in another organisation, which this store
+        // cannot walk and which is not this org's edge to make a loop of.
+        put(&s, &set.id, coll(&festival.id).in_domain("vnt.test")).unwrap();
     }
 
     #[test]

@@ -410,9 +410,9 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                 let Some(root) = roots.iter().find(|r| r.name == *title) else {
                     continue;
                 };
-                if let Err(e) = files::FilesService::checkpoint_now(
+                if let Err(e) = files::service::VersionService::checkpoint(
                     &backend,
-                    root.id,
+                    files::RootId::new(root.id),
                     Some(format!("{name} — rough cut")),
                 )
                 .await
@@ -424,9 +424,9 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                     println!("  video: final render of \"{name}\" failed — rough cut stands");
                     continue;
                 }
-                match files::FilesService::checkpoint_now(
+                match files::service::VersionService::checkpoint(
                     &backend,
-                    root.id,
+                    files::RootId::new(root.id),
                     Some(format!("{name} — final")),
                 )
                 .await
@@ -434,6 +434,13 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                     Ok(_) => println!("  video: \"{name}\" finalled — two versions on record"),
                     Err(e) => println!("  video: final of \"{name}\" not checkpointed ({e})"),
                 }
+            }
+        }
+
+        if slug == example_org::BOUND_SAMPLE.org {
+            match plant_bound_sample(&backend, &org).await {
+                Ok(line) => println!("  sample: {line}"),
+                Err(e) => println!("  sample: the bound sample was not planted ({e})"),
             }
         }
     }
@@ -465,6 +472,93 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Task as an app's store, planted: make a root the way an app makes one,
+/// save a file into it through the upload lane, and pin a sample manifest
+/// to exactly those bytes.
+///
+/// Through `files_client` over an in-process router rather than through
+/// the backend's own methods, so the seed reaches the lanes the way
+/// Signal would — and a lane that stopped working for apps stops the
+/// seed too.
+///
+/// Idempotent: the root is found again by its directory, a file already
+/// at the path is not saved twice (create-only), and the manifest is
+/// re-pinned to whatever is there now.
+async fn plant_bound_sample(
+    backend: &files::FilesBackend,
+    org: &org_proto::OrgRoot,
+) -> eyre::Result<String> {
+    use architect::{LayerRouter, LocalServer, Scope};
+    use files_client::{FilesClient, Save, root_id};
+    use resources_proto::ResourcesService as _;
+
+    let bound = example_org::BOUND_SAMPLE;
+    let audio = example_org::studio_file(bound.source)
+        .ok_or_else(|| eyre::eyre!("{} is not committed", bound.source))?;
+
+    let local = LocalServer::serve(
+        LayerRouter::new()
+            .merge(files_proto::roots_layer(backend.clone()))
+            .merge(files_proto::tree_layer(backend.clone()))
+            .merge(files_proto::upload_layer(backend.clone()))
+            .merge(files_proto::media_layer(backend.clone()))
+            .merge(files_proto::media_stream_layer(backend.clone())),
+        Scope::new(),
+    );
+    let dialled = |e| eyre::eyre!("in-process dial: {e:?}");
+    let client = FilesClient::new(
+        local.establish().await.map_err(dialled)?,
+        local.establish().await.map_err(dialled)?,
+        local.establish().await.map_err(dialled)?,
+        local.establish().await.map_err(dialled)?,
+        local.establish().await.map_err(dialled)?,
+    );
+
+    let store = client
+        .ensure_root(
+            bound.root_dir,
+            bound.root_name,
+            files_proto::model::RootFlavor::Media,
+        )
+        .await
+        .map_err(|e| eyre::eyre!("ensure root: {e}"))?;
+    let root = root_id(&store);
+    let entry = match client
+        .put(root, bound.path, audio, Save::create_only())
+        .await
+    {
+        Ok(entry) => entry,
+        // Already planted. Pin whatever is there.
+        Err(e) if e.is_stale() => client
+            .entry(root, bound.path)
+            .await
+            .map_err(|e| eyre::eyre!("read back: {e}"))?,
+        Err(e) => return Err(eyre::eyre!("save: {e}")),
+    };
+    let pin = entry.content.map(|c| c.0).unwrap_or_default();
+
+    let resources = resources::ResourcesBackend::new(org.resources_dir());
+    let mut sample = resources
+        .sample(bound.slug)
+        .map_err(|e| eyre::eyre!("read manifest: {e:?}"))?;
+    sample.content = resources_proto::ContentRef {
+        root_id: root.to_string(),
+        path: bound.path.to_string(),
+        content: pin.clone(),
+    };
+    resources
+        .upsert_sample(sample)
+        .map_err(|e| eyre::eyre!("bind manifest: {e:?}"))?;
+    Ok(format!(
+        "sample:{} bound to {}/{} in \"{}\", pinned {}",
+        bound.slug,
+        bound.root_dir,
+        bound.path,
+        bound.root_name,
+        pin.get(..12).unwrap_or(&pin)
+    ))
 }
 
 /// Which pass of a deliverable synth this is — the two must LOOK

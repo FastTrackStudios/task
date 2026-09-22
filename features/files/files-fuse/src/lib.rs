@@ -81,7 +81,7 @@ const TTL: Duration = Duration::from_secs(1);
 /// A trait so this crate does not depend on the sync agent: the agent
 /// implements it over its own backend, and a test implements it with a
 /// closure. What arrives is the path *relative to the mounted root*,
-/// which is how `FilesService::hydrate` names a file.
+/// which is how `SyncService::hydrate` names a file.
 pub trait Hydrator: Send + Sync + 'static {
     /// Make `rel` resident, blocking until it is. Returning `Ok` means
     /// the content is on disk and the next read will find it.

@@ -1,7 +1,35 @@
-//! This crate's own error type (repo open/init, registry I/O, live-tree
-//! scans). [`FilesBackend`](crate::FilesBackend) maps every variant onto
-//! [`files_proto::FilesError`] at the RPC boundary — see
-//! `backend::to_files_error`.
+//! This crate's own error types. [`Error`] is what the backend's internals
+//! fail with (repo open/init, registry I/O, live-tree scans); every lane
+//! maps it onto the wire's [`files_proto::FilesFault`].
+//!
+//! [`FilesError`] is the coarse four-way error the backend's synchronous
+//! store seams (`sync_*`, `read_source_content`, `with_version_store`)
+//! report to the in-process crates built on them — `files-sync`, the
+//! daemon. It is not on any wire.
+
+/// The coarse error of the backend's in-process store seams.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FilesError {
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("already exists: {0}")]
+    AlreadyExists(String),
+    #[error("bad request: {0}")]
+    BadRequest(String),
+    #[error("io: {0}")]
+    Io(String),
+}
+
+impl From<FilesError> for files_proto::error::FilesFault {
+    fn from(err: FilesError) -> Self {
+        use files_proto::error::FilesFault as F;
+        match err {
+            FilesError::NotFound(m) | FilesError::BadRequest(m) => F::Invalid(m),
+            FilesError::AlreadyExists(m) => F::AlreadyRoot(m),
+            FilesError::Io(m) => F::Io(m),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

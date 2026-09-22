@@ -137,7 +137,7 @@ async fn every_lane_rejects_an_unknown_root_identically() {
         .expect_err("version");
     let from_curation = rig
         .backend
-        .named_versions(ghost, None)
+        .named_versions(Some(ghost), None)
         .await
         .expect_err("curation");
     let from_tree = rig

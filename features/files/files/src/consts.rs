@@ -1,7 +1,7 @@
 //! Names [`crate::backend`] and [`crate::scan`] agree on for a File
 //! Root's own internals — never surfaced by
-//! [`files_proto::FilesService::browse`] (root browsing), but visible
-//! through [`files_proto::FilesService::drive_browse`] ("Drive"
+//! `TreeService::browse` (root browsing), but visible
+//! through `RootsService::browse_area` ("Drive"
 //! browsing shows the raw tree, internals included — that's the
 //! distinction the glossary draws between the two).
 //!

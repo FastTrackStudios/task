@@ -5,8 +5,49 @@
 //! criterion.
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::{FilesBackend, FilesService as _, RootFlavor};
+use files::service::roots::{AdoptRequest, RootsService as _};
+use files::service::sync::SyncService as _;
+use files::service::tree::TreeService as _;
+use files::service::version::{Resolution, VersionService as _};
+use files::{FilesBackend, FilesFault, RootFlavor, RootId, RootPath};
+use files_proto::VersionId;
 use files_sync::{SyncHost, SyncServiceClient, layer as sync_service_layer, reconcile};
+
+fn rp(path: &str) -> RootPath {
+    RootPath::parse(path).expect("a valid root path")
+}
+
+/// Adopt a folder as a root through the roots lane, and wait out the
+/// catalogue walk adoption runs behind its return — so a test's own
+/// checkpoint never races the adoption's.
+trait AdoptRoot {
+    async fn adopt_root(
+        &self,
+        path: String,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<files::FileRootInfo, FilesFault>;
+}
+
+impl AdoptRoot for FilesBackend {
+    async fn adopt_root(
+        &self,
+        path: String,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<files::FileRootInfo, FilesFault> {
+        let root = self
+            .adopt(AdoptRequest {
+                path,
+                name,
+                flavor,
+                hash_content: true,
+            })
+            .await?;
+        self.settled(RootId::new(root.id)).await;
+        Ok(root)
+    }
+}
 
 struct Agent {
     _dir: tempfile::TempDir,
@@ -49,16 +90,16 @@ async fn rig() -> (Agent, Agent, uuid::Uuid) {
     .unwrap();
     let root = primary
         .backend
-        .create_root(
+        .adopt_root(
             root_dir.to_string_lossy().into_owned(),
             "session".into(),
             RootFlavor::Media,
         )
         .await
-        .expect("create_root");
+        .expect("adopt");
     primary
         .backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
         .expect("primary checkpoint");
 
@@ -102,7 +143,7 @@ async fn edits_flow_both_ways() {
     .unwrap();
     replica
         .backend
-        .checkpoint_now(root_id, Some("overdub on the plane".into()))
+        .checkpoint(RootId::new(root_id), Some("overdub on the plane".into()))
         .await
         .expect("replica checkpoint");
 
@@ -113,7 +154,11 @@ async fn edits_flow_both_ways() {
         .expect("pull back");
     assert_eq!(report.heads_imported, 1);
     assert_eq!(read(&primary, "overdub.wav"), vec![0x33u8; 32 * 1024]);
-    let divergent = primary.backend.divergences(root_id).await.unwrap();
+    let divergent = primary
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert!(divergent.is_empty(), "fast-forward is not divergence");
 }
 
@@ -135,7 +180,7 @@ async fn concurrent_edits_survive_and_resolve() {
     .unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, Some("studio".into()))
+        .checkpoint(RootId::new(root_id), Some("studio".into()))
         .await
         .unwrap();
     std::fs::write(
@@ -145,7 +190,7 @@ async fn concurrent_edits_survive_and_resolve() {
     .unwrap();
     replica
         .backend
-        .checkpoint_now(root_id, Some("plane".into()))
+        .checkpoint(RootId::new(root_id), Some("plane".into()))
         .await
         .unwrap();
 
@@ -154,7 +199,11 @@ async fn concurrent_edits_survive_and_resolve() {
     reconcile(&primary.backend, &replica.client, root_id)
         .await
         .expect("pull replica line");
-    let divergent = primary.backend.divergences(root_id).await.unwrap();
+    let divergent = primary
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert_eq!(divergent.len(), 1);
     assert_eq!(divergent[0].path, "mix.wav");
     assert_eq!(divergent[0].sides.len(), 2);
@@ -166,9 +215,9 @@ async fn concurrent_edits_survive_and_resolve() {
     let resolved = primary
         .backend
         .resolve_divergence(
-            root_id,
-            "mix.wav".into(),
-            files::DivergenceChoice::Pick { commit_id: other },
+            RootId::new(root_id),
+            VersionId::from_commit_hex(&other),
+            Resolution::KeepTheirs,
         )
         .await
         .expect("resolve");
@@ -176,7 +225,7 @@ async fn concurrent_edits_survive_and_resolve() {
     assert!(
         primary
             .backend
-            .divergences(root_id)
+            .divergences(RootId::new(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -187,11 +236,18 @@ async fn concurrent_edits_survive_and_resolve() {
     let sides = divergent[0].sides.clone();
     let listed = primary
         .backend
-        .browse_at(root_id, sides[0].commit_id.clone(), String::new())
+        .browse_at(
+            RootId::new(root_id),
+            RootPath::root(),
+            VersionId::from_commit_hex(&sides[0].commit_id),
+        )
         .await
         .expect("losing side still browsable");
     assert!(listed.iter().any(|e| e.name == "mix.wav"));
-    assert!(!resolved.commit_id.is_empty());
+    assert_eq!(
+        resolved.path, "mix.wav",
+        "the settled divergence comes back"
+    );
 }
 
 /// AC 3: an interrupted transfer resumes at chunk level — chunks
@@ -219,14 +275,18 @@ async fn interrupted_transfer_resumes_at_chunk_level() {
     std::fs::write(root_dir.join("big.wav"), &big).unwrap();
     let root = primary
         .backend
-        .create_root(
+        .adopt_root(
             root_dir.to_string_lossy().into_owned(),
             "session".into(),
             RootFlavor::Media,
         )
         .await
         .unwrap();
-    primary.backend.checkpoint_now(root.id, None).await.unwrap();
+    primary
+        .backend
+        .checkpoint(RootId::new(root.id), None)
+        .await
+        .unwrap();
 
     let replica = agent().await;
     replica
@@ -325,7 +385,7 @@ async fn partial_replica_hydrates_only_chosen_paths() {
     // The slice: stems/ stays hydrated, everything else dehydrated.
     replica
         .backend
-        .set_hydration_policy(root_id, vec!["stems/".into()])
+        .set_residency(RootId::new(root_id), vec!["stems/".into()])
         .await
         .expect("set policy");
 
@@ -341,7 +401,7 @@ async fn partial_replica_hydrates_only_chosen_paths() {
     assert_eq!(read(&replica, "stems/kick.wav"), vec![0x22u8; 48 * 1024]);
     let listed = replica
         .backend
-        .browse(root_id, String::new())
+        .browse(RootId::new(root_id), RootPath::root())
         .await
         .unwrap();
     let mix = listed.iter().find(|e| e.name == "mix.wav").unwrap();
@@ -353,10 +413,19 @@ async fn partial_replica_hydrates_only_chosen_paths() {
     // hydrates through sync — #263's hydrate doc).
     let hydrated = replica
         .backend
-        .hydrate(root_id, "mix.wav".into())
+        .hydrate(RootId::new(root_id), vec![rp("mix.wav")], true)
         .await
         .expect("hydrate on demand");
-    assert!(!hydrated.stub);
+    assert_eq!(hydrated, vec![rp("mix.wav")]);
+    let entry = replica
+        .backend
+        .browse(RootId::new(root_id), RootPath::root())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.name == "mix.wav")
+        .unwrap();
+    assert!(!entry.stub);
     assert_eq!(read(&replica, "mix.wav"), vec![0x11u8; 96 * 1024]);
 }
 
@@ -379,7 +448,7 @@ async fn offline_checkpoints_reconcile_later() {
     .unwrap();
     let info = replica
         .backend
-        .checkpoint_now(root_id, Some("offline".into()))
+        .checkpoint(RootId::new(root_id), Some("offline".into()))
         .await
         .expect("offline checkpoint");
     assert_eq!(info.changed_paths, vec!["mix.wav".to_string()]);
@@ -387,7 +456,7 @@ async fn offline_checkpoints_reconcile_later() {
     // The replica's chain answers locally, offline.
     let chain = replica
         .backend
-        .chain(root_id, "mix.wav".into())
+        .chain(RootId::new(root_id), rp("mix.wav"))
         .await
         .unwrap();
     assert_eq!(chain.len(), 2, "offline history is real history");
@@ -400,7 +469,7 @@ async fn offline_checkpoints_reconcile_later() {
     assert_eq!(read(&primary, "mix.wav"), b"late night edit");
     let chain = primary
         .backend
-        .chain(root_id, "mix.wav".into())
+        .chain(RootId::new(root_id), rp("mix.wav"))
         .await
         .unwrap();
     assert_eq!(chain.len(), 2, "the primary sees the same chain");
@@ -423,7 +492,7 @@ async fn keep_both_lands_every_side_side_by_side() {
     .unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, Some("studio".into()))
+        .checkpoint(RootId::new(root_id), Some("studio".into()))
         .await
         .unwrap();
     std::fs::write(
@@ -433,16 +502,31 @@ async fn keep_both_lands_every_side_side_by_side() {
     .unwrap();
     replica
         .backend
-        .checkpoint_now(root_id, Some("plane".into()))
+        .checkpoint(RootId::new(root_id), Some("plane".into()))
         .await
         .unwrap();
     reconcile(&primary.backend, &replica.client, root_id)
         .await
         .expect("pull replica line");
 
+    let side = primary
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap()[0]
+        .sides[0]
+        .commit_id
+        .clone();
     primary
         .backend
-        .resolve_divergence(root_id, "mix.wav".into(), files::DivergenceChoice::KeepBoth)
+        .resolve_divergence(
+            RootId::new(root_id),
+            VersionId::from_commit_hex(&side),
+            Resolution::KeepBoth {
+                mine: String::new(),
+                theirs: String::new(),
+            },
+        )
         .await
         .expect("keep both");
 
@@ -452,7 +536,7 @@ async fn keep_both_lands_every_side_side_by_side() {
     assert!(
         primary
             .backend
-            .divergences(root_id)
+            .divergences(RootId::new(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -529,7 +613,7 @@ async fn an_interrupted_pull_completes_on_retry() {
     assert_eq!(read(&replica, "stems/kick.wav"), vec![0x22u8; 48 * 1024]);
     let chain = replica
         .backend
-        .chain(root_id, "mix.wav".into())
+        .chain(RootId::new(root_id), rp("mix.wav"))
         .await
         .unwrap();
     assert!(
@@ -561,7 +645,7 @@ async fn resolve_refuses_to_clobber_unversioned_work() {
     .unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, Some("studio".into()))
+        .checkpoint(RootId::new(root_id), Some("studio".into()))
         .await
         .unwrap();
     std::fs::write(
@@ -571,7 +655,7 @@ async fn resolve_refuses_to_clobber_unversioned_work() {
     .unwrap();
     replica
         .backend
-        .checkpoint_now(root_id, Some("plane".into()))
+        .checkpoint(RootId::new(root_id), Some("plane".into()))
         .await
         .unwrap();
     reconcile(&primary.backend, &replica.client, root_id)
@@ -585,15 +669,20 @@ async fn resolve_refuses_to_clobber_unversioned_work() {
     )
     .unwrap();
 
-    let other = primary.backend.divergences(root_id).await.unwrap()[0].sides[1]
+    let other = primary
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap()[0]
+        .sides[1]
         .commit_id
         .clone();
     let err = primary
         .backend
         .resolve_divergence(
-            root_id,
-            "mix.wav".into(),
-            files::DivergenceChoice::Pick { commit_id: other },
+            RootId::new(root_id),
+            VersionId::from_commit_hex(&other),
+            Resolution::KeepTheirs,
         )
         .await
         .expect_err("must refuse to clobber unversioned work");
@@ -728,17 +817,17 @@ async fn an_adopted_then_checkpointed_root_has_one_head() {
     std::fs::write(root_dir.join("b.md"), b"beta").unwrap();
     let root = primary
         .backend
-        .create_root(
+        .adopt_root(
             root_dir.to_string_lossy().into_owned(),
             "assets".into(),
             RootFlavor::Media,
         )
         .await
-        .expect("create_root");
+        .expect("adopt");
     let before = primary.backend.sync_heads(root.id).expect("heads");
     primary
         .backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
         .expect("checkpoint");
     let after = primary.backend.sync_heads(root.id).expect("heads");
@@ -747,7 +836,11 @@ async fn an_adopted_then_checkpointed_root_has_one_head() {
         1,
         "one line, not siblings: before={before:?} after={after:?}"
     );
-    let divergent = primary.backend.divergences(root.id).await.unwrap();
+    let divergent = primary
+        .backend
+        .divergences(RootId::new(root.id))
+        .await
+        .unwrap();
     assert!(divergent.is_empty(), "{divergent:?}");
 }
 
@@ -762,7 +855,11 @@ async fn a_fresh_replica_is_not_divergent_after_its_first_pull() {
         .expect("first pull");
     let heads = replica.backend.sync_heads(root_id).expect("heads");
     assert_eq!(heads.len(), 1, "{heads:?}");
-    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    let divergent = replica
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert!(divergent.is_empty(), "{divergent:?}");
     // A second pull with nothing new changes nothing.
     let report = reconcile(&replica.backend, &primary.client, root_id)
@@ -798,16 +895,16 @@ async fn divergences_costs_the_whole_tree_every_call() {
     }
     let root = primary
         .backend
-        .create_root(
+        .adopt_root(
             root_dir.to_string_lossy().into_owned(),
             "wiki".into(),
             RootFlavor::Media,
         )
         .await
-        .expect("create_root");
+        .expect("adopt");
     primary
         .backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
         .expect("checkpoint");
 
@@ -819,7 +916,11 @@ async fn divergences_costs_the_whole_tree_every_call() {
         .expect("seed divergence");
 
     let started = std::time::Instant::now();
-    let divergent = primary.backend.divergences(root.id).await.expect("diverge");
+    let divergent = primary
+        .backend
+        .divergences(RootId::new(root.id))
+        .await
+        .expect("diverge");
     let once = started.elapsed();
     assert_eq!(divergent.len(), 1, "one path is in dispute");
     println!(
@@ -864,7 +965,11 @@ async fn a_capture_pass_does_not_claim_the_files_a_pull_just_wrote() {
 
     let heads = replica.backend.sync_heads(root_id).expect("heads");
     assert_eq!(heads.len(), 1, "capture split the line: {heads:?}");
-    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    let divergent = replica
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert!(
         divergent.is_empty(),
         "a replica that only pulled is in dispute with itself: {divergent:?}"
@@ -899,7 +1004,7 @@ async fn a_watched_replica_that_edits_stays_on_one_line() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     replica
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("capture after the pull");
     let settled = replica.backend.sync_heads(root_id).expect("heads");
@@ -907,7 +1012,11 @@ async fn a_watched_replica_that_edits_stays_on_one_line() {
         settled, pulled,
         "capturing after a pull invented local work out of the pull's own writes"
     );
-    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    let divergent = replica
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert!(
         divergent.is_empty(),
         "a watched replica forked over content it had just been given: {divergent:?}"
@@ -922,7 +1031,7 @@ async fn a_watched_replica_that_edits_stays_on_one_line() {
     .unwrap();
     replica
         .backend
-        .checkpoint_now(root_id, Some("overdub".into()))
+        .checkpoint(RootId::new(root_id), Some("overdub".into()))
         .await
         .expect("capture the edit");
     let after = replica.backend.sync_heads(root_id).expect("heads");
@@ -931,7 +1040,7 @@ async fn a_watched_replica_that_edits_stays_on_one_line() {
     assert!(
         replica
             .backend
-            .divergences(root_id)
+            .divergences(RootId::new(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -943,7 +1052,11 @@ async fn a_watched_replica_that_edits_stays_on_one_line() {
     reconcile(&primary.backend, &replica.client, root_id)
         .await
         .expect("pull back");
-    let divergent = primary.backend.divergences(root_id).await.unwrap();
+    let divergent = primary
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert!(
         divergent.is_empty(),
         "the replica's edit reached the primary as a fork, not a descendant: {divergent:?}"
@@ -972,12 +1085,12 @@ async fn captures_with_nothing_to_capture_do_not_fork_the_root() {
     // Neither side touches a file; both cadences come round.
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("primary idle capture");
     replica
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("replica idle capture");
 
@@ -995,7 +1108,11 @@ async fn captures_with_nothing_to_capture_do_not_fork_the_root() {
     reconcile(&replica.backend, &primary.client, root_id)
         .await
         .expect("second pull");
-    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    let divergent = replica
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert!(
         divergent.is_empty(),
         "two idle captures put the root in dispute over content both sides agree on: {divergent:?}"

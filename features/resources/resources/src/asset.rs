@@ -84,14 +84,16 @@ pub fn refresh_manifest(existing: &str, owned: Vec<Owned>) -> Result<String, Res
     Ok(format!("---\n{}---\n{body}", yaml(&fm)?))
 }
 
-/// The two app-owned keys that bind an asset to its bytes. Written on
-/// every upsert — including as empty strings, so *unbinding* content is
-/// expressible and does not leave a stale path behind.
+/// The app-owned keys that bind an asset to its bytes: where they are,
+/// and — when the app pinned them — exactly which bytes. Written on
+/// every upsert, including as empty strings, so *unbinding* content (or
+/// dropping a pin) is expressible and does not leave a stale value.
 #[must_use]
-pub fn content_keys(root_id: &str, path: &str) -> Vec<Owned> {
+pub fn content_keys(content: &resources_proto::ContentRef) -> Vec<Owned> {
     vec![
-        ("content_root", root_id.into()),
-        ("content_path", path.into()),
+        ("content_root", content.root_id.as_str().into()),
+        ("content_path", content.path.as_str().into()),
+        ("content_id", content.content.as_str().into()),
     ]
 }
 

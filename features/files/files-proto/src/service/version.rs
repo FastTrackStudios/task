@@ -137,4 +137,46 @@ pub trait VersionService {
         root_id: RootId,
         snapshot: SnapshotId,
     ) -> Result<CheckpointInfo, FilesFault>;
+
+    /// The direct children of `path` as they were at `version` —
+    /// time-travel browsing, read-only by construction: answered from the
+    /// store, never the live tree. How an old Project Version iteration
+    /// is explored. Sizes are unreported; tree entries carry identities,
+    /// not lengths.
+    async fn browse_at(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+        version: VersionId,
+    ) -> Result<Vec<crate::model::BrowseEntry>, FilesFault>;
+
+    /// Copy chosen paths out of `version` into the live tree — the
+    /// everyday verb for quarrying an old iteration. Each file is
+    /// verified against its content address before it lands; a target
+    /// holding unversioned changes is refused rather than overwritten.
+    /// Returns the paths written, sorted.
+    async fn copy_forward(
+        &self,
+        root_id: RootId,
+        version: VersionId,
+        paths: Vec<RootPath>,
+    ) -> Result<Vec<RootPath>, FilesFault>;
+
+    /// Tell the cadence engine these paths just changed — what a watcher
+    /// that is not this server's own (a device's daemon) reports, so
+    /// quiescence is measured from the real last write. Returns how many
+    /// of them count (ignored paths do not).
+    async fn hint_activity(&self, root_id: RootId, paths: Vec<RootPath>)
+    -> Result<u32, FilesFault>;
+
+    /// One retention pass over the root's store. Everything a Named or
+    /// Project Version references survives regardless of age; nothing
+    /// written within `keep_newer_secs` (default 60) is swept, which is
+    /// the guard for a second process on the same store — `Some(0)` only
+    /// when nothing else holds the root.
+    async fn collect(
+        &self,
+        root_id: RootId,
+        keep_newer_secs: Option<u64>,
+    ) -> Result<crate::model::GcReport, FilesFault>;
 }

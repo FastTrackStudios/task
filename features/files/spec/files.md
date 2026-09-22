@@ -45,7 +45,7 @@ re-evaluating placement policy moves bytes without moving paths.
 ### The full write surface works over the network
 
 t[files.write.surface]
-`FilesService` exposes `mkdir`, `rename`, `move`, `copy` and `delete` over vox.
+`WriteService` exposes `mkdir`, `rename`, `move`, `copy` and `delete` over vox.
 Each is transactional and wrapped in one jj operation, so history records the
 action rather than its constituent writes. Each takes a set of paths as readily
 as one, and a selection downloads as a single archive stream.
@@ -62,6 +62,22 @@ Uploads are chunked and resumable: an interrupted one sends only the missing
 chunks, and content already in the store sends nothing at all. A collision
 offers keep-both, replace or keep-existing and never picks for you; `replace`
 records a new version rather than discarding the old.
+
+Bytes land in any root, not only a media one, and a file only lands once every
+declared byte has arrived: a part-sent upload is resumed, never landed with
+holes.
+
+---
+
+### A save can be safe
+
+t[files.write.safe-save]
+An upload may state what it expects at its destination — nothing, or the
+content address a previous read or save reported — and the landing checks it
+under the root's lock. A mismatch fails as `Stale` and lands nothing, so two
+machines saving one session file cannot overwrite each other silently. The
+address a save returns is the landed file's own, so it is the one the next
+save's expectation compares against.
 
 ---
 
@@ -98,6 +114,19 @@ t[files.adopt.in-place]
 Adopting an existing tree as a root moves, copies and renames nothing. The
 applications already reading and writing that tree keep doing so throughout, and
 adoption never requires quiescing them or taking the tree offline.
+
+---
+
+### A client with no server path can still have a root
+
+t[files.adopt.create]
+An app that keeps its work in Task has no folder on the server to point at. It
+asks for a directory by name, relative to the org's files area, and gets a new
+root there. Asking again returns the same root, so an app may ask on every
+start. A directory that exists and is not a root is refused — creating is never
+adopting by accident — and the names the backend keeps its own bookkeeping
+under are reserved. Anyone whose role writes in the org may create a root; a
+caller holding only grants may not.
 
 ---
 
@@ -186,6 +215,10 @@ A structural change renders on the originating client before the server
 acknowledges it, and visibly reverts if rejected. Other clients receive it as a
 `FilesEvent` and update without polling. A client reconnecting after a gap
 converges without re-listing the tree.
+
+The stream is one subscription carrying every lane's events, nested by lane,
+optionally narrowed to one root, and filtered per subscriber to what they may
+read.
 
 ---
 
@@ -473,6 +506,20 @@ Authorisation is checked at the path being acted on, via a direct
 `engine.check`, not only at the root. A grant on a folder says nothing about its
 parents. Outside a granted subtree, paths are absent rather than
 visible-but-forbidden.
+
+---
+
+### Who you are counts as much as what you were given
+
+t[files.access.role-baseline]
+What a caller may do is their org role united with their grants. An owner,
+admin or member reaches every root by their role; any other role reads. No
+membership row means no baseline — a client holding one granted folder holds
+that folder and nothing beside it, in a listing, a read, a search or the live
+stream. Every lane checks, not only the tree and write lanes, and the caller is
+the one the gate resolved: holds, favourites, uploads and grants all name the
+person who made the call. Managing roots themselves — adopt, rename, release —
+is an owner's or admin's act.
 
 ---
 

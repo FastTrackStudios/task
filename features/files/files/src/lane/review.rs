@@ -64,12 +64,12 @@
 //! file, asks [`served_rendition`] which bytes this scope may have, and
 //! mints the ticket for a rendition or for the source accordingly.
 
+use crate::error::FilesError;
 use files_proto::error::FilesFault;
 use files_proto::id::{CommentId, ReviewId, RootId, VersionId};
 use files_proto::model::{NewReviewComment, RenditionKind, Review, ReviewComment};
 use files_proto::path::RootPath;
 use files_proto::service::access::{Capability, ShareLink};
-use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::media::{ByteTicket, Region};
 use files_proto::service::review::{GuestScope, NewComment, ReviewService};
 
@@ -148,6 +148,10 @@ fn scope_of(review: ReviewId, link: &ShareLink) -> GuestScope {
 /// cannot carry it yet.
 // t[impl files.index.regions] — one region scheme, and review annotations
 // are one of its three consumers
+/// The timecode a comment about the whole piece is stored at — the value
+/// the review panel reads as "not pinned to a moment".
+pub const UNPINNED_SECS: f64 = -1.0;
+
 fn timecode_of(region: &Region) -> Result<f64, FilesFault> {
     #[allow(clippy::cast_precision_loss)]
     let secs = |ms: u64| ms as f64 / 1000.0;
@@ -156,7 +160,10 @@ fn timecode_of(region: &Region) -> Result<f64, FilesFault> {
         // A drawing over a frame is anchored at that frame; over a still
         // there is no time, and the start is the only honest answer.
         Region::Rect { at_ms, .. } => Ok(at_ms.map_or(0.0, secs)),
-        Region::Whole => Ok(0.0),
+        // About the whole piece, not a moment in it — the review page's
+        // general note, stored at its "unpinned" timecode so it reads
+        // back as unpinned rather than as feedback on the first frame.
+        Region::Whole => Ok(UNPINNED_SECS),
         Region::Page { page } => Err(FilesFault::invalid(format!(
             "a review comment anchors to a moment in the media, and page {page} is not one yet"
         ))),
@@ -254,12 +261,16 @@ impl ReviewService for FilesBackend {
     /// because the store's keyed read is private to the backend; a review
     /// list is a handful of rows per org.
     async fn review(&self, review: ReviewId) -> Result<Review, FilesFault> {
-        let all = FilesService::list_reviews(self, None)
-            .await
-            .map_err(fault)?;
-        all.into_iter()
+        let all = self.list_reviews(None).await.map_err(fault)?;
+        let found = all
+            .into_iter()
             .find(|r| r.id == review.get())
-            .ok_or(FilesFault::ReviewNotFound(review))
+            .ok_or(FilesFault::ReviewNotFound(review))?;
+        let path = RootPath::parse(&found.file_path)?;
+        crate::lane::caller::authorise(self, RootId::new(found.root_id), &path, Capability::Read)
+            .await
+            .map_err(|_| FilesFault::ReviewNotFound(review))?;
+        Ok(found)
     }
 
     /// Faults: the byte lane does not exist yet.
@@ -287,9 +298,7 @@ impl ReviewService for FilesBackend {
         // Existence first: an unknown id must not read as a review with
         // nothing said about it yet.
         self.review(review).await?;
-        FilesService::review_comments(self, review.get())
-            .await
-            .map_err(fault)
+        self.review_comments(review.get()).await.map_err(fault)
     }
 
     // t[impl files.index.regions]
@@ -312,12 +321,29 @@ impl ReviewService for FilesBackend {
             author,
         } = comment;
         let timecode_secs = timecode_of(&region)?;
+        // A comment is a comment on the file, so the caller must be able
+        // to comment there — `review` checks they can see it at all.
+        let target = self.review(review).await?;
+        crate::lane::caller::authorise(
+            self,
+            RootId::new(target.root_id),
+            &RootPath::parse(&target.file_path)?,
+            Capability::Comment,
+        )
+        .await?;
+        // Through a share link the author is whatever name the visitor
+        // gave, marked as such; a member signs as themselves.
+        let for_link = crate::lane::caller::is_for_link();
         let added = self
             .add_review_comment_via(
                 review.get(),
                 NewReviewComment {
                     timecode_secs,
-                    author: guest_author(&author),
+                    author: if for_link {
+                        guest_author(&author)
+                    } else {
+                        author
+                    },
                     body,
                     // A `VersionId` is the commit's leading 128 bits, and
                     // its 32-hex spelling is a prefix the store's resolver
@@ -326,30 +352,35 @@ impl ReviewService for FilesBackend {
                     commit_id: version.commit_prefix(),
                     annotation: strokes,
                 },
-                VIA_GUEST_LINK.to_string(),
+                if for_link {
+                    VIA_GUEST_LINK.to_string()
+                } else {
+                    String::new()
+                },
             )
             .await
             .map_err(fault)?;
         Ok(added)
     }
 
-    /// Faults: whose comment it is cannot be established here.
+    /// Remove a comment — a member's act, by someone who may comment on
+    /// the reviewed file.
     ///
-    /// "One's own" needs an identity, and a guest has none that reaches
-    /// this lane — the link identifies a *review*, not a person, and two
-    /// visitors holding the same link are indistinguishable. Implementing
-    /// this on the id alone would let any link holder delete an org
-    /// member's feedback, which is why `share_guest.rs` refuses the call
-    /// outright rather than narrowing it.
-    ///
-    /// FUTURE: a per-visitor token stamped onto the comment at creation
-    /// would make "one's own" checkable without an account.
+    /// A guest never reaches this: the link identifies a *review*, not a
+    /// person, and two visitors holding one link are indistinguishable,
+    /// so "one's own" cannot be established for them. The guest mount
+    /// (`share_guest.rs`) refuses the call outright rather than narrowing
+    /// it.
     // t[impl files.review.anonymity] — a link identifies a review, not a
     // person, so no guest may remove feedback
-    async fn delete_comment(&self, _comment: CommentId) -> Result<ReviewComment, FilesFault> {
-        Err(FilesFault::Internal(
-            "not yet implemented: comment ownership — no guest identity reaches this lane".into(),
-        ))
+    async fn delete_comment(&self, comment: CommentId) -> Result<ReviewComment, FilesFault> {
+        let review = self.review_of_comment(comment.get()).await.map_err(fault)?;
+        let root = RootId::new(review.root_id);
+        let path = RootPath::parse(&review.file_path)?;
+        crate::lane::caller::authorise(self, root, &path, Capability::Comment).await?;
+        self.delete_review_comment(comment.get())
+            .await
+            .map_err(fault)
     }
 
     /// Get-or-create the review for a file. **The member side's entry
@@ -361,9 +392,48 @@ impl ReviewService for FilesBackend {
         // than as prose from the legacy path.
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
-        FilesService::review_for_file(self, root_id.get(), path.as_str().to_string())
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Comment).await?;
+        self.review_for_file(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)
+    }
+
+    async fn find(&self, root_id: RootId, path: RootPath) -> Result<Option<Review>, FilesFault> {
+        crate::lane::root_or_fault(self, root_id)?;
+        let path = path.validate()?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        self.find_review(root_id.get(), path.as_str().to_string())
+            .await
+            .map_err(fault)
+    }
+
+    async fn reviews(&self, root_id: Option<RootId>) -> Result<Vec<Review>, FilesFault> {
+        if let Some(id) = root_id {
+            crate::lane::root_or_fault(self, id)?;
+        }
+        let all = self
+            .list_reviews(root_id.map(RootId::get))
+            .await
+            .map_err(fault)?;
+        // Only the reviews of files the caller may read.
+        let mut out = Vec::with_capacity(all.len());
+        for review in all {
+            let Ok(path) = RootPath::parse(&review.file_path) else {
+                continue;
+            };
+            if crate::lane::caller::authorise(
+                self,
+                RootId::new(review.root_id),
+                &path,
+                Capability::Read,
+            )
+            .await
+            .is_ok()
+            {
+                out.push(review);
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -468,7 +538,7 @@ mod tests {
                 < f64::EPSILON,
             "a drawing is anchored at the frame it was drawn over"
         );
-        assert_eq!(timecode_of(&Region::Whole).unwrap(), 0.0);
+        assert_eq!(timecode_of(&Region::Whole).unwrap(), UNPINNED_SECS);
     }
 
     // t[verify files.index.regions]

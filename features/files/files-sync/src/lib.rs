@@ -21,7 +21,7 @@
 //!   head visible. jj's view semantics take it from there: a head
 //!   descending from the local line fast-forwards it; concurrent lines
 //!   stay sibling heads — Divergent versions, flagged until resolved
-//!   through [`files_proto::FilesService::resolve_divergence`].
+//!   through [`files_proto::VersionService::resolve_divergence`].
 //!
 //! "Edits flow both ways" is two pulls: each side serves and each side
 //! reconciles. There is no push — a replica that wants its offline
@@ -51,8 +51,8 @@ pub use files::{FilesBackend, MaterializeReport};
 /// directly from [`reconcile`]'s async task parks the tokio worker
 /// inside `block_on` while the RPC futures it is racing still need that
 /// worker — a deadlock. Every local backend touch therefore goes
-/// through `spawn_blocking`, exactly as `FilesService`'s own `blocking`
-/// helper does for the RPC methods.
+/// through `spawn_blocking`, exactly as the backend's own `blocking`
+/// helper does for the lane methods.
 async fn off_thread<T, F>(f: F) -> Result<T, SyncError>
 where
     F: FnOnce() -> Result<T, SyncError> + Send + 'static,
@@ -103,13 +103,13 @@ pub enum SyncError {
     Io(String),
 }
 
-fn from_files(err: files_proto::FilesError) -> SyncError {
+fn from_files(err: files::FilesError) -> SyncError {
     match err {
-        files_proto::FilesError::NotFound(m) => SyncError::NotFound(m),
-        files_proto::FilesError::AlreadyExists(m) | files_proto::FilesError::BadRequest(m) => {
+        files::FilesError::NotFound(m) => SyncError::NotFound(m),
+        files::FilesError::AlreadyExists(m) | files::FilesError::BadRequest(m) => {
             SyncError::BadRequest(m)
         }
-        files_proto::FilesError::Io(m) => SyncError::Io(m),
+        files::FilesError::Io(m) => SyncError::Io(m),
     }
 }
 
@@ -307,13 +307,20 @@ pub async fn serve_peer(
         files::peer::REPLICA_PERMITS,
     ));
     let router = architect::LayerRouter::new().merge(layer(SyncHost::new(backend)));
-    files::peer::serve_over_iroh(endpoint, move |bearer| {
-        architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(
-            gate.clone(),
-            router.clone(),
-            bearer,
-        )
-    })
+    files::peer::serve_over_iroh(
+        endpoint,
+        move |bearer| {
+            architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(
+                gate.clone(),
+                router.clone(),
+                bearer,
+            )
+        },
+        // A device replica serves no relay — federation is an org-to-org
+        // thing, and this endpoint's peers are this account's own
+        // devices.
+        None,
+    )
     .await;
 }
 
@@ -397,12 +404,13 @@ impl SyncHost {
 // the client — the deadlock that wedged the first test run.
 impl SyncService for SyncHost {
     async fn roots(&self) -> Result<Vec<WireRoot>, SyncError> {
-        // `list_roots` is already the async, blocking-pool-aware method
-        // (the registry read plus a vault overlay), so it does not go
-        // through `off_thread` as the `sync_*` calls do.
-        let roots = files::FilesService::list_roots(&self.backend)
-            .await
-            .map_err(from_files)?;
+        // Not `RootsService::list`: that lane filters by the person
+        // calling, and the caller here is a peer this surface already
+        // admitted — replication is whole-org by design, authorised by
+        // host admission rather than by anyone's role. The backend's
+        // `replica_roots` is the explicit whole-org listing for exactly
+        // this surface (already on the blocking pool).
+        let roots = self.backend.replica_roots().await.map_err(from_files)?;
         Ok(roots
             .into_iter()
             .map(|r| {

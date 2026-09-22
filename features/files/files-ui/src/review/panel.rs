@@ -10,11 +10,12 @@
 use architect_ui::lucide_dioxus::{Clock, Pencil, SendHorizontal, SquareCheckBig, X};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
-use files_proto::{NewReviewComment, ReviewComment};
+use files_proto::ReviewComment;
 
 use super::{
-    DrawCtx, PlayerCtx, ReviewData, UNPINNED, avatar_css, display_author, display_timecode,
-    ensure_review, initials, is_pinned, pause, post_comment, remove_comment, seek_to,
+    CommentDraft, DrawCtx, PlayerCtx, ReviewData, UNPINNED, avatar_css, display_author,
+    display_timecode, ensure_review, initials, is_pinned, pause, post_comment, remove_comment,
+    seek_to,
 };
 
 #[component]
@@ -294,14 +295,14 @@ fn Composer(video_id: String, watching: ReadSignal<Option<String>>) -> Element {
         } else {
             UNPINNED
         };
-        let comment = NewReviewComment {
+        let comment = CommentDraft {
             timecode_secs,
             author: ident
                 .and_then(|i| i.name())
                 .unwrap_or_else(|| author.peek().trim().to_string()),
             body: text,
             commit_id,
-            annotation: strokes,
+            strokes,
         };
         let (mut body, mut draw, mut scope, mut comments) = (body, draw, data.scope, data.comments);
         spawn(async move {

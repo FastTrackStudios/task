@@ -28,15 +28,18 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+use crate::error::FilesError;
 use chrono::{TimeDelta, Utc};
+use files_proto::DivergenceChoice;
 use files_proto::error::FilesFault;
 use files_proto::id::{PrincipalId, RootId, SnapshotId, VersionId};
 use files_proto::model::{ChainEntry, CheckpointInfo, DivergenceInfo, SnapshotInfo};
 use files_proto::path::RootPath;
+use files_proto::service::access::Capability;
 use files_proto::service::version::{Occupancy, Resolution, VersionService};
-use files_proto::{DivergenceChoice, FilesError, FilesService};
 
 use crate::backend::FilesBackend;
+use crate::lane::caller;
 
 /// How long a hold survives without a heartbeat.
 ///
@@ -62,21 +65,6 @@ const OCCUPANCY_TTL: TimeDelta = TimeDelta::seconds(90);
 #[must_use]
 pub fn version_id_of(commit_hex: &str) -> VersionId {
     VersionId::from_commit_hex(commit_hex)
-}
-
-/// The principal this process speaks for.
-///
-/// A placeholder, and knowingly so: no method on this trait carries a
-/// caller, and `FilesBackend` holds no session — the dispatcher that will
-/// supply one is not built. Minting one id per process at least makes the
-/// signal *correct within a process* (a client's own holds are its own,
-/// two clients on one server are not yet distinguishable) instead of
-/// pretending to an attribution we cannot make. Everything else here is
-/// written against `PrincipalId`, so threading a real one through is a
-/// change to this function and its callers, not to the table.
-fn this_principal() -> PrincipalId {
-    static ME: OnceLock<PrincipalId> = OnceLock::new();
-    *ME.get_or_init(PrincipalId::generate)
 }
 
 /// Who has what open, keyed by `(root, path)` then by principal.
@@ -172,7 +160,8 @@ impl VersionService for FilesBackend {
     // opened and follows jj's recorded renames through it
     async fn chain(&self, root_id: RootId, path: RootPath) -> Result<Vec<ChainEntry>, FilesFault> {
         self.known_root(root_id)?;
-        FilesService::chain(self, root_id.get(), path.as_str().to_string())
+        caller::authorise(self, root_id, &path, Capability::History).await?;
+        self.chain_of(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)
     }
@@ -185,7 +174,8 @@ impl VersionService for FilesBackend {
         description: Option<String>,
     ) -> Result<CheckpointInfo, FilesFault> {
         self.known_root(root_id)?;
-        FilesService::checkpoint_now(self, root_id.get(), description)
+        caller::authorise_root(self, root_id, Capability::Write).await?;
+        self.checkpoint_now(root_id.get(), description)
             .await
             .map_err(fault)
     }
@@ -198,9 +188,8 @@ impl VersionService for FilesBackend {
         limit: Option<u32>,
     ) -> Result<Vec<SnapshotInfo>, FilesFault> {
         self.known_root(root_id)?;
-        let mut all = FilesService::snapshots(self, root_id.get())
-            .await
-            .map_err(fault)?;
+        caller::authorise_root(self, root_id, Capability::History).await?;
+        let mut all = self.snapshots_of(root_id.get()).await.map_err(fault)?;
         // Newest first already; truncating keeps the newest, which is the
         // half a recovery UI shows.
         if let Some(limit) = limit {
@@ -213,10 +202,14 @@ impl VersionService for FilesBackend {
     // nothing else: no gate, no write refused, no release
     async fn hold(&self, root_id: RootId, path: RootPath) -> Result<Occupancy, FilesFault> {
         self.known_root(root_id)?;
+        caller::authorise(self, root_id, &path, Capability::Read).await?;
         // Deliberately not checked against the tree: a hold is taken as a
         // file is being opened, and making it depend on a scan would put
         // the one call a client makes on a timer behind disk I/O.
-        Ok(holds().touch(root_id, &path, this_principal()))
+        let who = caller::principal().ok_or_else(|| {
+            FilesFault::invalid("a hold is a person's, and this caller is not one")
+        })?;
+        Ok(holds().touch(root_id, &path, who))
     }
 
     // t[impl files.concurrency.advisory-lock]
@@ -226,10 +219,10 @@ impl VersionService for FilesBackend {
         path: RootPath,
     ) -> Result<Vec<Occupancy>, FilesFault> {
         self.known_root(root_id)?;
-        // Every live holder, the caller's own included: without a caller
-        // identity on this surface the server cannot say which one is
-        // "else", and silently omitting a row would be the one failure
-        // mode this signal exists to prevent.
+        caller::authorise(self, root_id, &path, Capability::Read).await?;
+        // Every live holder, the caller's own included — each row names
+        // its principal, so a client can tell its own apart, and omitting
+        // one would be the failure this signal exists to prevent.
         Ok(holds().live(root_id, &path))
     }
 
@@ -237,9 +230,8 @@ impl VersionService for FilesBackend {
     // already saved by the time anyone is asked about them
     async fn divergences(&self, root_id: RootId) -> Result<Vec<DivergenceInfo>, FilesFault> {
         self.known_root(root_id)?;
-        FilesService::divergences(self, root_id.get())
-            .await
-            .map_err(fault)
+        caller::authorise_root(self, root_id, Capability::History).await?;
+        self.divergences_of(root_id.get()).await.map_err(fault)
     }
 
     // t[impl files.version.keep-both] — a human picks; nothing is merged
@@ -250,7 +242,9 @@ impl VersionService for FilesBackend {
         resolution: Resolution,
     ) -> Result<DivergenceInfo, FilesFault> {
         self.known_root(root_id)?;
-        let info = FilesService::divergences(self, root_id.get())
+        caller::authorise_root(self, root_id, Capability::Write).await?;
+        let info = self
+            .divergences_of(root_id.get())
             .await
             .map_err(fault)?
             .into_iter()
@@ -301,7 +295,7 @@ impl VersionService for FilesBackend {
             Resolution::KeepBoth { .. } => DivergenceChoice::KeepBoth,
         };
 
-        FilesService::resolve_divergence(self, root_id.get(), info.path.clone(), choice)
+        self.settle_divergence(root_id.get(), info.path.clone(), choice)
             .await
             .map_err(fault)?;
         // The divergence as it stood, which is what was settled — reading
@@ -318,7 +312,9 @@ impl VersionService for FilesBackend {
         version: VersionId,
     ) -> Result<ChainEntry, FilesFault> {
         self.known_root(root_id)?;
-        let before = FilesService::chain(self, root_id.get(), path.as_str().to_string())
+        caller::authorise(self, root_id, &path, Capability::Write).await?;
+        let before = self
+            .chain_of(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)?;
         let target = before
@@ -340,8 +336,7 @@ impl VersionService for FilesBackend {
             )));
         }
 
-        FilesService::copy_forward(
-            self,
+        self.copy_forward_commit(
             root_id.get(),
             target.commit_id.clone(),
             vec![target.path.clone()],
@@ -350,15 +345,14 @@ impl VersionService for FilesBackend {
         .map_err(fault)?;
         // A copy into the live tree is not yet a version; the checkpoint
         // is what makes the restore itself part of history.
-        FilesService::checkpoint_now(
-            self,
+        self.checkpoint_now(
             root_id.get(),
             Some(format!("restore {path} to {}", target.commit_id)),
         )
         .await
         .map_err(fault)?;
 
-        FilesService::chain(self, root_id.get(), path.as_str().to_string())
+        self.chain_of(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)?
             .into_iter()
@@ -387,6 +381,84 @@ impl VersionService for FilesBackend {
         Err(FilesFault::Internal(format!(
             "not yet implemented: promoting snapshot {snapshot} to a durable version"
         )))
+    }
+
+    async fn browse_at(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+        version: VersionId,
+    ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
+        self.known_root(root_id)?;
+        let path = path.validate()?;
+        caller::authorise(self, root_id, &path, Capability::History).await?;
+        self.browse_commit(
+            root_id.get(),
+            version.commit_prefix(),
+            path.as_str().to_string(),
+        )
+        .await
+        .map_err(|e| match e {
+            FilesError::NotFound(_) => FilesFault::VersionNotFound(version),
+            other => fault(other),
+        })
+    }
+
+    async fn copy_forward(
+        &self,
+        root_id: RootId,
+        version: VersionId,
+        paths: Vec<RootPath>,
+    ) -> Result<Vec<RootPath>, FilesFault> {
+        self.known_root(root_id)?;
+        let paths: Vec<RootPath> = paths
+            .iter()
+            .map(RootPath::validate)
+            .collect::<Result<_, _>>()?;
+        for path in &paths {
+            caller::authorise(self, root_id, path, Capability::History).await?;
+            caller::authorise(self, root_id, path, Capability::Write).await?;
+        }
+        let written = self
+            .copy_forward_commit(
+                root_id.get(),
+                version.commit_prefix(),
+                paths.iter().map(|p| p.as_str().to_string()).collect(),
+            )
+            .await
+            .map_err(fault)?;
+        written
+            .into_iter()
+            .map(|p| RootPath::parse(p).map_err(FilesFault::from))
+            .collect()
+    }
+
+    async fn hint_activity(
+        &self,
+        root_id: RootId,
+        paths: Vec<RootPath>,
+    ) -> Result<u32, FilesFault> {
+        self.known_root(root_id)?;
+        caller::authorise_root(self, root_id, Capability::Write).await?;
+        self.note_activity(
+            root_id.get(),
+            paths.iter().map(|p| p.as_str().to_string()).collect(),
+        )
+        .await
+        .map_err(fault)
+    }
+
+    async fn collect(
+        &self,
+        root_id: RootId,
+        keep_newer_secs: Option<u64>,
+    ) -> Result<files_proto::model::GcReport, FilesFault> {
+        self.known_root(root_id)?;
+        // Retention is root lifecycle: it decides what history survives.
+        caller::authorise_steward(self).await?;
+        self.gc_root(root_id.get(), keep_newer_secs)
+            .await
+            .map_err(fault)
     }
 }
 

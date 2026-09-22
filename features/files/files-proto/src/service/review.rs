@@ -86,4 +86,13 @@ pub trait ReviewService {
     /// Find or create the review for a file — the member-side entry
     /// point, not the guest's.
     async fn for_file(&self, root_id: RootId, path: RootPath) -> Result<Review, FilesFault>;
+
+    /// The review for a file, if one exists — a pure read, so opening a
+    /// file never mints an entity. Follows rename history: a review kept
+    /// under an earlier path of the same file is this file's review.
+    async fn find(&self, root_id: RootId, path: RootPath) -> Result<Option<Review>, FilesFault>;
+
+    /// Every review the caller can see, newest first; `Some` narrows to
+    /// one root.
+    async fn reviews(&self, root_id: Option<RootId>) -> Result<Vec<Review>, FilesFault>;
 }

@@ -12,7 +12,7 @@ live tree, read-write, and nothing else.
   version store (`.fts-root.json`, `.fts-files`) do not exist as far as
   WebDAV is concerned — they cannot be listed, read, written, or
   deleted through the mount. Version chains live on the Files RPC
-  surface (`FilesService::chain`), not here.
+  surface (`VersionService::chain`), not here.
 
 Writes are ordinary writes: a file dropped in through Finder lands in
 the live tree and is picked up by the next scan-certified Session
@@ -94,8 +94,8 @@ force) rather than silently un-hiding anything.
   uuid, which is the stable form for scripts.
 - **The mount point is read-only.** Creating a folder at the top level
   does not create a File Root — roots are created through
-  `FilesService::create_root`, which mints the id, writes the marker
-  and initializes the version store.
+  `RootsService::adopt` or `RootsService::create`, which mint the id, write the marker
+  and initialize the version store.
 - **Cross-root moves are not supported.** Each root is served as its
   own WebDAV namespace; a `MOVE` between two roots is refused. Within a
   root, moves and copies work normally.

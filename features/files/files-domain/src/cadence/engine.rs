@@ -12,7 +12,7 @@
 //!
 //! # The cadence itself
 //!
-//! - Activity (a watcher hint, or [`files_proto::FilesService::hint_activity`])
+//! - Activity (a watcher hint, or [`files_proto::VersionService::hint_activity`])
 //!   opens a **session** on the root if none is open, and extends it.
 //!   Sessions are per-root: concurrent writers share one (glossary).
 //! - While the session has uncaptured activity, an auto-snapshot falls

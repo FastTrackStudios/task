@@ -4,10 +4,48 @@
 
 use architect::{LayerRouter, LocalServer, Scope};
 use files::{FilesBackend, RootFlavor};
-use files_proto::TreeNode;
+use files_proto::service::roots::AdoptRequest;
+use files_proto::{
+    RootId, RootsServiceClient, TreeNode, TreePath, TreeServiceClient, VersionServiceClient,
+};
 
 fn router(backend: FilesBackend) -> LayerRouter {
-    LayerRouter::new().merge(files::files_service_layer(backend))
+    LayerRouter::new()
+        .merge(files_proto::roots_layer(backend.clone()))
+        .merge(files_proto::tree_layer(backend.clone()))
+        .merge(files_proto::version_layer(backend))
+}
+
+/// The lanes this file drives, over one in-process link.
+struct Rig {
+    backend: FilesBackend,
+    roots: RootsServiceClient,
+    tree: TreeServiceClient,
+    version: VersionServiceClient,
+    _local: LocalServer,
+}
+
+/// Resolve one org-tree path. A path that does not even parse is a
+/// refusal like any other, so it lands as an `Err` beside the server's.
+async fn resolve(rig: &Rig, path: &str) -> Result<TreeNode, String> {
+    let path = TreePath::parse(path).map_err(|e| e.to_string())?;
+    rig.tree.resolve(path).await.map_err(|e| format!("{e:?}"))
+}
+
+/// Adopt `dir` as a media root and wait for the walk to finish.
+async fn adopt(rig: &Rig, dir: &std::path::Path, name: &str) -> uuid::Uuid {
+    let root = rig
+        .roots
+        .adopt(AdoptRequest {
+            path: dir.to_string_lossy().into_owned(),
+            name: name.into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        })
+        .await
+        .expect("adopt");
+    rig.backend.settled(RootId::new(root.id)).await;
+    root.id
 }
 
 fn names(node: &TreeNode) -> Vec<String> {
@@ -19,12 +57,7 @@ fn names(node: &TreeNode) -> Vec<String> {
 
 /// An org with a project (note + notes + a registered media root), an
 /// album with a song, tagged vault + wiki pages, and a loose asset.
-async fn rig() -> (
-    tempfile::TempDir,
-    files::FilesServiceClient,
-    uuid::Uuid,
-    LocalServer,
-) {
+async fn rig() -> (tempfile::TempDir, Rig, uuid::Uuid) {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault");
 
@@ -66,50 +99,52 @@ async fn rig() -> (
 
     let backend = FilesBackend::new(dir.path(), &vault).unwrap();
     let scope = Scope::new();
-    let local = LocalServer::serve(router(backend), scope.clone());
-    let client: files::FilesServiceClient = local.establish().await.unwrap();
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = Rig {
+        backend,
+        roots: local.establish().await.unwrap(),
+        tree: local.establish().await.unwrap(),
+        version: local.establish().await.unwrap(),
+        _local: local,
+    };
 
     // The project's media root, registered under the project's name.
     let root_dir = dir.path().join("alpha-media");
     std::fs::create_dir(&root_dir).unwrap();
     std::fs::write(root_dir.join("cut.mov"), vec![0x11u8; 512]).unwrap();
-    let root = client
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "Alpha".into(),
-            RootFlavor::Media,
-        )
+    let root_id = adopt(&client, &root_dir, "Alpha").await;
+    client
+        .version
+        .checkpoint(RootId::new(root_id), None)
         .await
         .unwrap();
-    client.checkpoint_now(root.id, None).await.unwrap();
 
-    (dir, client, root.id, local)
+    (dir, client, root_id)
 }
 
 #[tokio::test]
 async fn the_tree_serves_areas_join_lenses_and_assets() {
-    let (_dir, client, root_id, _local) = rig().await;
+    let (_dir, client, root_id) = rig().await;
 
     // Areas.
     assert_eq!(
-        names(&client.tree_browse("".into()).await.unwrap()),
+        names(&resolve(&client, "").await.unwrap()),
         vec!["Projects", "Vault", "Wiki", "Assets"]
     );
 
     // Projects: both homes, name-sorted.
     assert_eq!(
-        names(&client.tree_browse("Projects".into()).await.unwrap()),
+        names(&resolve(&client, "Projects").await.unwrap()),
         vec!["Alpha", "Dusk"]
     );
 
     // The join: Alpha has notes AND the virtual Media door…
-    let alpha = names(&client.tree_browse("Projects/Alpha".into()).await.unwrap());
+    let alpha = names(&resolve(&client, "Projects/Alpha").await.unwrap());
     assert!(alpha.contains(&"Alpha.md".to_string()), "{alpha:?}");
     assert!(alpha.contains(&"Notes".to_string()), "{alpha:?}");
     assert!(alpha.contains(&"Media".to_string()), "{alpha:?}");
     // …and Media hands off to the root explorer with the subpath.
-    match client
-        .tree_browse("Projects/Alpha/Media/takes".into())
+    match resolve(&client, "Projects/Alpha/Media/takes")
         .await
         .unwrap()
     {
@@ -120,34 +155,34 @@ async fn the_tree_serves_areas_join_lenses_and_assets() {
         TreeNode::Listing(_) => panic!("Media must resolve to the root"),
     }
     // A project with no registered root gets no Media entry.
-    let dusk = names(&client.tree_browse("Projects/Dusk".into()).await.unwrap());
+    let dusk = names(&resolve(&client, "Projects/Dusk").await.unwrap());
     assert!(!dusk.contains(&"Media".to_string()), "{dusk:?}");
 
     // Vault/Wiki: the physical folder tree, straight through.
-    let vault_top = names(&client.tree_browse("Vault".into()).await.unwrap());
+    let vault_top = names(&resolve(&client, "Vault").await.unwrap());
     assert!(vault_top.contains(&"Projects".to_string()), "{vault_top:?}");
     assert!(vault_top.contains(&"Records".to_string()), "{vault_top:?}");
-    let records = names(&client.tree_browse("Vault/Records".into()).await.unwrap());
+    let records = names(&resolve(&client, "Vault/Records").await.unwrap());
     assert_eq!(records, vec!["Sunday.md"]);
-    let wiki = names(&client.tree_browse("Wiki".into()).await.unwrap());
+    let wiki = names(&resolve(&client, "Wiki").await.unwrap());
     assert_eq!(wiki, vec!["Runbook.md"]);
 
     // Assets: loose files visible, registered root dirs hidden.
-    let assets = names(&client.tree_browse("Assets".into()).await.unwrap());
+    let assets = names(&resolve(&client, "Assets").await.unwrap());
     assert!(assets.contains(&"logo.png".to_string()), "{assets:?}");
     assert!(!assets.contains(&"alpha-media".to_string()), "{assets:?}");
 
     // Escapes and unknowns refuse.
-    assert!(client.tree_browse("Vault/../..".into()).await.is_err());
-    assert!(client.tree_browse("Nope".into()).await.is_err());
-    assert!(client.tree_browse("Vault/Ghost".into()).await.is_err());
+    assert!(resolve(&client, "Vault/../..").await.is_err());
+    assert!(resolve(&client, "Nope").await.is_err());
+    assert!(resolve(&client, "Vault/Ghost").await.is_err());
 }
 
 /// A physical `Media` folder without a registered root is a plain
 /// vault dir — listed once, and enterable (never shown-but-404).
 #[tokio::test]
 async fn a_physical_media_folder_without_a_root_is_a_plain_dir() {
-    let (dir, client, _root_id, _local) = rig().await;
+    let (dir, client, _root_id) = rig().await;
     let media = dir
         .path()
         .join("vault")
@@ -157,14 +192,9 @@ async fn a_physical_media_folder_without_a_root_is_a_plain_dir() {
     std::fs::create_dir_all(&media).unwrap();
     std::fs::write(media.join("cover.png"), b"png").unwrap();
 
-    let dusk = names(&client.tree_browse("Projects/Dusk".into()).await.unwrap());
+    let dusk = names(&resolve(&client, "Projects/Dusk").await.unwrap());
     assert_eq!(dusk.iter().filter(|n| *n == "Media").count(), 1, "{dusk:?}");
-    let inside = names(
-        &client
-            .tree_browse("Projects/Dusk/Media".into())
-            .await
-            .unwrap(),
-    );
+    let inside = names(&resolve(&client, "Projects/Dusk/Media").await.unwrap());
     assert_eq!(inside, vec!["cover.png"]);
 }
 
@@ -172,7 +202,7 @@ async fn a_physical_media_folder_without_a_root_is_a_plain_dir() {
 /// lists ONE Media entry, and the handoff wins on descent.
 #[tokio::test]
 async fn a_registered_root_shadows_a_physical_media_dir() {
-    let (dir, client, root_id, _local) = rig().await;
+    let (dir, client, root_id) = rig().await;
     let media = dir
         .path()
         .join("vault")
@@ -181,17 +211,13 @@ async fn a_registered_root_shadows_a_physical_media_dir() {
         .join("Media");
     std::fs::create_dir_all(&media).unwrap();
 
-    let alpha = names(&client.tree_browse("Projects/Alpha".into()).await.unwrap());
+    let alpha = names(&resolve(&client, "Projects/Alpha").await.unwrap());
     assert_eq!(
         alpha.iter().filter(|n| *n == "Media").count(),
         1,
         "{alpha:?}"
     );
-    match client
-        .tree_browse("Projects/Alpha/Media".into())
-        .await
-        .unwrap()
-    {
+    match resolve(&client, "Projects/Alpha/Media").await.unwrap() {
         TreeNode::Root { id, .. } => assert_eq!(id, root_id),
         TreeNode::Listing(_) => panic!("the registered root must win"),
     }
@@ -202,21 +228,14 @@ async fn a_registered_root_shadows_a_physical_media_dir() {
 /// never as loose files.
 #[tokio::test]
 async fn assets_hide_roots_at_every_depth() {
-    let (dir, client, _root_id, _local) = rig().await;
+    let (dir, client, _root_id) = rig().await;
     let nested = dir.path().join("stash").join("nested-root");
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(nested.join("take.wav"), b"wav").unwrap();
     std::fs::write(dir.path().join("stash").join("loose.txt"), b"txt").unwrap();
-    client
-        .create_root(
-            nested.to_string_lossy().into_owned(),
-            "Stashed".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .unwrap();
+    adopt(&client, &nested, "Stashed").await;
 
-    let stash = names(&client.tree_browse("Assets/stash".into()).await.unwrap());
+    let stash = names(&resolve(&client, "Assets/stash").await.unwrap());
     assert!(stash.contains(&"loose.txt".to_string()), "{stash:?}");
     assert!(!stash.contains(&"nested-root".to_string()), "{stash:?}");
 }
@@ -226,11 +245,11 @@ async fn assets_hide_roots_at_every_depth() {
 #[cfg(unix)]
 #[tokio::test]
 async fn symlinks_cannot_escape_the_area() {
-    let (dir, client, _root_id, _local) = rig().await;
+    let (dir, client, _root_id) = rig().await;
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(outside.path().join("secret.txt"), b"nope").unwrap();
     std::os::unix::fs::symlink(outside.path(), dir.path().join("vault").join("escape")).unwrap();
 
-    let err = client.tree_browse("Vault/escape".into()).await;
+    let err = resolve(&client, "Vault/escape").await;
     assert!(err.is_err(), "symlinked escape must refuse: {err:?}");
 }

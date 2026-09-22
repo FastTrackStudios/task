@@ -44,16 +44,23 @@ pub trait CurationService {
         version: VersionId,
     ) -> Result<NamedVersion, FilesFault>;
 
-    /// Named versions of a root, or of one path within it.
+    /// Named versions of a root, or of one path within it. `None` for the
+    /// root lists every root the caller can see; a path then has nothing
+    /// to be relative to and is refused.
     async fn named_versions(
         &self,
-        root_id: RootId,
+        root_id: Option<RootId>,
         path: Option<RootPath>,
     ) -> Result<Vec<NamedVersion>, FilesFault>;
 
     /// Resolve a name to the version it points at.
     async fn resolve_name(&self, root_id: RootId, name: String)
     -> Result<NamedVersion, FilesFault>;
+
+    /// One Named Version by its id, with `change_id`/`commit_id` resolved
+    /// to where the name points *now* — a rewritten change has moved
+    /// since it was named, and a share link must stream the current one.
+    async fn named_version(&self, id: uuid::Uuid) -> Result<NamedVersion, FilesFault>;
 
     /// Begin a new Project Version — a named lineage of the whole tree,
     /// as distinct from a version of one file.

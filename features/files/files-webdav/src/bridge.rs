@@ -16,7 +16,7 @@
 //! addressed path (`…/@v/<commit>/…`) is exactly what issue #274 rules
 //! out — "only current heads are visible; version history is not
 //! exposed" — and the version chain already has a first-class surface in
-//! `FilesService::chain`. This bridge is the compat path for an OS file
+//! `VersionService::chain`. This bridge is the compat path for an OS file
 //! manager, never the sync path.
 //!
 //! ## Dispatch
@@ -27,7 +27,7 @@
 //! empty → the roots collection, otherwise the named root. The handler
 //! is then given `strip_prefix` down to that root, so every path the
 //! root's view sees is root-relative — the same coordinate system
-//! `FilesService::browse` uses.
+//! `TreeService::browse` uses.
 //!
 //! ## Locks
 //!
@@ -47,8 +47,10 @@ use dav_server::body::Body;
 use dav_server::davpath::DavPath;
 use dav_server::memls::MemLs;
 use dav_server::{DavConfig, DavHandler, DavMethodSet};
-use files::{FilesBackend, FilesService as _};
-use files_proto::{FileRootInfo, FilesError};
+use files::FilesBackend;
+use files::service::roots::RootsService as _;
+use files::service::sync::SyncService as _;
+use files_proto::{FileRootInfo, FilesFault, RootId, RootPath};
 use http::{Request, Response, StatusCode};
 use http_body::Body as HttpBody;
 use uuid::Uuid;
@@ -122,13 +124,10 @@ impl WebdavBridge {
     /// projects reads as *every project deleted*, and a client syncing
     /// or caching against the mount can act on that (PR #287 review).
     /// A 5xx is a mount hiccup; an empty multistatus is a catastrophe.
-    async fn visible(&self) -> Result<Vec<naming::RootSegment>, FilesError> {
-        let roots = self.backend.list_roots().await?;
+    async fn visible(&self) -> Result<Vec<naming::RootSegment>, FilesFault> {
+        let roots = self.backend.list().await?;
         // One policy read for the whole request, not one per root.
-        let hidden = self
-            .policy
-            .hidden_set()
-            .map_err(|e| FilesError::Io(e.to_string()))?;
+        let hidden = self.policy.hidden_set().map_err(FilesFault::io)?;
         let visible: Vec<FileRootInfo> = roots
             .into_iter()
             .filter(|r| !hidden.contains(&r.id))
@@ -307,7 +306,15 @@ impl WebdavBridge {
                     _ => false,
                 };
                 if is_stub {
-                    if let Err(err) = self.backend.hydrate(root.id, rel.clone()).await {
+                    let hydrated = match RootPath::parse(&rel) {
+                        Ok(path) => self
+                            .backend
+                            .hydrate(RootId::new(root.id), vec![path], true)
+                            .await
+                            .map(drop),
+                        Err(err) => Err(FilesFault::from(err)),
+                    };
+                    if let Err(err) = hydrated {
                         tracing::warn!(
                             target: "files_webdav::bridge",
                             root = %root.id,

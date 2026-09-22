@@ -101,9 +101,7 @@ pub fn ReviewScreen(
         move || org(),
         move |event: FilesEvent| {
             let (mut versions, mut sources) = (versions, sources);
-            if let FilesEvent::Checkpointed(info) = &event
-                && info.root_id == *root_id.peek()
-            {
+            if crate::checkpointed_root(&event) == Some(*root_id.peek()) {
                 versions.restart();
                 if selected.peek().is_none() {
                     sources.restart();

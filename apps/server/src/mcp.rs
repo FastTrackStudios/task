@@ -1207,6 +1207,7 @@ fn patch_tool_catalog() -> Vec<ToolDef> {
                                             are bound. Leave both content fields out when \
                                             nothing is bound yet."),
                         "content_path": s_("Root-relative path of those bytes."),
+                        "content_id": s_("Optional pin: the content address a Files upload reported for exactly these bytes."),
                     }),
                     &["title", "body"],
                 )
@@ -1273,6 +1274,7 @@ fn sample_tool_catalog() -> Vec<ToolDef> {
                                             state."),
                         "content_path": s_("Root-relative path of the audio, e.g. \
                                             'Samples/Kicks/Room Kick 48k.wav'."),
+                        "content_id": s_("Optional pin: the content address a Files upload reported for exactly these bytes."),
                     }),
                     &["title", "body"],
                 )
@@ -1335,6 +1337,7 @@ fn lighting_tool_catalog() -> Vec<ToolDef> {
                         "content_root": s_("File Root id holding any rendered media the show \
                                             needs."),
                         "content_path": s_("Root-relative path of that content."),
+                        "content_id": s_("Optional pin: the content address a Files upload reported for exactly these bytes."),
                     }),
                     &["title", "body", "scope"],
                 )
@@ -4322,6 +4325,7 @@ fn content_arg(args: &Value) -> resources_proto::ContentRef {
     resources_proto::ContentRef {
         root_id: arg_str(args, "content_root").unwrap_or_default(),
         path: arg_str(args, "content_path").unwrap_or_default(),
+        content: arg_str(args, "content_id").unwrap_or_default(),
     }
 }
 
@@ -4329,7 +4333,9 @@ fn content_json(content: &resources_proto::ContentRef) -> Value {
     json!({
         "root_id": content.root_id,
         "path": content.path,
+        "content_id": content.content,
         "bound": content.is_bound(),
+        "pinned": content.is_pinned(),
     })
 }
 

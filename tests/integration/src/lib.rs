@@ -119,6 +119,7 @@
 pub mod archive;
 pub mod client;
 pub mod device;
+pub mod keyflow;
 pub mod net;
 pub mod orgs;
 pub mod people;

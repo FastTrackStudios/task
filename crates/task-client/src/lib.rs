@@ -292,7 +292,7 @@ impl TaskClient {
     /// Establish a typed service client for one org.
     ///
     /// `C` is any generated `…ServiceClient` — `GoalServiceClient`,
-    /// `WikiServiceClient`, `FilesServiceClient`. The same `C` works
+    /// `WikiServiceClient`, `TreeServiceClient`. The same `C` works
     /// over either transport, which is the entire point.
     pub async fn org<C>(&self, slug: &str) -> Result<C>
     where

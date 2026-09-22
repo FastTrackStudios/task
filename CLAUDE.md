@@ -16,6 +16,10 @@ the File Root holds what it weighs** — identity and metadata under
 `resources/` or the vault, bytes in a File Root, so subscribing to a
 library moves names rather than gigabytes.
 
+Wiring an app (Session, Signal, Ignition, Keyflow) to Task: follow
+`docs/app-integration.md` — sign-in, stores, safe saves, manifests,
+libraries, live events, and what is not built yet.
+
 ## The dev loop: server + webapp, owned by you
 
 You (the agent) own the lifecycle of the demo processes: launch them
@@ -93,7 +97,7 @@ vocabulary. Video deliverables are intentionally *not* committed — the
 seeder generates them with ffmpeg at plant time, into the project's own
 directory (`files/Projects/<dir>/Deliverables/`), and adopts each
 declared project directory as a File Root named after the project
-(`apps/server/tests/demo_plant.rs` pins all of this, including the
+(`apps/server/tests/it/demo_plant.rs` pins all of this, including the
 two-version history each fresh video gets: rough cut checkpointed,
 final rendered over it, checkpointed again). That root is what makes
 deliverables reviewable: video plays through the review platform
@@ -109,7 +113,9 @@ enough for git). Add new songs there, never by hand.
 
 ## The PR gate
 
-`checks` runs on THEBATTLESHIP (self-hosted, four slots), against a target
+`checks` runs on THEBATTLESHIP (self-hosted, the `task`-labelled runners —
+which share the machine, and its dev drive, with runners for a dozen other
+repos, so a busy gate is felt as slow local builds), against a target
 dir that persists between runs. The check set lives in the `Justfile`, one
 recipe per check, and the workflow invokes those same recipes — so the two
 cannot drift:

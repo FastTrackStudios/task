@@ -9,7 +9,7 @@
 //!
 //! **Why a file and not an RPC verb.** Hiding a root is an
 //! operator/owner-tier decision on a compat surface, and
-//! [`files_proto::FilesService`] is a shared wire contract that
+//! [`files_proto::SyncService`] is a shared wire contract that
 //! concurrent tickets are also extending — adding a method here would
 //! be a cross-ticket collision for a knob with exactly one production
 //! caller. The file is the surface: an operator edits it, and the next

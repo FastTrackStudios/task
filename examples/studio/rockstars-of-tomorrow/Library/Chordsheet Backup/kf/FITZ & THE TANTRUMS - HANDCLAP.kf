@@ -1,0 +1,50 @@
+HANDCLAP - FITZ & THE TANTRUMS
+4/4
+
+intro 4
+\ChordLength //
+| Cm_2 !Eb_2 | !Ab_2 Gm_2 | Cm_2 !Eb_2 | !Ab // r2 |
+
+vs 6
+\ChordLength //
+|: Cm_2 !Eb_2 | !Ab_2 Gm_2 | Cm_2 !Eb_2 | !Ab_2 !Bb_2 :|x2
+    | Cm_2 !Eb_2 | !Ab_2 Gm_2 |
+
+pre 4
+\ChordLength //
+| Cm_2 !Eb_2 | !Ab_2 Gm_2 | Cm_2 !Eb_2 | !Ab_2 !Bb_2 |
+
+vs 6
+\ChordLength //
+|: Cm_2 !Eb_2 | !Ab_2 Gm_2 | Cm_2 !Eb_2 | !Ab_2 !Bb_2 :|x2
+    | Cm_2 !Eb_2 | !Ab_2 Gm_2 |
+
+[Pr-echorus] 1
+| r1 |
+
+br 8
+|: !Ab / | !Bb / | Cm / | Gm / :|x3
+    | !Ab / | !Bb / | r1 | r1 |
+
+ch 4
+|: !Ab / | !Bb / | Cm / | Gm / :|x2
+
+vs 6
+\ChordLength //
+|: Cm_2 !Eb_2 | !Ab_2 Gm_2 | Cm_2 !Eb_2 | !Ab_2 !Bb_2 :|x2
+    | Cm_2 !Eb_2 | !Ab_2 Gm_2 |
+
+pre 4
+\ChordLength //
+| Cm_2 !Eb_2 | !Ab_2 Gm_2 | Cm_2 !Eb_2 | !Ab_2 !Bb_2 |
+
+br 8
+|: !Ab / | !Bb / | Cm / | Gm / :|x3
+    | !Ab / | !Bb / | r1 | r1 |
+
+[Double Chorus] 4
+|: !Ab / | !Bb / | Cm / | Gm / :|x2
+
+out 2
+\ChordLength //
+|: Cm_2 !Eb_2 | !Ab_2 Gm_2 :|x2

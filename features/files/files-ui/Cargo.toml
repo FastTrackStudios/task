@@ -25,7 +25,7 @@ share-proto = { workspace = true, features = ["vox"] }
 # Copy-minted-link-to-clipboard on the web build.
 wasm-bindgen.workspace = true
 web-sys = { workspace = true, features = ["Window", "Navigator", "Clipboard"] }
-# `use_stream` — holds the `FilesService` event stream open and
+# `use_stream` — holds the `TreeService` event stream open and
 # re-establishes it across reconnects.
 architect = { workspace = true, features = ["client", "vox", "platform"] }
 uuid = { workspace = true, features = ["v4", "js"] }

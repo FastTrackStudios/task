@@ -4,7 +4,7 @@
 
 //! Server-side half of the Files feature (issue #259, ADR 0001 —
 //! `apps/task/docs/adr/0001-files-version-store-jj-cas.md`). The
-//! wasm-clean wire surface ([`files_proto::FilesService`] + its model
+//! wasm-clean wire surface (the lane traits in [`files_proto::service`] + their model
 //! types) lives in the sibling `files-proto` crate; this crate is
 //! [`FilesBackend`] — the version-store-backed implementation — plus
 //! the plumbing it needs: [`registry`] (root identity, persisted
@@ -127,24 +127,16 @@ pub use versions::VaultVersions;
 // the version store.
 pub use consts::{MARKER_FILE, STORE_DIR};
 
+pub use error::FilesError;
 pub use files_proto::{
     BrowseEntry, ChainEntry, CheckpointInfo, DivergenceChoice, DivergenceInfo, DivergenceSide,
-    FileRootInfo, FilesError, FilesEvent, FilesService, GcReport, NamedVersion, ProjectVersion,
-    RestartMode, RootFlavor, SavePoint, SnapshotInfo, VersionRef,
+    FileRootInfo, FilesEvent, GcReport, NamedVersion, ProjectVersion, RestartMode, RootFlavor,
+    SavePoint, SnapshotInfo, VersionRef,
 };
 
-// architect-emitted vox bits: the async client / dispatcher / descriptor
-// / serve helpers. Mount sites stitch the descriptor + `serve` into the
-// org router; the CLI / web UI bind the client.
+// The live stream — `TreeService::events`, every lane on one
+// subscription. Mount `tree_stream_layer(backend)` beside the tree lane.
 pub use files_proto::{
-    FilesDispatcher, FilesServiceBridge, FilesServiceClient, files_service_descriptor,
-    files_service_layer, serve_files_service,
-};
-
-// `#[subscribe] fn events` stream sibling — live root/checkpoint
-// changes. Mount `files_service_stream_layer(backend)` next to the base
-// service; subscribers drive a `FilesServiceStreamClient`.
-pub use files_proto::{
-    FilesServiceStream, FilesServiceStreamClient, FilesServiceStreamSource,
-    files_service_stream_layer, files_stream_descriptor, serve_files_service_stream,
+    MediaServiceStreamClient, TreeServiceStreamClient, serve_tree_stream, tree_stream_descriptor,
+    tree_stream_layer,
 };

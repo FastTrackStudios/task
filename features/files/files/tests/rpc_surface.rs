@@ -1,15 +1,20 @@
-//! The Files RPC surface v1 (issue #259) end to end over an in-process
+//! The Files RPC surface (issue #259) end to end over an in-process
 //! `architect::LocalServer` — the spec's Testing Decisions primary
 //! seam ("the established idiom ... the session facade's memory-link
 //! bootstrap tests are the prior art"), mirroring `task`'s own
 //! `tests/events_stream.rs`.
 //!
 //! Covers every acceptance criterion, plus the PR #280 review's
-//! findings: org confinement (`create_root`/`drive_browse` can't reach
+//! findings: org confinement (`adopt`/`browse_area` can't reach
 //! outside the org's own files area), root-browse escape (absolute
 //! subpath, `..`, symlink), nested-root rejection, `changed_paths`
 //! accuracy, the concurrent-checkpoint race, and root identity
 //! surviving a genuine `FilesBackend` restart.
+//!
+//! Driven through the v2 lanes — roots, tree, version and curation,
+//! each its own client over the one in-process server, mounted as the
+//! org router mounts them. No gate stands in front, so every call is
+//! the server's own and holds every capability.
 //!
 //! The second `FilesBackend::new` argument is the org vault holding
 //! the curated version entities (issue #261) — irrelevant to
@@ -17,30 +22,122 @@
 //! roots rather than staging a whole vault. The curation surface has
 //! its own file, `versions_rpc.rs`.
 
+use std::path::Path;
 use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::FilesServiceStreamSource as _;
+use files::id::{RootId, VersionId};
+use files::service::roots::{AdoptRequest, RootEvent};
+use files::service::version::VersionEvent;
 use files::{
-    FileRootInfo, FilesBackend, FilesEvent, FilesServiceClient, FilesServiceStreamClient,
-    RootFlavor, files_service_layer, files_service_stream_layer,
+    CurationServiceClient, FileRootInfo, FilesBackend, FilesEvent, RootFlavor, RootPath,
+    RootsServiceClient, TreeServiceClient, TreeServiceStreamClient, VersionServiceClient,
 };
 
 fn router(backend: FilesBackend) -> LayerRouter {
     LayerRouter::new()
-        .merge(files_service_layer(backend.clone()))
-        .merge(files_service_stream_layer(backend))
+        .merge(files::roots_layer(backend.clone()))
+        .merge(files::tree_layer(backend.clone()))
+        .merge(files::version_layer(backend.clone()))
+        .merge(files::curation_layer(backend.clone()))
+        .merge(files::tree_stream_layer(backend))
 }
 
-async fn next_event(rx: &mut vox::Rx<FilesEvent>) -> FilesEvent {
-    let frame = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+/// One client per lane these tests drive.
+#[derive(Clone)]
+struct Rpc {
+    roots: RootsServiceClient,
+    tree: TreeServiceClient,
+    version: VersionServiceClient,
+    curation: CurationServiceClient,
+}
+
+async fn connect(local: &LocalServer) -> Rpc {
+    Rpc {
+        roots: local
+            .establish()
+            .await
+            .expect("establish RootsServiceClient"),
+        tree: local
+            .establish()
+            .await
+            .expect("establish TreeServiceClient"),
+        version: local
+            .establish()
+            .await
+            .expect("establish VersionServiceClient"),
+        curation: local
+            .establish()
+            .await
+            .expect("establish CurationServiceClient"),
+    }
+}
+
+fn path(p: &str) -> RootPath {
+    RootPath::parse(p).expect("valid root path")
+}
+
+fn adopt_request(dir: &Path, name: &str, flavor: RootFlavor) -> AdoptRequest {
+    AdoptRequest {
+        path: dir.to_str().unwrap().to_string(),
+        name: name.to_string(),
+        flavor,
+        // Structure only: the old `create_root` registered a root and
+        // captured nothing, and every assertion below about the first
+        // checkpoint's `changed_paths` depends on that staying true.
+        hash_content: false,
+    }
+}
+
+/// Adopt `dir` as a root and wait for the (structure-only) walk behind
+/// the return, so nothing below races it.
+async fn adopt(
+    rpc: &Rpc,
+    backend: &FilesBackend,
+    dir: &Path,
+    name: &str,
+    flavor: RootFlavor,
+) -> FileRootInfo {
+    let root = rpc
+        .roots
+        .adopt(adopt_request(dir, name, flavor))
         .await
-        .expect("timed out waiting for a FilesEvent")
-        .expect("event channel errored")
-        .expect("event stream closed early");
-    let mut copied = None;
-    let _ = frame.map(|ev| copied = Some(ev));
-    copied.expect("SelfRef::map ran")
+        .expect("adopt rpc");
+    backend.settled(RootId::new(root.id)).await;
+    root
+}
+
+/// Whether browsing `sub` inside the root is refused — at the typed
+/// path (an absolute or escaping path never parses) or by the lane.
+async fn browse_refused(rpc: &Rpc, root: RootId, sub: &str) -> bool {
+    match RootPath::parse(sub) {
+        Err(_) => true,
+        Ok(p) => rpc.tree.browse(root, p).await.is_err(),
+    }
+}
+
+/// The next event `pick` accepts, skipping any other lane's traffic
+/// (adoption progress, catalogue deltas) in between.
+async fn next_event<T>(
+    rx: &mut vox::Rx<FilesEvent>,
+    mut pick: impl FnMut(&FilesEvent) -> Option<T>,
+) -> T {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let frame = rx
+                .recv()
+                .await
+                .expect("event channel errored")
+                .expect("event stream closed early");
+            let mut copied = None;
+            let _ = frame.map(|ev| copied = Some(ev));
+            if let Some(found) = copied.as_ref().and_then(&mut pick) {
+                return found;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for a FilesEvent")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -62,72 +159,72 @@ async fn create_browse_chain_checkpoint_over_rpc() {
     let scope = Scope::new();
     let local = LocalServer::serve(router(backend.clone()), scope.clone());
 
-    let client: FilesServiceClient = local
+    let client = connect(&local).await;
+    let stream: TreeServiceStreamClient = local
         .establish()
         .await
-        .expect("establish FilesServiceClient");
-    let stream: FilesServiceStreamClient = local
-        .establish()
-        .await
-        .expect("establish FilesServiceStreamClient");
+        .expect("establish TreeServiceStreamClient");
 
     // Subscribe before mutating (the call stays in flight for the life
     // of the subscription — see `task`'s `events_stream.rs` for why).
     let (tx, mut rx) = vox::channel::<FilesEvent>();
     let subscription = tokio::spawn(async move {
-        stream.events(tx).await.expect("subscribe to files events");
+        stream
+            .events(None, tx)
+            .await
+            .expect("subscribe to files events");
     });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while backend.events_hub().subscriber_count() == 0 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("subscriber sink never reached the backend hub");
+    // The hub is joined when the server attaches the sink, which has no
+    // observable of its own from out here; give it the beat the other
+    // stream tests give it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // create_root: marker file + entity.
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Mix Session".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    // adopt: marker file + entity.
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Mix Session",
+        RootFlavor::Media,
+    )
+    .await;
+    let root_id = RootId::new(root.id);
     assert_eq!(root.name, "Mix Session");
     assert!(
         root_dir.join(".fts-root.json").exists(),
         "marker file written into the root's own tree"
     );
-    match next_event(&mut rx).await {
-        FilesEvent::RootCreated(r) => assert_eq!(r.id, root.id),
-        other => panic!("expected RootCreated, got {other:?}"),
-    }
+    next_event(&mut rx, |e| match e {
+        FilesEvent::Root(RootEvent::Created(r)) => {
+            assert_eq!(r.id, root.id);
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
 
-    // A second create_root on the same folder is rejected — root
-    // identity is unique per tree.
+    // A second adopt of the same folder is rejected — root identity is
+    // unique per tree.
     let dup = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Dup".to_string(),
-            RootFlavor::Media,
-        )
+        .roots
+        .adopt(adopt_request(&root_dir, "Dup", RootFlavor::Media))
         .await;
     assert!(
         dup.is_err(),
         "creating a root over an existing root must fail"
     );
 
-    // list_roots / get_root.
-    let listed = client.list_roots().await.expect("list_roots rpc");
+    // list / get.
+    let listed = client.roots.list().await.expect("list rpc");
     assert_eq!(listed.len(), 1);
-    let got = client.get_root(root.id).await.expect("get_root rpc");
+    let got = client.roots.get(root_id).await.expect("get rpc");
     assert_eq!(got.path, root.path);
 
     // browse (root-scoped) hides the marker file / store dir; a nested
     // subpath is a distinct call.
     let top = client
-        .browse(root.id, String::new())
+        .tree
+        .browse(root_id, RootPath::root())
         .await
         .expect("browse rpc");
     let names: Vec<_> = top.iter().map(|e| e.name.as_str()).collect();
@@ -138,38 +235,46 @@ async fn create_browse_chain_checkpoint_over_rpc() {
         "root browsing hides internals: {names:?}"
     );
     let stems = client
-        .browse(root.id, "stems".to_string())
+        .tree
+        .browse(root_id, path("stems"))
         .await
         .expect("browse rpc");
     assert_eq!(stems.len(), 1);
     assert_eq!(stems[0].name, "kick.wav");
 
-    // drive_browse (rootless, still org-confined) is a genuinely
+    // browse_area (rootless, still org-confined) is a genuinely
     // different view — it shows the raw tree, internals included.
     let drive = client
-        .drive_browse(root_dir.to_str().unwrap().to_string())
+        .roots
+        .browse_area(root_dir.to_str().unwrap().to_string())
         .await
-        .expect("drive_browse rpc");
+        .expect("browse_area rpc");
     let drive_names: Vec<_> = drive.iter().map(|e| e.name.as_str()).collect();
     assert!(
         drive_names.contains(&".fts-root.json"),
-        "drive_browse shows the raw tree: {drive_names:?}"
+        "browse_area shows the raw tree: {drive_names:?}"
     );
 
-    // checkpoint_now — the live tree checkpoints; chain sees it.
+    // checkpoint — the live tree checkpoints; chain sees it.
     let cp1 = client
-        .checkpoint_now(root.id, Some("first save".to_string()))
+        .version
+        .checkpoint(root_id, Some("first save".to_string()))
         .await
-        .expect("checkpoint_now rpc");
+        .expect("checkpoint rpc");
     assert!(cp1.changed_paths.contains(&"mix.wav".to_string()));
     assert!(cp1.changed_paths.contains(&"stems/kick.wav".to_string()));
-    match next_event(&mut rx).await {
-        FilesEvent::Checkpointed(info) => assert_eq!(info.commit_id, cp1.commit_id),
-        other => panic!("expected Checkpointed, got {other:?}"),
-    }
+    next_event(&mut rx, |e| match e {
+        FilesEvent::Version(VersionEvent::Checkpointed(info)) => {
+            assert_eq!(info.commit_id, cp1.commit_id);
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
 
     let chain = client
-        .chain(root.id, "mix.wav".to_string())
+        .version
+        .chain(root_id, path("mix.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 1, "one saved state so far: {chain:?}");
@@ -178,9 +283,10 @@ async fn create_browse_chain_checkpoint_over_rpc() {
     // Edit the file and checkpoint again — a second chain entry.
     std::fs::write(root_dir.join("mix.wav"), b"take two, final").unwrap();
     let cp2 = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(root_id, None)
         .await
-        .expect("checkpoint_now rpc");
+        .expect("checkpoint rpc");
     assert_eq!(cp2.description, "checkpoint now", "default description");
     assert_ne!(cp2.commit_id, cp1.commit_id);
     assert_eq!(
@@ -190,7 +296,8 @@ async fn create_browse_chain_checkpoint_over_rpc() {
     );
 
     let chain = client
-        .chain(root.id, "mix.wav".to_string())
+        .version
+        .chain(root_id, path("mix.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 2, "two saved states now: {chain:?}");
@@ -210,9 +317,10 @@ async fn create_browse_chain_checkpoint_over_rpc() {
     // commits on the same parent, and every path underneath was then
     // reported as "two machines changed".
     let cp3 = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(root_id, None)
         .await
-        .expect("checkpoint_now rpc");
+        .expect("checkpoint rpc");
     assert_eq!(
         cp3.commit_id, cp2.commit_id,
         "a no-op checkpoint leaves the head where it is"
@@ -223,7 +331,8 @@ async fn create_browse_chain_checkpoint_over_rpc() {
         cp3.changed_paths
     );
     let chain_after_noop = client
-        .chain(root.id, "mix.wav".to_string())
+        .version
+        .chain(root_id, path("mix.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(
@@ -236,10 +345,10 @@ async fn create_browse_chain_checkpoint_over_rpc() {
     scope.close().await;
 }
 
-/// PR #280 review findings 1+2: `create_root` and `drive_browse` must
-/// not reach outside the org's own files area, and root-scoped
-/// `browse` must not escape the root via an absolute subpath, `..`, or
-/// a symlink.
+/// PR #280 review findings 1+2: `adopt` and `browse_area` must not
+/// reach outside the org's own files area, and root-scoped `browse`
+/// must not escape the root via an absolute subpath, `..`, or a
+/// symlink.
 #[tokio::test(flavor = "multi_thread")]
 async fn filesystem_access_is_confined() {
     let data_dir = tempfile::tempdir().expect("data tempdir");
@@ -249,62 +358,52 @@ async fn filesystem_access_is_confined() {
     let backend =
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(router(backend), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
-    // create_root outside the org's files area is rejected outright.
+    // adopt outside the org's files area is rejected outright.
     let outside_create = client
-        .create_root(
-            outside.path().to_str().unwrap().to_string(),
-            "Escape".to_string(),
-            RootFlavor::Media,
-        )
+        .roots
+        .adopt(adopt_request(outside.path(), "Escape", RootFlavor::Media))
         .await;
     assert!(
         outside_create.is_err(),
-        "create_root must reject a path outside the org's files area"
+        "adopt must reject a path outside the org's files area"
     );
     assert!(
         !outside.path().join(".fts-root.json").exists(),
-        "a rejected create_root must not write a marker file outside confinement"
+        "a rejected adopt must not write a marker file outside confinement"
     );
 
-    // drive_browse outside the org's files area is rejected outright —
-    // no server-filesystem enumeration at plain member tier.
+    // browse_area outside the org's files area is rejected outright —
+    // no server-filesystem enumeration.
     let outside_browse = client
-        .drive_browse(outside.path().to_str().unwrap().to_string())
+        .roots
+        .browse_area(outside.path().to_str().unwrap().to_string())
         .await;
     assert!(
         outside_browse.is_err(),
-        "drive_browse must reject a path outside the org's files area"
+        "browse_area must reject a path outside the org's files area"
     );
 
     // A real root, to probe browse's escape guard against.
     let root_dir = data_dir.path().join("root-a");
     std::fs::create_dir(&root_dir).unwrap();
     std::fs::write(root_dir.join("inside.txt"), b"ok").unwrap();
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Root A".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    let root = adopt(&client, &backend, &root_dir, "Root A", RootFlavor::Media).await;
+    let root_id = RootId::new(root.id);
 
     // Absolute subpath: `root_path.join("/etc")` replaces the base
     // entirely under plain `PathBuf::join` semantics — must still be
     // rejected, not silently resolve to `/etc`.
-    let abs_escape = client.browse(root.id, "/etc".to_string()).await;
     assert!(
-        abs_escape.is_err(),
+        browse_refused(&client, root_id, "/etc").await,
         "an absolute subpath must not escape the root"
     );
 
     // `..`-relative escape.
-    let dotdot_escape = client.browse(root.id, "../".to_string()).await;
     assert!(
-        dotdot_escape.is_err(),
+        browse_refused(&client, root_id, "../").await,
         "a `..` subpath must not escape the root"
     );
 
@@ -314,9 +413,8 @@ async fn filesystem_access_is_confined() {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(outside.path(), root_dir.join("escape-link")).unwrap();
-        let symlink_escape = client.browse(root.id, "escape-link".to_string()).await;
         assert!(
-            symlink_escape.is_err(),
+            browse_refused(&client, root_id, "escape-link").await,
             "a symlink inside the root pointing outside it must not be followed out"
         );
     }
@@ -348,29 +446,19 @@ async fn nested_roots_are_submodules() {
     let backend =
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(router(backend), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
     // Outer root first; a descendant root is now permitted.
     let outer = data_dir.path().join("outer");
     std::fs::create_dir(&outer).unwrap();
-    client
-        .create_root(
-            outer.to_str().unwrap().to_string(),
-            "Outer".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create outer root");
+    adopt(&client, &backend, &outer, "Outer", RootFlavor::Media).await;
 
     let inner = outer.join("inner");
     std::fs::create_dir(&inner).unwrap();
     let nested = client
-        .create_root(
-            inner.to_str().unwrap().to_string(),
-            "Inner".to_string(),
-            RootFlavor::Media,
-        )
+        .roots
+        .adopt(adopt_request(&inner, "Inner", RootFlavor::Media))
         .await;
     assert!(
         nested.is_ok(),
@@ -383,20 +471,10 @@ async fn nested_roots_are_submodules() {
     let parent = data_dir.path().join("parent");
     let child = parent.join("child");
     std::fs::create_dir_all(&child).unwrap();
-    client
-        .create_root(
-            child.to_str().unwrap().to_string(),
-            "Child".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create child root");
+    adopt(&client, &backend, &child, "Child", RootFlavor::Media).await;
     let ancestor = client
-        .create_root(
-            parent.to_str().unwrap().to_string(),
-            "Parent".to_string(),
-            RootFlavor::Media,
-        )
+        .roots
+        .adopt(adopt_request(&parent, "Parent", RootFlavor::Media))
         .await;
     assert!(
         ancestor.is_ok(),
@@ -407,11 +485,8 @@ async fn nested_roots_are_submodules() {
     // containment must not relax identity — two roots over one tree
     // would be two histories of the same files.
     let duplicate = client
-        .create_root(
-            child.to_str().unwrap().to_string(),
-            "Child Again".to_string(),
-            RootFlavor::Media,
-        )
+        .roots
+        .adopt(adopt_request(&child, "Child Again", RootFlavor::Media))
         .await;
     assert!(
         duplicate.is_err(),
@@ -453,25 +528,21 @@ async fn carving_a_child_root_out_of_tracked_files_keeps_the_history() {
     let backend =
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(router(backend), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
-    let parent = client
-        .create_root(
-            album.to_str().unwrap().to_string(),
-            "Album".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create album root");
+    let parent = adopt(&client, &backend, &album, "Album", RootFlavor::Media).await;
+    let parent_id = RootId::new(parent.id);
     let whole = client
-        .checkpoint_now(parent.id, Some("album captured whole".to_string()))
+        .version
+        .checkpoint(parent_id, Some("album captured whole".to_string()))
         .await
         .expect("first checkpoint");
 
     // The song is in the album's history at this point.
     let before = client
-        .chain(parent.id, "song one/mix.wav".to_string())
+        .version
+        .chain(parent_id, path("song one/mix.wav"))
         .await
         .expect("chain rpc");
     assert!(
@@ -480,23 +551,18 @@ async fn carving_a_child_root_out_of_tracked_files_keeps_the_history() {
     );
 
     // Now carve it out.
-    let child = client
-        .create_root(
-            song.to_str().unwrap().to_string(),
-            "Song One".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create song root");
+    let child = adopt(&client, &backend, &song, "Song One", RootFlavor::Media).await;
     client
-        .checkpoint_now(parent.id, Some("after the split".to_string()))
+        .version
+        .checkpoint(parent_id, Some("after the split".to_string()))
         .await
         .expect("second checkpoint");
 
     // The album keeps its OWN files — the whole point of the submodule
     // prune (a parent with subprojects still has files of its own).
     let album_entries = client
-        .browse(parent.id, String::new())
+        .tree
+        .browse(parent_id, RootPath::root())
         .await
         .expect("browse album");
     assert!(
@@ -508,7 +574,12 @@ async fn carving_a_child_root_out_of_tracked_files_keeps_the_history() {
     // commit that captured it. This is the property that makes
     // splitting a tree that already has history a safe operation.
     let at_split = client
-        .browse_at(parent.id, whole.commit_id.clone(), "song one".to_string())
+        .version
+        .browse_at(
+            parent_id,
+            path("song one"),
+            VersionId::from_commit_hex(&whole.commit_id),
+        )
         .await
         .expect("browse_at the pre-split commit");
     assert!(
@@ -518,7 +589,8 @@ async fn carving_a_child_root_out_of_tracked_files_keeps_the_history() {
 
     // And the child owns the file going forward.
     let song_entries = client
-        .browse(child.id, String::new())
+        .tree
+        .browse(RootId::new(child.id), RootPath::root())
         .await
         .expect("browse song");
     assert!(
@@ -556,19 +628,21 @@ async fn moving_a_root_folder_re_points_it_and_keeps_its_history() {
     let backend =
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(router(backend), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
-    let root = client
-        .create_root(
-            original.to_str().unwrap().to_string(),
-            "Yokasta Segura".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create root");
+    let root = adopt(
+        &client,
+        &backend,
+        &original,
+        "Yokasta Segura",
+        RootFlavor::Media,
+    )
+    .await;
+    let root_id = RootId::new(root.id);
     let first = client
-        .checkpoint_now(root.id, Some("before the move".to_string()))
+        .version
+        .checkpoint(root_id, Some("before the move".to_string()))
         .await
         .expect("checkpoint");
 
@@ -578,13 +652,14 @@ async fn moving_a_root_folder_re_points_it_and_keeps_its_history() {
     std::fs::rename(&original, &moved).unwrap();
 
     let readded = client
-        .create_root(
-            moved.to_str().unwrap().to_string(),
+        .roots
+        .adopt(adopt_request(
+            &moved,
             // A different name on the way back in must not matter; the
             // marker is the authority on identity.
-            "whatever the caller types".to_string(),
+            "whatever the caller types",
             RootFlavor::Media,
-        )
+        ))
         .await
         .expect("re-adding a moved root must succeed, not conflict");
 
@@ -596,12 +671,13 @@ async fn moving_a_root_folder_re_points_it_and_keeps_its_history() {
     assert_eq!(readded.path.as_deref(), moved.to_str());
 
     // Exactly one root, not a second one shadowing the first.
-    let roots = client.list_roots().await.expect("list");
+    let roots = client.roots.list().await.expect("list");
     assert_eq!(roots.len(), 1, "re-pointing must not duplicate: {roots:?}");
 
     // The history came with the folder.
     let chain = client
-        .chain(root.id, "mix.wav".to_string())
+        .version
+        .chain(root_id, path("mix.wav"))
         .await
         .expect("chain after the move");
     assert_eq!(chain.len(), 1);
@@ -610,11 +686,13 @@ async fn moving_a_root_folder_re_points_it_and_keeps_its_history() {
     // And it still versions going forward, from the new location.
     std::fs::write(moved.join("mix.wav"), b"v2 after the move").unwrap();
     client
-        .checkpoint_now(root.id, Some("after the move".to_string()))
+        .version
+        .checkpoint(root_id, Some("after the move".to_string()))
         .await
         .expect("checkpoint at the new path");
     let chain = client
-        .chain(root.id, "mix.wav".to_string())
+        .version
+        .chain(root_id, path("mix.wav"))
         .await
         .expect("chain");
     assert_eq!(chain.len(), 2, "a move must not end the file's history");
@@ -622,9 +700,9 @@ async fn moving_a_root_folder_re_points_it_and_keeps_its_history() {
     scope.close().await;
 }
 
-/// PR #280 review finding 4: two concurrent `checkpoint_now` calls on
-/// the same root must not race — every writer's change must land in
-/// the chain, none silently orphaned by a lost `set_head`.
+/// PR #280 review finding 4: two concurrent checkpoints on the same
+/// root must not race — every writer's change must land in the chain,
+/// none silently orphaned by a lost `set_head`.
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_checkpoints_on_same_root_do_not_race() {
     let data_dir = tempfile::tempdir().expect("data tempdir");
@@ -634,28 +712,28 @@ async fn concurrent_checkpoints_on_same_root_do_not_race() {
     let backend =
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(router(backend), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Concurrent".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Concurrent",
+        RootFlavor::Media,
+    )
+    .await;
+    let root_id = RootId::new(root.id);
 
     const N: usize = 8;
     let mut tasks = Vec::new();
     for i in 0..N {
         std::fs::write(root_dir.join(format!("f{i}.txt")), format!("content {i}")).unwrap();
-        let client = client.clone();
-        let root_id = root.id;
+        let version = client.version.clone();
         tasks.push(tokio::spawn(async move {
-            client
-                .checkpoint_now(root_id, Some(format!("writer {i}")))
+            version
+                .checkpoint(root_id, Some(format!("writer {i}")))
                 .await
-                .expect("checkpoint_now rpc")
+                .expect("checkpoint rpc")
         }));
     }
     let mut commit_ids = std::collections::HashSet::new();
@@ -680,7 +758,8 @@ async fn concurrent_checkpoints_on_same_root_do_not_race() {
     // committed onto the line of history the tracked head walks.
     for i in 0..N {
         let chain = client
-            .chain(root.id, format!("f{i}.txt"))
+            .version
+            .chain(root_id, path(&format!("f{i}.txt")))
             .await
             .unwrap_or_else(|_| panic!("chain rpc for f{i}.txt"));
         assert_eq!(
@@ -713,19 +792,13 @@ async fn root_identity_survives_backend_restart() {
             FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
         let scope = Scope::new();
         let local = LocalServer::serve(router(backend.clone()), scope.clone());
-        let client: FilesServiceClient = local.establish().await.expect("establish client");
-        let root = client
-            .create_root(
-                root_dir.to_str().unwrap().to_string(),
-                "Session".to_string(),
-                RootFlavor::Media,
-            )
-            .await
-            .expect("create_root rpc");
+        let client = connect(&local).await;
+        let root = adopt(&client, &backend, &root_dir, "Session", RootFlavor::Media).await;
         client
-            .checkpoint_now(root.id, Some("initial".to_string()))
+            .version
+            .checkpoint(RootId::new(root.id), Some("initial".to_string()))
             .await
-            .expect("checkpoint_now rpc");
+            .expect("checkpoint rpc");
 
         // Tear this backend all the way down before the second one
         // touches the same repo: flush its chunk stores, drop the RPC
@@ -755,14 +828,15 @@ async fn root_identity_survives_backend_restart() {
             FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
         let scope = Scope::new();
         let local = LocalServer::serve(router(backend), scope.clone());
-        let client: FilesServiceClient = local.establish().await.expect("establish client");
+        let client = connect(&local).await;
 
-        let roots = client.list_roots().await.expect("list_roots rpc");
+        let roots = client.roots.list().await.expect("list rpc");
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].id, created.id);
 
         let chain = client
-            .chain(created.id, "session.rpp".to_string())
+            .version
+            .chain(RootId::new(created.id), path("session.rpp"))
             .await
             .expect("chain rpc");
         assert_eq!(
@@ -795,25 +869,21 @@ async fn browse_reports_pointer_stubs_for_non_resident_paths() {
     let backend =
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(router(backend), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Video Cut".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    let root = adopt(&client, &backend, &root_dir, "Video Cut", RootFlavor::Media).await;
+    let root_id = RootId::new(root.id);
     client
-        .checkpoint_now(root.id, Some("ingest".to_string()))
+        .version
+        .checkpoint(root_id, Some("ingest".to_string()))
         .await
-        .expect("checkpoint_now rpc");
+        .expect("checkpoint rpc");
 
     // Everything is resident right after the checkpoint.
     let top = client
-        .browse(root.id, String::new())
+        .tree
+        .browse(root_id, RootPath::root())
         .await
         .expect("browse rpc");
     assert!(
@@ -827,7 +897,8 @@ async fn browse_reports_pointer_stubs_for_non_resident_paths() {
     std::fs::remove_dir_all(root_dir.join("media")).unwrap();
 
     let top = client
-        .browse(root.id, String::new())
+        .tree
+        .browse(root_id, RootPath::root())
         .await
         .expect("browse rpc");
     let cut = top
@@ -854,7 +925,8 @@ async fn browse_reports_pointer_stubs_for_non_resident_paths() {
     // A directory that is entirely non-resident is still browsable —
     // its content answers from the store, as stubs.
     let inside = client
-        .browse(root.id, "media".to_string())
+        .tree
+        .browse(root_id, path("media"))
         .await
         .expect("browsing a non-resident tracked directory");
     assert_eq!(inside.len(), 1);
@@ -863,17 +935,18 @@ async fn browse_reports_pointer_stubs_for_non_resident_paths() {
 
     // A path that is neither on disk nor in the store is still a miss,
     // and an escaping subpath is still refused.
-    assert!(client.browse(root.id, "nope".to_string()).await.is_err());
-    assert!(client.browse(root.id, "../..".to_string()).await.is_err());
+    assert!(browse_refused(&client, root_id, "nope").await);
+    assert!(browse_refused(&client, root_id, "../..").await);
 
-    // Drive browsing has no root context, so it never claims stubs.
+    // Area browsing has no root context, so it never claims stubs.
     let drive = client
-        .drive_browse(root_dir.to_str().unwrap().to_string())
+        .roots
+        .browse_area(root_dir.to_str().unwrap().to_string())
         .await
-        .expect("drive_browse rpc");
+        .expect("browse_area rpc");
     assert!(
         drive.iter().all(|e| !e.stub && !e.divergent),
-        "Drive browsing reports the raw tree only: {drive:?}"
+        "area browsing reports the raw tree only: {drive:?}"
     );
 
     scope.close().await;
@@ -913,25 +986,28 @@ async fn browse_reports_divergent_versions_from_concurrent_saves() {
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
     let local = LocalServer::serve(router(backend.clone()), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let client = connect(&local).await;
 
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Split Session".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Split Session",
+        RootFlavor::Media,
+    )
+    .await;
+    let root_id = RootId::new(root.id);
     client
-        .checkpoint_now(root.id, Some("base".to_string()))
+        .version
+        .checkpoint(root_id, Some("base".to_string()))
         .await
-        .expect("checkpoint_now rpc");
+        .expect("checkpoint rpc");
 
     // Warm the backend: this browse caches the repo handle at the base
     // checkpoint, so everything below has to survive a stale cache.
     let before = client
-        .browse(root.id, String::new())
+        .tree
+        .browse(root_id, RootPath::root())
         .await
         .expect("browse rpc");
     assert!(
@@ -991,7 +1067,7 @@ async fn browse_reports_divergent_versions_from_concurrent_saves() {
     // merges the heads, and both saves are visible.
     let top = tokio::time::timeout(
         Duration::from_secs(30),
-        client.browse(root.id, String::new()),
+        client.tree.browse(root_id, RootPath::root()),
     )
     .await
     .expect("browse must not hang on a divergent root")
@@ -1033,10 +1109,10 @@ async fn browse_reports_divergent_versions_from_concurrent_saves() {
     scope.close().await;
 }
 
-/// A root's lineage badge: `list_roots`/`get_root` project the root's
-/// CURRENT Project Version — the highest-numbered entity (#261) — so
-/// the explorer can render it without a second round trip, and a root
-/// that has never been restarted carries none.
+/// A root's lineage badge: `list`/`get` project the root's CURRENT
+/// Project Version — the highest-numbered entity (#261) — so the
+/// explorer can render it without a second round trip, and a root that
+/// has never been restarted carries none.
 #[tokio::test(flavor = "multi_thread")]
 async fn root_reads_carry_the_current_project_version() {
     let data_dir = tempfile::tempdir().expect("data tempdir");
@@ -1048,52 +1124,49 @@ async fn root_reads_carry_the_current_project_version() {
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
     let local = LocalServer::serve(router(backend.clone()), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let client = connect(&local).await;
 
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Album".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    let root = adopt(&client, &backend, &root_dir, "Album", RootFlavor::Media).await;
+    let root_id = RootId::new(root.id);
     assert_eq!(
         root.project_version, None,
         "a root that has never been restarted wears no badge"
     );
     client
-        .checkpoint_now(root.id, Some("base".to_string()))
+        .version
+        .checkpoint(root_id, Some("base".to_string()))
         .await
-        .expect("checkpoint_now rpc");
+        .expect("checkpoint rpc");
 
     // A root with only v1 recorded already shows it — the badge is
     // "which lineage is this", not "has it been restarted twice".
     let v1 = client
-        .start_project_version(root.id, None)
+        .curation
+        .start_project_version(root_id, String::new())
         .await
         .expect("start_project_version rpc");
     assert_eq!(v1.number, 1);
-    let got = client.get_root(root.id).await.expect("get_root rpc");
+    let got = client.roots.get(root_id).await.expect("get rpc");
     assert_eq!(got.project_version.as_ref().map(|pv| pv.number), Some(1));
 
     // A second restart wins: the badge is the CURRENT lineage.
     let v2 = client
-        .start_project_version(root.id, Some("client cut".to_string()))
+        .curation
+        .start_project_version(root_id, "client cut".to_string())
         .await
         .expect("start_project_version rpc");
     assert_eq!(v2.number, 2);
 
-    let got = client.get_root(root.id).await.expect("get_root rpc");
-    let badge = got.project_version.expect("badge on get_root");
+    let got = client.roots.get(root_id).await.expect("get rpc");
+    let badge = got.project_version.expect("badge on get");
     assert_eq!(badge.number, 2);
     assert_eq!(badge.label.as_deref(), Some("client cut"));
 
-    let listed = client.list_roots().await.expect("list_roots rpc");
+    let listed = client.roots.list().await.expect("list rpc");
     assert_eq!(
         listed[0].project_version.as_ref().map(|pv| pv.number),
         Some(2),
-        "list_roots carries the badge too — the explorer's root list reads it"
+        "list carries the badge too — the explorer's root list reads it"
     );
 
     backend.shutdown().await;
@@ -1115,16 +1188,16 @@ async fn browse_never_initializes_a_missing_store() {
         FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
     let scope = Scope::new();
     let local = LocalServer::serve(router(backend.clone()), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let client = connect(&local).await;
 
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "On A Drive".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "On A Drive",
+        RootFlavor::Media,
+    )
+    .await;
     backend.shutdown().await;
 
     // Simulate the volume going away: the tree (store included) is no
@@ -1135,7 +1208,8 @@ async fn browse_never_initializes_a_missing_store() {
     std::fs::create_dir(&root_dir).unwrap();
 
     let listed = client
-        .browse(root.id, String::new())
+        .tree
+        .browse(RootId::new(root.id), RootPath::root())
         .await
         .expect("an empty mountpoint lists as empty, not as an error");
     assert!(listed.is_empty(), "nothing is there: {listed:?}");
@@ -1164,17 +1238,11 @@ async fn cold_open_browse_on_a_divergent_root_completes() {
             FilesBackend::new(data_dir.path(), data_dir.path().join("vault")).expect("backend");
         let scope = Scope::new();
         let local = LocalServer::serve(router(backend.clone()), scope.clone());
-        let client: FilesServiceClient = local.establish().await.expect("client");
-        let root = client
-            .create_root(
-                root_dir.to_str().unwrap().to_string(),
-                "Split".to_string(),
-                RootFlavor::Media,
-            )
-            .await
-            .expect("create_root");
+        let client = connect(&local).await;
+        let root = adopt(&client, &backend, &root_dir, "Split", RootFlavor::Media).await;
         client
-            .checkpoint_now(root.id, Some("base".to_string()))
+            .version
+            .checkpoint(RootId::new(root.id), Some("base".to_string()))
             .await
             .expect("checkpoint");
         backend
@@ -1193,13 +1261,13 @@ async fn cold_open_browse_on_a_divergent_root_completes() {
     backend2.spawn_cadence_driver(Duration::from_secs(30));
     let scope2 = Scope::new();
     let local2 = LocalServer::serve(router(backend2.clone()), scope2.clone());
-    let client2: FilesServiceClient = local2.establish().await.expect("client2");
-    let roots = client2.list_roots().await.expect("list_roots");
-    let root_id = roots.first().expect("a root").id;
+    let client2 = connect(&local2).await;
+    let roots = client2.roots.list().await.expect("list");
+    let root_id = RootId::new(roots.first().expect("a root").id);
 
     let browsed = tokio::time::timeout(
         Duration::from_secs(20),
-        client2.browse(root_id, String::new()),
+        client2.tree.browse(root_id, RootPath::root()),
     )
     .await;
     assert!(

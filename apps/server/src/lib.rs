@@ -2036,6 +2036,17 @@ pub(crate) async fn build_org_state(
             home_identity,
             &files,
         ));
+        // The role half of what a caller may do on the Files lanes: the
+        // same membership rows the gate's home fallback admits people by.
+        // Without it only explicit grants convey, and a member signed in
+        // from Keyflow would need a grant per folder to open their own
+        // charts.
+        if let Some(home) = home_identity {
+            files.set_memberships(Arc::new(crate::memberships::FilesRoles::new(
+                Arc::clone(&home.memberships),
+                org_root.slug(),
+            )));
+        }
         // Coverage + dry-run, once per org at boot: how many mounted
         // services carry a permit table, which do not, and what a
         // signed-in member would be denied if enforcement were on. The
@@ -3954,26 +3965,13 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             workstream::workstream_service_descriptor(),
             workstream::serve_workstream_service(org.workstreams.clone()),
         )
-        .with(
-            files::files_service_descriptor(),
-            files::serve_files_service(org.files.clone()),
-        )
-        // Live root-creation / checkpoint events — `FilesService`'s
-        // `#[subscribe]` stream sibling, served from the hub on the
-        // `FilesBackend` above.
-        .merge(files::files_service_stream_layer(org.files.clone()))
-        // The v2 lanes (`files_proto::service`), one mount per trait.
+        // The Files lanes (`files_proto::service`), one mount per trait —
+        // the only Files API (the v1 `FilesService` is gone, ADR 0005).
         //
-        // Every one is served by the SAME `FilesBackend` as v1 above —
-        // they are `impl XService for FilesBackend`, not separate
-        // objects — so a root adopted through `RootsService` is the root
-        // `TreeService` browses, with no state to keep in step.
-        //
-        // v1 stays mounted beside them until its last caller moves. The
-        // two surfaces disagree about nothing because they are the same
-        // backend; where a method exists on both (`browse`, `chain`,
-        // `hydrate`), the v2 one adds typed ids, typed faults and path
-        // confinement and delegates to the same inner method.
+        // Every one is served by the SAME `FilesBackend` — they are
+        // `impl XService for FilesBackend`, not separate objects — so a
+        // root adopted through `RootsService` is the root `TreeService`
+        // browses, with no state to keep in step.
         //
         // Each lane's permits live in `permits.rs` — mounting without
         // granting fails every method closed, which is the failure this
@@ -4032,6 +4030,9 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             files_proto::serve_media(org.files.clone()),
         )
         .merge(files_proto::media_stream_layer(org.files.clone()))
+        // The v2 live stream: every lane's changes, one subscription,
+        // filtered per subscriber.
+        .merge(files_proto::tree_stream_layer(org.files.clone()))
         .with(
             files_proto::search_descriptor(),
             files_proto::serve_search(org.files.clone()),
@@ -4440,9 +4441,17 @@ pub async fn serve_org_iroh(
     gate: snapshot::WriteGate,
     endpoint: &architect::iroh_link::iroh::Endpoint,
 ) {
-    files::peer::serve_over_iroh(endpoint, move |bearer| {
-        org_router_guarded(&org, gate.clone(), bearer)
-    })
+    // The federation relay's serving half: chunks `open_relay` publishes
+    // are served over the second ALPN `files::bind_endpoint` already
+    // advertises. `serve_over_iroh` opens the org's federation-blobs
+    // store itself, lazily, on the first such connection — never at
+    // boot, and never for an org that happens not to federate.
+    let files_backend = org.files.clone();
+    files::peer::serve_over_iroh(
+        endpoint,
+        move |bearer| org_router_guarded(&org, gate.clone(), bearer),
+        Some(files_backend),
+    )
     .await;
 }
 

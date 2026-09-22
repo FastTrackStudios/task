@@ -72,6 +72,7 @@
 
 use std::collections::HashMap;
 
+use crate::error::FilesError;
 use chrono::{DateTime, Duration, Utc};
 use facet::Facet;
 use files_proto::error::FilesFault;
@@ -79,8 +80,7 @@ use files_proto::id::{ContentId, RootId, VersionId};
 use files_proto::model::{RenditionInfo, RenditionKind};
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
-use files_proto::service::federation::{ByteRange, EndpointId};
-use files_proto::service::legacy::{FilesError, FilesService};
+use files_proto::service::federation::EndpointId;
 use files_proto::service::media::{
     ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService,
 };
@@ -137,23 +137,23 @@ enum ByteSource {
     /// That is a weaker promise, made explicitly rather than by
     /// accident.
     Archive { root_id: Uuid, paths: Vec<String> },
-    /// An object on another server, pulled through as it is read.
+    /// An object on another server, fetched over iroh-blobs.
     ///
     /// `files.peering.serving`: a host without the content still answers
-    /// `read`, fetching from a host that has it. The token here is the
-    /// *origin's*, never handed to our caller — they hold an ordinary
-    /// local ticket, which is what keeps a federated file first-class
-    /// rather than a redirect.
+    /// `read`, fetching from a host that has it. Nothing here is the
+    /// *origin's* token — our caller holds an ordinary local ticket,
+    /// which is what keeps a federated file first-class rather than a
+    /// redirect.
     ///
     /// Immutable like the others: the origin pinned a content address
-    /// when it minted, so what this relays cannot change underneath a
-    /// half-served response either.
+    /// when it minted and published exactly that manifest, so what this
+    /// relays cannot change underneath a half-served response either.
+    /// The manifest was resolved once, at mint (`open_relay`'s one
+    /// authorization round trip) — every redemption after that is an
+    /// iroh-blobs fetch against `origin`, not a further vox call.
     Relay {
         origin: EndpointId,
-        /// Our authority at the origin, presented on every chunk — which
-        /// is what makes a revocation land mid-transfer.
-        secret: String,
-        token: String,
+        manifest: files_proto::service::federation::RelayManifest,
     },
 }
 
@@ -312,6 +312,32 @@ impl FilesBackend {
             .ok_or_else(|| FilesFault::invalid("no such byte ticket, or it has expired"))
     }
 
+    /// The root and file a token names, if it names a plain chunked
+    /// source object — what an origin's [`FederationService::open_relay`]
+    /// needs to find the manifest to publish.
+    ///
+    /// [`FederationService::open_relay`]: files_proto::service::federation::FederationService::open_relay
+    pub(crate) fn relay_source_for(
+        &self,
+        token: &str,
+    ) -> Result<(RootId, files_store::chunk::FileId), FilesFault> {
+        let now = Utc::now();
+        let grant = TICKETS
+            .read(self, |book| book.0.get(token).cloned())
+            .filter(|grant| grant.expires_at > now)
+            .ok_or_else(|| FilesFault::invalid("no such byte ticket, or it has expired"))?;
+        match grant.source {
+            ByteSource::Source { root_id, file_id } => {
+                let file_id = files_store::chunk::FileId::from_hex(&file_id)
+                    .map_err(|e| FilesFault::Io(format!("{file_id}: {e}")))?;
+                Ok((RootId::new(root_id), file_id))
+            }
+            _ => Err(FilesFault::invalid(
+                "this ticket has no chunk manifest to relay",
+            )),
+        }
+    }
+
     /// Stream a ticket's bytes into `dest`, honouring a range.
     ///
     /// `range` is an inclusive `(first, last)` byte pair **relative to
@@ -336,7 +362,11 @@ impl FilesBackend {
         dest: &mut W,
     ) -> Result<(), FilesFault>
     where
-        W: tokio::io::AsyncWrite + Unpin,
+        // `Send` so a relay source can pass `dest` on as the trait
+        // object `RemoteFiles::fetch_relay` takes — the concrete writers
+        // every caller passes (a file, a `Vec`, a duplex half) are all
+        // `Send` already.
+        W: tokio::io::AsyncWrite + Unpin + Send,
     {
         let now = Utc::now();
         let grant = TICKETS
@@ -376,43 +406,26 @@ impl FilesBackend {
                 .read_rendition_range(*root_id, file_id, start, len, dest)
                 .await
                 .map_err(fault),
-            ByteSource::Relay {
-                origin,
-                secret,
-                token,
-            } => {
+            ByteSource::Relay { origin, manifest } => {
+                // A zero-length grant — an origin that could not state a
+                // length, per `mint_relay_ticket` — refuses every range
+                // by having nothing to serve; matches the old chunk
+                // loop's behaviour, which never entered its `while`.
+                if len == 0 {
+                    return Ok(());
+                }
                 let Some(port) = self.remote_files() else {
                     return Err(FilesFault::Unavailable {
                         path: files_proto::path::RootPath::root(),
                     });
                 };
-                // Chunk at a time, so relaying a 4 GB reel costs one
-                // buffer here rather than 4 GB. This is the same bound
-                // the origin enforces; doing it on both sides means
-                // neither has to trust the other's arithmetic.
-                use tokio::io::AsyncWriteExt as _;
-                let mut sent = 0u64;
-                while sent < len {
-                    let want = u32::try_from((len - sent).min(u64::from(ByteRange::MAX_LEN)))
-                        .unwrap_or(ByteRange::MAX_LEN);
-                    let chunk = port
-                        .fetch_offered(origin, secret, token, ByteRange::new(start + sent, want))
-                        .await?;
-                    if chunk.is_empty() {
-                        // The origin ran out early. Truncating is the
-                        // only signal left once bytes are on the wire,
-                        // so say so rather than pad.
-                        return Err(FilesFault::Io(format!(
-                            "{origin}: relay ended {} bytes short",
-                            len - sent
-                        )));
-                    }
-                    sent += chunk.len() as u64;
-                    dest.write_all(&chunk)
-                        .await
-                        .map_err(|e| FilesFault::Io(format!("relay write: {e}")))?;
-                }
-                Ok(())
+                // The manifest was resolved once, at mint — this is an
+                // iroh-blobs fetch against `origin`, not a vox call, and
+                // bounded memory is `fetch_relay`'s job now rather than
+                // a chunk loop here: it writes to `dest` as bytes
+                // arrive, whatever it fetches them over.
+                port.fetch_relay(origin, manifest, Some((start, start + len - 1)), dest)
+                    .await
             }
             ByteSource::Archive { root_id, paths } => {
                 if range.is_some() {
@@ -536,15 +549,11 @@ impl FilesBackend {
     pub(crate) fn mint_relay_ticket(
         &self,
         origin: EndpointId,
-        secret: String,
         remote: ByteTicket,
+        manifest: files_proto::service::federation::RelayManifest,
     ) -> ByteTicket {
         self.mint(Grant {
-            source: ByteSource::Relay {
-                origin,
-                secret,
-                token: remote.token,
-            },
+            source: ByteSource::Relay { origin, manifest },
             offset: 0,
             // An origin that could not state a length minted an archive
             // or a generated stream; relaying one is not supported, and
@@ -647,7 +656,8 @@ impl MediaService for FilesBackend {
         // belongs at minting rather than at redemption: a token handed
         // out and refused later is a token that leaked the fact the file
         // exists.
-        self.authorise_caller(root_id, &path.clone().validate()?, Capability::Read)?;
+        self.authorise_caller(root_id, &path.clone().validate()?, Capability::Read)
+            .await?;
         self.ticket_for(root_id, path).await
     }
 
@@ -659,6 +669,11 @@ impl MediaService for FilesBackend {
         path: RootPath,
         version: VersionId,
     ) -> Result<ByteTicket, FilesFault> {
+        // A past version is history: reading it needs `History` as well
+        // as the path, so a reader of the current cut is not handed
+        // every draft that preceded it.
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::History).await?;
         // `commit_prefix` is the canonical conversion back to something
         // the store's prefix resolver accepts — see `VersionId`.
         self.source_ticket(root_id, &path, Some(version.commit_prefix()))
@@ -690,6 +705,17 @@ impl MediaService for FilesBackend {
                 continue;
             };
             if !chunks.has(fid).await {
+                continue;
+            }
+            // Holding the content is not enough: the caller must be able
+            // to read the root that holds it, or a content address would
+            // be a way round every grant. A root-wide read is required
+            // because the address carries no path to check a narrower
+            // grant against.
+            if crate::lane::caller::authorise_root(self, RootId::new(root.id), Capability::Read)
+                .await
+                .is_err()
+            {
                 continue;
             }
             let length = chunks
@@ -735,6 +761,7 @@ impl MediaService for FilesBackend {
     ) -> Result<Vec<RenditionInfo>, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         let path = readable(&path)?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
         let (_len, source) = self
             .resolve_source(root_id.get(), path.as_str().to_string(), None)
             .await
@@ -751,7 +778,8 @@ impl MediaService for FilesBackend {
             if !record.exists() {
                 continue;
             }
-            match FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
+            match self
+                .rendition_of(root_id.get(), path.as_str().to_string(), kind)
                 .await
             {
                 Ok(info) => out.push(info),
@@ -780,7 +808,9 @@ impl MediaService for FilesBackend {
     ) -> Result<ByteTicket, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = readable(&path)?;
-        let info = FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        let info = self
+            .rendition_of(root_id.get(), path.as_str().to_string(), kind)
             .await
             .map_err(fault)?;
         Ok(self.mint(Grant {
@@ -795,6 +825,31 @@ impl MediaService for FilesBackend {
             content_type: info.mime,
             expires_at: Utc::now() + Duration::seconds(TICKET_TTL_SECS),
         }))
+    }
+
+    /// A rendition's record, generating it once if absent. At a past
+    /// version it is that version's content's rendition — the review
+    /// screen's version switcher shows what the client saw then.
+    async fn rendition_info(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+        kind: RenditionKind,
+        at: Option<VersionId>,
+    ) -> Result<RenditionInfo, FilesFault> {
+        crate::lane::root_or_fault(self, root_id)?;
+        let path = readable(&path)?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        let rel = path.as_str().to_string();
+        match at {
+            None => self.rendition_of(root_id.get(), rel, kind).await,
+            Some(version) => {
+                crate::lane::caller::authorise(self, root_id, &path, Capability::History).await?;
+                self.rendition_of_at(root_id.get(), rel, version.commit_prefix(), kind)
+                    .await
+            }
+        }
+        .map_err(fault)
     }
 
     /// Hand a selection to an editor as a bin or a timeline.
@@ -831,6 +886,7 @@ impl MediaService for FilesBackend {
         for item in items {
             let root = crate::lane::root_or_fault(self, item.root_id)?;
             let path = readable(&item.path)?;
+            crate::lane::caller::authorise(self, item.root_id, &path, Capability::Read).await?;
             let (disk, _) = self.resolve_root_file(&root, path.as_str())?;
             if disk.symlink_metadata().is_err() {
                 return Err(FilesFault::PathNotFound(path));

@@ -846,8 +846,9 @@ impl SearchService for FilesBackend {
             return Ok(Vec::new());
         }
         let backend = self.clone();
+        let limit = query.limit;
 
-        crate::lane::blocking(move || {
+        let ranked = crate::lane::blocking(move || {
             let rows: Vec<Row> = EXTRACTED.read(&backend, |s| {
                 s.rows
                     .values()
@@ -905,12 +906,42 @@ impl SearchService for FilesBackend {
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| a.path.cmp(&b.path))
             });
-            if let Some(limit) = query.limit {
-                hits.truncate(limit as usize);
-            }
             Ok(hits)
         })
-        .await
+        .await?;
+
+        // Only what the caller may read, and the limit applied after —
+        // a search that answered from the whole index would be a way to
+        // learn what a folder you cannot open says, and one that cut
+        // before filtering would return fewer hits than exist.
+        let mut allowed: std::collections::HashMap<(RootId, RootPath), bool> =
+            std::collections::HashMap::new();
+        let mut hits = Vec::new();
+        for hit in ranked {
+            let key = (hit.root_id, hit.path.clone());
+            let ok = match allowed.get(&key) {
+                Some(ok) => *ok,
+                None => {
+                    let ok = crate::lane::caller::authorise(
+                        self,
+                        hit.root_id,
+                        &hit.path,
+                        files_proto::service::access::Capability::Read,
+                    )
+                    .await
+                    .is_ok();
+                    allowed.insert(key, ok);
+                    ok
+                }
+            };
+            if ok {
+                hits.push(hit);
+                if limit.is_some_and(|l| hits.len() >= l as usize) {
+                    break;
+                }
+            }
+        }
+        Ok(hits)
     }
 
     // t[impl files.index.extraction] — what is known about one file
@@ -921,6 +952,13 @@ impl SearchService for FilesBackend {
     ) -> Result<Vec<ExtractState>, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
+        crate::lane::caller::authorise(
+            self,
+            root_id,
+            &path,
+            files_proto::service::access::Capability::Read,
+        )
+        .await?;
         Ok(EXTRACTED.read(self, |s| {
             IMPLEMENTED
                 .iter()
@@ -952,7 +990,12 @@ impl SearchService for FilesBackend {
     // t[impl files.index.extraction] — incremental means there is a
     // remainder, and it is nameable
     async fn pending(&self, root_id: RootId) -> Result<Vec<ExtractState>, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_root(
+            self,
+            root_id,
+            files_proto::service::access::Capability::Read,
+        )
+        .await?;
         let backend = self.clone();
         crate::lane::blocking(move || {
             let paths = walk(&backend, root_id, &RootPath::root())?;
@@ -993,6 +1036,16 @@ impl SearchService for FilesBackend {
             .iter()
             .map(RootPath::validate)
             .collect::<Result<Vec<_>, _>>()?;
+        // Extraction writes sidecars into the root, so it is a write.
+        for path in &paths {
+            crate::lane::caller::authorise(
+                self,
+                root_id,
+                path,
+                files_proto::service::access::Capability::Write,
+            )
+            .await?;
+        }
         let kinds = if kinds.is_empty() {
             IMPLEMENTED.to_vec()
         } else {

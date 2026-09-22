@@ -1529,13 +1529,36 @@ async fn seed_files_demo(org: &org_proto::OrgRoot, with_divergence: bool) -> eyr
     result
 }
 
+/// Adopt an on-disk directory as a File Root and wait out the catalogue
+/// walk, so the checkpoint a seed takes next sees the whole tree.
+#[cfg(debug_assertions)]
+async fn adopt_root(
+    backend: &files::FilesBackend,
+    path: String,
+    name: String,
+    flavor: files::RootFlavor,
+) -> Result<files::FileRootInfo, files::FilesFault> {
+    let root = files::service::RootsService::adopt(
+        backend,
+        files::service::roots::AdoptRequest {
+            path,
+            name,
+            flavor,
+            hash_content: true,
+        },
+    )
+    .await?;
+    backend.settled(files::RootId::new(root.id)).await;
+    Ok(root)
+}
+
 #[cfg(debug_assertions)]
 async fn seed_files_demo_inner(
     backend: &files::FilesBackend,
     files_dir: &std::path::Path,
     with_divergence: bool,
 ) -> eyre::Result<()> {
-    let existing = files::FilesService::list_roots(backend)
+    let existing = files::service::RootsService::list(backend)
         .await
         .map_err(|e| eyre::eyre!("list roots: {e:?}"))?;
     if let Some(root) = existing.iter().find(|r| r.name == "Demo Project") {
@@ -1543,11 +1566,12 @@ async fn seed_files_demo_inner(
         // present yet (e.g. a prior `--no-divergence` run), so a re-run
         // never reports success with nothing for the #267 UI to resolve.
         if with_divergence {
-            let has_divergence = files::FilesService::divergences(backend, root.id)
-                .await
-                .map_err(|e| eyre::eyre!("divergences: {e:?}"))?
-                .iter()
-                .any(|d| d.path == "edit.mov");
+            let has_divergence =
+                files::service::VersionService::divergences(backend, files::RootId::new(root.id))
+                    .await
+                    .map_err(|e| eyre::eyre!("divergences: {e:?}"))?
+                    .iter()
+                    .any(|d| d.path == "edit.mov");
             if !has_divergence {
                 backend
                     .seed_divergent_file(
@@ -1581,7 +1605,7 @@ async fn seed_files_demo_inner(
         b"# Editorial notes\n\n- assembly cut\n",
     )?;
 
-    let root = files::FilesService::create_root(
+    let root = adopt_root(
         backend,
         root_dir.to_string_lossy().into_owned(),
         "Demo Project".to_owned(),
@@ -1589,9 +1613,13 @@ async fn seed_files_demo_inner(
     )
     .await
     .map_err(|e| eyre::eyre!("create root: {e:?}"))?;
-    files::FilesService::checkpoint_now(backend, root.id, Some("Initial import".to_owned()))
-        .await
-        .map_err(|e| eyre::eyre!("checkpoint 1: {e:?}"))?;
+    files::service::VersionService::checkpoint(
+        backend,
+        files::RootId::new(root.id),
+        Some("Initial import".to_owned()),
+    )
+    .await
+    .map_err(|e| eyre::eyre!("checkpoint 1: {e:?}"))?;
 
     // A revision, checkpointed and given a Named Version.
     std::fs::write(root_dir.join("edit.mov"), b"reel v2 - rough cut")?;
@@ -1599,13 +1627,17 @@ async fn seed_files_demo_inner(
         root_dir.join("notes.md"),
         b"# Editorial notes\n\n- assembly cut\n- rough cut: tightened the intro\n",
     )?;
-    let cp2 = files::FilesService::checkpoint_now(backend, root.id, Some("Rough cut".to_owned()))
-        .await
-        .map_err(|e| eyre::eyre!("checkpoint 2: {e:?}"))?;
-    files::FilesService::name_version(
+    let cp2 = files::service::VersionService::checkpoint(
         backend,
-        root.id,
-        cp2.commit_id.clone(),
+        files::RootId::new(root.id),
+        Some("Rough cut".to_owned()),
+    )
+    .await
+    .map_err(|e| eyre::eyre!("checkpoint 2: {e:?}"))?;
+    files::service::CurationService::name_version(
+        backend,
+        files::RootId::new(root.id),
+        files::id::VersionId::from_commit_hex(&cp2.commit_id),
         "Rough Cut v1".to_owned(),
     )
     .await
@@ -1613,9 +1645,13 @@ async fn seed_files_demo_inner(
 
     // A third revision.
     std::fs::write(root_dir.join("edit.mov"), b"reel v3 - color pass")?;
-    files::FilesService::checkpoint_now(backend, root.id, Some("Color pass".to_owned()))
-        .await
-        .map_err(|e| eyre::eyre!("checkpoint 3: {e:?}"))?;
+    files::service::VersionService::checkpoint(
+        backend,
+        files::RootId::new(root.id),
+        Some("Color pass".to_owned()),
+    )
+    .await
+    .map_err(|e| eyre::eyre!("checkpoint 3: {e:?}"))?;
 
     // A divergence on edit.mov, for the #267 resolution UI (on by
     // default; `--no-divergence` skips it).
@@ -2061,7 +2097,7 @@ async fn seed_studio_files_inner(
     with_divergence: bool,
 ) -> eyre::Result<()> {
     let existing: std::collections::HashMap<String, files::FileRootInfo> =
-        files::FilesService::list_roots(backend)
+        files::service::RootsService::list(backend)
             .await
             .map_err(|e| eyre::eyre!("list roots: {e:?}"))?
             .into_iter()
@@ -2083,13 +2119,15 @@ async fn seed_studio_files_inner(
         root_id: uuid::Uuid,
         probe: &str,
     ) -> eyre::Result<bool> {
-        Ok(
-            files::FilesService::chain(backend, root_id, probe.to_owned())
-                .await
-                .map_err(|e| eyre::eyre!("chain {probe}: {e:?}"))?
-                .len()
-                >= 2,
+        Ok(files::service::VersionService::chain(
+            backend,
+            files::RootId::new(root_id),
+            files::RootPath::parse(probe).map_err(|e| eyre::eyre!("path {probe}: {e}"))?,
         )
+        .await
+        .map_err(|e| eyre::eyre!("chain {probe}: {e:?}"))?
+        .len()
+            >= 2)
     }
 
     let mut planted = 0usize;
@@ -2123,7 +2161,7 @@ async fn seed_studio_files_inner(
                     format!("# {name}\n\n- assembly cut\n"),
                 )?;
 
-                let root = files::FilesService::create_root(
+                let root = adopt_root(
                     backend,
                     root_dir.to_string_lossy().into_owned(),
                     (*name).to_owned(),
@@ -2131,9 +2169,9 @@ async fn seed_studio_files_inner(
                 )
                 .await
                 .map_err(|e| eyre::eyre!("create root {name}: {e:?}"))?;
-                files::FilesService::checkpoint_now(
+                files::service::VersionService::checkpoint(
                     backend,
-                    root.id,
+                    files::RootId::new(root.id),
                     Some("Initial import".to_owned()),
                 )
                 .await
@@ -2155,15 +2193,18 @@ async fn seed_studio_files_inner(
                 root_dir.join("notes.md"),
                 format!("# {name}\n\n- assembly cut\n- rough cut: tightened intro\n"),
             )?;
-            let cp2 =
-                files::FilesService::checkpoint_now(backend, root.id, Some("Rough cut".to_owned()))
-                    .await
-                    .map_err(|e| eyre::eyre!("checkpoint 2 {name}: {e:?}"))?;
+            let cp2 = files::service::VersionService::checkpoint(
+                backend,
+                files::RootId::new(root.id),
+                Some("Rough cut".to_owned()),
+            )
+            .await
+            .map_err(|e| eyre::eyre!("checkpoint 2 {name}: {e:?}"))?;
             if wants_name {
-                files::FilesService::name_version(
+                files::service::CurationService::name_version(
                     backend,
-                    root.id,
-                    cp2.commit_id.clone(),
+                    files::RootId::new(root.id),
+                    files::id::VersionId::from_commit_hex(&cp2.commit_id),
                     "Rough Cut v1".to_owned(),
                 )
                 .await
@@ -2174,11 +2215,12 @@ async fn seed_studio_files_inner(
         // Divergence top-up (the #267 UI's fixture) — on the NOTES
         // file, so the playable cut stays playable.
         if wants_divergence {
-            let has = files::FilesService::divergences(backend, root.id)
-                .await
-                .map_err(|e| eyre::eyre!("divergences {name}: {e:?}"))?
-                .iter()
-                .any(|d| d.path == "notes.md");
+            let has =
+                files::service::VersionService::divergences(backend, files::RootId::new(root.id))
+                    .await
+                    .map_err(|e| eyre::eyre!("divergences {name}: {e:?}"))?
+                    .iter()
+                    .any(|d| d.path == "notes.md");
             if !has {
                 backend
                     .seed_divergent_file(
@@ -2220,7 +2262,7 @@ async fn seed_studio_files_inner(
                     format!("# {album}\n\nTracking + mix files, one folder per song.\n"),
                 )?;
 
-                let root = files::FilesService::create_root(
+                let root = adopt_root(
                     backend,
                     root_dir.to_string_lossy().into_owned(),
                     root_name.clone(),
@@ -2228,9 +2270,13 @@ async fn seed_studio_files_inner(
                 )
                 .await
                 .map_err(|e| eyre::eyre!("create root {root_name}: {e:?}"))?;
-                files::FilesService::checkpoint_now(backend, root.id, Some("Tracking".to_owned()))
-                    .await
-                    .map_err(|e| eyre::eyre!("checkpoint {root_name}: {e:?}"))?;
+                files::service::VersionService::checkpoint(
+                    backend,
+                    files::RootId::new(root.id),
+                    Some("Tracking".to_owned()),
+                )
+                .await
+                .map_err(|e| eyre::eyre!("checkpoint {root_name}: {e:?}"))?;
                 planted += 1;
                 root
             }
@@ -2244,17 +2290,17 @@ async fn seed_studio_files_inner(
                     topped_up += 1;
                 }
                 seed_audio_file(&root_dir.join(first).join("mix.wav"), ffmpeg, 445)?;
-                let cp = files::FilesService::checkpoint_now(
+                let cp = files::service::VersionService::checkpoint(
                     backend,
-                    root.id,
+                    files::RootId::new(root.id),
                     Some("Mix v1".to_owned()),
                 )
                 .await
                 .map_err(|e| eyre::eyre!("checkpoint 2 {root_name}: {e:?}"))?;
-                files::FilesService::name_version(
+                files::service::CurationService::name_version(
                     backend,
-                    root.id,
-                    cp.commit_id,
+                    files::RootId::new(root.id),
+                    files::id::VersionId::from_commit_hex(&cp.commit_id),
                     "Mix v1".to_owned(),
                 )
                 .await
@@ -2303,7 +2349,7 @@ fn webdav(args: &[String]) -> eyre::Result<()> {
                 .wrap_err_with(|| format!("{name} takes a root id, got `{raw}`"))?;
             // Refuse an id this org does not have — a typo'd uuid would
             // otherwise be accepted silently and hide nothing.
-            let roots = pollster::block_on(files::FilesService::list_roots(&backend))
+            let roots = pollster::block_on(files::service::RootsService::list(&backend))
                 .map_err(|e| eyre::eyre!("list roots: {e}"))?;
             if !roots.iter().any(|r| r.id == id) {
                 bail!("org `{slug}` has no File Root {id}");
@@ -2319,7 +2365,7 @@ fn webdav(args: &[String]) -> eyre::Result<()> {
         }
     }
 
-    let roots = pollster::block_on(files::FilesService::list_roots(&backend))
+    let roots = pollster::block_on(files::service::RootsService::list(&backend))
         .map_err(|e| eyre::eyre!("list roots: {e}"))?;
     if roots.is_empty() {
         println!("{slug}: no File Roots");

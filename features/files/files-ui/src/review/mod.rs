@@ -43,9 +43,11 @@
 //! sky/emerald = compare sides A/B. All numerals are mono + tabular.
 
 use dioxus::prelude::*;
+use files_proto::service::media::Region;
+use files_proto::service::review::{NewComment, ReviewEvent};
 use files_proto::{
-    AnnotationPoint, AnnotationStroke, FilesEvent, NewReviewComment, RenditionKind, Review,
-    ReviewComment,
+    AnnotationPoint, AnnotationStroke, CommentId, FilesEvent, RenditionKind, Review, ReviewComment,
+    ReviewId, RootId, RootPath, VersionId,
 };
 use uuid::Uuid;
 
@@ -80,22 +82,16 @@ pub fn is_video_path(path: &str) -> bool {
 /// `None` when the project has no adopted root, no video deliverable,
 /// or no rendition yet — the caller's card simply stays textual.
 pub async fn deliverable_poster(org: &str, root_name: &str) -> Option<String> {
-    let c = crate::client(org).await.ok()?;
-    let root = c
-        .list_roots()
-        .await
-        .ok()?
-        .into_iter()
-        .find(|r| r.name == root_name)?;
-    let file = c
-        .browse(root.id, "Deliverables".to_owned())
-        .await
-        .ok()?
+    let root = crate::root_named(org, root_name).await?;
+    let file = browse_in(org, root.id, "Deliverables")
+        .await?
         .into_iter()
         .find(|e| !e.is_dir && is_video_path(&e.name))?;
-    let path = format!("Deliverables/{}", file.name);
-    let proxy = c
-        .rendition(root.id, path, RenditionKind::Proxy720)
+    let path = RootPath::parse(format!("Deliverables/{}", file.name)).ok()?;
+    let proxy = crate::media(org)
+        .await
+        .ok()?
+        .rendition_info(RootId::new(root.id), path, RenditionKind::Proxy720, None)
         .await
         .ok()?;
     let tok =
@@ -140,11 +136,9 @@ pub struct ReviewTaskHook(pub EventHandler<ReviewTaskRequest>);
 /// fall back to its outstanding state instead of mounting a player
 /// over a hole.
 pub async fn locate_in_root(org: &str, root_name: &str, path: &str) -> Option<(Uuid, String)> {
-    let c = crate::client(org).await.ok()?;
-    let roots = c.list_roots().await.ok()?;
-    let root = roots.into_iter().find(|r| r.name == root_name)?;
+    let root = crate::root_named(org, root_name).await?;
     let (dir, file) = path.rsplit_once('/').unwrap_or(("", path));
-    let entries = c.browse(root.id, dir.to_owned()).await.ok()?;
+    let entries = browse_in(org, root.id, dir).await?;
     entries
         .iter()
         .any(|e| !e.is_dir && e.name == file)
@@ -166,10 +160,8 @@ pub fn is_audio_path(path: &str) -> bool {
 /// extension — the review-side half of the "file named like the item"
 /// binding convention. `None` = not adopted / not delivered yet.
 pub async fn locate_titled(org: &str, root_name: &str, title: &str) -> Option<(Uuid, String)> {
-    let c = crate::client(org).await.ok()?;
-    let roots = c.list_roots().await.ok()?;
-    let root = roots.into_iter().find(|r| r.name == root_name)?;
-    let entries = c.browse(root.id, "Deliverables".to_owned()).await.ok()?;
+    let root = crate::root_named(org, root_name).await?;
+    let entries = browse_in(org, root.id, "Deliverables").await?;
     let file = entries.into_iter().find(|e| {
         !e.is_dir
             && (is_video_path(&e.name) || is_audio_path(&e.name))
@@ -181,17 +173,23 @@ pub async fn locate_titled(org: &str, root_name: &str, title: &str) -> Option<(U
     Some((root.id, format!("Deliverables/{}", file.name)))
 }
 
-/// The guest lane's "what can I see": its one review.
-pub async fn guest_scoped_review(org: &str) -> Result<Review, String> {
-    let reviews = crate::client(org)
-        .await?
-        .list_reviews(None)
+/// One directory of a root's live tree, `None` on any failure — the
+/// locate helpers' "not there (yet)".
+async fn browse_in(org: &str, root: Uuid, dir: &str) -> Option<Vec<files_proto::BrowseEntry>> {
+    crate::tree(org)
         .await
-        .map_err(|e| e.to_string())?;
-    reviews
-        .into_iter()
-        .next()
-        .ok_or_else(|| "this link has no review attached".to_string())
+        .ok()?
+        .browse(RootId::new(root), RootPath::parse(dir).ok()?)
+        .await
+        .ok()
+}
+
+/// The guest lane's "what can I see": its one review, named by the
+/// link's scope.
+pub async fn guest_scoped_review(org: &str) -> Result<Review, String> {
+    let lane = crate::reviews(org).await?;
+    let scope = lane.scope().await.map_err(|e| e.to_string())?;
+    lane.review(scope.review).await.map_err(|e| e.to_string())
 }
 
 // ── streaming sources ─────────────────────────────────────────────
@@ -236,16 +234,14 @@ pub(crate) async fn resolve_sources(
     path: &str,
     at: Option<String>,
 ) -> Result<Sources, String> {
-    let c = crate::client(org).await?;
+    let c = crate::media(org).await?;
+    let file = RootPath::parse(path).map_err(|e| e.to_string())?;
+    // A pin is the chain row's full commit id — what a `VersionId`
+    // round-trips.
+    let at = at.as_deref().map(VersionId::from_commit_hex);
     let rendition = |kind: RenditionKind| {
-        let c = c.clone();
-        let at = at.clone();
-        async move {
-            match at {
-                Some(commit) => c.rendition_at(root_id, path.to_owned(), commit, kind).await,
-                None => c.rendition(root_id, path.to_owned(), kind).await,
-            }
-        }
+        let (c, file) = (c.clone(), file.clone());
+        async move { c.rendition_info(RootId::new(root_id), file, kind, at).await }
     };
     // Video first; an audio file has no Proxy720, so fall through to
     // its own ladder (AAC stream + waveform peaks). One surface, both
@@ -287,9 +283,10 @@ pub(crate) async fn find_review(
     root_id: Uuid,
     path: &str,
 ) -> Result<Option<Review>, String> {
-    crate::client(org)
+    let path = RootPath::parse(path).map_err(|e| e.to_string())?;
+    crate::reviews(org)
         .await?
-        .find_review(root_id, path.to_owned())
+        .find(RootId::new(root_id), path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -297,9 +294,10 @@ pub(crate) async fn find_review(
 /// Get-or-create the file's review — called when feedback actually
 /// starts (the first comment), never on mount.
 pub(crate) async fn ensure_review(org: &str, root_id: Uuid, path: &str) -> Result<Review, String> {
-    crate::client(org)
+    let path = RootPath::parse(path).map_err(|e| e.to_string())?;
+    crate::reviews(org)
         .await?
-        .review_for_file(root_id, path.to_owned())
+        .for_file(RootId::new(root_id), path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -308,30 +306,64 @@ pub(crate) async fn fetch_comments(
     org: &str,
     review_id: Uuid,
 ) -> Result<Vec<ReviewComment>, String> {
-    crate::client(org)
+    crate::reviews(org)
         .await?
-        .review_comments(review_id)
+        .comments(ReviewId::new(review_id))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// What the comment box collected, before it is placed on the wire.
+pub(crate) struct CommentDraft {
+    /// The pinned moment, or [`UNPINNED`] for a general note.
+    pub timecode_secs: f64,
+    pub author: String,
+    pub body: String,
+    /// The full commit id of the version on screen.
+    pub commit_id: String,
+    pub strokes: Vec<AnnotationStroke>,
 }
 
 pub(crate) async fn post_comment(
     org: &str,
     review_id: Uuid,
-    comment: NewReviewComment,
+    draft: CommentDraft,
 ) -> Result<ReviewComment, String> {
-    crate::client(org)
+    crate::reviews(org)
         .await?
-        .add_review_comment(review_id, comment)
+        .comment(NewComment {
+            review: ReviewId::new(review_id),
+            version: VersionId::from_commit_hex(&draft.commit_id),
+            region: comment_region(draft.timecode_secs),
+            body: draft.body,
+            strokes: draft.strokes,
+            author: draft.author,
+        })
         .await
         .map_err(|e| e.to_string())
 }
 
+/// Where a comment sits in the media: a pinned moment is a zero-length
+/// time region; a general note is about the whole file.
+fn comment_region(timecode_secs: f64) -> Region {
+    if is_pinned(timecode_secs) {
+        // f64→u64 `as` saturates and maps NaN to 0.
+        let ms = (timecode_secs * 1000.0).round() as u64;
+        Region::Time {
+            start_ms: ms,
+            end_ms: ms,
+        }
+    } else {
+        Region::Whole
+    }
+}
+
 pub(crate) async fn remove_comment(org: &str, id: Uuid) -> Result<(), String> {
-    crate::client(org)
+    crate::reviews(org)
         .await?
-        .delete_review_comment(id)
+        .delete_comment(CommentId::new(id))
         .await
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
@@ -742,9 +774,9 @@ pub(crate) fn use_review_data(
         move |event: FilesEvent| {
             let mut comments = comments;
             let touched = match &event {
-                FilesEvent::ReviewCommentAdded(c) | FilesEvent::ReviewCommentDeleted(c) => {
-                    Some(c.review_id)
-                }
+                FilesEvent::Review(
+                    ReviewEvent::CommentAdded(c) | ReviewEvent::CommentDeleted(c),
+                ) => Some(c.review_id),
                 _ => None,
             };
             if touched.is_some() && touched == *review_id.peek() {

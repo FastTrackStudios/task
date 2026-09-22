@@ -39,9 +39,17 @@ pub mod review;
 
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
+use files_proto::service::roots::RootEvent;
+use files_proto::service::sync::SyncEvent;
+use files_proto::service::tree::TreeEvent;
+use files_proto::service::upload::UploadEvent;
+use files_proto::service::version::{Resolution, VersionEvent};
+use files_proto::service::write::WriteEvent;
 use files_proto::{
-    BrowseEntry, ChainEntry, DivergenceChoice, DivergenceInfo, FileRootInfo, FilesEvent,
-    FilesServiceClient, FilesServiceStreamClient, ProjectVersion,
+    BrowseEntry, ChainEntry, CheckpointInfo, CurationServiceClient, DivergenceChoice,
+    DivergenceInfo, FileRootInfo, FilesEvent, MediaServiceClient, ProjectVersion,
+    ReviewServiceClient, RootId, RootPath, RootsServiceClient, SnapshotInfo, TreeServiceClient,
+    TreeServiceStreamClient, VersionId, VersionServiceClient,
 };
 use task_ui_core::orgs::{OrgMeta, OrgSelection};
 use task_widgets::{WidgetCtx, WidgetMatch, WidgetSpec, WidgetTarget};
@@ -62,17 +70,44 @@ pub(crate) fn placement_label(root: &files_proto::model::FileRootInfo) -> String
 const NOTE_TYPE: &str = "file-root";
 
 // ── RPC ───────────────────────────────────────────────────────────
+//
+// One typed client per Files lane, each a cheap view over the org's
+// one cached vox connection. On a share-link boot that connection is
+// the guest's, so the review surface reaches the guest router's lanes
+// through these same constructors.
 
-async fn client(org: &str) -> Result<FilesServiceClient, String> {
-    task_ui_core::vox_clients::establish_for::<FilesServiceClient>(org).await
+async fn roots(org: &str) -> Result<RootsServiceClient, String> {
+    task_ui_core::vox_clients::establish_for::<RootsServiceClient>(org).await
+}
+
+async fn tree(org: &str) -> Result<TreeServiceClient, String> {
+    task_ui_core::vox_clients::establish_for::<TreeServiceClient>(org).await
+}
+
+async fn versions(org: &str) -> Result<VersionServiceClient, String> {
+    task_ui_core::vox_clients::establish_for::<VersionServiceClient>(org).await
+}
+
+async fn curation(org: &str) -> Result<CurationServiceClient, String> {
+    task_ui_core::vox_clients::establish_for::<CurationServiceClient>(org).await
+}
+
+async fn media(org: &str) -> Result<MediaServiceClient, String> {
+    task_ui_core::vox_clients::establish_for::<MediaServiceClient>(org).await
+}
+
+async fn reviews(org: &str) -> Result<ReviewServiceClient, String> {
+    task_ui_core::vox_clients::establish_for::<ReviewServiceClient>(org).await
+}
+
+/// A root-relative path as the lanes take it. The UI's paths come from
+/// listings, so a refusal here is a bug worth showing, not swallowing.
+fn root_path(path: &str) -> Result<RootPath, String> {
+    RootPath::parse(path).map_err(|e| e.to_string())
 }
 
 async fn fetch_roots(org: &str) -> Result<Vec<FileRootInfo>, String> {
-    client(org)
-        .await?
-        .list_roots()
-        .await
-        .map_err(|e| e.to_string())
+    roots(org).await?.list().await.map_err(|e| e.to_string())
 }
 
 /// The adopted root named `name`, if any — the convention project
@@ -88,18 +123,24 @@ pub async fn root_named(org: &str, name: &str) -> Option<FileRootInfo> {
 }
 
 async fn fetch_entries(org: &str, scope: &Location) -> Result<Vec<BrowseEntry>, String> {
-    let c = client(org).await?;
     match scope {
-        Location::Root { id, subpath } => c.browse(*id, subpath.clone()).await,
-        Location::Drive { path } => c.drive_browse(path.clone()).await,
+        Location::Root { id, subpath } => tree(org)
+            .await?
+            .browse(RootId::new(*id), root_path(subpath)?)
+            .await
+            .map_err(|e| e.to_string()),
+        Location::Drive { path } => roots(org)
+            .await?
+            .browse_area(path.clone())
+            .await
+            .map_err(|e| e.to_string()),
     }
-    .map_err(|e| e.to_string())
 }
 
 async fn fetch_chain(org: &str, root: Uuid, path: String) -> Result<Vec<ChainEntry>, String> {
-    client(org)
+    versions(org)
         .await?
-        .chain(root, path)
+        .chain(RootId::new(root), root_path(&path)?)
         .await
         .map_err(|e| e.to_string())
 }
@@ -107,19 +148,25 @@ async fn fetch_chain(org: &str, root: Uuid, path: String) -> Result<Vec<ChainEnt
 // ── History & divergence mutations (issue #267) ───────────────────
 
 async fn fetch_divergences(org: &str, root: Uuid) -> Result<Vec<DivergenceInfo>, String> {
-    client(org)
+    versions(org)
         .await?
-        .divergences(root)
+        .divergences(RootId::new(root))
         .await
         .map_err(|e| e.to_string())
 }
 
 /// Restore one file's state from a past checkpoint into the live tree
-/// (the `copy_forward` verb). `path` is the file's path *in that commit*.
+/// (the `copy_forward` verb). `path` is the file's path *in that commit*;
+/// `commit` is the chain row's full commit id, which is what a
+/// [`VersionId`] round-trips.
 async fn restore_file(org: &str, root: Uuid, commit: String, path: String) -> Result<(), String> {
-    client(org)
+    versions(org)
         .await?
-        .copy_forward(root, commit, vec![path])
+        .copy_forward(
+            RootId::new(root),
+            VersionId::from_commit_hex(&commit),
+            vec![root_path(&path)?],
+        )
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -127,9 +174,9 @@ async fn restore_file(org: &str, root: Uuid, commit: String, path: String) -> Re
 
 /// Name a checkpoint — creates the Named Version Vault entity.
 async fn name_a_version(org: &str, root: Uuid, commit: String, name: String) -> Result<(), String> {
-    client(org)
+    curation(org)
         .await?
-        .name_version(root, commit, name)
+        .name_version(RootId::new(root), VersionId::from_commit_hex(&commit), name)
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -137,15 +184,42 @@ async fn name_a_version(org: &str, root: Uuid, commit: String, name: String) -> 
 
 /// Resolve a divergent file — Pick a side or KeepBoth — writing the
 /// merge checkpoint that carries the decision.
+///
+/// The lane addresses a divergence by one of its sides' versions and
+/// speaks mine/theirs: side 0 is the head the live tree sits on
+/// ("mine"), any other side arrived beside it ("theirs"). A three-way
+/// divergence has no single "theirs", and the lane refuses a keep-theirs
+/// there rather than guess.
 async fn resolve_a_divergence(
     org: &str,
     root: Uuid,
-    path: String,
+    info: &DivergenceInfo,
     choice: DivergenceChoice,
 ) -> Result<(), String> {
-    client(org)
+    let first = info
+        .sides
+        .first()
+        .ok_or_else(|| format!("{}: no sides to resolve", info.path))?;
+    let (commit, resolution) = match choice {
+        DivergenceChoice::Pick { commit_id } if commit_id == first.commit_id => {
+            (commit_id, Resolution::KeepMine)
+        }
+        DivergenceChoice::Pick { commit_id } => (commit_id, Resolution::KeepTheirs),
+        DivergenceChoice::KeepBoth => (
+            first.commit_id.clone(),
+            Resolution::KeepBoth {
+                mine: String::new(),
+                theirs: String::new(),
+            },
+        ),
+    };
+    versions(org)
         .await?
-        .resolve_divergence(root, path, choice)
+        .resolve_divergence(
+            RootId::new(root),
+            VersionId::from_commit_hex(&commit),
+            resolution,
+        )
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -185,9 +259,9 @@ async fn mint_named_version_link(
     root_id: Uuid,
     commit_id: &str,
 ) -> Result<String, String> {
-    let c = client(org).await?;
-    let named = c
-        .list_named_versions(Some(root_id))
+    let named = curation(org)
+        .await?
+        .named_versions(Some(RootId::new(root_id)), None)
         .await
         .map_err(|e| e.to_string())?;
     let version = named
@@ -340,16 +414,65 @@ pub(crate) fn use_files_events(
                     return false;
                 }
                 let Ok(stream) =
-                    task_ui_core::vox_clients::establish_for::<FilesServiceStreamClient>(&slug)
+                    task_ui_core::vox_clients::establish_for::<TreeServiceStreamClient>(&slug)
                         .await
                 else {
                     return false;
                 };
-                stream.events(tx).await.is_ok()
+                // Every root the caller can see — each surface filters
+                // for its own root in `on_event`. A guest's stream is
+                // narrowed to its review server-side.
+                stream.events(None, tx).await.is_ok()
             }
         },
         on_event,
     );
+}
+
+/// The root whose live listing `event` can move, if any — what a
+/// listing (or a divergence panel reading the same heads) restarts on.
+/// Curation and review traffic writes vault pages, never a listing, so
+/// it answers `None`; so does a new root, which callers handle
+/// themselves (it can adopt loose files out from under Drive).
+pub(crate) fn listing_root(event: &FilesEvent) -> Option<Uuid> {
+    match event {
+        FilesEvent::Version(
+            VersionEvent::Checkpointed(CheckpointInfo { root_id, .. })
+            | VersionEvent::Snapshotted(SnapshotInfo { root_id, .. }),
+        ) => Some(*root_id),
+        FilesEvent::Version(
+            VersionEvent::Diverged(info) | VersionEvent::DivergenceResolved(info),
+        ) => Some(info.root_id),
+        FilesEvent::Sync(SyncEvent::HydrationChanged(change)) => Some(change.root_id),
+        // A delta names its root per entry; a removal-only delta names
+        // none, and the write that removed them reports its own.
+        FilesEvent::Tree(TreeEvent::Changed(delta)) => {
+            delta.changed.first().map(|e| e.root_id.get())
+        }
+        FilesEvent::Write(
+            WriteEvent::Moved(receipt) | WriteEvent::Copied(receipt) | WriteEvent::Deleted(receipt),
+        ) => Some(receipt.root_id.get()),
+        FilesEvent::Write(WriteEvent::Created(entries)) => entries.first().map(|e| e.root_id.get()),
+        FilesEvent::Upload(UploadEvent::Completed(entry)) => Some(entry.root_id.get()),
+        _ => None,
+    }
+}
+
+/// Whether `event` changes the org's roots list — a root appearing,
+/// renamed, or released — which every root picker re-reads on.
+pub(crate) fn roots_changed(event: &FilesEvent) -> bool {
+    matches!(
+        event,
+        FilesEvent::Root(RootEvent::Created(_) | RootEvent::Renamed(_) | RootEvent::Released(_))
+    )
+}
+
+/// The root a checkpoint landed on — what moves a file's chain head.
+pub(crate) fn checkpointed_root(event: &FilesEvent) -> Option<Uuid> {
+    match event {
+        FilesEvent::Version(VersionEvent::Checkpointed(info)) => Some(info.root_id),
+        _ => None,
+    }
 }
 
 // ── The explorer ── the Spacedrive-style shell lives in `explorer` ──
@@ -410,7 +533,7 @@ pub fn FilesSidebar() -> Element {
         move || org(),
         move |event: FilesEvent| {
             let mut roots = roots;
-            if matches!(event, FilesEvent::RootCreated(_)) {
+            if roots_changed(&event) {
                 roots.restart();
             }
         },
@@ -507,7 +630,7 @@ pub fn FilesPane() -> Element {
         move || org(),
         move |event: FilesEvent| {
             let mut roots = roots;
-            if matches!(event, FilesEvent::RootCreated(_)) {
+            if roots_changed(&event) {
                 roots.restart();
             }
         },

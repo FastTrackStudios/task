@@ -17,7 +17,14 @@ use std::io::Cursor;
 use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::{FilesBackend, FilesServiceClient, RootFlavor, files_service_layer};
+use files::id::{CommentId, ReviewId, RootId, VersionId};
+use files::service::media::Region;
+use files::service::review::NewComment;
+use files::service::roots::AdoptRequest;
+use files::{
+    CurationServiceClient, FileRootInfo, FilesBackend, ReviewServiceClient, RootFlavor, RootPath,
+    RootsServiceClient, VersionServiceClient,
+};
 use files_store::version::VersionStoreBackend;
 use jj_lib::backend::{
     Backend as _, ChangeId, Commit, CommitId, FileId, MillisSinceEpoch, Signature, Timestamp, Tree,
@@ -39,7 +46,73 @@ struct Fixture {
     backend: FilesBackend,
     scope: std::sync::Arc<Scope>,
     _local: LocalServer,
-    client: FilesServiceClient,
+    client: Rpc,
+}
+
+/// The v2 lanes this file drives, mounted as the org router mounts
+/// them. No gate stands in front, so every call is the server's own.
+fn router(backend: FilesBackend) -> LayerRouter {
+    LayerRouter::new()
+        .merge(files::roots_layer(backend.clone()))
+        .merge(files::version_layer(backend.clone()))
+        .merge(files::curation_layer(backend.clone()))
+        .merge(files::review_layer(backend))
+}
+
+/// One client per lane.
+struct Rpc {
+    roots: RootsServiceClient,
+    version: VersionServiceClient,
+    curation: CurationServiceClient,
+    review: ReviewServiceClient,
+}
+
+async fn connect(local: &LocalServer) -> Rpc {
+    Rpc {
+        roots: local.establish().await.expect("establish roots client"),
+        version: local.establish().await.expect("establish version client"),
+        curation: local.establish().await.expect("establish curation client"),
+        review: local.establish().await.expect("establish review client"),
+    }
+}
+
+/// Adopt `dir` and wait out the walk behind the return. Structure only
+/// (`hash_content: false`), as the old `create_root` was: an adoption
+/// capture would put a commit in the store before any test asked for
+/// one, and several below count commits exactly.
+async fn adopt(
+    client: &Rpc,
+    backend: &FilesBackend,
+    dir: &std::path::Path,
+    name: &str,
+    flavor: RootFlavor,
+) -> FileRootInfo {
+    let root = client
+        .roots
+        .adopt(AdoptRequest {
+            path: dir.to_str().unwrap().to_string(),
+            name: name.to_string(),
+            flavor,
+            hash_content: false,
+        })
+        .await
+        .unwrap_or_else(|e| panic!("adopt {name}: {e:?}"));
+    backend.settled(RootId::new(root.id)).await;
+    root
+}
+
+fn rid(root_id: uuid::Uuid) -> RootId {
+    RootId::new(root_id)
+}
+
+/// A version by its full commit hex — what a checkpoint or the chain
+/// reports, and the only spelling a `VersionId` round-trips.
+fn vid(commit_hex: impl AsRef<str>) -> VersionId {
+    VersionId::from_commit_hex(commit_hex.as_ref())
+}
+
+fn rp(p: &str) -> RootPath {
+    RootPath::parse(p).expect("valid root path")
 }
 
 async fn fixture(root_name: &str) -> Fixture {
@@ -50,20 +123,10 @@ async fn fixture(root_name: &str) -> Fixture {
 
     let backend = FilesBackend::new(data.path(), vault.path()).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(
-        LayerRouter::new().merge(files_service_layer(backend.clone())),
-        scope.clone(),
-    );
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
-    client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            root_name.to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create_root rpc");
+    adopt(&client, &backend, &root_dir, root_name, RootFlavor::Media).await;
 
     Fixture {
         data_dir: data.path().to_path_buf(),
@@ -80,7 +143,7 @@ async fn fixture(root_name: &str) -> Fixture {
 
 impl Fixture {
     async fn root_id(&self) -> uuid::Uuid {
-        self.client.list_roots().await.expect("list_roots")[0].id
+        self.client.roots.list().await.expect("list")[0].id
     }
 
     /// Tear the backend all the way down — flush its chunk stores,
@@ -151,20 +214,23 @@ async fn naming_a_version_shows_up_in_the_chain_as_curated_metadata() {
     std::fs::write(fx.root_dir.join("mix.wav"), b"take one").unwrap();
     let cp1 = fx
         .client
-        .checkpoint_now(root_id, Some("first save".into()))
+        .version
+        .checkpoint(rid(root_id), Some("first save".into()))
         .await
         .expect("checkpoint_now rpc");
     std::fs::write(fx.root_dir.join("mix.wav"), b"take two, brighter").unwrap();
     let cp2 = fx
         .client
-        .checkpoint_now(root_id, None)
+        .version
+        .checkpoint(rid(root_id), None)
         .await
         .expect("checkpoint_now rpc");
 
     // Before naming, the chain is uncurated.
     let chain = fx
         .client
-        .chain(root_id, "mix.wav".into())
+        .version
+        .chain(rid(root_id), rp("mix.wav"))
         .await
         .expect("chain rpc");
     assert!(
@@ -174,7 +240,12 @@ async fn naming_a_version_shows_up_in_the_chain_as_curated_metadata() {
 
     let named = fx
         .client
-        .name_version(root_id, cp1.commit_id.clone(), "v3 for client".into())
+        .curation
+        .name_version(
+            rid(root_id),
+            vid(cp1.commit_id.clone()),
+            "v3 for client".into(),
+        )
         .await
         .expect("name_version rpc");
     assert_eq!(named.name, "v3 for client");
@@ -186,7 +257,8 @@ async fn naming_a_version_shows_up_in_the_chain_as_curated_metadata() {
 
     let chain = fx
         .client
-        .chain(root_id, "mix.wav".into())
+        .version
+        .chain(rid(root_id), rp("mix.wav"))
         .await
         .expect("chain rpc");
     let curated: Vec<_> = chain
@@ -210,7 +282,12 @@ async fn naming_a_version_shows_up_in_the_chain_as_curated_metadata() {
     // Naming twice under one name is a conflict, not a silent second page.
     assert!(
         fx.client
-            .name_version(root_id, cp2.commit_id.clone(), "v3 for client".into())
+            .curation
+            .name_version(
+                rid(root_id),
+                vid(cp2.commit_id.clone()),
+                "v3 for client".into()
+            )
             .await
             .is_err(),
         "a root's Named Version names are unique"
@@ -219,7 +296,8 @@ async fn naming_a_version_shows_up_in_the_chain_as_curated_metadata() {
     // Naming a commit that isn't in this root's store is rejected.
     assert!(
         fx.client
-            .name_version(root_id, "ab".repeat(32), "bogus".into())
+            .curation
+            .name_version(rid(root_id), vid("ab".repeat(32)), "bogus".into())
             .await
             .is_err(),
         "a Named Version can't reference a commit the store doesn't have"
@@ -242,12 +320,14 @@ async fn naming_a_version_shows_up_in_the_chain_as_curated_metadata() {
 
     // `unname_version` drops the curation and leaves the chain alone.
     fx.client
-        .unname_version(named.id)
+        .curation
+        .unname_version(rid(root_id), VersionId::new(named.id))
         .await
         .expect("unname_version rpc");
     let chain = fx
         .client
-        .chain(root_id, "mix.wav".into())
+        .version
+        .chain(rid(root_id), rp("mix.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 2, "the automatic chain is untouched");
@@ -311,6 +391,46 @@ async fn write_unreachable_commit(
     (commit_id, chunk_id)
 }
 
+/// A Named Version of `commit_hex` — a commit the store holds but its
+/// index cannot reach, like the ones [`write_unreachable_commit`] makes.
+///
+/// The curation lane cannot name one of those itself: it takes a
+/// `VersionId`, the commit's leading 128 bits, and a prefix resolves
+/// only through the index. The legacy RPC took the full hex and could.
+/// What still reaches such a commit is a page that arrives with the
+/// Vault — hand-written or replicated, both of which the tests below
+/// already exercise — and that page is all the protect set reads. So:
+/// name a reachable stand-in over RPC (which writes a real page with a
+/// real id), then point the page at the commit that matters.
+async fn plant_named_version(
+    fx: &Fixture,
+    root_id: uuid::Uuid,
+    commit_hex: &str,
+    name: &str,
+) -> files::NamedVersion {
+    std::fs::write(fx.root_dir.join(format!("stand-in for {name}.txt")), name).unwrap();
+    let stand_in = fx
+        .client
+        .version
+        .checkpoint(rid(root_id), Some(format!("stand-in for {name}")))
+        .await
+        .expect("checkpoint rpc");
+    let named = fx
+        .client
+        .curation
+        .name_version(rid(root_id), vid(&stand_in.commit_id), name.into())
+        .await
+        .expect("name_version rpc");
+    let page = fx.vault_dir.join(&named.path);
+    let body = std::fs::read_to_string(&page).unwrap();
+    assert!(body.contains(&named.commit_id), "{body}");
+    std::fs::write(&page, body.replace(&named.commit_id, commit_hex)).unwrap();
+    files::NamedVersion {
+        commit_id: commit_hex.to_string(),
+        ..named
+    }
+}
+
 /// AC 2: "GC sweeps an unnamed old checkpoint but never a Named
 /// Version's content."
 ///
@@ -338,16 +458,14 @@ async fn gc_sweeps_the_unnamed_old_checkpoint_and_never_the_named_one() {
             .expect("with_version_store")
     });
 
-    fx.client
-        .name_version(root_id, kept_commit.hex(), "v3 for client".into())
-        .await
-        .expect("name_version rpc");
+    plant_named_version(&fx, root_id, &kept_commit.hex(), "v3 for client").await;
 
     // Both commits are older than this pass's concurrent-writer guard.
     tokio::time::sleep(Duration::from_millis(20)).await;
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("gc_root rpc");
     assert_eq!(
@@ -395,16 +513,19 @@ async fn gc_sweeps_the_unnamed_old_checkpoint_and_never_the_named_one() {
     // set really is read from the Vault every time, not baked in.
     let named = fx
         .client
-        .list_named_versions(Some(root_id))
+        .curation
+        .named_versions(Some(rid(root_id)), None)
         .await
         .expect("list_named_versions rpc");
     fx.client
-        .unname_version(named[0].id)
+        .curation
+        .unname_version(rid(root_id), VersionId::new(named[0].id))
         .await
         .expect("unname_version rpc");
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("gc_root rpc");
     assert_eq!(report.protected_commits, 0);
@@ -432,23 +553,31 @@ async fn version_entities_replicate_with_the_vault_and_re_resolve_elsewhere() {
     std::fs::write(fx.root_dir.join("master.wav"), b"master v1").unwrap();
     let cp1 = fx
         .client
-        .checkpoint_now(root_id, Some("master".into()))
+        .version
+        .checkpoint(rid(root_id), Some("master".into()))
         .await
         .expect("checkpoint_now rpc");
 
     let named = fx
         .client
-        .name_version(root_id, cp1.commit_id.clone(), "v1 approved".into())
+        .curation
+        .name_version(
+            rid(root_id),
+            vid(cp1.commit_id.clone()),
+            "v1 approved".into(),
+        )
         .await
         .expect("name_version rpc");
     let pv1 = fx
         .client
-        .start_project_version(root_id, None)
+        .curation
+        .start_project_version(rid(root_id), String::new())
         .await
         .expect("start_project_version rpc");
     let pv2 = fx
         .client
-        .start_project_version(root_id, Some("Client remix".into()))
+        .curation
+        .start_project_version(rid(root_id), "Client remix".into())
         .await
         .expect("start_project_version rpc");
     assert_eq!((pv1.number, pv2.number), (1, 2), "auto-numbered from 1");
@@ -484,14 +613,12 @@ async fn version_entities_replicate_with_the_vault_and_re_resolve_elsewhere() {
 
     let backend = FilesBackend::new(&data_dir, other_vault.path()).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(
-        LayerRouter::new().merge(files_service_layer(backend.clone())),
-        scope.clone(),
-    );
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
     let replicated = client
-        .list_named_versions(Some(root_id))
+        .curation
+        .named_versions(Some(rid(root_id)), None)
         .await
         .expect("list_named_versions rpc");
     assert_eq!(replicated.len(), 1);
@@ -499,7 +626,8 @@ async fn version_entities_replicate_with_the_vault_and_re_resolve_elsewhere() {
     assert_eq!(replicated[0].name, "v1 approved");
 
     let resolved = client
-        .resolve_named_version(named.id)
+        .curation
+        .named_version(named.id)
         .await
         .expect("resolve_named_version rpc");
     assert_eq!(resolved.root_id, root_id);
@@ -507,7 +635,8 @@ async fn version_entities_replicate_with_the_vault_and_re_resolve_elsewhere() {
     assert_eq!(resolved.change_id, named.change_id);
 
     let project_versions = client
-        .list_project_versions(root_id)
+        .curation
+        .project_versions(rid(root_id))
         .await
         .expect("list_project_versions rpc");
     assert_eq!(
@@ -538,7 +667,8 @@ async fn version_entities_replicate_with_the_vault_and_re_resolve_elsewhere() {
     .unwrap();
 
     let after_sync = client
-        .list_project_versions(root_id)
+        .curation
+        .project_versions(rid(root_id))
         .await
         .expect("list_project_versions rpc");
     assert_eq!(
@@ -547,7 +677,8 @@ async fn version_entities_replicate_with_the_vault_and_re_resolve_elsewhere() {
         "a page that arrived by replication is visible on the next scan"
     );
     let pv3 = client
-        .start_project_version(root_id, None)
+        .curation
+        .start_project_version(rid(root_id), String::new())
         .await
         .expect("start_project_version rpc");
     assert_eq!(
@@ -572,12 +703,18 @@ async fn share_link_targeting_resolves_to_the_exact_change() {
     std::fs::write(fx.root_dir.join("cut.mov"), b"rough cut").unwrap();
     let cp1 = fx
         .client
-        .checkpoint_now(root_id, Some("rough cut".into()))
+        .version
+        .checkpoint(rid(root_id), Some("rough cut".into()))
         .await
         .expect("checkpoint_now rpc");
     let named = fx
         .client
-        .name_version(root_id, cp1.commit_id.clone(), "v2 for client".into())
+        .curation
+        .name_version(
+            rid(root_id),
+            vid(cp1.commit_id.clone()),
+            "v2 for client".into(),
+        )
         .await
         .expect("name_version rpc");
 
@@ -585,14 +722,16 @@ async fn share_link_targeting_resolves_to_the_exact_change() {
     for take in ["fine cut", "final"] {
         std::fs::write(fx.root_dir.join("cut.mov"), take).unwrap();
         fx.client
-            .checkpoint_now(root_id, None)
+            .version
+            .checkpoint(rid(root_id), None)
             .await
             .expect("checkpoint_now rpc");
     }
 
     let resolved = fx
         .client
-        .resolve_named_version(named.id)
+        .curation
+        .named_version(named.id)
         .await
         .expect("resolve_named_version rpc");
     assert_eq!(resolved.root_id, root_id);
@@ -606,7 +745,8 @@ async fn share_link_targeting_resolves_to_the_exact_change() {
     // The resolved change is the one the chain attributes the name to.
     let chain = fx
         .client
-        .chain(root_id, "cut.mov".into())
+        .version
+        .chain(rid(root_id), rp("cut.mov"))
         .await
         .expect("chain rpc");
     let entry = chain
@@ -617,11 +757,12 @@ async fn share_link_targeting_resolves_to_the_exact_change() {
 
     // A link whose target was un-named no longer resolves.
     fx.client
-        .unname_version(named.id)
+        .curation
+        .unname_version(rid(root_id), VersionId::new(named.id))
         .await
         .expect("unname_version rpc");
     assert!(
-        fx.client.resolve_named_version(named.id).await.is_err(),
+        fx.client.curation.named_version(named.id).await.is_err(),
         "a revoked Named Version resolves to nothing"
     );
 
@@ -658,11 +799,7 @@ async fn a_broken_version_page_stops_gc_but_a_stale_reference_does_not() {
             })
             .expect("with_version_store")
     });
-    let named = fx
-        .client
-        .name_version(root_id, kept_commit.hex(), "keeper".into())
-        .await
-        .expect("name_version rpc");
+    let named = plant_named_version(&fx, root_id, &kept_commit.hex(), "keeper").await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     // Corrupt the page the way a hand-edit or a bad merge would.
@@ -672,7 +809,8 @@ async fn a_broken_version_page_stops_gc_but_a_stale_reference_does_not() {
 
     let err = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect_err("an unreadable version page must abort the sweep");
     assert!(
@@ -702,7 +840,8 @@ async fn a_broken_version_page_stops_gc_but_a_stale_reference_does_not() {
     std::fs::write(&page, &original).unwrap();
     let pv = fx
         .client
-        .start_project_version(root_id, None)
+        .curation
+        .start_project_version(rid(root_id), String::new())
         .await
         .expect("start_project_version rpc");
     let pv_page = fx.vault_dir.join(&pv.path);
@@ -711,7 +850,8 @@ async fn a_broken_version_page_stops_gc_but_a_stale_reference_does_not() {
 
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("a stale reference must not wedge gc");
     assert_eq!(
@@ -736,44 +876,62 @@ async fn a_broken_version_page_stops_gc_but_a_stale_reference_does_not() {
     fx.finish().await;
 }
 
-/// `task files chain` prints a twelve-character commit prefix, and the
-/// CLI tells the user to paste it into `version name` — so the service
-/// has to accept an unambiguous prefix, and reject an ambiguous one
-/// rather than pick.
+/// A `VersionId` is the commit's leading 128 bits — itself a *prefix*
+/// of the commit, which the store resolves back to the whole id. So the
+/// service has to resolve that prefix to the one commit it names, and
+/// refuse an id that addresses nothing rather than pick.
+///
+/// This test used to pass the twelve-character prefix `task files
+/// chain` prints straight to `name_version`. The v2 lane takes a typed
+/// `VersionId`, which only round-trips a full commit hex, so expanding a
+/// short user-typed prefix is now the CLI's job (against `chain`), and
+/// what is left to pin here is the resolution the lane itself does.
 #[tokio::test(flavor = "multi_thread")]
-async fn naming_accepts_the_commit_prefix_the_chain_prints() {
+async fn naming_resolves_a_version_id_to_the_full_commit() {
     let fx = fixture("Prefixes").await;
     let root_id = fx.root_id().await;
 
     std::fs::write(fx.root_dir.join("take.wav"), b"one").unwrap();
     let cp1 = fx
         .client
-        .checkpoint_now(root_id, None)
+        .version
+        .checkpoint(rid(root_id), None)
         .await
-        .expect("checkpoint_now rpc");
+        .expect("checkpoint rpc");
+    let version = vid(&cp1.commit_id);
+    assert!(
+        cp1.commit_id.len() > version.commit_prefix().len(),
+        "a media commit id is longer than the prefix a VersionId carries"
+    );
 
     let named = fx
         .client
-        .name_version(root_id, cp1.commit_id[..12].to_string(), "v1".into())
+        .curation
+        .name_version(rid(root_id), version, "v1".into())
         .await
-        .expect("a twelve-character prefix must resolve");
+        .expect("a VersionId's prefix must resolve");
     assert_eq!(
         named.commit_id, cp1.commit_id,
         "the entity records the full id it resolved to"
     );
 
-    // An empty prefix matches everything, so it must be refused.
+    // A well-formed id addressing no commit here must be refused rather
+    // than silently pick one. (Not the empty string, as the old prefix
+    // test used: `VersionId::from_commit_hex("")` is the nil id, whose
+    // prefix is all zeros — the store's root commit, which exists.)
     assert!(
         fx.client
-            .name_version(root_id, String::new(), "v2".into())
+            .curation
+            .name_version(rid(root_id), vid("cd".repeat(32)), "v2".into())
             .await
             .is_err(),
-        "an ambiguous (here: empty) prefix must not silently pick a commit"
+        "an id naming no commit must not silently pick one"
     );
     // Not hex at all.
     assert!(
         fx.client
-            .name_version(root_id, "not-a-commit".into(), "v3".into())
+            .curation
+            .name_version(rid(root_id), vid("not-a-commit"), "v3".into())
             .await
             .is_err()
     );
@@ -874,7 +1032,8 @@ async fn a_checkpoint_written_behind_the_cache_survives_gc() {
 
     std::fs::write(fx.root_dir.join("mix.wav"), b"server take").unwrap();
     fx.client
-        .checkpoint_now(root_id, Some("server".into()))
+        .version
+        .checkpoint(rid(root_id), Some("server".into()))
         .await
         .expect("checkpoint_now rpc");
 
@@ -889,7 +1048,8 @@ async fn a_checkpoint_written_behind_the_cache_survives_gc() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("gc_root rpc");
     assert_eq!(report.manifests_swept, 0, "nothing here is garbage");
@@ -911,7 +1071,8 @@ async fn a_checkpoint_written_behind_the_cache_survives_gc() {
     // through the commit the cache had never heard of.
     let chain = fx
         .client
-        .chain(root_id, "mix.wav".into())
+        .version
+        .chain(rid(root_id), rp("mix.wav"))
         .await
         .expect("chain rpc");
     assert!(
@@ -944,10 +1105,7 @@ async fn a_foreign_broken_page_does_not_block_this_roots_gc() {
             })
             .expect("with_version_store")
     });
-    fx.client
-        .name_version(root_id, kept_commit.hex(), "keeper".into())
-        .await
-        .expect("name_version rpc");
+    plant_named_version(&fx, root_id, &kept_commit.hex(), "keeper").await;
 
     // Another root's version page, malformed.
     let foreign = fx.vault_dir.join("Files/some-other-root/versions/v1.md");
@@ -972,7 +1130,8 @@ async fn a_foreign_broken_page_does_not_block_this_roots_gc() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("a page outside this root's folder must not block its sweep");
     assert_eq!(report.protected_commits, 1);
@@ -1017,7 +1176,8 @@ async fn a_prefix_page_gcs_fine_and_an_empty_commit_id_does_not_wedge() {
     std::fs::write(fx.root_dir.join("keeper.wav"), b"the deliverable").unwrap();
     let cp = fx
         .client
-        .checkpoint_now(root_id, Some("keeper".into()))
+        .version
+        .checkpoint(rid(root_id), Some("keeper".into()))
         .await
         .expect("checkpoint_now rpc");
     let swept_chunk = tokio::task::block_in_place(|| {
@@ -1029,7 +1189,8 @@ async fn a_prefix_page_gcs_fine_and_an_empty_commit_id_does_not_wedge() {
     });
     let named = fx
         .client
-        .name_version(root_id, cp.commit_id.clone(), "keeper".into())
+        .curation
+        .name_version(rid(root_id), vid(cp.commit_id.clone()), "keeper".into())
         .await
         .expect("name_version rpc");
 
@@ -1062,7 +1223,8 @@ async fn a_prefix_page_gcs_fine_and_an_empty_commit_id_does_not_wedge() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("a prefix id and an empty id must both leave gc working");
     assert_eq!(
@@ -1073,7 +1235,8 @@ async fn a_prefix_page_gcs_fine_and_an_empty_commit_id_does_not_wedge() {
 
     // Still working on the next pass — the point of "does not wedge".
     fx.client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("gc stays healthy on subsequent passes");
     let swept_present = tokio::task::block_in_place(|| {
@@ -1098,11 +1261,7 @@ async fn a_prefix_page_gcs_fine_and_an_empty_commit_id_does_not_wedge() {
             })
             .expect("with_version_store")
     });
-    let orphan_named = fx
-        .client
-        .name_version(root_id, orphan.hex(), "orphan".into())
-        .await
-        .expect("name_version rpc");
+    let orphan_named = plant_named_version(&fx, root_id, &orphan.hex(), "orphan").await;
     let orphan_page = fx.vault_dir.join(&orphan_named.path);
     let orphan_body = std::fs::read_to_string(&orphan_page).unwrap();
     std::fs::write(
@@ -1110,10 +1269,12 @@ async fn a_prefix_page_gcs_fine_and_an_empty_commit_id_does_not_wedge() {
         orphan_body.replace(&orphan_named.commit_id, &orphan_named.commit_id[..12]),
     )
     .unwrap();
-    let err =
-        fx.client.gc_root(root_id, Some(0)).await.expect_err(
-            "an unresolvable abbreviation must stop the sweep, not forfeit the content",
-        );
+    let err = fx
+        .client
+        .version
+        .collect(rid(root_id), Some(0))
+        .await
+        .expect_err("an unresolvable abbreviation must stop the sweep, not forfeit the content");
     assert!(
         format!("{err}").contains(&orphan_named.path),
         "the error names the page to fix: {err}"
@@ -1141,29 +1302,32 @@ async fn curation_works_the_same_on_a_software_root() {
 
     let backend = FilesBackend::new(data.path(), vault.path()).expect("backend");
     let scope = Scope::new();
-    let local = LocalServer::serve(
-        LayerRouter::new().merge(files_service_layer(backend.clone())),
-        scope.clone(),
-    );
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let local = LocalServer::serve(router(backend.clone()), scope.clone());
+    let client = connect(&local).await;
 
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Synth Plugin".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software)");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Synth Plugin",
+        RootFlavor::Software,
+    )
+    .await;
     let cp1 = client
-        .checkpoint_now(root.id, Some("v1".into()))
+        .version
+        .checkpoint(rid(root.id), Some("v1".into()))
         .await
         .expect("checkpoint_now rpc");
 
     // Naming resolves against git's objects through jj's `Backend`
     // trait, exactly as the chain does.
     let named = client
-        .name_version(root.id, cp1.commit_id.clone(), "v1 for review".into())
+        .curation
+        .name_version(
+            rid(root.id),
+            vid(cp1.commit_id.clone()),
+            "v1 for review".into(),
+        )
         .await
         .expect("name_version on a software root");
     assert_eq!(named.commit_id, cp1.commit_id);
@@ -1173,11 +1337,13 @@ async fn curation_works_the_same_on_a_software_root() {
     // page — same as any media root.
     std::fs::write(root_dir.join("main.rs"), b"fn main() { todo!() }\n").unwrap();
     client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(rid(root.id), None)
         .await
         .expect("checkpoint_now rpc");
     let chain = client
-        .chain(root.id, "main.rs".into())
+        .version
+        .chain(rid(root.id), rp("main.rs"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 2, "{chain:?}");
@@ -1196,21 +1362,24 @@ async fn curation_works_the_same_on_a_software_root() {
 
     // Project Versions too — numbering is Vault-side, not store-side.
     let pv = client
-        .start_project_version(root.id, Some("rewrite".into()))
+        .curation
+        .start_project_version(rid(root.id), "rewrite".into())
         .await
         .expect("start_project_version on a software root");
     assert_eq!(pv.number, 1);
 
     // Share-link targeting still resolves to the exact change.
     let resolved = client
-        .resolve_named_version(named.id)
+        .curation
+        .named_version(named.id)
         .await
         .expect("resolve_named_version rpc");
     assert_eq!(resolved.commit_id, cp1.commit_id);
 
     // The sweep is the one verb that is genuinely media-only.
     let err = client
-        .gc_root(root.id, None)
+        .version
+        .collect(rid(root.id), None)
         .await
         .expect_err("gc_root must refuse a software root");
     let message = format!("{err}");
@@ -1235,8 +1404,10 @@ async fn gc_never_sweeps_a_commit_a_review_comment_pins() {
 
     // A tracked file, so the review can exist at all.
     std::fs::write(fx.root_dir.join("cut.mov"), vec![7u8; 1024]).unwrap();
-    fx.client
-        .checkpoint_now(root_id, None)
+    let head = fx
+        .client
+        .version
+        .checkpoint(rid(root_id), None)
         .await
         .expect("checkpoint");
 
@@ -1256,27 +1427,45 @@ async fn gc_never_sweeps_a_commit_a_review_comment_pins() {
 
     let review = fx
         .client
-        .review_for_file(root_id, "cut.mov".into())
+        .review
+        .for_file(rid(root_id), rp("cut.mov"))
         .await
         .expect("review");
-    fx.client
-        .add_review_comment(
-            review.id,
-            files_proto::NewReviewComment {
-                timecode_secs: 4.0,
-                author: "Client".into(),
-                body: "this is the take".into(),
-                commit_id: pinned_commit.hex(),
-                annotation: Vec::new(),
+    // The lane pins a comment by `VersionId` — a 128-bit prefix, which
+    // resolves only through the index, so it cannot pin a commit the
+    // index can't reach (the legacy call took the full hex and could).
+    // Comment on the head over RPC, then point the comment's page at the
+    // old version, exactly as a page arriving with the Vault would.
+    let comment = fx
+        .client
+        .review
+        .comment(NewComment {
+            review: ReviewId::new(review.id),
+            version: vid(&head.commit_id),
+            region: Region::Time {
+                start_ms: 4_000,
+                end_ms: 4_000,
             },
-        )
+            body: "this is the take".into(),
+            strokes: Vec::new(),
+            author: "Client".into(),
+        })
         .await
-        .expect("comment pinning the old version");
+        .expect("comment on the head");
+    let page = fx.vault_dir.join(&comment.path);
+    let body = std::fs::read_to_string(&page).unwrap();
+    assert!(body.contains(&comment.commit_id), "{body}");
+    std::fs::write(
+        &page,
+        body.replace(&comment.commit_id, &pinned_commit.hex()),
+    )
+    .unwrap();
 
     tokio::time::sleep(Duration::from_millis(20)).await;
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("gc_root rpc");
     assert_eq!(
@@ -1305,16 +1494,19 @@ async fn gc_never_sweeps_a_commit_a_review_comment_pins() {
     // Delete the comment and the same pass now sweeps the pin.
     let comments = fx
         .client
-        .review_comments(review.id)
+        .review
+        .comments(ReviewId::new(review.id))
         .await
         .expect("comments");
     fx.client
-        .delete_review_comment(comments[0].id)
+        .review
+        .delete_comment(CommentId::new(comments[0].id))
         .await
         .expect("delete comment");
     let report = fx
         .client
-        .gc_root(root_id, Some(0))
+        .version
+        .collect(rid(root_id), Some(0))
         .await
         .expect("gc_root rpc");
     assert_eq!(report.protected_commits, 0);

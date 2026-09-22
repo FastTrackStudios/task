@@ -7,18 +7,14 @@
 // workspace, which is the case the lint's own note says to suppress.
 #![allow(async_fn_in_trait)]
 
-//! Wire contract for the Files feature (GitHub issue #255, ADR 0001 —
-//! `apps/task/docs/adr/0001-files-version-store-jj-cas.md`). This
-//! ticket (#259) is the RPC surface v1: create a File Root from an
-//! existing folder, browse it, read a file's version chain, trigger a
-//! checkpoint on demand. Issue #261 adds the curated half — Named
-//! Versions and Project Versions, which are *Vault* entities
-//! referencing `(root id, change id)` rather than store constructs,
-//! plus the Vault-protected GC pass that makes them immortal.
+//! Wire contract for the Files feature (ADR 0001, ADR 0005): one lane
+//! per section of `features/files/spec/files.md` — see [`service`] for
+//! the map. There is one Files API; the v1 `FilesService` it replaced is
+//! gone.
 //!
 //! This proto owns the wasm-clean wire surface — [`model`]'s types plus
-//! the [`service::FilesService`] trait. The sibling `files` crate sits
-//! on top and owns the version-store-backed [`FilesBackend`](../files/struct.FilesBackend.html)
+//! the lane traits. The sibling `files` crate sits on top and owns the
+//! version-store-backed [`FilesBackend`](../files/struct.FilesBackend.html)
 //! side, exactly like `milestone` sits on top of `milestone-proto`.
 
 pub mod consts;
@@ -35,12 +31,10 @@ pub use model::{
     NamedVersion, NewReviewComment, ProjectVersion, RenditionInfo, RenditionKind, RestartMode,
     Review, ReviewComment, RootFlavor, SavePoint, SnapshotInfo, TreeNode, VersionRef,
 };
-// v1, re-exported at the crate root it has always occupied so downstream
-// is untouched. `service::FilesEvent` is the *new* nested stream; the
-// root re-export flips to it when the last lane has migrated.
-pub use service::legacy::{FilesError, FilesEvent, FilesService};
+// The one live stream's payload — every lane's events, nested by lane.
+pub use service::FilesEvent;
 
-// The lane traits — the target surface. See [`service`] for the map from
+// The lane traits — the surface. See [`service`] for the map from
 // each to its section of `features/files/spec/files.md`.
 pub use error::FilesFault;
 pub use id::{
@@ -53,28 +47,7 @@ pub use service::{
     SearchService, SyncService, TreeService, UploadService, VersionService, WriteService,
 };
 
-// architect-emitted vox bits: the async client / dispatcher / descriptor
-// / serve helpers. Mount sites stitch the descriptor + `serve` into the
-// org router; the web UI binds the client.
-#[cfg(feature = "vox")]
-pub use service::legacy::{
-    FilesServiceClient, FilesServiceRpcDispatcher as FilesDispatcher,
-    Service as FilesServiceBridge,
-    files_service_rpc_service_descriptor as files_service_descriptor, layer as files_service_layer,
-    serve as serve_files_service,
-};
-
-// `#[subscribe] fn events` stream sibling — live root/checkpoint
-// changes. Mount `files_service_stream_layer(backend)` next to the base
-// service; subscribers drive a `FilesServiceStreamClient`.
-#[cfg(feature = "vox")]
-pub use service::legacy::{
-    FilesServiceStream, FilesServiceStreamClient, FilesServiceStreamSource,
-    files_service_stream_service_descriptor as files_stream_descriptor,
-    stream_layer as files_service_stream_layer, stream_serve as serve_files_service_stream,
-};
-
-// The v2 lanes' architect-emitted vox bits, one group per module.
+// The lanes' architect-emitted vox bits, one group per module.
 // Each lane mounts independently — a descriptor plus `serve` stitched
 // into the org router — so migrating one does not disturb the rest.
 // A lane is granted in `permits.rs` in the same change that mounts it,
@@ -155,6 +128,15 @@ pub use service::version::{
 pub use service::write::{
     WriteServiceClient, WriteServiceRpcDispatcher as WriteDispatcher, layer as write_layer,
     serve as serve_write, write_service_rpc_service_descriptor as write_descriptor,
+};
+
+// The v2 live stream — `TreeService::events`, every lane's changes on one
+// subscription. Mounted beside the tree lane; granted in `permits.rs`.
+#[cfg(feature = "vox")]
+pub use service::tree::{
+    TreeServiceStream, TreeServiceStreamClient, TreeServiceStreamSource,
+    stream_layer as tree_stream_layer, stream_serve as serve_tree_stream,
+    tree_service_stream_service_descriptor as tree_stream_descriptor,
 };
 
 // The byte lane's stream sibling. Bytes ride vox like everything else;

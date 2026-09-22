@@ -505,14 +505,14 @@ where
 /// it went would leave a partial write when it hit the path the caller
 /// may not touch — and `files.write.surface` exists precisely so a
 /// structural change is one operation that happened or did not.
-fn authorise_all(
+async fn authorise_all(
     backend: &FilesBackend,
     root_id: RootId,
     paths: &[RootPath],
     capability: Capability,
 ) -> Result<(), FilesFault> {
     for path in paths {
-        backend.authorise_caller(root_id, path, capability)?;
+        backend.authorise_caller(root_id, path, capability).await?;
     }
     Ok(())
 }
@@ -529,7 +529,7 @@ impl WriteService for FilesBackend {
         root_id: RootId,
         paths: Vec<RootPath>,
     ) -> Result<WriteReceipt, FilesFault> {
-        authorise_all(self, root_id, &paths, Capability::Write)?;
+        authorise_all(self, root_id, &paths, Capability::Write).await?;
         let this = self.clone();
         let description = format!("create {} director{}", paths.len(), plural_y(paths.len()));
         crate::lane::blocking(move || {
@@ -575,7 +575,8 @@ impl WriteService for FilesBackend {
         path: RootPath,
         name: String,
     ) -> Result<WriteReceipt, FilesFault> {
-        self.authorise_caller(root_id, &path, Capability::Write)?;
+        self.authorise_caller(root_id, &path, Capability::Write)
+            .await?;
         let this = self.clone();
         let description = format!("rename {path} to {name}");
         crate::lane::blocking(move || {
@@ -628,13 +629,15 @@ impl WriteService for FilesBackend {
             root_id,
             &moves.iter().map(|r| r.from.clone()).collect::<Vec<_>>(),
             Capability::Write,
-        )?;
+        )
+        .await?;
         authorise_all(
             self,
             root_id,
             &moves.iter().map(|r| r.to.clone()).collect::<Vec<_>>(),
             Capability::Write,
-        )?;
+        )
+        .await?;
         let this = self.clone();
         let description = format!("move {} path{}", moves.len(), plural_s(moves.len()));
         crate::lane::blocking(move || {
@@ -691,13 +694,15 @@ impl WriteService for FilesBackend {
             root_id,
             &copies.iter().map(|r| r.from.clone()).collect::<Vec<_>>(),
             Capability::Write,
-        )?;
+        )
+        .await?;
         authorise_all(
             self,
             root_id,
             &copies.iter().map(|r| r.to.clone()).collect::<Vec<_>>(),
             Capability::Write,
-        )?;
+        )
+        .await?;
         let this = self.clone();
         let description = format!("copy {} path{}", copies.len(), plural_s(copies.len()));
         crate::lane::blocking(move || {
@@ -752,7 +757,7 @@ impl WriteService for FilesBackend {
         root_id: RootId,
         paths: Vec<RootPath>,
     ) -> Result<WriteReceipt, FilesFault> {
-        authorise_all(self, root_id, &paths, Capability::Write)?;
+        authorise_all(self, root_id, &paths, Capability::Write).await?;
         let this = self.clone();
         let description = format!("delete {} path{}", paths.len(), plural_s(paths.len()));
         crate::lane::blocking(move || {
@@ -805,7 +810,7 @@ impl WriteService for FilesBackend {
         // the building, and a client who may review the mix is not
         // thereby a client who may keep it — the distinction the client
         // account exists to test.
-        authorise_all(self, root_id, &paths, Capability::Download)?;
+        authorise_all(self, root_id, &paths, Capability::Download).await?;
         let root = crate::lane::root_or_fault(self, root_id)?;
         if paths.is_empty() {
             return Err(FilesFault::invalid("an archive needs at least one path"));

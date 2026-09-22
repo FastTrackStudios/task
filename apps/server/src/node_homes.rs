@@ -109,6 +109,10 @@ pub fn library_of(kind: NodeKind) -> Option<&'static str> {
         | NodeKind::Entity
         | NodeKind::Block
         | NodeKind::Project
+        // A collection is not library material and is not published by
+        // one: it is an org's own arrangement of references, the way a
+        // note is its own writing.
+        | NodeKind::Collection
         | NodeKind::External => return None,
     })
 }

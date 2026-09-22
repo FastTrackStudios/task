@@ -232,13 +232,17 @@ impl PermissionEngine for HostEngine {
 /// served with no gate at all: nothing at the call site says an identity
 /// is missing, because an ungated router answers every call perfectly
 /// well.
-pub async fn serve_over_iroh<H, F>(endpoint: &architect::iroh_link::iroh::Endpoint, make: F)
-where
+pub async fn serve_over_iroh<H, F>(
+    endpoint: &architect::iroh_link::iroh::Endpoint,
+    make: F,
+    relay: Option<FilesBackend>,
+) where
     F: Fn(Option<String>) -> H + Send + Sync + Clone + 'static,
     H: architect::vox::Handler<architect::vox::DriverReplySink> + Clone + Send + Sync + 'static,
 {
     while let Some(incoming) = endpoint.accept().await {
         let make = make.clone();
+        let relay = relay.clone();
         tokio::spawn(async move {
             let connection = match incoming.await {
                 Ok(connection) => connection,
@@ -247,6 +251,44 @@ where
                     return;
                 }
             };
+
+            // ALPN is negotiated once per QUIC connection (see
+            // `IrohRemotes::bind_endpoint`'s doc), so this is which of
+            // the two protocols this connection is — vox's org router,
+            // or an iroh-blobs relay fetch. Neither ever mixes with the
+            // other on one connection.
+            if connection.alpn() == iroh_blobs::ALPN {
+                let Some(relay) = relay else {
+                    tracing::debug!(
+                        "peering: iroh-blobs connection with no relay store to serve it from"
+                    );
+                    return;
+                };
+                // Opened here, on the first iroh-blobs connection this
+                // org ever receives — not at boot for every org. An
+                // `FsStore` open spawns its own dedicated tokio runtime
+                // (issue: it wants its own blocking-safe pool), so doing
+                // this eagerly for every org at every startup — most of
+                // which never federate — was a real regression, not a
+                // theoretical one: it starved the test suite of threads
+                // running hundreds of servers at once. `federation_blobs`
+                // is itself a `OnceCell`, so every connection after the
+                // first reuses the same open store.
+                let store = match relay.federation_blobs().await {
+                    Ok(store) => store,
+                    Err(err) => {
+                        tracing::warn!(%err, "peering: federation-blobs store failed to open");
+                        return;
+                    }
+                };
+                let blobs = iroh_blobs::BlobsProtocol::new(store, None);
+                use architect::iroh_link::iroh::protocol::ProtocolHandler as _;
+                if let Err(err) = blobs.accept(connection).await {
+                    tracing::debug!(%err, "peering: iroh-blobs connection ended");
+                }
+                return;
+            }
+
             // Proved by the handshake, not asserted by the caller.
             let bearer = format!("{HOST_BEARER_PREFIX}{}", connection.remote_id());
             let handler = make(Some(bearer));

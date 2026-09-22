@@ -19,7 +19,11 @@ use files_domain::adopt::Adoption;
 use files_proto::error::FilesFault;
 use files_proto::id::RootId;
 use files_proto::model::FileRootInfo;
-use files_proto::service::roots::{AdoptRequest, AdoptionPhase, AdoptionProgress, RootsService};
+use files_proto::path::RootPath;
+use files_proto::service::FilesEvent;
+use files_proto::service::roots::{
+    AdoptRequest, AdoptionPhase, AdoptionProgress, CreateRequest, RootEvent, RootsService,
+};
 
 use crate::backend::FilesBackend;
 
@@ -256,6 +260,9 @@ impl RootsService for FilesBackend {
     // t[impl files.adopt.in-place] — nothing is moved, copied or renamed
     // t[impl files.adopt.catalogue-first] — returns before the walk finishes
     async fn adopt(&self, request: AdoptRequest) -> Result<FileRootInfo, FilesFault> {
+        // Adoption names a path on the server's disk, so it is an
+        // owner's or admin's act — not every member's.
+        crate::lane::caller::authorise_steward(self).await?;
         let this = self.clone();
         let AdoptRequest {
             path,
@@ -276,12 +283,61 @@ impl RootsService for FilesBackend {
         let driver = self.clone();
         tokio::spawn(async move { driver.drive_adoption(root_id).await });
 
+        // `register_root` already published `RootEvent::Created`.
         Ok(root)
+    }
+
+    // t[impl files.adopt.create] — a root for a client with no server path
+    async fn create(&self, request: CreateRequest) -> Result<FileRootInfo, FilesFault> {
+        let CreateRequest { dir, name, flavor } = request;
+        if name.trim().is_empty() {
+            return Err(FilesFault::invalid("a root's name may not be empty"));
+        }
+        // A new root is new content, so anyone whose role lets them write
+        // in the org may make one. A person holding only grants — a
+        // client on one folder — may not: minting a root would give them
+        // a place in the org nobody granted.
+        if !crate::lane::caller::baseline(self)
+            .await
+            .contains(&files_proto::service::access::Capability::Write)
+        {
+            return Err(FilesFault::denied("create a root", RootPath::root()));
+        }
+        let rel = RootPath::parse(dir.trim_matches('/'))?;
+        if rel.is_root() {
+            return Err(FilesFault::invalid(
+                "a new root needs a directory of its own, not the files area itself",
+            ));
+        }
+        let this = self.clone();
+        // A fresh root announces itself: `register_root` publishes
+        // `RootEvent::Created`, so nothing is published here.
+        let (root, _fresh) =
+            crate::lane::blocking(move || this.create_fresh_root(&rel, name, flavor)).await??;
+        Ok(root)
+    }
+
+    async fn browse_area(
+        &self,
+        path: String,
+    ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
+        crate::lane::caller::authorise_steward(self).await?;
+        // Relative to the files area; an absolute path is still confined,
+        // which is what lets a granted Storage Location be browsed too.
+        let requested = std::path::Path::new(&path);
+        let at = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            self.confine_root().join(requested)
+        };
+        let this = self.clone();
+        crate::lane::blocking(move || this.drive_browse_inner(at.display().to_string())).await
     }
 
     // t[impl files.adopt.resumable]
     async fn resume_adoption(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_steward(self).await?;
         self.adoptions()
             .with(root_id, |a| {
                 a.resume(Utc::now());
@@ -292,6 +348,7 @@ impl RootsService for FilesBackend {
 
     async fn pause_adoption(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_steward(self).await?;
         self.adoptions()
             .with(root_id, |a| {
                 a.pause(Utc::now());
@@ -301,6 +358,9 @@ impl RootsService for FilesBackend {
     }
 
     async fn adoption_progress(&self, root_id: RootId) -> Result<AdoptionProgress, FilesFault> {
+        if !crate::lane::caller::can_see_root(self, root_id).await {
+            return Err(FilesFault::RootNotFound(root_id));
+        }
         self.adoption_or_complete(root_id)
     }
 
@@ -315,6 +375,7 @@ impl RootsService for FilesBackend {
         // asking first. Returning what is already here rather than
         // overwriting also means a host that *does* hold the tree does
         // not lose its placement to a peer's structure push.
+        crate::lane::caller::authorise_steward(self).await?;
         if let Some(known) = self.registry_get(root_id.get()) {
             return Ok(known);
         }
@@ -332,13 +393,25 @@ impl RootsService for FilesBackend {
         Ok(root)
     }
 
+    /// Every root the caller can see anything in — by role, or by a
+    /// grant somewhere inside it. A root they hold nothing in is not
+    /// listed: its name alone is something they were never given.
     async fn list(&self) -> Result<Vec<FileRootInfo>, FilesFault> {
+        let mut visible = Vec::new();
+        for root in self.registry_list() {
+            if crate::lane::caller::can_see_root(self, RootId::new(root.id)).await {
+                visible.push(root);
+            }
+        }
         let this = self.clone();
-        crate::lane::blocking(move || Ok(this.with_project_version(this.registry_list()))).await
+        crate::lane::blocking(move || Ok(this.with_project_version(visible))).await
     }
 
     async fn get(&self, root_id: RootId) -> Result<FileRootInfo, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
+        if !crate::lane::caller::can_see_root(self, root_id).await {
+            return Err(FilesFault::RootNotFound(root_id));
+        }
         let this = self.clone();
         crate::lane::blocking(move || {
             Ok(this
@@ -354,25 +427,31 @@ impl RootsService for FilesBackend {
             return Err(FilesFault::invalid("a root's name may not be empty"));
         }
         let mut root = crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_steward(self).await?;
         root.name = name;
         let this = self.clone();
         let updated = root.clone();
-        crate::lane::blocking(move || {
+        let root = crate::lane::blocking(move || {
             this.registry_insert(updated)?;
             Ok(root)
         })
-        .await
+        .await?;
+        crate::lane::events::publish(self, FilesEvent::Root(RootEvent::Renamed(root.clone())));
+        Ok(root)
     }
 
     /// Stop tracking the root. Its bytes are untouched.
     async fn release(&self, root_id: RootId) -> Result<(), FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_steward(self).await?;
         let this = self.clone();
         crate::lane::blocking(move || {
             this.registry_remove(root_id.get())?;
             Ok(())
         })
-        .await
+        .await?;
+        crate::lane::events::publish(self, FilesEvent::Root(RootEvent::Released(root_id)));
+        Ok(())
     }
 }
 

@@ -38,7 +38,7 @@
 //!
 //! Whatever the route, the session must be valid **in this org's own
 //! auth store**, which is the same "any member of this org" boundary
-//! `permits.rs` puts on the `FilesService` RPC verbs. Per-root
+//! `permits.rs` puts on the Files lanes' RPC verbs. Per-root
 //! narrowing beyond that is the bridge's `WebdavPolicy` (hide a root)
 //! until the Files permission model lands with slices.
 //!

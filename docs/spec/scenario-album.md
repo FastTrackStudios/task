@@ -434,7 +434,7 @@ Exercised by some stage above: every rule in `files.*`, `project.*` and
   codebase, not of a run. No scenario can exercise either; a second definition,
   or a free-form capability string, is what violates them.
 - `project.vault.write-path` — met, and verified by a chapter of its own
-  (`tests/integration/tests/vault_root.rs`) rather than by a stage here: the
+  (`tests/integration/tests/it/vault_root.rs`) rather than by a stage here: the
   claim is about *how* a page reaches disk, which no narrative stage observes.
   This line once said every write went through the Files API "by construction",
   which was an assumption about code nobody had checked; it is now a binding

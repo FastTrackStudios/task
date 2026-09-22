@@ -1,0 +1,32 @@
+SOME KIND OF WONDERFUL - GRAND FUNK RAILROAD
+4/4
+
+intro 4
+| ^"BASS AND DRUMS" !D / | r1 | r1 | r1 |
+
+vs 12
+|: !D / | r1 | r1 | r1 :|x2
+    | !G / | r1 | r1 | r1 |
+    | !D / | r1 | r1 | !F#_4 !G_4 !G#_2 |
+
+pre 4
+\ChordLength /
+| !A | r1 | !G | !B_4 !C_4 !C#_2 |
+
+ch 8
+\ChordLength /
+| !D | !G_4 !C_4 !C#_2 | !D | !G_4 !C_4 !C#_2 |
+    | !D | !G_4 !C_4 !C#_2 | !D | !D |
+
+vs 12
+|: !D / | r1 | r1 | r1 :|x2
+    | !G / | r1 | r1 | r1 |
+    | !D / | r1 | r1 | !F#_4 !G_4 !G#_2 |
+
+br 9
+|: !D / | r1 | r1 | r1 :|x2
+    |: !D / | r1 | Bm / | r1 :|x3
+    | !D / |
+
+out 4
+|: !G / | !G / | !D / | !D / :|x2
