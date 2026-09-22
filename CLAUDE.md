@@ -16,6 +16,10 @@ the File Root holds what it weighs** — identity and metadata under
 `resources/` or the vault, bytes in a File Root, so subscribing to a
 library moves names rather than gigabytes.
 
+Wiring an app (Session, Signal, Ignition, Keyflow) to Task: follow
+`docs/app-integration.md` — sign-in, stores, safe saves, manifests,
+libraries, live events, and what is not built yet.
+
 ## The dev loop: server + webapp, owned by you
 
 You (the agent) own the lifecycle of the demo processes: launch them
