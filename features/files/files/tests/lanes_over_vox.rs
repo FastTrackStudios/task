@@ -381,6 +381,7 @@ async fn an_upload_sends_its_bytes_over_vox_and_lands() {
             size: payload.len() as u64,
             content: None,
             modified_at: None,
+            expect: None,
         })
         .await
         .expect("begin");

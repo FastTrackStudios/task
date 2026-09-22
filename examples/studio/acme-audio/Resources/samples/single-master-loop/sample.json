@@ -1,0 +1,5 @@
+{
+  "captured": "2026-09-21",
+  "source": "Resources/songs/single-master/Single master.wav",
+  "notes": "Bound at plant time: the audio is saved into the `signal/samples` root through the upload lane and pinned by content_id in sample.md."
+}

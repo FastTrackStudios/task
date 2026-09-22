@@ -2036,6 +2036,17 @@ pub(crate) async fn build_org_state(
             home_identity,
             &files,
         ));
+        // The role half of what a caller may do on the Files lanes: the
+        // same membership rows the gate's home fallback admits people by.
+        // Without it only explicit grants convey, and a member signed in
+        // from Keyflow would need a grant per folder to open their own
+        // charts.
+        if let Some(home) = home_identity {
+            files.set_memberships(Arc::new(crate::memberships::FilesRoles::new(
+                Arc::clone(&home.memberships),
+                org_root.slug(),
+            )));
+        }
         // Coverage + dry-run, once per org at boot: how many mounted
         // services carry a permit table, which do not, and what a
         // signed-in member would be denied if enforcement were on. The
@@ -4032,6 +4043,9 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             files_proto::serve_media(org.files.clone()),
         )
         .merge(files_proto::media_stream_layer(org.files.clone()))
+        // The v2 live stream: every lane's changes, one subscription,
+        // filtered per subscriber.
+        .merge(files_proto::tree_stream_layer(org.files.clone()))
         .with(
             files_proto::search_descriptor(),
             files_proto::serve_search(org.files.clone()),

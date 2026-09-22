@@ -76,6 +76,7 @@ async fn a_sample_is_bound_to_a_file_that_is_really_there() {
     let bound = ContentRef {
         root_id: root.to_string(),
         path: path.to_string(),
+        ..Default::default()
     };
     let saved = alice
         .resources()

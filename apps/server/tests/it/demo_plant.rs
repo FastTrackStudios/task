@@ -38,6 +38,50 @@ fn ffmpeg_on_path() -> bool {
         .unwrap_or(false)
 }
 
+// t[verify files.adopt.create] — reachable from the planted world
+// t[verify files.write.safe-save]
+/// The seed keeps a sample the way an app would: a root made through
+/// `RootsService::create`, the audio saved through the upload lane, and
+/// the manifest pinned to exactly those bytes. Planting twice changes
+/// nothing — the root is found again and the create-only save does not
+/// land a second copy.
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_a_sample_bound_and_pinned_through_the_app_store() -> eyre::Result<()> {
+    use resources_proto::ResourcesService;
+    use task_server::example_org::BOUND_SAMPLE as B;
+
+    let tmp = tempfile::tempdir()?;
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(tmp.path(), B.org)?;
+    plant(tmp.path(), B.org)?;
+
+    let org = org_proto::DataRoot::new(tmp.path().to_owned()).org(B.org);
+    let audio = org.path().join("files").join(B.root_dir).join(B.path);
+    let committed = task_server::example_org::studio_file(B.source).expect("committed audio");
+    eyre::ensure!(
+        std::fs::read(&audio)? == committed,
+        "the saved audio is the committed file, byte for byte"
+    );
+
+    let files = files::FilesBackend::new(org.path().join("files"), org.vault_dir())
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    let roots = RootsService::list(&files).await?;
+    let store: Vec<_> = roots.iter().filter(|r| r.name == B.root_name).collect();
+    eyre::ensure!(
+        store.len() == 1,
+        "one store, however often planted: {roots:?}"
+    );
+
+    let sample = resources::ResourcesBackend::new(org.resources_dir())
+        .sample(B.slug)
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    eyre::ensure!(sample.content.is_pinned(), "pinned: {:?}", sample.content);
+    eyre::ensure!(sample.content.root_id == store[0].id.to_string());
+    eyre::ensure!(sample.content.path == B.path);
+    Ok(())
+}
+
 // Multi-thread on purpose: planting checkpoints roots, and the Files
 // lane parks blocking work that must not starve a lone runtime worker
 // (the CLI runs on the default multi-thread runtime too).

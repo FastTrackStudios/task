@@ -35,6 +35,7 @@ pub const APP_OWNED: &[&str] = &[
     "sample_rate",
     "content_root",
     "content_path",
+    "content_id",
     "updated_at",
 ];
 
@@ -70,10 +71,7 @@ fn owned_values(sample: &SampleDoc) -> Vec<Owned> {
         ("duration_secs", sample.duration_secs.into()),
         ("sample_rate", sample.sample_rate.into()),
     ];
-    v.extend(asset::content_keys(
-        &sample.content.root_id,
-        &sample.content.path,
-    ));
+    v.extend(asset::content_keys(&sample.content));
     v.push(("updated_at", sample.updated_at.clone().into()));
     v
 }
@@ -126,6 +124,7 @@ mod tests {
             content: ContentRef {
                 root_id: "acme-library".into(),
                 path: "Samples/Kicks/Room Kick 48k.wav".into(),
+                ..Default::default()
             },
             updated_at: "2026-09-05T10:00:00Z".into(),
         }

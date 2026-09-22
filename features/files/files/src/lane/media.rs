@@ -656,7 +656,8 @@ impl MediaService for FilesBackend {
         // belongs at minting rather than at redemption: a token handed
         // out and refused later is a token that leaked the fact the file
         // exists.
-        self.authorise_caller(root_id, &path.clone().validate()?, Capability::Read)?;
+        self.authorise_caller(root_id, &path.clone().validate()?, Capability::Read)
+            .await?;
         self.ticket_for(root_id, path).await
     }
 
@@ -668,6 +669,11 @@ impl MediaService for FilesBackend {
         path: RootPath,
         version: VersionId,
     ) -> Result<ByteTicket, FilesFault> {
+        // A past version is history: reading it needs `History` as well
+        // as the path, so a reader of the current cut is not handed
+        // every draft that preceded it.
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::History).await?;
         // `commit_prefix` is the canonical conversion back to something
         // the store's prefix resolver accepts — see `VersionId`.
         self.source_ticket(root_id, &path, Some(version.commit_prefix()))
@@ -699,6 +705,17 @@ impl MediaService for FilesBackend {
                 continue;
             };
             if !chunks.has(fid).await {
+                continue;
+            }
+            // Holding the content is not enough: the caller must be able
+            // to read the root that holds it, or a content address would
+            // be a way round every grant. A root-wide read is required
+            // because the address carries no path to check a narrower
+            // grant against.
+            if crate::lane::caller::authorise_root(self, RootId::new(root.id), Capability::Read)
+                .await
+                .is_err()
+            {
                 continue;
             }
             let length = chunks
@@ -744,6 +761,7 @@ impl MediaService for FilesBackend {
     ) -> Result<Vec<RenditionInfo>, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         let path = readable(&path)?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
         let (_len, source) = self
             .resolve_source(root_id.get(), path.as_str().to_string(), None)
             .await
@@ -789,6 +807,7 @@ impl MediaService for FilesBackend {
     ) -> Result<ByteTicket, FilesFault> {
         crate::lane::root_or_fault(self, root_id)?;
         let path = readable(&path)?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
         let info = FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
             .await
             .map_err(fault)?;
@@ -840,6 +859,7 @@ impl MediaService for FilesBackend {
         for item in items {
             let root = crate::lane::root_or_fault(self, item.root_id)?;
             let path = readable(&item.path)?;
+            crate::lane::caller::authorise(self, item.root_id, &path, Capability::Read).await?;
             let (disk, _) = self.resolve_root_file(&root, path.as_str())?;
             if disk.symlink_metadata().is_err() {
                 return Err(FilesFault::PathNotFound(path));

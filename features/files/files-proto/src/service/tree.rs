@@ -145,4 +145,18 @@ pub trait TreeService {
     /// How current this view is, per root. What a UI reads to say "as
     /// of" instead of implying now.
     async fn freshness(&self) -> Result<Vec<Freshness>, FilesFault>;
+
+    /// **Live changes**, every lane's, on one subscription — the v2
+    /// [`FilesEvent`](crate::service::FilesEvent), nested by lane.
+    ///
+    /// `Some(root)` narrows to one root; `None` is every root the caller
+    /// can see. Only what the caller may read arrives: a subscriber holding
+    /// one granted folder hears about that folder and nothing beside it.
+    ///
+    /// The no-snapshot contract: subscribe first, then read current state
+    /// (`catalogue`, `list`), then fold events in — nothing is missed in
+    /// between. A subscriber that falls behind loses its oldest events and
+    /// converges by [`Self::changes_since`], never by re-listing.
+    #[subscribe]
+    fn events(&self, root_id: Option<RootId>) -> crate::service::FilesEvent;
 }

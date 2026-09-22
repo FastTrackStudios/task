@@ -59,6 +59,39 @@ use include_dir::{Dir, include_dir};
 /// The committed example studio, compiled into the binary.
 static STUDIO: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../examples/studio");
 
+/// One committed file's bytes, by its path under `examples/studio/`.
+#[must_use]
+pub fn studio_file(path: &str) -> Option<&'static [u8]> {
+    STUDIO.get_file(path).map(include_dir::File::contents)
+}
+
+/// Where the seed keeps its bound sample: a root made through
+/// `RootsService::create`, as an app makes one, and the file saved into
+/// it through the upload lane, by `demo_cli` at plant time.
+pub const BOUND_SAMPLE: BoundSample = BoundSample {
+    org: "acme-audio",
+    root_dir: "signal/samples",
+    root_name: "Signal samples",
+    path: "Loops/Single master.wav",
+    source: "acme-audio/Resources/songs/single-master/Single master.wav",
+    slug: "single-master-loop",
+};
+
+/// The seed's bound sample — see [`BOUND_SAMPLE`].
+#[derive(Debug, Clone, Copy)]
+pub struct BoundSample {
+    pub org: &'static str,
+    /// Relative to the org's files area, as `RootsService::create` takes it.
+    pub root_dir: &'static str,
+    pub root_name: &'static str,
+    /// Root-relative path the audio is saved at.
+    pub path: &'static str,
+    /// The committed file whose bytes are saved.
+    pub source: &'static str,
+    /// The sample manifest bound to it.
+    pub slug: &'static str,
+}
+
 /// The orgs the example describes, in the order a demo should boot them.
 ///
 /// ACME first: it is the one that owns the audio work, holds the
@@ -1051,6 +1084,18 @@ pub const DECLARED_ASSETS: &[DeclaredAsset] = &[
         demonstrates: "a sample whose audio is deliberately NOT here: the manifest says what \
                        the sample is, and the bytes belong in a File Root — which is what \
                        keeps subscribing to a sample library cheap",
+    },
+    DeclaredAsset {
+        org: "acme-audio",
+        tier: AssetTier::Resources,
+        library: "samples",
+        slug: "single-master-loop",
+        manifest: "single-master-loop/sample.md",
+        body: "single-master-loop/sample.json",
+        demonstrates: "the bound twin: at plant time the seed makes a root through \
+                       `RootsService::create`, saves the audio through the upload lane with \
+                       `files_client`, and pins the manifest to exactly those bytes — Task \
+                       as an app's store, reachable from the planted world",
     },
     DeclaredAsset {
         org: "acme-audio",

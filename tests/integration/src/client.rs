@@ -150,6 +150,29 @@ impl Session {
         self.establish().await
     }
 
+    /// The upload lane — resumable, conditional saves.
+    pub async fn uploads(&self) -> files::UploadServiceClient {
+        self.establish().await
+    }
+
+    /// The v2 live stream — `TreeService::events`, every lane on one
+    /// subscription, filtered to what this person may read.
+    pub async fn tree_stream(&self) -> files_proto::TreeServiceStreamClient {
+        self.establish().await
+    }
+
+    /// The Files lanes the way an app holds them — `files_client`, over
+    /// this person's own connections.
+    pub async fn files_client(&self) -> files_client::FilesClient {
+        files_client::FilesClient::new(
+            self.establish().await,
+            self.establish().await,
+            self.establish().await,
+            self.establish().await,
+            self.establish().await,
+        )
+    }
+
     /// The search lane — extraction and region hits.
     pub async fn search(&self) -> files::SearchServiceClient {
         self.establish().await
@@ -342,6 +365,9 @@ macro_rules! signable {
 
 signable!(
     files::FilesServiceStreamClient,
+    files::UploadServiceClient,
+    files_proto::TreeServiceStreamClient,
+    files_proto::MediaServiceStreamClient,
     files::OrganiseServiceClient,
     files::SearchServiceClient,
     ReviewServiceClient,

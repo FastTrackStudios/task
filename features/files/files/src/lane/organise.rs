@@ -78,13 +78,13 @@
 use facet::Facet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use files_domain::cadence::Journal;
 use files_proto::error::FilesFault;
 use files_proto::id::{ActivityId, PrincipalId, RootId};
 use files_proto::path::RootPath;
+use files_proto::service::access::Capability;
 use files_proto::service::organise::{Action, Activity, Marks, OrganiseService, Tag};
 use uuid::Uuid;
 
@@ -206,11 +206,12 @@ fn read_state<T>(backend: &FilesBackend, f: impl FnOnce(&Organised) -> T) -> T {
     ORGANISED.read(backend, f)
 }
 
-/// The principal this process speaks for. See the module doc for why it
-/// is minted rather than received.
-fn this_principal() -> PrincipalId {
-    static ME: OnceLock<PrincipalId> = OnceLock::new();
-    *ME.get_or_init(PrincipalId::generate)
+/// The caller, whose favourites a mark reports. A caller who is not a
+/// person has none, and may not keep any.
+fn this_principal() -> Result<PrincipalId, FilesFault> {
+    crate::lane::caller::principal().ok_or_else(|| {
+        FilesFault::invalid("favourites belong to a person, and this caller is not one")
+    })
 }
 
 /// The actor of a derived activity row: nobody, recorded as such.
@@ -355,11 +356,10 @@ fn feed_of(root_id: RootId, created_at: DateTime<Utc>, journal: &Journal) -> Vec
 impl OrganiseService for FilesBackend {
     // t[impl files.organise.manual] — reads the marks, touches no path
     async fn marks(&self, root_id: RootId, path: RootPath) -> Result<Marks, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
-        Ok(read_state(self, |s| {
-            marks_of(s, root_id, &path, this_principal())
-        }))
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        let who = this_principal()?;
+        Ok(read_state(self, |s| marks_of(s, root_id, &path, who)))
     }
 
     // t[impl files.organise.manual] — a tag is a view: no move, no rename,
@@ -370,8 +370,9 @@ impl OrganiseService for FilesBackend {
         path: RootPath,
         tags: Vec<Tag>,
     ) -> Result<Marks, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Write).await?;
+        let who = this_principal()?;
         let canonical = canonical_all(&tags)?;
 
         // Deliberately *not* checked against the live tree: a stub is a
@@ -386,7 +387,7 @@ impl OrganiseService for FilesBackend {
             } else {
                 s.tags.insert(key, canonical.into_iter().collect());
             }
-            marks_of(s, root_id, &path, this_principal())
+            marks_of(s, root_id, &path, who)
         }))
     }
 
@@ -397,9 +398,10 @@ impl OrganiseService for FilesBackend {
         path: RootPath,
         favourite: bool,
     ) -> Result<Marks, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
-        let who = this_principal();
+        // A favourite is the caller's own view, so reading is enough.
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        let who = this_principal()?;
         Ok(with_state(self, |s| {
             let key = (who, root_id, path.clone());
             if favourite {
@@ -421,9 +423,9 @@ impl OrganiseService for FilesBackend {
             crate::lane::root_or_fault(self, id)?;
         }
         let wanted = canonical_all(&tags)?;
-        let who = this_principal();
+        let who = this_principal()?;
 
-        Ok(read_state(self, |s| {
+        let found: Vec<Marks> = read_state(self, |s| {
             s.tags
                 .iter()
                 .filter(|((root, _), _)| root_id.is_none_or(|id| id == *root))
@@ -433,18 +435,44 @@ impl OrganiseService for FilesBackend {
                 .filter(|(_, held)| wanted.iter().all(|t| held.contains(t)))
                 .map(|((root, path), _)| marks_of(s, *root, path, who))
                 .collect()
-        }))
+        });
+        // A view shows only what its viewer may read — a tag must not be
+        // a way to learn that a path you cannot open exists.
+        let mut visible = Vec::with_capacity(found.len());
+        for marks in found {
+            if crate::lane::caller::authorise(self, marks.root_id, &marks.path, Capability::Read)
+                .await
+                .is_ok()
+            {
+                visible.push(marks);
+            }
+        }
+        Ok(visible)
     }
 
     // t[impl files.organise.manual] — what exists, for completion
     async fn all_tags(&self, root_id: Option<RootId>) -> Result<Vec<Tag>, FilesFault> {
-        if let Some(id) = root_id {
-            crate::lane::root_or_fault(self, id)?;
+        let mut roots: Vec<RootId> = match root_id {
+            Some(id) => {
+                crate::lane::caller::authorise_root(self, id, Capability::Read).await?;
+                vec![id]
+            }
+            None => self
+                .registry_list()
+                .into_iter()
+                .map(|r| RootId::new(r.id))
+                .collect(),
+        };
+        let mut seen = Vec::with_capacity(roots.len());
+        for id in roots.drain(..) {
+            if crate::lane::caller::can_see_root(self, id).await {
+                seen.push(id);
+            }
         }
         Ok(read_state(self, |s| {
             s.tags
                 .iter()
-                .filter(|((root, _), _)| root_id.is_none_or(|id| id == *root))
+                .filter(|((root, _), _)| seen.contains(root))
                 .flat_map(|(_, held)| held.iter().cloned())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -463,6 +491,13 @@ impl OrganiseService for FilesBackend {
     ) -> Result<Vec<Activity>, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         let under = under.map(|u| u.validate()).transpose()?;
+        crate::lane::caller::authorise(
+            self,
+            root_id,
+            under.as_ref().unwrap_or(&RootPath::root()),
+            Capability::History,
+        )
+        .await?;
         let store_dir = self.store_of(&root);
         let created_at = root.created_at;
 

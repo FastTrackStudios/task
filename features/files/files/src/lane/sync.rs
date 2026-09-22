@@ -52,6 +52,7 @@ use files_proto::error::FilesFault;
 use files_proto::id::{DeviceId, RootId};
 use files_proto::model::{FileRootInfo, RootFlavor};
 use files_proto::path::RootPath;
+use files_proto::service::access::Capability as Can;
 use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::sync::{
     DeviceInfo, FacetBinding, FacetName, FacetSource, IgnoreSet, Subscription, SyncService,
@@ -518,6 +519,7 @@ impl SyncService for FilesBackend {
     // t[impl files.facet.project-override] — unmapped is reported, never guessed
     async fn facets(&self, root_id: RootId) -> Result<Vec<FacetBinding>, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
         let ignores = self.sync_ignores(root_id, &root).await?;
         let listing = self.list_tree(&root, &ignores).await?;
         let map = self.facet_map(root_id, &root);
@@ -545,6 +547,7 @@ impl SyncService for FilesBackend {
     ) -> Result<FacetBinding, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         let path = path.validate()?;
+        crate::lane::caller::authorise(self, root_id, &path, Can::Write).await?;
         if facet.0.trim().is_empty() {
             return Err(FilesFault::invalid("a facet's name may not be empty"));
         }
@@ -560,6 +563,7 @@ impl SyncService for FilesBackend {
     // t[impl files.ignore.layers] — three layers, none able to defeat another
     async fn ignore_set(&self, root_id: RootId) -> Result<IgnoreSet, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
         let project = FilesService::ignore_set(self, root_id.get())
             .await
             .map_err(fault)?;
@@ -579,7 +583,7 @@ impl SyncService for FilesBackend {
         root_id: RootId,
         patterns: Vec<String>,
     ) -> Result<IgnoreSet, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_root(self, root_id, Can::Write).await?;
         // Only the project layer is settable: the other two are
         // knowledge about an OS and about an application, and a root
         // that could edit them could hide a `.DS_Store` policy bug from
@@ -591,7 +595,7 @@ impl SyncService for FilesBackend {
     }
 
     async fn subscription(&self, root_id: RootId) -> Result<Subscription, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
         Ok(stored_subscription(self, root_id))
     }
 
@@ -601,7 +605,7 @@ impl SyncService for FilesBackend {
         root_id: RootId,
         facets: Vec<FacetName>,
     ) -> Result<Subscription, FilesFault> {
-        crate::lane::root_or_fault(self, root_id)?;
+        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
         let mut sub = stored_subscription(self, root_id);
         sub.facets = facets;
         sub.facets.sort_by(|a, b| a.0.cmp(&b.0));
@@ -626,6 +630,9 @@ impl SyncService for FilesBackend {
             .into_iter()
             .map(|p| p.validate())
             .collect::<Result<_, _>>()?;
+        for path in &paths {
+            crate::lane::caller::authorise(self, root_id, path, Can::Read).await?;
+        }
 
         let mut sub = stored_subscription(self, root_id);
         if pinned {
@@ -650,6 +657,7 @@ impl SyncService for FilesBackend {
         let mut done = Vec::with_capacity(paths.len());
         for path in paths {
             let path = path.validate()?;
+            crate::lane::caller::authorise(self, root_id, &path, Can::Read).await?;
             // Explicit, so unlike the subscription sweep a refusal is
             // reported: the caller named this path and is owed the
             // reason it could not be released.

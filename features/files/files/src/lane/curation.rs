@@ -34,10 +34,12 @@ use files_proto::error::FilesFault;
 use files_proto::id::{ProjectVersionId, RootId, VersionId};
 use files_proto::model::{NamedVersion, ProjectVersion, RestartMode};
 use files_proto::path::RootPath;
+use files_proto::service::access::Capability;
 use files_proto::service::curation::CurationService;
 use files_proto::service::legacy::{FilesError, FilesService as LegacyFiles};
 
 use crate::backend::FilesBackend;
+use crate::lane::caller;
 
 /// The commit reference a [`VersionId`] names — its 32 hex characters,
 /// resolved as a prefix by the backend.
@@ -131,6 +133,7 @@ impl CurationService for FilesBackend {
         name: String,
     ) -> Result<NamedVersion, FilesFault> {
         self.curated_root(root_id)?;
+        caller::authorise_root(self, root_id, Capability::Write).await?;
         LegacyFiles::name_version(self, root_id.get(), commit_ref(version), name)
             .await
             .map_err(|e| match e {
@@ -149,6 +152,7 @@ impl CurationService for FilesBackend {
         root_id: RootId,
         version: VersionId,
     ) -> Result<NamedVersion, FilesFault> {
+        caller::authorise_root(self, root_id, Capability::Write).await?;
         let named = self.named_by_version(root_id, version).await?;
         LegacyFiles::unname_version(self, named.id)
             .await
@@ -161,6 +165,13 @@ impl CurationService for FilesBackend {
         root_id: RootId,
         path: Option<RootPath>,
     ) -> Result<Vec<NamedVersion>, FilesFault> {
+        caller::authorise(
+            self,
+            root_id,
+            path.as_ref().unwrap_or(&RootPath::root()),
+            Capability::History,
+        )
+        .await?;
         let all = self.curated_names(root_id).await?;
         let Some(path) = path else {
             return Ok(all);
@@ -196,6 +207,7 @@ impl CurationService for FilesBackend {
         root_id: RootId,
         name: String,
     ) -> Result<NamedVersion, FilesFault> {
+        caller::authorise_root(self, root_id, Capability::History).await?;
         let wanted = name.trim();
         let mut named = self
             .curated_names(root_id)
@@ -224,6 +236,7 @@ impl CurationService for FilesBackend {
         name: String,
     ) -> Result<ProjectVersion, FilesFault> {
         self.curated_root(root_id)?;
+        caller::authorise_root(self, root_id, Capability::Write).await?;
         // The number is the identity and the label is decoration, so an
         // empty label is a legitimate "just the next one" rather than a
         // bad request.
@@ -235,6 +248,7 @@ impl CurationService for FilesBackend {
 
     async fn project_versions(&self, root_id: RootId) -> Result<Vec<ProjectVersion>, FilesFault> {
         self.curated_root(root_id)?;
+        caller::authorise_root(self, root_id, Capability::History).await?;
         LegacyFiles::list_project_versions(self, root_id.get())
             .await
             .map_err(fault)
@@ -247,6 +261,7 @@ impl CurationService for FilesBackend {
         mode: RestartMode,
     ) -> Result<ProjectVersion, FilesFault> {
         self.curated_root(root_id)?;
+        caller::authorise_root(self, root_id, Capability::Write).await?;
         let target = LegacyFiles::list_project_versions(self, root_id.get())
             .await
             .map_err(fault)?

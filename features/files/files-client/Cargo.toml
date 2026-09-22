@@ -1,0 +1,24 @@
+[package]
+name = "files-client"
+description = "The Files lanes as an app's store: make a root, save bytes safely (resumable, conditional), read them back whole or by range, follow a pinned content reference, and hear what changed. Transport-agnostic over the generated vox clients, so the same code runs in a browser (task-dial) and natively (task-client)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+files-proto = { workspace = true, features = ["vox"] }
+architect = { workspace = true, features = ["vox"] }
+futures = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+files = { workspace = true }
+architect = { workspace = true, features = ["local"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

@@ -53,6 +53,7 @@ fn sample(title: &str, body: &str) -> SampleDoc {
         content: ContentRef {
             root_id: "acme-library".into(),
             path: format!("Samples/{title}.wav"),
+            ..Default::default()
         },
         updated_at: "2026-09-05T10:00:00Z".into(),
     }

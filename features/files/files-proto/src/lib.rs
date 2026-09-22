@@ -157,6 +157,15 @@ pub use service::write::{
     serve as serve_write, write_service_rpc_service_descriptor as write_descriptor,
 };
 
+// The v2 live stream — `TreeService::events`, every lane's changes on one
+// subscription. Mounted beside the tree lane; granted in `permits.rs`.
+#[cfg(feature = "vox")]
+pub use service::tree::{
+    TreeServiceStream, TreeServiceStreamClient, TreeServiceStreamSource,
+    stream_layer as tree_stream_layer, stream_serve as serve_tree_stream,
+    tree_service_stream_service_descriptor as tree_stream_descriptor,
+};
+
 // The byte lane's stream sibling. Bytes ride vox like everything else;
 // the browser's service-worker adapter binds this client and answers
 // `Range` from it, and a native client needs no HTTP at all.

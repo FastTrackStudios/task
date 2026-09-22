@@ -24,19 +24,24 @@
 //! outgoing content first, so replacing records a new version instead of
 //! destroying the old one.
 //!
-//! ## Two things here are not real, and are not pretended to be
+//! **A save can be safe.** [`UploadSpec::expect`] names what the caller
+//! believes occupies the destination — nothing, or the content address a
+//! previous read or save reported — and the landing checks it under the
+//! root's lock. Two machines saving one session file therefore cannot
+//! overwrite each other silently: the second gets `FilesFault::Stale`.
+//! The address `complete` returns is the landed file's own, read back
+//! from where it sits, because placement decides the address and the
+//! next save's precondition must compare like with like.
 //!
-//! **There is no byte lane.** Nothing in this codebase receives upload
-//! bytes over the network yet, so [`UploadPlan::lane`] names
-//! [`BYTE_LANE`] — a placeholder string, deliberately not a URL or a
-//! topic anyone could mistake for a live endpoint — and any
-//! `complete` that would need bytes to arrive fails with
-//! `FilesFault::Internal("not yet implemented: the byte lane")`. What
-//! *is* implemented end to end is the half that does not need one: the
-//! plan, the dedup decision, conflict detection and resolution,
-//! progress accounting, and abort. An upload whose content the store
-//! already holds needs no transport at all and completes for real —
-//! bytes are materialised out of the CAS and landed atomically.
+//! ## How bytes arrive
+//!
+//! [`send_bytes`](UploadService::send_bytes) writes frames into a
+//! staging file outside the live tree and records which ranges arrived.
+//! Only once every declared byte is there is the file ingested into the
+//! root's chunk store — ingesting a file with holes would record zeros
+//! as content — and `complete` then renames that staging file into
+//! place. Content the store already held needs no transfer at all: it is
+//! materialised out of the CAS at `complete`.
 //!
 //! **Sessions are per-process.** There is no upload store anywhere in
 //! this codebase, so open sessions live in [`uploads`], a
@@ -56,10 +61,11 @@ use files_proto::error::FilesFault;
 use files_proto::id::{ContentId, RootId, UploadId};
 use files_proto::model::{FileRootInfo, RootFlavor};
 use files_proto::path::RootPath;
+use files_proto::service::access::Capability;
 use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::tree::{CatalogueEntry, EntryKind, Hydration};
 use files_proto::service::upload::{
-    ChunkRange, Conflict, Received, UploadFrame, UploadPlan, UploadProgress, UploadService,
+    ChunkRange, Conflict, Expect, Received, UploadFrame, UploadPlan, UploadProgress, UploadService,
     UploadSpec,
 };
 use files_proto::service::write::OnConflict;
@@ -67,13 +73,11 @@ use files_proto::service::write::OnConflict;
 use crate::backend::FilesBackend;
 use crate::error::Error;
 
-/// Where bytes are sent — except that nowhere is, yet.
-///
-/// Named rather than left empty so a client cannot read a plausible
-/// endpoint out of it and start posting into the void. Anything that
-/// would need this string to resolve fails loudly instead; see the
-/// module doc.
-pub const BYTE_LANE: &str = "not-yet-implemented:byte-lane";
+/// Where bytes are sent: this lane's own
+/// [`send_bytes`](UploadService::send_bytes), over the connection the
+/// plan arrived on. Named so a client reading [`UploadPlan::lane`] learns
+/// the method, not a URL — there is no second endpoint.
+pub const BYTE_LANE: &str = "files-upload/send_bytes";
 
 /// How long an unfinished upload stays addressable.
 ///
@@ -103,6 +107,25 @@ const KEEP_BOTH_LIMIT: usize = 1000;
 struct Session {
     spec: UploadSpec,
     expires_at: DateTime<Utc>,
+    /// Byte ranges that have arrived over [`UploadService::send_bytes`]
+    /// into this session's staging file, sorted and coalesced.
+    ///
+    /// The one piece of progress that *is* held here rather than read
+    /// out of the store, because it has to be: until every byte has
+    /// arrived the staging file holds holes, and ingesting a file with
+    /// holes would record zeros as content. The store only hears about
+    /// an upload once this covers the whole file.
+    received: Vec<ChunkRange>,
+    /// Who began it. `pending` answers per caller, so one person's
+    /// half-finished uploads are not another's to list.
+    owner: Option<files_proto::id::PrincipalId>,
+}
+
+impl Session {
+    /// Every declared byte has arrived and sits in the staging file.
+    fn staged_whole(&self) -> bool {
+        missing(&self.received, self.spec.size).is_empty()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -171,6 +194,42 @@ fn push_range(out: &mut Vec<ChunkRange>, start: u64, end: u64) {
     }
 }
 
+/// Fold `[start, end)` into a sorted, coalesced range set.
+fn merge_range(set: &mut Vec<ChunkRange>, start: u64, end: u64) {
+    if start >= end {
+        return;
+    }
+    set.push(ChunkRange { start, end });
+    set.sort_by_key(|r| r.start);
+    let mut out: Vec<ChunkRange> = Vec::with_capacity(set.len());
+    for r in set.drain(..) {
+        match out.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => out.push(r),
+        }
+    }
+    *set = out;
+}
+
+/// The complement of a sorted, coalesced range set within `[0, size)`.
+fn missing(have: &[ChunkRange], size: u64) -> Vec<ChunkRange> {
+    let mut out = Vec::new();
+    let mut at = 0u64;
+    for r in have {
+        if r.start > at {
+            push_range(&mut out, at, r.start.min(size));
+        }
+        at = at.max(r.end);
+        if at >= size {
+            break;
+        }
+    }
+    if at < size {
+        push_range(&mut out, at, size);
+    }
+    out
+}
+
 fn outstanding_bytes(ranges: &[ChunkRange]) -> u64 {
     ranges.iter().map(|r| r.end.saturating_sub(r.start)).sum()
 }
@@ -231,9 +290,81 @@ fn as_error(err: FilesError) -> Error {
     }
 }
 
+/// The etag of a file in a root with no chunk store: `blake3:<hex>` over
+/// its bytes, read in bounded memory.
+fn plain_address(disk: &std::path::Path) -> Result<ContentId, Error> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(std::fs::File::open(disk)?)?;
+    Ok(ContentId::new(format!(
+        "blake3:{}",
+        hasher.finalize().to_hex()
+    )))
+}
+
+/// What [`FilesBackend::land`] made of a landing.
+enum Landing {
+    /// In place, with the landed file's content address.
+    Landed(Option<ContentId>),
+    /// The destination was taken and replacing was not chosen.
+    Occupied,
+    /// The caller's [`Expect`] did not hold; this is what is there.
+    Stale(Option<ContentId>),
+}
+
+/// Refuse unless the caller may put content at `path`: `Write`, or
+/// `Deposit` — the drop-folder capability, which is upload without read
+/// and exists for exactly this lane.
+async fn may_upload(
+    backend: &FilesBackend,
+    root_id: RootId,
+    path: &RootPath,
+) -> Result<(), FilesFault> {
+    match crate::lane::caller::authorise(backend, root_id, path, Capability::Write).await {
+        Ok(()) => Ok(()),
+        Err(write) => crate::lane::caller::authorise(backend, root_id, path, Capability::Deposit)
+            .await
+            .map_err(|_| write),
+    }
+}
+
 // ── The store questions ────────────────────────────────────────────
 
 impl FilesBackend {
+    /// The content address of what sits at `disk` right now, or `None`
+    /// when nothing does. A directory has no address and reads as
+    /// occupied-by-something-else, which no `Expect::Content` matches.
+    ///
+    /// A stub answers from itself — the stub *is* the address — so a
+    /// dehydrated file can be safely replaced without hydrating it
+    /// first. Anything else is probed through the root's chunk store:
+    /// the address a write of these bytes would get, derived without
+    /// writing, which is the same answer the catalogue reports.
+    pub(crate) fn sync_content_at(
+        &self,
+        root: &FileRootInfo,
+        disk: &std::path::Path,
+    ) -> Result<Option<ContentId>, Error> {
+        let Ok(meta) = std::fs::symlink_metadata(disk) else {
+            return Ok(None);
+        };
+        if meta.is_dir() {
+            return Ok(Some(ContentId::new("directory")));
+        }
+        if root.flavor != RootFlavor::Media {
+            // A software root's history is its colocated git, and it has
+            // no chunk store to ask. The etag is the bytes' own BLAKE3,
+            // tagged so it can never be mistaken for a chunk address.
+            return plain_address(disk).map(Some);
+        }
+        if crate::stub::candidate_len(meta.len())
+            && let Some(stub) = crate::stub::probe(disk)
+        {
+            return Ok(Some(ContentId::new(stub.file_id)));
+        }
+        self.sync_probe_path(root.id, disk)
+            .map(|hex| Some(ContentId::new(hex)))
+            .map_err(as_error)
+    }
     /// The byte ranges this server does not already hold.
     ///
     /// Three answers, in order of how much they cost:
@@ -251,17 +382,34 @@ impl FilesBackend {
     ///    supplies none pays in full; that is the client's choice, and
     ///    it is reported rather than worked around.
     ///
-    /// A software root always lands in (3): its content lives in its
+    /// Bytes that arrived over the wire count before any of that: a
+    /// session whose staging file is whole needs nothing more, whatever
+    /// the store says, and one that is part-way needs exactly its holes
+    /// — (3) minus what was received.
+    ///
+    /// A software root skips (1) and (2): its content lives in its
     /// colocated git, not in the chunk CAS, so the CAS has nothing
     /// useful to say about it.
     async fn outstanding(
         &self,
         root: &FileRootInfo,
         spec: &UploadSpec,
+        received: &[ChunkRange],
     ) -> Result<Vec<ChunkRange>, FilesFault> {
+        let from_wire = missing(received, spec.size);
+        if from_wire.is_empty() {
+            return Ok(from_wire);
+        }
         let (Some(content), RootFlavor::Media) = (spec.content.clone(), root.flavor) else {
-            return Ok(whole(spec.size));
+            return Ok(from_wire);
         };
+        // A partly-sent file whose address the store also knows: the
+        // store's answer covers what the wire has not, but mixing the
+        // two sources into one staging file is not something `stage`
+        // does. The wire's holes are the honest answer.
+        if !received.is_empty() {
+            return Ok(from_wire);
+        }
         let this = self.clone();
         let root_id = root.id;
         let hex = content.0;
@@ -420,7 +568,8 @@ impl FilesBackend {
         dest: &RootPath,
         staged: PathBuf,
         replace: bool,
-    ) -> Result<bool, FilesFault> {
+        expect: Option<Expect>,
+    ) -> Result<Landing, FilesFault> {
         let this = self.clone();
         let root = root.clone();
         let dest = dest.clone();
@@ -428,8 +577,23 @@ impl FilesBackend {
             let (disk, _) = this.resolve_root_file(&root, dest.as_str())?;
             let lock = this.root_lock(root.id);
             let _guard = lock.lock().expect("root lock poisoned");
+            // t[impl files.write.safe-save] — checked under the root lock
+            // The precondition, inside the lock: between checking and
+            // renaming nobody else may land here, or a safe save is
+            // only safe against writers slower than itself.
+            if let Some(expect) = &expect {
+                let now = this.sync_content_at(&root, &disk)?;
+                let holds = match (expect, &now) {
+                    (Expect::Absent, None) => true,
+                    (Expect::Content(want), Some(have)) => want == have,
+                    _ => false,
+                };
+                if !holds {
+                    return Ok(Landing::Stale(now));
+                }
+            }
             if disk.exists() && !replace {
-                return Ok(false);
+                return Ok(Landing::Occupied);
             }
             if let Some(parent) = disk.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -446,7 +610,13 @@ impl FilesBackend {
                 tmp.persist(&disk).map_err(|e| Error::Io(e.error))?;
                 let _ = std::fs::remove_file(&staged);
             }
-            Ok(true)
+            // The landed file's own address, read back from where it now
+            // sits — not the staging file's. Placement decides the
+            // address (a whole-file link and a chunked copy of the same
+            // bytes differ), and the etag a caller hands back as
+            // `Expect::Content` must be the one this lock will compute.
+            let content = this.sync_content_at(&root, &disk)?;
+            Ok(Landing::Landed(content))
         })
         .await
     }
@@ -478,12 +648,13 @@ impl UploadService for FilesBackend {
                 "an upload needs a destination path, not the root itself",
             ));
         }
+        may_upload(self, spec.root_id, &path).await?;
 
         let spec = UploadSpec {
             path: path.clone(),
             ..spec
         };
-        let needed = self.outstanding(&root, &spec).await?;
+        let needed = self.outstanding(&root, &spec, &[]).await?;
 
         // The occupant is reported, never acted on. `complete` carries
         // the choice, so a client may finish transferring while a human
@@ -505,6 +676,8 @@ impl UploadService for FilesBackend {
                 Session {
                     spec: spec.clone(),
                     expires_at,
+                    received: Vec::new(),
+                    owner: crate::lane::caller::principal(),
                 },
             );
         });
@@ -525,7 +698,9 @@ impl UploadService for FilesBackend {
         // Re-derived, not remembered: chunks that arrived by any route
         // since the plan — another upload, a sync pull — count, so
         // resuming never re-sends what the server already has.
-        let needed = self.outstanding(&root, &session.spec).await?;
+        let needed = self
+            .outstanding(&root, &session.spec, &session.received)
+            .await?;
         Ok(progress_of(upload_id, &session.spec, needed))
     }
 
@@ -536,21 +711,33 @@ impl UploadService for FilesBackend {
         on_conflict: OnConflict,
     ) -> Result<CatalogueEntry, FilesFault> {
         let session = session_of(upload_id)?;
-        let spec = session.spec;
+        let staged_whole = session.staged_whole() && session.spec.size > 0;
+        let spec = session.spec.clone();
         let root_id = spec.root_id;
         let root = crate::lane::root_or_fault(self, root_id)?;
         let path = spec.path.validate()?;
+        may_upload(self, root_id, &path).await?;
 
-        if !self.outstanding(&root, &spec).await?.is_empty() {
-            // Not a lie about the upload and not a silent truncation:
-            // bytes are still needed and nothing in this codebase can
-            // have delivered them. The session stays open, so a client
-            // loses nothing when the lane lands.
-            return Err(FilesFault::Internal(
-                "not yet implemented: the byte lane — an upload whose content the store does not \
-                 already hold cannot be completed, because nothing receives bytes yet"
-                    .to_string(),
+        // An expectation is about the path the caller named. Keep-both
+        // lands somewhere else and keep-existing lands nowhere, so
+        // pairing either with one asks two contradictory things.
+        if spec.expect.is_some()
+            && matches!(on_conflict, OnConflict::KeepBoth | OnConflict::KeepExisting)
+        {
+            return Err(FilesFault::invalid(
+                "an expectation about the destination needs `Fail` or `Replace`",
             ));
+        }
+
+        let needed = self.outstanding(&root, &spec, &session.received).await?;
+        if !needed.is_empty() {
+            // Not a silent truncation: bytes are still owed. The session
+            // stays open, so the client sends what `needed` names and
+            // tries again.
+            return Err(FilesFault::invalid(format!(
+                "{path}: {} bytes still outstanding — send them with `send_bytes` first",
+                outstanding_bytes(&needed)
+            )));
         }
 
         let occupant = self.occupant(&root, &path).await?;
@@ -570,14 +757,28 @@ impl UploadService for FilesBackend {
         };
         let replacing = occupant.is_some() && on_conflict == OnConflict::Replace;
 
-        let staged = self.stage(upload_id, root_id, &spec).await?;
+        // Bytes that came over the wire are already staged, whole; bytes
+        // the store already held are materialised out of it now.
+        let staged = if staged_whole {
+            self.staging_path(upload_id)
+        } else {
+            self.stage(upload_id, root_id, &spec).await?
+        };
         let landed = self
             .finish(&root, &dest, staged.clone(), replacing, &spec)
             .await;
         if landed.is_err() {
             // Nothing partial is left anywhere: the staging file lives
-            // outside the tree and goes with the failure.
+            // outside the tree and goes with the failure. The session
+            // forgets what arrived with it, so its next answer comes
+            // from the store — which, for a media root, already holds
+            // every chunk, and a retry transfers nothing.
             let _ = std::fs::remove_file(&staged);
+            with_uploads(|u| {
+                if let Some(s) = u.0.get_mut(&upload_id) {
+                    s.received.clear();
+                }
+            });
         }
         let entry = landed?;
         forget(upload_id);
@@ -586,6 +787,12 @@ impl UploadService for FilesBackend {
         if let Ok(root) = crate::lane::root_or_fault(self, spec.root_id) {
             crate::lane::tree::note_write(self, &root, std::slice::from_ref(&entry.path), &[]);
         }
+        crate::lane::events::publish(
+            self,
+            files_proto::service::FilesEvent::Upload(
+                files_proto::service::upload::UploadEvent::Completed(entry.clone()),
+            ),
+        );
         Ok(entry)
     }
 
@@ -603,12 +810,17 @@ impl UploadService for FilesBackend {
     }
 
     async fn pending(&self) -> Result<Vec<UploadProgress>, FilesFault> {
-        // Every open session in this process. There is no principal on
-        // this seam yet and no cross-device session store, so "across
-        // devices" is not something this can honour — see the module
-        // doc. What it does report is exact.
+        // The caller's open sessions, whichever device began them — the
+        // session is keyed to the person, not the connection, which is
+        // what lets a phone finish what a laptop began. Sessions are
+        // still process-lifetime (see the module doc).
+        let me = crate::lane::caller::principal();
         let open = with_uploads(|u| {
-            let mut v: Vec<_> = u.0.iter().map(|(id, s)| (*id, s.clone())).collect();
+            let mut v: Vec<_> =
+                u.0.iter()
+                    .filter(|(_, s)| s.owner == me)
+                    .map(|(id, s)| (*id, s.clone()))
+                    .collect();
             v.sort_by_key(|(id, _)| *id);
             v
         });
@@ -622,7 +834,9 @@ impl UploadService for FilesBackend {
             let Ok(root) = crate::lane::root_or_fault(self, session.spec.root_id) else {
                 continue;
             };
-            let needed = self.outstanding(&root, &session.spec).await?;
+            let needed = self
+                .outstanding(&root, &session.spec, &session.received)
+                .await?;
             out.push(progress_of(id, &session.spec, needed));
         }
         Ok(out)
@@ -639,15 +853,12 @@ impl UploadService for FilesBackend {
         let session = session_of(upload_id)?;
         let spec = session.spec.clone();
         let root = crate::lane::root_or_fault(self, spec.root_id)?;
+        may_upload(self, spec.root_id, &spec.path).await?;
 
-        // The staging file already exists — `begin` created it and filled
-        // whatever the store could supply. Writing into it at an offset
-        // is what makes a resumed upload cheap: the client sends the
-        // ranges still outstanding and nothing else.
-        let staged = self
-            .data_dir()
-            .join("uploads")
-            .join(format!("{upload_id}.part"));
+        // Writing into the staging file at an offset is what makes a
+        // resumed upload cheap: the client sends the ranges still
+        // outstanding and nothing else.
+        let staged = self.staging_path(upload_id);
         tokio::fs::create_dir_all(staged.parent().expect("uploads dir"))
             .await
             .map_err(FilesFault::io)?;
@@ -665,6 +876,7 @@ impl UploadService for FilesBackend {
         let mut file = file;
 
         let mut written = 0u64;
+        let mut arrived: Vec<ChunkRange> = Vec::new();
         // Each `recv` awaits, so the channel's credit is what paces the
         // sender: a client faster than this disk waits on us rather than
         // filling our memory. That is the whole reason a 244 GB upload is
@@ -687,6 +899,7 @@ impl UploadService for FilesBackend {
                         .map_err(FilesFault::io)?;
                     file.write_all(&bytes).await.map_err(FilesFault::io)?;
                     written += bytes.len() as u64;
+                    merge_range(&mut arrived, offset, offset + bytes.len() as u64);
                 }
                 Some(UploadFrame::Finished) => break,
                 None => break,
@@ -700,16 +913,42 @@ impl UploadService for FilesBackend {
         file.sync_all().await.map_err(FilesFault::io)?;
         drop(file);
 
-        // Chunk the staged file into the root's store.
+        // Only now, with the bytes durable, does the session count them.
+        let received = with_uploads(|u| {
+            u.0.get_mut(&upload_id).map(|s| {
+                for r in &arrived {
+                    merge_range(&mut s.received, r.start, r.end);
+                }
+                s.received.clone()
+            })
+        })
+        .ok_or(FilesFault::UploadNotFound(upload_id))?;
+        let holes = missing(&received, spec.size);
+        if !holes.is_empty() {
+            // Part-way. Nothing reaches the store yet: the staging file
+            // still has holes, and ingesting it would record zeros as
+            // content under an address the client never sent.
+            return Ok(Received {
+                upload_id,
+                written,
+                needed: holes,
+            });
+        }
+
+        // Whole. Chunk the staged file into the root's store — this is
+        // what makes the bytes *held* rather than merely written, and
+        // where the upload dedups against everything already there: an
+        // identical chunk costs nothing to add.
         //
-        // This is what makes the bytes *held* rather than merely written:
-        // `outstanding` derives from the store, deliberately, so that a
-        // chunk arriving by any route at all counts. Skipping this step
-        // would leave a complete staging file that every other method in
-        // the lane still reports as missing.
-        //
-        // It is also where the upload finally dedups against everything
-        // already in the store — an identical chunk costs nothing to add.
+        // A software root has no chunk store — its history is git's — so
+        // its staging file is simply whole, and lands as it is.
+        if root.flavor != RootFlavor::Media {
+            return Ok(Received {
+                upload_id,
+                written,
+                needed: Vec::new(),
+            });
+        }
         let this = self.clone();
         let root_id = spec.root_id.get();
         let staged_for_ingest = staged.clone();
@@ -737,9 +976,7 @@ impl UploadService for FilesBackend {
             ..spec
         };
 
-        // Recomputed rather than tallied, for the same reason `progress`
-        // recomputes: a fact beats a count two paths could disagree about.
-        let needed = self.outstanding(&root, &spec).await?;
+        let needed = self.outstanding(&root, &spec, &received).await?;
         Ok(Received {
             upload_id,
             written,
@@ -749,6 +986,14 @@ impl UploadService for FilesBackend {
 }
 
 impl FilesBackend {
+    /// Where an upload's bytes wait, outside the live tree, until
+    /// `complete` renames them into it.
+    fn staging_path(&self, upload_id: UploadId) -> PathBuf {
+        self.data_dir()
+            .join("uploads")
+            .join(format!("{upload_id}.part"))
+    }
+
     /// The landing half of `complete`, split out so its failure can be
     /// caught in one place and the staging file cleaned up.
     async fn finish(
@@ -767,9 +1012,26 @@ impl FilesBackend {
             self.checkpoint(root_id, format!("before replacing {dest}"))
                 .await?;
         }
-        if !self.land(root, dest, staged, replacing).await? {
-            return Err(FilesFault::Exists { path: dest.clone() });
-        }
+        let content = match self
+            .land(root, dest, staged, replacing, spec.expect.clone())
+            .await?
+        {
+            Landing::Landed(content) => content,
+            Landing::Occupied => return Err(FilesFault::Exists { path: dest.clone() }),
+            Landing::Stale(now) => {
+                architect_telemetry::wide::set(
+                    "files.upload.stale_found",
+                    now.map_or_else(|| "nothing".to_string(), |c| c.0),
+                );
+                return Err(FilesFault::Stale {
+                    path: dest.clone(),
+                    expected: match &spec.expect {
+                        Some(Expect::Content(c)) => c.to_string(),
+                        _ => "nothing".to_string(),
+                    },
+                });
+            }
+        };
         self.checkpoint(root_id, format!("upload: {dest}")).await?;
 
         // FUTURE: `spec.modified_at` is not applied to the landed file —
@@ -778,9 +1040,15 @@ impl FilesBackend {
         // mtime rather than the client's claim, so it is honest about
         // what happened; it is not yet faithful to what was asked.
         let _ = spec.modified_at;
-        self.occupant(root, dest)
+        let mut entry = self
+            .occupant(root, dest)
             .await?
-            .ok_or_else(|| FilesFault::Io(format!("{dest}: landed and then vanished")))
+            .ok_or_else(|| FilesFault::Io(format!("{dest}: landed and then vanished")))?;
+        // The etag the caller passes back as `Expect::Content` on its
+        // next save — computed under the landing's lock, so it names
+        // exactly the bytes this call put there.
+        entry.content = content;
+        Ok(entry)
     }
 }
 
@@ -792,6 +1060,33 @@ mod tests {
         RootPath::parse(s).expect("path")
     }
 
+    #[test]
+    fn received_ranges_merge_and_their_holes_are_what_is_missing() {
+        let mut have = Vec::new();
+        merge_range(&mut have, 10, 20);
+        merge_range(&mut have, 0, 5);
+        merge_range(&mut have, 18, 30);
+        merge_range(&mut have, 5, 5);
+        assert_eq!(
+            have,
+            vec![
+                ChunkRange { start: 0, end: 5 },
+                ChunkRange { start: 10, end: 30 }
+            ]
+        );
+        assert_eq!(
+            missing(&have, 40),
+            vec![
+                ChunkRange { start: 5, end: 10 },
+                ChunkRange { start: 30, end: 40 }
+            ]
+        );
+        merge_range(&mut have, 5, 10);
+        merge_range(&mut have, 30, 40);
+        assert!(missing(&have, 40).is_empty(), "every byte arrived");
+        assert!(missing(&[], 0).is_empty(), "an empty file needs nothing");
+    }
+
     fn spec(size: u64) -> UploadSpec {
         UploadSpec {
             root_id: RootId::generate(),
@@ -799,6 +1094,7 @@ mod tests {
             size,
             content: None,
             modified_at: None,
+            expect: None,
         }
     }
 
@@ -900,6 +1196,8 @@ mod tests {
             Session {
                 spec: spec(1),
                 expires_at: now + Duration::hours(1),
+                received: Vec::new(),
+                owner: None,
             },
         );
         uploads.0.insert(
@@ -907,6 +1205,8 @@ mod tests {
             Session {
                 spec: spec(1),
                 expires_at: now - Duration::seconds(1),
+                received: Vec::new(),
+                owner: None,
             },
         );
 

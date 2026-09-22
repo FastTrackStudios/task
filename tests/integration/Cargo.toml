@@ -20,6 +20,9 @@ path = "src/lib.rs"
 architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
 files-sync = { workspace = true }
+# The client an app holds — the chapter an app's store is proved through.
+files-client = { workspace = true }
+files-proto = { workspace = true, features = ["vox"] }
 task-proto = { workspace = true }
 # The wiki lane: registry, pages, subscriptions and Edit Requests, all
 # reached as a signed-in person on the org router.

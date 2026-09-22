@@ -64,6 +64,25 @@ pub struct AdoptRequest {
     pub hash_content: bool,
 }
 
+/// A new, empty root, made where the org keeps its files.
+///
+/// The counterpart to [`AdoptRequest`] for a client that has no folder on
+/// the server to point at — which is every app that uses Task as its
+/// store. Signal wanting somewhere to keep impulse responses asks for
+/// `signal/impulse-responses` and gets a root there; it never learns, or
+/// needs to learn, a server path.
+#[derive(Debug, Clone, PartialEq, Facet)]
+#[repr(C)]
+pub struct CreateRequest {
+    /// Where, relative to the org's files area: `signal/irs`. Missing
+    /// parents are made. May not escape the area, and may not name a
+    /// directory that already holds anything but this same root.
+    pub dir: String,
+    pub name: String,
+    /// Fixed for the root's life.
+    pub flavor: RootFlavor,
+}
+
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(u8)]
 pub enum RootEvent {
@@ -90,6 +109,18 @@ pub trait RootsService {
     /// Fails with [`FilesFault::AlreadyRoot`] if the path is one already,
     /// and [`FilesFault::NotADirectory`] if it is not a directory.
     async fn adopt(&self, request: AdoptRequest) -> Result<FileRootInfo, FilesFault>;
+
+    /// Make a new, empty root in the org's files area.
+    ///
+    /// Idempotent on `dir`: asking again for a directory that is already
+    /// a root returns that root, so an app can call this on every start
+    /// to find its store rather than remembering whether it has made one.
+    /// A directory that exists and is *not* a root is refused with
+    /// [`FilesFault::Exists`] — creating is never adopting by accident.
+    ///
+    /// Open to anyone who may write in the org; a caller who holds only
+    /// grants on other people's roots may not mint roots of their own.
+    async fn create(&self, request: CreateRequest) -> Result<FileRootInfo, FilesFault>;
 
     /// Resume an adoption left in [`AdoptionPhase::Paused`]. Continues
     /// from where it stopped; work in flight when it stopped is redone,

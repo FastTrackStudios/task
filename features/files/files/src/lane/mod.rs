@@ -20,7 +20,9 @@
 //! same change that grants it.
 
 pub mod access;
+pub mod caller;
 pub mod curation;
+pub mod events;
 pub mod federation;
 pub mod hosts;
 pub mod ingest;

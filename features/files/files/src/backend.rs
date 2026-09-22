@@ -366,6 +366,15 @@ pub struct FilesBackend {
     /// never need it, and opening is async where `FilesBackend::new` is
     /// not.
     federation_blobs: Arc<tokio::sync::OnceCell<iroh_blobs::store::fs::FsStore>>,
+    /// The v2 stream's hub: every lane mutation publishes its own
+    /// [`files_proto::service::FilesEvent`] here, and legacy events are
+    /// translated into it. Separate from `events` because the two
+    /// subscriptions carry different payloads and neither should have
+    /// to filter the other's.
+    lane_events: tokio::sync::broadcast::Sender<files_proto::service::FilesEvent>,
+    /// The server's membership table, injected — the role half of what a
+    /// caller may do. See [`crate::lane::caller`].
+    memberships: Arc<std::sync::RwLock<Option<Arc<dyn crate::lane::caller::Memberships>>>>,
 }
 
 // Manual impl: `PubSub` and the repo cache carry no `Debug`.
@@ -519,8 +528,24 @@ impl FilesBackend {
             rendition_gen_locks: Arc::new(Mutex::new(HashMap::new())),
             rendition_open_lock: Arc::new(tokio::sync::Mutex::new(())),
             events: architect::PubSub::sliding(256),
+            lane_events: tokio::sync::broadcast::channel(1024).0,
             federation_blobs: Arc::new(tokio::sync::OnceCell::new()),
+            memberships: Arc::new(std::sync::RwLock::new(None)),
         })
+    }
+
+    /// The injected membership table — see [`crate::lane::caller`].
+    pub(crate) fn memberships_slot(
+        &self,
+    ) -> &std::sync::RwLock<Option<Arc<dyn crate::lane::caller::Memberships>>> {
+        &self.memberships
+    }
+
+    /// The v2 lanes' event hub — see [`crate::lane::events`].
+    pub(crate) fn lane_events(
+        &self,
+    ) -> &tokio::sync::broadcast::Sender<files_proto::service::FilesEvent> {
+        &self.lane_events
     }
 
     /// The iroh-blobs store [`crate::lane::federation`]'s `open_relay`
@@ -732,6 +757,44 @@ impl FilesBackend {
         self.create_root_inner(path, name, flavor)
     }
 
+    /// `RootsService::create`'s body: make `<files area>/<rel>` and adopt
+    /// it, or return the root already there. `bool` is whether it is new.
+    ///
+    /// The files area is also this backend's own data directory, so the
+    /// names it keeps its bookkeeping under are refused as a first
+    /// segment — an app asking for `uploads` must not be handed the
+    /// staging directory.
+    pub(crate) fn create_fresh_root(
+        &self,
+        rel: &files_proto::path::RootPath,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<Result<(FileRootInfo, bool), files_proto::error::FilesFault>, Error> {
+        use files_proto::error::FilesFault;
+        const RESERVED: [&str; 4] = ["uploads", "federation-blobs", "stores", "roots.json"];
+        let first = rel.as_str().split('/').next().unwrap_or_default();
+        if first.starts_with('.') || RESERVED.contains(&first) {
+            return Ok(Err(FilesFault::invalid(format!(
+                "`{first}` is reserved in the files area; choose another directory"
+            ))));
+        }
+        let dir = self.confine_root.join(rel.as_str());
+        if dir.exists() {
+            let canonical = self.confine(&dir)?;
+            if let Some(existing) = self
+                .registry_list()
+                .into_iter()
+                .find(|r| r.local_tree() == Some(canonical.as_path()))
+            {
+                return Ok(Ok((existing, false)));
+            }
+            return Ok(Err(FilesFault::Exists { path: rel.clone() }));
+        }
+        std::fs::create_dir_all(&dir)?;
+        let canonical = self.confine(&dir)?;
+        Ok(Ok((self.register_root(canonical, name, flavor)?, true)))
+    }
+
     pub(crate) fn registry_list(&self) -> Vec<FileRootInfo> {
         self.registry.list()
     }
@@ -866,6 +929,12 @@ impl FilesBackend {
     // the catalogue's, since a subscriber that missed events converges by
     // reading the catalogue rather than by walking the tree
     fn publish(&self, event: FilesEvent) {
+        // The v2 stream hears every legacy event too, translated, so a
+        // v2 subscriber misses nothing the cadence engine or a legacy
+        // caller did.
+        if let Some(v2) = crate::lane::events::from_legacy(&event) {
+            crate::lane::events::publish(self, v2);
+        }
         self.events.publish(event);
     }
 
@@ -4311,6 +4380,18 @@ impl FilesBackend {
         let owned = path.to_path_buf();
         self.with_version_store(root_id, |vs| {
             drive_off_worker(vs.chunks().write_path(&owned))
+        })?
+        .map(|file_id| file_id.to_string())
+        .map_err(|e| to_files_error(Error::VersionStore(e.into())))
+    }
+
+    /// The content address the file at `path` would get in this root's
+    /// store, writing nothing — the etag a conditional write compares.
+    /// Same thread-safety story as [`Self::sync_ingest_path`].
+    pub fn sync_probe_path(&self, root_id: Uuid, path: &Path) -> Result<String, FilesError> {
+        let owned = path.to_path_buf();
+        self.with_version_store(root_id, |vs| {
+            drive_off_worker(vs.chunks().probe_path(&owned))
         })?
         .map(|file_id| file_id.to_string())
         .map_err(|e| to_files_error(Error::VersionStore(e.into())))

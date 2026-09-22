@@ -147,6 +147,10 @@ pub struct Resource {
     /// Root-relative path of those bytes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content_path: String,
+    /// The content address the app pinned, when it pinned one — the etag
+    /// the Files lane reported for exactly these bytes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_id: String,
     /// When the owning app last changed the resource (`RFC 3339`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub updated_at: String,

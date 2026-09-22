@@ -169,6 +169,14 @@ permit table as Task's own web app (ADR 0003, decision 4). A library is a
 musician's library is one qualified reference
 (`guest.example/song:hosanna`) beside a local one.
 
+The Files half of that is built for an app to use (ADR 0005): an app asks
+for a root by name, saves into it safely — a save against a copy another
+machine has since replaced is refused rather than applied — reads back
+whole or by range, and follows a manifest's pinned `ContentRef` to the
+exact bytes it named. A member reaches their org's roots by their role; a
+client granted one folder reaches that folder. `files-client` is the crate
+an app holds, the same in a browser and natively.
+
 Honest gaps, as of this writing:
 
 - A qualified reference to an organisation on **another server** parses

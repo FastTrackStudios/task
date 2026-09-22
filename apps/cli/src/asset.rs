@@ -48,6 +48,7 @@ pub fn content_ref(root: Option<String>, path: Option<String>) -> ContentRef {
     ContentRef {
         root_id: root.unwrap_or_default(),
         path: path.unwrap_or_default(),
+        ..Default::default()
     }
 }
 

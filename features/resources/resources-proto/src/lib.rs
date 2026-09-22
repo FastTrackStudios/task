@@ -466,6 +466,18 @@ pub struct ContentRef {
     #[serde(default)]
     #[facet(default)]
     pub path: String,
+    /// The exact bytes, when the app pinned them: the content address the
+    /// Files lane reported when they were saved (`CatalogueEntry::content`
+    /// from an upload's `complete`). Empty means "whatever is at `path`".
+    ///
+    /// A pin is what lets a manifest mean one recording rather than a
+    /// path someone may overwrite: a reader resolving it finds out
+    /// whether `path` still holds those bytes, and can fetch them by
+    /// address (`MediaService::read_content`) while any root here still
+    /// does. Defaulted, so every reference written before it parses.
+    #[serde(default)]
+    #[facet(default)]
+    pub content: String,
 }
 
 impl ContentRef {
@@ -474,6 +486,12 @@ impl ContentRef {
     #[must_use]
     pub fn is_bound(&self) -> bool {
         !self.root_id.is_empty() && !self.path.is_empty()
+    }
+
+    /// Whether the reference names exact bytes rather than a path.
+    #[must_use]
+    pub fn is_pinned(&self) -> bool {
+        self.is_bound() && !self.content.is_empty()
     }
 }
 

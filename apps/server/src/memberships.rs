@@ -545,6 +545,70 @@ fn esc(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// One org's membership rows, as the Files lanes ask about them — the
+/// role half of what a caller may do there (`files::lane::caller`).
+///
+/// Cached briefly per principal: a lane authorises every path it touches,
+/// and a search or a catalogue page can ask dozens of times in one call.
+/// A role change therefore reaches the files lanes within
+/// [`FilesRoles::TTL`]; a removed row stops conveying by then too.
+pub struct FilesRoles {
+    memberships: std::sync::Arc<Memberships>,
+    slug: String,
+    cache: std::sync::Mutex<
+        std::collections::HashMap<Uuid, (std::time::Instant, Option<files::lane::caller::OrgRole>)>,
+    >,
+}
+
+impl FilesRoles {
+    pub const TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+    #[must_use]
+    pub fn new(memberships: std::sync::Arc<Memberships>, slug: impl Into<String>) -> Self {
+        Self {
+            memberships,
+            slug: slug.into(),
+            cache: std::sync::Mutex::default(),
+        }
+    }
+}
+
+impl std::fmt::Debug for FilesRoles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilesRoles")
+            .field("slug", &self.slug)
+            .finish_non_exhaustive()
+    }
+}
+
+impl files::lane::caller::Memberships for FilesRoles {
+    fn role(&self, principal: files::id::PrincipalId) -> files::lane::caller::RoleFuture<'_> {
+        Box::pin(async move {
+            let id = principal.get();
+            if let Some((at, role)) = self.cache.lock().expect("roles cache").get(&id)
+                && at.elapsed() < Self::TTL
+            {
+                return *role;
+            }
+            // A read that fails is no row, never a default one: refusing
+            // a member for ten seconds is recoverable, handing a stranger
+            // the org is not.
+            let role = self
+                .memberships
+                .role_for(id, &self.slug)
+                .await
+                .ok()
+                .flatten()
+                .map(|m| files::lane::caller::OrgRole::from_row(m.role.as_deref()));
+            self.cache
+                .lock()
+                .expect("roles cache")
+                .insert(id, (std::time::Instant::now(), role));
+            role
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

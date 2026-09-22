@@ -85,6 +85,9 @@ workstream = { workspace = true, features = ["vox"] }
 # Files RPC surface v1 (issue #259/ADR 0001): create-root / browse /
 # chain / checkpoint-now over `task-files-version-store`.
 files = { workspace = true }
+# The client an app holds. The demo seed saves its bound sample through
+# it, so the planted world is reached the way an app reaches Task.
+files-client = { workspace = true }
 # `serve_org_iroh` builds the federation relay's serving handler
 # (`BlobsProtocol`) from an org's `FilesBackend::federation_blobs` store.
 iroh-blobs = { workspace = true }

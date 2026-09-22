@@ -139,25 +139,16 @@ async fn a_second_engineer_is_warned_and_not_blocked() {
         .expect("an advisory lock advises — it does not refuse");
 }
 
-/// **The advisory lock cannot tell two people apart.**
+// t[verify files.concurrency.advisory-lock] — the holder is named
+/// **The advisory lock tells two people apart.**
 ///
-/// `hold` records `this_principal()` — the *process's* principal — so
-/// every hold on a server is the same holder whoever signed the call.
-/// `occupancy` says as much where it is implemented: "without a caller
-/// identity on this surface the server cannot say which one is else".
-///
-/// So what the test above really establishes is that somebody has it
-/// open and that a second caller is not blocked. The half of
-/// `files.concurrency.advisory-lock` that names *who* — the half that
-/// makes the warning act on-able, since "someone" and "Sam, twenty
-/// minutes ago" are different messages — is not reachable yet.
-///
-/// This is the same identity gap `people.rs` describes for the access
-/// lane's owner shortcut, in a lane that has not closed it. Asserted
-/// deliberately, so closing it is a decision someone makes and sees fail
-/// here rather than a surprise nobody wrote down.
+/// The half of `files.concurrency.advisory-lock` that names *who* — the
+/// half that makes the warning act on-able, since "someone" and "Sam,
+/// twenty minutes ago" are different messages. `hold` once recorded the
+/// process's principal for every caller; it now records the caller the
+/// gate resolved, so two people holding one file are two holders.
 #[tokio::test]
-async fn two_people_holding_one_file_are_recorded_as_one() {
+async fn two_people_holding_one_file_are_recorded_as_two() {
     let s = Scenario::open().await;
 
     let hers = s
@@ -176,14 +167,14 @@ async fn two_people_holding_one_file_are_recorded_as_one() {
         .await
         .expect("Sam holds");
 
-    assert_eq!(
-        hers.principal, his.principal,
-        "if this fails, the hold lane learned who the caller is — good, \
-         and this test should become an assertion that they differ"
-    );
     assert_ne!(
-        s.people.alice.subject, s.people.sam.subject,
-        "the two are different people, which is what makes the above a gap"
+        hers.principal, his.principal,
+        "two people holding one file are two holders"
+    );
+    assert_eq!(
+        files::service::access::Subject::Person(his.principal),
+        s.people.sam.subject,
+        "and the holder is the person who signed the call"
     );
 }
 

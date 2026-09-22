@@ -7170,6 +7170,7 @@ version = "0.1.0"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.8.2)",
  "architect-permissions 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.8.2)",
+ "architect-telemetry",
  "async-trait",
  "bao-tree",
  "blake3",
@@ -7199,6 +7200,19 @@ dependencies = [
  "vault",
  "vault-entity",
  "vox",
+]
+
+[[package]]
+name = "files-client"
+version = "0.1.0"
+dependencies = [
+ "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.8.2)",
+ "files",
+ "files-proto",
+ "futures",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -10837,7 +10851,9 @@ dependencies = [
  "collection-proto",
  "email-proto",
  "files",
+ "files-client",
  "files-domain",
+ "files-proto",
  "files-store",
  "files-sync",
  "iroh",
@@ -21279,6 +21295,7 @@ dependencies = [
  "eyre",
  "facet",
  "files",
+ "files-client",
  "files-daemon",
  "files-domain",
  "files-proto",

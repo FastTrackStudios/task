@@ -58,6 +58,21 @@ async fn the_vault_is_a_root_from_boot_and_stays_one() {
         .canonicalize()
         .expect("the vault exists");
 
+    // A root is listed only to someone who holds something in it
+    // (`files.access.role-baseline`), and the suite's people hold only
+    // what they were given — so Alice, who owns ACME, is given its vault.
+    s.orgs
+        .acme
+        .backend
+        .grant(
+            s.people.alice.subject.clone(),
+            s.orgs.acme.backend.vault_root_id().expect("a vault root"),
+            RootPath::root(),
+            Holds::Owner.capabilities(),
+        )
+        .await
+        .expect("ACME grants Alice its vault");
+
     let listed = s
         .as_alice()
         .await

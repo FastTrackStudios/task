@@ -98,23 +98,16 @@ async fn a_favourite_is_remembered() {
     );
 }
 
-/// **A favourite is not per-person over the wire.**
+// t[verify files.organise.manual] — per person, over the wire
+/// **A favourite is per-person over the wire.**
 ///
-/// `set_favourite` keys the shortlist on `this_principal()` — the
-/// *process's* principal — so on a server every caller shares one
-/// shortlist. The lane's own docs name this: nothing on these traits
-/// carries a caller.
-///
-/// `files.organise.manual` says "a favourite is per-person", and the
-/// storage is already keyed by principal, so the gap is entirely in
-/// which principal arrives. It is the same identity gap `people.rs`
-/// describes for the access lane and `versions.rs` for the advisory
-/// lock — one cause, three lanes.
-///
-/// Asserted deliberately, so closing it fails here rather than
-/// surprising someone.
+/// `files.organise.manual` says "a favourite is per-person". The storage
+/// was always keyed by principal; what this chapter once pinned as a gap
+/// was *which* principal arrived — the process's, the same for every
+/// caller. The lanes now take the caller the gate resolved
+/// (`files::lane::caller`), so Alice's star is Alice's.
 #[tokio::test]
-async fn one_persons_shortlist_is_currently_everyones() {
+async fn one_persons_shortlist_is_theirs_alone() {
     let s = Scenario::open().await;
 
     s.as_alice()
@@ -134,9 +127,8 @@ async fn one_persons_shortlist_is_currently_everyones() {
         .expect("Sam reads the marks");
 
     assert!(
-        his.favourite,
-        "if this fails, the organise lane learned who the caller is — good, \
-         and this test should become an assertion that Sam sees no star"
+        !his.favourite,
+        "Alice's shortlist is hers: Sam sees no star on the take"
     );
 }
 

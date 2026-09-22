@@ -28,6 +28,37 @@ pub struct UploadSpec {
     /// server answer "already have it" before a byte moves.
     pub content: Option<ContentId>,
     pub modified_at: Option<DateTime<Utc>>,
+    /// What the caller believes is at `path` right now — the
+    /// precondition that turns a save into a *safe* save.
+    ///
+    /// Checked when the upload lands, under the root's lock, against the
+    /// bytes actually on disk. A mismatch fails with
+    /// [`FilesFault::Stale`] and lands nothing, so two machines saving
+    /// the same session file cannot silently overwrite each other: the
+    /// second one is told, and decides. `None` asserts nothing — the
+    /// [`OnConflict`] choice alone governs.
+    ///
+    /// Defaulted on the wire so a client written before the field
+    /// existed still decodes.
+    #[facet(default)]
+    pub expect: Option<Expect>,
+}
+
+/// A precondition on what occupies an upload's destination.
+///
+/// The content address is the one a [`CatalogueEntry`] or a completed
+/// upload reported — an etag the server issued, never one the client
+/// derived, because the address depends on how the store placed the
+/// bytes and only the server knows that.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[repr(u8)]
+pub enum Expect {
+    /// Nothing is there. Create-only: a save that must not displace
+    /// anything, whatever the conflict policy says.
+    Absent,
+    /// Exactly this content is there. The optimistic-concurrency case:
+    /// replace what I last read, and nothing newer.
+    Content(ContentId),
 }
 
 /// What the server wants, having compared the spec against what it holds.

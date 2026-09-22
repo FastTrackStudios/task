@@ -69,6 +69,7 @@ members = [
     # email-* crates without the full task-ui shell.
     "features/email/examples/email-client",
     "features/files/files",
+    "features/files/files-client",
     "features/files/files-daemon",
     "features/files/files-daemon-proto",
     "features/files/files-domain",
@@ -260,6 +261,7 @@ agent-worktree = { path = "features/agent/agent-worktree" }
 # features/files — the Files platform (CAS chunk store, version store,
 # RPC surface, placement, sync, transcode, WebDAV bridge)
 files = { path = "features/files/files" }
+files-client = { path = "features/files/files-client" }
 files-daemon = { path = "features/files/files-daemon" }
 files-daemon-proto = { path = "features/files/files-daemon-proto" }
 files-domain = { path = "features/files/files-domain" }

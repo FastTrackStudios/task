@@ -28,6 +28,7 @@
 //! `tests/` directly would quietly become a forty-first binary again.
 
 mod adoption;
+mod app_store;
 mod archive;
 mod charts;
 mod collaboration;

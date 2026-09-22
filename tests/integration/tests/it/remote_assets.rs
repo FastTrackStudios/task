@@ -95,6 +95,7 @@ async fn a_foreign_content_ref_reaches_its_bytes_through_the_accepted_root() {
     let bound = ContentRef {
         root_id: acme_session.to_string(),
         path: take_path.to_string(),
+        ..Default::default()
     };
     alice
         .resources()
@@ -296,6 +297,7 @@ async fn a_subscribed_sample_plays_from_the_offered_subtree_and_nothing_beside_i
                 ContentRef {
                     root_id: samples_root.to_string(),
                     path: path.into(),
+                    ..Default::default()
                 },
             ))
             .await

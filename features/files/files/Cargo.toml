@@ -14,6 +14,7 @@ facet-json = { workspace = true }
 files-store.workspace = true
 architect = { workspace = true }
 architect-permissions = { workspace = true }
+architect-telemetry = { workspace = true }
 files-domain.workspace = true
 files-proto = { workspace = true, features = ["vox"] }
 async-trait = "0.1"

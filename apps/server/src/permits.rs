@@ -440,6 +440,11 @@ table!(FILES_STREAM, "files-stream", "files/**", [rd "events"]);
 table!(FILES_ROOTS, "files-roots", "files/**", [
     wr "adopt", wr "resume_adoption", wr "pause_adoption", rd "adoption_progress",
     rd "list", rd "get", wr "rename_root", wa "release",
+    // `create` makes a new, empty directory in the org's files area and
+    // adopts it — the way an app that has no server path gets a store.
+    // Additive like `adopt`; the lane itself refuses callers whose role
+    // does not write.
+    wr "create",
     // `wa`, matching `release`: it changes which roots this org's
     // servers hold, and although it moves no byte and destroys nothing,
     // "who hosts what" is the same class of fact as "who can find
@@ -453,6 +458,11 @@ table!(FILES_TREE, "files-tree", "files/**", [
     rd "browse", rd "resolve", rd "entry", rd "catalogue", rd "changes_since",
     rd "freshness",
 ]);
+
+// The v2 live stream (`TreeService::events`), its own descriptor like
+// every `#[subscribe]` sibling. A read: it carries structure and
+// metadata, filtered per subscriber to what they may see.
+table!(FILES_TREE_STREAM, "files-tree-stream", "files/**", [rd "events"]);
 
 // The write surface (`files.write.surface`) — the lane that did not
 // exist at all until now.
@@ -1247,6 +1257,11 @@ pub fn mounts() -> Vec<Mount> {
             "core",
             files_proto::media_stream_descriptor(),
             FILES_MEDIA_STREAM,
+        ),
+        m(
+            "core",
+            files_proto::tree_stream_descriptor(),
+            FILES_TREE_STREAM,
         ),
         m("core", files_proto::search_descriptor(), FILES_SEARCH),
         m("core", files_proto::review_descriptor(), FILES_REVIEW),

@@ -116,6 +116,7 @@ impl Rig {
             size,
             content,
             modified_at: None,
+            expect: None,
         }
     }
 
@@ -199,23 +200,22 @@ async fn an_upload_with_no_content_address_pays_in_full() {
     assert_eq!(plan.needed[0].start, 0);
     assert_eq!(plan.needed[0].end, 4_096);
 
-    // And it cannot be completed, because nothing in this codebase
-    // receives bytes yet. A decision on record, not a silent truncation.
+    // And it cannot be completed before the bytes are sent — a refusal
+    // that says how many are owed, not a silent truncation.
     match rig
         .backend
         .complete(plan.upload_id, OnConflict::Fail)
         .await
-        .expect_err("no byte lane exists")
+        .expect_err("bytes are still owed")
     {
-        FilesFault::Internal(why) => assert!(
-            why.contains("not yet implemented: the byte lane"),
-            "the refusal must name what is missing: {why}"
+        FilesFault::Invalid(why) => assert!(
+            why.contains("4096 bytes still outstanding"),
+            "the refusal must say what is missing: {why}"
         ),
-        other => panic!("expected the byte-lane refusal, got {other:?}"),
+        other => panic!("expected the outstanding-bytes refusal, got {other:?}"),
     }
 
-    // The session survives the refusal, so nothing is lost when the lane
-    // does land.
+    // The session survives the refusal, so the client sends and retries.
     assert!(rig.backend.progress(plan.upload_id).await.is_ok());
     assert!(
         !rig.dir.join("Audio Files/unknown.wav").exists(),
@@ -263,6 +263,7 @@ async fn an_interrupted_upload_resumes_rather_than_restarting() {
             size,
             content: Some(content.clone()),
             modified_at: None,
+            expect: None,
         })
         .await
         .expect("begin");
