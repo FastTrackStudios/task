@@ -51,7 +51,10 @@ fn write_take(path: &std::path::Path, len: u64) -> blake3::Hash {
     let mut buf = vec![0u8; 1 << 20];
     let mut left = len;
     while left > 0 {
-        for word in buf.chunks_exact_mut(8) {
+        // `chunks_mut`, not `chunks_exact_mut`: the buffer is a multiple
+        // of eight, so both walk the same words, and newer clippy
+        // (1.98, CI's) rejects the exact form with a constant size.
+        for word in buf.chunks_mut(8) {
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;
