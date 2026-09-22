@@ -481,6 +481,7 @@ fn ShareReviewButton() -> Element {
                         comment: true,
                         download: false,
                         file_request: false,
+                        documents: false,
                     };
                     match crate::mint_share_link(&org, target, Some(caps)).await {
                         Ok(url) => {

@@ -135,6 +135,17 @@ plant() {
   ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/acme" \
       cargo run --quiet -p task-server -- admin demo --org rockstars-of-tomorrow )
   echo
+  # Membership rows for the people who belong to their org — what the
+  # Files lanes read a role from (ADR 0005 decision 1). Without them an
+  # owner signed in from an app holds only the grants the seed made, and
+  # `ensure_root` — the first thing an integrating app calls — is refused.
+  # Casey is left out on purpose: a client holds one granted folder and
+  # nothing beside it.
+  echo ">> recording memberships"
+  for who in acme:alice@acme.test acme:sam@acme.test acme:riley@rockstars.test vnt:victor@vnt.test; do
+    ( cd "$REPO_ROOT" && TASK_DATA_ROOT="$DEMO_ROOT/${who%%:*}" \
+        cargo run --quiet -p task-server -- admin adopt-principal --email "${who#*:}" >/dev/null )
+  done
   echo ">> planted. next: '$0 serve' in one terminal, '$0 web' in another."
 }
 

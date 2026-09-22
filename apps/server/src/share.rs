@@ -92,6 +92,7 @@ impl StoredLink {
             comment: self.capability == "comment",
             download: false,
             file_request: false,
+            documents: false,
         })
     }
 
@@ -907,9 +908,28 @@ pub async fn share_browse_handler(
     render_browse(&org, &slug, &token, &link, &scope, &rel, &q).await
 }
 
+/// Where a media file's committed proxy lives: `Media/Bass.wav` →
+/// `Media/Proxies/Bass.ogg` — a folder beside the media, so the proxies
+/// move and sync with what they stand in for. `None` for a path that is
+/// already inside a `Proxies` folder.
+// t[impl files.access.link-proxies]
+pub fn proxy_path(media: &str) -> Option<String> {
+    let (dir, name) = media.rsplit_once('/').map_or(("", media), |(d, n)| (d, n));
+    if dir.rsplit('/').next() == Some("Proxies") || name.is_empty() {
+        return None;
+    }
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    Some(if dir.is_empty() {
+        format!("Proxies/{stem}.ogg")
+    } else {
+        format!("{dir}/Proxies/{stem}.ogg")
+    })
+}
+
 /// `GET /org/{slug}/share/{token}/rendition/{kind}/{*rel}` — stream a
-/// derived rendition. This is the ONLY media a view-only link serves:
-/// originals need the `download` capability (AC 3).
+/// rendition. This is the ONLY media a view-only link serves: originals
+/// need the `download` capability (AC 3). An `audio` (or `audio-aac`) request for media
+/// with a committed proxy beside it ([`proxy_path`]) streams that file.
 pub async fn share_rendition_handler(
     State(state): State<AppState>,
     AxPath((slug, token, kind, rel)): AxPath<(String, String, String, String)>,
@@ -938,6 +958,32 @@ pub async fn share_rendition_handler(
         return (StatusCode::NOT_FOUND, "this link serves one file").into_response();
     }
     let full = join_scope(&scope.subpath, &rel);
+    // A committed proxy stands in for its media: a session keeps the
+    // proxies it plays from beside its takes, synced with them, so a link
+    // streams those rather than deriving its own.
+    if wire_kind == files_proto::RenditionKind::Audio
+        && let Some(proxy) = proxy_path(&full)
+        && let Ok((total, content_id)) = org
+            .files
+            .resolve_source(scope.root_id, proxy, scope.at.clone())
+            .await
+    {
+        architect_telemetry::wide::set("share.outcome", "rendition-proxy-file");
+        org.shares.log_access(&token, "rendition", &rel);
+        let range = headers
+            .get(header::RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| crate::parse_byte_range(s, total));
+        return crate::stream_response(
+            &org,
+            scope.root_id,
+            &content_id,
+            crate::StreamFrom::Source,
+            "audio/ogg",
+            total,
+            range,
+        );
+    }
     let rendition = match files::RootPath::parse(&full) {
         Ok(path) => {
             org.files
@@ -1058,6 +1104,130 @@ fn sanitize_filename(name: &str) -> String {
         "download".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+/// The most a link's `documents` capability serves of one file. A session
+/// or a chart is kilobytes; anything past this is not what the capability
+/// is for.
+pub const DOCUMENT_MAX: u64 = 16 * 1024 * 1024;
+
+/// `GET /org/{slug}/share/{token}/doc/{*rel}` — one of the slice's
+/// documents, whole (`files.access.link-documents`): what an app opens the
+/// folder by, for a link carrying `documents`. Media is refused here
+/// whatever it is named — told by its bytes ([`is_media`]) as well as its
+/// name — and stays renditions-only unless the link also carries
+/// `download`.
+// t[impl files.access.link-documents]
+pub async fn share_document_handler(
+    State(state): State<AppState>,
+    AxPath((slug, token, rel)): AxPath<(String, String, String)>,
+    Query(q): Query<ShareQuery>,
+) -> Response {
+    use architect_telemetry::wide;
+    let (org, link) = match gate(&state, &slug, &token, q.pw.as_deref(), false) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
+    if !link.capabilities().documents {
+        wide::set("share.outcome", "documents-not-granted");
+        return (StatusCode::FORBIDDEN, "this link does not open documents").into_response();
+    }
+    let rel = match clean_rel(&rel) {
+        Ok(r) => r,
+        Err(resp) => return *resp,
+    };
+    let scope = match files_scope(&org, &link).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return (StatusCode::NOT_FOUND, "not a files link").into_response(),
+        Err(resp) => return resp,
+    };
+    if let Some(only) = &scope.file_only
+        && rel != *only
+    {
+        return (StatusCode::NOT_FOUND, "this link serves one file").into_response();
+    }
+    let full = join_scope(&scope.subpath, &rel);
+    let (len, content_id) = match org
+        .files
+        .resolve_source(scope.root_id, full, scope.at.clone())
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::NOT_FOUND, format!("document: {e}")).into_response(),
+    };
+    wide::set("share.document_len", i64::try_from(len).unwrap_or(i64::MAX));
+    if len > DOCUMENT_MAX {
+        wide::set("share.outcome", "document-too-large");
+        return (StatusCode::FORBIDDEN, "too large to be a document").into_response();
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    if let Err(e) = org
+        .files
+        .read_source_content(scope.root_id, &content_id, &mut bytes)
+        .await
+    {
+        tracing::error!(?e, "share document: read failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "document read failed").into_response();
+    }
+    if is_media(&rel, &bytes) {
+        wide::set("share.outcome", "document-is-media");
+        return (
+            StatusCode::FORBIDDEN,
+            "media is served as renditions, not documents",
+        )
+            .into_response();
+    }
+    wide::set("share.outcome", "document");
+    org.shares.log_access(&token, "document", &rel);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, document_mime(&rel))],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Whether a file is media rather than a document: by its name, and by
+/// its first bytes, so renaming a take does not turn it into a document.
+fn is_media(name: &str, bytes: &[u8]) -> bool {
+    const MEDIA_EXT: &[&str] = &[
+        "wav", "wave", "aif", "aiff", "flac", "mp3", "ogg", "oga", "opus", "m4a", "aac", "caf",
+        "mp4", "m4v", "mov", "mkv", "webm", "avi", "mxf", "w64", "rf64",
+    ];
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if MEDIA_EXT.contains(&ext.as_str()) {
+        return true;
+    }
+    let at = |offset: usize, magic: &[u8]| bytes.get(offset..offset + magic.len()) == Some(magic);
+    at(0, b"RIFF")
+        || at(0, b"RF64")
+        || at(0, b"FORM")
+        || at(0, b"fLaC")
+        || at(0, b"OggS")
+        || at(0, b"ID3")
+        || at(0, b"caff")
+        || at(0, b"\x1a\x45\xdf\xa3")
+        || at(4, b"ftyp")
+        || matches!(bytes, [0xff, b, ..] if b & 0xe0 == 0xe0)
+}
+
+/// A document's content type, from its name. Text formats say they are
+/// UTF-8 text, so a browser `fetch().text()` reads them as they are.
+fn document_mime(name: &str) -> &'static str {
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "json" => "application/json",
+        "rpp" | "kf" | "txt" | "md" | "styx" | "toml" | "csv" | "lrc" => {
+            "text/plain; charset=utf-8"
+        }
+        _ => "application/octet-stream",
     }
 }
 
@@ -1242,7 +1412,10 @@ fn rendition_kind_from_tag(tag: &str) -> Option<files_proto::RenditionKind> {
     Some(match tag {
         "proxy-1080" => K::Proxy1080,
         "proxy-720" => K::Proxy720,
-        "audio-aac" => K::Audio,
+        // `audio` is the file's audio proxy whatever its codec — a committed
+        // proxy file when there is one ([`proxy_path`]), the derived AAC
+        // otherwise; `audio-aac` is the derived one's own name.
+        "audio" | "audio-aac" => K::Audio,
         "peaks" => K::Peaks,
         "filmstrip" => K::Filmstrip,
         _ => return None,

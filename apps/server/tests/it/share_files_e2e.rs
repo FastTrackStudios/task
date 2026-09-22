@@ -144,6 +144,7 @@ async fn share_links_scope_gate_and_receipt() -> eyre::Result<()> {
                 comment: false,
                 download: true,
                 file_request: false,
+                documents: false,
             }),
         )
         .await
@@ -241,6 +242,7 @@ async fn share_links_scope_gate_and_receipt() -> eyre::Result<()> {
                 comment: false,
                 download: true,
                 file_request: false,
+                documents: false,
             }),
         )
         .await
@@ -277,6 +279,7 @@ async fn share_links_scope_gate_and_receipt() -> eyre::Result<()> {
                 comment: false,
                 download: false,
                 file_request: false,
+                documents: false,
             }),
         )
         .await
@@ -344,5 +347,145 @@ async fn share_links_scope_gate_and_receipt() -> eyre::Result<()> {
     let (status, _) = get(&format!("{nv_base}/download/takes/cut.mov")).await;
     assert_eq!(status, 200, "existing links keep resolving");
 
+    Ok(())
+}
+
+/// A `documents` link opens a session folder the way a public demo does:
+/// the session and its chart whole, its takes as renditions only — and a
+/// take renamed to look like a document is still a take.
+// t[verify files.access.link-documents]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_documents_link_opens_the_session_not_its_media() -> eyre::Result<()> {
+    let (base, state, root_id, tmp) = boot().await?;
+    let share = svc(&state);
+    let org = state.org("share-test").expect("org hosted");
+    let takes = tmp.path().join("orgs/share-test/files/session/takes");
+    std::fs::write(takes.join("Song.RPP"), b"<REAPER_PROJECT 0.1 \"7.0\"\n>\n")?;
+    std::fs::write(takes.join("Song.kf"), b"Title: Song\n")?;
+    std::fs::write(takes.join("take.txt"), b"RIFF\x24\x00\x00\x00WAVEfmt ")?;
+    crate::support::checkpoint(&org.files, root_id).await?;
+
+    let plain = share
+        .create_link(
+            ShareTarget::Slice {
+                root_id,
+                subpath: "takes".into(),
+            },
+            options(ShareCapabilities::default()),
+        )
+        .await
+        .expect("mint view-only link");
+    let (status, _) = get(&format!(
+        "{base}/org/share-test/share/{}/doc/Song.RPP",
+        plain.token
+    ))
+    .await;
+    assert_eq!(status, 403, "a view-only link opens no documents");
+
+    let demo = share
+        .create_link(
+            ShareTarget::Slice {
+                root_id,
+                subpath: "takes".into(),
+            },
+            options(ShareCapabilities {
+                documents: true,
+                ..ShareCapabilities::default()
+            }),
+        )
+        .await
+        .expect("mint documents link");
+    let link = format!("{base}/org/share-test/share/{}", demo.token);
+
+    let r = reqwest::get(format!("{link}/doc/Song.RPP")).await?;
+    assert_eq!(r.status().as_u16(), 200);
+    assert!(
+        r.headers()[reqwest::header::CONTENT_TYPE]
+            .to_str()?
+            .starts_with("text/plain"),
+        "a session reads as text"
+    );
+    assert!(r.text().await?.starts_with("<REAPER_PROJECT"));
+    let (status, body) = get(&format!("{link}/doc/Song.kf")).await;
+    assert_eq!((status, body.as_str()), (200, "Title: Song\n"));
+
+    // Media is refused whole, by name and by its bytes.
+    let (status, _) = get(&format!("{link}/doc/cut.mov")).await;
+    assert_eq!(status, 403, "a take is not a document");
+    let (status, _) = get(&format!("{link}/doc/take.txt")).await;
+    assert_eq!(status, 403, "a renamed take is still a take");
+    let (status, _) = get(&format!("{link}/download/cut.mov")).await;
+    assert_eq!(status, 403, "documents does not grant download");
+    let (status, _) = get(&format!("{link}/rendition/proxy-720/cut.mov")).await;
+    assert_eq!(status, 200, "the takes still stream as renditions");
+    // Still only the slice.
+    let (status, _) = get(&format!("{link}/doc/..%2Fmix.wav")).await;
+    assert_ne!(status, 200, "traversal must not escape the slice");
+
+    let log = share.access_log(demo.token.clone()).await.expect("log");
+    assert!(
+        log.iter().any(|a| a.kind == "document" && a.path == "Song.RPP"),
+        "document reads are receipted: {log:?}"
+    );
+    Ok(())
+}
+
+/// A take with its proxy committed beside it streams that proxy — whole
+/// or by range — as its audio rendition; the original never serves, and
+/// a take without one falls back to the derived rendition.
+// t[verify files.access.link-proxies]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_committed_proxy_is_the_audio_rendition() -> eyre::Result<()> {
+    const PROXY: &[u8] = b"OggS\x00\x02 a vorbis proxy of the bass";
+    let (base, state, root_id, tmp) = boot().await?;
+    let share = svc(&state);
+    let org = state.org("share-test").expect("org hosted");
+    let takes = tmp.path().join("orgs/share-test/files/session/takes");
+    std::fs::create_dir_all(takes.join("Proxies"))?;
+    std::fs::write(takes.join("Bass.wav"), b"RIFF\x24\x00\x00\x00WAVE the original")?;
+    std::fs::write(takes.join("Proxies/Bass.ogg"), PROXY)?;
+    std::fs::write(takes.join("Keys.wav"), b"AUDIO keys, with no proxy")?;
+    crate::support::checkpoint(&org.files, root_id).await?;
+
+    let link = share
+        .create_link(
+            ShareTarget::Slice {
+                root_id,
+                subpath: "takes".into(),
+            },
+            options(ShareCapabilities::default()),
+        )
+        .await
+        .expect("mint view-only link");
+    let link = format!("{base}/org/share-test/share/{}", link.token);
+
+    let r = reqwest::get(format!("{link}/rendition/audio/Bass.wav")).await?;
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(r.headers()[reqwest::header::CONTENT_TYPE], "audio/ogg");
+    assert_eq!(&r.bytes().await?[..], PROXY, "the committed proxy, not a derived one");
+
+    let r = reqwest::Client::new()
+        .get(format!("{link}/rendition/audio/Bass.wav"))
+        .header(reqwest::header::RANGE, "bytes=0-3")
+        .send()
+        .await?;
+    assert_eq!(r.status().as_u16(), 206, "a proxy streams by range");
+    assert_eq!(
+        r.headers()[reqwest::header::CONTENT_RANGE],
+        format!("bytes 0-3/{}", PROXY.len()).as_str()
+    );
+    assert_eq!(&r.bytes().await?[..], b"OggS");
+
+    let (status, _) = get(&format!("{link}/download/Bass.wav")).await;
+    assert_eq!(status, 403, "the original still never serves");
+    let (status, body) = get(&format!("{link}/rendition/audio/Keys.wav")).await;
+    assert_eq!(status, 200);
+    assert!(body.starts_with("audio-aac:"), "no proxy beside it: the derived rendition: {body}");
+
+    assert_eq!(
+        task_server::share::proxy_path("Media/Bass.wav").as_deref(),
+        Some("Media/Proxies/Bass.ogg")
+    );
+    assert_eq!(task_server::share::proxy_path("Media/Proxies/Bass.ogg"), None);
     Ok(())
 }

@@ -2737,6 +2737,29 @@ pub(crate) fn rendition_stream_response(
     total: u64,
     range: Option<(u64, u64)>,
 ) -> axum::response::Response {
+    stream_response(org, root_id, file_id, StreamFrom::Rendition, mime, total, range)
+}
+
+/// Which store a streamed response reads from.
+#[derive(Clone, Copy)]
+pub(crate) enum StreamFrom {
+    /// The root's private rendition CAS — derived proxies.
+    Rendition,
+    /// The root's own content — a committed proxy file standing in for
+    /// its media (`files.access.link-proxies`).
+    Source,
+}
+
+/// [`rendition_stream_response`] over either store.
+pub(crate) fn stream_response(
+    org: &OrgAppState,
+    root_id: uuid::Uuid,
+    file_id: &str,
+    from: StreamFrom,
+    mime: &str,
+    total: u64,
+    range: Option<(u64, u64)>,
+) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
     let (start, len) = match range {
@@ -2747,10 +2770,19 @@ pub(crate) fn rendition_stream_response(
     let files = org.files.clone();
     let read_file_id = file_id.to_string();
     tokio::spawn(async move {
-        if let Err(e) = files
-            .read_rendition_range(root_id, &read_file_id, start, len, &mut writer)
-            .await
-        {
+        let read = match from {
+            StreamFrom::Rendition => {
+                files
+                    .read_rendition_range(root_id, &read_file_id, start, len, &mut writer)
+                    .await
+            }
+            StreamFrom::Source => {
+                files
+                    .read_source_range(root_id, &read_file_id, start, len, &mut writer)
+                    .await
+            }
+        };
+        if let Err(e) = read {
             match e {
                 files::FilesError::NotFound(_) => {
                     tracing::debug!(%root_id, file_id = read_file_id, "rendition: swept mid-stream");
@@ -2842,6 +2874,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/org/{slug}/share/{token}/download/{*rel}",
             get(share::share_download_handler),
+        )
+        // A slice's documents, whole, for a link carrying `documents`
+        // (`files.access.link-documents`): what a public demo opens a
+        // session by, beside its renditions.
+        .route(
+            "/org/{slug}/share/{token}/doc/{*rel}",
+            get(share::share_document_handler),
         )
         // The guest lane (issue #272): the real RPC surface over an
         // anonymous WebSocket, scoped to the link's Review.

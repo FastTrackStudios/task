@@ -35,6 +35,14 @@ pub(crate) enum FilesCmd {
     /// The machines that sync this org's files.
     #[command(subcommand)]
     Device(FilesDeviceCmd),
+    /// Upload a file, or a folder recursively, streamed. Create-only
+    /// unless `--save` says otherwise.
+    Put(crate::files_bytes::PutArgs),
+    /// Download a file, streamed, to a path or stdout.
+    Get(crate::files_bytes::GetArgs),
+    /// Make renditions ahead of their first use — the audio proxies a
+    /// browser streams — for a file or a folder's media.
+    Render(crate::files_bytes::RenderArgs),
     /// Root-scoped directory listing — the marker file and version
     /// store are hidden. Empty `subpath` lists the root itself.
     Browse {
@@ -311,6 +319,19 @@ pub(crate) enum FilesRootCmd {
         #[arg(long)]
         json: bool,
     },
+    /// The root at `dir` in the org's files area, made if it does not
+    /// exist — what an app calls on every start (`session/<project>`).
+    /// Safe to run again: it returns the root that is there.
+    Ensure {
+        dir: String,
+        /// Defaults to the directory's own name.
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, value_enum, default_value_t = FlavorArg::Media)]
+        flavor: FlavorArg,
+        #[arg(long)]
+        json: bool,
+    },
     /// Every File Root known to this org.
     List {
         #[arg(long)]
@@ -542,6 +563,9 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
     match cmd {
         FilesCmd::Device(cmd) => run_files_device(cmd, &slug, &vox_url).await?,
         FilesCmd::Root(cmd) => run_files_root(cmd, &vox_url).await?,
+        FilesCmd::Put(args) => crate::files_bytes::put(&vox_url, args).await?,
+        FilesCmd::Get(args) => crate::files_bytes::get(&vox_url, args).await?,
+        FilesCmd::Render(args) => crate::files_bytes::render(&vox_url, args).await?,
         FilesCmd::Browse {
             root_id,
             subpath,
@@ -836,6 +860,12 @@ async fn run_files_root(cmd: FilesRootCmd, vox_url: &str) -> eyre::Result<()> {
                 println!("{} ({})", root.id, placement(&root));
             }
         }
+        FilesRootCmd::Ensure {
+            dir,
+            name,
+            flavor,
+            json,
+        } => crate::files_bytes::ensure_root(vox_url, &dir, name, flavor.into(), json).await?,
         FilesRootCmd::List { json } => {
             let roots = roots
                 .list()

@@ -96,6 +96,13 @@ pub struct ShareCapabilities {
     /// promotes uploads in.
     #[serde(default)]
     pub file_request: bool,
+    /// May read the slice's DOCUMENTS whole — the small, non-media files
+    /// an app opens a folder by (a DAW session, a chart). Media stays
+    /// renditions-only without `download`; this widens nothing else. What
+    /// lets a public demo open a session and stream its proxies with no
+    /// account (`files.access.link-documents`).
+    #[serde(default)]
+    pub documents: bool,
 }
 
 /// The mint/edit options for a link, bundled (RPC methods carry at most
