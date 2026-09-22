@@ -79,7 +79,7 @@ impl std::fmt::Debug for LiveTreeFs {
 impl LiveTreeFs {
     /// View of the live tree at `base`. `base` must already be
     /// canonical — it comes from the Files registry, which canonicalized
-    /// (and org-confined) it at `create_root` time.
+    /// (and org-confined) it at adoption time.
     pub fn new(base: impl Into<PathBuf>) -> Self {
         let base = base.into();
         let store = base.join(files::STORE_DIR).canonicalize().ok();

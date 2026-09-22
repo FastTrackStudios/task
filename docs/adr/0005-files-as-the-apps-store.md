@@ -56,8 +56,21 @@ No membership row is no baseline. That keeps the rule
 who signed up to review one deliverable holds that folder and nothing
 beside it: not in a listing, a read, a search or the live stream.
 
-Every v2 lane now checks. The legacy `FilesService` still does not, and
-closes when its last caller moves (`docs/spec/unmet.md`).
+Every lane now checks.
+
+### 7. One Files API
+
+The v1 `FilesService` — 37 ungrouped methods, no per-path checks, its own
+event stream — is deleted rather than kept beside the lanes. What it could
+do that the lanes could not moved into them (`RootsService::browse_area`,
+`VersionService::{browse_at, copy_forward, hint_activity, collect}`,
+`SyncService::{residency, set_residency, apply_residency}`,
+`MediaService::rendition_info`, `CurationService::named_version`,
+`ReviewService::{find, reviews}`), and every caller — the web UI, the CLI,
+the daemon, sync, WebDAV, the share-link lane — uses them. The share-link
+lane checks a link's scope itself and then calls the lanes as the server
+(`files::lane::caller::on_behalf_of_link`), because a link holder is not a
+person and the lanes hold nothing for one.
 
 ### 2. An app asks for a root by name
 
@@ -120,8 +133,8 @@ that window.
 keep using it; moving them onto File Roots was considered and deferred by
 decision, not by oversight.
 
-**Still to do, each its own piece of work:** the legacy lane's per-path
-checks (by deleting it), a device principal for the sync lane,
+**Still to do, each its own piece of work:** a device principal for the
+sync lane,
 upload sessions that survive a restart, an HTTP fallback for a browser to
 read an original without the byte lane, and MCP/CLI verbs for putting and
 getting bytes.

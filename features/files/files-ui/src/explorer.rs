@@ -22,15 +22,17 @@ use architect_ui::lucide_dioxus::{
 };
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
+use files_proto::service::curation::CurationEvent;
+use files_proto::service::roots::RootEvent;
 use files_proto::{
     BrowseEntry, ChainEntry, DivergenceChoice, DivergenceInfo, FileRootInfo, FilesEvent,
 };
 use uuid::Uuid;
 
 use crate::{
-    Location, copy_to_clipboard, crumbs, fetch_chain, fetch_divergences, fetch_entries, human_size,
-    mint_named_version_link, mint_share_link, name_a_version, project_version_label,
-    resolve_a_divergence, restore_file, short_id,
+    Location, checkpointed_root, copy_to_clipboard, crumbs, fetch_chain, fetch_divergences,
+    fetch_entries, human_size, listing_root, mint_named_version_link, mint_share_link,
+    name_a_version, project_version_label, resolve_a_divergence, restore_file, short_id,
 };
 
 /// How the listing renders. Persisted per mount only — a per-user
@@ -194,24 +196,19 @@ pub fn Explorer(props: ExplorerProps) -> Element {
                 // stream handles those; restarting here double-fetched
                 // for output that could not have moved.
                 let touched = match &event {
-                    FilesEvent::Checkpointed(info) => Some(info.root_id),
-                    FilesEvent::Snapshotted(snap) => Some(snap.root_id),
-                    FilesEvent::HydrationChanged(change) => Some(change.root_id),
                     // A new root can adopt loose files out from under a
                     // Drive listing, so it refreshes BOTH surfaces.
-                    FilesEvent::RootCreated(root) => {
+                    FilesEvent::Root(RootEvent::Created(root)) => {
                         if location.peek().root_id().is_none() {
                             entries.restart();
                             return;
                         }
                         Some(root.id)
                     }
-                    FilesEvent::VersionNamed(_)
-                    | FilesEvent::VersionUnnamed(_)
-                    | FilesEvent::ProjectVersionStarted(_)
-                    | FilesEvent::ReviewCreated(_)
-                    | FilesEvent::ReviewCommentAdded(_)
-                    | FilesEvent::ReviewCommentDeleted(_) => return,
+                    other => match listing_root(other) {
+                        Some(root) => Some(root),
+                        None => return,
+                    },
                 };
                 // Root browsing refreshes on its own root's traffic; a
                 // Drive listing lives outside every root, and a
@@ -585,9 +582,10 @@ fn Inspector(
             move |event: FilesEvent| {
                 let mut chain = chain;
                 let touched = match &event {
-                    FilesEvent::Checkpointed(i) => Some(i.root_id),
-                    FilesEvent::VersionNamed(v) | FilesEvent::VersionUnnamed(v) => Some(v.root_id),
-                    _ => None,
+                    FilesEvent::Curation(
+                        CurationEvent::VersionNamed(v) | CurationEvent::VersionUnnamed(v),
+                    ) => Some(v.root_id),
+                    other => checkpointed_root(other),
                 };
                 if touched.is_some() && touched == root_id {
                     chain.restart();
@@ -1023,12 +1021,7 @@ fn DivergencePanel(
             move || org.clone(),
             move |event: FilesEvent| {
                 let mut info = info;
-                let touched = match &event {
-                    FilesEvent::Checkpointed(i) => Some(i.root_id),
-                    FilesEvent::HydrationChanged(c) => Some(c.root_id),
-                    _ => None,
-                };
-                if touched == Some(root_id) {
+                if listing_root(&event) == Some(root_id) {
                     info.restart();
                 }
             },
@@ -1043,10 +1036,18 @@ fn DivergencePanel(
             if *busy.peek() {
                 return;
             }
+            // The lane addresses the divergence by its sides, so resolve
+            // against the listing the buttons were drawn from.
+            let Some(divergence) = (match &*info.peek() {
+                Some(Ok(list)) => list.iter().find(|d| d.path == path).cloned(),
+                _ => None,
+            }) else {
+                return;
+            };
             busy.set(true);
             let (org, path) = (org.clone(), path.clone());
             spawn(async move {
-                match resolve_a_divergence(&org, root_id, path.clone(), choice).await {
+                match resolve_a_divergence(&org, root_id, &divergence, choice).await {
                     Ok(()) => {
                         toast.success(
                             "Divergence resolved".into(),

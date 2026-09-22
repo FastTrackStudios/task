@@ -1,17 +1,28 @@
 //! `task files …` — the Files RPC surface (issue #259, ADR 0001):
 //! turn a folder into a File Root, browse it, read a file's version
-//! chain, checkpoint on demand. Talks to the org's `FilesService` over
+//! chain, checkpoint on demand. Talks to the org's Files lanes over
 //! vox — remote server or embedded in-process backend alike, exactly
-//! like `task timer …` (see `establish_for_url`).
+//! like `task timer …` (see `establish_for_url`). Each command dials the
+//! lane it needs (`RootsService`, `TreeService`, `VersionService`, …).
 //!
 //! Issue #261 adds the curated verbs — `task files version …` (Named
 //! Versions), `task files project-version …` (Project Versions), and
 //! `task files gc` (the Vault-protected sweep). Those entities are
 //! vault pages, so they are equally editable in a text editor; the CLI
 //! is the path that also validates the reference against the store.
+//!
+//! A commit typed on the command line may be any unambiguous prefix; it
+//! is expanded to the full commit before it reaches a lane, because a
+//! `VersionId` only round-trips a full commit hex (see `expand_commit`).
 
 use clap::{Subcommand, ValueEnum};
-use files_proto::{FilesServiceClient, RootFlavor};
+use files_proto::id::{ProjectVersionId, VersionId};
+use files_proto::service::roots::AdoptRequest;
+use files_proto::service::tree::EntryKind;
+use files_proto::{
+    BrowseEntry, CurationServiceClient, RootFlavor, RootId, RootPath, RootsServiceClient,
+    SyncServiceClient, TreeServiceClient, VersionServiceClient,
+};
 
 use crate::establish_for_url;
 use crate::resolve_org_vox_url;
@@ -178,11 +189,14 @@ pub(crate) enum FilesProjectVersionCmd {
     /// iteration, reshape the live tree, and start the new lineage.
     /// Exactly one of --empty / --template / --carry-forward picks the
     /// starting mode; --carry-forward with no paths carries everything
-    /// (a pure lineage cut).
+    /// (a pure lineage cut). The new iteration keeps the label of the
+    /// one it restarts.
     Restart {
         root_id: uuid::Uuid,
+        /// The iteration to restart, by number. Defaults to the root's
+        /// current lineage (its highest-numbered Project Version).
         #[arg(long)]
-        label: Option<String>,
+        from: Option<u32>,
         /// Start with an empty tree.
         #[arg(long, conflicts_with_all = ["template", "carry_forward"])]
         empty: bool,
@@ -376,8 +390,6 @@ fn agent_says(args: &[&str]) -> eyre::Result<String> {
 }
 
 async fn run_files_device(cmd: FilesDeviceCmd, slug: &str, vox_url: &str) -> eyre::Result<()> {
-    use files_proto::service::sync::SyncServiceClient;
-
     let sync: SyncServiceClient = establish_for_url(vox_url).await?;
     match cmd {
         FilesDeviceCmd::Pair {
@@ -525,107 +537,29 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
     let slug = crate::resolve_slug(org_override)?;
     let vox_url = resolve_org_vox_url(None, &slug);
 
-    // The device lane before the `FilesService` client is established:
-    // pairing needs the sync service and nothing else, and a machine
-    // with no roots yet should not wait on a handshake it has no use
-    // for. Taken here rather than as a match arm below because that
-    // match establishes the other client first.
-    if matches!(cmd, FilesCmd::Device(_)) {
-        let FilesCmd::Device(cmd) = cmd else {
-            unreachable!("just matched")
-        };
-        return run_files_device(cmd, &slug, &vox_url).await;
-    }
-
-    let client: FilesServiceClient = establish_for_url(&vox_url).await?;
-
+    // Each arm dials only the lane it uses, so pairing a machine with no
+    // roots yet waits on no handshake but the sync lane's.
     match cmd {
-        // Handled above, before this client existed.
-        FilesCmd::Device(_) => unreachable!("device commands return earlier"),
-        FilesCmd::Root(FilesRootCmd::Create {
-            path,
-            name,
-            flavor,
-            json,
-        }) => {
-            let name = name.unwrap_or_else(|| {
-                std::path::Path::new(&path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.clone())
-            });
-            let root = client
-                .create_root(path, name, flavor.into())
-                .await
-                .map_err(|e| eyre::eyre!("create_root: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&root).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                println!("{} ({})", root.id, placement(&root));
-            }
-        }
-        FilesCmd::Root(FilesRootCmd::List { json }) => {
-            let roots = client
-                .list_roots()
-                .await
-                .map_err(|e| eyre::eyre!("list_roots: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&roots).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                for r in roots {
-                    println!(
-                        "{}  {:?}  {}  {}{}",
-                        r.id,
-                        r.flavor,
-                        r.name,
-                        placement(&r),
-                        project_version_suffix(&r)
-                    );
-                }
-            }
-        }
-        FilesCmd::Root(FilesRootCmd::Get { id, json }) => {
-            let root = client
-                .get_root(id)
-                .await
-                .map_err(|e| eyre::eyre!("get_root: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&root).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                println!(
-                    "{} [{:?}] ({}){}",
-                    root.name,
-                    root.flavor,
-                    placement(&root),
-                    project_version_suffix(&root)
-                );
-            }
-        }
+        FilesCmd::Device(cmd) => run_files_device(cmd, &slug, &vox_url).await?,
+        FilesCmd::Root(cmd) => run_files_root(cmd, &vox_url).await?,
         FilesCmd::Browse {
             root_id,
             subpath,
             json,
         } => {
-            let entries = client
-                .browse(root_id, subpath)
+            let tree: TreeServiceClient = establish_for_url(&vox_url).await?;
+            let entries = tree
+                .browse(RootId::new(root_id), root_path(&subpath)?)
                 .await
                 .map_err(|e| eyre::eyre!("browse: {e}"))?;
             print_entries(&entries, json)?;
         }
         FilesCmd::DriveBrowse { path, json } => {
-            let entries = client
-                .drive_browse(path)
+            let roots: RootsServiceClient = establish_for_url(&vox_url).await?;
+            let entries = roots
+                .browse_area(path)
                 .await
-                .map_err(|e| eyre::eyre!("drive_browse: {e}"))?;
+                .map_err(|e| eyre::eyre!("browse_area: {e}"))?;
             print_entries(&entries, json)?;
         }
         FilesCmd::Chain {
@@ -633,8 +567,9 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             path,
             json,
         } => {
-            let chain = client
-                .chain(root_id, path)
+            let versions: VersionServiceClient = establish_for_url(&vox_url).await?;
+            let chain = versions
+                .chain(RootId::new(root_id), root_path(&path)?)
                 .await
                 .map_err(|e| eyre::eyre!("chain: {e}"))?;
             if json {
@@ -668,10 +603,11 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             message,
             json,
         } => {
-            let info = client
-                .checkpoint_now(root_id, message)
+            let versions: VersionServiceClient = establish_for_url(&vox_url).await?;
+            let info = versions
+                .checkpoint(RootId::new(root_id), message)
                 .await
-                .map_err(|e| eyre::eyre!("checkpoint_now: {e}"))?;
+                .map_err(|e| eyre::eyre!("checkpoint: {e}"))?;
             if json {
                 println!(
                     "{}",
@@ -697,8 +633,9 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             }
         }
         FilesCmd::Snapshots { root_id, json } => {
-            let snapshots = client
-                .snapshots(root_id)
+            let versions: VersionServiceClient = establish_for_url(&vox_url).await?;
+            let snapshots = versions
+                .snapshots(RootId::new(root_id), None)
                 .await
                 .map_err(|e| eyre::eyre!("snapshots: {e}"))?;
             if json {
@@ -723,215 +660,48 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
                 }
             }
         }
-        FilesCmd::Version(FilesVersionCmd::Name {
-            root_id,
-            commit_id,
-            name,
-            json,
-        }) => {
-            let named = client
-                .name_version(root_id, commit_id, name)
-                .await
-                .map_err(|e| eyre::eyre!("name_version: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&named).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                println!(
-                    "{}  {}  {}  ({})",
-                    named.id,
-                    short(&named.commit_id),
-                    named.name,
-                    named.path
-                );
-            }
-        }
-        FilesCmd::Version(FilesVersionCmd::List { root_id, json }) => {
-            let versions = client
-                .list_named_versions(root_id)
-                .await
-                .map_err(|e| eyre::eyre!("list_named_versions: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&versions).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                for v in versions {
-                    println!("{}  {}  {}", v.id, short(&v.commit_id), v.name);
-                }
-            }
-        }
-        FilesCmd::Version(FilesVersionCmd::Resolve { id, json }) => {
-            let target = client
-                .resolve_named_version(id)
-                .await
-                .map_err(|e| eyre::eyre!("resolve_named_version: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&target).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                println!(
-                    "root {}  change {}  commit {}",
-                    target.root_id,
-                    short(&target.change_id),
-                    target.commit_id
-                );
-            }
-        }
-        FilesCmd::Version(FilesVersionCmd::Remove { id }) => {
-            client
-                .unname_version(id)
-                .await
-                .map_err(|e| eyre::eyre!("unname_version: {e}"))?;
-            println!("removed {id}");
-        }
-        FilesCmd::ProjectVersion(FilesProjectVersionCmd::Start {
-            root_id,
-            label,
-            json,
-        }) => {
-            let pv = client
-                .start_project_version(root_id, label)
-                .await
-                .map_err(|e| eyre::eyre!("start_project_version: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&pv).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                println!("v{}{}  ({})", pv.number, label_suffix(&pv.label), pv.path);
-            }
-        }
-        FilesCmd::ProjectVersion(FilesProjectVersionCmd::List { root_id, json }) => {
-            let versions = client
-                .list_project_versions(root_id)
-                .await
-                .map_err(|e| eyre::eyre!("list_project_versions: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&versions).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                for v in versions {
-                    println!(
-                        "v{}{}  {}  {}",
-                        v.number,
-                        label_suffix(&v.label),
-                        short(&v.commit_id),
-                        v.id
-                    );
-                }
-            }
-        }
-        FilesCmd::ProjectVersion(FilesProjectVersionCmd::Restart {
-            root_id,
-            label,
-            empty,
-            template,
-            carry_forward,
-            json,
-        }) => {
-            let mode = match (empty, template, carry_forward) {
-                (true, None, None) => files_proto::RestartMode::Empty,
-                (false, Some(source_path), None) => {
-                    files_proto::RestartMode::Template { source_path }
-                }
-                (false, None, Some(paths)) => files_proto::RestartMode::CarryForward { paths },
-                _ => eyre::bail!("pick exactly one of --empty / --template / --carry-forward"),
-            };
-            let pv = client
-                .restart_project_version(root_id, mode, label)
-                .await
-                .map_err(|e| eyre::eyre!("restart_project_version: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&pv).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                println!(
-                    "restarted as v{}{} at {}",
-                    pv.number,
-                    label_suffix(&pv.label),
-                    short(&pv.commit_id)
-                );
-            }
-        }
-        FilesCmd::ProjectVersion(FilesProjectVersionCmd::BrowseAt {
-            root_id,
-            commit_id,
-            subpath,
-            json,
-        }) => {
-            let entries = client
-                .browse_at(root_id, commit_id, subpath)
-                .await
-                .map_err(|e| eyre::eyre!("browse_at: {e}"))?;
-            print_entries(&entries, json)?;
-        }
-        FilesCmd::ProjectVersion(FilesProjectVersionCmd::CopyForward {
-            root_id,
-            commit_id,
-            paths,
-            json,
-        }) => {
-            let written = client
-                .copy_forward(root_id, commit_id, paths)
-                .await
-                .map_err(|e| eyre::eyre!("copy_forward: {e}"))?;
-            if json {
-                println!(
-                    "{}",
-                    facet_json::to_string(&written).map_err(|e| eyre::eyre!("{e}"))?
-                );
-            } else {
-                for path in &written {
-                    println!("{path}");
-                }
-                println!("{} file(s) copied forward", written.len());
-            }
-        }
+        FilesCmd::Version(cmd) => run_files_version(cmd, &vox_url).await?,
+        FilesCmd::ProjectVersion(cmd) => run_files_project_version(cmd, &vox_url).await?,
         FilesCmd::Hint { root_id, paths } => {
-            let accepted = client
-                .hint_activity(root_id, paths)
+            let versions: VersionServiceClient = establish_for_url(&vox_url).await?;
+            let paths = paths
+                .iter()
+                .map(|p| root_path(p))
+                .collect::<eyre::Result<Vec<_>>>()?;
+            let accepted = versions
+                .hint_activity(RootId::new(root_id), paths)
                 .await
                 .map_err(|e| eyre::eyre!("hint_activity: {e}"))?;
             println!("{accepted} hints accepted (the rest are in the Ignore set)");
         }
         FilesCmd::Ignore(FilesIgnoreCmd::Show { root_id, json }) => {
-            let patterns = client
-                .ignore_set(root_id)
+            let sync: SyncServiceClient = establish_for_url(&vox_url).await?;
+            let set = sync
+                .ignore_set(RootId::new(root_id))
                 .await
                 .map_err(|e| eyre::eyre!("ignore_set: {e}"))?;
-            print_patterns(&patterns, json)?;
+            // The root's own layer — the one `set` replaces. The platform
+            // and capability layers are not this root's to change.
+            print_patterns(&set.project, json)?;
         }
         FilesCmd::Ignore(FilesIgnoreCmd::Set {
             root_id,
             patterns,
             json,
         }) => {
-            let stored = client
-                .set_ignore_set(root_id, patterns)
+            let sync: SyncServiceClient = establish_for_url(&vox_url).await?;
+            let stored = sync
+                .set_project_ignores(RootId::new(root_id), patterns)
                 .await
-                .map_err(|e| eyre::eyre!("set_ignore_set: {e}"))?;
-            print_patterns(&stored, json)?;
+                .map_err(|e| eyre::eyre!("set_project_ignores: {e}"))?;
+            print_patterns(&stored.project, json)?;
         }
         FilesCmd::Dehydrate {
             root_id,
             path,
             json,
         } => {
-            let entry = client
-                .dehydrate(root_id, path)
-                .await
-                .map_err(|e| eyre::eyre!("dehydrate: {e}"))?;
+            let entry = set_residency_of(&vox_url, root_id, &path, false).await?;
             if json {
                 println!(
                     "{}",
@@ -950,10 +720,7 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             path,
             json,
         } => {
-            let entry = client
-                .hydrate(root_id, path)
-                .await
-                .map_err(|e| eyre::eyre!("hydrate: {e}"))?;
+            let entry = set_residency_of(&vox_url, root_id, &path, true).await?;
             if json {
                 println!(
                     "{}",
@@ -968,10 +735,11 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             }
         }
         FilesCmd::HydrationPolicy(FilesHydrationPolicyCmd::Show { root_id, json }) => {
-            let patterns = client
-                .hydration_policy(root_id)
+            let sync: SyncServiceClient = establish_for_url(&vox_url).await?;
+            let patterns = sync
+                .residency(RootId::new(root_id))
                 .await
-                .map_err(|e| eyre::eyre!("hydration_policy: {e}"))?;
+                .map_err(|e| eyre::eyre!("residency: {e}"))?;
             print_patterns(&patterns, json)?;
         }
         FilesCmd::HydrationPolicy(FilesHydrationPolicyCmd::Set {
@@ -979,17 +747,19 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             patterns,
             json,
         }) => {
-            let stored = client
-                .set_hydration_policy(root_id, patterns)
+            let sync: SyncServiceClient = establish_for_url(&vox_url).await?;
+            let stored = sync
+                .set_residency(RootId::new(root_id), patterns)
                 .await
-                .map_err(|e| eyre::eyre!("set_hydration_policy: {e}"))?;
+                .map_err(|e| eyre::eyre!("set_residency: {e}"))?;
             print_patterns(&stored, json)?;
         }
         FilesCmd::HydrationPolicy(FilesHydrationPolicyCmd::Apply { root_id, json }) => {
-            let report = client
-                .apply_hydration_policy(root_id)
+            let sync: SyncServiceClient = establish_for_url(&vox_url).await?;
+            let report = sync
+                .apply_residency(RootId::new(root_id))
                 .await
-                .map_err(|e| eyre::eyre!("apply_hydration_policy: {e}"))?;
+                .map_err(|e| eyre::eyre!("apply_residency: {e}"))?;
             if json {
                 println!(
                     "{}",
@@ -1012,10 +782,11 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
             keep_newer_secs,
             json,
         } => {
-            let report = client
-                .gc_root(root_id, keep_newer_secs)
+            let versions: VersionServiceClient = establish_for_url(&vox_url).await?;
+            let report = versions
+                .collect(RootId::new(root_id), keep_newer_secs)
                 .await
-                .map_err(|e| eyre::eyre!("gc_root: {e}"))?;
+                .map_err(|e| eyre::eyre!("collect: {e}"))?;
             if json {
                 println!(
                     "{}",
@@ -1030,6 +801,445 @@ pub(crate) async fn run_files(cmd: FilesCmd, org_override: Option<&str>) -> eyre
         }
     }
     Ok(())
+}
+
+async fn run_files_root(cmd: FilesRootCmd, vox_url: &str) -> eyre::Result<()> {
+    let roots: RootsServiceClient = establish_for_url(vox_url).await?;
+    match cmd {
+        FilesRootCmd::Create {
+            path,
+            name,
+            flavor,
+            json,
+        } => {
+            let name = name.unwrap_or_else(|| {
+                std::path::Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.clone())
+            });
+            let root = roots
+                .adopt(AdoptRequest {
+                    path,
+                    name,
+                    flavor: flavor.into(),
+                    hash_content: true,
+                })
+                .await
+                .map_err(|e| eyre::eyre!("adopt: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&root).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                println!("{} ({})", root.id, placement(&root));
+            }
+        }
+        FilesRootCmd::List { json } => {
+            let roots = roots
+                .list()
+                .await
+                .map_err(|e| eyre::eyre!("list roots: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&roots).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                for r in roots {
+                    println!(
+                        "{}  {:?}  {}  {}{}",
+                        r.id,
+                        r.flavor,
+                        r.name,
+                        placement(&r),
+                        project_version_suffix(&r)
+                    );
+                }
+            }
+        }
+        FilesRootCmd::Get { id, json } => {
+            let root = roots
+                .get(RootId::new(id))
+                .await
+                .map_err(|e| eyre::eyre!("get root: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&root).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                println!(
+                    "{} [{:?}] ({}){}",
+                    root.name,
+                    root.flavor,
+                    placement(&root),
+                    project_version_suffix(&root)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_files_version(cmd: FilesVersionCmd, vox_url: &str) -> eyre::Result<()> {
+    let curation: CurationServiceClient = establish_for_url(vox_url).await?;
+    match cmd {
+        FilesVersionCmd::Name {
+            root_id,
+            commit_id,
+            name,
+            json,
+        } => {
+            let version = expand_commit(vox_url, root_id, &commit_id).await?;
+            let named = curation
+                .name_version(RootId::new(root_id), version, name)
+                .await
+                .map_err(|e| eyre::eyre!("name_version: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&named).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                println!(
+                    "{}  {}  {}  ({})",
+                    named.id,
+                    short(&named.commit_id),
+                    named.name,
+                    named.path
+                );
+            }
+        }
+        FilesVersionCmd::List { root_id, json } => {
+            let versions = curation
+                .named_versions(root_id.map(RootId::new), None)
+                .await
+                .map_err(|e| eyre::eyre!("named_versions: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&versions).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                for v in versions {
+                    println!("{}  {}  {}", v.id, short(&v.commit_id), v.name);
+                }
+            }
+        }
+        FilesVersionCmd::Resolve { id, json } => {
+            let target = curation
+                .named_version(id)
+                .await
+                .map_err(|e| eyre::eyre!("named_version: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&target).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                println!(
+                    "root {}  change {}  commit {}",
+                    target.root_id,
+                    short(&target.change_id),
+                    target.commit_id
+                );
+            }
+        }
+        FilesVersionCmd::Remove { id } => {
+            // Unnaming is addressed by root; the entity says which.
+            let named = curation
+                .named_version(id)
+                .await
+                .map_err(|e| eyre::eyre!("named_version: {e}"))?;
+            curation
+                .unname_version(RootId::new(named.root_id), VersionId::new(id))
+                .await
+                .map_err(|e| eyre::eyre!("unname_version: {e}"))?;
+            println!("removed {id}");
+        }
+    }
+    Ok(())
+}
+
+async fn run_files_project_version(cmd: FilesProjectVersionCmd, vox_url: &str) -> eyre::Result<()> {
+    match cmd {
+        FilesProjectVersionCmd::Start {
+            root_id,
+            label,
+            json,
+        } => {
+            let curation: CurationServiceClient = establish_for_url(vox_url).await?;
+            let pv = curation
+                .start_project_version(RootId::new(root_id), label.unwrap_or_default())
+                .await
+                .map_err(|e| eyre::eyre!("start_project_version: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&pv).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                println!("v{}{}  ({})", pv.number, label_suffix(&pv.label), pv.path);
+            }
+        }
+        FilesProjectVersionCmd::List { root_id, json } => {
+            let curation: CurationServiceClient = establish_for_url(vox_url).await?;
+            let mut versions = curation
+                .project_versions(RootId::new(root_id))
+                .await
+                .map_err(|e| eyre::eyre!("project_versions: {e}"))?;
+            // Oldest first, as this listing always read.
+            versions.sort_by_key(|v| v.number);
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&versions).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                for v in versions {
+                    println!(
+                        "v{}{}  {}  {}",
+                        v.number,
+                        label_suffix(&v.label),
+                        short(&v.commit_id),
+                        v.id
+                    );
+                }
+            }
+        }
+        FilesProjectVersionCmd::Restart {
+            root_id,
+            from,
+            empty,
+            template,
+            carry_forward,
+            json,
+        } => {
+            let mode = match (empty, template, carry_forward) {
+                (true, None, None) => files_proto::RestartMode::Empty,
+                (false, Some(source_path), None) => {
+                    files_proto::RestartMode::Template { source_path }
+                }
+                (false, None, Some(paths)) => files_proto::RestartMode::CarryForward { paths },
+                _ => eyre::bail!("pick exactly one of --empty / --template / --carry-forward"),
+            };
+            let curation: CurationServiceClient = establish_for_url(vox_url).await?;
+            let root = RootId::new(root_id);
+            let versions = curation
+                .project_versions(root)
+                .await
+                .map_err(|e| eyre::eyre!("project_versions: {e}"))?;
+            // The iteration being restarted: the one asked for, else the
+            // root's current lineage (its highest number).
+            let target = match from {
+                Some(number) => versions.iter().find(|v| v.number == number),
+                None => versions.iter().max_by_key(|v| v.number),
+            }
+            .ok_or_else(|| match from {
+                Some(number) => eyre::eyre!("root {root_id} has no project version v{number}"),
+                None => eyre::eyre!(
+                    "root {root_id} has no project version to restart — \
+                     `task files project-version start` begins one"
+                ),
+            })?;
+            let pv = curation
+                .restart_project_version(root, ProjectVersionId::new(target.id), mode)
+                .await
+                .map_err(|e| eyre::eyre!("restart_project_version: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&pv).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                println!(
+                    "restarted as v{}{} at {}",
+                    pv.number,
+                    label_suffix(&pv.label),
+                    short(&pv.commit_id)
+                );
+            }
+        }
+        FilesProjectVersionCmd::BrowseAt {
+            root_id,
+            commit_id,
+            subpath,
+            json,
+        } => {
+            let version = expand_commit(vox_url, root_id, &commit_id).await?;
+            let versions: VersionServiceClient = establish_for_url(vox_url).await?;
+            let entries = versions
+                .browse_at(RootId::new(root_id), root_path(&subpath)?, version)
+                .await
+                .map_err(|e| eyre::eyre!("browse_at: {e}"))?;
+            print_entries(&entries, json)?;
+        }
+        FilesProjectVersionCmd::CopyForward {
+            root_id,
+            commit_id,
+            paths,
+            json,
+        } => {
+            let version = expand_commit(vox_url, root_id, &commit_id).await?;
+            let versions: VersionServiceClient = establish_for_url(vox_url).await?;
+            let paths = paths
+                .iter()
+                .map(|p| root_path(p))
+                .collect::<eyre::Result<Vec<_>>>()?;
+            let written = versions
+                .copy_forward(RootId::new(root_id), version, paths)
+                .await
+                .map_err(|e| eyre::eyre!("copy_forward: {e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    facet_json::to_string(&written).map_err(|e| eyre::eyre!("{e}"))?
+                );
+            } else {
+                for path in &written {
+                    println!("{path}");
+                }
+                println!("{} file(s) copied forward", written.len());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A root-relative path as typed, validated the way the lanes will.
+fn root_path(raw: &str) -> eyre::Result<RootPath> {
+    RootPath::parse(raw).map_err(|e| eyre::eyre!("`{raw}`: {e}"))
+}
+
+/// Fetch or release one path's bytes, then read its entry back for the
+/// report — the hydration verb answers with the paths it moved, and the
+/// listing is what carries the size and the stub flag.
+async fn set_residency_of(
+    vox_url: &str,
+    root_id: uuid::Uuid,
+    raw: &str,
+    resident: bool,
+) -> eyre::Result<BrowseEntry> {
+    let root = RootId::new(root_id);
+    let path = root_path(raw)?;
+    let sync: SyncServiceClient = establish_for_url(vox_url).await?;
+    sync.hydrate(root, vec![path.clone()], resident)
+        .await
+        .map_err(|e| eyre::eyre!("{}: {e}", if resident { "hydrate" } else { "dehydrate" }))?;
+    let (parent, name) = match raw.trim_matches('/').rsplit_once('/') {
+        Some((parent, name)) => (parent.to_string(), name.to_string()),
+        None => (String::new(), raw.trim_matches('/').to_string()),
+    };
+    let tree: TreeServiceClient = establish_for_url(vox_url).await?;
+    tree.browse(root, root_path(&parent)?)
+        .await
+        .map_err(|e| eyre::eyre!("browse: {e}"))?
+        .into_iter()
+        .find(|e| e.name == name)
+        .ok_or_else(|| eyre::eyre!("{path} is not in the root's listing"))
+}
+
+/// A commit as a person types it — any unambiguous prefix of the hex
+/// `task files chain` prints — expanded to the version the lanes address.
+///
+/// A [`VersionId`] only round-trips a full commit hex (its first 32
+/// characters), so a short prefix has to be matched against commits the
+/// root actually has: its curated versions, snapshots and divergences
+/// first, and only if none of those match, the chain of each file in the
+/// catalogue until one does.
+async fn expand_commit(vox_url: &str, root_id: uuid::Uuid, typed: &str) -> eyre::Result<VersionId> {
+    let prefix = typed.trim().to_ascii_lowercase();
+    if prefix.is_empty() || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+        eyre::bail!("`{typed}` is not a hex commit id");
+    }
+    if prefix.len() >= 32 {
+        return Ok(VersionId::from_commit_hex(&prefix));
+    }
+    let root = RootId::new(root_id);
+    let mut matches = std::collections::BTreeSet::new();
+    let consider = |commit: &str, matches: &mut std::collections::BTreeSet<String>| {
+        if commit.starts_with(&prefix) {
+            matches.insert(commit.to_string());
+        }
+    };
+
+    let versions: VersionServiceClient = establish_for_url(vox_url).await?;
+    let curation: CurationServiceClient = establish_for_url(vox_url).await?;
+    for v in curation
+        .named_versions(Some(root), None)
+        .await
+        .map_err(|e| eyre::eyre!("named_versions: {e}"))?
+    {
+        consider(&v.commit_id, &mut matches);
+    }
+    for v in curation
+        .project_versions(root)
+        .await
+        .map_err(|e| eyre::eyre!("project_versions: {e}"))?
+    {
+        consider(&v.commit_id, &mut matches);
+    }
+    for s in versions
+        .snapshots(root, None)
+        .await
+        .map_err(|e| eyre::eyre!("snapshots: {e}"))?
+    {
+        consider(&s.snapshot_id, &mut matches);
+    }
+    for d in versions
+        .divergences(root)
+        .await
+        .map_err(|e| eyre::eyre!("divergences: {e}"))?
+    {
+        for side in &d.sides {
+            consider(&side.commit_id, &mut matches);
+        }
+    }
+
+    // Nothing curated matched: walk the catalogue, reading each file's
+    // chain, and stop at the first file whose history holds it.
+    if matches.is_empty() {
+        let tree: TreeServiceClient = establish_for_url(vox_url).await?;
+        let mut cursor = None;
+        'walk: loop {
+            let page = tree
+                .catalogue(root, cursor)
+                .await
+                .map_err(|e| eyre::eyre!("catalogue: {e}"))?;
+            for entry in &page.changed {
+                if entry.kind != EntryKind::File {
+                    continue;
+                }
+                let chain = versions
+                    .chain(root, entry.path.clone())
+                    .await
+                    .map_err(|e| eyre::eyre!("chain {}: {e}", entry.path))?;
+                for c in &chain {
+                    consider(&c.commit_id, &mut matches);
+                }
+                if !matches.is_empty() {
+                    break 'walk;
+                }
+            }
+            if !page.more {
+                break;
+            }
+            cursor = Some(page.cursor);
+        }
+    }
+
+    let mut found = matches.into_iter();
+    match (found.next(), found.next()) {
+        (Some(full), None) => Ok(VersionId::from_commit_hex(&full)),
+        (None, _) => eyre::bail!("no commit in root {root_id} starts with `{typed}`"),
+        (Some(a), Some(b)) => eyre::bail!(
+            "`{typed}` is ambiguous in root {root_id} ({}, {}, …) — type more of it",
+            short(&a),
+            short(&b)
+        ),
+    }
 }
 
 /// Hex ids are long and only their prefix is ever typed back.

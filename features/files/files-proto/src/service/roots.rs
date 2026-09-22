@@ -122,6 +122,14 @@ pub trait RootsService {
     /// grants on other people's roots may not mint roots of their own.
     async fn create(&self, request: CreateRequest) -> Result<FileRootInfo, FilesFault>;
 
+    /// Browse the org's files area itself — folders that are roots and
+    /// folders that are not yet — so a steward can choose what to adopt.
+    /// `path` is relative to the area; `""` lists its top. Confined to
+    /// the area (and any granted Storage Location); an owner's or admin's
+    /// call, like adoption.
+    async fn browse_area(&self, path: String)
+    -> Result<Vec<crate::model::BrowseEntry>, FilesFault>;
+
     /// Resume an adoption left in [`AdoptionPhase::Paused`]. Continues
     /// from where it stopped; work in flight when it stopped is redone,
     /// nothing else is.

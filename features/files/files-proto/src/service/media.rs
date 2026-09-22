@@ -188,6 +188,18 @@ pub trait MediaService {
         kind: RenditionKind,
     ) -> Result<ByteTicket, FilesFault>;
 
+    /// One rendition's record — generated if absent, at the current
+    /// content or at a past `version`. What a player needs to address it
+    /// on the rendition route (`file_id`, `mime`, `len`) without redeeming
+    /// a ticket.
+    async fn rendition_info(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+        kind: RenditionKind,
+        at: Option<VersionId>,
+    ) -> Result<RenditionInfo, FilesFault>;
+
     /// Hand a selection to an editor as a bin or a timeline.
     async fn handoff(
         &self,

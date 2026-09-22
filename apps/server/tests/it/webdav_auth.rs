@@ -17,7 +17,7 @@
 
 use architect_auth::{CreateEmailPasswordUser, SignInEmailPassword};
 use base64::Engine as _;
-use files::{FilesService as _, RootFlavor};
+use files::RootFlavor;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -48,14 +48,7 @@ async fn boot() -> eyre::Result<(String, AuthState, tempfile::TempDir)> {
     let root_dir = org.files.data_dir().join("Mix Session");
     std::fs::create_dir_all(&root_dir)?;
     std::fs::write(root_dir.join("mix.wav"), b"take one")?;
-    org.files
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Mix Session".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .map_err(|e| eyre::eyre!("create_root: {e}"))?;
+    crate::support::adopt_root(&org.files, &root_dir, "Mix Session", RootFlavor::Media).await?;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();

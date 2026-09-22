@@ -28,14 +28,15 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+use crate::error::FilesError;
 use chrono::{TimeDelta, Utc};
+use files_proto::DivergenceChoice;
 use files_proto::error::FilesFault;
 use files_proto::id::{PrincipalId, RootId, SnapshotId, VersionId};
 use files_proto::model::{ChainEntry, CheckpointInfo, DivergenceInfo, SnapshotInfo};
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
 use files_proto::service::version::{Occupancy, Resolution, VersionService};
-use files_proto::{DivergenceChoice, FilesError, FilesService};
 
 use crate::backend::FilesBackend;
 use crate::lane::caller;
@@ -160,7 +161,7 @@ impl VersionService for FilesBackend {
     async fn chain(&self, root_id: RootId, path: RootPath) -> Result<Vec<ChainEntry>, FilesFault> {
         self.known_root(root_id)?;
         caller::authorise(self, root_id, &path, Capability::History).await?;
-        FilesService::chain(self, root_id.get(), path.as_str().to_string())
+        self.chain_of(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)
     }
@@ -174,7 +175,7 @@ impl VersionService for FilesBackend {
     ) -> Result<CheckpointInfo, FilesFault> {
         self.known_root(root_id)?;
         caller::authorise_root(self, root_id, Capability::Write).await?;
-        FilesService::checkpoint_now(self, root_id.get(), description)
+        self.checkpoint_now(root_id.get(), description)
             .await
             .map_err(fault)
     }
@@ -188,9 +189,7 @@ impl VersionService for FilesBackend {
     ) -> Result<Vec<SnapshotInfo>, FilesFault> {
         self.known_root(root_id)?;
         caller::authorise_root(self, root_id, Capability::History).await?;
-        let mut all = FilesService::snapshots(self, root_id.get())
-            .await
-            .map_err(fault)?;
+        let mut all = self.snapshots_of(root_id.get()).await.map_err(fault)?;
         // Newest first already; truncating keeps the newest, which is the
         // half a recovery UI shows.
         if let Some(limit) = limit {
@@ -232,9 +231,7 @@ impl VersionService for FilesBackend {
     async fn divergences(&self, root_id: RootId) -> Result<Vec<DivergenceInfo>, FilesFault> {
         self.known_root(root_id)?;
         caller::authorise_root(self, root_id, Capability::History).await?;
-        FilesService::divergences(self, root_id.get())
-            .await
-            .map_err(fault)
+        self.divergences_of(root_id.get()).await.map_err(fault)
     }
 
     // t[impl files.version.keep-both] — a human picks; nothing is merged
@@ -246,7 +243,8 @@ impl VersionService for FilesBackend {
     ) -> Result<DivergenceInfo, FilesFault> {
         self.known_root(root_id)?;
         caller::authorise_root(self, root_id, Capability::Write).await?;
-        let info = FilesService::divergences(self, root_id.get())
+        let info = self
+            .divergences_of(root_id.get())
             .await
             .map_err(fault)?
             .into_iter()
@@ -297,7 +295,7 @@ impl VersionService for FilesBackend {
             Resolution::KeepBoth { .. } => DivergenceChoice::KeepBoth,
         };
 
-        FilesService::resolve_divergence(self, root_id.get(), info.path.clone(), choice)
+        self.settle_divergence(root_id.get(), info.path.clone(), choice)
             .await
             .map_err(fault)?;
         // The divergence as it stood, which is what was settled — reading
@@ -315,7 +313,8 @@ impl VersionService for FilesBackend {
     ) -> Result<ChainEntry, FilesFault> {
         self.known_root(root_id)?;
         caller::authorise(self, root_id, &path, Capability::Write).await?;
-        let before = FilesService::chain(self, root_id.get(), path.as_str().to_string())
+        let before = self
+            .chain_of(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)?;
         let target = before
@@ -337,8 +336,7 @@ impl VersionService for FilesBackend {
             )));
         }
 
-        FilesService::copy_forward(
-            self,
+        self.copy_forward_commit(
             root_id.get(),
             target.commit_id.clone(),
             vec![target.path.clone()],
@@ -347,15 +345,14 @@ impl VersionService for FilesBackend {
         .map_err(fault)?;
         // A copy into the live tree is not yet a version; the checkpoint
         // is what makes the restore itself part of history.
-        FilesService::checkpoint_now(
-            self,
+        self.checkpoint_now(
             root_id.get(),
             Some(format!("restore {path} to {}", target.commit_id)),
         )
         .await
         .map_err(fault)?;
 
-        FilesService::chain(self, root_id.get(), path.as_str().to_string())
+        self.chain_of(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)?
             .into_iter()
@@ -384,6 +381,84 @@ impl VersionService for FilesBackend {
         Err(FilesFault::Internal(format!(
             "not yet implemented: promoting snapshot {snapshot} to a durable version"
         )))
+    }
+
+    async fn browse_at(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+        version: VersionId,
+    ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
+        self.known_root(root_id)?;
+        let path = path.validate()?;
+        caller::authorise(self, root_id, &path, Capability::History).await?;
+        self.browse_commit(
+            root_id.get(),
+            version.commit_prefix(),
+            path.as_str().to_string(),
+        )
+        .await
+        .map_err(|e| match e {
+            FilesError::NotFound(_) => FilesFault::VersionNotFound(version),
+            other => fault(other),
+        })
+    }
+
+    async fn copy_forward(
+        &self,
+        root_id: RootId,
+        version: VersionId,
+        paths: Vec<RootPath>,
+    ) -> Result<Vec<RootPath>, FilesFault> {
+        self.known_root(root_id)?;
+        let paths: Vec<RootPath> = paths
+            .iter()
+            .map(RootPath::validate)
+            .collect::<Result<_, _>>()?;
+        for path in &paths {
+            caller::authorise(self, root_id, path, Capability::History).await?;
+            caller::authorise(self, root_id, path, Capability::Write).await?;
+        }
+        let written = self
+            .copy_forward_commit(
+                root_id.get(),
+                version.commit_prefix(),
+                paths.iter().map(|p| p.as_str().to_string()).collect(),
+            )
+            .await
+            .map_err(fault)?;
+        written
+            .into_iter()
+            .map(|p| RootPath::parse(p).map_err(FilesFault::from))
+            .collect()
+    }
+
+    async fn hint_activity(
+        &self,
+        root_id: RootId,
+        paths: Vec<RootPath>,
+    ) -> Result<u32, FilesFault> {
+        self.known_root(root_id)?;
+        caller::authorise_root(self, root_id, Capability::Write).await?;
+        self.note_activity(
+            root_id.get(),
+            paths.iter().map(|p| p.as_str().to_string()).collect(),
+        )
+        .await
+        .map_err(fault)
+    }
+
+    async fn collect(
+        &self,
+        root_id: RootId,
+        keep_newer_secs: Option<u64>,
+    ) -> Result<files_proto::model::GcReport, FilesFault> {
+        self.known_root(root_id)?;
+        // Retention is root lifecycle: it decides what history survives.
+        caller::authorise_steward(self).await?;
+        self.gc_root(root_id.get(), keep_newer_secs)
+            .await
+            .map_err(fault)
     }
 }
 

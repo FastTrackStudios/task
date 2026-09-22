@@ -6,7 +6,7 @@
 //! handled by [`crate::bridge`] switching to that root's
 //! [`crate::live_tree_fs::LiveTreeFs`]. Nothing here touches a version
 //! store, and nothing here is writable: roots are created through
-//! `FilesService::create_root` (which does the marker file, the
+//! `RootsService::adopt` (which does the marker file, the
 //! registry entry, and the store init), never by a client dropping a
 //! folder into a WebDAV mount.
 
@@ -130,7 +130,7 @@ impl DavFileSystem for RootsFs {
     ) -> FsFuture<'a, Box<dyn DavFile>> {
         // Every child of this collection is itself a collection, so
         // there is nothing here to open — and creating one is
-        // `create_root`'s job, not a mount's.
+        // `RootsService::adopt`'s job, not a mount's.
         readonly()
     }
 

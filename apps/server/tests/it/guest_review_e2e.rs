@@ -7,8 +7,15 @@
 
 use std::sync::Arc;
 
-use files::FilesService as _;
-use files_proto::{AnnotationPoint, AnnotationStroke, FilesServiceClient, NewReviewComment};
+use files::id::{ReviewId, VersionId};
+use files::service::ReviewService as _;
+use files::service::media::Region;
+use files::service::review::{NewComment, ReviewEvent};
+use files::{
+    FilesEvent, MediaServiceClient, ReviewServiceClient, RootId, RootPath, TreeServiceClient,
+    TreeServiceStreamClient, VersionServiceClient,
+};
+use files_proto::{AnnotationPoint, AnnotationStroke, RenditionKind};
 use files_transcode::transcoder::FakeTranscoder;
 use share_proto::{NewShareLink, ShareCapabilities, ShareService as _, ShareTarget};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
@@ -43,19 +50,14 @@ async fn boot() -> eyre::Result<(String, AppState, uuid::Uuid, tempfile::TempDir
     std::fs::create_dir_all(&root_dir)?;
     std::fs::write(root_dir.join("cut.mov"), b"VIDEO the reviewed cut")?;
     std::fs::write(root_dir.join("secret.mov"), b"VIDEO not for guests")?;
-    let root = org
-        .files
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "session".into(),
-            files_proto::RootFlavor::Media,
-        )
-        .await
-        .map_err(|e| eyre::eyre!("create root: {e}"))?;
-    org.files
-        .checkpoint_now(root.id, None)
-        .await
-        .map_err(|e| eyre::eyre!("checkpoint: {e}"))?;
+    let root = crate::support::adopt_root(
+        &org.files,
+        &root_dir,
+        "session",
+        files_proto::RootFlavor::Media,
+    )
+    .await?;
+    crate::support::checkpoint(&org.files, root.id).await?;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -76,7 +78,11 @@ fn svc(state: &AppState) -> task_server::share::ShareServiceImpl {
     )
 }
 
-async fn guest_client(base: &str, token: &str, pw: &str) -> eyre::Result<FilesServiceClient> {
+/// One lane of the guest surface, dialled anonymously at the link.
+async fn guest_client<C>(base: &str, token: &str, pw: &str) -> eyre::Result<C>
+where
+    C: vox_core::FromVoxLane + 'static,
+{
     let ws = base.replace("http://", "ws://");
     let suffix = if pw.is_empty() {
         String::new()
@@ -89,23 +95,45 @@ async fn guest_client(base: &str, token: &str, pw: &str) -> eyre::Result<FilesSe
         .map_err(|e| eyre::eyre!("guest connect: {e:?}"))
 }
 
+/// A guest comment at `secs` against `commit`.
+fn guest_comment(
+    review: ReviewId,
+    commit: &str,
+    secs: u64,
+    author: &str,
+    body: &str,
+) -> NewComment {
+    NewComment {
+        review,
+        version: VersionId::from_commit_hex(commit),
+        region: Region::Time {
+            start_ms: secs * 1000,
+            end_ms: secs * 1000,
+        },
+        body: body.into(),
+        strokes: Vec::new(),
+        author: author.into(),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 // t[verify files.review.scope] — the link reaches its own review and
-// nothing else: another file's rendition is refused, browsing is refused,
-// and `list_reviews` answers with exactly one. The re-resolution half is
-// the password case at the end — setting one refuses the *upgrade*, so a
-// change binds on the next call rather than at the next connection
+// nothing else: another file's rendition is refused, every version verb
+// but `chain` is refused, the tree lane is not mounted at all, and
+// `reviews` answers with exactly one. The re-resolution half is the
+// disable case — a change binds on the next call, not the next
+// connection — and the password case at the end refuses the *upgrade*
 async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
     let (base, state, root_id, _tmp) = boot().await?;
     let org = state.org("guest-test").expect("org");
     let share = svc(&state);
+    let root = RootId::new(root_id);
+    let cut = RootPath::parse("cut.mov")?;
+    let secret = RootPath::parse("secret.mov")?;
 
     // The owner starts the review; the guest link points at it.
-    let review = org
-        .files
-        .review_for_file(root_id, "cut.mov".into())
-        .await
-        .expect("review");
+    let review = org.files.for_file(root, cut.clone()).await.expect("review");
+    let review_id = ReviewId::new(review.id);
     let link = share
         .create_link(
             ShareTarget::Review { id: review.id },
@@ -123,36 +151,44 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
         .await
         .expect("mint review link");
 
+    // ── The guest's first call: what the link permits, from the link.
+    let guest: ReviewServiceClient = guest_client(&base, &link.token, "").await?;
+    let scope = guest.scope().await.expect("guest scope");
+    assert_eq!(scope.review, review_id, "the scope names the linked review");
+    assert!(scope.can_comment, "this link comments");
+    assert!(!scope.can_download, "and does not download");
+
     // ── AC 1: an ANONYMOUS vox connection comments and draws; the
     //    comment records the link.
-    let guest = guest_client(&base, &link.token, "").await?;
     let found = guest
-        .find_review(root_id, "cut.mov".into())
+        .find(root, cut.clone())
         .await
         .expect("guest sees the review")
         .expect("scoped review");
     assert_eq!(found.id, review.id);
-    let head = guest.chain(root_id, "cut.mov".into()).await.expect("chain")[0]
+    assert_eq!(
+        guest.review(review_id).await.expect("the review").id,
+        review.id
+    );
+    let versions: VersionServiceClient = guest_client(&base, &link.token, "").await?;
+    let head = versions.chain(root, cut.clone()).await.expect("chain")[0]
         .commit_id
         .clone();
+    let mut drawn = guest_comment(review_id, &head, 2, "External Client", "love this cut");
+    drawn.region = Region::Time {
+        start_ms: 2500,
+        end_ms: 2500,
+    };
+    drawn.strokes = vec![AnnotationStroke {
+        points: vec![
+            AnnotationPoint { x: 0.2, y: 0.2 },
+            AnnotationPoint { x: 0.8, y: 0.6 },
+        ],
+        color: "#ff3355".into(),
+        width: 0.004,
+    }];
     let posted = guest
-        .add_review_comment(
-            review.id,
-            NewReviewComment {
-                timecode_secs: 2.5,
-                author: "External Client".into(),
-                body: "love this cut".into(),
-                commit_id: head.clone(),
-                annotation: vec![AnnotationStroke {
-                    points: vec![
-                        AnnotationPoint { x: 0.2, y: 0.2 },
-                        AnnotationPoint { x: 0.8, y: 0.6 },
-                    ],
-                    color: "#ff3355".into(),
-                    width: 0.004,
-                }],
-            },
-        )
+        .comment(drawn)
         .await
         .expect("guest comment with drawing");
     assert!(
@@ -165,9 +201,10 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
         "identity is constrained at the boundary — a guest can't post as a member"
     );
     assert_eq!(posted.annotation.len(), 1, "the drawing came through");
+    assert!((posted.timecode_secs - 2.5).abs() < f64::EPSILON);
 
     // The owner sees the same attributed comment on the org lane.
-    let owner_view = org.files.review_comments(review.id).await.expect("owner");
+    let owner_view = org.files.comments(review_id).await.expect("owner");
     assert!(
         owner_view
             .iter()
@@ -176,35 +213,75 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
     );
 
     // ── AC 2: the lane reaches exactly the review's media.
-    guest
-        .rendition(
-            root_id,
-            "cut.mov".into(),
-            files_proto::RenditionKind::Proxy720,
-        )
+    let media: MediaServiceClient = guest_client(&base, &link.token, "").await?;
+    media
+        .rendition_info(root, cut.clone(), RenditionKind::Proxy720, None)
         .await
         .expect("the review's proxy resolves");
-    guest
-        .rendition(
-            root_id,
-            "secret.mov".into(),
-            files_proto::RenditionKind::Proxy720,
-        )
+    media
+        .rendition_info(root, secret.clone(), RenditionKind::Proxy720, None)
         .await
         .expect_err("another file's rendition is refused");
-    guest
-        .browse(root_id, String::new())
+    media
+        .read(root, cut.clone())
         .await
-        .expect_err("browsing is refused");
-    // list_reviews is the guest's "what can I see": exactly its one
+        .expect_err("source bytes are not on the guest lane");
+    versions
+        .chain(root, secret.clone())
+        .await
+        .expect_err("another file's history is refused");
+    versions
+        .snapshots(root, None)
+        .await
+        .expect_err("every version verb but chain is refused");
+    versions
+        .checkpoint(root, None)
+        .await
+        .expect_err("a guest cannot checkpoint");
+    // The tree lane is not mounted on a guest connection at all.
+    let tree: TreeServiceClient = guest_client(&base, &link.token, "").await?;
+    let browsed = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tree.browse(root, RootPath::root()),
+    )
+    .await;
+    assert!(
+        !matches!(browsed, Ok(Ok(_))),
+        "browsing is refused: {browsed:?}"
+    );
+    // `reviews` is the guest's "what can I see": exactly its one
     // review, never the org's list — the entry page boots from this.
-    let visible = guest.list_reviews(None).await.expect("scoped listing");
+    let visible = guest.reviews(None).await.expect("scoped listing");
     assert_eq!(visible.len(), 1);
     assert_eq!(visible[0].id, review.id);
     guest
-        .delete_review_comment(posted.id)
+        .for_file(root, secret.clone())
+        .await
+        .expect_err("a guest cannot open (or mint) another file's review");
+    assert!(
+        guest
+            .find(root, secret.clone())
+            .await
+            .expect("find answers")
+            .is_none(),
+        "another file has no review a guest can see"
+    );
+    // t[verify files.review.anonymity] — two visitors holding one link
+    // are indistinguishable, so no guest may remove feedback, their own
+    // or anyone's.
+    guest
+        .delete_comment(files::id::CommentId::new(posted.id))
         .await
         .expect_err("guests cannot delete");
+    assert!(
+        org.files
+            .comments(review_id)
+            .await
+            .expect("owner")
+            .iter()
+            .any(|c| c.id == posted.id),
+        "the refusal leaves the comment standing"
+    );
 
     // A view-only review link cannot comment.
     let view_only = share
@@ -219,18 +296,10 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
         )
         .await
         .expect("mint view-only link");
-    let viewer = guest_client(&base, &view_only.token, "").await?;
+    let viewer: ReviewServiceClient = guest_client(&base, &view_only.token, "").await?;
+    assert!(!viewer.scope().await.expect("scope").can_comment);
     viewer
-        .add_review_comment(
-            review.id,
-            NewReviewComment {
-                timecode_secs: 1.0,
-                author: "lurker".into(),
-                body: "hi".into(),
-                commit_id: head,
-                annotation: Vec::new(),
-            },
-        )
+        .comment(guest_comment(review_id, &head, 1, "lurker", "hi"))
         .await
         .expect_err("view-only guests cannot comment");
 
@@ -241,7 +310,7 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
         .await
         .expect("disable");
     guest
-        .review_comments(review.id)
+        .comments(review_id)
         .await
         .expect_err("a disabled link cuts off connected guests");
     share
@@ -249,37 +318,29 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
         .await
         .expect("re-enable");
     guest
-        .review_comments(review.id)
+        .comments(review_id)
         .await
         .expect("re-enabling restores the connected guest");
 
     // ── The live-comment stream rides the guest lane too, filtered to
     //    this review.
     {
-        let ws = base.replace("http://", "ws://");
-        let stream: files_proto::FilesServiceStreamClient =
-            vox::connect_lane(format!("{ws}/org/guest-test/share/{}/vox", link.token))
-                .establish()
-                .await
-                .map_err(|e| eyre::eyre!("stream connect: {e:?}"))?;
-        let (tx, mut rx) = vox::channel::<files_proto::FilesEvent>();
-        let sub = tokio::spawn(async move { stream.events(tx).await });
+        let stream: TreeServiceStreamClient = guest_client(&base, &link.token, "").await?;
+        let (tx, mut rx) = vox::channel::<FilesEvent>();
+        let sub = tokio::spawn(async move { stream.events(None, tx).await });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         if sub.is_finished() {
             panic!("guest stream subscribe ended early: {:?}", sub.await);
         }
         // An org-lane comment lands as a guest-visible event…
         org.files
-            .add_review_comment(
-                review.id,
-                NewReviewComment {
-                    timecode_secs: 5.0,
-                    author: "Owner".into(),
-                    body: "replying".into(),
-                    commit_id: posted.commit_id.clone(),
-                    annotation: Vec::new(),
-                },
-            )
+            .comment(guest_comment(
+                review_id,
+                &posted.commit_id,
+                5,
+                "Owner",
+                "replying",
+            ))
             .await
             .expect("owner comment");
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -287,10 +348,13 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
             .expect("event within 5s")
             .expect("stream open")
             .expect("one event");
-        let mut owned: Option<files_proto::FilesEvent> = None;
+        let mut owned: Option<FilesEvent> = None;
         let _ = event.map(|ev| owned = Some(ev.clone()));
         assert!(
-            matches!(owned, Some(files_proto::FilesEvent::ReviewCommentAdded(c)) if c.review_id == review.id),
+            matches!(
+                owned,
+                Some(FilesEvent::Review(ReviewEvent::CommentAdded(c))) if c.review_id == review.id
+            ),
             "the guest stream carries this review's comments"
         );
     }
@@ -309,14 +373,18 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
         .await
         .expect("set password");
     assert!(
-        guest_client(&base, &link.token, "").await.is_err(),
+        guest_client::<ReviewServiceClient>(&base, &link.token, "")
+            .await
+            .is_err(),
         "no password → no upgrade"
     );
     assert!(
-        guest_client(&base, &link.token, "wrong").await.is_err(),
+        guest_client::<ReviewServiceClient>(&base, &link.token, "wrong")
+            .await
+            .is_err(),
         "wrong password → no upgrade"
     );
-    let _reconnected = guest_client(&base, &link.token, "secret")
+    let _reconnected: ReviewServiceClient = guest_client(&base, &link.token, "secret")
         .await
         .expect("right password connects");
 

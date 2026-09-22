@@ -44,6 +44,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::OnceLock;
 
+use crate::error::FilesError;
 use chrono::Utc;
 use files_domain::facet::{Capability, Facet, FacetMap, Source};
 use files_domain::hydration::{Subscription as Plan, decide};
@@ -53,7 +54,6 @@ use files_proto::id::{DeviceId, RootId};
 use files_proto::model::{FileRootInfo, RootFlavor};
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability as Can;
-use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::sync::{
     DeviceInfo, FacetBinding, FacetName, FacetSource, IgnoreSet, Subscription, SyncService,
     TransferPolicy,
@@ -290,9 +290,7 @@ impl FilesBackend {
         root_id: RootId,
         root: &FileRootInfo,
     ) -> Result<DomainIgnores, FilesFault> {
-        let project = FilesService::ignore_set(self, root_id.get())
-            .await
-            .map_err(fault)?;
+        let project = self.ignore_patterns(root_id.get()).await.map_err(fault)?;
         let mut set = DomainIgnores::new(capability_of(root));
         set.with_project(project);
         Ok(set)
@@ -337,12 +335,10 @@ impl FilesBackend {
         for path in listing.files {
             let wanted = decide(&path, &map, &plan).hydration;
             let outcome = match wanted {
-                Hydration::Resident => {
-                    FilesService::hydrate(self, root_id.get(), path.to_string()).await
-                }
+                Hydration::Resident => self.hydrate_path(root_id.get(), path.to_string()).await,
                 // `Unavailable` is a fact about the network, decided
                 // elsewhere; nothing the domain returns here asks for it.
-                _ => FilesService::dehydrate(self, root_id.get(), path.to_string()).await,
+                _ => self.dehydrate_path(root_id.get(), path.to_string()).await,
             };
             match outcome {
                 Ok(entry) => {
@@ -564,9 +560,7 @@ impl SyncService for FilesBackend {
     async fn ignore_set(&self, root_id: RootId) -> Result<IgnoreSet, FilesFault> {
         let root = crate::lane::root_or_fault(self, root_id)?;
         crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
-        let project = FilesService::ignore_set(self, root_id.get())
-            .await
-            .map_err(fault)?;
+        let project = self.ignore_patterns(root_id.get()).await.map_err(fault)?;
         // The domain owns both the matching and the lists; this is a
         // projection of them, not a second copy.
         let domain = DomainIgnores::new(capability_of(&root));
@@ -588,7 +582,7 @@ impl SyncService for FilesBackend {
         // knowledge about an OS and about an application, and a root
         // that could edit them could hide a `.DS_Store` policy bug from
         // every other root on the machine.
-        FilesService::set_ignore_set(self, root_id.get(), patterns)
+        self.set_ignore_patterns(root_id.get(), patterns)
             .await
             .map_err(fault)?;
         SyncService::ignore_set(self, root_id).await
@@ -662,15 +656,41 @@ impl SyncService for FilesBackend {
             // reported: the caller named this path and is owed the
             // reason it could not be released.
             let entry = if resident {
-                FilesService::hydrate(self, root_id.get(), path.to_string()).await
+                self.hydrate_path(root_id.get(), path.to_string()).await
             } else {
-                FilesService::dehydrate(self, root_id.get(), path.to_string()).await
+                self.dehydrate_path(root_id.get(), path.to_string()).await
             }
             .map_err(fault)?;
             debug_assert_eq!(entry.stub, !resident);
             done.push(path);
         }
         Ok(done)
+    }
+
+    async fn residency(&self, root_id: RootId) -> Result<Vec<String>, FilesFault> {
+        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
+        self.hydration_policy(root_id.get()).await.map_err(fault)
+    }
+
+    async fn set_residency(
+        &self,
+        root_id: RootId,
+        patterns: Vec<String>,
+    ) -> Result<Vec<String>, FilesFault> {
+        crate::lane::caller::authorise_root(self, root_id, Can::Write).await?;
+        self.set_hydration_policy(root_id.get(), patterns)
+            .await
+            .map_err(fault)
+    }
+
+    async fn apply_residency(
+        &self,
+        root_id: RootId,
+    ) -> Result<files_proto::model::HydrationReport, FilesFault> {
+        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
+        self.apply_hydration_policy(root_id.get())
+            .await
+            .map_err(fault)
     }
 
     async fn devices(&self) -> Result<Vec<DeviceInfo>, FilesFault> {

@@ -3965,26 +3965,13 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             workstream::workstream_service_descriptor(),
             workstream::serve_workstream_service(org.workstreams.clone()),
         )
-        .with(
-            files::files_service_descriptor(),
-            files::serve_files_service(org.files.clone()),
-        )
-        // Live root-creation / checkpoint events — `FilesService`'s
-        // `#[subscribe]` stream sibling, served from the hub on the
-        // `FilesBackend` above.
-        .merge(files::files_service_stream_layer(org.files.clone()))
-        // The v2 lanes (`files_proto::service`), one mount per trait.
+        // The Files lanes (`files_proto::service`), one mount per trait —
+        // the only Files API (the v1 `FilesService` is gone, ADR 0005).
         //
-        // Every one is served by the SAME `FilesBackend` as v1 above —
-        // they are `impl XService for FilesBackend`, not separate
-        // objects — so a root adopted through `RootsService` is the root
-        // `TreeService` browses, with no state to keep in step.
-        //
-        // v1 stays mounted beside them until its last caller moves. The
-        // two surfaces disagree about nothing because they are the same
-        // backend; where a method exists on both (`browse`, `chain`,
-        // `hydrate`), the v2 one adds typed ids, typed faults and path
-        // confinement and delegates to the same inner method.
+        // Every one is served by the SAME `FilesBackend` — they are
+        // `impl XService for FilesBackend`, not separate objects — so a
+        // root adopted through `RootsService` is the root `TreeService`
+        // browses, with no state to keep in step.
         //
         // Each lane's permits live in `permits.rs` — mounting without
         // granting fails every method closed, which is the failure this

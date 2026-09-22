@@ -1,7 +1,7 @@
 //! A File Root may live outside the org directory — but only inside a
 //! Storage Location the org was granted (issue #262).
 //!
-//! Before this, `create_root` confined to `<org>/files` and nothing else,
+//! Before this, adoption confined to `<org>/files` and nothing else,
 //! so media on a NAS could not be registered at all: the bytes were never
 //! going to fit on the server's own disk, and pointing at them was
 //! refused as a path escape. The boundary is still a real fence — these
@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use files::{FilesBackend, LocationBoundaries};
-use files_proto::{FilesService as _, RootFlavor};
+use files_proto::RootFlavor;
+use files_proto::service::roots::{AdoptRequest, RootsService};
 
 /// A boundary set fixed at construction — the server's implementation
 /// reads a live grant registry, but the rule under test is the same.
@@ -58,10 +59,14 @@ fn backend(f: &Fixture, granted: Vec<PathBuf>) -> FilesBackend {
 
 async fn create_at(b: &FilesBackend, dir: &PathBuf, name: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir).expect("mkdir");
-    b.create_root(
-        dir.to_string_lossy().into_owned(),
-        name.to_owned(),
-        RootFlavor::Media,
+    RootsService::adopt(
+        b,
+        AdoptRequest {
+            path: dir.to_string_lossy().into_owned(),
+            name: name.to_owned(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        },
     )
     .await
     .map(|_| ())
@@ -78,7 +83,7 @@ async fn a_granted_location_can_host_a_root() {
         .await
         .expect("a granted location hosts a root");
 
-    let roots = b.list_roots().await.expect("list");
+    let roots = RootsService::list(&b).await.expect("list");
     assert_eq!(roots.len(), 1);
     // The registered path is the location's, not a copy under the org dir
     // — the whole point is that the bytes stay where they are.

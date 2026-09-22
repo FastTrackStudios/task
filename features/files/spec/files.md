@@ -45,7 +45,7 @@ re-evaluating placement policy moves bytes without moving paths.
 ### The full write surface works over the network
 
 t[files.write.surface]
-`FilesService` exposes `mkdir`, `rename`, `move`, `copy` and `delete` over vox.
+`WriteService` exposes `mkdir`, `rename`, `move`, `copy` and `delete` over vox.
 Each is transactional and wrapped in one jj operation, so history records the
 action rather than its constituent writes. Each takes a set of paths as readily
 as one, and a selection downloads as a single archive stream.

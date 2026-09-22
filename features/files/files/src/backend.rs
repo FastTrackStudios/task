@@ -1,4 +1,4 @@
-//! [`FilesBackend`]: server-side [`FilesService`] impl. Wraps
+//! [`FilesBackend`]: the server side of every Files lane. Wraps
 //! [`Registry`] (root identity) and one
 //! `files_store::version::VersionStoreBackend`-backed jj repo per
 //! root (opened lazily, cached for the process's lifetime — see
@@ -11,7 +11,7 @@
 //! doc), and `#[architect::rpc]` methods must return a `Send` future —
 //! so none of this crate's logic can `.await` jj-lib directly from
 //! inside an `async fn` without poisoning the RPC method's future.
-//! Every `FilesService` method below runs its sync `*_inner` body on
+//! Every async entry point below runs its sync `*_inner` body on
 //! `tokio::task::spawn_blocking` (same convention as `task-server`'s
 //! `notifier.rs`/`mcp.rs`) rather than inline on the calling async
 //! task — a full-tree scan or a multi-GB checkpoint must not stall the
@@ -40,11 +40,54 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
+use files_proto::service::FilesEvent;
 use files_proto::{
-    BrowseEntry, ChainEntry, CheckpointInfo, FileRootInfo, FilesError, FilesEvent, FilesFault,
-    FilesService, GcReport, HydrationChange, HydrationReport, NamedVersion, ProjectVersion,
-    RootFlavor, SavePoint, SnapshotInfo, VersionRef,
+    BrowseEntry, ChainEntry, CheckpointInfo, FileRootInfo, FilesFault, GcReport, HydrationChange,
+    HydrationReport, NamedVersion, ProjectVersion, RootFlavor, SavePoint, SnapshotInfo, VersionRef,
 };
+
+use crate::error::FilesError;
+
+/// The live events the backend's internals emit, by what happened — each
+/// builds the lane-nested [`FilesEvent`] the one stream carries.
+mod ev {
+    use files_proto::model::{
+        CheckpointInfo, FileRootInfo, HydrationChange, NamedVersion, ProjectVersion, Review,
+        ReviewComment, SnapshotInfo,
+    };
+    use files_proto::service::{FilesEvent, curation, review, roots, sync, version};
+
+    pub fn root_created(r: FileRootInfo) -> FilesEvent {
+        FilesEvent::Root(roots::RootEvent::Created(r))
+    }
+    pub fn review_created(r: Review) -> FilesEvent {
+        FilesEvent::Review(review::ReviewEvent::Created(r))
+    }
+    pub fn review_comment_added(c: ReviewComment) -> FilesEvent {
+        FilesEvent::Review(review::ReviewEvent::CommentAdded(c))
+    }
+    pub fn review_comment_deleted(c: ReviewComment) -> FilesEvent {
+        FilesEvent::Review(review::ReviewEvent::CommentDeleted(c))
+    }
+    pub fn snapshotted(s: SnapshotInfo) -> FilesEvent {
+        FilesEvent::Version(version::VersionEvent::Snapshotted(s))
+    }
+    pub fn checkpointed(c: CheckpointInfo) -> FilesEvent {
+        FilesEvent::Version(version::VersionEvent::Checkpointed(c))
+    }
+    pub fn hydration_changed(h: HydrationChange) -> FilesEvent {
+        FilesEvent::Sync(sync::SyncEvent::HydrationChanged(h))
+    }
+    pub fn project_version_started(p: ProjectVersion) -> FilesEvent {
+        FilesEvent::Curation(curation::CurationEvent::ProjectVersionStarted(p))
+    }
+    pub fn version_named(n: NamedVersion) -> FilesEvent {
+        FilesEvent::Curation(curation::CurationEvent::VersionNamed(n))
+    }
+    pub fn version_unnamed(n: NamedVersion) -> FilesEvent {
+        FilesEvent::Curation(curation::CurationEvent::VersionUnnamed(n))
+    }
+}
 use files_store::version::VersionStoreBackend;
 use jj_lib::backend::{Backend, ChangeId, CommitId};
 use jj_lib::object_id::{HexPrefix, ObjectId as _, PrefixResolution};
@@ -114,7 +157,7 @@ use crate::scan;
 use crate::stub;
 use crate::versions::VaultVersions;
 
-/// Default `keep_newer` window for [`FilesService::gc_root`]: nothing
+/// Default `keep_newer` window for `VersionService::collect`: nothing
 /// written in the last minute is ever swept, so a sweep can't race a
 /// checkpoint that is mid-write on another connection (the
 /// concurrent-writer guard `Backend::gc`'s own contract describes).
@@ -358,7 +401,6 @@ pub struct FilesBackend {
     /// slow subscriber loses its *oldest* queued events, correct for
     /// these state-shaped payloads (same convention as
     /// `task::TaskBackend`).
-    events: architect::PubSub<FilesEvent>,
     /// The store [`crate::lane::federation`]'s `open_relay` publishes
     /// into and a `net_protocol` handler serves from — see
     /// [`FilesBackend::federation_blobs`]. Opened lazily rather than at
@@ -409,7 +451,7 @@ fn to_files_error(err: Error) -> FilesError {
 }
 
 /// Run a sync `*_inner` call on the blocking thread pool — the seam
-/// every `FilesService` method below uses (see the module doc). The
+/// every async entry point below uses (see the module doc). The
 /// closure captures a cheap `Clone` of `self` (every field is an
 /// `Arc`/`PathBuf`), never `self` by reference, so it satisfies
 /// `spawn_blocking`'s `'static` bound.
@@ -527,7 +569,6 @@ impl FilesBackend {
             rendition_stores: Arc::new(Mutex::new(HashMap::new())),
             rendition_gen_locks: Arc::new(Mutex::new(HashMap::new())),
             rendition_open_lock: Arc::new(tokio::sync::Mutex::new(())),
-            events: architect::PubSub::sliding(256),
             lane_events: tokio::sync::broadcast::channel(1024).0,
             federation_blobs: Arc::new(tokio::sync::OnceCell::new()),
             memberships: Arc::new(std::sync::RwLock::new(None)),
@@ -928,14 +969,30 @@ impl FilesBackend {
     // client's, in `files-ui`; the reconnect-without-re-listing half is
     // the catalogue's, since a subscriber that missed events converges by
     // reading the catalogue rather than by walking the tree
-    fn publish(&self, event: FilesEvent) {
-        // The v2 stream hears every legacy event too, translated, so a
-        // v2 subscriber misses nothing the cadence engine or a legacy
-        // caller did.
-        if let Some(v2) = crate::lane::events::from_legacy(&event) {
-            crate::lane::events::publish(self, v2);
-        }
-        self.events.publish(event);
+    /// Every root this org holds, for the **replica lane**.
+    ///
+    /// Not a lane method, and deliberately not caller-filtered: the
+    /// replica surface (`files-sync`'s `SyncHost`) is authorised by host
+    /// admission — a peer the org admitted replicates the whole org — not
+    /// by a person's role or grants, which the lanes check and which a
+    /// peer has none of. Anything a person reaches goes through
+    /// `RootsService::list` instead.
+    pub async fn replica_roots(&self) -> Result<Vec<FileRootInfo>, FilesError> {
+        let this = self.clone();
+        blocking(move || Ok(this.with_project_version(this.registry.list()))).await
+    }
+
+    pub(crate) fn publish(&self, event: FilesEvent) {
+        crate::lane::events::publish(self, event);
+    }
+
+    /// Follow this backend's live events in process — what the daemon and
+    /// the share-guest lane fold, without a vox subscription. The same
+    /// stream `TreeService::events` relays, unfiltered: an in-process
+    /// caller is the server itself.
+    #[must_use]
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<FilesEvent> {
+        self.lane_events.subscribe()
     }
 
     /// Best-effort flush of every cached root's chunk store
@@ -1076,7 +1133,7 @@ impl FilesBackend {
             }
         }
         tracing::info!(root = %root.id, path = ?root.path, "files: adopted a marked root");
-        self.publish(FilesEvent::RootCreated(root.clone()));
+        self.publish(ev::root_created(root.clone()));
         Ok(root)
     }
 
@@ -1489,7 +1546,7 @@ impl FilesBackend {
                 tracing::warn!(root_id = %id, ?err, "files: new root not watched");
             }
         }
-        self.publish(FilesEvent::RootCreated(root.clone()));
+        self.publish(ev::root_created(root.clone()));
         Ok(root)
     }
 
@@ -1951,7 +2008,7 @@ impl FilesBackend {
         let this = self.clone();
         let added =
             blocking(move || this.add_review_comment_inner(review_id, comment, via_link)).await?;
-        self.publish(FilesEvent::ReviewCommentAdded(added.clone()));
+        self.publish(ev::review_comment_added(added.clone()));
         Ok(added)
     }
 
@@ -1966,7 +2023,10 @@ impl FilesBackend {
                 "a comment needs text or a drawing".into(),
             ));
         }
-        if !comment.timecode_secs.is_finite() || comment.timecode_secs < 0.0 {
+        // Negative is refused except for the one sentinel that means "about
+        // the whole piece" — a general note, pinned to no moment.
+        let unpinned = comment.timecode_secs == crate::lane::review::UNPINNED_SECS;
+        if !comment.timecode_secs.is_finite() || (comment.timecode_secs < 0.0 && !unpinned) {
             return Err(Error::BadRequest(format!(
                 "bad timecode: {}",
                 comment.timecode_secs
@@ -2350,8 +2410,8 @@ impl FilesBackend {
         journal.save(&store_dir)?;
 
         self.publish(match &captured {
-            Captured::Snapshot(info) => FilesEvent::Snapshotted(info.clone()),
-            Captured::Checkpoint(info) => FilesEvent::Checkpointed(info.clone()),
+            Captured::Snapshot(info) => ev::snapshotted(info.clone()),
+            Captured::Checkpoint(info) => ev::checkpointed(info.clone()),
         });
 
         // Checkpoint trigger for derived media (issue #269): warm up the
@@ -2630,7 +2690,7 @@ impl FilesBackend {
         }
 
         stub::write(&disk_path, &stub::Stub::new(&head_id, len, executable))?;
-        self.publish(FilesEvent::HydrationChanged(HydrationChange {
+        self.publish(ev::hydration_changed(HydrationChange {
             root_id,
             path: repo_path.as_internal_file_string().to_string(),
             stub: true,
@@ -2670,7 +2730,7 @@ impl FilesBackend {
         };
 
         self.restore_content(&repo, &repo_path, &disk_path, &target_id, executable)?;
-        self.publish(FilesEvent::HydrationChanged(HydrationChange {
+        self.publish(ev::hydration_changed(HydrationChange {
             root_id,
             path: repo_path.as_internal_file_string().to_string(),
             stub: false,
@@ -3336,7 +3396,7 @@ impl FilesBackend {
             change_id.hex(),
             commit_id.hex(),
         )?;
-        self.publish(FilesEvent::Checkpointed(CheckpointInfo {
+        self.publish(ev::checkpointed(CheckpointInfo {
             root_id,
             commit_id: commit_hex,
             description: format!("restart: Project Version v{}", pv.number),
@@ -3345,7 +3405,7 @@ impl FilesBackend {
             save_points: Vec::new(),
             requeued_paths: result.requeued_paths,
         }));
-        self.publish(FilesEvent::ProjectVersionStarted(pv.clone()));
+        self.publish(ev::project_version_started(pv.clone()));
         Ok(pv)
     }
 
@@ -4153,7 +4213,7 @@ impl FilesBackend {
             save_points: Vec::new(),
             requeued_paths: Vec::new(),
         };
-        self.publish(FilesEvent::Checkpointed(info.clone()));
+        self.publish(ev::checkpointed(info.clone()));
         Ok(info)
     }
 
@@ -4242,7 +4302,7 @@ impl FilesBackend {
                 tracing::warn!(root_id = %root.id, ?err, "files: replica not watched");
             }
         }
-        self.publish(FilesEvent::RootCreated(root.clone()));
+        self.publish(ev::root_created(root.clone()));
         Ok(root)
     }
 }
@@ -5429,58 +5489,43 @@ fn from_files_error(err: FilesError) -> Error {
     }
 }
 
-impl FilesService for FilesBackend {
-    async fn create_root(
+/// The backend's async entry points — each runs its `*_inner` on the
+/// blocking pool and publishes what it did. Crate-private: callers reach
+/// these through the lanes, which are the one Files API.
+impl FilesBackend {
+    pub(crate) async fn browse_live(
         &self,
-        path: String,
-        name: String,
-        flavor: RootFlavor,
-    ) -> Result<FileRootInfo, FilesError> {
-        let this = self.clone();
-        blocking(move || this.create_root_inner(path, name, flavor)).await
-    }
-
-    async fn list_roots(&self) -> Result<Vec<FileRootInfo>, FilesError> {
-        // On the blocking pool like every other method here: the
-        // lineage overlay scans the vault, and one root on a sleeping
-        // drive must not stall a runtime worker for every org.
-        let this = self.clone();
-        blocking(move || Ok(this.with_project_version(this.registry.list()))).await
-    }
-
-    async fn get_root(&self, id: Uuid) -> Result<FileRootInfo, FilesError> {
-        let this = self.clone();
-        blocking(move || {
-            let root = this.get_root_info(id)?;
-            Ok(this
-                .with_project_version(vec![root])
-                .pop()
-                .expect("one root in, one root out"))
-        })
-        .await
-    }
-
-    async fn browse(&self, root_id: Uuid, subpath: String) -> Result<Vec<BrowseEntry>, FilesError> {
+        root_id: Uuid,
+        subpath: String,
+    ) -> Result<Vec<BrowseEntry>, FilesError> {
         let this = self.clone();
         blocking(move || this.browse_inner(root_id, subpath)).await
     }
 
-    async fn dehydrate(&self, root_id: Uuid, path: String) -> Result<BrowseEntry, FilesError> {
+    pub(crate) async fn dehydrate_path(
+        &self,
+        root_id: Uuid,
+        path: String,
+    ) -> Result<BrowseEntry, FilesError> {
         let this = self.clone();
         blocking(move || this.dehydrate_inner(root_id, path)).await
     }
 
-    async fn hydrate(&self, root_id: Uuid, path: String) -> Result<BrowseEntry, FilesError> {
+    pub(crate) async fn hydrate_path(
+        &self,
+        root_id: Uuid,
+        path: String,
+    ) -> Result<BrowseEntry, FilesError> {
         let this = self.clone();
         blocking(move || this.hydrate_inner(root_id, path)).await
     }
 
-    async fn hydration_policy(&self, root_id: Uuid) -> Result<Vec<String>, FilesError> {
+    pub(crate) async fn hydration_policy(&self, root_id: Uuid) -> Result<Vec<String>, FilesError> {
         let this = self.clone();
         blocking(move || this.hydration_policy_inner(root_id)).await
     }
 
-    async fn set_hydration_policy(
+    pub(crate) async fn set_hydration_policy(
         &self,
         root_id: Uuid,
         patterns: Vec<String>,
@@ -5489,27 +5534,32 @@ impl FilesService for FilesBackend {
         blocking(move || this.set_hydration_policy_inner(root_id, patterns)).await
     }
 
-    async fn apply_hydration_policy(&self, root_id: Uuid) -> Result<HydrationReport, FilesError> {
+    pub(crate) async fn apply_hydration_policy(
+        &self,
+        root_id: Uuid,
+    ) -> Result<HydrationReport, FilesError> {
         let this = self.clone();
         blocking(move || this.apply_hydration_policy_inner(root_id)).await
     }
 
-    async fn drive_browse(&self, path: String) -> Result<Vec<BrowseEntry>, FilesError> {
-        let this = self.clone();
-        blocking(move || this.drive_browse_inner(path)).await
-    }
-
-    async fn tree_browse(&self, path: String) -> Result<files_proto::TreeNode, FilesError> {
+    pub(crate) async fn tree_browse(
+        &self,
+        path: String,
+    ) -> Result<files_proto::TreeNode, FilesError> {
         let this = self.clone();
         blocking(move || this.tree_browse_inner(path)).await
     }
 
-    async fn chain(&self, root_id: Uuid, path: String) -> Result<Vec<ChainEntry>, FilesError> {
+    pub(crate) async fn chain_of(
+        &self,
+        root_id: Uuid,
+        path: String,
+    ) -> Result<Vec<ChainEntry>, FilesError> {
         let this = self.clone();
         blocking(move || this.chain_inner(root_id, path)).await
     }
 
-    async fn checkpoint_now(
+    pub(crate) async fn checkpoint_now(
         &self,
         root_id: Uuid,
         description: Option<String>,
@@ -5518,24 +5568,31 @@ impl FilesService for FilesBackend {
         blocking(move || this.checkpoint_now_inner(root_id, description)).await
     }
 
-    async fn hint_activity(&self, root_id: Uuid, paths: Vec<String>) -> Result<u32, FilesError> {
+    pub(crate) async fn note_activity(
+        &self,
+        root_id: Uuid,
+        paths: Vec<String>,
+    ) -> Result<u32, FilesError> {
         // On the blocking pool like its neighbours: the first hint for a
         // root compiles (and may seed) its Ignore set off disk.
         let this = self.clone();
         blocking(move || this.hint_activity_inner(root_id, paths)).await
     }
 
-    async fn snapshots(&self, root_id: Uuid) -> Result<Vec<SnapshotInfo>, FilesError> {
+    pub(crate) async fn snapshots_of(
+        &self,
+        root_id: Uuid,
+    ) -> Result<Vec<SnapshotInfo>, FilesError> {
         let this = self.clone();
         blocking(move || this.snapshots_inner(root_id)).await
     }
 
-    async fn ignore_set(&self, root_id: Uuid) -> Result<Vec<String>, FilesError> {
+    pub(crate) async fn ignore_patterns(&self, root_id: Uuid) -> Result<Vec<String>, FilesError> {
         let this = self.clone();
         blocking(move || this.ignore_set_inner(root_id)).await
     }
 
-    async fn set_ignore_set(
+    pub(crate) async fn set_ignore_patterns(
         &self,
         root_id: Uuid,
         patterns: Vec<String>,
@@ -5544,7 +5601,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.set_ignore_set_inner(root_id, patterns)).await
     }
 
-    async fn name_version(
+    pub(crate) async fn name_commit(
         &self,
         root_id: Uuid,
         commit_id: String,
@@ -5552,11 +5609,11 @@ impl FilesService for FilesBackend {
     ) -> Result<NamedVersion, FilesError> {
         let this = self.clone();
         let named = blocking(move || this.name_version_inner(root_id, commit_id, name)).await?;
-        self.publish(FilesEvent::VersionNamed(named.clone()));
+        self.publish(ev::version_named(named.clone()));
         Ok(named)
     }
 
-    async fn list_named_versions(
+    pub(crate) async fn list_named_versions(
         &self,
         root_id: Option<Uuid>,
     ) -> Result<Vec<NamedVersion>, FilesError> {
@@ -5564,30 +5621,30 @@ impl FilesService for FilesBackend {
         blocking(move || this.versions.named_versions(root_id)).await
     }
 
-    async fn resolve_named_version(&self, id: Uuid) -> Result<VersionRef, FilesError> {
+    pub(crate) async fn resolve_named_version(&self, id: Uuid) -> Result<VersionRef, FilesError> {
         let this = self.clone();
         blocking(move || this.resolve_named_version_inner(id)).await
     }
 
-    async fn unname_version(&self, id: Uuid) -> Result<(), FilesError> {
+    pub(crate) async fn unname_by_id(&self, id: Uuid) -> Result<(), FilesError> {
         let this = self.clone();
         let removed = blocking(move || this.unname_version_inner(id)).await?;
-        self.publish(FilesEvent::VersionUnnamed(removed));
+        self.publish(ev::version_unnamed(removed));
         Ok(())
     }
 
-    async fn start_project_version(
+    pub(crate) async fn begin_project_version(
         &self,
         root_id: Uuid,
         label: Option<String>,
     ) -> Result<ProjectVersion, FilesError> {
         let this = self.clone();
         let pv = blocking(move || this.start_project_version_inner(root_id, label)).await?;
-        self.publish(FilesEvent::ProjectVersionStarted(pv.clone()));
+        self.publish(ev::project_version_started(pv.clone()));
         Ok(pv)
     }
 
-    async fn list_project_versions(
+    pub(crate) async fn list_project_versions(
         &self,
         root_id: Uuid,
     ) -> Result<Vec<ProjectVersion>, FilesError> {
@@ -5595,7 +5652,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.versions.project_versions(root_id)).await
     }
 
-    async fn find_review(
+    pub(crate) async fn find_review(
         &self,
         root_id: Uuid,
         file_path: String,
@@ -5604,7 +5661,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.find_review_inner(root_id, &file_path)).await
     }
 
-    async fn review_for_file(
+    pub(crate) async fn review_for_file(
         &self,
         root_id: Uuid,
         file_path: String,
@@ -5613,12 +5670,12 @@ impl FilesService for FilesBackend {
         let (review, created) =
             blocking(move || this.review_for_file_inner(root_id, file_path)).await?;
         if created {
-            self.publish(FilesEvent::ReviewCreated(review.clone()));
+            self.publish(ev::review_created(review.clone()));
         }
         Ok(review)
     }
 
-    async fn list_reviews(
+    pub(crate) async fn list_reviews(
         &self,
         root_id: Option<Uuid>,
     ) -> Result<Vec<files_proto::Review>, FilesError> {
@@ -5626,7 +5683,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.versions.reviews(root_id)).await
     }
 
-    async fn review_comments(
+    pub(crate) async fn review_comments(
         &self,
         review_id: Uuid,
     ) -> Result<Vec<files_proto::ReviewComment>, FilesError> {
@@ -5634,20 +5691,10 @@ impl FilesService for FilesBackend {
         blocking(move || this.versions.review_comments(review_id)).await
     }
 
-    async fn add_review_comment(
+    pub(crate) async fn delete_review_comment(
         &self,
-        review_id: Uuid,
-        comment: files_proto::NewReviewComment,
+        id: Uuid,
     ) -> Result<files_proto::ReviewComment, FilesError> {
-        let this = self.clone();
-        let added =
-            blocking(move || this.add_review_comment_inner(review_id, comment, String::new()))
-                .await?;
-        self.publish(FilesEvent::ReviewCommentAdded(added.clone()));
-        Ok(added)
-    }
-
-    async fn delete_review_comment(&self, id: Uuid) -> Result<(), FilesError> {
         let this = self.clone();
         let removed = blocking(move || {
             let comment = this.versions.review_comment(id)?;
@@ -5656,11 +5703,29 @@ impl FilesService for FilesBackend {
             this.versions.delete_review_comment(id)
         })
         .await?;
-        self.publish(FilesEvent::ReviewCommentDeleted(removed));
-        Ok(())
+        self.publish(ev::review_comment_deleted(removed.clone()));
+        Ok(removed)
     }
 
-    async fn restart_project_version(
+    /// The review a comment belongs to — what deleting one authorises
+    /// against.
+    pub(crate) async fn review_of_comment(
+        &self,
+        id: Uuid,
+    ) -> Result<files_proto::Review, FilesError> {
+        let this = self.clone();
+        blocking(move || {
+            let comment = this.versions.review_comment(id)?;
+            this.versions
+                .reviews(None)?
+                .into_iter()
+                .find(|r| r.id == comment.review_id)
+                .ok_or_else(|| Error::NotFound(format!("review of comment {id}")))
+        })
+        .await
+    }
+
+    pub(crate) async fn restart_lineage(
         &self,
         root_id: Uuid,
         mode: files_proto::RestartMode,
@@ -5670,7 +5735,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.restart_inner(root_id, mode, label)).await
     }
 
-    async fn browse_at(
+    pub(crate) async fn browse_commit(
         &self,
         root_id: Uuid,
         commit_id: String,
@@ -5680,7 +5745,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.browse_at_inner(root_id, commit_id, subpath)).await
     }
 
-    async fn copy_forward(
+    pub(crate) async fn copy_forward_commit(
         &self,
         root_id: Uuid,
         commit_id: String,
@@ -5690,7 +5755,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.copy_forward_inner(root_id, commit_id, paths)).await
     }
 
-    async fn divergences(
+    pub(crate) async fn divergences_of(
         &self,
         root_id: Uuid,
     ) -> Result<Vec<files_proto::DivergenceInfo>, FilesError> {
@@ -5698,7 +5763,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.divergences_inner(root_id)).await
     }
 
-    async fn resolve_divergence(
+    pub(crate) async fn settle_divergence(
         &self,
         root_id: Uuid,
         path: String,
@@ -5708,7 +5773,7 @@ impl FilesService for FilesBackend {
         blocking(move || this.resolve_divergence_inner(root_id, path, choice)).await
     }
 
-    async fn gc_root(
+    pub(crate) async fn gc_root(
         &self,
         root_id: Uuid,
         keep_newer_secs: Option<u64>,
@@ -5728,7 +5793,7 @@ impl FilesService for FilesBackend {
         .await
     }
 
-    async fn rendition(
+    pub(crate) async fn rendition_of(
         &self,
         root_id: Uuid,
         path: String,
@@ -5739,7 +5804,7 @@ impl FilesService for FilesBackend {
             .map_err(to_files_error)
     }
 
-    async fn rendition_at(
+    pub(crate) async fn rendition_of_at(
         &self,
         root_id: Uuid,
         path: String,
@@ -5749,14 +5814,5 @@ impl FilesService for FilesBackend {
         self.rendition_inner(root_id, path, Some(commit_id), kind)
             .await
             .map_err(to_files_error)
-    }
-}
-
-/// The `#[subscribe]` backend contract: hand the emitted stream host
-/// the hub it attaches subscriber sinks to. Publishing happens in the
-/// `*_inner` methods above, on every successful mutation.
-impl files_proto::service::legacy::FilesServiceStreamSource for FilesBackend {
-    fn events_hub(&self) -> &architect::PubSub<FilesEvent> {
-        &self.events
     }
 }

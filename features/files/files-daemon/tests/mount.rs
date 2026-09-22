@@ -13,7 +13,9 @@
 //! stdout so a run that quietly covered nothing is legible as such.
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::{FilesBackend, FilesService as _, RootFlavor};
+use files::service::roots::{AdoptRequest, RootsService as _};
+use files::service::version::VersionService as _;
+use files::{FilesBackend, RootFlavor, RootId};
 use files_daemon::service::{DaemonControlServiceClient, layer as control_layer};
 use files_daemon::{DaemonControl, SyncDaemon};
 
@@ -56,14 +58,19 @@ async fn rig() -> Rig {
     std::fs::write(&tree.join("mix.wav"), vec![7u8; 3 * 1024 * 1024]).unwrap();
     std::fs::write(&tree.join("notes.txt"), b"session notes").unwrap();
     let root = backend
-        .create_root(
-            tree.to_string_lossy().into_owned(),
-            "session".into(),
-            RootFlavor::Media,
-        )
+        .adopt(AdoptRequest {
+            path: tree.to_string_lossy().into_owned(),
+            name: "session".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        })
         .await
         .unwrap();
-    backend.checkpoint_now(root.id, None).await.unwrap();
+    backend.settled(RootId::new(root.id)).await;
+    backend
+        .checkpoint(RootId::new(root.id), None)
+        .await
+        .unwrap();
 
     let daemon = SyncDaemon::open(backend, dir.path().join("daemon")).unwrap();
     let scope = Scope::new();

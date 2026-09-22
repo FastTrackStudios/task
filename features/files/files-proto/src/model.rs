@@ -92,8 +92,8 @@ impl FileRootInfo {
 }
 
 /// One entry in a directory listing — either a root-scoped
-/// [`crate::service::FilesService::browse`] or a rootless
-/// [`crate::service::FilesService::drive_browse`] ("Drive" browsing
+/// [`crate::service::tree::TreeService::browse`] or a rootless
+/// [`crate::service::roots::RootsService::browse_area`] ("Drive" browsing
 /// per the glossary: loose files outside any root).
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
@@ -107,7 +107,7 @@ pub struct BrowseEntry {
     /// store at the checkpoint head but not resident in the live tree
     /// (glossary "Pointer stub" — browsing a 240 GB project must not
     /// mean downloading it). Always `false` for
-    /// [`crate::service::FilesService::drive_browse`], which has no
+    /// [`crate::service::roots::RootsService::browse_area`], which has no
     /// root context. On-demand hydration is issue #263; v1 reports the
     /// state so the explorer can show resident-vs-stub honestly.
     #[facet(default)]
@@ -155,7 +155,7 @@ pub struct SavePoint {
 /// An **auto-snapshot** (glossary): the ephemeral safety capture the
 /// cadence engine takes during activity. Never a chain entry — snapshot
 /// commits branch off the checkpoint line rather than sitting on it, so
-/// [`crate::service::FilesService::chain`] walks straight past them —
+/// [`crate::service::version::VersionService::chain`] walks straight past them —
 /// and expirable, so a tracking day doesn't drown the history in noise.
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
@@ -209,13 +209,13 @@ pub struct ChainEntry {
 /// identity (what the reference *is*), `commit_id` the exact content
 /// pointer it resolved to when named (what GC protects and what a
 /// share link streams). See
-/// [`crate::service::FilesService::resolve_named_version`].
+/// [`crate::service::curation::CurationService::named_version`].
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct NamedVersion {
     pub id: Uuid,
     /// Vault-relative path of the entity's own page. Empty on input to
-    /// [`crate::service::FilesService::name_version`]; the server fills
+    /// [`crate::service::curation::CurationService::name_version`]; the server fills
     /// it in.
     pub path: String,
     /// The curated label, as the producer typed it ("v3 for client").
@@ -301,7 +301,7 @@ pub struct VersionRef {
     pub commit_id: String,
 }
 
-/// Result of [`crate::service::FilesService::gc_root`] — one
+/// Result of [`crate::service::version::VersionService::collect`] — one
 /// mark-and-sweep pass over a root's version store, with the protect
 /// set resolved from the Vault (ADR 0001: "protect set =
 /// index-reachable ∪ Vault-referenced ... the Vault is the authority
@@ -319,7 +319,7 @@ pub struct GcReport {
     pub protected_commits: u32,
 }
 
-/// Result of [`crate::service::FilesService::checkpoint_now`] (glossary
+/// Result of [`crate::service::version::VersionService::checkpoint`] (glossary
 /// "Session checkpoint").
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
@@ -360,7 +360,7 @@ pub struct HydrationChange {
     pub stub: bool,
 }
 
-/// Result of [`crate::service::FilesService::apply_hydration_policy`]:
+/// Result of [`crate::service::sync::SyncService::apply_residency`]:
 /// what one policy pass changed, root-relative paths, sorted.
 #[derive(Debug, Clone, Default, PartialEq, Facet)]
 #[repr(C)]
@@ -397,8 +397,8 @@ pub struct DivergenceSide {
 /// A path whose state differs between the root's visible heads —
 /// concurrent saves that both survived (ADR 0001: nothing is lost, no
 /// on-disk conflict markers; the UI resolves). Produced by
-/// [`crate::service::FilesService::divergences`], settled by
-/// [`crate::service::FilesService::resolve_divergence`].
+/// [`crate::service::version::VersionService::divergences`], settled by
+/// [`crate::service::version::VersionService::resolve_divergence`].
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]
 pub struct DivergenceInfo {
@@ -536,7 +536,7 @@ pub struct ReviewComment {
 }
 
 /// Input half of [`ReviewComment`] for
-/// [`crate::service::FilesService::add_review_comment`] (bundled — RPC
+/// [`crate::service::review::ReviewService::comment`] (bundled — RPC
 /// methods carry at most 4 params).
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[repr(C)]

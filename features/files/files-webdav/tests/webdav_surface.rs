@@ -7,13 +7,16 @@
 //! seam is the protocol itself — `OPTIONS` / `PROPFIND` / `PUT` / `GET`
 //! / `MKCOL` / `MOVE` / `DELETE` / `LOCK` against
 //! [`WebdavBridge::handle`], with the File Root underneath created
-//! through the ordinary `FilesService` calls. Nothing below reaches
+//! through the ordinary Files lane calls. Nothing below reaches
 //! into `LiveTreeFs`, the registry, or the version store.
 //!
 //! Each test is named for the acceptance criterion it proves.
 
 use bytes::Bytes;
-use files::{FilesBackend, FilesService as _, RootFlavor};
+use files::service::roots::{AdoptRequest, RootsService as _};
+use files::service::sync::SyncService as _;
+use files::service::version::VersionService as _;
+use files::{FilesBackend, RootFlavor, RootId, RootPath};
 use files_webdav::WebdavBridge;
 use http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt as _, Full};
@@ -51,14 +54,18 @@ impl Harness {
     async fn root(&self, name: &str) -> files::FileRootInfo {
         let dir = self.data_dir.join(name);
         std::fs::create_dir_all(&dir).expect("stage root dir");
-        self.backend
-            .create_root(
-                dir.to_str().unwrap().to_string(),
-                name.to_string(),
-                RootFlavor::Media,
-            )
+        let root = self
+            .backend
+            .adopt(AdoptRequest {
+                path: dir.to_str().unwrap().to_string(),
+                name: name.to_string(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            })
             .await
-            .expect("create_root")
+            .expect("adopt");
+        self.backend.settled(RootId::new(root.id)).await;
+        root
     }
 
     async fn send(&self, method: &str, path: &str, body: &[u8]) -> (StatusCode, String) {
@@ -251,9 +258,9 @@ async fn writes_through_the_bridge_enter_the_cadence_pipeline() {
         .await;
     let cp1 = h
         .backend
-        .checkpoint_now(root.id, Some("after the drop".into()))
+        .checkpoint(RootId::new(root.id), Some("after the drop".into()))
         .await
-        .expect("checkpoint_now");
+        .expect("checkpoint");
     assert!(
         cp1.changed_paths.contains(&"session.rpp".to_string()),
         "the checkpoint scan saw the WebDAV write: {:?}",
@@ -270,14 +277,17 @@ async fn writes_through_the_bridge_enter_the_cadence_pipeline() {
     .await;
     let cp2 = h
         .backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
-        .expect("checkpoint_now");
+        .expect("checkpoint");
     assert_eq!(cp2.changed_paths, vec!["session.rpp".to_string()]);
 
     let chain = h
         .backend
-        .chain(root.id, "session.rpp".to_string())
+        .chain(
+            RootId::new(root.id),
+            RootPath::parse("session.rpp").unwrap(),
+        )
         .await
         .expect("chain");
     assert_eq!(chain.len(), 2, "two saved states: {chain:?}");
@@ -299,9 +309,9 @@ async fn version_history_is_not_exposed() {
     h.send("PUT", &format!("{root_url}/mix.wav"), b"take one")
         .await;
     h.backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
-        .expect("checkpoint_now");
+        .expect("checkpoint");
     // The store really is there on disk — otherwise this test proves
     // nothing about hiding it.
     assert!(
@@ -407,7 +417,7 @@ async fn a_hidden_root_is_unreachable_over_webdav() {
     // from Files.
     assert!(
         h.backend
-            .list_roots()
+            .list()
             .await
             .unwrap()
             .iter()
@@ -666,9 +676,9 @@ async fn case_variants_of_the_internals_are_still_hidden() {
     h.send("PUT", "/org/acme/dav/Case%20Test/mix.wav", b"take one")
         .await;
     h.backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
-        .expect("checkpoint_now");
+        .expect("checkpoint");
     assert!(
         root.local_tree()
             .expect("a placed root")
@@ -787,7 +797,7 @@ async fn an_unreadable_policy_fails_closed() {
     std::fs::set_permissions(&policy_path, original).unwrap();
 }
 
-/// Roots are created through `FilesService::create_root` — which mints
+/// Roots are created through `RootsService::adopt` — which mints
 /// the id, writes the marker and initializes the version store — so the
 /// mount point itself is read-only. A client dropping a folder onto the
 /// mount must not produce a directory that looks like a root but has no
@@ -826,11 +836,15 @@ async fn a_get_of_a_stub_hydrates_and_serves_the_content() {
     let disk = h.data_dir.join("Session").join("mix.wav");
     std::fs::write(&disk, vec![0x5au8; 48 * 1024]).expect("stage media");
     h.backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
         .expect("checkpoint");
     h.backend
-        .dehydrate(root.id, "mix.wav".into())
+        .hydrate(
+            RootId::new(root.id),
+            vec![RootPath::parse("mix.wav").unwrap()],
+            false,
+        )
         .await
         .expect("dehydrate");
     assert!(

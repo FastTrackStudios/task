@@ -176,10 +176,11 @@ async fn demo_plants_adopted_roots_with_video_deliverables() -> eyre::Result<()>
                     .iter()
                     .find(|r| r.name == declared.title)
                     .expect("adopted above");
-                let chain = files::FilesService::chain(
+                let chain = files::service::VersionService::chain(
                     &backend,
-                    root.id,
-                    format!("Deliverables/{name}.mp4"),
+                    files::RootId::new(root.id),
+                    files::RootPath::parse(&format!("Deliverables/{name}.mp4"))
+                        .expect("deliverable path"),
                 )
                 .await
                 .unwrap_or_else(|e| panic!("chain of \"{name}\": {e}"));

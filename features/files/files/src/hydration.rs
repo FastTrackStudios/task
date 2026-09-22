@@ -11,7 +11,7 @@
 //! no policy behaves exactly as before this ticket.
 //!
 //! Storing patterns changes no file;
-//! [`files_proto::FilesService::apply_hydration_policy`] is the pass
+//! `SyncService::apply_residency` is the pass
 //! that does, and dirty files (content differing from the checkpoint
 //! head) are never dehydrated by it — see `backend`'s apply
 //! implementation.

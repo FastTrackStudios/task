@@ -14,9 +14,10 @@
 use files::FilesBackend;
 use files_proto::id::{DeviceId, RootId};
 use files_proto::model::RootFlavor;
-use files_proto::service::legacy::FilesService;
 use files_proto::service::roots::{AdoptRequest, RootsService};
 use files_proto::service::sync::{FacetName, FacetSource, SyncService};
+use files_proto::service::tree::TreeService;
+use files_proto::service::version::VersionService;
 use files_proto::{FilesFault, RootPath};
 
 /// An album root: one session with its media, some footage, and a
@@ -58,14 +59,16 @@ async fn album(name: &str) -> (tempfile::TempDir, FilesBackend, RootId) {
         })
         .await
         .expect("adopt");
+    let root = RootId::new(root.id);
+    backend.settled(root).await;
 
     // Selective sync can only release bytes the store already holds, so
     // a root that has never been checkpointed can never be stubbed.
-    FilesService::checkpoint_now(&backend, root.id, Some("staged".into()))
+    VersionService::checkpoint(&backend, root, Some("staged".into()))
         .await
         .expect("checkpoint");
 
-    (data_dir, backend, RootId::new(root.id))
+    (data_dir, backend, root)
 }
 
 /// Is this path a pointer stub right now?
@@ -73,7 +76,7 @@ async fn is_stub(backend: &FilesBackend, root: RootId, path: &str) -> bool {
     let p = RootPath::parse(path).expect("path");
     let parent = p.parent().unwrap_or_else(RootPath::root);
     let name = p.name().expect("a named path").to_string();
-    FilesService::browse(backend, root.get(), parent.to_string())
+    TreeService::browse(backend, root, parent)
         .await
         .expect("browse")
         .into_iter()
@@ -108,7 +111,7 @@ async fn a_mix_engineer_takes_sessions_and_leaves_footage_as_stubs() {
 
     // The whole rule: unsubscribed is a stub, never absent.
     for path in ["Proxies/reel.mov", "01 Song/Bounced Files/rough.wav"] {
-        let disk = FilesService::get_root(&backend, root.get())
+        let disk = RootsService::get(&backend, root)
             .await
             .expect("root")
             .local_tree()
@@ -313,10 +316,7 @@ async fn the_three_ignore_layers_are_reported_and_only_one_is_settable() {
     );
 
     // Ignored is not deleted: the junk is still exactly where it was.
-    let path = FilesService::get_root(&backend, root.get())
-        .await
-        .expect("root")
-        .path;
+    let path = RootsService::get(&backend, root).await.expect("root").path;
     assert!(
         std::path::Path::new(path.as_deref().expect("a placed root"))
             .join(".DS_Store")

@@ -28,9 +28,9 @@
 use files::FilesBackend;
 use files_proto::id::{ContentId, RootId, UploadId};
 use files_proto::model::RootFlavor;
-use files_proto::service::legacy::FilesService as LegacyFiles;
 use files_proto::service::roots::{AdoptRequest, RootsService};
 use files_proto::service::upload::{UploadService, UploadSpec};
+use files_proto::service::version::VersionService;
 use files_proto::service::write::OnConflict;
 use files_proto::{FilesFault, RootPath};
 
@@ -75,7 +75,7 @@ async fn rig() -> Rig {
 
 impl Rig {
     async fn checkpoint(&self, why: &str) {
-        LegacyFiles::checkpoint_now(&self.backend, self.root.get(), Some(why.into()))
+        VersionService::checkpoint(&self.backend, self.root, Some(why.into()))
             .await
             .expect("checkpoint");
     }
@@ -121,10 +121,14 @@ impl Rig {
     }
 
     async fn chain_len(&self, path: &str) -> usize {
-        LegacyFiles::chain(&self.backend, self.root.get(), path.into())
-            .await
-            .expect("chain")
-            .len()
+        VersionService::chain(
+            &self.backend,
+            self.root,
+            RootPath::parse(path).expect("path"),
+        )
+        .await
+        .expect("chain")
+        .len()
     }
 }
 

@@ -410,9 +410,9 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                 let Some(root) = roots.iter().find(|r| r.name == *title) else {
                     continue;
                 };
-                if let Err(e) = files::FilesService::checkpoint_now(
+                if let Err(e) = files::service::VersionService::checkpoint(
                     &backend,
-                    root.id,
+                    files::RootId::new(root.id),
                     Some(format!("{name} — rough cut")),
                 )
                 .await
@@ -424,9 +424,9 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                     println!("  video: final render of \"{name}\" failed — rough cut stands");
                     continue;
                 }
-                match files::FilesService::checkpoint_now(
+                match files::service::VersionService::checkpoint(
                     &backend,
-                    root.id,
+                    files::RootId::new(root.id),
                     Some(format!("{name} — final")),
                 )
                 .await

@@ -29,13 +29,15 @@
 use std::sync::Arc;
 
 use files::lane::federation::RemoteFiles;
-use files::{FilesBackend, FilesService, RootFlavor};
+use files::{FilesBackend, RootFlavor};
 use files_proto::FilesFault;
 use files_proto::id::RootId;
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
 use files_proto::service::federation::{EndpointId, FederationService, RelayManifest};
 use files_proto::service::media::{ByteTicket, MediaService};
+use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::version::VersionService;
 
 /// The transport, in-process.
 ///
@@ -147,18 +149,21 @@ async fn pair(
     // test below passes because the path is missing rather than because
     // the boundary held.
     std::fs::write(tree.join("Song.rpp"), b"REAPER project").unwrap();
-    let root = origin
-        .create_root(
-            tree.to_string_lossy().into_owned(),
-            "Session".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create root");
+    let root = RootsService::adopt(
+        &origin,
+        AdoptRequest {
+            path: tree.to_string_lossy().into_owned(),
+            name: "Session".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        },
+    )
+    .await
+    .expect("adopt root");
     let root = RootId::new(root.id);
+    origin.settled(root).await;
     // The byte lane serves the checkpoint head, never the live file.
-    origin
-        .checkpoint_now(root.into(), None)
+    VersionService::checkpoint(&origin, root, None)
         .await
         .expect("checkpoint");
 

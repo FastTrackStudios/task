@@ -74,19 +74,23 @@ impl Laptop {
         )
         .unwrap();
 
-        let album = files::FilesService::create_root(
+        let album = files::service::RootsService::adopt(
             &backend,
-            tree.to_string_lossy().into_owned(),
-            "Album".into(),
-            RootFlavor::Media,
+            files::service::roots::AdoptRequest {
+                path: tree.to_string_lossy().into_owned(),
+                name: "Album".into(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            },
         )
         .await
         .expect("adopt the project on the laptop");
         let album = RootId::new(album.id);
+        backend.settled(album).await;
 
         // Content into the store first, so dehydrating is dropping a
         // local copy rather than losing the file.
-        files::FilesService::checkpoint_now(&backend, album.into(), None)
+        files::service::VersionService::checkpoint(&backend, album, None)
             .await
             .expect("checkpoint");
 

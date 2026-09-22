@@ -5,20 +5,50 @@
 
 use architect::{LayerRouter, LocalServer, Scope};
 use files::{FilesBackend, RootFlavor};
-use files_proto::{AnnotationPoint, AnnotationStroke, NewReviewComment};
+use files_proto::service::media::Region;
+use files_proto::service::review::NewComment;
+use files_proto::service::roots::AdoptRequest;
+use files_proto::{
+    AnnotationPoint, AnnotationStroke, CommentId, FilesFault, ReviewId, ReviewServiceClient,
+    RootId, RootPath, RootsServiceClient, VersionId, VersionServiceClient,
+};
 
 fn router(backend: FilesBackend) -> LayerRouter {
-    LayerRouter::new().merge(files::files_service_layer(backend))
+    LayerRouter::new()
+        .merge(files_proto::roots_layer(backend.clone()))
+        .merge(files_proto::version_layer(backend.clone()))
+        .merge(files_proto::review_layer(backend))
+}
+
+/// The lanes this file drives, over one in-process link.
+struct Rig {
+    backend: FilesBackend,
+    version: VersionServiceClient,
+    review: ReviewServiceClient,
+    _local: LocalServer,
+}
+
+impl Rig {
+    /// The file's version chain, newest first.
+    async fn chain(&self, root_id: RootId) -> Vec<files::ChainEntry> {
+        self.version.chain(root_id, cut()).await.unwrap()
+    }
+}
+
+fn cut() -> RootPath {
+    RootPath::parse("cut.mov").unwrap()
+}
+
+/// The domain fault inside a transport error, as text.
+fn fault_text(err: vox::VoxError<FilesFault>) -> String {
+    match err {
+        vox::VoxError::User(fault) => fault.to_string(),
+        other => panic!("expected a domain fault, got {other:?}"),
+    }
 }
 
 /// A media root with one video file, checkpointed.
-async fn rig() -> (
-    tempfile::TempDir,
-    FilesBackend,
-    files::FilesServiceClient,
-    uuid::Uuid,
-    LocalServer,
-) {
+async fn rig() -> (tempfile::TempDir, Rig, RootId) {
     let dir = tempfile::tempdir().unwrap();
     let backend = FilesBackend::new(dir.path(), dir.path().join("vault")).unwrap();
     let root_dir = dir.path().join("session");
@@ -26,26 +56,41 @@ async fn rig() -> (
     std::fs::write(root_dir.join("cut.mov"), vec![0x11u8; 2048]).unwrap();
     let scope = Scope::new();
     let local = LocalServer::serve(router(backend.clone()), scope.clone());
-    let client: files::FilesServiceClient = local.establish().await.unwrap();
-    let root = client
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "session".into(),
-            RootFlavor::Media,
-        )
+    let roots: RootsServiceClient = local.establish().await.unwrap();
+    let root = roots
+        .adopt(AdoptRequest {
+            path: root_dir.to_string_lossy().into_owned(),
+            name: "session".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        })
         .await
         .unwrap();
-    client.checkpoint_now(root.id, None).await.unwrap();
-    (dir, backend, client, root.id, local)
+    let root_id = RootId::new(root.id);
+    backend.settled(root_id).await;
+    let rig = Rig {
+        backend,
+        version: local.establish().await.unwrap(),
+        review: local.establish().await.unwrap(),
+        _local: local,
+    };
+    rig.version.checkpoint(root_id, None).await.unwrap();
+    (dir, rig, root_id)
 }
 
-fn comment_at(secs: f64, body: &str, commit_id: &str) -> NewReviewComment {
-    NewReviewComment {
-        timecode_secs: secs,
-        author: "Cody".into(),
+/// A timecoded comment in the v2 shape: the moment as a zero-length
+/// time region, the version as the commit it was made on.
+fn comment_at(review: ReviewId, ms: u64, body: &str, commit_id: &str) -> NewComment {
+    NewComment {
+        review,
+        version: VersionId::from_commit_hex(commit_id),
+        region: Region::Time {
+            start_ms: ms,
+            end_ms: ms,
+        },
         body: body.into(),
-        commit_id: commit_id.into(),
-        annotation: Vec::new(),
+        strokes: Vec::new(),
+        author: "Cody".into(),
     }
 }
 
@@ -54,31 +99,33 @@ fn comment_at(secs: f64, body: &str, commit_id: &str) -> NewReviewComment {
 /// on — and a new version of the file keeps them attributed (AC 2).
 #[tokio::test(flavor = "multi_thread")]
 async fn comments_pin_their_file_version_across_new_versions() {
-    let (dir, backend, client, root_id, _local) = rig().await;
+    let (dir, rig, root_id) = rig().await;
 
     // Get-or-create: two asks, one entity.
-    let review = client
-        .review_for_file(root_id, "cut.mov".into())
+    let review = rig
+        .review
+        .for_file(root_id, cut())
         .await
         .expect("create review");
-    let again = client
-        .review_for_file(root_id, "cut.mov".into())
+    let again = rig
+        .review
+        .for_file(root_id, cut())
         .await
         .expect("same review");
     assert_eq!(review.id, again.id, "one review per (root, file)");
     assert_eq!(review.title, "cut.mov");
     assert_eq!(
-        client.list_reviews(Some(root_id)).await.unwrap().len(),
+        rig.review.reviews(Some(root_id)).await.unwrap().len(),
         1,
         "listed once"
     );
+    let review_id = ReviewId::new(review.id);
 
     // Comment on version 1 — the chain's head commit.
-    let v1 = &client.chain(root_id, "cut.mov".into()).await.unwrap()[0]
-        .commit_id
-        .clone();
-    let c1 = client
-        .add_review_comment(review.id, comment_at(12.5, "logo too early", v1))
+    let v1 = &rig.chain(root_id).await[0].commit_id.clone();
+    let c1 = rig
+        .review
+        .comment(comment_at(review_id, 12_500, "logo too early", v1))
         .await
         .expect("comment on v1");
     assert_eq!(&c1.commit_id, v1, "records the version it was made on");
@@ -86,20 +133,21 @@ async fn comments_pin_their_file_version_across_new_versions() {
 
     // A new version of the file lands…
     std::fs::write(dir.path().join("session/cut.mov"), vec![0x22u8; 4096]).unwrap();
-    client.checkpoint_now(root_id, None).await.unwrap();
-    let chain = client.chain(root_id, "cut.mov".into()).await.unwrap();
+    rig.version.checkpoint(root_id, None).await.unwrap();
+    let chain = rig.chain(root_id).await;
     assert!(chain.len() >= 2, "two versions now: {}", chain.len());
     let v2 = &chain[0].commit_id;
     assert_ne!(v1, v2);
 
     // …and a comment on v2 joins the SAME review, while the v1 comment
     // keeps its original attribution.
-    let c2 = client
-        .add_review_comment(review.id, comment_at(3.0, "new cut fixes it", v2))
+    let c2 = rig
+        .review
+        .comment(comment_at(review_id, 3_000, "new cut fixes it", v2))
         .await
         .expect("comment on v2");
     assert_eq!(&c2.commit_id, v2);
-    let comments = client.review_comments(review.id).await.unwrap();
+    let comments = rig.review.comments(review_id).await.unwrap();
     assert_eq!(comments.len(), 2);
     // Ordered by timecode, not creation: 3.0s before 12.5s.
     assert_eq!(comments[0].id, c2.id);
@@ -110,24 +158,23 @@ async fn comments_pin_their_file_version_across_new_versions() {
     );
 
     // Delete removes the page.
-    client.delete_review_comment(c2.id).await.unwrap();
-    assert_eq!(client.review_comments(review.id).await.unwrap().len(), 1);
+    rig.review
+        .delete_comment(CommentId::new(c2.id))
+        .await
+        .unwrap();
+    assert_eq!(rig.review.comments(review_id).await.unwrap().len(), 1);
 
-    backend.shutdown().await;
+    rig.backend.shutdown().await;
 }
 
 /// A frame drawing round-trips through the vault page in normalized
 /// coordinates (AC 3's persistence half).
 #[tokio::test(flavor = "multi_thread")]
 async fn annotations_round_trip_through_the_vault_page() {
-    let (_dir, backend, client, root_id, _local) = rig().await;
-    let review = client
-        .review_for_file(root_id, "cut.mov".into())
-        .await
-        .unwrap();
-    let head = client.chain(root_id, "cut.mov".into()).await.unwrap()[0]
-        .commit_id
-        .clone();
+    let (_dir, rig, root_id) = rig().await;
+    let review = rig.review.for_file(root_id, cut()).await.unwrap();
+    let review_id = ReviewId::new(review.id);
+    let head = rig.chain(root_id).await[0].commit_id.clone();
 
     let stroke = AnnotationStroke {
         points: vec![
@@ -137,98 +184,105 @@ async fn annotations_round_trip_through_the_vault_page() {
         color: "#ff3355".into(),
         width: 0.004,
     };
-    let drawn = client
-        .add_review_comment(
-            review.id,
-            NewReviewComment {
-                timecode_secs: 7.25,
-                author: String::new(),
-                body: "circle this".into(),
-                commit_id: head,
-                annotation: vec![stroke.clone()],
-            },
-        )
+    let drawn = rig
+        .review
+        .comment(NewComment {
+            strokes: vec![stroke.clone()],
+            author: String::new(),
+            ..comment_at(review_id, 7_250, "circle this", &head)
+        })
         .await
         .expect("annotated comment");
 
     // Read back through a fresh scan (the listing re-parses the page).
-    let read = client.review_comments(review.id).await.unwrap();
+    let read = rig.review.comments(review_id).await.unwrap();
     assert_eq!(read.len(), 1);
     assert_eq!(read[0].annotation, vec![stroke], "strokes survive the page");
     assert_eq!(read[0].timecode_secs, 7.25);
     assert_eq!(drawn.id, read[0].id);
 
-    backend.shutdown().await;
+    rig.backend.shutdown().await;
 }
 
-/// Browsing is a read: `find_review` never mints an entity, and the
-/// review only comes to exist when feedback starts
-/// (`review_for_file`). Once it exists, `find_review` resolves it.
+/// Browsing is a read: `find` never mints an entity, and the review
+/// only comes to exist when feedback starts (`for_file`). Once it
+/// exists, `find` resolves it.
 #[tokio::test(flavor = "multi_thread")]
 async fn finding_a_review_never_creates_one() {
-    let (_dir, backend, client, root_id, _local) = rig().await;
+    let (_dir, rig, root_id) = rig().await;
 
     // A miss, twice — and nothing minted by looking.
     for _ in 0..2 {
-        assert_eq!(
-            client.find_review(root_id, "cut.mov".into()).await.unwrap(),
-            None
-        );
+        assert_eq!(rig.review.find(root_id, cut()).await.unwrap(), None);
     }
     assert!(
-        client.list_reviews(Some(root_id)).await.unwrap().is_empty(),
+        rig.review.reviews(Some(root_id)).await.unwrap().is_empty(),
         "looking must not create"
     );
 
-    let review = client
-        .review_for_file(root_id, "cut.mov".into())
-        .await
-        .unwrap();
-    let found = client
-        .find_review(root_id, "cut.mov".into())
+    let review = rig.review.for_file(root_id, cut()).await.unwrap();
+    let found = rig
+        .review
+        .find(root_id, cut())
         .await
         .unwrap()
         .expect("exists now");
     assert_eq!(found.id, review.id);
 
-    backend.shutdown().await;
+    rig.backend.shutdown().await;
 }
 
 /// The refusals: an untracked file has no review, a comment must name
-/// a real version, and an empty comment is nothing.
+/// a real version, an empty comment is nothing, and a region that is
+/// not a moment in the media cannot anchor one.
+///
+/// The legacy surface also refused a NaN timecode. The v2 region is
+/// whole milliseconds, so a NaN is unrepresentable on the wire; the
+/// equivalent refusal is a region the comment model cannot carry.
 #[tokio::test(flavor = "multi_thread")]
 async fn review_refusals_are_clean_errors() {
-    let (_dir, backend, client, root_id, _local) = rig().await;
+    let (_dir, rig, root_id) = rig().await;
 
-    let err = client
-        .review_for_file(root_id, "nope.mov".into())
+    let err = rig
+        .review
+        .for_file(root_id, RootPath::parse("nope.mov").unwrap())
         .await
         .expect_err("untracked file");
-    assert!(err.to_string().contains("not tracked"), "{err}");
+    let text = fault_text(err);
+    assert!(text.contains("not tracked"), "{text}");
 
-    let review = client
-        .review_for_file(root_id, "cut.mov".into())
-        .await
-        .unwrap();
-    let err = client
-        .add_review_comment(review.id, comment_at(1.0, "ghost", "abcdef012345"))
+    let review = rig.review.for_file(root_id, cut()).await.unwrap();
+    let review_id = ReviewId::new(review.id);
+    let err = rig
+        .review
+        .comment(comment_at(
+            review_id,
+            1_000,
+            "ghost",
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        ))
         .await
         .expect_err("unknown commit");
-    assert!(!err.to_string().is_empty());
+    assert!(!fault_text(err).is_empty());
 
-    let head = client.chain(root_id, "cut.mov".into()).await.unwrap()[0]
-        .commit_id
-        .clone();
-    let err = client
-        .add_review_comment(review.id, comment_at(1.0, "   ", &head))
+    let head = rig.chain(root_id).await[0].commit_id.clone();
+    let err = rig
+        .review
+        .comment(comment_at(review_id, 1_000, "   ", &head))
         .await
         .expect_err("empty comment");
-    assert!(err.to_string().contains("text or a drawing"), "{err}");
-    let err = client
-        .add_review_comment(review.id, comment_at(f64::NAN, "x", &head))
+    let text = fault_text(err);
+    assert!(text.contains("text or a drawing"), "{text}");
+    let err = rig
+        .review
+        .comment(NewComment {
+            region: Region::Page { page: 4 },
+            ..comment_at(review_id, 0, "x", &head)
+        })
         .await
-        .expect_err("NaN timecode");
-    assert!(err.to_string().contains("timecode"), "{err}");
+        .expect_err("a page is not a moment");
+    let text = fault_text(err);
+    assert!(text.contains("anchors to a moment"), "{text}");
 
-    backend.shutdown().await;
+    rig.backend.shutdown().await;
 }

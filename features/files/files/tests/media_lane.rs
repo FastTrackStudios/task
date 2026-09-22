@@ -9,10 +9,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use files::{FilesBackend, FilesService, RootFlavor};
+use files::{FilesBackend, RootFlavor};
 use files_proto::id::{ContentId, RootId, VersionId};
 use files_proto::model::RenditionKind;
 use files_proto::service::media::{HandoffItem, HandoffTarget, MediaService, Region};
+use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::version::VersionService;
 use files_proto::{FilesFault, RootPath};
 
 /// Bytes long enough that a range is a genuine window rather than the
@@ -25,6 +27,28 @@ fn p(s: &str) -> RootPath {
     RootPath::parse(s).expect("test path")
 }
 
+/// Adopt `dir` as a media root, wait for the walk, and checkpoint it so
+/// its content is in the store.
+async fn adopt_checkpointed(backend: &FilesBackend, dir: &std::path::Path, name: &str) -> RootId {
+    let root = RootsService::adopt(
+        backend,
+        AdoptRequest {
+            path: dir.to_string_lossy().into_owned(),
+            name: name.into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        },
+    )
+    .await
+    .expect("adopt");
+    let root_id = RootId::new(root.id);
+    backend.settled(root_id).await;
+    VersionService::checkpoint(backend, root_id, None)
+        .await
+        .expect("checkpoint");
+    root_id
+}
+
 /// A media root holding `mix.wav`, checkpointed so its content is in the
 /// store — the byte lane serves the checkpoint head, never the live file.
 async fn rig() -> (tempfile::TempDir, FilesBackend, RootId, Vec<u8>) {
@@ -35,19 +59,8 @@ async fn rig() -> (tempfile::TempDir, FilesBackend, RootId, Vec<u8>) {
     let bytes = take();
     std::fs::write(root_dir.join("mix.wav"), &bytes).unwrap();
 
-    let root = backend
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "Session".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create root");
-    backend
-        .checkpoint_now(root.id, None)
-        .await
-        .expect("checkpoint");
-    (data, backend, RootId::new(root.id), bytes)
+    let root_id = adopt_checkpointed(&backend, &root_dir, "Session").await;
+    (data, backend, root_id, bytes)
 }
 
 async fn redeem(
@@ -177,21 +190,17 @@ async fn one_orgs_ticket_is_not_anothers() {
 #[tokio::test(flavor = "multi_thread")]
 async fn read_at_serves_the_version_asked_for() {
     let (_data, backend, root_id, first) = rig().await;
-    let chain = backend
-        .chain(root_id.get(), "mix.wav".into())
-        .await
-        .expect("chain");
+    let chain = backend.chain(root_id, p("mix.wav")).await.expect("chain");
     let original = VersionId::from_commit_hex(&chain[0].commit_id);
 
     // Overwrite and checkpoint again.
-    let root = backend.get_root(root_id.get()).await.expect("root");
+    let root = RootsService::get(&backend, root_id).await.expect("root");
     std::fs::write(
         root.local_tree().expect("a placed root").join("mix.wav"),
         b"a second take",
     )
     .unwrap();
-    backend
-        .checkpoint_now(root_id.get(), None)
+    VersionService::checkpoint(&backend, root_id, None)
         .await
         .expect("second checkpoint");
 
@@ -218,10 +227,7 @@ async fn read_at_serves_the_version_asked_for() {
 #[tokio::test(flavor = "multi_thread")]
 async fn content_already_held_resolves_without_an_origin() {
     let (_data, backend, root_id, bytes) = rig().await;
-    let chain = backend
-        .chain(root_id.get(), "mix.wav".into())
-        .await
-        .expect("chain");
+    let chain = backend.chain(root_id, p("mix.wav")).await.expect("chain");
     let content = ContentId::new(chain[0].file_id.clone());
 
     let ticket = backend.read_content(content).await.expect("read_content");
@@ -259,16 +265,7 @@ async fn a_rendition_ticket_streams_and_seeks() {
     std::fs::write(root_dir.join("cut.mov"), &video).unwrap();
     std::fs::write(root_dir.join("notes.txt"), b"not media").unwrap();
 
-    let root = backend
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "Cuts".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .unwrap();
-    let root_id = RootId::new(root.id);
-    backend.checkpoint_now(root.id, None).await.unwrap();
+    let root_id = adopt_checkpointed(&backend, &root_dir, "Cuts").await;
     // The ladder warm-up is spawned detached; the fake is deterministic
     // and fast.
     tokio::time::sleep(Duration::from_millis(400)).await;
@@ -303,16 +300,7 @@ async fn renditions_lists_what_was_generated() {
     std::fs::write(root_dir.join("cut.mov"), &video).unwrap();
     std::fs::write(root_dir.join("notes.txt"), b"not media").unwrap();
 
-    let root = backend
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "Cuts".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .unwrap();
-    let root_id = RootId::new(root.id);
-    backend.checkpoint_now(root.id, None).await.unwrap();
+    let root_id = adopt_checkpointed(&backend, &root_dir, "Cuts").await;
     tokio::time::sleep(Duration::from_millis(400)).await;
 
     let listed = backend
@@ -434,7 +422,7 @@ async fn what_is_not_implemented_refuses_rather_than_pretending() {
 
     // Nothing is readable before it has been checkpointed: the byte lane
     // serves the store, and a file being written has no stable length.
-    let root = backend.get_root(root_id.get()).await.unwrap();
+    let root = RootsService::get(&backend, root_id).await.unwrap();
     std::fs::write(
         root.local_tree().expect("a placed root").join("new.wav"),
         b"fresh",

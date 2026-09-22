@@ -131,3 +131,37 @@ async fn boot_over(
 pub async fn boot_ws() -> eyre::Result<(String, tempfile::TempDir)> {
     boot_ws_with(|_| {}).await
 }
+
+/// Adopt an on-disk directory as a File Root, in process, and wait out
+/// the catalogue walk — what a test that writes files and then
+/// checkpoints them needs before its first checkpoint.
+pub async fn adopt_root(
+    files: &files::FilesBackend,
+    dir: &std::path::Path,
+    name: &str,
+    flavor: files::RootFlavor,
+) -> eyre::Result<files::FileRootInfo> {
+    let root = files::service::RootsService::adopt(
+        files,
+        files::service::roots::AdoptRequest {
+            path: dir.to_string_lossy().into_owned(),
+            name: name.to_owned(),
+            flavor,
+            hash_content: true,
+        },
+    )
+    .await
+    .map_err(|e| eyre::eyre!("adopt {name}: {e}"))?;
+    files.settled(files::RootId::new(root.id)).await;
+    Ok(root)
+}
+
+/// Certify a checkpoint of a root now, in process.
+pub async fn checkpoint(
+    files: &files::FilesBackend,
+    root_id: uuid::Uuid,
+) -> eyre::Result<files::CheckpointInfo> {
+    files::service::VersionService::checkpoint(files, files::RootId::new(root_id), None)
+        .await
+        .map_err(|e| eyre::eyre!("checkpoint: {e}"))
+}

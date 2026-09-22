@@ -30,13 +30,13 @@
 //! `VersionId` from a commit is the reading lane's business (a chain
 //! entry is where a caller gets one), so it is not duplicated here.
 
+use crate::error::FilesError;
 use files_proto::error::FilesFault;
 use files_proto::id::{ProjectVersionId, RootId, VersionId};
 use files_proto::model::{NamedVersion, ProjectVersion, RestartMode};
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
 use files_proto::service::curation::CurationService;
-use files_proto::service::legacy::{FilesError, FilesService as LegacyFiles};
 
 use crate::backend::FilesBackend;
 use crate::lane::caller;
@@ -89,7 +89,7 @@ impl FilesBackend {
     /// them.
     async fn curated_names(&self, root_id: RootId) -> Result<Vec<NamedVersion>, FilesFault> {
         self.curated_root(root_id)?;
-        LegacyFiles::list_named_versions(self, Some(root_id.get()))
+        self.list_named_versions(Some(root_id.get()))
             .await
             .map_err(fault)
     }
@@ -134,7 +134,12 @@ impl CurationService for FilesBackend {
     ) -> Result<NamedVersion, FilesFault> {
         self.curated_root(root_id)?;
         caller::authorise_root(self, root_id, Capability::Write).await?;
-        LegacyFiles::name_version(self, root_id.get(), commit_ref(version), name)
+        // The nil id is all zeros, which prefix-resolves to jj's root
+        // commit — a version of nothing, and never what a caller meant.
+        if version.get().is_nil() {
+            return Err(FilesFault::VersionNotFound(version));
+        }
+        self.name_commit(root_id.get(), commit_ref(version), name)
             .await
             .map_err(|e| match e {
                 // The only thing this call can fail to find is the
@@ -154,17 +159,34 @@ impl CurationService for FilesBackend {
     ) -> Result<NamedVersion, FilesFault> {
         caller::authorise_root(self, root_id, Capability::Write).await?;
         let named = self.named_by_version(root_id, version).await?;
-        LegacyFiles::unname_version(self, named.id)
-            .await
-            .map_err(fault)?;
+        self.unname_by_id(named.id).await.map_err(fault)?;
         Ok(named)
     }
 
     async fn named_versions(
         &self,
-        root_id: RootId,
+        root_id: Option<RootId>,
         path: Option<RootPath>,
     ) -> Result<Vec<NamedVersion>, FilesFault> {
+        let Some(root_id) = root_id else {
+            if path.is_some() {
+                return Err(FilesFault::invalid(
+                    "a path is relative to a root; name the root to filter by path",
+                ));
+            }
+            // Every root the caller can trace history in.
+            let mut out = Vec::new();
+            for root in self.registry_list() {
+                let id = RootId::new(root.id);
+                if caller::authorise_root(self, id, Capability::History)
+                    .await
+                    .is_ok()
+                {
+                    out.extend(self.curated_names(id).await?);
+                }
+            }
+            return Ok(out);
+        };
         caller::authorise(
             self,
             root_id,
@@ -186,7 +208,8 @@ impl CurationService for FilesBackend {
         // chain, which is the same join `chain` already does in the
         // other direction, so the chain is the authority on membership
         // rather than a second traversal here.
-        let chain = LegacyFiles::chain(self, root_id.get(), path.as_str().to_string())
+        let chain = self
+            .chain_of(root_id.get(), path.as_str().to_string())
             .await
             .map_err(fault)?;
         Ok(all
@@ -222,9 +245,22 @@ impl CurationService for FilesBackend {
         // change has moved since. Resolving through the root's index
         // gives the commit the name points at *now*, which is what a
         // share link must stream — the page itself stays as written.
-        let at = LegacyFiles::resolve_named_version(self, named.id)
+        let at = self.resolve_named_version(named.id).await.map_err(fault)?;
+        named.change_id = at.change_id;
+        named.commit_id = at.commit_id;
+        Ok(named)
+    }
+
+    async fn named_version(&self, id: uuid::Uuid) -> Result<NamedVersion, FilesFault> {
+        let mut named = self
+            .list_named_versions(None)
             .await
-            .map_err(fault)?;
+            .map_err(fault)?
+            .into_iter()
+            .find(|n| n.id == id)
+            .ok_or(FilesFault::VersionNotFound(VersionId::new(id)))?;
+        caller::authorise_root(self, RootId::new(named.root_id), Capability::History).await?;
+        let at = self.resolve_named_version(id).await.map_err(fault)?;
         named.change_id = at.change_id;
         named.commit_id = at.commit_id;
         Ok(named)
@@ -241,7 +277,7 @@ impl CurationService for FilesBackend {
         // empty label is a legitimate "just the next one" rather than a
         // bad request.
         let label = Some(name).filter(|l| !l.trim().is_empty());
-        LegacyFiles::start_project_version(self, root_id.get(), label)
+        self.begin_project_version(root_id.get(), label)
             .await
             .map_err(fault)
     }
@@ -249,7 +285,7 @@ impl CurationService for FilesBackend {
     async fn project_versions(&self, root_id: RootId) -> Result<Vec<ProjectVersion>, FilesFault> {
         self.curated_root(root_id)?;
         caller::authorise_root(self, root_id, Capability::History).await?;
-        LegacyFiles::list_project_versions(self, root_id.get())
+        self.list_project_versions(root_id.get())
             .await
             .map_err(fault)
     }
@@ -262,7 +298,8 @@ impl CurationService for FilesBackend {
     ) -> Result<ProjectVersion, FilesFault> {
         self.curated_root(root_id)?;
         caller::authorise_root(self, root_id, Capability::Write).await?;
-        let target = LegacyFiles::list_project_versions(self, root_id.get())
+        let target = self
+            .list_project_versions(root_id.get())
             .await
             .map_err(fault)?
             .into_iter()
@@ -276,7 +313,7 @@ impl CurationService for FilesBackend {
         // because "begin again" keeps the name of what began. The
         // number never does — numbers are per root, 1-based and never
         // reused.
-        LegacyFiles::restart_project_version(self, root_id.get(), mode, target.label)
+        self.restart_lineage(root_id.get(), mode, target.label)
             .await
             .map_err(fault)
     }

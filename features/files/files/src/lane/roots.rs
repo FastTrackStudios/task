@@ -283,7 +283,7 @@ impl RootsService for FilesBackend {
         let driver = self.clone();
         tokio::spawn(async move { driver.drive_adoption(root_id).await });
 
-        crate::lane::events::publish(self, FilesEvent::Root(RootEvent::Created(root.clone())));
+        // `register_root` already published `RootEvent::Created`.
         Ok(root)
     }
 
@@ -310,12 +310,28 @@ impl RootsService for FilesBackend {
             ));
         }
         let this = self.clone();
-        let (root, fresh) =
+        // A fresh root announces itself: `register_root` publishes
+        // `RootEvent::Created`, so nothing is published here.
+        let (root, _fresh) =
             crate::lane::blocking(move || this.create_fresh_root(&rel, name, flavor)).await??;
-        if fresh {
-            crate::lane::events::publish(self, FilesEvent::Root(RootEvent::Created(root.clone())));
-        }
         Ok(root)
+    }
+
+    async fn browse_area(
+        &self,
+        path: String,
+    ) -> Result<Vec<files_proto::model::BrowseEntry>, FilesFault> {
+        crate::lane::caller::authorise_steward(self).await?;
+        // Relative to the files area; an absolute path is still confined,
+        // which is what lets a granted Storage Location be browsed too.
+        let requested = std::path::Path::new(&path);
+        let at = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            self.confine_root().join(requested)
+        };
+        let this = self.clone();
+        crate::lane::blocking(move || this.drive_browse_inner(at.display().to_string())).await
     }
 
     // t[impl files.adopt.resumable]

@@ -16,7 +16,10 @@
 use std::path::{Path, PathBuf};
 
 use files::{FilesBackend, MARKER_FILE};
-use files_proto::{FilesService as _, RootFlavor};
+use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::tree::TreeService;
+use files_proto::service::version::VersionService;
+use files_proto::{FileRootInfo, FilesFault, RootFlavor, RootId, RootPath};
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -39,6 +42,27 @@ fn backend(f: &Fixture) -> FilesBackend {
     FilesBackend::new(&f.files_dir, &vault).expect("backend")
 }
 
+/// Adopt `dir` as a media root and wait for the walk, so a checkpoint
+/// that follows sees the tree the adoption saw.
+async fn adopt(b: &FilesBackend, dir: &Path, name: &str) -> Result<FileRootInfo, FilesFault> {
+    let root = RootsService::adopt(
+        b,
+        AdoptRequest {
+            path: dir.to_string_lossy().into_owned(),
+            name: name.to_owned(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        },
+    )
+    .await?;
+    b.settled(RootId::new(root.id)).await;
+    Ok(root)
+}
+
+fn p(s: &str) -> RootPath {
+    RootPath::parse(s).expect("test path")
+}
+
 fn write(path: &Path, body: &str) {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).expect("mkdir");
@@ -54,23 +78,15 @@ async fn a_root_may_be_created_inside_another_root() {
     let song = album.join("Track 01");
     std::fs::create_dir_all(&song).expect("mkdir");
 
-    b.create_root(
-        album.to_string_lossy().into_owned(),
-        "Golden Hour".into(),
-        RootFlavor::Media,
-    )
-    .await
-    .expect("the album registers");
+    adopt(&b, &album, "Golden Hour")
+        .await
+        .expect("the album registers");
 
-    b.create_root(
-        song.to_string_lossy().into_owned(),
-        "Track 01".into(),
-        RootFlavor::Media,
-    )
-    .await
-    .expect("a song inside the album registers — this is a submodule");
+    adopt(&b, &song, "Track 01")
+        .await
+        .expect("a song inside the album registers — this is a submodule");
 
-    assert_eq!(b.list_roots().await.expect("list").len(), 2);
+    assert_eq!(RootsService::list(&b).await.expect("list").len(), 2);
 }
 
 #[tokio::test]
@@ -82,21 +98,11 @@ async fn the_exact_same_path_is_still_refused() {
     let dir = f.files_dir.join("Golden Hour");
     std::fs::create_dir_all(&dir).expect("mkdir");
 
-    b.create_root(
-        dir.to_string_lossy().into_owned(),
-        "Golden Hour".into(),
-        RootFlavor::Media,
-    )
-    .await
-    .expect("first");
+    adopt(&b, &dir, "Golden Hour").await.expect("first");
 
-    b.create_root(
-        dir.to_string_lossy().into_owned(),
-        "Again".into(),
-        RootFlavor::Media,
-    )
-    .await
-    .expect_err("the same directory twice is still a conflict");
+    adopt(&b, &dir, "Again")
+        .await
+        .expect_err("the same directory twice is still a conflict");
 }
 
 #[tokio::test]
@@ -114,29 +120,16 @@ async fn a_parent_keeps_its_own_files_and_does_not_swallow_the_child() {
     write(&album.join("liner-notes.md"), "the album's own file\n");
     write(&song.join("mix.wav"), "the song's own file\n");
 
-    let album_root = b
-        .create_root(
-            album.to_string_lossy().into_owned(),
-            "Golden Hour".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("album");
-    b.create_root(
-        song.to_string_lossy().into_owned(),
-        "Track 01".into(),
-        RootFlavor::Media,
-    )
-    .await
-    .expect("song");
+    let album_root = adopt(&b, &album, "Golden Hour").await.expect("album");
+    adopt(&b, &song, "Track 01").await.expect("song");
 
-    b.checkpoint_now(album_root.id, Some("album".into()))
+    VersionService::checkpoint(&b, RootId::new(album_root.id), Some("album".into()))
         .await
         .expect("the album checkpoints with a child root inside it");
 
     // The parent's own file IS versioned by the parent…
     let own = b
-        .chain(album_root.id, "liner-notes.md".into())
+        .chain(RootId::new(album_root.id), p("liner-notes.md"))
         .await
         .expect("chain for the parent's own file");
     assert!(
@@ -154,7 +147,7 @@ async fn a_parent_keeps_its_own_files_and_does_not_swallow_the_child() {
     // *tracking* it.
     for leaked in ["Track 01/mix.wav", &format!("Track 01/{MARKER_FILE}")] {
         let chain = b
-            .chain(album_root.id, leaked.to_owned())
+            .chain(RootId::new(album_root.id), p(leaked))
             .await
             .unwrap_or_default();
         assert!(
@@ -175,27 +168,16 @@ async fn the_child_still_versions_its_own_content() {
     std::fs::create_dir_all(&song).expect("mkdir");
     write(&song.join("mix.wav"), "the song's own file\n");
 
-    b.create_root(
-        album.to_string_lossy().into_owned(),
-        "Golden Hour".into(),
-        RootFlavor::Media,
-    )
-    .await
-    .expect("album");
-    let song_root = b
-        .create_root(
-            song.to_string_lossy().into_owned(),
-            "Track 01".into(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("song");
+    adopt(&b, &album, "Golden Hour").await.expect("album");
+    let song_root = adopt(&b, &song, "Track 01").await.expect("song");
 
-    b.checkpoint_now(song_root.id, Some("song".into()))
+    VersionService::checkpoint(&b, RootId::new(song_root.id), Some("song".into()))
         .await
         .expect("child checkpoints");
 
-    let listing = b.browse(song_root.id, String::new()).await.expect("browse");
+    let listing = TreeService::browse(&b, RootId::new(song_root.id), RootPath::root())
+        .await
+        .expect("browse");
     let names: Vec<&str> = listing.iter().map(|e| e.name.as_str()).collect();
     assert!(
         names.contains(&"mix.wav"),

@@ -12,9 +12,10 @@
 //! that regresses, which means each one destroys something before it
 //! asks.
 
-use files::{FilesBackend, FilesService, RootFlavor};
+use files::{FilesBackend, RootFlavor};
 use files_proto::id::RootId;
 use files_proto::path::RootPath;
+use files_proto::service::roots::{AdoptRequest, RootsService};
 use files_proto::service::tree::TreeService;
 use files_proto::service::write::WriteService;
 
@@ -36,15 +37,19 @@ async fn rig() -> (tempfile::TempDir, std::path::PathBuf, FilesBackend, RootId) 
     std::fs::write(tree.join("Song.rpp"), b"REAPER project").unwrap();
     std::fs::write(tree.join("Audio Files").join("vox.wav"), vec![7u8; 4096]).unwrap();
 
-    let root = FilesService::create_root(
+    let root = RootsService::adopt(
         &backend,
-        tree.to_string_lossy().into_owned(),
-        "Album".into(),
-        RootFlavor::Media,
+        AdoptRequest {
+            path: tree.to_string_lossy().into_owned(),
+            name: "Album".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        },
     )
     .await
-    .expect("create root");
+    .expect("adopt root");
     let root = RootId::new(root.id);
+    backend.settled(root).await;
 
     // Ask a catalogue question, which is what builds and persists it.
     TreeService::catalogue(&backend, root, None)

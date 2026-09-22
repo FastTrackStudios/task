@@ -141,22 +141,17 @@ impl Session {
         self.establish().await
     }
 
-    /// The live event stream — `FilesService`'s `#[subscribe]` sibling.
-    ///
-    /// Its own lane and its own connection, which is the point: what
-    /// this chapter asserts is that a client which did *not* make a
-    /// change hears about it.
-    pub async fn files_stream(&self) -> files::FilesServiceStreamClient {
-        self.establish().await
-    }
-
     /// The upload lane — resumable, conditional saves.
     pub async fn uploads(&self) -> files::UploadServiceClient {
         self.establish().await
     }
 
-    /// The v2 live stream — `TreeService::events`, every lane on one
+    /// The live stream — `TreeService::events`, every lane on one
     /// subscription, filtered to what this person may read.
+    ///
+    /// Its own lane and its own connection, which is the point: what a
+    /// live chapter asserts is that a client which did *not* make a
+    /// change hears about it.
     pub async fn tree_stream(&self) -> files_proto::TreeServiceStreamClient {
         self.establish().await
     }
@@ -364,7 +359,6 @@ macro_rules! signable {
 }
 
 signable!(
-    files::FilesServiceStreamClient,
     files::UploadServiceClient,
     files_proto::TreeServiceStreamClient,
     files_proto::MediaServiceStreamClient,

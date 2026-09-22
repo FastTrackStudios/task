@@ -29,7 +29,9 @@ use std::time::Duration;
 
 use architect::iroh_link::iroh;
 use files::cadence::{CadenceConfig, TestClock};
-use files::{AddressBook, FilesBackend, FilesService as _, RootFlavor};
+use files::service::roots::{AdoptRequest, RootsService as _};
+use files::service::version::VersionService as _;
+use files::{AddressBook, FilesBackend, RootFlavor, RootId, RootPath};
 use files_daemon::SyncDaemon;
 
 /// The addresses every endpoint in this process can resolve.
@@ -99,15 +101,17 @@ impl Machine {
         std::fs::write(tree.join("mix.wav"), contents).unwrap();
         let root = self
             .backend
-            .create_root(
-                tree.to_string_lossy().into_owned(),
-                "Album".into(),
-                RootFlavor::Media,
-            )
+            .adopt(AdoptRequest {
+                path: tree.to_string_lossy().into_owned(),
+                name: "Album".into(),
+                flavor: RootFlavor::Media,
+                hash_content: true,
+            })
             .await
             .expect("create the root");
+        self.backend.settled(RootId::new(root.id)).await;
         self.backend
-            .checkpoint_now(root.id, None)
+            .checkpoint(RootId::new(root.id), None)
             .await
             .expect("checkpoint");
         root.id
@@ -256,7 +260,10 @@ async fn a_tick_captures_the_local_session_before_it_pulls() {
     std::fs::write(laptop.album_tree().join("mix.wav"), b"take two").unwrap();
     laptop
         .backend
-        .hint_activity(album, vec!["mix.wav".into()])
+        .hint_activity(
+            RootId::new(album),
+            vec![RootPath::parse("mix.wav").unwrap()],
+        )
         .await
         .expect("hint");
     laptop.clock.advance_minutes(45);
@@ -394,7 +401,7 @@ async fn forgetting_a_peer_stops_the_sync_and_keeps_the_files() {
     std::fs::write(server.album_tree().join("mix.wav"), b"a newer mix").unwrap();
     server
         .backend
-        .checkpoint_now(album, None)
+        .checkpoint(RootId::new(album), None)
         .await
         .expect("checkpoint");
     laptop.daemon.tick().await;
@@ -439,7 +446,7 @@ async fn a_restart_resumes_what_it_was_syncing() {
     std::fs::write(server.album_tree().join("mix.wav"), b"after the reboot").unwrap();
     server
         .backend
-        .checkpoint_now(album, None)
+        .checkpoint(RootId::new(album), None)
         .await
         .expect("checkpoint");
     restarted.tick().await;

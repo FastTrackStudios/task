@@ -72,6 +72,7 @@
 
 use std::collections::HashMap;
 
+use crate::error::FilesError;
 use chrono::{DateTime, Duration, Utc};
 use facet::Facet;
 use files_proto::error::FilesFault;
@@ -80,7 +81,6 @@ use files_proto::model::{RenditionInfo, RenditionKind};
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
 use files_proto::service::federation::EndpointId;
-use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::media::{
     ByteFrame, ByteRequest, ByteTicket, Handoff, HandoffItem, HandoffTarget, MediaService,
 };
@@ -778,7 +778,8 @@ impl MediaService for FilesBackend {
             if !record.exists() {
                 continue;
             }
-            match FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
+            match self
+                .rendition_of(root_id.get(), path.as_str().to_string(), kind)
                 .await
             {
                 Ok(info) => out.push(info),
@@ -808,7 +809,8 @@ impl MediaService for FilesBackend {
         crate::lane::root_or_fault(self, root_id)?;
         let path = readable(&path)?;
         crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
-        let info = FilesService::rendition(self, root_id.get(), path.as_str().to_string(), kind)
+        let info = self
+            .rendition_of(root_id.get(), path.as_str().to_string(), kind)
             .await
             .map_err(fault)?;
         Ok(self.mint(Grant {
@@ -823,6 +825,31 @@ impl MediaService for FilesBackend {
             content_type: info.mime,
             expires_at: Utc::now() + Duration::seconds(TICKET_TTL_SECS),
         }))
+    }
+
+    /// A rendition's record, generating it once if absent. At a past
+    /// version it is that version's content's rendition — the review
+    /// screen's version switcher shows what the client saw then.
+    async fn rendition_info(
+        &self,
+        root_id: RootId,
+        path: RootPath,
+        kind: RenditionKind,
+        at: Option<VersionId>,
+    ) -> Result<RenditionInfo, FilesFault> {
+        crate::lane::root_or_fault(self, root_id)?;
+        let path = readable(&path)?;
+        crate::lane::caller::authorise(self, root_id, &path, Capability::Read).await?;
+        let rel = path.as_str().to_string();
+        match at {
+            None => self.rendition_of(root_id.get(), rel, kind).await,
+            Some(version) => {
+                crate::lane::caller::authorise(self, root_id, &path, Capability::History).await?;
+                self.rendition_of_at(root_id.get(), rel, version.commit_prefix(), kind)
+                    .await
+            }
+        }
+        .map_err(fault)
     }
 
     /// Hand a selection to an editor as a bin or a timeline.

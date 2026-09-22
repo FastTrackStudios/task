@@ -20,7 +20,7 @@ use crate::support;
 use std::time::Duration;
 
 use architect::iroh_link::iroh;
-use files::{FilesService as _, RootFlavor};
+use files::RootFlavor;
 use files_daemon::SyncDaemon;
 use task_server::device_sync;
 
@@ -71,17 +71,10 @@ async fn a_laptops_offline_work_reaches_the_server() {
     let project = org_root.join("files").join("Album");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join("mix.wav"), b"the rough mix").unwrap();
-    let root = org
-        .files
-        .create_root(
-            project.to_string_lossy().into_owned(),
-            "Album".into(),
-            RootFlavor::Media,
-        )
+    let root = support::adopt_root(&org.files, &project, "Album", RootFlavor::Media)
         .await
         .expect("create the root");
-    org.files
-        .checkpoint_now(root.id, None)
+    support::checkpoint(&org.files, root.id)
         .await
         .expect("checkpoint");
 

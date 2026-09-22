@@ -5,7 +5,7 @@
 //! mounts in place — inspector, versions, review and all.
 
 use dioxus::prelude::*;
-use files_proto::{BrowseEntry, FilesEvent, TreeNode};
+use files_proto::{BrowseEntry, FilesEvent, RootId, TreeNode, TreePath};
 use uuid::Uuid;
 
 use crate::Location;
@@ -36,9 +36,10 @@ impl TreeArea {
 }
 
 async fn tree_browse(org: &str, path: &str) -> Result<TreeNode, String> {
-    crate::client(org)
+    let path = TreePath::parse(path).map_err(|e| e.to_string())?;
+    crate::tree(org)
         .await?
-        .tree_browse(path.to_owned())
+        .resolve(path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -82,11 +83,14 @@ pub fn TreeExplorer(
             move || org.clone(),
             move |event: FilesEvent| {
                 let mut node = node;
-                match event {
-                    FilesEvent::ReviewCreated(_)
-                    | FilesEvent::ReviewCommentAdded(_)
-                    | FilesEvent::ReviewCommentDeleted(_) => {}
-                    _ => node.restart(),
+                // Roots, listings, and curation (which writes vault
+                // pages) move the tree; review, media and search
+                // traffic, and upload progress ticks, never do.
+                if crate::roots_changed(&event)
+                    || crate::listing_root(&event).is_some()
+                    || matches!(event, FilesEvent::Curation(_))
+                {
+                    node.restart();
                 }
             },
         );
@@ -202,9 +206,9 @@ fn RootHandoff(org: String, root_id: Uuid, subpath: String) -> Element {
         use_resource(move || {
             let org = org.clone();
             async move {
-                crate::client(&org)
+                crate::roots(&org)
                     .await?
-                    .get_root(root_id)
+                    .get(RootId::new(root_id))
                     .await
                     .map_err(|e| e.to_string())
             }

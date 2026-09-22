@@ -19,8 +19,43 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::{CadenceConfig, FilesBackend, FilesService as _, RootFlavor, TestClock};
+use files::service::roots::{AdoptRequest, RootsService as _};
+use files::service::version::{Resolution, VersionService as _};
+use files::{CadenceConfig, FilesBackend, FilesFault, RootFlavor, RootId, TestClock};
+use files_proto::VersionId;
 use files_sync::{SyncHost, SyncServiceClient, layer as sync_service_layer, reconcile};
+
+/// Adopt a folder as a root through the roots lane, and wait out the
+/// catalogue walk adoption runs behind its return — so a test's own
+/// checkpoint never races the adoption's.
+trait AdoptRoot {
+    async fn adopt_root(
+        &self,
+        path: String,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<files::FileRootInfo, FilesFault>;
+}
+
+impl AdoptRoot for FilesBackend {
+    async fn adopt_root(
+        &self,
+        path: String,
+        name: String,
+        flavor: RootFlavor,
+    ) -> Result<files::FileRootInfo, FilesFault> {
+        let root = self
+            .adopt(AdoptRequest {
+                path,
+                name,
+                flavor,
+                hash_content: true,
+            })
+            .await?;
+        self.settled(RootId::new(root.id)).await;
+        Ok(root)
+    }
+}
 
 struct Agent {
     dir: tempfile::TempDir,
@@ -73,16 +108,16 @@ async fn rig() -> (Agent, Agent, uuid::Uuid) {
     std::fs::write(tree.join("seed.txt"), b"seed").unwrap();
     let root = primary
         .backend
-        .create_root(
+        .adopt_root(
             tree.to_string_lossy().into_owned(),
             "session".into(),
             RootFlavor::Media,
         )
         .await
-        .expect("create_root");
+        .expect("adopt");
     primary
         .backend
-        .checkpoint_now(root.id, None)
+        .checkpoint(RootId::new(root.id), None)
         .await
         .expect("seed checkpoint");
 
@@ -270,7 +305,7 @@ async fn every_ordinary_edit_in_a_replica_reaches_the_peer_unaided() {
     assert!(
         replica
             .backend
-            .divergences(root_id)
+            .divergences(RootId::new(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -305,7 +340,7 @@ async fn an_arriving_change_does_not_clobber_unsaved_local_work() {
     std::fs::write(primary.tree().join("theirs.txt"), b"from the studio").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("peer checkpoint");
 
@@ -348,14 +383,18 @@ async fn the_same_path_edited_on_both_sides_is_a_conflict_that_resolve_settles()
     std::fs::write(primary.tree().join("seed.txt"), b"primary's take").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("primary capture");
 
     reconcile(&replica.backend, &primary.client, root_id)
         .await
         .expect("pull the peer's line");
-    let divergent = replica.backend.divergences(root_id).await.unwrap();
+    let divergent = replica
+        .backend
+        .divergences(RootId::new(root_id))
+        .await
+        .unwrap();
     assert_eq!(
         divergent.len(),
         1,
@@ -367,16 +406,16 @@ async fn the_same_path_edited_on_both_sides_is_a_conflict_that_resolve_settles()
     replica
         .backend
         .resolve_divergence(
-            root_id,
-            "seed.txt".into(),
-            files::DivergenceChoice::Pick { commit_id: keep },
+            RootId::new(root_id),
+            VersionId::from_commit_hex(&keep),
+            Resolution::KeepMine,
         )
         .await
         .expect("resolve");
     assert!(
         replica
             .backend
-            .divergences(root_id)
+            .divergences(RootId::new(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -404,7 +443,7 @@ async fn a_fork_whose_sides_agree_settles_itself() {
     std::fs::write(primary.tree().join("agreed.txt"), b"same bytes").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("primary capture");
 
@@ -421,7 +460,7 @@ async fn a_fork_whose_sides_agree_settles_itself() {
     assert!(
         replica
             .backend
-            .divergences(root_id)
+            .divergences(RootId::new(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -469,7 +508,7 @@ async fn a_fork_with_a_real_disagreement_is_left_alone() {
     std::fs::write(primary.tree().join("seed.txt"), b"primary's take").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("primary capture");
     reconcile(&replica.backend, &primary.client, root_id)
@@ -485,7 +524,12 @@ async fn a_fork_with_a_real_disagreement_is_left_alone() {
         "a real disagreement must not be settled without a person"
     );
     assert_eq!(
-        replica.backend.divergences(root_id).await.unwrap().len(),
+        replica
+            .backend
+            .divergences(RootId::new(root_id))
+            .await
+            .unwrap()
+            .len(),
         1,
         "the disagreement should still be reported"
     );
@@ -518,7 +562,7 @@ async fn two_lines_that_changed_different_files_merge_themselves() {
     std::fs::write(primary.tree().join("theirs.txt"), b"theirs").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("primary capture");
 
@@ -583,7 +627,7 @@ async fn the_same_file_changed_on_both_sides_is_not_merged_away() {
     std::fs::write(primary.tree().join("seed.txt"), b"theirs").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("primary capture");
 
@@ -607,7 +651,7 @@ async fn the_same_file_changed_on_both_sides_is_not_merged_away() {
     assert!(
         !replica
             .backend
-            .divergences(root_id)
+            .divergences(RootId::new(root_id))
             .await
             .unwrap()
             .is_empty(),
@@ -636,7 +680,7 @@ async fn three_lines_drain_a_pair_at_a_time() {
     std::fs::write(primary.tree().join("theirs-one.txt"), b"one").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("first primary capture");
     reconcile(&replica.backend, &primary.client, root_id)
@@ -648,7 +692,7 @@ async fn three_lines_drain_a_pair_at_a_time() {
     std::fs::write(primary.tree().join("theirs-two.txt"), b"two").unwrap();
     primary
         .backend
-        .checkpoint_now(root_id, None)
+        .checkpoint(RootId::new(root_id), None)
         .await
         .expect("second primary capture");
     reconcile(&replica.backend, &primary.client, root_id)

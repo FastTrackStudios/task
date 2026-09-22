@@ -145,9 +145,39 @@ pub fn process_principal() -> PrincipalId {
     *ME.get_or_init(PrincipalId::generate)
 }
 
+tokio::task_local! {
+    /// Set while the share-link lane acts for a link it has already
+    /// scoped — see [`on_behalf_of_link`].
+    static FOR_LINK: ();
+}
+
+/// Run `fut` as the server, on behalf of a share link.
+///
+/// A link holder is not a person: the gate resolves them to a guest, and
+/// the lanes hold nothing for a guest. The share-link mount therefore
+/// checks the link's own scope — this review, this file, comment but not
+/// download — and then calls the lanes through this, as the process. It
+/// is the one sanctioned way in-process code acts with the server's
+/// authority, and nothing reachable over the org router calls it.
+///
+/// Inside, [`is_for_link`] is true, so a comment is recorded as a
+/// visitor's rather than an org member's.
+pub async fn on_behalf_of_link<F: Future>(fut: F) -> F::Output {
+    FOR_LINK.scope((), fut).await
+}
+
+/// Whether this task is acting for a share link.
+#[must_use]
+pub fn is_for_link() -> bool {
+    FOR_LINK.try_with(|()| ()).is_ok()
+}
+
 /// The caller of the request running on this task.
 #[must_use]
 pub fn current() -> Caller {
+    if is_for_link() {
+        return Caller::Process;
+    }
     match architect::permissions_gate::caller() {
         None => Caller::Process,
         Some(architect_permissions::Principal::User { user_id }) => user_id

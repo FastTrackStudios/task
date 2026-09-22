@@ -45,22 +45,18 @@ silently is a different thing from a duplication.
 
 ## Met in part
 
-### `files.access.role-baseline` — the v2 lanes only
+### `files.access.role-baseline`
 
 > What a caller may do is their org role united with their grants …
 > Every lane checks.
 
-Every **v2** lane checks, as the caller the gate resolved
-(`files::lane::caller`), and `tests/integration/tests/it/app_store.rs`
-proves it over the router: a member creates and saves, a client holding one
-granted folder is refused a root and hears nothing of it on the live stream.
-Four things stay open, each its own piece of work:
+Every lane checks, as the caller the gate resolved (`files::lane::caller`),
+and `tests/integration/tests/it/app_store.rs` proves it over the router: a
+member creates and saves, a client holding one granted folder is refused a
+root and hears nothing of it on the live stream. The v1 `FilesService`,
+which checked nothing per path, is deleted — there is one Files API. Three
+things stay open, each its own piece of work:
 
-- **The legacy `FilesService` does not check per path.** `files-ui`, the CLI
-  and `share_guest` still use it, gated only by org membership. A client with
-  a grant on `Deliverables` who spoke the legacy lane directly could browse
-  beyond it — true before this change and unchanged by it. It closes when the
-  last legacy caller moves to v2 and the lane is deleted.
 - **Device identity is still per process.** The sync lane keys subscriptions
   and pins to `this_device()`; a restarted device reads back an empty
   subscription. A device principal does not reach the lanes yet.
@@ -70,6 +66,12 @@ Four things stay open, each its own piece of work:
 - **Roles are cached for ten seconds** (`memberships::FilesRoles::TTL`), so a
   revoked membership stops conveying on the Files lanes within that window
   rather than on the next request.
+
+A `VersionId` carries a commit's leading 128 bits and resolves as a prefix
+through the root's index, so the lanes cannot name or pin a commit that was
+never indexed. Every commit the lanes write is indexed; only a commit placed
+in the store by hand or by a replica ahead of its index is out of reach until
+it is imported.
 
 A software root's etag is `blake3:<hex>` of its bytes, since it has no chunk
 store; `MediaService::read_content` cannot resolve one, so a pinned

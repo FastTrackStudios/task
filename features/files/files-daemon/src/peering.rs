@@ -83,9 +83,9 @@ pub async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<SyncServiceCl
 /// Where a device may keep live trees, beyond its own store directory.
 ///
 /// A `FilesBackend` confines adopted trees to its data dir, and on a
-/// server that boundary has real work to do: `create_root` takes a path
-/// from a network caller, every org shares one data root, and a path
-/// argument that escaped would reach another org's files.
+/// server that boundary has real work to do: `RootsService::adopt` takes
+/// a path from a network caller, every org shares one data root, and a
+/// path argument that escaped would reach another org's files.
 ///
 /// On a device none of that holds, and the rule is simply wrong. The
 /// only caller is the person at the keyboard, over a socket bound to

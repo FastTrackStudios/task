@@ -8,21 +8,21 @@
 //!
 //! Three of these rules were implemented and verified by nothing. That
 //! is a worse state than unimplemented, because the code reads as
-//! finished — `files.review.anonymity` in particular is a *refusal*, and
-//! a refusal nobody exercises is one line away from becoming an
-//! accidental permit.
+//! finished.
 //!
 //! # Over the wire, as a member
 //!
 //! The guest half of this lane is served over HTTP, at
 //! `/org/<slug>/share/<token>/vox`, because a browser opening a link has
 //! no other way in. That surface has its own test
-//! (`apps/server/tests/guest_review_e2e.rs`).
+//! (`apps/server/tests/it/guest_review_e2e.rs`), and it is where
+//! `files.review.anonymity` — a *refusal*: no guest may delete feedback —
+//! is exercised, because the guest mount is what refuses it.
 //!
 //! What is asserted here is the half a member reaches on the org router,
 //! which is the same backend behind both — so "a page region is refused"
-//! and "no caller may delete a guest comment" are established against
-//! the implementation rather than against one transport's wrapper.
+//! is established against the implementation rather than against one
+//! transport's wrapper, and a member's delete is shown to work.
 
 use files::id::VersionId;
 use files::path::RootPath;
@@ -160,16 +160,17 @@ async fn a_region_that_cannot_anchor_is_refused_rather_than_flattened() {
     }
 }
 
-// t[verify files.review.anonymity]
-/// Nobody deletes a comment through this lane.
+/// A member removes a comment through the org's review lane.
 ///
-/// Not "a guest may only delete their own" — there is no *their own* to
-/// check. Two visitors holding one link are indistinguishable, so
-/// deleting on the comment's id alone would let either of them remove an
-/// org member's feedback. The lane refuses outright, and this is the
-/// test that notices if someone ever narrows it to an id check instead.
+/// Removing feedback is a member's act, by someone who may comment on
+/// the reviewed file — the member side of the delete a guest is refused.
+/// That refusal is `files.review.anonymity`, and it lives on the guest
+/// mount (`/org/<slug>/share/<token>/vox`), which refuses the call
+/// outright: two visitors holding one link are indistinguishable, so
+/// there is no *their own* to check. `apps/server`'s
+/// `guest_review_e2e` pins that half over the guest wire.
 #[tokio::test]
-async fn no_one_may_delete_feedback_through_the_review_lane() {
+async fn a_member_removes_feedback_through_the_review_lane() {
     let s = Scenario::open().await;
     let (review, version) = mix_review(&s).await;
 
@@ -186,22 +187,17 @@ async fn no_one_may_delete_feedback_through_the_review_lane() {
         .await
         .expect("leave a comment");
 
-    let refused = s
+    let removed = s
         .as_alice()
         .await
         .review()
         .await
         .delete_comment(files::id::CommentId::new(added.id))
-        .await;
+        .await
+        .expect("a member may remove feedback on a file they can comment on");
+    assert_eq!(removed.id, added.id, "the removed comment comes back");
 
-    assert!(
-        refused.is_err(),
-        "a link identifies a review, not a person — so no caller on this \
-         lane can be shown to have written what they ask to delete"
-    );
-
-    // And the comment is still there, which is the half that matters to
-    // whoever wrote it.
+    // And the comment is gone for everyone reading the review.
     let comments = s
         .as_alice()
         .await
@@ -211,7 +207,7 @@ async fn no_one_may_delete_feedback_through_the_review_lane() {
         .await
         .expect("list comments");
     assert!(
-        comments.iter().any(|c| c.id == added.id),
-        "the refusal must leave the comment standing"
+        !comments.iter().any(|c| c.id == added.id),
+        "a removed comment must not be listed"
     );
 }

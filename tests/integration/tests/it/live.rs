@@ -45,12 +45,12 @@ async fn expect_event(
     want: impl Fn(&files::FilesEvent) -> bool + Send + 'static,
     act: impl std::future::Future<Output = ()>,
 ) -> bool {
-    let watcher: files::FilesServiceStreamClient = {
+    let watcher: files::TreeServiceStreamClient = {
         let session = s.as_alice().await;
-        session.files_stream().await
+        session.tree_stream().await
     };
     let (tx, mut rx) = vox::channel::<files::FilesEvent>();
-    let sub = tokio::spawn(async move { watcher.events(tx).await });
+    let sub = tokio::spawn(async move { watcher.events(None, tx).await });
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
         !sub.is_finished(),
@@ -98,7 +98,13 @@ async fn a_rename_reaches_a_client_that_did_not_make_it() {
 
     let arrived = expect_event(
         &s,
-        |event| matches!(event, files::FilesEvent::Checkpointed(_)),
+        |event| {
+            matches!(
+                event,
+                files::FilesEvent::Version(files::service::version::VersionEvent::Checkpointed(_))
+                    | files::FilesEvent::Write(files::service::write::WriteEvent::Moved(_))
+            )
+        },
         async {
             s.as_alice()
                 .await

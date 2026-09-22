@@ -18,13 +18,29 @@ use std::path::Path;
 use std::process::Command;
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::{FilesBackend, FilesServiceClient, RootFlavor, files_service_layer};
+use files::id::RootId;
+use files::service::roots::AdoptRequest;
+use files::{
+    FileRootInfo, FilesBackend, RootFlavor, RootPath, RootsServiceClient, TreeServiceClient,
+    VersionServiceClient,
+};
 
 fn router(backend: FilesBackend) -> LayerRouter {
-    LayerRouter::new().merge(files_service_layer(backend))
+    LayerRouter::new()
+        .merge(files::roots_layer(backend.clone()))
+        .merge(files::tree_layer(backend.clone()))
+        .merge(files::version_layer(backend))
 }
 
-async fn client_for(data_dir: &Path) -> (FilesBackend, FilesServiceClient, std::sync::Arc<Scope>) {
+/// The v2 lanes these tests drive, one client each. No gate stands in
+/// front of the in-process server, so every call is the server's own.
+struct Rpc {
+    roots: RootsServiceClient,
+    tree: TreeServiceClient,
+    version: VersionServiceClient,
+}
+
+async fn client_for(data_dir: &Path) -> (FilesBackend, Rpc, std::sync::Arc<Scope>) {
     // The second argument is the org vault holding curated version
     // entities (issue #261) — nothing here touches curation, so it
     // points at a directory beside the roots rather than staging a
@@ -32,8 +48,45 @@ async fn client_for(data_dir: &Path) -> (FilesBackend, FilesServiceClient, std::
     let backend = FilesBackend::new(data_dir, data_dir.join("vault")).expect("backend");
     let scope = Scope::new();
     let local = LocalServer::serve(router(backend.clone()), scope.clone());
-    let client: FilesServiceClient = local.establish().await.expect("establish client");
+    let client = Rpc {
+        roots: local.establish().await.expect("establish roots client"),
+        tree: local.establish().await.expect("establish tree client"),
+        version: local.establish().await.expect("establish version client"),
+    };
     (backend, client, scope)
+}
+
+/// Adopt `dir` as a root of `flavor` and wait out the walk behind the
+/// return. Structure only (`hash_content: false`): adoption's own
+/// capture would otherwise be the first checkpoint, and every test here
+/// asserts on what *its* first checkpoint records.
+async fn adopt(
+    client: &Rpc,
+    backend: &FilesBackend,
+    dir: &Path,
+    name: &str,
+    flavor: RootFlavor,
+) -> FileRootInfo {
+    let root = client
+        .roots
+        .adopt(AdoptRequest {
+            path: dir.to_str().unwrap().to_string(),
+            name: name.to_string(),
+            flavor,
+            hash_content: false,
+        })
+        .await
+        .unwrap_or_else(|e| panic!("adopt {name} ({flavor:?}): {e:?}"));
+    backend.settled(id(&root)).await;
+    root
+}
+
+fn id(root: &FileRootInfo) -> RootId {
+    RootId::new(root.id)
+}
+
+fn path(p: &str) -> RootPath {
+    RootPath::parse(p).expect("valid root path")
 }
 
 /// Run `git` in `dir`, asserting success, and return stdout.
@@ -71,14 +124,14 @@ async fn software_root_is_a_normal_git_repo() {
     std::fs::write(root_dir.join("src").join("dsp.rs"), b"// dsp\n").unwrap();
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Synth Plugin".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software)");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Synth Plugin",
+        RootFlavor::Software,
+    )
+    .await;
     assert_eq!(root.flavor, RootFlavor::Software);
     assert!(
         root_dir.join(".git").is_dir(),
@@ -86,7 +139,8 @@ async fn software_root_is_a_normal_git_repo() {
     );
 
     let checkpoint = client
-        .checkpoint_now(root.id, Some("first checkpoint".to_string()))
+        .version
+        .checkpoint(id(&root), Some("first checkpoint".to_string()))
         .await
         .expect("checkpoint_now");
     assert_eq!(
@@ -173,18 +227,19 @@ async fn an_existing_git_repo_is_adopted_with_its_history() {
     let human_commit = git(&root_dir, &["rev-parse", "HEAD"]).trim().to_string();
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Existing Repo".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software) adopting an existing repo");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Existing Repo",
+        RootFlavor::Software,
+    )
+    .await;
 
     // The human's commit is already visible as a version of the file.
     let chain = client
-        .chain(root.id, "lib.rs".to_string())
+        .version
+        .chain(id(&root), path("lib.rs"))
         .await
         .expect("chain over adopted history");
     assert_eq!(chain.len(), 1);
@@ -193,7 +248,8 @@ async fn an_existing_git_repo_is_adopted_with_its_history() {
     // A checkpoint continues that branch rather than starting a new one.
     std::fs::write(root_dir.join("lib.rs"), b"// v2\n").unwrap();
     let cp = client
-        .checkpoint_now(root.id, Some("files checkpoint".to_string()))
+        .version
+        .checkpoint(id(&root), Some("files checkpoint".to_string()))
         .await
         .expect("checkpoint_now");
     assert_eq!(
@@ -207,7 +263,8 @@ async fn an_existing_git_repo_is_adopted_with_its_history() {
         "the human's commit is the checkpoint's parent"
     );
     let chain = client
-        .chain(root.id, "lib.rs".to_string())
+        .version
+        .chain(id(&root), path("lib.rs"))
         .await
         .expect("chain after checkpoint");
     assert_eq!(chain.len(), 2, "both saved states are in the chain");
@@ -228,29 +285,25 @@ async fn chain_and_checkpoints_behave_identically_on_both_flavors() {
         std::fs::write(root_dir.join("notes.txt"), b"take one").unwrap();
 
         let (backend, client, _scope) = client_for(data_dir.path()).await;
-        let root = client
-            .create_root(
-                root_dir.to_str().unwrap().to_string(),
-                "Project".to_string(),
-                flavor,
-            )
-            .await
-            .expect("create_root");
+        let root = adopt(&client, &backend, &root_dir, "Project", flavor).await;
 
         let first = client
-            .checkpoint_now(root.id, Some("v1".to_string()))
+            .version
+            .checkpoint(id(&root), Some("v1".to_string()))
             .await
             .expect("checkpoint 1");
         std::fs::write(root_dir.join("notes.txt"), b"take two").unwrap();
         let second = client
-            .checkpoint_now(root.id, Some("v2".to_string()))
+            .version
+            .checkpoint(id(&root), Some("v2".to_string()))
             .await
             .expect("checkpoint 2");
         assert_eq!(second.changed_paths, vec!["notes.txt".to_string()]);
 
         // A checkpoint with nothing changed is a true no-op in the diff.
         let third = client
-            .checkpoint_now(root.id, None)
+            .version
+            .checkpoint(id(&root), None)
             .await
             .expect("checkpoint 3");
         assert!(
@@ -259,7 +312,8 @@ async fn chain_and_checkpoints_behave_identically_on_both_flavors() {
         );
 
         let chain = client
-            .chain(root.id, "notes.txt".to_string())
+            .version
+            .chain(id(&root), path("notes.txt"))
             .await
             .expect("chain");
         assert_eq!(
@@ -277,14 +331,19 @@ async fn chain_and_checkpoints_behave_identically_on_both_flavors() {
 
         // A file that has never been checkpointed has an empty chain.
         let missing = client
-            .chain(root.id, "nope.txt".to_string())
+            .version
+            .chain(id(&root), path("nope.txt"))
             .await
             .expect("chain of an unknown path");
         assert!(missing.is_empty(), "{flavor:?}: unknown path has no chain");
 
         // Root browsing hides the root's own internals on both flavors
         // (`.fts-files`, the marker, and a software root's `.git`).
-        let entries = client.browse(root.id, String::new()).await.expect("browse");
+        let entries = client
+            .tree
+            .browse(id(&root), RootPath::root())
+            .await
+            .expect("browse");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["notes.txt"], "{flavor:?}: browse listing");
 
@@ -295,12 +354,14 @@ async fn chain_and_checkpoints_behave_identically_on_both_flavors() {
         drop(client);
         let (backend, client, _scope) = client_for(data_dir.path()).await;
         let reopened = client
-            .get_root(root.id)
+            .roots
+            .get(id(&root))
             .await
-            .expect("get_root after restart");
+            .expect("get after restart");
         assert_eq!(reopened.flavor, flavor, "flavor survives a restart");
         let chain = client
-            .chain(root.id, "notes.txt".to_string())
+            .version
+            .chain(id(&root), path("notes.txt"))
             .await
             .expect("chain after restart");
         assert_eq!(chain.len(), 2, "{flavor:?}: history survives a restart");
@@ -321,22 +382,22 @@ async fn flavor_is_chosen_at_creation_and_media_is_untouched() {
     std::fs::write(software_dir.join("lib.rs"), b"// code\n").unwrap();
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let media = client
-        .create_root(
-            media_dir.to_str().unwrap().to_string(),
-            "Mix Session".to_string(),
-            RootFlavor::Media,
-        )
-        .await
-        .expect("create media root");
-    let software = client
-        .create_root(
-            software_dir.to_str().unwrap().to_string(),
-            "Plugin".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create software root");
+    let media = adopt(
+        &client,
+        &backend,
+        &media_dir,
+        "Mix Session",
+        RootFlavor::Media,
+    )
+    .await;
+    let software = adopt(
+        &client,
+        &backend,
+        &software_dir,
+        "Plugin",
+        RootFlavor::Software,
+    )
+    .await;
 
     assert_eq!(media.flavor, RootFlavor::Media);
     assert!(
@@ -350,18 +411,19 @@ async fn flavor_is_chosen_at_creation_and_media_is_untouched() {
     // A media checkpoint still versions a heavy file that a software
     // root would ignore — the doctrine is per-flavor, not global.
     let cp = client
-        .checkpoint_now(media.id, None)
+        .version
+        .checkpoint(id(&media), None)
         .await
         .expect("media checkpoint");
     assert_eq!(cp.changed_paths, vec!["mix.wav".to_string()]);
 
     // Both flavors are listed side by side, each remembering its own.
-    let listed = client.list_roots().await.expect("list_roots");
+    let listed = client.roots.list().await.expect("list");
     let flavors: Vec<_> = listed.iter().map(|r| (r.name.as_str(), r.flavor)).collect();
     assert!(flavors.contains(&("Mix Session", RootFlavor::Media)));
     assert!(flavors.contains(&("Plugin", RootFlavor::Software)));
     assert_eq!(
-        client.get_root(software.id).await.unwrap().flavor,
+        client.roots.get(id(&software)).await.unwrap().flavor,
         RootFlavor::Software
     );
 
@@ -388,17 +450,18 @@ async fn heavy_stray_files_respect_the_ignore_set() {
     std::fs::write(root_dir.join("secrets.env"), b"TOKEN=hunter2\n").unwrap();
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Sampler".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software)");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Sampler",
+        RootFlavor::Software,
+    )
+    .await;
 
     let cp = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint_now");
     assert_eq!(
@@ -413,7 +476,8 @@ async fn heavy_stray_files_respect_the_ignore_set() {
     // An ignored file has no chain: it was never versioned.
     assert!(
         client
-            .chain(root.id, "bounce.wav".to_string())
+            .version
+            .chain(id(&root), path("bounce.wav"))
             .await
             .expect("chain of an ignored path")
             .is_empty()
@@ -424,7 +488,8 @@ async fn heavy_stray_files_respect_the_ignore_set() {
     // system (see `files::ignore`).
     std::fs::write(root_dir.join(".gitignore"), b"secrets.env\nlib.rs\n").unwrap();
     let cp = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint after ignoring a tracked file");
     assert_eq!(
@@ -466,19 +531,20 @@ async fn ignoring_a_directory_never_deletes_what_is_already_tracked() {
     git(&root_dir, &["commit", "--quiet", "-m", "seed"]);
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Docs Project".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software)");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Docs Project",
+        RootFlavor::Software,
+    )
+    .await;
 
     // The seed ignores `target/`, but those files are already tracked, so
     // the first checkpoint must leave them exactly where they are.
     let cp = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("first checkpoint");
     assert!(
@@ -494,7 +560,8 @@ async fn ignoring_a_directory_never_deletes_what_is_already_tracked() {
     // Now the project ignores a directory full of tracked files.
     std::fs::write(root_dir.join(".gitignore"), b"docs/\n").unwrap();
     let cp = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint after ignoring a tracked directory");
     assert_eq!(
@@ -511,7 +578,8 @@ async fn ignoring_a_directory_never_deletes_what_is_already_tracked() {
     // A *new* file under the now-ignored directory still stays out.
     std::fs::write(root_dir.join("docs").join("draft.txt"), b"draft\n").unwrap();
     let cp = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint with a new file under an ignored directory");
     assert!(
@@ -557,18 +625,19 @@ async fn a_multi_branch_repo_moves_only_the_checked_out_branch() {
         .collect();
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Many Branches".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software)");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Many Branches",
+        RootFlavor::Software,
+    )
+    .await;
 
     std::fs::write(root_dir.join("lib.rs"), b"// files edit\n").unwrap();
     let cp = client
-        .checkpoint_now(root.id, Some("files checkpoint".to_string()))
+        .version
+        .checkpoint(id(&root), Some("files checkpoint".to_string()))
         .await
         .expect("checkpoint_now");
 
@@ -605,16 +674,17 @@ async fn a_git_side_commit_mid_session_is_picked_up_without_a_restart() {
     std::fs::write(root_dir.join("lib.rs"), b"// v1\n").unwrap();
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Live Repo".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software)");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Live Repo",
+        RootFlavor::Software,
+    )
+    .await;
     let first = client
-        .checkpoint_now(root.id, Some("files v1".to_string()))
+        .version
+        .checkpoint(id(&root), Some("files v1".to_string()))
         .await
         .expect("checkpoint 1");
 
@@ -626,7 +696,8 @@ async fn a_git_side_commit_mid_session_is_picked_up_without_a_restart() {
 
     // The same client, no restart: the chain shows their commit.
     let chain = client
-        .chain(root.id, "lib.rs".to_string())
+        .version
+        .chain(id(&root), path("lib.rs"))
         .await
         .expect("chain");
     assert_eq!(
@@ -638,7 +709,8 @@ async fn a_git_side_commit_mid_session_is_picked_up_without_a_restart() {
     // ...and the next checkpoint builds on it rather than forking.
     std::fs::write(root_dir.join("lib.rs"), b"// v3 by files\n").unwrap();
     let third = client
-        .checkpoint_now(root.id, Some("files v3".to_string()))
+        .version
+        .checkpoint(id(&root), Some("files v3".to_string()))
         .await
         .expect("checkpoint 3");
     assert_eq!(
@@ -678,18 +750,19 @@ async fn a_detached_head_is_preserved_and_no_branch_is_clobbered() {
     git(&root_dir, &["checkout", "--quiet", "--detach", &v1]);
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Detached Repo".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software) on a detached checkout");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Detached Repo",
+        RootFlavor::Software,
+    )
+    .await;
 
     std::fs::write(root_dir.join("lib.rs"), b"// v1 edited\n").unwrap();
     let cp = client
-        .checkpoint_now(root.id, Some("on a detached head".to_string()))
+        .version
+        .checkpoint(id(&root), Some("on a detached head".to_string()))
         .await
         .expect("checkpoint_now on a detached HEAD");
 
@@ -748,16 +821,17 @@ async fn the_executable_bit_is_recorded_and_preserved() {
     std::fs::write(root_dir.join("readme.md"), b"# hi\n").unwrap();
 
     let (backend, client, _scope) = client_for(data_dir.path()).await;
-    let root = client
-        .create_root(
-            root_dir.to_str().unwrap().to_string(),
-            "Scripts".to_string(),
-            RootFlavor::Software,
-        )
-        .await
-        .expect("create_root(Software)");
+    let root = adopt(
+        &client,
+        &backend,
+        &root_dir,
+        "Scripts",
+        RootFlavor::Software,
+    )
+    .await;
     client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("first checkpoint");
 
@@ -773,7 +847,8 @@ async fn the_executable_bit_is_recorded_and_preserved() {
     std::fs::write(&script, b"#!/bin/sh\necho bye\n").unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let cp = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint after editing the script");
     assert_eq!(cp.changed_paths, vec!["build.sh".to_string()]);
@@ -783,7 +858,8 @@ async fn the_executable_bit_is_recorded_and_preserved() {
     // Flipping the bit alone is itself a change worth recording.
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
     let cp = client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint after chmod -x");
     assert_eq!(

@@ -36,9 +36,9 @@ use org_proto::OrgRoot;
 /// Returns how many roots were adopted on this call (not how many the
 /// org has), which is what a log line after a sweep wants to say.
 pub async fn adopt_knowledge_roots(files: &files::FilesBackend, org_root: &OrgRoot) -> usize {
-    use files::FilesService as _;
+    use files::service::RootsService as _;
     let known: std::collections::HashSet<std::path::PathBuf> = files
-        .list_roots()
+        .list()
         .await
         .unwrap_or_default()
         .into_iter()
@@ -122,7 +122,7 @@ impl Placer for OrgPlacer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use files::FilesService as _;
+    use files::service::RootsService as _;
     use files_sync::{SyncHost, SyncService as _};
 
     fn org() -> (tempfile::TempDir, OrgRoot, files::FilesBackend) {
@@ -188,7 +188,7 @@ mod tests {
         // The default wiki is inside the `Wiki` root, at `Wiki/Knowledge`
         // — one canonical path, not a second root under its slug.
         let wiki = files
-            .list_roots()
+            .list()
             .await
             .unwrap()
             .into_iter()
@@ -217,7 +217,7 @@ mod tests {
         std::fs::create_dir_all(org.named_wiki_dir("bible-study")).unwrap();
         assert_eq!(adopt_knowledge_roots(&files, &org).await, 1);
         let names: Vec<String> = files
-            .list_roots()
+            .list()
             .await
             .unwrap()
             .into_iter()
@@ -237,7 +237,7 @@ mod tests {
             .adopt_tree(&elsewhere, "Ghosts")
             .expect("registered outside the files boundary, like the vault");
         let placer = OrgPlacer::new(org);
-        let info = files.get_root(root.get()).await.unwrap();
+        let info = files.get(root).await.unwrap();
         assert_eq!(placer.place(&info), None);
     }
 }

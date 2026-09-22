@@ -56,13 +56,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+use crate::error::FilesError;
 use chrono::{DateTime, Duration, Utc};
 use files_proto::error::FilesFault;
 use files_proto::id::{ContentId, RootId, UploadId};
 use files_proto::model::{FileRootInfo, RootFlavor};
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
-use files_proto::service::legacy::{FilesError, FilesService};
 use files_proto::service::tree::{CatalogueEntry, EntryKind, Hydration};
 use files_proto::service::upload::{
     ChunkRange, Conflict, Expect, Received, UploadFrame, UploadPlan, UploadProgress, UploadService,
@@ -627,7 +627,7 @@ impl FilesBackend {
     /// outgoing content becomes a version rather than a casualty, and
     /// once after, so the landed file is itself recoverable.
     async fn checkpoint(&self, root_id: RootId, why: String) -> Result<(), FilesFault> {
-        FilesService::checkpoint_now(self, root_id.get(), Some(why))
+        self.checkpoint_now(root_id.get(), Some(why))
             .await
             .map(|_| ())
             .map_err(fault)

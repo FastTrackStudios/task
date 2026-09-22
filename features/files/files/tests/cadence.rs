@@ -13,32 +13,58 @@ use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
 use chrono::TimeDelta;
-use files::FilesServiceStreamSource as _;
+use files::id::RootId;
+use files::service::roots::AdoptRequest;
+use files::service::version::VersionEvent;
 use files::{
-    CadenceConfig, FileRootInfo, FilesBackend, FilesEvent, FilesServiceClient,
-    FilesServiceStreamClient, RootFlavor, TestClock, files_service_layer,
-    files_service_stream_layer, ignore,
+    CadenceConfig, FileRootInfo, FilesBackend, FilesEvent, RootFlavor, RootPath,
+    RootsServiceClient, SyncServiceClient, TestClock, VersionServiceClient, ignore,
 };
 use uuid::Uuid;
 
+/// The v2 lanes the cadence is observed through, mounted as the org
+/// router mounts them. No gate stands in front, so every call is the
+/// server's own.
 fn router(backend: FilesBackend) -> LayerRouter {
     LayerRouter::new()
-        .merge(files_service_layer(backend.clone()))
-        .merge(files_service_stream_layer(backend))
+        .merge(files::roots_layer(backend.clone()))
+        .merge(files::version_layer(backend.clone()))
+        .merge(files::sync_layer(backend))
 }
 
-/// A backend on a `TestClock`, its RPC client, and a live collector of
-/// everything `#[subscribe] fn events` emits — the whole harness every
-/// test below runs on.
+/// One client per lane.
+struct Rpc {
+    roots: RootsServiceClient,
+    version: VersionServiceClient,
+    sync: SyncServiceClient,
+}
+
+fn id(root: &FileRootInfo) -> RootId {
+    RootId::new(root.id)
+}
+
+fn path(p: &str) -> RootPath {
+    RootPath::parse(p).expect("valid root path")
+}
+
+/// A backend on a `TestClock`, its RPC clients, and a live collector of
+/// every event the backend publishes — the whole harness every test
+/// below runs on.
+///
+/// The collector follows the backend's hub in process
+/// (`FilesBackend::subscribe_events`, the same stream
+/// `TreeService::events` relays) rather than over a vox subscription:
+/// subscribing in process is synchronous, so no event can slip past
+/// before the subscriber is attached, and what is under test here is
+/// the cadence, not the transport.
 struct Harness {
     _data_dir: tempfile::TempDir,
     root_dir: std::path::PathBuf,
     backend: FilesBackend,
-    client: FilesServiceClient,
+    client: Rpc,
     clock: Arc<TestClock>,
     events: Arc<Mutex<Vec<FilesEvent>>>,
     scope: std::sync::Arc<Scope>,
-    _subscription: tokio::task::JoinHandle<()>,
     _collector: tokio::task::JoinHandle<()>,
 }
 
@@ -61,34 +87,27 @@ impl Harness {
                 .expect("backend");
         let scope = Scope::new();
         let local = LocalServer::serve(router(backend.clone()), scope.clone());
-        let client: FilesServiceClient = local.establish().await.expect("establish client");
-        let stream: FilesServiceStreamClient =
-            local.establish().await.expect("establish stream client");
+        let client = Rpc {
+            roots: local.establish().await.expect("establish roots client"),
+            version: local.establish().await.expect("establish version client"),
+            sync: local.establish().await.expect("establish sync client"),
+        };
 
-        let (tx, mut rx) = vox::channel::<FilesEvent>();
-        let subscription = tokio::spawn(async move {
-            let _ = stream.events(tx).await;
-        });
+        // Subscribe before mutating — attached by the time this returns.
+        let mut rx = backend.subscribe_events();
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
         let collector = tokio::spawn(async move {
-            while let Ok(Some(frame)) = rx.recv().await {
-                let mut copied = None;
-                let _ = frame.map(|ev| copied = Some(ev));
-                if let Some(ev) = copied {
-                    sink.lock().expect("event sink poisoned").push(ev);
+            loop {
+                match rx.recv().await {
+                    Ok(ev) => sink.lock().expect("event sink poisoned").push(ev),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        panic!("the collector fell {n} events behind")
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }
             }
         });
-        // Subscribe before mutating: the sink has to have reached the
-        // hub or the first events are simply missed.
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while backend.events_hub().subscriber_count() == 0 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("subscriber sink never reached the backend hub");
 
         // `local` is kept alive by the client handles; dropping it here
         // is fine (the served router lives on the scope).
@@ -102,20 +121,27 @@ impl Harness {
             clock,
             events,
             scope,
-            _subscription: subscription,
             _collector: collector,
         }
     }
 
+    /// Adopt the session folder — structure only, as the old
+    /// `create_root` was, so no capture happens before a test asks for
+    /// one — and wait out the walk behind the return.
     async fn create_root(&self) -> FileRootInfo {
-        self.client
-            .create_root(
-                self.root_dir.to_str().unwrap().to_string(),
-                "El Artisa".to_string(),
-                RootFlavor::Media,
-            )
+        let root = self
+            .client
+            .roots
+            .adopt(AdoptRequest {
+                path: self.root_dir.to_str().unwrap().to_string(),
+                name: "El Artisa".to_string(),
+                flavor: RootFlavor::Media,
+                hash_content: false,
+            })
             .await
-            .expect("create_root rpc")
+            .expect("adopt rpc");
+        self.backend.settled(id(&root)).await;
+        root
     }
 
     fn write(&self, rel: &str, content: &[u8]) {
@@ -131,7 +157,8 @@ impl Harness {
     async fn write_and_hint(&self, root_id: Uuid, rel: &str, content: &[u8]) -> u32 {
         self.write(rel, content);
         self.client
-            .hint_activity(root_id, vec![rel.to_string()])
+            .version
+            .hint_activity(RootId::new(root_id), vec![path(rel)])
             .await
             .expect("hint_activity rpc")
     }
@@ -143,11 +170,11 @@ impl Harness {
         let events = self.events.lock().expect("event sink poisoned");
         let snapshots = events
             .iter()
-            .filter(|e| matches!(e, FilesEvent::Snapshotted(_)))
+            .filter(|e| matches!(e, FilesEvent::Version(VersionEvent::Snapshotted(_))))
             .count();
         let checkpoints = events
             .iter()
-            .filter(|e| matches!(e, FilesEvent::Checkpointed(_)))
+            .filter(|e| matches!(e, FilesEvent::Version(VersionEvent::Checkpointed(_))))
             .count();
         (snapshots, checkpoints)
     }
@@ -195,7 +222,8 @@ async fn a_recording_storm_yields_snapshots_and_exactly_one_checkpoint() {
     // The snapshots are real, listed, and recoverable...
     let listed = harness
         .client
-        .snapshots(root.id)
+        .version
+        .snapshots(id(&root), None)
         .await
         .expect("snapshots rpc");
     assert_eq!(listed.len(), snapshots, "every snapshot is listed");
@@ -205,7 +233,8 @@ async fn a_recording_storm_yields_snapshots_and_exactly_one_checkpoint() {
     // entry").
     let chain = harness
         .client
-        .chain(root.id, "Audio Files/gtr.wav".to_string())
+        .version
+        .chain(id(&root), path("Audio Files/gtr.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(
@@ -247,7 +276,8 @@ async fn a_project_file_save_marks_a_save_point_visible_in_the_chain() {
     harness.backend.tick().await;
     let snapshots = harness
         .client
-        .snapshots(root.id)
+        .version
+        .snapshots(id(&root), None)
         .await
         .expect("snapshots rpc");
     assert_eq!(snapshots.len(), 1, "one auto-snapshot so far");
@@ -269,7 +299,8 @@ async fn a_project_file_save_marks_a_save_point_visible_in_the_chain() {
 
     let chain = harness
         .client
-        .chain(root.id, "El Artisa.rpp".to_string())
+        .version
+        .chain(id(&root), path("El Artisa.rpp"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 1, "one checkpointed state: {chain:?}");
@@ -288,7 +319,8 @@ async fn a_project_file_save_marks_a_save_point_visible_in_the_chain() {
     // point belongs to the session, not to one path.
     let audio_chain = harness
         .client
-        .chain(root.id, "Audio Files/gtr.wav".to_string())
+        .version
+        .chain(id(&root), path("Audio Files/gtr.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(audio_chain[0].save_points.len(), 1);
@@ -319,21 +351,20 @@ async fn ignored_patterns_never_enter_the_store() {
     // of this junk reaches the store.
     let ignore = harness
         .client
-        .ignore_set(root.id)
+        .sync
+        .ignore_set(id(&root))
         .await
         .expect("ignore_set rpc");
-    assert!(ignore.is_empty(), "nothing edited yet: {ignore:?}");
+    assert!(ignore.project.is_empty(), "nothing edited yet: {ignore:?}");
 
     // Backup churn is not activity: hinting only ignored paths opens no
     // session at all.
     let accepted = harness
         .client
+        .version
         .hint_activity(
-            root.id,
-            vec![
-                "El Artisa.rpp-bak".to_string(),
-                "Audio Files/gtr.reapeaks".to_string(),
-            ],
+            id(&root),
+            vec![path("El Artisa.rpp-bak"), path("Audio Files/gtr.reapeaks")],
         )
         .await
         .expect("hint_activity rpc");
@@ -342,7 +373,8 @@ async fn ignored_patterns_never_enter_the_store() {
 
     let checkpoint = harness
         .client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint_now rpc");
     assert_eq!(
@@ -362,7 +394,8 @@ async fn ignored_patterns_never_enter_the_store() {
     ] {
         let chain = harness
             .client
-            .chain(root.id, junk.to_string())
+            .version
+            .chain(id(&root), path(junk))
             .await
             .expect("chain rpc");
         assert!(chain.is_empty(), "{junk} must never enter the store");
@@ -372,11 +405,12 @@ async fn ignored_patterns_never_enter_the_store() {
     // next capture.
     let stored = harness
         .client
-        .set_ignore_set(root.id, vec!["*.wav".to_string(), " *.wav ".to_string()])
+        .sync
+        .set_project_ignores(id(&root), vec!["*.wav".to_string(), " *.wav ".to_string()])
         .await
         .expect("set_ignore_set rpc");
     assert_eq!(
-        stored,
+        stored.project,
         vec!["*.wav".to_string()],
         "normalized on the way in"
     );
@@ -385,7 +419,8 @@ async fn ignored_patterns_never_enter_the_store() {
     harness.write("El Artisa.rpp", b"<REAPER_PROJECT> v2");
     let after = harness
         .client
-        .checkpoint_now(root.id, None)
+        .version
+        .checkpoint(id(&root), None)
         .await
         .expect("checkpoint_now rpc");
     assert!(
@@ -408,7 +443,8 @@ async fn ignored_patterns_never_enter_the_store() {
     );
     let survivor = harness
         .client
-        .chain(root.id, "Audio Files/gtr.wav".to_string())
+        .version
+        .chain(id(&root), path("Audio Files/gtr.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(
@@ -422,7 +458,8 @@ async fn ignored_patterns_never_enter_the_store() {
     assert!(
         harness
             .client
-            .set_ignore_set(root.id, vec!["*.wav\n!keep.wav".to_string()])
+            .sync
+            .set_project_ignores(id(&root), vec!["*.wav\n!keep.wav".to_string()])
             .await
             .is_err(),
         "a pattern carrying a line break must be rejected"
@@ -443,13 +480,15 @@ async fn a_file_changing_mid_hash_is_requeued_and_rides_into_the_next_capture() 
     harness.write("Renders/mix.wav", b"render v1");
     let first = harness
         .client
-        .checkpoint_now(root.id, Some("v1".to_string()))
+        .version
+        .checkpoint(id(&root), Some("v1".to_string()))
         .await
         .expect("checkpoint_now rpc");
     assert!(first.requeued_paths.is_empty(), "nothing was moving");
     let settled = harness
         .client
-        .chain(root.id, "Renders/mix.wav".to_string())
+        .version
+        .chain(id(&root), path("Renders/mix.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(settled.len(), 1);
@@ -476,7 +515,8 @@ async fn a_file_changing_mid_hash_is_requeued_and_rides_into_the_next_capture() 
     harness.write("Session/notes.txt", b"bounce running");
     let during = harness
         .client
-        .checkpoint_now(root.id, Some("mid-bounce".to_string()))
+        .version
+        .checkpoint(id(&root), Some("mid-bounce".to_string()))
         .await
         .expect("a capture with an in-flight write must still succeed");
     assert_eq!(
@@ -498,7 +538,8 @@ async fn a_file_changing_mid_hash_is_requeued_and_rides_into_the_next_capture() 
     // that was actually coherent, not a torn read of the bounce.
     let chain = harness
         .client
-        .chain(root.id, "Renders/mix.wav".to_string())
+        .version
+        .chain(id(&root), path("Renders/mix.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 1, "no torn version was committed: {chain:?}");
@@ -509,7 +550,8 @@ async fn a_file_changing_mid_hash_is_requeued_and_rides_into_the_next_capture() 
     harness.backend.set_mid_hash_hook(None);
     let after = harness
         .client
-        .checkpoint_now(root.id, Some("bounce done".to_string()))
+        .version
+        .checkpoint(id(&root), Some("bounce done".to_string()))
         .await
         .expect("checkpoint_now rpc");
     assert!(after.requeued_paths.is_empty());
@@ -520,7 +562,8 @@ async fn a_file_changing_mid_hash_is_requeued_and_rides_into_the_next_capture() 
     );
     let chain = harness
         .client
-        .chain(root.id, "Renders/mix.wav".to_string())
+        .version
+        .chain(id(&root), path("Renders/mix.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 2, "and becomes a version of its own");
@@ -593,7 +636,7 @@ async fn a_failed_checkpoint_preserves_the_session() {
                 let _ = std::fs::remove_file(path);
             }
         })));
-    let failed = harness.client.checkpoint_now(root.id, None).await;
+    let failed = harness.client.version.checkpoint(id(&root), None).await;
     assert!(
         failed.is_err(),
         "the capture should have failed: {failed:?}"
@@ -615,7 +658,8 @@ async fn a_failed_checkpoint_preserves_the_session() {
 
     let chain = harness
         .client
-        .chain(root.id, "El Artisa.rpp".to_string())
+        .version
+        .chain(id(&root), path("El Artisa.rpp"))
         .await
         .expect("chain rpc");
     assert_eq!(chain.len(), 1, "quiescence still checkpointed: {chain:?}");
@@ -686,7 +730,8 @@ async fn a_write_during_a_capture_keeps_the_session_alive() {
     assert!(
         harness
             .client
-            .chain(root.id, "Audio Files/vox.wav".to_string())
+            .version
+            .chain(id(&root), path("Audio Files/vox.wav"))
             .await
             .expect("chain rpc")
             .is_empty(),
@@ -699,7 +744,8 @@ async fn a_write_during_a_capture_keeps_the_session_alive() {
     harness.backend.tick().await;
     let chain = harness
         .client
-        .chain(root.id, "Audio Files/vox.wav".to_string())
+        .version
+        .chain(id(&root), path("Audio Files/vox.wav"))
         .await
         .expect("chain rpc");
     assert_eq!(
@@ -722,7 +768,8 @@ async fn a_corrupt_journal_costs_labels_not_the_root() {
     harness.write("El Artisa.rpp", b"<REAPER_PROJECT>");
     harness
         .client
-        .checkpoint_now(root.id, Some("v1".to_string()))
+        .version
+        .checkpoint(id(&root), Some("v1".to_string()))
         .await
         .expect("checkpoint_now rpc");
 
@@ -734,7 +781,8 @@ async fn a_corrupt_journal_costs_labels_not_the_root() {
     // Every RPC still works.
     let chain = harness
         .client
-        .chain(root.id, "El Artisa.rpp".to_string())
+        .version
+        .chain(id(&root), path("El Artisa.rpp"))
         .await
         .expect("chain must survive a corrupt journal");
     assert_eq!(chain.len(), 1);
@@ -745,7 +793,8 @@ async fn a_corrupt_journal_costs_labels_not_the_root() {
     assert!(
         harness
             .client
-            .snapshots(root.id)
+            .version
+            .snapshots(id(&root), None)
             .await
             .expect("snapshots must survive a corrupt journal")
             .is_empty()
@@ -754,7 +803,8 @@ async fn a_corrupt_journal_costs_labels_not_the_root() {
     harness.write("El Artisa.rpp", b"<REAPER_PROJECT> v2");
     let recovered = harness
         .client
-        .checkpoint_now(root.id, Some("v2".to_string()))
+        .version
+        .checkpoint(id(&root), Some("v2".to_string()))
         .await
         .expect("checkpoint must survive a corrupt journal");
     assert_eq!(recovered.changed_paths, vec!["El Artisa.rpp".to_string()]);

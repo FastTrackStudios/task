@@ -8,7 +8,7 @@
 //! folder whose holding location is down has to list rather than appear
 //! empty (`files.catalogue.offline`).
 //!
-//! The live half delegates to the legacy `FilesService` methods, which
+//! The live half delegates to the backend's own listing, which
 //! already carry the confinement guard, the internals-hiding rules and
 //! the on-disk stub probe. Re-deriving any of that here would be a second
 //! implementation of the same rules, and the second one is the one that
@@ -49,6 +49,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::error::FilesError;
 use chrono::{DateTime, Utc};
 use files_domain::catalogue::{Catalogue, Change};
 use files_proto::error::FilesFault;
@@ -59,7 +60,6 @@ use files_proto::service::access::Capability;
 use files_proto::service::tree::{
     CatalogueDelta, CatalogueEntry, Cursor, EntryKind, Freshness, Hydration, TreeEvent, TreeService,
 };
-use files_proto::{FilesError, FilesService};
 use jj_lib::gitignore::GitIgnoreFile;
 use jj_lib::repo_path::RepoPathBuf;
 
@@ -686,7 +686,7 @@ impl TreeService for FilesBackend {
     /// about what the namespace contains.
     async fn resolve(&self, path: TreePath) -> Result<TreeNode, FilesFault> {
         let path = path.validate()?;
-        <Self as FilesService>::tree_browse(self, path.as_str().to_string())
+        self.tree_browse(path.as_str().to_string())
             .await
             .map_err(|e| match e {
                 FilesError::NotFound(_) => FilesFault::TreePathNotFound(path.clone()),
@@ -872,10 +872,10 @@ impl FilesBackend {
             return self.browse_catalogued(root_id, &path);
         }
 
-        let mut listed =
-            <Self as FilesService>::browse(self, root_id.get(), path.as_str().to_string())
-                .await
-                .map_err(|e| fault_of(e, &path))?;
+        let mut listed = self
+            .browse_live(root_id.get(), path.as_str().to_string())
+            .await
+            .map_err(|e| fault_of(e, &path))?;
 
         // The Ignore set governs listings, not only captures.
         //

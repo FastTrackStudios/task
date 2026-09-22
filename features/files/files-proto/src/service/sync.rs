@@ -115,7 +115,7 @@ pub struct DeviceInfo {
 #[repr(u8)]
 pub enum SyncEvent {
     /// A path's bytes became resident, or were replaced by a stub.
-    HydrationChanged(RootPath),
+    HydrationChanged(crate::model::HydrationChange),
     SubscriptionChanged(Subscription),
     FacetsChanged(RootId),
     DeviceChanged(DeviceInfo),
@@ -174,6 +174,27 @@ pub trait SyncService {
         paths: Vec<RootPath>,
         resident: bool,
     ) -> Result<Vec<RootPath>, FilesFault>;
+
+    /// The patterns whose content this host keeps resident — its
+    /// **residency policy**. Everything else may be dehydrated to a stub
+    /// by [`Self::apply_residency`]. Gitignore syntax, over root-relative
+    /// paths.
+    async fn residency(&self, root_id: RootId) -> Result<Vec<String>, FilesFault>;
+
+    /// Replace the residency policy. Changes nothing on disk by itself —
+    /// [`Self::apply_residency`] enforces it.
+    async fn set_residency(
+        &self,
+        root_id: RootId,
+        patterns: Vec<String>,
+    ) -> Result<Vec<String>, FilesFault>;
+
+    /// Enforce the residency policy: dehydrate what it does not keep,
+    /// hydrate what it does. Reports what moved.
+    async fn apply_residency(
+        &self,
+        root_id: RootId,
+    ) -> Result<crate::model::HydrationReport, FilesFault>;
 
     /// Devices registered to this org.
     async fn devices(&self) -> Result<Vec<DeviceInfo>, FilesFault>;

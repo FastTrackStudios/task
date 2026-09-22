@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use files::FilesService as _;
+use files::service::MediaService as _;
 use files_proto::RenditionKind;
 use files_transcode::transcoder::FakeTranscoder;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
@@ -56,19 +56,14 @@ async fn boot() -> eyre::Result<(String, AppState, uuid::Uuid, tempfile::TempDir
     let mut video = b"VIDEO".to_vec();
     video.extend_from_slice(&vec![0x11u8; 4096]);
     std::fs::write(root_dir.join("cut.mov"), &video)?;
-    let root = org
-        .files
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "session".into(),
-            files_proto::RootFlavor::Media,
-        )
-        .await
-        .map_err(|e| eyre::eyre!("create root: {e}"))?;
-    org.files
-        .checkpoint_now(root.id, None)
-        .await
-        .map_err(|e| eyre::eyre!("checkpoint: {e}"))?;
+    let root = crate::support::adopt_root(
+        &org.files,
+        &root_dir,
+        "session",
+        files_proto::RootFlavor::Media,
+    )
+    .await?;
+    crate::support::checkpoint(&org.files, root.id).await?;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -108,7 +103,12 @@ async fn rendition_route_streams_ranges_behind_the_media_grant() -> eyre::Result
     // does before building its streaming URL.
     let proxy = org
         .files
-        .rendition(root_id, "cut.mov".into(), RenditionKind::Proxy720)
+        .rendition_info(
+            files::RootId::new(root_id),
+            files::RootPath::parse("cut.mov")?,
+            RenditionKind::Proxy720,
+            None,
+        )
         .await
         .map_err(|e| eyre::eyre!("rendition: {e}"))?;
     assert_eq!(proxy.mime, "video/mp4");

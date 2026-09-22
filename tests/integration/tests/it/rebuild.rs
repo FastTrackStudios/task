@@ -26,8 +26,8 @@
 //! test that deleted those would be testing whether files come back from
 //! nowhere, which is not a property anything has.
 
-use files::FilesService;
 use files::path::RootPath;
+use files::service::RootsService;
 
 use integration::scenario::Scenario;
 
@@ -105,9 +105,7 @@ async fn the_tree_comes_back_after_every_database_is_deleted() {
     );
 
     // The roots register is reconstructed…
-    let roots = FilesService::list_roots(&acme.backend)
-        .await
-        .expect("list roots");
+    let roots = RootsService::list(&acme.backend).await.expect("list roots");
     assert!(
         roots.iter().any(|r| r.id == s.acme_root.get()),
         "the adopted root did not come back: {roots:?}"

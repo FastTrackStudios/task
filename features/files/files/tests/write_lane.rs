@@ -12,10 +12,11 @@
 
 use std::path::{Path, PathBuf};
 
-use files::{FilesBackend, FilesService};
+use files::FilesBackend;
 use files_proto::id::RootId;
 use files_proto::model::RootFlavor;
 use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::version::VersionService;
 use files_proto::service::write::{OnConflict, Relocation, WriteService};
 use files_proto::{FilesFault, RootPath};
 
@@ -326,7 +327,9 @@ async fn replace_takes_the_destination_and_records_a_new_version() {
     let (_tmp, backend, id, dir) = adopted().await;
     // A checkpoint first, so the displaced content is genuinely in
     // history rather than merely uncommitted.
-    backend.checkpoint_now(id.get(), None).await.expect("base");
+    VersionService::checkpoint(&backend, id, None)
+        .await
+        .expect("base");
 
     let receipt = backend
         .copy_paths(
@@ -344,8 +347,7 @@ async fn replace_takes_the_destination_and_records_a_new_version() {
         "the staging area does not outlive the batch"
     );
 
-    let chain = backend
-        .chain(id.get(), "mix.wav".into())
+    let chain = VersionService::chain(&backend, id, p("mix.wav"))
         .await
         .expect("history for the replaced path");
     assert!(

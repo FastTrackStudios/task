@@ -16,9 +16,9 @@ use std::collections::BTreeSet;
 use files::FilesBackend;
 use files_proto::id::RootId;
 use files_proto::model::RootFlavor;
-use files_proto::service::legacy::FilesService;
 use files_proto::service::organise::{Action, OrganiseService, Tag};
 use files_proto::service::roots::{AdoptRequest, RootsService};
+use files_proto::service::version::VersionService;
 use files_proto::{FilesFault, RootPath};
 
 /// A backend confined to its own data dir, with one staged folder ready
@@ -316,7 +316,7 @@ async fn every_structural_change_shows_up_in_the_feed() {
     assert!(created[0].path.is_root());
     assert_eq!(created[0].root_id, root);
 
-    FilesService::checkpoint_now(&backend, root.get(), Some("first pass".into()))
+    VersionService::checkpoint(&backend, root, Some("first pass".into()))
         .await
         .expect("checkpoint");
 

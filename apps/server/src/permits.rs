@@ -371,57 +371,13 @@ table!(WORKSTREAM, "workstream", "workstreams/**", [
     wr "set_status", wa "delete", rd "rollup",
 ]);
 table!(WORKSTREAM_STREAM, "workstream-stream", "workstreams/**", [rd "events"]);
-table!(FILES, "files", "files/**", [
-    wr "create_root", rd "list_roots", rd "get_root", rd "browse", rd "drive_browse", rd "tree_browse",
-    rd "chain", wr "checkpoint_now",
-    // Cadence engine (issue #260): activity hints and the per-root
-    // Ignore set. A hint can cause a capture, so it is a write.
-    wr "hint_activity", rd "snapshots", rd "ignore_set", wr "set_ignore_set",
-    // Curation (issue #261). Naming and starting an iteration are
-    // ordinary writes; dropping a name and running GC carry an audit
-    // line even on allow (`wa`, like every `delete` above) because both
-    // can end an object's protection. Still member tier — this lane has
-    // no admin permits at all (see the module doc).
-    wr "name_version", rd "list_named_versions", rd "resolve_named_version",
-    wa "unname_version", wr "start_project_version", rd "list_project_versions",
-    wa "gc_root",
-    // Hydration (issue #263). Dehydrate carries an audit line even on
-    // allow (`wa`): it replaces live-tree content with a stub, and
-    // although the content survives in the store, it is the one write
-    // here that makes files non-resident. Hydrate restores content —
-    // an ordinary write. Applying policy does both in bulk.
-    wa "dehydrate", wr "hydrate", rd "hydration_policy", wr "set_hydration_policy",
-    wa "apply_hydration_policy",
-    // Project Version restart (issue #268). Restarting reshapes the
-    // whole live tree and copy-forward can overwrite versioned files —
-    // audited writes; time-travel browsing is an ordinary read.
-    wa "restart_project_version", rd "browse_at", wa "copy_forward",
-    // Divergent versions (issue #264): listing is a read; settling
-    // writes a merge checkpoint and rewrites live-tree files (audited).
-    rd "divergences", wa "resolve_divergence",
-    // Derived media (issue #269). Requesting a rendition may generate
-    // it (an expensive transcode) and cache it, but it never mutates
-    // the versioned tree — a read from the caller's point of view.
-    // `rendition_at` is the same call pinned to a past version (the
-    // Review page's switcher, issue #270).
-    rd "rendition", rd "rendition_at",
-    // Reviews (issue #270). The Review page's audience includes
-    // share-link guests, so the feedback verbs sit at comment tier
-    // (`cm`, like `add_comment` / `post_message`): get-or-create runs
-    // when feedback starts, and posting writes a comment page. Pure
-    // lookups are reads. Deleting a comment removes someone's
-    // feedback, so it carries an audit line even on allow, like the
-    // other `delete` verbs.
-    rd "find_review", cm "review_for_file", rd "list_reviews", rd "review_comments",
-    cm "add_review_comment", wa "delete_review_comment",
-]);
-table!(FILES_STREAM, "files-stream", "files/**", [rd "events"]);
 
-// ── Files v2 lanes ───────────────────────────────────────────────────────
+// ── Files lanes ──────────────────────────────────────────────────────────
 //
 // One table per lane, mirroring `files_proto::service`'s split and the
-// spec sections each lane owns (`features/files/spec/files.md`). The v1
-// `FILES` table above stays until the last caller moves off it.
+// spec sections each lane owns (`features/files/spec/files.md`). These
+// are the only Files tables: the v1 `FILES` table went with the v1
+// `FilesService` it gated.
 //
 // Tiering is decided per method from what the method DOES, not from its
 // name. The rules applied here:
@@ -450,6 +406,12 @@ table!(FILES_ROOTS, "files-roots", "files/**", [
     // "who hosts what" is the same class of fact as "who can find
     // what".
     wa "host_structure",
+    // Browsing the org's files area itself — folders that are not roots
+    // yet — is what a steward does before adopting, so it sits with
+    // adoption at write tier: the lane refuses it to anyone who may not
+    // steward roots, and the gate should not admit a reader it will only
+    // refuse.
+    wr "browse_area",
 ]);
 
 // The namespace and the replicated catalogue (`files.catalogue.*`).
@@ -504,6 +466,13 @@ table!(FILES_UPLOAD, "files-upload", "files/**", [
 table!(FILES_VERSION, "files-version", "files/**", [
     rd "chain", wr "checkpoint", rd "snapshots", wr "hold", rd "occupancy",
     rd "divergences", wa "resolve_divergence", wa "restore", wr "keep_snapshot",
+    // Time-travel browsing reads the store and never the live tree.
+    // `copy_forward` writes old content into the live tree but refuses a
+    // target holding unversioned changes, so nothing is lost — a write.
+    // An activity hint can cause a capture, so it is a write too.
+    // `collect` is audited: it is the retention pass, and it can end an
+    // unprotected object's life.
+    rd "browse_at", wr "copy_forward", wr "hint_activity", wa "collect",
 ]);
 
 // Named and Project Versions.
@@ -514,6 +483,7 @@ table!(FILES_VERSION, "files-version", "files/**", [
 table!(FILES_CURATION, "files-curation", "files/**", [
     wr "name_version", wa "unname_version", rd "named_versions", rd "resolve_name",
     wr "start_project_version", rd "project_versions", wa "restart_project_version",
+    rd "named_version",
 ]);
 
 // Facets, ignoring, hydration and devices (`files.facet.*`,
@@ -536,6 +506,10 @@ table!(FILES_SYNC, "files-sync", "files/**", [
     rd "subscription", wr "subscribe", wr "pin", wa "hydrate",
     rd "devices", wr "set_transfer_policy", wa "revoke_device",
     wa "enroll_device", rd "coordinator",
+    // Residency: reading and setting the policy change nothing on disk;
+    // applying it dehydrates and hydrates in bulk — a write, and not
+    // audited, because the content it releases survives in the store.
+    rd "residency", wr "set_residency", wr "apply_residency",
 ]);
 
 // Replica sync — the commit graph and the chunks under it
@@ -597,6 +571,9 @@ table!(FILES_MEDIA_STREAM, "files-media-stream", "files/**", [dl "bytes"]);
 table!(FILES_MEDIA, "files-media", "files/**", [
     rd "read", rd "read_at", rd "read_content",
     rd "renditions", rd "rendition", wr "handoff",
+    // A rendition's record may generate it (an expensive transcode) but
+    // never mutates the versioned tree — a read from the caller's side.
+    rd "rendition_info",
 ]);
 
 // `files.index.*`. `extract` is `wr` — it derives and stores a sidecar,
@@ -613,6 +590,7 @@ table!(FILES_SEARCH, "files-search", "files/**", [
 table!(FILES_REVIEW, "files-review", "files/**", [
     rd "scope", rd "review", rd "playback", rd "comments",
     cm "comment", wa "delete_comment", rd "for_file",
+    rd "find", rd "reviews",
 ]);
 
 // Content across a server boundary. `offer` and `withdraw` are audited
@@ -1231,8 +1209,6 @@ pub fn mounts() -> Vec<Mount> {
             workstream::workstream_stream_descriptor(),
             WORKSTREAM_STREAM,
         ),
-        m("core", files::files_service_descriptor(), FILES),
-        m("core", files::files_stream_descriptor(), FILES_STREAM),
         m("core", files_proto::roots_descriptor(), FILES_ROOTS),
         m("core", files_proto::tree_descriptor(), FILES_TREE),
         m("core", files_proto::write_descriptor(), FILES_WRITE),

@@ -17,7 +17,7 @@
 //! missed call site would read or write files belonging to whatever
 //! directory the server happened to start in.
 
-use files::{FilesBackend, FilesService, RootFlavor};
+use files::{FilesBackend, RootFlavor};
 use files_proto::id::RootId;
 use files_proto::path::RootPath;
 use files_proto::service::roots::RootsService;
@@ -101,7 +101,7 @@ async fn an_unplaced_root_never_touches_the_working_directory() {
 
     let _ = <FilesBackend as WriteService>::create_dirs(&backend, id, vec![p("Stems")]).await;
     let _ = TreeService::browse(&backend, id, p("Stems")).await;
-    let _ = FilesService::get_root(&backend, id.get()).await;
+    let _ = RootsService::get(&backend, id).await;
 
     assert!(
         !canary.exists(),

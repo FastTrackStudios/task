@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use files::FilesService as _;
+use files::service::{CurationService as _, VersionService as _};
 use files_transcode::transcoder::FakeTranscoder;
 use share_proto::{NewShareLink, ShareCapabilities, ShareService as _, ShareTarget};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
@@ -45,19 +45,14 @@ async fn boot() -> eyre::Result<(String, AppState, uuid::Uuid, tempfile::TempDir
     std::fs::write(root_dir.join("takes/cut.mov"), V1_BYTES)?;
     std::fs::write(root_dir.join("takes/notes.txt"), b"take notes")?;
     std::fs::write(root_dir.join("mix.wav"), b"AUDIO outside the slice")?;
-    let root = org
-        .files
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "session".into(),
-            files_proto::RootFlavor::Media,
-        )
-        .await
-        .map_err(|e| eyre::eyre!("create root: {e}"))?;
-    org.files
-        .checkpoint_now(root.id, None)
-        .await
-        .map_err(|e| eyre::eyre!("checkpoint: {e}"))?;
+    let root = crate::support::adopt_root(
+        &org.files,
+        &root_dir,
+        "session",
+        files_proto::RootFlavor::Media,
+    )
+    .await?;
+    crate::support::checkpoint(&org.files, root.id).await?;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -212,14 +207,21 @@ async fn share_links_scope_gate_and_receipt() -> eyre::Result<()> {
     let org = state.org("share-test").expect("org");
     let v1_commit = org
         .files
-        .chain(root_id, "takes/cut.mov".into())
+        .chain(
+            files::RootId::new(root_id),
+            files::RootPath::parse("takes/cut.mov")?,
+        )
         .await
         .expect("chain")[0]
         .commit_id
         .clone();
     let named = org
         .files
-        .name_version(root_id, v1_commit, "client cut".into())
+        .name_version(
+            files::RootId::new(root_id),
+            files::id::VersionId::from_commit_hex(&v1_commit),
+            "client cut".into(),
+        )
         .await
         .expect("name version");
     // v2 lands.
@@ -228,8 +230,7 @@ async fn share_links_scope_gate_and_receipt() -> eyre::Result<()> {
             .join("orgs/share-test/files/session/takes/cut.mov"),
         b"VIDEOv2 a totally different cut",
     )?;
-    org.files
-        .checkpoint_now(root_id, None)
+    crate::support::checkpoint(&org.files, root_id)
         .await
         .expect("checkpoint v2");
 

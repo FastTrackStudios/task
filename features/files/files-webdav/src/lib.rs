@@ -12,7 +12,7 @@
 //!   root's live tree with the root's own internals — marker file and
 //!   version store — removed from existence. There is no
 //!   version-addressed URL space at all; version history stays behind
-//!   `FilesService::chain`.
+//!   `VersionService::chain`.
 //! - **Read-write, and writes are ordinary writes.** A `PUT` lands in
 //!   the live tree exactly like a DAW saving over NFS would, so the
 //!   scan-certifying cadence pipeline picks it up on the next Session

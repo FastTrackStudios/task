@@ -7,7 +7,9 @@
 use std::time::Duration;
 
 use architect::{LayerRouter, LocalServer, Scope};
-use files::{FilesBackend, FilesService as _, RootFlavor};
+use files::service::roots::{AdoptRequest, RootsService as _};
+use files::service::version::VersionService as _;
+use files::{FilesBackend, RootFlavor, RootId};
 use files_daemon::model::RootSyncState;
 use files_daemon::service::{DaemonControlServiceClient, layer as control_layer};
 use files_daemon::{DaemonControl, SyncDaemon};
@@ -46,14 +48,16 @@ async fn rig() -> Rig {
     std::fs::write(root_dir.join("mix.wav"), big_file(6 * 1024 * 1024).await).unwrap();
     std::fs::write(root_dir.join("notes.txt"), b"session notes").unwrap();
     let root = coord
-        .create_root(
-            root_dir.to_string_lossy().into_owned(),
-            "session".into(),
-            RootFlavor::Media,
-        )
+        .adopt(AdoptRequest {
+            path: root_dir.to_string_lossy().into_owned(),
+            name: "session".into(),
+            flavor: RootFlavor::Media,
+            hash_content: true,
+        })
         .await
         .unwrap();
-    coord.checkpoint_now(root.id, None).await.unwrap();
+    coord.settled(RootId::new(root.id)).await;
+    coord.checkpoint(RootId::new(root.id), None).await.unwrap();
 
     let coord_scope = Scope::new();
     let coord_server = LocalServer::serve(

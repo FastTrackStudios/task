@@ -1,11 +1,10 @@
 //! The v2 live stream — [`TreeService::events`](files_proto::service::tree::TreeService::events).
 //!
-//! One hub per backend ([`FilesBackend::lane_events`]), fed from two
-//! places: every v2 lane mutation publishes its own nested
-//! [`FilesEvent`], and every legacy event is translated on its way out
-//! ([`from_legacy`]) — so a v2 subscriber hears about checkpoints the
+//! One hub per backend ([`FilesBackend::lane_events`]). Every lane
+//! mutation publishes its own nested [`FilesEvent`], and so do the
+//! backend's internals — so a subscriber hears about checkpoints the
 //! cadence engine took and hydration a daemon asked for, not only about
-//! what arrived through a v2 method.
+//! what arrived through a method.
 //!
 //! ## Only what the subscriber may read
 //!
@@ -22,7 +21,6 @@ use files_proto::id::RootId;
 use files_proto::path::RootPath;
 use files_proto::service::FilesEvent;
 use files_proto::service::access::Capability;
-use files_proto::service::legacy::FilesEvent as Legacy;
 use files_proto::service::tree::TreeServiceStreamSource;
 use files_proto::service::{curation, review, roots, sync, tree, upload, version, write};
 
@@ -33,32 +31,6 @@ use crate::lane::caller::{self, Caller};
 /// with nobody listening is not an error.
 pub fn publish(backend: &FilesBackend, event: FilesEvent) {
     let _ = backend.lane_events().send(event);
-}
-
-/// A legacy event in v2's vocabulary, when it has one.
-#[must_use]
-pub fn from_legacy(event: &Legacy) -> Option<FilesEvent> {
-    Some(match event.clone() {
-        Legacy::RootCreated(info) => FilesEvent::Root(roots::RootEvent::Created(info)),
-        Legacy::Checkpointed(c) => FilesEvent::Version(version::VersionEvent::Checkpointed(c)),
-        Legacy::Snapshotted(s) => FilesEvent::Version(version::VersionEvent::Snapshotted(s)),
-        Legacy::VersionNamed(n) => FilesEvent::Curation(curation::CurationEvent::VersionNamed(n)),
-        Legacy::VersionUnnamed(n) => {
-            FilesEvent::Curation(curation::CurationEvent::VersionUnnamed(n))
-        }
-        Legacy::ProjectVersionStarted(p) => {
-            FilesEvent::Curation(curation::CurationEvent::ProjectVersionStarted(p))
-        }
-        Legacy::HydrationChanged(h) => {
-            let path = RootPath::parse(&h.path).ok()?;
-            FilesEvent::Sync(sync::SyncEvent::HydrationChanged(path))
-        }
-        Legacy::ReviewCreated(r) => FilesEvent::Review(review::ReviewEvent::Created(r)),
-        Legacy::ReviewCommentAdded(c) => FilesEvent::Review(review::ReviewEvent::CommentAdded(c)),
-        Legacy::ReviewCommentDeleted(c) => {
-            FilesEvent::Review(review::ReviewEvent::CommentDeleted(c))
-        }
-    })
 }
 
 /// Which root an event is about, and which paths in it — what the
@@ -110,6 +82,10 @@ fn scope(event: &FilesEvent) -> (Option<RootId>, Vec<RootPath>) {
         ) => (id(p.root_id), Vec::new()),
         E::Review(review::ReviewEvent::Created(r)) => (id(r.root_id), Vec::new()),
         E::Sync(sync::SyncEvent::FacetsChanged(r)) => (Some(*r), Vec::new()),
+        E::Sync(sync::SyncEvent::HydrationChanged(h)) => (
+            id(h.root_id),
+            RootPath::parse(&h.path).map_or_else(|_| Vec::new(), |p| vec![p]),
+        ),
         _ => (None, Vec::new()),
     }
 }
@@ -194,16 +170,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_legacy_event_with_a_v2_meaning_is_translated() {
-        let root = files_proto::model::FileRootInfo {
-            id: uuid::Uuid::nil(),
-            name: "r".into(),
-            path: None,
-            flavor: files_proto::model::RootFlavor::Media,
-            created_at: chrono::Utc::now(),
-            project_version: None,
-        };
-        let v2 = from_legacy(&Legacy::RootCreated(root.clone())).expect("translated");
-        assert_eq!(v2, FilesEvent::Root(roots::RootEvent::Created(root)));
+    fn a_hydration_change_is_placed_in_its_root_at_its_path() {
+        let root = uuid::Uuid::from_bytes([7; 16]);
+        let event = FilesEvent::Sync(sync::SyncEvent::HydrationChanged(
+            files_proto::model::HydrationChange {
+                root_id: root,
+                path: "Audio Files/vox.wav".into(),
+                stub: true,
+            },
+        ));
+        let (at, paths) = scope(&event);
+        assert_eq!(at, Some(RootId::new(root)));
+        assert_eq!(paths, vec![RootPath::parse("Audio Files/vox.wav").unwrap()]);
     }
 }

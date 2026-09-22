@@ -1,10 +1,8 @@
 //! The Files RPC surface, one trait per spec section.
 //!
-//! v1 was a single `FilesService` with 37 methods and no grouping, backed
-//! by one 4,860-line `FilesBackend`. The requirements in
-//! `features/files/spec/files.md` add roughly thirty methods more — write
-//! RPCs, upload, catalogue, facets, adoption, search, grants, devices,
-//! activity — which would take that trait past seventy.
+//! This is the only Files API. It replaced a single v1 `FilesService` of
+//! 37 ungrouped methods, which was deleted once every caller had moved
+//! (ADR 0005).
 //!
 //! ## How this is split
 //!
@@ -49,12 +47,6 @@
 //!   subscription — subscribers want one connection — with a variant per
 //!   lane rather than thirty flat ones.
 //!
-//! ## Migration
-//!
-//! [`legacy`] holds v1 verbatim and is still what the backend implements
-//! and what mount sites bind. The lanes here are the target; each moves
-//! over independently, and `legacy` is deleted when the last one lands.
-//!
 //! ⚠️ Every new method needs its `permits.rs` row in the same change, or
 //! it fails closed in production.
 
@@ -62,7 +54,6 @@ pub mod access;
 pub mod curation;
 pub mod enrollment;
 pub mod federation;
-pub mod legacy;
 pub mod media;
 pub mod organise;
 pub mod review;
@@ -75,9 +66,6 @@ pub mod version;
 pub mod write;
 
 use facet::Facet;
-
-// v1, re-exported at its original path so downstream keeps compiling.
-pub use legacy::{FilesError, FilesEvent as LegacyFilesEvent, FilesService};
 
 pub use access::AccessService;
 pub use curation::CurationService;
