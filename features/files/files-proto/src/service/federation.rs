@@ -198,29 +198,33 @@ pub fn resolve_content_ref(
 
 /// A bounded window of an object, for a relayed read.
 ///
-/// Half-open: `[offset, offset + len)`. `len` is what keeps a relay's
-/// memory flat regardless of how large the object is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+/// One chunk of a relayed file's content, addressed the way
+/// [`Self::hash`] already is everywhere else in Files: a blake3 hash a
+/// receiver can hand straight to iroh-blobs.
+///
+/// `files.scale.large-media`'s answer to "how does a relay move
+/// gigabytes without a connection per megabyte": the origin publishes
+/// these into an iroh-blobs store on the same endpoint it already
+/// serves vox from, and the receiver fetches each hash over iroh-blobs'
+/// own verified, chunked, resumable transfer — one connection per
+/// origin, not one per chunk.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
 #[repr(C)]
-pub struct ByteRange {
-    pub offset: u64,
-    pub len: u32,
+pub struct RelayChunk {
+    /// Hex blake3 — and so, byte for byte, a valid `iroh_blobs::Hash`
+    /// for the same content; BLAKE3's tree construction guarantees the
+    /// two agree, which is why this crate never re-hashes to cross into
+    /// iroh-blobs' address space.
+    pub hash: String,
+    pub len: u64,
 }
 
-impl ByteRange {
-    /// The largest chunk an origin will serve in one call.
-    ///
-    /// A relay's memory ceiling, so it is enforced on the serving side
-    /// rather than trusted from the caller.
-    pub const MAX_LEN: u32 = 1 << 20;
-
-    #[must_use]
-    pub fn new(offset: u64, len: u32) -> Self {
-        Self {
-            offset,
-            len: len.min(Self::MAX_LEN),
-        }
-    }
+/// The ordered chunk list a relay needs, in the order they concatenate
+/// to the file's bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[repr(C)]
+pub struct RelayManifest {
+    pub chunks: Vec<RelayChunk>,
 }
 
 #[derive(Debug, Clone, PartialEq, Facet)]
@@ -328,20 +332,18 @@ pub trait FederationService {
     /// server, which is the outcome `files.topology.federation` refuses.
     async fn read_offered(&self, secret: String, path: RootPath) -> Result<ByteTicket, FilesFault>;
 
-    /// Serve one bounded chunk of a ticket minted by
-    /// [`Self::read_offered`].
+    /// Authorize an iroh-blobs relay of a ticket minted by
+    /// [`Self::read_offered`], and publish its content so a peer may
+    /// fetch it directly.
     ///
-    /// Bounded because the receiver is relaying: an unbounded read would
-    /// put a 244 GB object through its memory on the way past, which is
-    /// the allocation failure the whole ticket design exists to avoid.
-    /// The secret is re-checked here, so a revocation lands mid-transfer
-    /// rather than at the next file.
-    async fn fetch_offered(
-        &self,
-        secret: String,
-        token: String,
-        range: ByteRange,
-    ) -> Result<Vec<u8>, FilesFault>;
+    /// The secret is checked here — once, not on every byte the way an
+    /// earlier design did. That is `files.topology.federation`'s
+    /// deliberate trade: a revocation after this call no longer stops a
+    /// transfer already under way (it stops the next one), and what it
+    /// buys back is the actual bytes moving over iroh-blobs' own
+    /// verified, chunked, resumable transfer — one connection per
+    /// origin, ever, rather than one vox round trip per megabyte.
+    async fn open_relay(&self, secret: String, token: String) -> Result<RelayManifest, FilesFault>;
 
     /// Answer a receiver's call: list a path inside an offered subtree.
     ///

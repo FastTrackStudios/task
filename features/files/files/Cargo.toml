@@ -24,6 +24,12 @@ blake3 = { workspace = true }
 # The BLAKE3 range types the resumable-transfer seams speak. Pinned to
 # iroh-blobs' own version, since the types cross that boundary.
 bao-tree = "0.16"
+# `federation_blobs()` (the store a relay publishes into and serves
+# from) and `fetch_relay` (the receiving fetch, over iroh-blobs' own
+# verified, chunked transfer) both speak iroh-blobs directly — the one
+# place in this crate where that is true, everywhere else routed through
+# `files-store`'s `ChunkStore`.
+iroh-blobs = { workspace = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 gix = { workspace = true }
 globset = { workspace = true }

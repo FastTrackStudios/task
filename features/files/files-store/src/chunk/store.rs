@@ -884,6 +884,72 @@ impl ChunkStore {
         self.read_manifest(file_id).await
     }
 
+    /// Publish `file_id`'s content into `dest`, an iroh-blobs store a
+    /// [`crate`]-external `net_protocol` handler serves from — so a
+    /// federation peer may fetch it directly over iroh-blobs, instead of
+    /// this server relaying it a call at a time.
+    ///
+    /// Nothing here checks that the caller may do this; that is
+    /// `files.topology.federation`'s job, once, before this runs.
+    ///
+    /// A whole-tier file is linked into `dest` by reference — the same
+    /// trick [`ChunkStore::reference_whole`] already uses locally — so
+    /// publishing an 800 GB take costs an outboard computation and no
+    /// data movement. A chunked file's pieces are each read (bounded by
+    /// the chunker's max size, per [`ChunkStore::read_chunk`]) and copied
+    /// in one at a time: the destination is a different store, possibly
+    /// on a different filesystem, so there is no path to link. Either
+    /// way, a chunk `dest` already holds — because an earlier relay
+    /// published it, or because it is identical to one from another file
+    /// — costs nothing to publish again: content addressing means that
+    /// check is a presence lookup, not a comparison.
+    pub async fn publish_for_relay(
+        &self,
+        file_id: FileId,
+        dest: &iroh_blobs::store::fs::FsStore,
+    ) -> Result<Manifest> {
+        use iroh_blobs::BlobFormat;
+        use iroh_blobs::api::blobs::AddPathOptions;
+        use iroh_blobs::api::proto::ImportMode;
+
+        let manifest = self.read_manifest(file_id).await?;
+        for chunk in &manifest.chunks {
+            let hash_bytes = *chunk.hash.as_bytes();
+            if dest.has(hash_bytes).await.unwrap_or(false) {
+                continue;
+            }
+            if tokio::fs::metadata(self.whole_path(&chunk.hash))
+                .await
+                .is_ok()
+            {
+                let tag = dest
+                    .add_path_with_opts(AddPathOptions {
+                        path: self.whole_path(&chunk.hash),
+                        format: BlobFormat::Raw,
+                        mode: ImportMode::TryReference,
+                    })
+                    .temp_tag()
+                    .await
+                    .map_err(|e| Error::Store(format!("publish {}: {e}", chunk.hash)))?;
+                // Dropped immediately, exactly as `reference_whole` does:
+                // this store's liveness is never a tags row. `dest` has
+                // no manifests of its own and no GC configured against
+                // it either, so nothing sweeps this once the tag is
+                // gone.
+                drop(tag);
+            } else {
+                let bytes = self.read_chunk(chunk.hash).await?;
+                let tag = dest
+                    .add_bytes(bytes)
+                    .temp_tag()
+                    .await
+                    .map_err(|e| Error::Store(format!("publish {}: {e}", chunk.hash)))?;
+                drop(tag);
+            }
+        }
+        Ok(manifest)
+    }
+
     /// Is this one chunk in the blob store? The chunk-level presence
     /// probe replica reconcile plans transfers with (issue #264):
     /// "resumable at chunk level" means asking this per chunk and

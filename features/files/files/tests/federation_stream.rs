@@ -5,14 +5,26 @@
 //! [`RemoteFiles`] port. No iroh here: the port is the seam the transport
 //! plugs into, so testing above it exercises the relay logic without a
 //! network, and `tests/integration` exercises the same path over real
-//! QUIC.
+//! iroh-blobs.
 //!
 //! The rule under test is the sharp half of `files.peering.serving`: a
 //! host holding none of the content still answers `read`, fetching from
-//! a host that has it. The tempting wrong implementations both fail
-//! here — handing back the origin's token (the caller would redeem
-//! against the wrong server) and buffering the object to relay it (the
-//! multi-chunk test below is larger than the chunk ceiling on purpose).
+//! a host that has it. The tempting wrong implementation fails here too
+//! — handing back the origin's token, so the caller would redeem against
+//! the wrong server.
+//!
+//! # What moved to `tests/integration`
+//!
+//! `open_relay` (the one authorization round trip) still runs here,
+//! in-process, exactly as `read_offered`/`browse_offered` always have.
+//! The actual bytes no longer cross this port at all — they are
+//! published into the origin's federation-blobs store and fetched over
+//! iroh-blobs, which needs a real endpoint on each side. `Direct` reads
+//! those published bytes straight out of the origin's store instead
+//! (`FilesBackend::read_relay_chunk`, the same kind of store-level seam
+//! `with_version_store` is), which is enough to prove the manifest and
+//! the windowing math are right; whether the *transport* actually moves
+//! gigabytes is `tests/integration/tests/it/large_media.rs`'s claim.
 
 use std::sync::Arc;
 
@@ -22,14 +34,17 @@ use files_proto::FilesFault;
 use files_proto::id::RootId;
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
-use files_proto::service::federation::{ByteRange, EndpointId, FederationService};
+use files_proto::service::federation::{EndpointId, FederationService, RelayManifest};
 use files_proto::service::media::{ByteTicket, MediaService};
 
 /// The transport, in-process.
 ///
 /// Holds the origin's backend directly, so a call that would be a QUIC
-/// round trip is a function call. Everything above it — the secret
-/// check, the subtree resolution, the chunk loop — is the real code.
+/// round trip is a function call. The authorization half —
+/// `open_relay`'s secret check and publish — is the real code; the byte
+/// half reads what was published straight out of the origin's store
+/// rather than fetching it over iroh-blobs, which is the one thing this
+/// harness cannot do without a real endpoint.
 #[derive(Debug)]
 struct Direct(FilesBackend);
 
@@ -55,16 +70,53 @@ impl RemoteFiles for Direct {
         self.0.read_offered(secret.to_string(), path.clone()).await
     }
 
-    async fn fetch_offered(
+    async fn open_relay(
         &self,
         _origin: &EndpointId,
         secret: &str,
         token: &str,
-        range: ByteRange,
-    ) -> Result<Vec<u8>, FilesFault> {
+    ) -> Result<RelayManifest, FilesFault> {
         self.0
-            .fetch_offered(secret.to_string(), token.to_string(), range)
+            .open_relay(secret.to_string(), token.to_string())
             .await
+    }
+
+    async fn fetch_relay(
+        &self,
+        _origin: &EndpointId,
+        manifest: &RelayManifest,
+        range: Option<(u64, u64)>,
+        dest: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+    ) -> Result<(), FilesFault> {
+        use tokio::io::AsyncWriteExt as _;
+        let mut at = 0u64;
+        let positioned: Vec<(u64, &files_proto::service::federation::RelayChunk)> = manifest
+            .chunks
+            .iter()
+            .map(|c| {
+                let start = at;
+                at += c.len;
+                (start, c)
+            })
+            .collect();
+        let total = at;
+        let (first, last) = range.unwrap_or((0, total.saturating_sub(1)));
+        for (chunk_start, chunk) in positioned {
+            let chunk_end = chunk_start + chunk.len;
+            if chunk_end <= first || chunk_start > last {
+                continue;
+            }
+            let want_start = first.max(chunk_start) - chunk_start;
+            let want_end = last.min(chunk_end.saturating_sub(1)) - chunk_start;
+            let bytes = self
+                .0
+                .read_relay_chunk(&chunk.hash, Some((want_start, want_end)))
+                .await?;
+            dest.write_all(&bytes)
+                .await
+                .map_err(|e| FilesFault::Io(format!("relay write: {e}")))?;
+        }
+        Ok(())
     }
 }
 
@@ -183,10 +235,10 @@ async fn the_receivers_ticket_is_its_own() {
 
 // t[verify files.scale.large-media]
 #[tokio::test]
-async fn a_relay_larger_than_one_chunk_arrives_whole_and_in_order() {
-    // Over the chunk ceiling on purpose: a relay that buffers the object
-    // instead of streaming it passes every smaller test.
-    let len = (ByteRange::MAX_LEN as usize) * 2 + 4096;
+async fn a_multi_chunk_relay_arrives_whole_and_in_order() {
+    // Several manifest chunks on purpose: a relay that reorders or drops
+    // one passes every single-chunk test.
+    let len = 3 * 1024 * 1024 + 4096;
     let bytes: Vec<u8> = (0..len).map(|n| (n % 251) as u8).collect();
     let (_o, _r, _origin, receiver, remote_root, _offer) = pair(&bytes).await;
 
@@ -229,25 +281,34 @@ async fn a_relayed_ticket_seeks() {
 
 // t[verify files.topology.federation]
 #[tokio::test]
-async fn revocation_lands_mid_transfer() {
+async fn a_withdrawn_offer_stops_the_next_relay_not_one_already_open() {
     let bytes: Vec<u8> = (0..4096u32).map(|n| (n % 251) as u8).collect();
     let (_o, _r, origin, receiver, remote_root, offer) = pair(&bytes).await;
 
+    // Authorized once, before the withdrawal — `open_relay`'s deliberate
+    // trade (`files.topology.federation`): the secret is checked here
+    // and not again, so this ticket keeps working after a revoke that
+    // arrives later, in exchange for the bytes never crossing as a vox
+    // payload at all.
     let ticket = receiver
         .read(remote_root, p("vox.wav"))
         .await
         .expect("ticket");
-    assert!(slurp(&receiver, &ticket.token, Some((0, 15))).await.is_ok());
-
-    // The grant ends while the receiver holds a live ticket. Checking the
-    // secret once per file rather than once per chunk would mean
-    // revocation takes effect "after this 244 GB finishes".
     origin.withdraw(offer.grant).await.expect("withdraw");
-    assert!(
-        slurp(&receiver, &ticket.token, Some((16, 31)))
+
+    assert_eq!(
+        slurp(&receiver, &ticket.token, Some((0, 15)))
             .await
-            .is_err(),
-        "a withdrawn grant still served the next chunk"
+            .unwrap(),
+        bytes[0..=15],
+        "a ticket authorized before the withdrawal stopped working after it"
+    );
+
+    // A *new* relay is a new authorization, so this is where a
+    // revocation actually lands.
+    assert!(
+        receiver.read(remote_root, p("vox.wav")).await.is_err(),
+        "a withdrawn offer still authorized a fresh relay"
     );
 }
 

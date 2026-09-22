@@ -57,7 +57,7 @@ use architect::iroh_link::{self, iroh};
 use files_proto::error::FilesFault;
 use files_proto::model::BrowseEntry;
 use files_proto::path::RootPath;
-use files_proto::service::federation::{ByteRange, EndpointId};
+use files_proto::service::federation::{EndpointId, RelayChunk, RelayManifest};
 use files_proto::service::media::ByteTicket;
 use tokio::sync::Mutex;
 
@@ -76,10 +76,15 @@ use crate::lane::federation::RemoteFiles;
 /// builders can be topped up afterwards and every endpoint sees it.
 pub type AddressBook = iroh::address_lookup::memory::MemoryLookup;
 
-/// Bind an endpoint that serves and dials the vox protocol.
+/// Bind an endpoint that serves and dials the vox protocol, and serves
+/// (over a second ALPN) an iroh-blobs relay.
 ///
-/// [`architect::iroh_link::bind_endpoint`] with one addition: an
-/// optional [`AddressBook`]. The n0 preset underneath is unchanged —
+/// [`architect::iroh_link::bind_endpoint`] with two additions: an
+/// optional [`AddressBook`], and `iroh_blobs::ALPN` alongside vox's own.
+/// ALPN is negotiated once per QUIC connection, so the two never share
+/// one — [`peer::serve_over_iroh`](crate::peer::serve_over_iroh)'s
+/// accept loop dispatches an incoming connection to whichever protocol
+/// it negotiated. The n0 preset underneath is otherwise unchanged —
 /// relay, DNS lookup and pkarr publishing — so an endpoint bound with a
 /// book still discovers everything it would have discovered, and merely
 /// also knows what it was told.
@@ -89,7 +94,10 @@ pub async fn bind_endpoint(
 ) -> Result<iroh::Endpoint, iroh::endpoint::BindError> {
     let mut builder = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
         .secret_key(secret_key)
-        .alpns(vec![iroh_link::VOX_ALPN.to_vec()]);
+        .alpns(vec![
+            iroh_link::VOX_ALPN.to_vec(),
+            iroh_blobs::ALPN.to_vec(),
+        ]);
     if let Some(book) = book {
         builder = builder.address_lookup(book);
     }
@@ -126,6 +134,29 @@ pub struct IrohRemotes {
     /// One live connection per origin. See the module docs on why this
     /// is pooled and how a stale entry is noticed.
     pool: Mutex<HashMap<iroh::EndpointId, iroh::endpoint::Connection>>,
+    /// One live iroh-blobs connection per origin — a second pool because
+    /// ALPN is negotiated per QUIC connection, so this cannot share an
+    /// entry with `pool` even when it is the same origin. This is the
+    /// connection `fetch_relay` reuses across every chunk and every
+    /// file, which is the whole point: one handshake per origin ever,
+    /// not one per megabyte.
+    blobs_pool: Mutex<HashMap<iroh::EndpointId, iroh::endpoint::Connection>>,
+    /// Where `fetch_relay` receives into, on disk rather than in
+    /// memory — an in-memory receiver held the whole object's worth of
+    /// pages by the time a big fetch finished (measured, not assumed:
+    /// bounded per-window buffers still didn't bound *this*, because
+    /// what a `MemStore` holds is not released the moment its handle is
+    /// dropped). Writing to a file-backed store instead means every
+    /// byte a window receives is on disk, not the heap, before it is
+    /// read back out to hand to the caller — a page a normal write
+    /// syscall touches does not count toward this process's RSS the way
+    /// a `MemStore`'s pages apparently do.
+    ///
+    /// Held for the endpoint's lifetime (an ephemeral `TempDir`, gone
+    /// at drop) rather than reopened per fetch: content-addressed, so a
+    /// second fetch of a chunk this org already relayed once — from any
+    /// origin — costs nothing.
+    scratch: Arc<tokio::sync::OnceCell<(tempfile::TempDir, iroh_blobs::store::fs::FsStore)>>,
 }
 
 impl IrohRemotes {
@@ -135,6 +166,8 @@ impl IrohRemotes {
         Self {
             endpoint,
             pool: Mutex::new(HashMap::new()),
+            blobs_pool: Mutex::new(HashMap::new()),
+            scratch: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -226,6 +259,55 @@ impl IrohRemotes {
             .map_err(|e| FilesFault::Io(format!("open stream: {e}")))?;
         Ok(iroh_link::IrohLink::new(connection, send, recv))
     }
+
+    /// The pooled iroh-blobs connection to `id`, dialling fresh if there
+    /// is none or the pooled one has died.
+    ///
+    /// Mirrors `redial`/`pooled` exactly, on a separate pool: ALPN is
+    /// negotiated once per QUIC connection, so a vox connection to `id`
+    /// cannot double as this one. `fetch_relay` calls this once per
+    /// origin, ever (until the connection dies) — every chunk after
+    /// that reuses it as a fresh multiplexed stream, which is what a
+    /// megabyte cost a fresh handshake for before.
+    async fn blobs_connection(
+        &self,
+        id: iroh::EndpointId,
+    ) -> Result<iroh::endpoint::Connection, FilesFault> {
+        if let Some(connection) = self.blobs_pool.lock().await.get(&id).cloned()
+            && connection.close_reason().is_none()
+        {
+            return Ok(connection);
+        }
+        let dialled =
+            tokio::time::timeout(DIAL_TIMEOUT, self.endpoint.connect(id, iroh_blobs::ALPN)).await;
+        let connection = match dialled {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(e)) => return Err(FilesFault::Io(format!("blobs dial {id}: {e}"))),
+            Err(_elapsed) => {
+                return Err(FilesFault::Unavailable {
+                    path: RootPath::root(),
+                });
+            }
+        };
+        self.blobs_pool.lock().await.insert(id, connection.clone());
+        Ok(connection)
+    }
+
+    /// The on-disk store `fetch_relay` receives into. See the field doc
+    /// on why this is a file-backed store rather than a `MemStore`.
+    async fn scratch_store(&self) -> Result<&iroh_blobs::store::fs::FsStore, FilesFault> {
+        self.scratch
+            .get_or_try_init(|| async {
+                let dir = tempfile::tempdir()
+                    .map_err(|e| FilesFault::Io(format!("relay scratch dir: {e}")))?;
+                let store = iroh_blobs::store::fs::FsStore::load(dir.path())
+                    .await
+                    .map_err(|e| FilesFault::Io(format!("opening relay scratch store: {e}")))?;
+                Ok((dir, store))
+            })
+            .await
+            .map(|(_, store)| store)
+    }
 }
 
 /// Unwrap a vox error into the fault the origin actually raised.
@@ -272,17 +354,112 @@ impl RemoteFiles for IrohRemotes {
             .map_err(fault)
     }
 
-    async fn fetch_offered(
+    async fn open_relay(
         &self,
         origin: &EndpointId,
         secret: &str,
         token: &str,
-        range: ByteRange,
-    ) -> Result<Vec<u8>, FilesFault> {
+    ) -> Result<RelayManifest, FilesFault> {
         self.lane(origin)
             .await?
-            .fetch_offered(secret.to_string(), token.to_string(), range)
+            .open_relay(secret.to_string(), token.to_string())
             .await
             .map_err(fault)
+    }
+
+    async fn fetch_relay(
+        &self,
+        origin: &EndpointId,
+        manifest: &RelayManifest,
+        range: Option<(u64, u64)>,
+        dest: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+    ) -> Result<(), FilesFault> {
+        let id: iroh::EndpointId = origin
+            .0
+            .parse()
+            .map_err(|e| FilesFault::Io(format!("not an endpoint id: {} ({e})", origin.0)))?;
+
+        // `(cumulative start, chunk)` for every chunk in order — the
+        // manifest's own math for turning an absolute byte range into
+        // which chunks it overlaps.
+        let mut at = 0u64;
+        let positioned: Vec<(u64, &RelayChunk)> = manifest
+            .chunks
+            .iter()
+            .map(|c| {
+                let start = at;
+                at += c.len;
+                (start, c)
+            })
+            .collect();
+        let total = at;
+        let (first, last) = range.unwrap_or((0, total.saturating_sub(1)));
+
+        // Bounded regardless of how large a "chunk" is: the whole-tier
+        // case is one chunk for the entire file, so without this a
+        // single-chunk multi-gigabyte take would hold itself whole in
+        // memory on its way through — precisely the failure this relay
+        // exists to avoid.
+        const WINDOW: u64 = 4 << 20;
+
+        let connection = self.blobs_connection(id).await?;
+        let scratch = self.scratch_store().await?;
+        use tokio::io::AsyncWriteExt as _;
+        for (chunk_start, chunk) in positioned {
+            let chunk_end = chunk_start + chunk.len;
+            if chunk_end <= first || chunk_start > last {
+                continue;
+            }
+            let hash = iroh_blobs::Hash::from(
+                blake3::Hash::from_hex(&chunk.hash)
+                    .map_err(|e| FilesFault::Io(format!("{}: not a hash: {e}", chunk.hash)))?
+                    .as_bytes()
+                    .to_owned(),
+            );
+            // The overlap with the caller's window, relative to this
+            // chunk's own start.
+            let want_start = first.max(chunk_start) - chunk_start;
+            let want_end = last.min(chunk_end.saturating_sub(1)) - chunk_start;
+            let mut cursor = want_start;
+            while cursor <= want_end {
+                let window_end = (cursor + WINDOW - 1).min(want_end);
+                // Received into the on-disk `scratch` store, then read
+                // back out and forgotten from `dest`'s point of view
+                // once written — which is what keeps a multi-gigabyte
+                // fetch bounded to one window of *this process's own
+                // memory* rather than growing for the whole call. The
+                // bytes on disk persist (see the field doc on `scratch`
+                // for why that is the point, not a leak).
+                let ranges: iroh_blobs::protocol::ChunkRanges =
+                    iroh_blobs::protocol::ChunkRangesExt::bytes(cursor..window_end + 1);
+                let request = iroh_blobs::protocol::GetRequest::blob_ranges(hash, ranges.clone());
+                scratch
+                    .remote()
+                    .execute_get(connection.clone(), request)
+                    .complete()
+                    .await
+                    .map_err(|e| {
+                        FilesFault::Io(format!("{origin}: fetching {}: {e}", chunk.hash))
+                    })?;
+                let bytes = scratch
+                    .blobs()
+                    .export_bao(hash, ranges)
+                    .data_to_vec()
+                    .await
+                    .map_err(|e| {
+                        FilesFault::Io(format!("{origin}: reading fetched {}: {e}", chunk.hash))
+                    })?;
+                // `ChunkRangesExt::bytes` rounded [cursor, window_end]
+                // up to whole BLAKE3 chunks to fetch something provable
+                // — undo that here, or a caller asking for exactly 100
+                // bytes gets back up to 2047 extra ones either side.
+                let bytes = crate::lane::federation::trim_to_byte_range(bytes, cursor, window_end);
+                dest.write_all(&bytes)
+                    .await
+                    .map_err(|e| FilesFault::Io(format!("relay write: {e}")))?;
+                cursor = window_end + 1;
+            }
+        }
+        Ok(())
     }
 }

@@ -4440,9 +4440,17 @@ pub async fn serve_org_iroh(
     gate: snapshot::WriteGate,
     endpoint: &architect::iroh_link::iroh::Endpoint,
 ) {
-    files::peer::serve_over_iroh(endpoint, move |bearer| {
-        org_router_guarded(&org, gate.clone(), bearer)
-    })
+    // The federation relay's serving half: chunks `open_relay` publishes
+    // are served over the second ALPN `files::bind_endpoint` already
+    // advertises. `serve_over_iroh` opens the org's federation-blobs
+    // store itself, lazily, on the first such connection — never at
+    // boot, and never for an org that happens not to federate.
+    let files_backend = org.files.clone();
+    files::peer::serve_over_iroh(
+        endpoint,
+        move |bearer| org_router_guarded(&org, gate.clone(), bearer),
+        Some(files_backend),
+    )
     .await;
 }
 

@@ -60,6 +60,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # own rather than this harness's `Session`.
 task-ui-core = { workspace = true }
 serde_json = { workspace = true }
+# `large_media.rs` checks that gigabytes arrive intact by hashing them as
+# they stream past, rather than holding them to compare.
+blake3 = { workspace = true }
 # `wiki_promote.rs` stamps a promotion with an explicit instant so the
 # rendered documents are a pure function of their inputs.
 chrono = { workspace = true }

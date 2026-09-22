@@ -39,8 +39,8 @@ use files_proto::model::BrowseEntry;
 use files_proto::path::RootPath;
 use files_proto::service::access::Capability;
 use files_proto::service::federation::{
-    AcceptedSubtree, ByteRange, EndpointId, FederationService, LocalContent, Offer, Remote,
-    resolve_content_ref,
+    AcceptedSubtree, EndpointId, FederationService, LocalContent, Offer, RelayChunk, RelayManifest,
+    Remote, resolve_content_ref,
 };
 use files_proto::service::media::ByteTicket;
 use uuid::Uuid;
@@ -75,20 +75,29 @@ pub trait RemoteFiles: Send + Sync + std::fmt::Debug + 'static {
         path: &RootPath,
     ) -> Result<ByteTicket, FilesFault>;
 
-    /// Pull one bounded chunk of a ticket `origin` minted.
-    ///
-    /// Bounded is the point: this server is relaying, so an unbounded
-    /// read would put the whole object through its memory on the way
-    /// past — the failure `files.scale.large-media` exists to prevent,
-    /// and it does not stop being that failure because the bytes are
-    /// someone else's.
-    async fn fetch_offered(
+    /// Authorize a relay of a ticket `origin` minted, once, and learn
+    /// which content hashes it published — see
+    /// [`FederationService::open_relay`] for the trade this makes.
+    async fn open_relay(
         &self,
         origin: &EndpointId,
         secret: &str,
         token: &str,
-        range: ByteRange,
-    ) -> Result<Vec<u8>, FilesFault>;
+    ) -> Result<RelayManifest, FilesFault>;
+
+    /// Fetch bytes `origin` published via [`Self::open_relay`], over
+    /// iroh-blobs rather than a vox call per megabyte.
+    ///
+    /// Bounded memory is still the point: `dest` is written to as bytes
+    /// arrive, so the whole object never sits in memory on the way past
+    /// regardless of how this is implemented underneath.
+    async fn fetch_relay(
+        &self,
+        origin: &EndpointId,
+        manifest: &RelayManifest,
+        range: Option<(u64, u64)>,
+        dest: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+    ) -> Result<(), FilesFault>;
 }
 
 /// What the origin keeps about an offer it has made.
@@ -136,6 +145,36 @@ fn read<T>(backend: &FilesBackend, f: impl FnOnce(&Federated) -> T) -> T {
 
 fn write<T>(backend: &FilesBackend, f: impl FnOnce(&mut Federated) -> T) -> T {
     FEDERATION.write(backend, f)
+}
+
+/// BLAKE3's own chunk size — 1024 raw bytes per leaf, fixed by the
+/// algorithm's spec, not an iroh-blobs implementation detail that could
+/// change.
+///
+/// `iroh_blobs::protocol::ChunkRangesExt::bytes` rounds a byte range
+/// *up* to whole chunks of this size before fetching, because that is
+/// the smallest unit BLAKE3's own tree can prove — a sub-chunk range has
+/// no hash of its own to verify against. [`trim_to_byte_range`] is the
+/// other half: undoing that rounding once the (verified) chunk-aligned
+/// bytes are back, so a caller who asked for 100 bytes gets 100 bytes.
+const BLAKE3_CHUNK_LEN: u64 = 1024;
+
+/// Trim bytes returned for a chunk-rounded fetch down to the exact
+/// `[first, last]` (inclusive) byte range that was actually asked for.
+///
+/// `bytes` starts at the *chunk-aligned* offset the rounding produced —
+/// `first` rounded down to a multiple of [`BLAKE3_CHUNK_LEN`] — not at
+/// `first` itself, which is the one fact a caller needs to know to make
+/// sense of what came back.
+pub(crate) fn trim_to_byte_range(mut bytes: Vec<u8>, first: u64, last: u64) -> Vec<u8> {
+    let aligned_start = (first / BLAKE3_CHUNK_LEN) * BLAKE3_CHUNK_LEN;
+    let skip = usize::try_from(first - aligned_start).unwrap_or(0);
+    let want = usize::try_from(last - first + 1).unwrap_or(0);
+    if skip > 0 {
+        bytes.drain(..skip.min(bytes.len()));
+    }
+    bytes.truncate(want);
+    bytes
 }
 
 /// A 256-bit secret, from two v4 UUIDs.
@@ -227,11 +266,20 @@ impl FilesBackend {
         match port.read_offered(&origin, &secret, path).await {
             Ok(remote) => {
                 self.mark_reachable(root_id, true);
-                // A local ticket standing for a remote object. Redemption
-                // relays chunk by chunk, so nothing here is downloaded
-                // up front — a preview that plays the first second of a
-                // 4 GB reel transfers the first second.
-                Ok(self.mint_relay_ticket(origin, secret, remote))
+                // The one authorization round trip `files.topology.
+                // federation`'s relay tier makes: the secret is checked
+                // here, once, and the origin publishes this file's
+                // content for direct fetch. Every redemption after this
+                // is an iroh-blobs fetch, not a vox call — which is also
+                // why it is no longer lazy per byte range the way the
+                // old per-chunk relay was: the origin has no cheaper way
+                // to publish "the first second" than "the file", since
+                // publishing is a manifest-order operation, not a
+                // window one. For a whole-tier take — the case this
+                // exists for — publishing is a link, not a copy, so the
+                // cost is an outboard computation regardless of size.
+                let manifest = port.open_relay(&origin, &secret, &remote.token).await?;
+                Ok(self.mint_relay_ticket(origin, remote, manifest))
             }
             Err(fault) => {
                 self.mark_reachable(root_id, false);
@@ -464,26 +512,37 @@ impl FederationService for FilesBackend {
             .map_err(|_| FilesFault::PathNotFound(path))
     }
 
-    async fn fetch_offered(
-        &self,
-        secret: String,
-        token: String,
-        range: ByteRange,
-    ) -> Result<Vec<u8>, FilesFault> {
-        // Re-checked on every chunk, not once per file: a grant
-        // withdrawn during a large transfer has to stop that transfer,
-        // or revocation means "after this 244 GB finishes".
+    /// Authorize a relay of `token`, once, and publish its content.
+    ///
+    /// The secret is checked here — a single time, which is
+    /// `files.topology.federation`'s deliberate trade against an
+    /// earlier design that re-checked it on every chunk: a revocation
+    /// after this call no longer stops a transfer already under way. In
+    /// return, the actual bytes never cross as a vox call's payload at
+    /// all — they are published into this server's federation-blobs
+    /// store, for the receiver to fetch over iroh-blobs directly.
+    async fn open_relay(&self, secret: String, token: String) -> Result<RelayManifest, FilesFault> {
         self.live_offer(&secret, &RootPath::root())?;
 
-        let range = ByteRange::new(range.offset, range.len);
-        let last = range
-            .offset
-            .saturating_add(u64::from(range.len))
-            .saturating_sub(1);
-        let mut buf = Vec::new();
-        self.redeem_bytes(&token, Some((range.offset, last)), &mut buf)
-            .await?;
-        Ok(buf)
+        let (root_id, file_id) = self.relay_source_for(&token)?;
+        let chunks = self
+            .with_version_store(root_id.get(), |vs| vs.chunks().clone())
+            .map_err(|e| FilesFault::Store(e.to_string()))?;
+        let dest = self.federation_blobs().await?;
+        let manifest = chunks
+            .publish_for_relay(file_id, dest)
+            .await
+            .map_err(|e| FilesFault::Io(format!("publishing {file_id:?} for relay: {e}")))?;
+        Ok(RelayManifest {
+            chunks: manifest
+                .chunks
+                .into_iter()
+                .map(|c| RelayChunk {
+                    hash: c.hash.to_hex().to_string(),
+                    len: c.len,
+                })
+                .collect(),
+        })
     }
 
     async fn browse_offered(

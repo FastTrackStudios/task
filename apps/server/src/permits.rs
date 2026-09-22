@@ -613,10 +613,14 @@ table!(FILES_REVIEW, "files-review", "files/**", [
 // read that carries an audit line — the one call on this surface whose
 // caller is not a member of this org.
 //
-// `read_offered` and `fetch_offered` are the same case with bytes
-// attached: `fetch_offered` is the second method on the v2 surface that
-// moves file content, and it does so to a caller on another server, so
-// `dl` here is the tier it would have earned even without the audit.
+// `read_offered` and `open_relay` are the same case with bytes attached:
+// `open_relay` is the second method on the v2 surface that moves file
+// content, and it does so to a caller on another server, so `dl` here
+// is the tier it would have earned even without the audit. It moves no
+// bytes itself — the actual content now crosses over iroh-blobs, off
+// this RPC surface entirely — but it is the one authorization check
+// standing between a caller and that transfer, so it is audited exactly
+// as the per-chunk `fetch_offered` it replaced was.
 //
 // Which is why the three `*_offered` methods sit on `public/**` rather
 // than `files/**`, and it is not a relaxation: their credential is the
@@ -649,7 +653,7 @@ const FILES_FEDERATION: ServicePermits = ServicePermits {
         MethodPermit::new("forget", Action::WRITE, "files/**").audited(),
         MethodPermit::new("browse_offered", Action::READ, "public/files-offer").audited(),
         MethodPermit::new("read_offered", Action::READ, "public/files-offer").audited(),
-        MethodPermit::new("fetch_offered", Action::READ, "public/files-offer").audited(),
+        MethodPermit::new("open_relay", Action::READ, "public/files-offer").audited(),
     ],
 };
 
@@ -868,7 +872,7 @@ table!(WIKI_EDITS, "wiki-edits", "wiki/edits/**", [
 // source was consulted, and cross-server subscription could not exist.
 //
 // So they sit on `public/**`, exactly as `browse_offered` /
-// `read_offered` / `fetch_offered` do one lane over, and for the same
+// `read_offered` / `open_relay` do one lane over, and for the same
 // reason: the far side's authority is not a role in this org.
 //
 // **What decides access is the source's own declaration**, checked inside

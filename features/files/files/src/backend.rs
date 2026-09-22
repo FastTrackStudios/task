@@ -41,9 +41,9 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use files_proto::{
-    BrowseEntry, ChainEntry, CheckpointInfo, FileRootInfo, FilesError, FilesEvent, FilesService,
-    GcReport, HydrationChange, HydrationReport, NamedVersion, ProjectVersion, RootFlavor,
-    SavePoint, SnapshotInfo, VersionRef,
+    BrowseEntry, ChainEntry, CheckpointInfo, FileRootInfo, FilesError, FilesEvent, FilesFault,
+    FilesService, GcReport, HydrationChange, HydrationReport, NamedVersion, ProjectVersion,
+    RootFlavor, SavePoint, SnapshotInfo, VersionRef,
 };
 use files_store::version::VersionStoreBackend;
 use jj_lib::backend::{Backend, ChangeId, CommitId};
@@ -359,6 +359,13 @@ pub struct FilesBackend {
     /// these state-shaped payloads (same convention as
     /// `task::TaskBackend`).
     events: architect::PubSub<FilesEvent>,
+    /// The store [`crate::lane::federation`]'s `open_relay` publishes
+    /// into and a `net_protocol` handler serves from — see
+    /// [`FilesBackend::federation_blobs`]. Opened lazily rather than at
+    /// construction: most backends (every test that never federates)
+    /// never need it, and opening is async where `FilesBackend::new` is
+    /// not.
+    federation_blobs: Arc<tokio::sync::OnceCell<iroh_blobs::store::fs::FsStore>>,
 }
 
 // Manual impl: `PubSub` and the repo cache carry no `Debug`.
@@ -512,6 +519,58 @@ impl FilesBackend {
             rendition_gen_locks: Arc::new(Mutex::new(HashMap::new())),
             rendition_open_lock: Arc::new(tokio::sync::Mutex::new(())),
             events: architect::PubSub::sliding(256),
+            federation_blobs: Arc::new(tokio::sync::OnceCell::new()),
+        })
+    }
+
+    /// The iroh-blobs store [`crate::lane::federation`]'s `open_relay`
+    /// publishes into, opened on first use at `<data_dir>/federation-blobs`.
+    ///
+    /// Separate from every root's own per-root chunk store: a federation
+    /// relay needs one store a single `net_protocol` handler can serve
+    /// the whole org from, and roots each have their own. What crosses
+    /// into it is published on demand — see
+    /// [`files_store::chunk::ChunkStore::publish_for_relay`] — never the
+    /// whole org up front.
+    pub async fn federation_blobs(&self) -> Result<&iroh_blobs::store::fs::FsStore, FilesFault> {
+        self.federation_blobs
+            .get_or_try_init(|| async {
+                iroh_blobs::store::fs::FsStore::load(self.data_dir.join("federation-blobs"))
+                    .await
+                    .map_err(|e| FilesFault::Io(format!("opening federation-blobs store: {e}")))
+            })
+            .await
+    }
+
+    /// Read a relay-published chunk's bytes, ranged.
+    ///
+    /// The store-level seam a test harness with no real network reads
+    /// through, the way [`FilesBackend::with_version_store`] is a seam
+    /// for store-level properties invisible at the RPC surface: a real
+    /// [`crate::lane::federation::RemoteFiles`] fetches this over
+    /// iroh-blobs and a connection; a `Direct`, in-process port has
+    /// neither, and reads the same published bytes directly instead.
+    pub async fn read_relay_chunk(
+        &self,
+        hash_hex: &str,
+        range: Option<(u64, u64)>,
+    ) -> Result<Vec<u8>, FilesFault> {
+        let hash = blake3::Hash::from_hex(hash_hex)
+            .map_err(|e| FilesFault::Io(format!("{hash_hex}: not a hash: {e}")))?;
+        let store = self.federation_blobs().await?;
+        let ranges = match range {
+            Some((first, last)) => iroh_blobs::protocol::ChunkRangesExt::bytes(first..last + 1),
+            None => iroh_blobs::protocol::ChunkRanges::all(),
+        };
+        let bytes = store
+            .blobs()
+            .export_bao(iroh_blobs::Hash::from(*hash.as_bytes()), ranges)
+            .data_to_vec()
+            .await
+            .map_err(|e| FilesFault::Io(format!("reading published {hash_hex}: {e}")))?;
+        Ok(match range {
+            Some((first, last)) => crate::lane::federation::trim_to_byte_range(bytes, first, last),
+            None => bytes,
         })
     }
 

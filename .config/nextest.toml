@@ -5,6 +5,30 @@
 fail-fast = true
 status-level = "pass"
 slow-timeout = { period = "2s", terminate-after = 2 }
+# Capped for the same reason `profile.ci` already caps it (see that
+# profile's own comment): every `iroh_blobs::store::fs::FsStore` open —
+# one per File Root, and now also one per org that federates
+# (`files.topology.federation`'s relay store) — spawns its own
+# dedicated multi-thread tokio runtime, sized to every core by default.
+# At full, uncapped concurrency on a 32-core box this reliably crashed
+# the suite: dozens of test binaries opening several such stores each,
+# all within the same few seconds, hit `EAGAIN` on `pthread_create`
+# ("OS can't spawn worker thread") — not a leak, a burst. One test's
+# `.expect()` on that turns into a real assertion failure; the crash
+# that actually takes the whole binary down is `notify`'s `INotifyWatcher`
+# panicking in `Drop` when its already-dead event loop can't be told to
+# shut down, which is what turns one starved thread spawn into a dozen
+# unrelated-looking failures in whatever else shared that process.
+# Confirmed empirically (2026-09-22): 32 threads flakes, 16 (CI's own
+# number) and 6 both run every `integration` test clean.
+test-threads = 16
+
+# `large_media` is a gigabyte measurement, opt-in (`--run-ignored only`);
+# it moves the file four times over, so its budget is minutes, not seconds.
+# Before the package-wide override, because the first match wins.
+[[profile.default.overrides]]
+filter = 'package(integration) and test(/^large_media::/)'
+slow-timeout = { period = "60s", terminate-after = 20 }
 
 # The integration suite is not a unit suite with a wide scope: one test
 # boots two servers on real iroh endpoints, adopts two trees and hires

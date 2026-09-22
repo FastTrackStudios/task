@@ -307,13 +307,20 @@ pub async fn serve_peer(
         files::peer::REPLICA_PERMITS,
     ));
     let router = architect::LayerRouter::new().merge(layer(SyncHost::new(backend)));
-    files::peer::serve_over_iroh(endpoint, move |bearer| {
-        architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(
-            gate.clone(),
-            router.clone(),
-            bearer,
-        )
-    })
+    files::peer::serve_over_iroh(
+        endpoint,
+        move |bearer| {
+            architect::permissions_gate::PermissionsGate::wrap_shared_with_bearer(
+                gate.clone(),
+                router.clone(),
+                bearer,
+            )
+        },
+        // A device replica serves no relay — federation is an org-to-org
+        // thing, and this endpoint's peers are this account's own
+        // devices.
+        None,
+    )
     .await;
 }
 
