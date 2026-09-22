@@ -45,7 +45,7 @@
 //!
 //! So the source becomes a fenced block in the document itself:
 //!
-//! ```text
+//! ````text
 //! ---
 //! type: asset
 //! asset_kind: chart
@@ -59,7 +59,7 @@
 //! ```
 //!
 //! ## Notes
-//! ```
+//! ````
 //!
 //! One file, one path, one CRDT document. Two people editing "a chart"
 //! are editing one markdown document through exactly the path two
