@@ -762,6 +762,10 @@ table!(LINKS, "links", "links/**", [
 #[cfg(feature = "plugin-fasttrackstudio")]
 table!(COLLECTION, "collection", "collections/**", [
     wr "create", rd "get", rd "list", wr "add_item", wr "remove_item", wr "reorder",
+    // `delete` is audited: it removes the ordering itself. Nothing it
+    // gathered goes with it — the songs and charts stay — but a set list
+    // somebody built is work, and its removal is worth a line.
+    wr "rename", wa "delete",
 ]);
 table!(RESOURCES, "resources", "resources/**", [
     rd "transcript", wr "upsert_sermon", rd "list_sermons", rd "sermon", wa "relocate_sermons",

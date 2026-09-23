@@ -499,14 +499,23 @@ session-ui = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag 
 song = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
 
 # ── Facet reflection + vox RPC — the rc.5 fleet pins ──────────────────
-facet = { version = "0.50.0-rc.5", features = ["reflect", "chrono", "uuid"] }
-facet-json = "0.50.0-rc.5"
-vox = { version = "0.10.0-rc.5", default-features = false, features = ["runtime"] }
-vox-core = "0.10.0-rc.5"
-vox-types = "0.10.0-rc.5"
-vox-websocket = "0.10.0-rc.5"
+#
+# Exact (`=`) on purpose. facet's reflection is what encodes the vox
+# handshake schema, so a client on rc.7 and a server on rc.5 do not
+# negotiate — they fail with "schema decode consumed N of M bytes", which
+# reads like a vox bug and is not one. A caret range over a pre-release
+# (`0.50.0-rc.5` alone means `>=0.50.0-rc.5, <0.51.0`) lets one side
+# drift to the next rc on any unrelated `cargo update`; `=` does not.
+# Every sibling repo that dials this server pins the same way. Bump the
+# fleet together or not at all.
+facet = { version = "=0.50.0-rc.5", features = ["reflect", "chrono", "uuid"] }
+facet-json = "=0.50.0-rc.5"
+vox = { version = "=0.10.0-rc.5", default-features = false, features = ["runtime"] }
+vox-core = "=0.10.0-rc.5"
+vox-types = "=0.10.0-rc.5"
+vox-websocket = "=0.10.0-rc.5"
 # `cargo xtask` TS-type generation (xtask/).
-vox-codegen = "0.10.0-rc.5"
+vox-codegen = "=0.10.0-rc.5"
 
 # ── UI framework ──────────────────────────────────────────────────────
 # dioxus 0.8 line — git rev pinned; it must stay in lockstep across every

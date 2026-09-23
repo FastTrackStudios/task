@@ -167,6 +167,30 @@ impl CollectionService for Store {
         Ok(inner.collections.iter().find(|c| c.id == id).cloned())
     }
 
+    fn rename(&self, id: &str, title: String) -> Result<Collection, CollectionError> {
+        if title.trim().is_empty() {
+            return Err(CollectionError::BadRequest(
+                "a collection's title may not be blank".to_string(),
+            ));
+        }
+        let mut inner = self.inner.lock().expect("collection store poisoned");
+        let c = inner.find_mut(id)?;
+        c.title = title;
+        inner.persist()?;
+        inner.find_mut(id).cloned()
+    }
+
+    fn delete(&self, id: &str) -> Result<(), CollectionError> {
+        let mut inner = self.inner.lock().expect("collection store poisoned");
+        let before = inner.collections.len();
+        inner.collections.retain(|c| c.id != id);
+        if inner.collections.len() == before {
+            return Err(CollectionError::NotFound(id.to_string()));
+        }
+        inner.persist()?;
+        Ok(())
+    }
+
     fn list(
         &self,
         org: String,
@@ -394,6 +418,95 @@ mod tests {
             s.create("acme".into(), "Nameless".into(), CollectionKind::new("   ")),
             Err(CollectionError::BadRequest(_))
         ));
+    }
+
+    /// Renaming keeps the collection — the same id, the same items, in
+    /// the same order — because a set list retitled the morning of the
+    /// show is the same set list.
+    #[test]
+    fn renaming_keeps_the_id_and_the_order() {
+        let path = std::env::temp_dir().join(format!("col-{}.jsonl", uuid::Uuid::new_v4()));
+        let s = Store::open(&path);
+        let set = s
+            .create(
+                "acme".into(),
+                "Set A".into(),
+                CollectionKind::new("setlist"),
+            )
+            .unwrap();
+        for song in ["one", "two"] {
+            s.add_item(Placement {
+                collection_id: set.id.clone(),
+                node: NodeRef::song(song),
+                after: None,
+            })
+            .unwrap();
+        }
+
+        let renamed = s.rename(&set.id, "Friday, second set".into()).unwrap();
+        assert_eq!(renamed.id, set.id);
+        assert_eq!(renamed.title, "Friday, second set");
+        assert_eq!(
+            renamed
+                .items
+                .iter()
+                .map(|i| i.node.id.clone())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"],
+            "renaming is not a reordering"
+        );
+        assert!(
+            matches!(
+                s.rename(&set.id, "   ".into()),
+                Err(CollectionError::BadRequest(_))
+            ),
+            "a blank title is refused, as it is on create"
+        );
+        // Persisted, not just held.
+        assert_eq!(
+            Store::open(&path).get(&set.id).unwrap().unwrap().title,
+            "Friday, second set"
+        );
+    }
+
+    /// Deleting a collection deletes the ordering and nothing it ordered.
+    #[test]
+    fn deleting_a_collection_leaves_what_it_gathered() {
+        let path = std::env::temp_dir().join(format!("col-{}.jsonl", uuid::Uuid::new_v4()));
+        let s = Store::open(&path);
+        let set = s
+            .create(
+                "acme".into(),
+                "Set A".into(),
+                CollectionKind::new("setlist"),
+            )
+            .unwrap();
+        let library = s
+            .create(
+                "acme".into(),
+                "Songs".into(),
+                CollectionKind::new("library"),
+            )
+            .unwrap();
+        for c in [&set, &library] {
+            s.add_item(Placement {
+                collection_id: c.id.clone(),
+                node: NodeRef::song("hosanna"),
+                after: None,
+            })
+            .unwrap();
+        }
+
+        s.delete(&set.id).unwrap();
+        assert!(s.get(&set.id).unwrap().is_none());
+        assert!(
+            matches!(s.delete(&set.id), Err(CollectionError::NotFound(_))),
+            "a second delete says so rather than reporting success"
+        );
+        // The song is a node elsewhere; the other collection still holds it.
+        let kept = s.get(&library.id).unwrap().unwrap();
+        assert_eq!(kept.items.len(), 1);
+        assert!(Store::open(&path).get(&set.id).unwrap().is_none());
     }
 
     #[test]

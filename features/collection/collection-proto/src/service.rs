@@ -47,6 +47,19 @@ pub trait CollectionService {
     /// One collection by id, or `None` if absent.
     fn get(&self, id: &str) -> Result<Option<Collection>, CollectionError>;
 
+    /// Retitle one. The id, kind, org and every item stay as they are —
+    /// a set list renamed the morning of the show is the same set list.
+    /// An empty title is refused, as it is on `create`.
+    fn rename(&self, id: &str, title: String) -> Result<Collection, CollectionError>;
+
+    /// Remove the collection itself. The nodes it gathered are untouched:
+    /// a collection is an ordering over things that live elsewhere, so
+    /// deleting one deletes no song, no chart and no file.
+    ///
+    /// `NotFound` when there is no such collection — so a second delete
+    /// says so rather than reporting success.
+    fn delete(&self, id: &str) -> Result<(), CollectionError>;
+
     /// Every collection in `org`, optionally filtered to a single `kind`.
     fn list(
         &self,

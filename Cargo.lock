@@ -23446,9 +23446,9 @@ dependencies = [
 
 [[package]]
 name = "vox-codegen"
-version = "0.10.0-rc.6"
+version = "0.10.0-rc.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d987b384f18d1983a0d9fe41bf011dcdd8184fb184f342ad64fc48de46ecb5d"
+checksum = "c025b3ddad8e17fa86850f2a6b11007ea1d58d6b7b9643f5cf0b5aeb0a6b0b56"
 dependencies = [
  "base64 0.21.7",
  "facet",
