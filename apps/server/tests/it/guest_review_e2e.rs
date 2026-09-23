@@ -81,7 +81,7 @@ fn svc(state: &AppState) -> task_server::share::ShareServiceImpl {
 /// One lane of the guest surface, dialled anonymously at the link.
 async fn guest_client<C>(base: &str, token: &str, pw: &str) -> eyre::Result<C>
 where
-    C: vox_core::FromVoxLane + 'static,
+    C: vox_core::FromVoxLane + vox::MaybeSend + 'static,
 {
     let ws = base.replace("http://", "ws://");
     let suffix = if pw.is_empty() {

@@ -388,7 +388,7 @@ impl TaskClient {
     /// [`org`]: Self::org
     pub async fn server<C>(&self) -> Result<(C, String)>
     where
-        C: vox_core::FromVoxLane + 'static,
+        C: vox_core::FromVoxLane + vox::MaybeSend + 'static,
     {
         if self.is_embedded() {
             let emb = embedded().await?;

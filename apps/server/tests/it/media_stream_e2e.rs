@@ -47,7 +47,7 @@ async fn boot_server() -> eyre::Result<(String, String, tempfile::TempDir)> {
     ))
 }
 
-async fn connect<C: vox_core::FromVoxLane>(url: &str) -> eyre::Result<C> {
+async fn connect<C: vox_core::FromVoxLane + vox::MaybeSend>(url: &str) -> eyre::Result<C> {
     vox::connect_lane(url)
         .establish()
         .await

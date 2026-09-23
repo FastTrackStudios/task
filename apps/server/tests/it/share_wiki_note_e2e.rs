@@ -15,7 +15,7 @@ use crate::support;
 const WIKI_VAULT: &str = "wiki:music-theory";
 const PAGE: &str = "Concepts/Modes.md";
 
-async fn lane<C: vox_core::FromVoxLane>(url: &str) -> C {
+async fn lane<C: vox_core::FromVoxLane + vox::MaybeSend>(url: &str) -> C {
     vox::connect_lane(url)
         .establish()
         .await

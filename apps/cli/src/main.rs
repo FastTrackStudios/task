@@ -1166,7 +1166,7 @@ where
 /// (`(embedded)` in-process).
 async fn establish_server_client<C>(server: Option<&str>) -> eyre::Result<(C, String)>
 where
-    C: vox_core::FromVoxLane + 'static,
+    C: vox_core::FromVoxLane + vox::MaybeSend + 'static,
 {
     client(server).server().await.map_err(client_error)
 }
