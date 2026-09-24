@@ -423,6 +423,10 @@ async fn a_documents_link_opens_the_session_not_its_media() -> eyre::Result<()> 
     // The slice's files, listed as JSON — what a client streaming the
     // session reads first.
     let listed: serde_json::Value = reqwest::get(format!("{link}/list")).await?.json().await?;
+    assert!(
+        listed["commit"].as_str().is_some_and(|c| !c.is_empty()),
+        "the commit listed, for a client to key what it keeps by"
+    );
     let paths: Vec<&str> = listed["entries"]
         .as_array()
         .expect("entries")

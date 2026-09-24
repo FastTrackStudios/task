@@ -911,7 +911,7 @@ pub async fn share_browse_handler(
 }
 
 /// `GET /org/{slug}/share/{token}/list` — the scope's files as JSON
-/// (`{"entries":[{"path":"Media/Proxies/Bass.ogg","size":null}]}`), every
+/// (`{"commit":"…","entries":[{"path":"Media/Proxies/Bass.ogg","size":null}]}`), every
 /// file under it, paths relative to the scope, with the length the byte
 /// routes serve: what a client opening a
 /// shared session reads first (a public demo streams a song by this, then
@@ -993,7 +993,10 @@ pub async fn share_list_handler(
         i64::try_from(entries.len()).unwrap_or(i64::MAX),
     );
     org.shares.log_access(&token, "list", "");
-    axum::Json(serde_json::json!({ "entries": entries })).into_response()
+    // The commit listed: the same commit is the same bytes at every path,
+    // so a client keeping what it fetched (a page's cache) keys it by this
+    // and fetches nothing again until the link's files change.
+    axum::Json(serde_json::json!({ "commit": commit, "entries": entries })).into_response()
 }
 
 /// Where a media file's committed proxy lives: `Media/Bass.wav` →
