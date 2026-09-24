@@ -508,8 +508,9 @@ pub async fn run_song(cmd: SongCmd) -> eyre::Result<()> {
             // takes a chart file from anywhere on disk and still
             // registers `song:<slug>` in the target collection; only
             // where the bytes land moved, and the server decides that.
-            let active = crate::org_ctx::resolve_active(org.as_deref())?;
-            let org_slug = active.root.slug().to_string();
+            // The slug only — everything below goes over RPC, so a
+            // remote session's org is enough (no local org dir).
+            let org_slug = crate::resolve_active_org(org.clone())?;
             let arr_name = arrangement.unwrap_or_else(|| "Default".to_string());
             let key = key.unwrap_or_default();
 

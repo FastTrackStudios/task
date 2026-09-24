@@ -145,6 +145,11 @@ const AUTH: ServicePermits = ServicePermits {
     methods: &[
         MethodPermit::new("sign_up_email_password", Action::WRITE, "auth/signup").audited(),
         MethodPermit::new("sign_in_email_password", Action::READ, "public/auth"),
+        // A device signing in from a phone (architect v0.9.3): public
+        // before there is a session, like password sign-in. Only the
+        // account server that serves /auth/device approves a code.
+        MethodPermit::new("start_device_sign_in", Action::READ, "public/auth"),
+        MethodPermit::new("poll_device_sign_in", Action::READ, "public/auth"),
         MethodPermit::new("current_session", Action::READ, "public/auth"),
         MethodPermit::new("refresh_session", Action::READ, "public/auth"),
         MethodPermit::new("whoami", Action::READ, "public/auth"),

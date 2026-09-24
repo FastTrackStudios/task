@@ -34,6 +34,12 @@ pub(crate) enum AuthCmd {
         /// one's environment.
         #[arg(long, env = "TASK_PASSWORD", hide_env_values = true)]
         password: Option<String>,
+        /// Sign in from another device instead — a phone: this prints a
+        /// code and a link on the account server the Task server trusts
+        /// (its `central_auth`), and finishes by itself once the code is
+        /// approved there. No password on this machine at all.
+        #[arg(long, conflicts_with_all = ["email", "password"])]
+        device: bool,
     },
     /// Create a new email/password user over the org's
     /// `AuthService` and persist the resulting session — like
@@ -409,6 +415,93 @@ async fn resolve_auth_target(org_override: Option<&str>) -> eyre::Result<(String
     Ok((slug, base))
 }
 
+/// The account server `base` trusts — its `central_auth` issuer, from
+/// the same well-known document [`fetch_hosted_orgs`] reads.
+async fn fetch_central_auth(base: &str) -> eyre::Result<String> {
+    let url = format!(
+        "{}/.well-known/task-server.json",
+        ws_base_to_http(&crate::session_store::normalize_server_base(base))
+    );
+    let doc: serde_json::Value = reqwest::get(&url)
+        .await
+        .map_err(|e| eyre::eyre!("fetch {url}: {e}"))?
+        .json()
+        .await
+        .map_err(|e| eyre::eyre!("parse {url}: {e}"))?;
+    doc.get("central_auth")
+        .and_then(serde_json::Value::as_str)
+        .map(|issuer| issuer.trim_end_matches('/').to_owned())
+        .ok_or_else(|| {
+            crate::errors::usage("device sign-in")
+                .cause(format!(
+                    "{base} has no central account server to sign in at"
+                ))
+                .hint("sign in with `task auth login` (email and password) instead")
+                .report()
+        })
+}
+
+/// Sign this machine in from another device (RFC 8628): ask the account
+/// server `base` trusts for a code, show it and its link, and poll until
+/// the code is approved from a signed-in browser — a phone — there.
+async fn device_sign_in(base: &str) -> eyre::Result<architect_auth::proto::AuthSessionBundle> {
+    use architect_auth::proto::{AuthSessionBundle, DeviceSignIn};
+    let issuer = fetch_central_auth(base).await?;
+    let http = reqwest::Client::new();
+    let post = |path: &str, body: serde_json::Value| {
+        http.post(format!("{issuer}/auth/{path}"))
+            .json(&body)
+            .send()
+    };
+    let response = post(
+        "device/code",
+        serde_json::json!({ "client_id": "task-cli" }),
+    )
+    .await
+    .map_err(|e| eyre::eyre!("start device sign-in at {issuer}: {e}"))?;
+    let text = response.text().await?;
+    let device: DeviceSignIn = facet_json::from_str(&text)
+        .map_err(|e| eyre::eyre!("{issuer} did not start a device sign-in ({e}): {text}"))?;
+    println!("To sign this machine in, open this on your phone:");
+    println!();
+    println!("    {issuer}{}", device.verification_uri_complete);
+    println!();
+    println!(
+        "or go to {issuer}{} and enter the code  {}",
+        device.verification_uri, device.user_code
+    );
+    println!();
+    println!("Waiting for it to be approved…");
+    let mut interval =
+        std::time::Duration::from_secs(u64::try_from(device.interval_seconds).unwrap_or(5).max(1));
+    let body = serde_json::json!({ "device_code": device.device_code, "user_agent": "task-cli" });
+    loop {
+        tokio::time::sleep(interval).await;
+        let response = post("device/token", body.clone())
+            .await
+            .map_err(|e| eyre::eyre!("poll device sign-in at {issuer}: {e}"))?;
+        let ok = response.status().is_success();
+        let text = response.text().await?;
+        if ok {
+            return facet_json::from_str::<AuthSessionBundle>(&text)
+                .map_err(|e| eyre::eyre!("{issuer} answered a session this cannot read ({e})"));
+        }
+        // The error's stable code (`AuthFlowError::code`), not its message.
+        let error: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        match error.get("code").and_then(serde_json::Value::as_str) {
+            Some("verification_required") => {}
+            Some("invalid_input") if text.contains("slow_down") => {
+                interval += std::time::Duration::from_secs(5);
+            }
+            Some("permission_denied") => eyre::bail!("the sign-in was refused"),
+            Some("invalid_credentials") => {
+                eyre::bail!("the code expired before it was approved — run the command again")
+            }
+            _ => eyre::bail!("device sign-in at {issuer} failed: {text}"),
+        }
+    }
+}
+
 pub(crate) async fn run_auth(cmd: AuthCmd, org_override: Option<&str>) -> eyre::Result<()> {
     use architect_auth::commands::CurrentSession;
     use architect_auth::proto::{AuthServiceClient, SignInEmailPassword, SignUpEmailPassword};
@@ -650,7 +743,27 @@ pub(crate) async fn run_auth(cmd: AuthCmd, org_override: Option<&str>) -> eyre::
                 println!("  re-run `task auth set-profile` to retry those");
             }
         }
-        AuthCmd::Login { email, password } => {
+        AuthCmd::Login { device: true, .. } => {
+            let (slug, base) = resolve_auth_target(org_override).await?;
+            let bundle = device_sign_in(&base).await?;
+            let email = bundle.user.email.clone().unwrap_or_default();
+            let mut sess = crate::session_store::load()?
+                .unwrap_or_else(crate::session_store::CliSession::empty);
+            let key = sess.record_login(
+                &slug,
+                &base,
+                bundle.user.id,
+                email.clone(),
+                bundle.token.clone(),
+            );
+            crate::session_store::save(&sess)?;
+            println!("Signed in as {email} ({}) on org `{slug}`", bundle.user.id);
+            println!("  server:   {base}");
+            println!("  session:  {key}");
+        }
+        AuthCmd::Login {
+            email, password, ..
+        } => {
             let email = resolve_email(email)?;
             let password = resolve_password(password, false)?;
             // Remote-first sign-in over the org's AuthService.
