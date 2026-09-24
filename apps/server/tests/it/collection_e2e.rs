@@ -18,10 +18,6 @@
 
 use collection_proto::{CollectionKind, CollectionServiceClient, NodeRef, Placement};
 
-/// Serializes env-var twiddling across the async test pool — the same
-/// guard `vault_sync_e2e` uses, so the two suites don't race on the
-/// shared process env while `AppState::new` reads it.
-
 async fn boot_server() -> eyre::Result<(String, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
     let guard = crate::support::env_lock().await;

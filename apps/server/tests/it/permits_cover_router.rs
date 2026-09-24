@@ -18,9 +18,6 @@
 
 use task_server::{AppState, org_layer_router, permits};
 
-/// Serializes the env twiddle below — `AppState::new` reads
-/// `TASK_DATA_ROOT` once at boot.
-
 #[tokio::test(flavor = "multi_thread")]
 async fn every_mounted_service_has_a_permit_table() {
     let tmp = tempfile::tempdir().expect("temp data root");
