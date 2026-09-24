@@ -42,9 +42,10 @@
 
 name: checks
 
+# Pull requests only (and by hand): a merge to main is the tree its PR
+# already passed; checking it again on push held the task runners for a
+# quarter of an hour the next PR was waiting on.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
