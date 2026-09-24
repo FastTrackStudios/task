@@ -304,7 +304,7 @@ pub async fn serve_peer(
     // what it did, loudly, the first time this ran.
     let gate = std::sync::Arc::new(files::peer::device_gate(&backend, &whose).permit(
         sync_service_service_descriptor(),
-        files::peer::REPLICA_PERMITS,
+        &files::peer::REPLICA_PERMITS,
     ));
     let router = architect::LayerRouter::new().merge(layer(SyncHost::new(backend)));
     files::peer::serve_over_iroh(
