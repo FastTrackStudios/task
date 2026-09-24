@@ -57,6 +57,9 @@ struct SetState {
     epoch: u64,
     /// Its reset interval, once a playground link opened it.
     reset: Option<Duration>,
+    /// When the current epoch began, on Task's clock (microseconds) — set
+    /// when the resets start and at each one.
+    started_at: f64,
     /// The ids its current epoch serves.
     ids: Vec<Uuid>,
 }
@@ -151,10 +154,11 @@ impl LiveHost {
             let mut sets = lock(&self.inner.sets);
             let state = sets
                 .entry(setlist.to_owned())
-                .or_insert_with(|| SetState { epoch: 0, reset: None, ids: Vec::new() });
+                .or_insert_with(|| SetState { epoch: 0, reset: None, started_at: now_micros(), ids: Vec::new() });
             let start = state.reset.is_none() && reset.is_some();
             if start {
                 state.reset = reset.map(|r| r.max(SHORTEST_RESET));
+                state.started_at = now_micros();
             }
             let epoch = state.epoch;
             let mut ids: Vec<Uuid> = slugs.iter().map(|s| doc_id(&self.inner.org, setlist, epoch, s)).collect();
@@ -175,10 +179,12 @@ impl LiveHost {
                 files: None,
             })
             .collect();
-        let resets_every_secs = lock(&self.inner.sets)
+        let (resets_every_secs, resets_at) = lock(&self.inner.sets)
             .get(setlist)
-            .and_then(|s| s.reset)
-            .and_then(|r| u32::try_from(r.as_secs()).ok());
+            .and_then(|s| Some((s.reset?, s.started_at)))
+            .map_or((None, None), |(every, started)| {
+                (u32::try_from(every.as_secs()).ok(), Some(started + every.as_secs_f64() * 1e6))
+            });
         wide::set("live.setlist", setlist.to_owned());
         wide::set("live.epoch", i64::try_from(epoch).unwrap_or(i64::MAX));
         Ok(LiveSet {
@@ -188,6 +194,7 @@ impl LiveHost {
             presence_id: doc_id(&self.inner.org, setlist, epoch, "presence").to_string(),
             songs,
             resets_every_secs,
+            resets_at,
         })
     }
 
@@ -207,6 +214,7 @@ impl LiveHost {
                 admitted.remove(&id);
             }
             state.epoch += 1;
+            state.started_at = now_micros();
             state.epoch
         };
         tracing::info!(live.setlist = setlist, live.epoch = epoch, "live: the set starts over");

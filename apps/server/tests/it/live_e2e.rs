@@ -75,6 +75,7 @@ async fn two_peers_meet_in_a_songs_doc_through_task() {
     let set = live.join(setlist.clone()).await.unwrap();
     assert_eq!(set.title, "Worship Set");
     assert_eq!(set.epoch, 0);
+    assert_eq!(set.resets_at, None, "a set that keeps what is done in it");
     let slugs: Vec<&str> = set.songs.iter().map(|s| s.slug.as_str()).collect();
     assert_eq!(slugs, ["washed", "who-else"], "the set's songs, in order");
     assert!(set.songs.iter().all(|s| s.files.is_none()), "a member reads the library itself");
@@ -151,6 +152,8 @@ async fn a_guest_is_kept_to_its_links_set_and_given_its_songs_files() {
 
     let set = live.join(setlist.clone()).await.unwrap();
     assert_eq!(set.resets_every_secs, Some(300), "a playground");
+    let (now, resets_at) = (live.now().await.unwrap(), set.resets_at.expect("a playground ends"));
+    assert!(resets_at > now && resets_at <= now + 300e6, "its run ends within the interval, on Task's clock");
     assert_eq!(set.songs[0].files.as_deref(), Some("https://task.test/org/x/share/w"));
     assert_eq!(set.songs[1].files, None, "a song with no session in Task has no files");
     assert!(live.join("another-set".into()).await.is_err(), "only the link's set");

@@ -34,7 +34,7 @@ pub struct LiveSong {
 }
 
 /// A live set, as a peer joins it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, facet::Facet)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, facet::Facet)]
 pub struct LiveSet {
     /// The setlist it plays.
     pub setlist: String,
@@ -48,6 +48,10 @@ pub struct LiveSet {
     /// Seconds between resets, for a playground; `None` for a set that
     /// keeps what is done in it.
     pub resets_every_secs: Option<u32>,
+    /// When this run ends, on Task's clock ([`LiveSessions::now`],
+    /// microseconds) — what a playground counts down to. `None` for a set
+    /// that does not reset.
+    pub resets_at: Option<f64>,
 }
 
 /// A set's epoch moved on: its docs start fresh.
