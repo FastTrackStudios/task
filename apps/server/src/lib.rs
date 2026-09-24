@@ -2867,6 +2867,12 @@ pub fn router(state: AppState) -> Router {
             "/org/{slug}/share/{token}/b/{*rel}",
             get(share::share_browse_handler),
         )
+        // The scope's files as JSON — what a client streaming a shared
+        // session (the public demo) reads first.
+        .route(
+            "/org/{slug}/share/{token}/list",
+            get(share::share_list_handler),
+        )
         .route(
             "/org/{slug}/share/{token}/rendition/{kind}/{*rel}",
             get(share::share_rendition_handler),

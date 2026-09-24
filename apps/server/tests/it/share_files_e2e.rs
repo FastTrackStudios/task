@@ -422,6 +422,17 @@ async fn a_documents_link_opens_the_session_not_its_media() -> eyre::Result<()> 
     let (status, _) = get(&format!("{link}/doc/..%2Fmix.wav")).await;
     assert_ne!(status, 200, "traversal must not escape the slice");
 
+    // The slice's files, listed as JSON — what a client streaming the
+    // session reads first.
+    let listed: serde_json::Value = reqwest::get(format!("{link}/list")).await?.json().await?;
+    let paths: Vec<&str> = listed["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|e| e["path"].as_str())
+        .collect();
+    assert!(paths.contains(&"Song.RPP") && paths.contains(&"Song.kf"), "{paths:?}");
+
     let log = share.access_log(demo.token.clone()).await.expect("log");
     assert!(
         log.iter().any(|a| a.kind == "document" && a.path == "Song.RPP"),

@@ -908,6 +908,69 @@ pub async fn share_browse_handler(
     render_browse(&org, &slug, &token, &link, &scope, &rel, &q).await
 }
 
+/// `GET /org/{slug}/share/{token}/list` — the scope's files as JSON
+/// (`{"entries":[{"path":"Media/Proxies/Bass.ogg","size":null}]}`), every
+/// file under it, paths relative to the scope (`size` when the tree knows
+/// it — a checkpoint's does not; a proxy's `.idx` carries its length, and
+/// documents come whole): what a client opening a
+/// shared session reads first (a public demo streams a song by this, then
+/// `doc/` for its documents and `rendition/audio/` for its proxies). The
+/// checkpoint tree, like browse — never a file the byte routes would 404
+/// on. A one-file (review) link has no listing.
+pub async fn share_list_handler(
+    State(state): State<AppState>,
+    AxPath((slug, token)): AxPath<(String, String)>,
+    Query(q): Query<ShareQuery>,
+) -> Response {
+    use architect_telemetry::wide;
+    let (org, link) = match gate(&state, &slug, &token, q.pw.as_deref(), true) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
+    let scope = match files_scope(&org, &link).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return (StatusCode::NOT_FOUND, "not a files link").into_response(),
+        Err(resp) => return resp,
+    };
+    if scope.file_only.is_some() {
+        wide::set("share.outcome", "list-one-file-link");
+        return (StatusCode::NOT_FOUND, "this link serves one file").into_response();
+    }
+    let commit = match &scope.at {
+        Some(commit) => commit.clone(),
+        None => match org.files.head_commit_hex(scope.root_id).await {
+            Ok(head) => head,
+            Err(e) => return (StatusCode::NOT_FOUND, format!("root: {e}")).into_response(),
+        },
+    };
+    let version = files::id::VersionId::from_commit_hex(&commit);
+    let mut entries = Vec::new();
+    let mut pending = vec![String::new()];
+    while let Some(rel) = pending.pop() {
+        let full = join_scope(&scope.subpath, &rel);
+        let Ok(path) = files::RootPath::parse(&full) else { continue };
+        let Ok(listed) = org
+            .files
+            .browse_at(files::RootId::new(scope.root_id), path, version.clone())
+            .await
+        else {
+            continue;
+        };
+        for e in listed {
+            let child = if rel.is_empty() { e.name.clone() } else { format!("{rel}/{}", e.name) };
+            if e.is_dir {
+                pending.push(child);
+            } else {
+                entries.push(serde_json::json!({ "path": child, "size": e.size }));
+            }
+        }
+    }
+    wide::set("share.outcome", "list");
+    wide::set("share.list_len", i64::try_from(entries.len()).unwrap_or(i64::MAX));
+    org.shares.log_access(&token, "list", "");
+    axum::Json(serde_json::json!({ "entries": entries })).into_response()
+}
+
 /// Where a media file's committed proxy lives: `Media/Bass.wav` →
 /// `Media/Proxies/Bass.ogg` — a folder beside the media, so the proxies
 /// move and sync with what they stand in for. `None` for a path that is
