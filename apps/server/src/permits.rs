@@ -767,6 +767,13 @@ table!(COLLECTION, "collection", "collections/**", [
     // somebody built is work, and its removal is worth a line.
     wr "rename", wa "delete",
 ]);
+// Live sessions: a setlist played together. Joining admits the set's docs
+// for sync (DocSync gates the edits themselves) and writes nothing of the
+// org's; the clock and the epochs only read.
+#[cfg(feature = "plugin-fasttrackstudio")]
+table!(LIVE, "live-sessions", "live/**", [rd "join", rd "now"]);
+#[cfg(feature = "plugin-fasttrackstudio")]
+table!(LIVE_STREAM, "live-sessions-stream", "live/**", [rd "epochs"]);
 table!(RESOURCES, "resources", "resources/**", [
     rd "transcript", wr "upsert_sermon", rd "list_sermons", rd "sermon", wa "relocate_sermons",
     wr "upsert_chart", rd "chart", rd "list_charts", wa "delete_chart",
@@ -1376,11 +1383,11 @@ pub fn mounts() -> Vec<Mount> {
     )]);
     v.extend([m("core", links::links_service_descriptor(), LINKS)]);
     #[cfg(feature = "plugin-fasttrackstudio")]
-    v.extend([m(
-        "fasttrackstudio",
-        collection::collection_service_descriptor(),
-        COLLECTION,
-    )]);
+    v.extend([
+        m("fasttrackstudio", collection::collection_service_descriptor(), COLLECTION),
+        m("fasttrackstudio", live_proto::live_sessions_rpc_service_descriptor(), LIVE),
+        m("fasttrackstudio", live_proto::live_sessions_stream_service_descriptor(), LIVE_STREAM),
+    ]);
     v.extend([m(
         "core",
         resources_proto::resources_service_rpc_service_descriptor(),
