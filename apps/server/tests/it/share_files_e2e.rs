@@ -432,6 +432,9 @@ async fn a_documents_link_opens_the_session_not_its_media() -> eyre::Result<()> 
         .filter_map(|e| e["path"].as_str())
         .collect();
     assert!(paths.contains(&"Song.RPP") && paths.contains(&"Song.kf"), "{paths:?}");
+    let rpp = listed["entries"].as_array().unwrap().iter().find(|e| e["path"] == "Song.RPP").unwrap();
+    let rpp_len = b"<REAPER_PROJECT 0.1 \"7.0\"\n>\n".len();
+    assert_eq!(rpp["size"], rpp_len, "with the length the byte routes serve");
 
     let log = share.access_log(demo.token.clone()).await.expect("log");
     assert!(

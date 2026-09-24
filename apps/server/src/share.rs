@@ -910,9 +910,8 @@ pub async fn share_browse_handler(
 
 /// `GET /org/{slug}/share/{token}/list` — the scope's files as JSON
 /// (`{"entries":[{"path":"Media/Proxies/Bass.ogg","size":null}]}`), every
-/// file under it, paths relative to the scope (`size` when the tree knows
-/// it — a checkpoint's does not; a proxy's `.idx` carries its length, and
-/// documents come whole): what a client opening a
+/// file under it, paths relative to the scope, with the length the byte
+/// routes serve: what a client opening a
 /// shared session reads first (a public demo streams a song by this, then
 /// `doc/` for its documents and `rendition/audio/` for its proxies). The
 /// checkpoint tree, like browse — never a file the byte routes would 404
@@ -961,7 +960,18 @@ pub async fn share_list_handler(
             if e.is_dir {
                 pending.push(child);
             } else {
-                entries.push(serde_json::json!({ "path": child, "size": e.size }));
+                // The length the byte routes will serve: a checkpoint's
+                // tree does not carry one, its content does.
+                let size = match e.size {
+                    Some(n) => Some(n),
+                    None => org
+                        .files
+                        .resolve_source(scope.root_id, join_scope(&scope.subpath, &child), scope.at.clone())
+                        .await
+                        .ok()
+                        .map(|(len, _)| len),
+                };
+                entries.push(serde_json::json!({ "path": child, "size": size }));
             }
         }
     }
