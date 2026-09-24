@@ -19,7 +19,6 @@ use files_proto::RenditionKind;
 use files_transcode::transcoder::FakeTranscoder;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Boot a server with one org, a Media File Root holding one video file
 /// (checkpointed), and the fake transcoder wired in. Returns the base
@@ -27,7 +26,7 @@ static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 async fn boot() -> eyre::Result<(String, AppState, uuid::Uuid, tempfile::TempDir)> {
     let auth = AuthState::open("sqlite::memory:", "test-secret-at-least-32-bytes!!!").await?;
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` while `AppState` reads the env.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());

@@ -14,7 +14,6 @@
 use architect_auth::{CreateEmailPasswordUser, SignInEmailPassword};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Returns the `TempDir` so the caller keeps the data root alive for the
 /// duration of the test — dropping it early would delete the org out from
@@ -31,7 +30,7 @@ async fn boot_server() -> eyre::Result<(String, AuthState, tempfile::TempDir)> {
     // happened to contain an org, and touching it as a side effect. Every
     // other suite in this directory already sandboxes this way.
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` while `AppState` reads the env.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());

@@ -23,6 +23,8 @@ use task_server::AppState;
 async fn bookings_and_audit_trail_survive_a_restart() {
     let tmp = tempfile::tempdir().unwrap();
     // SAFETY: one test per binary, so nothing races this env setup.
+    // The process environment is shared by every test in this binary.
+    let _env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         for var in ["TASK_SERVER_ORG", "TASK_FORGE_POLL_SECS"] {

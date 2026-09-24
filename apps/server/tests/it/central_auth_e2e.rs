@@ -244,6 +244,8 @@ async fn a_resolved_token_is_not_asked_about_twice() {
 async fn discovery_says_where_accounts_come_from() {
     let tmp = tempfile::tempdir().unwrap();
     // SAFETY: one test per binary, so nothing races this env setup.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         for var in ["TASK_SERVER_ORG", "TASK_SERVER_VAULT_ROOT"] {
@@ -263,6 +265,7 @@ async fn discovery_says_where_accounts_come_from() {
     data_root.init_org("alpha", "Alpha", true).unwrap();
 
     let state = task_server::AppState::new(None).await.expect("boot");
+    drop(env_guard);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let app = task_server::router(state);

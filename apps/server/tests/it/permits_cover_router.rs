@@ -20,12 +20,11 @@ use task_server::{AppState, org_layer_router, permits};
 
 /// Serializes the env twiddle below — `AppState::new` reads
 /// `TASK_DATA_ROOT` once at boot.
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_mounted_service_has_a_permit_table() {
     let tmp = tempfile::tempdir().expect("temp data root");
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` for the duration of `AppState::new`,
     // which reads the var exactly once.
     unsafe {

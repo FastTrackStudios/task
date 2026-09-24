@@ -54,6 +54,8 @@ async fn refusal(client: &reqwest::Client, url: &str, token: Option<&str>) -> St
 async fn the_three_ways_to_reach_no_org_say_three_different_things() {
     let tmp = tempfile::tempdir().unwrap();
     // SAFETY: one test per binary, so nothing races this env setup.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         // Nobody listens here. The one answer this test needs is seeded
@@ -78,6 +80,7 @@ async fn the_three_ways_to_reach_no_org_say_three_different_things() {
         .expect("open memberships");
 
     let state = AppState::new(None).await.expect("boot");
+    drop(env_guard);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let app = task_server::router(state);

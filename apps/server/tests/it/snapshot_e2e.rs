@@ -44,6 +44,8 @@ async fn snapshot_under_concurrent_writes_restore_and_branch() {
 
     // SAFETY: single boot in this test binary; nothing else reads
     // these vars concurrently.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         std::env::set_var("TASK_BACKUP_GIT_TOKEN", BACKUP_TOKEN);
@@ -74,6 +76,7 @@ async fn snapshot_under_concurrent_writes_restore_and_branch() {
     std::fs::write(&vault_note, "state A\n").unwrap();
 
     let state = AppState::new(None).await.expect("boot AppState");
+    drop(env_guard);
     let org = state.org("alpha").expect("alpha hosted");
     assert!(
         org.sqlite_conns.len() >= 5,

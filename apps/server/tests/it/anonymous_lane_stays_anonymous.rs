@@ -47,7 +47,6 @@ use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
 const ORG: &str = "lane-identity-test";
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Boot a sandboxed, ENFORCING server with one org. Returns the org
 /// lane's URL, the auth state to mint a session from, and the data root
@@ -55,7 +54,7 @@ static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 async fn boot() -> eyre::Result<(String, AuthState, tempfile::TempDir)> {
     let auth = AuthState::open("sqlite::memory:", "test-secret-at-least-32-bytes!!!").await?;
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` while `AppState` reads the env.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());

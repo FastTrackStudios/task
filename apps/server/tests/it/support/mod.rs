@@ -49,8 +49,16 @@ pub fn org_root(tmp: &tempfile::TempDir) -> org_proto::OrgRoot {
 /// Boot an `AppState` over a fresh tempdir data root holding the
 /// example studio. Returns the tempdir so the caller keeps it alive.
 pub async fn boot_app_state() -> eyre::Result<(AppState, tempfile::TempDir)> {
+    boot_app_state_env(&[]).await
+}
+
+/// [`boot_app_state`] with `env` set for the server: under the env lock,
+/// after every other test's settings are cleared ([`env_lock`]). A
+/// variable read per request, not at boot, stays set after the boot —
+/// sound one-test-per-process (nextest), as the suite runs.
+pub async fn boot_app_state_env(env: &[(&str, &str)]) -> eyre::Result<(AppState, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
-    let state = boot_over(tmp.path(), |_| {}).await?;
+    let state = boot_over_env(tmp.path(), |_| {}, env).await?;
     Ok((state, tmp))
 }
 
@@ -88,20 +96,74 @@ async fn serve(state: AppState) -> eyre::Result<String> {
     Ok(format!("ws://127.0.0.1:{port}/vox"))
 }
 
+/// THE lock around the process environment, for every test in this binary.
+///
+/// `cargo test` runs tests on a shared thread pool, and `AppState::new`
+/// reads `TASK_DATA_ROOT` (and friends) from the environment — one
+/// environment for the whole process. A lock per test file serialized
+/// nothing across files: a share test's boot set the data root while
+/// another file's boot was reading it, and the second server came up over
+/// the wrong root and waited forever. Hold this for the whole window in
+/// which a test sets the environment and constructs its `AppState`.
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Every variable a test in this binary sets. Cleared each time the lock
+/// is taken, so a boot sees its own settings and never another test's
+/// leftovers (a central-auth URL, an MCP token, an enforcement switch).
+const TEST_ENV: &[&str] = &[
+    "TASK_DATA_ROOT",
+    "TASK_DEMO_NO_BIBLE",
+    "TASK_MCP_TOKEN",
+    "TASK_CENTRAL_AUTH_URL",
+    "TASK_ENFORCE_MEDIA_TOKEN",
+    "TASK_ENFORCE_PERMISSIONS",
+    "TASK_TELEMETRY_TEMPO_URL",
+    "TASK_TELEMETRY_LOKI_URL",
+    "TASK_SERVER_VAULT_ROOT",
+    "TASK_SERVER_ORG",
+    "TASK_SERVER_COLLECTIONS_PATH",
+    "TASK_BACKUP_GIT_TOKEN",
+    "TASK_WATCH_TOKEN",
+    "TASK_SESSION_FILE",
+    "TASK_AUTH_SECRET",
+];
+
+/// Take the process environment ([`ENV_LOCK`]), cleared of every test's
+/// settings. Hold it while setting variables and constructing the
+/// `AppState` that reads them.
+///
+/// Some variables are read per request, not at boot (`TASK_MCP_TOKEN`,
+/// `TASK_ENFORCE_MEDIA_TOKEN`, `TASK_WATCH_TOKEN`): a test relying on one
+/// is only sound one-test-per-process — how nextest runs this binary, and
+/// what `just test` does (see the Justfile).
+pub async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = ENV_LOCK.lock().await;
+    for name in TEST_ENV {
+        // SAFETY: under the binary's one env lock.
+        unsafe { std::env::remove_var(name) };
+    }
+    guard
+}
+
 async fn boot_over(
     root: &std::path::Path,
     prepare: impl FnOnce(&org_proto::OrgRoot),
 ) -> eyre::Result<AppState> {
-    // Serializes env-var twiddling. `cargo test` runs tests on a shared
-    // thread pool; without this, two boots interleave their `set_var`s.
-    // Safe because the lock is held for the whole window in which
-    // `AppState::new` reads the environment.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    boot_over_env(root, prepare, &[]).await
+}
 
-    let guard = ENV_LOCK.lock().await;
+async fn boot_over_env(
+    root: &std::path::Path,
+    prepare: impl FnOnce(&org_proto::OrgRoot),
+    env: &[(&str, &str)],
+) -> eyre::Result<AppState> {
+    let guard = env_lock().await;
     // SAFETY: held under `ENV_LOCK` for the duration of
     // `AppState::new`, which reads the vars exactly once.
     unsafe {
+        for (name, value) in env {
+            std::env::set_var(name, value);
+        }
         std::env::set_var("TASK_DATA_ROOT", root);
         // A developer's shell (or another test's leftovers) must not
         // leak a vault root or an org filter into this boot.
@@ -130,6 +192,13 @@ async fn boot_over(
 /// port. Returns the `ws://…/vox` URL.
 pub async fn boot_ws() -> eyre::Result<(String, tempfile::TempDir)> {
     boot_ws_with(|_| {}).await
+}
+
+/// [`boot_ws`] with `env` set for the server (see [`boot_app_state_env`]).
+pub async fn boot_ws_env(env: &[(&str, &str)]) -> eyre::Result<(String, tempfile::TempDir)> {
+    let tmp = tempfile::tempdir()?;
+    let state = boot_over_env(tmp.path(), |_| {}, env).await?;
+    Ok((serve(state).await?, tmp))
 }
 
 /// Adopt an on-disk directory as a File Root, in process, and wait out

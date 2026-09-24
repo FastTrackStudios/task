@@ -37,6 +37,8 @@ async fn next_event<Ev: Clone + vox::facet::Facet<'static> + 'static>(
 async fn completing_a_task_notifies_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
     // SAFETY: one test per binary, so nothing races this env setup.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         for var in [
@@ -55,6 +57,7 @@ async fn completing_a_task_notifies_end_to_end() {
     // Boots the org (fresh empty data root → notify.sqlite migrated
     // from nothing) AND spawns the notifier.
     let state = AppState::new(None).await.expect("boot AppState");
+    drop(env_guard);
     let scope = Scope::new();
     let local = state
         .local_server("alpha", &scope)

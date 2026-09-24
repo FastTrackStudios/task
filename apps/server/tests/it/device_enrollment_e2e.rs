@@ -16,7 +16,6 @@ use task_server::{AppState, router};
 const TOKEN: &str = "central-session-token";
 const ENDPOINT: &str = "4bca942e5de4cda31d40c920ee4b88b01bf08cfd34ed1777cfcb953fcd072c6f";
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn boot() -> eyre::Result<(AppState, String, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
@@ -61,7 +60,7 @@ async fn enrollment(ws: &str) -> eyre::Result<DeviceEnrollmentServiceClient> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn one_call_enrols_the_machine_in_every_org_the_account_is_in() -> eyre::Result<()> {
-    let _guard = ENV_LOCK.lock().await;
+    let _guard = crate::support::env_lock().await;
     let (state, ws, _tmp) = boot().await?;
 
     let principal = uuid::Uuid::new_v4();
@@ -162,7 +161,7 @@ async fn one_call_enrols_the_machine_in_every_org_the_account_is_in() -> eyre::R
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_token_that_names_nobody_is_refused() -> eyre::Result<()> {
-    let _guard = ENV_LOCK.lock().await;
+    let _guard = crate::support::env_lock().await;
     let (_state, ws, _tmp) = boot().await?;
     let client = enrollment(&ws).await?;
     let refused = client
