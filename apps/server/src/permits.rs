@@ -1616,7 +1616,7 @@ pub fn install_for(
 ) -> architect::permissions_gate::PermissionsGate {
     for mount in mounts_for(set) {
         if let Some(table) = mount.permits {
-            gate = gate.permit(mount.descriptor, table);
+            gate = gate.permit(mount.descriptor, &table);
         }
     }
     gate
