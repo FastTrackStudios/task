@@ -11,7 +11,9 @@ repository.workspace = true
 [dependencies]
 facet = { workspace = true }
 thiserror = { workspace = true }
-architect = { workspace = true }
+# Not the workspace entry: that one turns on iroh, and a wire contract
+# should not choose a peer's transport — a browser joins over WebSocket.
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
 serde = { workspace = true, features = ["derive"] }
 vox = { workspace = true, optional = true }
 
