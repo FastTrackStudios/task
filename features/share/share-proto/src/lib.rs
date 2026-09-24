@@ -45,6 +45,17 @@ pub enum ShareTarget {
     /// puts an anonymous visitor in the review — playback, comments,
     /// drawings — scoped to exactly that review's file.
     Review { id: Uuid },
+    /// A setlist's live session (`live-proto`): the guest lane puts an
+    /// anonymous visitor in it — its songs' docs, the set's presence, the
+    /// clock — and streams them the songs. `reset_secs` makes it a
+    /// playground that starts over that often (the public demo); `0`
+    /// keeps what is done in it.
+    Live {
+        setlist: String,
+        #[serde(default)]
+        #[facet(default)]
+        reset_secs: u32,
+    },
 }
 
 /// The vault id of an org's own vault — what a note link with an empty

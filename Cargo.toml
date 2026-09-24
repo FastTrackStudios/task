@@ -49,6 +49,7 @@ members = [
     "features/collection/collection-proto",
     "features/contacts/contacts",
     "features/contacts/contacts-proto",
+    "features/live/live-proto",
     "features/cycle/cycle",
     "features/email/email-autoconfig",
     "features/email/email-config",
@@ -324,6 +325,7 @@ collection = { path = "features/collection/collection" }
 collection-proto = { path = "features/collection/collection-proto", default-features = false }
 contacts = { path = "features/contacts/contacts" }
 contacts-proto = { path = "features/contacts/contacts-proto", default-features = false }
+live-proto = { path = "features/live/live-proto" }
 cookbook = { path = "features/mealplan/cookbook" }
 cookbook-proto = { path = "features/mealplan/cookbook/cookbook-proto", default-features = false }
 cycle = { path = "features/cycle/cycle", default-features = false }

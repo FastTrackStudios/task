@@ -1,0 +1,23 @@
+[package]
+name = "live-proto"
+description = "Wire contract for live sessions: a setlist played together, hosted by Task — joining it, its songs' shared docs, the clock every peer follows, and the epochs a playground resets by."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+facet = { workspace = true }
+thiserror = { workspace = true }
+architect = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+vox = { workspace = true, optional = true }
+
+[features]
+default = ["vox"]
+vox = ["dep:vox", "architect/vox"]
+
+[lints]
+workspace = true

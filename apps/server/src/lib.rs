@@ -56,6 +56,8 @@ pub mod operator;
 pub mod org_roots;
 pub mod otlp;
 pub mod permits;
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub mod live;
 pub mod presence;
 pub mod server_mgmt;
 pub mod share;
@@ -412,6 +414,10 @@ pub struct OrgAppState {
     /// [`presence::PRESENCE_DOC_ID`]; nothing is persisted —
     /// states expire on their own when a peer goes quiet.
     pub presence: crdt::sync::PresenceHost,
+    /// Live sessions (`live-proto`): setlists played together, their
+    /// songs' docs and presence served beside the vault's.
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    pub live: live::LiveHost,
     /// Link-graph read service (`VaultGraph`) over the same vault
     /// root as [`Self::vault_sync`] — backlinks / links / orphans /
     /// unresolved / deadends / tags for the web vault page.
@@ -2053,6 +2059,8 @@ pub(crate) async fn build_org_state(
         // gap used to be silent — that is how it sat at 2/71.
         permits::log_coverage(org_root.slug(), &permissions, enforce_permissions());
         let shares = Arc::new(share::ShareStore::open(org_root.path()));
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        let live = live::LiveHost::new(org_root.slug().to_owned(), collections.clone(), resources.clone());
 
         Ok(OrgAppState {
             slug: org_root.slug().to_owned(),
@@ -2157,6 +2165,8 @@ pub(crate) async fn build_org_state(
                 presence::PRESENCE_DOC_ID,
                 presence::PRESENCE_TIMEOUT_MS,
             ),
+            #[cfg(feature = "plugin-fasttrackstudio")]
+            live,
             vault_graph,
             sqlite_conns,
         })
@@ -4156,10 +4166,17 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
     // Setlist / Show / Playlist) backing the song/setlist surfaces.
     #[cfg(feature = "plugin-fasttrackstudio")]
     if on("fasttrackstudio") {
-        router = router.with(
-            collection::collection_service_descriptor(),
-            collection::serve_collection_service(org.collections.clone()),
-        );
+        router = router
+            .with(
+                collection::collection_service_descriptor(),
+                collection::serve_collection_service(org.collections.clone()),
+            )
+            // Live sessions: a setlist played together, kept open here.
+            .with(
+                live_proto::live_sessions_rpc_service_descriptor(),
+                live_proto::serve(live::LiveLane(org.live.clone())),
+            )
+            .merge(live_proto::stream_layer(live::LiveLane(org.live.clone())));
     }
 
     // ── Mealplan plugin — cookbook / plan / pantry / shopping /
@@ -4281,7 +4298,7 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // the plain files on disk authoritative for everyone else.
         .with(
             crdt::sync::doc_sync_service_descriptor(),
-            crdt::sync::DocSyncDispatcher::new(org.vault_collab.registry().clone()),
+            crdt::sync::DocSyncDispatcher::new(org_doc_sync(org)),
         )
         // Presence — ONE mounted `DocPresence` service, routed by doc
         // id: the fixed `presence::PRESENCE_DOC_ID` reaches the
@@ -4294,6 +4311,8 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             crdt::sync::DocPresenceDispatcher::new(presence::PresenceRouter::new(
                 org.presence.clone(),
                 org.vault_collab.registry().clone(),
+                #[cfg(feature = "plugin-fasttrackstudio")]
+                org.live.clone(),
             )),
         )
         // Vault link-graph (backlinks / links / orphans / unresolved /
@@ -4392,6 +4411,18 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 /// call on the connection that does not carry its own `authorization`
 /// metadata. Transports without a handshake to read it from pass `None`
 /// and rely on per-call metadata.
+/// The org's one `DocSync` backend: live-session docs to the live host,
+/// vault files to the vault's registry.
+#[cfg(feature = "plugin-fasttrackstudio")]
+fn org_doc_sync(org: &OrgAppState) -> live::DocSyncRouter {
+    live::DocSyncRouter { live: org.live.clone(), vault: org.vault_collab.registry().clone() }
+}
+
+#[cfg(not(feature = "plugin-fasttrackstudio"))]
+fn org_doc_sync(org: &OrgAppState) -> crdt::registry::DocRegistry {
+    org.vault_collab.registry().clone()
+}
+
 pub fn org_router_guarded(
     org: &OrgAppState,
     gate: snapshot::WriteGate,

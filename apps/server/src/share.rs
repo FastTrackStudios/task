@@ -725,6 +725,7 @@ fn gate(
             ShareTarget::Slice { .. } => "slice",
             ShareTarget::NamedVersion { .. } => "named-version",
             ShareTarget::Review { .. } => "review",
+            ShareTarget::Live { .. } => "live",
         },
     );
     if link.disabled {
@@ -809,7 +810,8 @@ async fn files_scope(
     link: &StoredLink,
 ) -> Result<Option<FilesScope>, Response> {
     match link.target() {
-        ShareTarget::Note { .. } => Ok(None),
+        // A live link's files are each song's own documents link.
+        ShareTarget::Note { .. } | ShareTarget::Live { .. } => Ok(None),
         ShareTarget::Slice { root_id, subpath } => Ok(Some(FilesScope {
             root_id,
             subpath,
@@ -1319,6 +1321,10 @@ pub async fn share_guest_vox_handler(
         Ok(v) => v,
         Err(resp) => return *resp,
     };
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    if let ShareTarget::Live { setlist, reset_secs } = link.target() {
+        return live_guest(&state, &org, &token, setlist, reset_secs, ws).await;
+    }
     let ShareTarget::Review { id } = link.target() else {
         return (StatusCode::BAD_REQUEST, "not a review link").into_response();
     };
@@ -1366,6 +1372,106 @@ pub async fn share_guest_vox_handler(
     let router = crate::snapshot::GatedRouter::new(router, state.write_gate.clone());
     ws.protocols([crate::VOX_SUBPROTOCOL])
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
+}
+
+/// A live link's guest lane: the one setlist's live session — its
+/// `LiveSessions` (join, the clock, epochs), and `DocSync` / `DocPresence`
+/// over its docs only — with each song's files as a documents link to its
+/// session folder, found or minted here.
+#[cfg(feature = "plugin-fasttrackstudio")]
+async fn live_guest(
+    state: &AppState,
+    org: &crate::OrgAppState,
+    token: &str,
+    setlist: String,
+    reset_secs: u32,
+    ws: axum::extract::WebSocketUpgrade,
+) -> Response {
+    use architect_telemetry::wide;
+    org.shares.log_access(token, "live", &setlist);
+    let files = match live_files(org, &setlist).await {
+        Ok(files) => files,
+        Err(e) => {
+            tracing::warn!(live.setlist = %setlist, error = %e, "live: the set's songs could not be linked");
+            return (StatusCode::NOT_FOUND, e).into_response();
+        }
+    };
+    wide::set("share.outcome", "live-guest");
+    wide::set("live.songs_linked", i64::try_from(files.len()).unwrap_or(i64::MAX));
+    let lane = crate::live::GuestLiveLane {
+        host: org.live.clone(),
+        setlist,
+        reset: (reset_secs > 0).then(|| std::time::Duration::from_secs(u64::from(reset_secs))),
+        files: std::sync::Arc::new(files),
+    };
+    let only = crate::live::LiveOnly(org.live.clone());
+    let router = architect::LayerRouter::new()
+        .with(live_proto::live_sessions_rpc_service_descriptor(), live_proto::serve(lane.clone()))
+        .merge(live_proto::stream_layer(lane))
+        .with(crdt::sync::doc_sync_service_descriptor(), crdt::sync::DocSyncDispatcher::new(only.clone()))
+        .with(crdt::sync::doc_presence_service_descriptor(), crdt::sync::DocPresenceDispatcher::new(only));
+    let router = crate::snapshot::GatedRouter::new(router, state.write_gate.clone());
+    ws.protocols([crate::VOX_SUBPROTOCOL])
+        .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
+}
+
+/// Each song of `setlist` whose session is a File Root here, with a
+/// documents link to it: an existing one, else minted (labelled so the
+/// Links registry says what it is for).
+#[cfg(feature = "plugin-fasttrackstudio")]
+async fn live_files(
+    org: &crate::OrgAppState,
+    setlist: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    use collection::CollectionService as _;
+    use files::service::RootsService as _;
+    let collection = org
+        .collections
+        .get(setlist)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no setlist {setlist}"))?;
+    let roots = org.files.list().await.map_err(|e| format!("roots: {e:?}"))?;
+    let shares = ShareServiceImpl::new(
+        org.shares.clone(),
+        org.slug.clone(),
+        crate::share_public_base(),
+        Some(org.files.clone()),
+    );
+    let mut out = std::collections::HashMap::new();
+    for item in collection.items.iter().filter(|i| i.node.kind == collection::NodeKind::Song) {
+        let slug = &item.node.id;
+        let dir = format!("session/{slug}");
+        let Some(root) = roots
+            .iter()
+            .find(|r| r.path.as_deref().is_some_and(|p| p.trim_end_matches('/').ends_with(&dir)))
+        else {
+            continue;
+        };
+        let target = ShareTarget::Slice { root_id: root.id, subpath: String::new() };
+        let existing = shares
+            .links_for_target(target.clone())
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|l| !l.disabled && l.capabilities.documents && !l.password_protected);
+        let link = match existing {
+            Some(link) => link,
+            None => shares
+                .create_link(
+                    target,
+                    NewShareLink {
+                        label: format!("live: {slug}"),
+                        capabilities: Some(ShareCapabilities { documents: true, ..ShareCapabilities::default() }),
+                        password: None,
+                        expires_unix: None,
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?,
+        };
+        out.insert(slug.clone(), link.url);
+    }
+    Ok(out)
 }
 
 /// `POST /org/{slug}/share/{token}/upload/{name}` — the file-request

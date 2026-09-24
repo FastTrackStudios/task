@@ -67,6 +67,8 @@ mod permissions_observe_only;
 mod permits_cover_router;
 mod personal_org_e2e;
 mod plugin_toggle_e2e;
+#[cfg(feature = "plugin-fasttrackstudio")]
+mod live_e2e;
 mod presence_relay;
 mod rename_org;
 mod rendition_route;
