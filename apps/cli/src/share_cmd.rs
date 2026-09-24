@@ -54,6 +54,27 @@ pub enum ShareCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Mint a live link to a setlist: whoever opens it joins the set's
+    /// live session (Session, in a browser or the app) with no account —
+    /// its songs streamed, everyone in one session. `--reset-minutes`
+    /// makes it a playground that starts over that often (the public
+    /// demo).
+    ///
+    /// ```text
+    /// task share live <setlist-id> --label demo --reset-minutes 5
+    /// ```
+    Live {
+        setlist: String,
+        #[arg(long, default_value = "")]
+        label: String,
+        /// Start the set over this often (0: keep what is done in it).
+        #[arg(long, default_value_t = 0)]
+        reset_minutes: u32,
+        #[arg(long, env = "TASK_SHARE_PASSWORD", hide_env_values = true)]
+        password: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Every link in the org, newest first.
     List {
         #[arg(long)]
@@ -111,6 +132,16 @@ pub async fn run_share(cmd: ShareCmd, org_override: Option<&str>) -> eyre::Resul
                         password,
                         expires_unix,
                     },
+                )
+                .await
+                .map_err(|e| eyre::eyre!("create link: {e}"))?;
+            print_link(&link, json)?;
+        }
+        ShareCmd::Live { setlist, label, reset_minutes, password, json } => {
+            let link = share
+                .create_link(
+                    ShareTarget::Live { setlist, reset_secs: reset_minutes.saturating_mul(60) },
+                    NewShareLink { label, capabilities: None, password, expires_unix: None },
                 )
                 .await
                 .map_err(|e| eyre::eyre!("create link: {e}"))?;
