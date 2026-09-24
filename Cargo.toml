@@ -466,19 +466,19 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.0" }
 
 # ── FastTrackStudio monorepo — the music-production domains ───────────
 # These stay in the FTS monorepo; Task consumes them cross-repo. REPIN
@@ -637,12 +637,9 @@ tempfile = "3"
 # additive change over the published rc.7 (the rc.5 original was rev
 # 98d6798 on `feat/global-client-middleware`).
 #
-# SIBLING-CHECKOUT PATH, like every `../vendor` entry below: the rc.7
-# ports are committed locally but not pushed yet. Before this repo is
-# pushed, push the branch and replace the path with a pinned `rev`
-# (never a branch — a patch that moves when somebody pushes is a build
-# that changes without a commit here saying so).
-vox-core = { path = "../vox/rust/vox-core" }
+# Pinned by `rev`, never the branch: a patch that moves when somebody
+# pushes is a build that changes without a commit here saying so.
+vox-core = { git = "https://github.com/Codys-Wright/vox", rev = "08db2c4e8db643d235bf325462dd171dcb06cbaf" }
 # Blitz from the FTS fork (0.3.0-beta.1 line, upstream 02523b83 +
 # fts-focus: focus-follows-pointerdown for all focusable content —
 # upstream only click-focuses text inputs, leaving the editor's tabindex
@@ -659,18 +656,15 @@ blitz-html = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd23
 # keybind configs (`keys "<C-s>"`) could not be re-parsed.
 styx-format = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
 # The FastTrackStudios/vendor forks, on the rc.7 fleet. Each entry's
-# reason is in vendor's README. phon and facet-core are SIBLING-CHECKOUT
-# PATHS (../vendor, a clone of that repo): their rc.7 forward-ports are
-# committed there locally but not tagged yet — replace each with
-# `{ git = "https://github.com/FastTrackStudios/vendor", tag = … }` before
-# this repo is pushed. phon-jit and vox-phon were already on rc.7 at
-# published tags, so they are pinned normally.
+# reason is in vendor's README. phon and facet-core carry their rc.7
+# forward-ports from vendor v0.4.0; phon-jit and vox-phon were already on
+# rc.7 at earlier tags.
 #
 # phon rc.7 + derive support for parse/display opaque scalars (Uuid,
 # chrono DateTime/NaiveDate, url, …). Upstream PANICS (and the reply path
 # aborts the process) the first time a vox RPC reply contains such a
 # field — every task-server list/stats call died.
-phon = { path = "../vendor/phon" }
+phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0" }
 # phon-jit rc.7 with a build.rs fix: build the tail-call stencils on the
 # pinned stable rustc (upstream's nightly detection misfires on it →
 # E0658 on `become`).
@@ -680,7 +674,7 @@ phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.3" 
 # `display`, so upstream's `SecondsFormat::Secs` rounded EVERY timestamp
 # on every vox RPC to the second — and anything ordered by one could
 # invert when two events shared a second.
-facet-core = { path = "../vendor/facet-core" }
+facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0" }
 # vox-phon rc.7 without the bogus post-decode length check in
 # `parse_schema_bytes`: upstream rc.7 fails every real schema exchange
 # with "schema decode consumed N of M bytes" (it compares phon-schema's
@@ -739,39 +733,6 @@ dioxus-core-types = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "
 generational-box = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
 subsecond = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
 subsecond-types = { git = "https://github.com/Brahmastra-Labs/dioxus", rev = "19ea84261d3feab7c2015d7b5eab2c8514bc2e5c" }
-
-[patch."https://github.com/FastTrackStudios/architect"]
-# Sibling checkout, branch `fleet` (v0.8.2 + "an argless subscription can
-# introduce itself"): ONE architect for session, daw, keyflow and task while
-# the fleet is updated together. Replace with a tag pin before pushing.
-architect-action-derive = { path = "../architect/crates/architect-action-derive" }
-architect-derive = { path = "../architect/crates/architect-derive" }
-architect-rpc-derive = { path = "../architect/crates/architect-rpc-derive" }
-architect = { path = "../architect/crates/architect" }
-architect-atom = { path = "../architect/features/atom" }
-architect-auth = { path = "../architect/features/auth/architect-auth" }
-auth-client = { path = "../architect/features/auth/auth-client" }
-auth-db = { path = "../architect/features/auth/auth-db" }
-auth-http = { path = "../architect/features/auth/auth-http" }
-auth-proto = { path = "../architect/features/auth/auth-proto" }
-auth = { path = "../architect/features/auth/auth" }
-crdt-derive = { path = "../architect/features/crdt/crdt-derive" }
-crdt-seaorm = { path = "../architect/features/crdt/crdt-seaorm" }
-crdt = { path = "../architect/features/crdt/crdt" }
-architect-form = { path = "../architect/features/form" }
-architect-launcher-core = { path = "../architect/features/launcher/architect-launcher-core" }
-architect-launcher-providers = { path = "../architect/features/launcher/architect-launcher-providers" }
-architect-launcher-ui = { path = "../architect/features/launcher/architect-launcher-ui" }
-architect-permissions = { path = "../architect/features/permissions" }
-architect-permissions-proto = { path = "../architect/features/permissions/proto" }
-architect-story-core = { path = "../architect/features/story/architect-story-core" }
-architect-story-macros = { path = "../architect/features/story/architect-story-macros" }
-architect-story-parity = { path = "../architect/features/story/architect-story-parity" }
-architect-story-runtime = { path = "../architect/features/story/architect-story-runtime" }
-architect-story-shell = { path = "../architect/features/story/architect-story-shell" }
-architect-story-snapshots = { path = "../architect/features/story/architect-story-snapshots" }
-architect-telemetry = { path = "../architect/features/telemetry" }
-architect-ui = { path = "../architect/features/ui/architect-ui" }
 
 # ── Lints ─────────────────────────────────────────────────────────────
 [workspace.lints.rust]
