@@ -54,7 +54,7 @@ architect-auth = { workspace = true }
 iroh = { workspace = true }
 async-trait = { workspace = true }
 vox = { workspace = true }
-vox-core = "0.10.0-rc.5"
+vox-core = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

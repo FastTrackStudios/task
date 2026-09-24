@@ -5430,6 +5430,28 @@ impl FilesBackend {
             .map_err(|e| FilesError::Io(format!("source {file_id_hex}: {e}")))
     }
 
+    /// [`FilesBackend::read_source_content`] for the byte range
+    /// `[start, start + len)` only — reading just the chunks it overlaps,
+    /// so a player seeking in a long proxy pulls a window, not the file.
+    pub async fn read_source_range<W>(
+        &self,
+        root_id: Uuid,
+        file_id_hex: &str,
+        start: u64,
+        len: u64,
+        dest: &mut W,
+    ) -> Result<(), FilesError>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let chunks = self.with_version_store(root_id, |vs| vs.chunks().clone())?;
+        let fid = chunk_file_id_from_hex(file_id_hex)?;
+        chunks
+            .read_range(fid, start, len, dest)
+            .await
+            .map_err(|e| FilesError::Io(format!("source {file_id_hex}: {e}")))
+    }
+
     /// Prune a root's renditions whose source content the store no
     /// longer holds, or whose recipe is superseded — the source-tied
     /// half of GC (AC 3/4). Called after `gc_root`'s version-store

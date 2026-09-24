@@ -39,12 +39,25 @@ pub const PRESENCE_TIMEOUT_MS: i64 = 30_000;
 pub struct PresenceRouter {
     org: crdt::sync::PresenceHost,
     files: crdt::registry::DocRegistry,
+    /// A live set's presence channel (who is on which song, cursors, the
+    /// transport) — [`crate::live`].
+    #[cfg(feature = "plugin-fasttrackstudio")]
+    live: crate::live::LiveHost,
 }
 
 impl PresenceRouter {
     #[must_use]
-    pub fn new(org: crdt::sync::PresenceHost, files: crdt::registry::DocRegistry) -> Self {
-        Self { org, files }
+    pub fn new(
+        org: crdt::sync::PresenceHost,
+        files: crdt::registry::DocRegistry,
+        #[cfg(feature = "plugin-fasttrackstudio")] live: crate::live::LiveHost,
+    ) -> Self {
+        Self {
+            org,
+            files,
+            #[cfg(feature = "plugin-fasttrackstudio")]
+            live,
+        }
     }
 }
 
@@ -55,6 +68,10 @@ impl DocPresence for PresenceRouter {
         up: vox::Rx<Vec<u8>>,
         down: vox::Tx<Vec<u8>>,
     ) -> Result<(), SyncError> {
+        #[cfg(feature = "plugin-fasttrackstudio")]
+        if self.live.admits(doc_id) {
+            return self.live.registry().presence(doc_id, up, down).await;
+        }
         if doc_id == PRESENCE_DOC_ID {
             self.org.presence(doc_id, up, down).await
         } else {

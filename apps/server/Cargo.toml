@@ -114,6 +114,7 @@ links = { workspace = true, features = ["vox"] }
 # Ordered-collection primitive (song Library / Setlist / Show /
 # Playlist) — one `CollectionService` mounted per org, JSONL-backed.
 collection = { workspace = true, features = ["vox"], optional = true }
+live-proto = { workspace = true, optional = true }
 resources = { workspace = true, features = ["vox"] }
 resources-proto = { workspace = true, features = ["vox"] }
 cookbook = { workspace = true, features = ["vox"], optional = true }
@@ -243,7 +244,7 @@ default = [
 ]
 plugin-mealplan = ["dep:cookbook", "dep:mealplan", "dep:pantry"]
 plugin-fitness = ["dep:body", "dep:exercises", "dep:workouts", "dep:intake"]
-plugin-fasttrackstudio = ["dep:collection"]
+plugin-fasttrackstudio = ["dep:collection", "dep:live-proto"]
 plugin-wiki = ["dep:wiki-proto", "dep:wiki-live"]
 plugin-scripture = ["dep:scripture"]
 plugin-email = [

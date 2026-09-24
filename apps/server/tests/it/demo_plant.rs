@@ -93,6 +93,8 @@ async fn demo_plants_adopted_roots_with_video_deliverables() -> eyre::Result<()>
 
     // SAFETY: single-test binary; only the DataRoot construction below
     // reads it.
+    // The process environment is shared by every test in this binary.
+    let _env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         std::env::remove_var("TASK_SERVER_VAULT_ROOT");

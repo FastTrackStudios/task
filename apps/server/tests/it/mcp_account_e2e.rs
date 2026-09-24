@@ -66,6 +66,8 @@ async fn call_tool(client: &reqwest::Client, url: &str, name: &str, args: Value)
 async fn mcp_account_lane_spans_orgs() {
     let tmp = tempfile::tempdir().unwrap();
     // SAFETY: one test per binary, so nothing races this env setup.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         std::env::set_var("TASK_MCP_TOKEN", TOKEN);
@@ -81,6 +83,7 @@ async fn mcp_account_lane_spans_orgs() {
     }
 
     let state = AppState::new(None).await.expect("boot AppState");
+    drop(env_guard);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {

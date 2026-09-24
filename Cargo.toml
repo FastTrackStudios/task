@@ -49,6 +49,7 @@ members = [
     "features/collection/collection-proto",
     "features/contacts/contacts",
     "features/contacts/contacts-proto",
+    "features/live/live-proto",
     "features/cycle/cycle",
     "features/email/email-autoconfig",
     "features/email/email-config",
@@ -324,6 +325,7 @@ collection = { path = "features/collection/collection" }
 collection-proto = { path = "features/collection/collection-proto", default-features = false }
 contacts = { path = "features/contacts/contacts" }
 contacts-proto = { path = "features/contacts/contacts-proto", default-features = false }
+live-proto = { path = "features/live/live-proto" }
 cookbook = { path = "features/mealplan/cookbook" }
 cookbook-proto = { path = "features/mealplan/cookbook/cookbook-proto", default-features = false }
 cycle = { path = "features/cycle/cycle", default-features = false }
@@ -464,19 +466,19 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.8.2" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.2" }
 
 # ── FastTrackStudio monorepo — the music-production domains ───────────
 # These stay in the FTS monorepo; Task consumes them cross-repo. REPIN
@@ -498,24 +500,30 @@ session-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", t
 session-ui = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0", default-features = false }
 song = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
 
-# ── Facet reflection + vox RPC — the rc.5 fleet pins ──────────────────
+# ── Facet reflection + vox RPC — the rc.7 fleet ───────────────────────
 #
-# Exact (`=`) on purpose. facet's reflection is what encodes the vox
+# The fleet moves together. facet's reflection is what encodes the vox
 # handshake schema, so a client on rc.7 and a server on rc.5 do not
 # negotiate — they fail with "schema decode consumed N of M bytes", which
-# reads like a vox bug and is not one. A caret range over a pre-release
-# (`0.50.0-rc.5` alone means `>=0.50.0-rc.5, <0.51.0`) lets one side
-# drift to the next rc on any unrelated `cargo update`; `=` does not.
-# Every sibling repo that dials this server pins the same way. Bump the
-# fleet together or not at all.
-facet = { version = "=0.50.0-rc.5", features = ["reflect", "chrono", "uuid"] }
-facet-json = "=0.50.0-rc.5"
-vox = { version = "=0.10.0-rc.5", default-features = false, features = ["runtime"] }
-vox-core = "=0.10.0-rc.5"
-vox-types = "=0.10.0-rc.5"
-vox-websocket = "=0.10.0-rc.5"
+# reads like a vox bug and is not one. So every repo that dials this
+# server (keyflow, session, fasttrackstudio, architect) must be on the
+# same rc as it.
+#
+# Caret ranges, not `=` pins: the version here is a FLOOR (`0.50.0-rc.7`
+# means `>=0.50.0-rc.7, <0.51.0`), and the floor is what enforces "same
+# rc" — nothing that builds against this can resolve rc.5. The exact
+# version is the lockfile's job. An `=` pin also made every consumer's
+# graph unsolvable the moment one repo moved ahead of another, which is
+# the opposite of moving together. Bump the floor across the fleet in one
+# step, and `cargo update -p` the families here in the same commit.
+facet = { version = "0.50.0-rc.7", features = ["reflect", "chrono", "uuid"] }
+facet-json = "0.50.0-rc.7"
+vox = { version = "0.10.0-rc.7", default-features = false, features = ["runtime"] }
+vox-core = "0.10.0-rc.7"
+vox-types = "0.10.0-rc.7"
+vox-websocket = "0.10.0-rc.7"
 # `cargo xtask` TS-type generation (xtask/).
-vox-codegen = "=0.10.0-rc.5"
+vox-codegen = "0.10.0-rc.7"
 
 # ── UI framework ──────────────────────────────────────────────────────
 # dioxus 0.8 line — git rev pinned; it must stay in lockstep across every
@@ -624,21 +632,14 @@ tempfile = "3"
 # vox-core with `Caller::with_global_middleware` — the service-agnostic
 # middleware seam the native iroh transport needs to present a bearer on
 # every call of a connection (crates/ui-core/src/vox_clients.rs; the CLI
-# documents the same gap in `dial_authenticated`). The branch is
-# `feat/global-client-middleware` on the vox repo, one additive change
-# over the published rc.5 (its vox-core is byte-identical to the
-# crates.io release).
+# documents the same gap in `dial_authenticated`). Branch
+# `feat/global-client-middleware-rc7` on the Codys-Wright/vox fork: one
+# additive change over the published rc.7 (the rc.5 original was rev
+# 98d6798 on `feat/global-client-middleware`).
 #
-# Fetched, not local: this used to be an absolute path into one
-# machine's worktree, and every other machine failed before compiling a
-# line with `failed to read …/vox-global-mw/rust/vox-core/Cargo.toml`.
-# The branch is pushed now, and the repository is public, so a checkout
-# anywhere builds with no credentials and nothing to copy across.
-#
-# Pinned by `rev` rather than tracked by branch: a patch that moves when
-# somebody pushes is a build that changes without a commit here saying
-# so. Bump this line to take a newer one.
-vox-core = { git = "https://github.com/Codys-Wright/vox.git", rev = "98d6798dd926cb06c9da44add5eb9599b8f5c267" }
+# Pinned by `rev`, never the branch: a patch that moves when somebody
+# pushes is a build that changes without a commit here saying so.
+vox-core = { git = "https://github.com/Codys-Wright/vox", rev = "08db2c4e8db643d235bf325462dd171dcb06cbaf" }
 # Blitz from the FTS fork (0.3.0-beta.1 line, upstream 02523b83 +
 # fts-focus: focus-follows-pointerdown for all focusable content —
 # upstream only click-focuses text inputs, leaving the editor's tabindex
@@ -654,21 +655,31 @@ blitz-html = { git = "https://github.com/FastTrackStudios/blitz", rev = "c82dd23
 # styx-format emits them bare but styx-parse rejects them, so serialized
 # keybind configs (`keys "<C-s>"`) could not be re-parsed.
 styx-format = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
-# Vendored phon rc.5 + derive support for parse/display opaque scalars
-# (Uuid, chrono DateTime/NaiveDate, url, …). Upstream rc.5 PANICS (and the
-# reply path aborts the process) the first time a vox RPC reply contains
-# such a field — every task-server list/stats call died.
-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
-# Vendored phon-jit rc.5 with a one-line build.rs fix: force the stable,
-# call-based stencils (upstream's nightly detection misfires on the pinned
-# stable toolchain → E0658 on `become`).
-phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
-# Vendored facet-core rc.5 with one change: chrono's display fns keep
-# sub-second precision. chrono types are opaque scalars whose only
-# encode path is `display`, so upstream's `SecondsFormat::Secs` rounded
-# EVERY timestamp on every vox RPC to the second — and anything ordered
-# by one could invert when two events shared a second.
-facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.0" }
+# The FastTrackStudios/vendor forks, on the rc.7 fleet. Each entry's
+# reason is in vendor's README. phon and facet-core carry their rc.7
+# forward-ports from vendor v0.4.0; phon-jit and vox-phon were already on
+# rc.7 at earlier tags.
+#
+# phon rc.7 + derive support for parse/display opaque scalars (Uuid,
+# chrono DateTime/NaiveDate, url, …). Upstream PANICS (and the reply path
+# aborts the process) the first time a vox RPC reply contains such a
+# field — every task-server list/stats call died.
+phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0" }
+# phon-jit rc.7 with a build.rs fix: build the tail-call stencils on the
+# pinned stable rustc (upstream's nightly detection misfires on it →
+# E0658 on `become`).
+phon-jit = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.2.3" }
+# facet-core rc.7 with one change: chrono's display fns keep sub-second
+# precision. chrono types are opaque scalars whose only encode path is
+# `display`, so upstream's `SecondsFormat::Secs` rounded EVERY timestamp
+# on every vox RPC to the second — and anything ordered by one could
+# invert when two events shared a second.
+facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0" }
+# vox-phon rc.7 without the bogus post-decode length check in
+# `parse_schema_bytes`: upstream rc.7 fails every real schema exchange
+# with "schema decode consumed N of M bytes" (it compares phon-schema's
+# allocation count against the slice length).
+vox-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.3.0" }
 # The editor's vendored mermaid-rs-renderer fork now lives in the editor
 # repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
 # and needs no patch entry here.

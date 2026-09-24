@@ -21,8 +21,6 @@
 use architect_auth::CreateEmailPasswordUser;
 use task_server::{AppState, router};
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 /// 32+ chars, as `auth_secret` requires.
 const TEST_AUTH_SECRET: &str = "task-server-test-auth-secret-32+!";
 
@@ -47,7 +45,7 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` while `AppState` reads the env.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());

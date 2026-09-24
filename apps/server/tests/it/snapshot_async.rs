@@ -16,6 +16,8 @@ async fn async_snapshot_kickoff_and_status() {
     let tmp = tempfile::tempdir().unwrap();
     // SAFETY: serialized — these integration tests run single-threaded
     // per binary for env-var setup.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         std::env::set_var("TASK_BACKUP_GIT_TOKEN", BACKUP_TOKEN);
@@ -34,6 +36,7 @@ async fn async_snapshot_kickoff_and_status() {
     std::fs::write(org_root.vault_dir().join("note.md"), "state A\n").unwrap();
 
     let state = AppState::new(None).await.expect("boot AppState");
+    drop(env_guard);
     let scope = state.scope.clone();
     let app = task_server::router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

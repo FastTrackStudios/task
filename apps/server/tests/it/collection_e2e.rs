@@ -18,14 +18,9 @@
 
 use collection_proto::{CollectionKind, CollectionServiceClient, NodeRef, Placement};
 
-/// Serializes env-var twiddling across the async test pool — the same
-/// guard `vault_sync_e2e` uses, so the two suites don't race on the
-/// shared process env while `AppState::new` reads it.
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn boot_server() -> eyre::Result<(String, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` for the duration of `AppState::new`,
     // which reads both vars exactly once (captured into `OrgAppState`).
     unsafe {

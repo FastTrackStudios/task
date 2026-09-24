@@ -33,6 +33,8 @@ const EMAIL: &str = "newcomer@example.test";
 async fn boot() -> eyre::Result<(String, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
     // SAFETY: this binary's tests run sequentially against one boot.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         // Nobody listens here. The one answer this test needs is seeded
@@ -51,6 +53,7 @@ async fn boot() -> eyre::Result<(String, tempfile::TempDir)> {
         .map_err(|e| eyre::eyre!("open memberships: {e}"))?;
 
     let state = AppState::new(None).await?;
+    drop(env_guard);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let app = router(state);

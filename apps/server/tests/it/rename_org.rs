@@ -16,11 +16,18 @@ use task_server::admin_cli::rename_org;
 use task_server::memberships::Memberships;
 
 /// A data root with a home org and the org under test, pointed at by
-/// `TASK_DATA_ROOT`. One test per process under nextest, so setting the
-/// variable is safe.
-fn data_root(with: &[(&str, &str, bool)]) -> (tempfile::TempDir, org_proto::DataRoot) {
+/// `TASK_DATA_ROOT` — which is the whole process's, so the caller holds
+/// the returned guard for as long as the test reads it.
+async fn data_root(
+    with: &[(&str, &str, bool)],
+) -> (
+    tempfile::TempDir,
+    org_proto::DataRoot,
+    tokio::sync::MutexGuard<'static, ()>,
+) {
     let tmp = tempfile::tempdir().unwrap();
-    // SAFETY: nextest runs one test per process; nothing else reads this.
+    let env_guard = crate::support::env_lock().await;
+    // SAFETY: held under the binary's one `ENV_LOCK`.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         std::env::remove_var("TASK_CENTRAL_AUTH_URL");
@@ -30,7 +37,7 @@ fn data_root(with: &[(&str, &str, bool)]) -> (tempfile::TempDir, org_proto::Data
     for (slug, name, is_home) in with {
         root.init_org(slug, name, *is_home).unwrap();
     }
-    (tmp, root)
+    (tmp, root, env_guard)
 }
 
 fn args(pairs: &[(&str, &str)]) -> Vec<String> {
@@ -42,10 +49,11 @@ fn args(pairs: &[(&str, &str)]) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_rename_moves_the_directory_manifest_roots_and_memberships() {
-    let (_tmp, root) = data_root(&[
+    let (_tmp, root, _env) = data_root(&[
         ("home", "Home", true),
         ("fasttrackstudios", "FastTrackStudios", false),
-    ]);
+    ])
+    .await;
     let old = root.org("fasttrackstudios");
     let home = root.org("home");
 
@@ -166,7 +174,7 @@ async fn a_rename_moves_the_directory_manifest_roots_and_memberships() {
 /// so the command refuses rather than doing half of one.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_home_org_is_refused() {
-    let (_tmp, root) = data_root(&[("home", "Home", true)]);
+    let (_tmp, root, _env) = data_root(&[("home", "Home", true)]).await;
     let err = rename_org(&args(&[("--from", "home"), ("--to", "casa")]))
         .await
         .expect_err("home org must be refused");
@@ -179,11 +187,12 @@ async fn the_home_org_is_refused() {
 /// Refused before anything is touched.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_existing_target_is_refused() {
-    let (_tmp, root) = data_root(&[
+    let (_tmp, root, _env) = data_root(&[
         ("home", "Home", true),
         ("alpha", "Alpha", false),
         ("beta", "Beta", false),
-    ]);
+    ])
+    .await;
     let err = rename_org(&args(&[("--from", "alpha"), ("--to", "beta")]))
         .await
         .expect_err("collision must be refused");
@@ -197,7 +206,7 @@ async fn an_existing_target_is_refused() {
 /// directory the server then refuses to load.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bad_slug_is_refused_before_anything_moves() {
-    let (_tmp, root) = data_root(&[("home", "Home", true), ("alpha", "Alpha", false)]);
+    let (_tmp, root, _env) = data_root(&[("home", "Home", true), ("alpha", "Alpha", false)]).await;
     for bad in ["Alpha", "al pha", "alpha_2", ""] {
         let err = rename_org(&args(&[("--from", "alpha"), ("--to", bad)]))
             .await

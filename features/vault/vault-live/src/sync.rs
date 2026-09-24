@@ -1015,12 +1015,20 @@ fn forward_watcher_events(
     vault_id: String,
 ) {
     let mut seen: HashMap<String, Seen> = HashMap::new();
+    // The watcher reports canonical paths (macOS's FSEvents: `/private/var`
+    // for a root given as `/var`, a symlink), so an event is matched
+    // against the root as given and as the filesystem names it — else
+    // every external edit under a symlinked root is silently dropped.
+    let canonical = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     while let Ok(evt) = rx.recv() {
         let abs = match evt {
             watcher::VaultEvent::Changed { abs_path } => abs_path,
             watcher::VaultEvent::Removed { abs_path } => abs_path,
         };
-        let Ok(rel_path) = abs.strip_prefix(&root) else {
+        let Ok(rel_path) = abs
+            .strip_prefix(&root)
+            .or_else(|_| abs.strip_prefix(&canonical))
+        else {
             continue;
         };
         let rel = rel_path.to_string_lossy().replace('\\', "/");

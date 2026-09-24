@@ -32,6 +32,8 @@ async fn boot(
     let tmp = tempfile::tempdir()?;
     // SAFETY: this binary holds one test, so nothing else reads the env
     // while `AppState::new` does.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         // Nobody listens here. Every answer this test needs is seeded into
@@ -50,6 +52,7 @@ async fn boot(
         .map_err(|e| eyre::eyre!("scaffold nobodys: {e}"))?;
     prepare(data_root).await;
     let state = AppState::new(None).await?;
+    drop(env_guard);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let app = router(state);

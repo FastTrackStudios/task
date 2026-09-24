@@ -34,7 +34,7 @@ async fn boot() -> (String, tempfile::TempDir) {
     support::boot_ws().await.expect("boot")
 }
 
-async fn lane<C: vox_core::FromVoxLane>(url: &str) -> C {
+async fn lane<C: vox_core::FromVoxLane + vox::MaybeSend>(url: &str) -> C {
     vox::connect_lane(url)
         .establish()
         .await

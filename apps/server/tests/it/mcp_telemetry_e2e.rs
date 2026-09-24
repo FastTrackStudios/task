@@ -213,15 +213,15 @@ async fn telemetry_tools_read_the_cluster_for_operators_only() {
     let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let fakes = serve_fakes(Arc::clone(&seen)).await;
 
-    // SAFETY: one test per binary. The telemetry URLs and the static
-    // token are read per request, not at boot, so setting them before
-    // `boot_app_state` takes its env lock is race-free here.
-    unsafe {
-        std::env::set_var("TASK_TELEMETRY_TEMPO_URL", &fakes);
-        std::env::set_var("TASK_TELEMETRY_LOKI_URL", format!("{fakes}/"));
-        std::env::set_var("TASK_MCP_TOKEN", TOKEN);
-    }
-    let (state, _tmp) = support::boot_app_state().await.expect("boot");
+    // The telemetry URLs and the static token are read per request.
+    let loki = format!("{fakes}/");
+    let (state, _tmp) = support::boot_app_state_env(&[
+        ("TASK_TELEMETRY_TEMPO_URL", fakes.as_str()),
+        ("TASK_TELEMETRY_LOKI_URL", loki.as_str()),
+        ("TASK_MCP_TOKEN", TOKEN),
+    ])
+    .await
+    .expect("boot");
     let home = state.org(support::ORG).expect("home org");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

@@ -21,8 +21,10 @@ async fn main() -> eyre::Result<()> {
     // Sentry error/crash telemetry — hold the guard for all of `main`.
     let _sentry = architect_telemetry::init("task-server");
 
+    // What is logged without RUST_LOG — and, below, what is exported.
+    const LOG_DEFAULT: &str = "task_server=info,tower_http=info";
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "task_server=info,tower_http=info".into());
+        .unwrap_or_else(|_| LOG_DEFAULT.into());
     let registry = tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
@@ -31,7 +33,7 @@ async fn main() -> eyre::Result<()> {
     // is set (the cluster points it at the collector; local runs stay
     // telemetry-free). The guard flushes the exporters on drop, so it
     // lives until the end of `main`.
-    let _otel = match architect_telemetry::otel::init("task-server") {
+    let _otel = match architect_telemetry::otel::init("task-server", LOG_DEFAULT) {
         Some((guard, layers)) => {
             registry.with(layers).init();
             info!("OTLP export enabled");

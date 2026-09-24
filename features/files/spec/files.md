@@ -523,6 +523,30 @@ is an owner's or admin's act.
 
 ---
 
+### A folder link may open its documents
+
+t[files.access.link-documents]
+A public link to a folder serves its media as renditions only, unless it carries
+download. A link may also carry *documents*: the folder's small, non-media files
+— a session, a chart, the text an app opens the folder by — are then served
+whole. Media is told from a document by what the file is, never by what the
+request asks for, and a document is bounded in size; neither widens what the
+link serves of the media beside it, which stays renditions-only.
+
+---
+
+### A committed proxy is the rendition
+
+t[files.access.link-proxies]
+A media file may keep its proxy as an ordinary file beside it — `Media/Bass.wav`
+by `Media/Proxies/Bass.ogg` — so the proxy is versioned and synced with what it
+stands in for rather than derived on a server. Where one exists, a link's audio
+rendition of the media is that file, streamed by byte range; where none does, it
+is the derived rendition. Either way the link serves a proxy and never the
+original.
+
+---
+
 ## Review
 
 The guest lane. Everywhere else the caller is a member of the org and the

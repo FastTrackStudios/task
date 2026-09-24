@@ -126,7 +126,7 @@ fn audible(
 impl TreeServiceStreamSource for FilesBackend {
     // t[impl files.live.propagation] — v2: one stream, every lane, filtered
     // to what the subscriber may read
-    fn events_attach(&self, root_id: Option<RootId>, sink: architect::vox::Tx<FilesEvent>) {
+    fn events_attach(&self, root_id: Option<RootId>, sink: architect::EventSink<FilesEvent>) {
         // Captured here, on the request task, while the gate's caller is
         // still in scope; the relay below runs after it has gone.
         let who = caller::current();

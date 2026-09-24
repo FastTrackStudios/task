@@ -214,8 +214,13 @@ check:
 build:
     cargo build --workspace
 
+# One process per test, as the gate runs them: the integration binary's
+# tests set process-wide environment the server reads (some of it per
+# request — see apps/server/tests/it/support's env_lock), which only
+# nextest's isolation makes sound. Doctests are cargo test's alone.
 test:
-    cargo test --workspace
+    cargo nextest run --workspace
+    cargo test --workspace --doc
 
 # Browser tests — Playwright. Run inside the dev shell
 # so Chromium + node come from Nix (it sets

@@ -497,7 +497,7 @@ impl TreeServiceStreamSource for GuestLanes {
     /// Narrowing to any root but the review's own hears nothing. The link
     /// is re-checked per event, so a revoked link goes quiet mid-stream
     /// exactly as its calls start failing.
-    fn events_attach(&self, root_id: Option<RootId>, sink: architect::vox::Tx<FilesEvent>) {
+    fn events_attach(&self, root_id: Option<RootId>, sink: architect::EventSink<FilesEvent>) {
         if self.live_link().is_err() || root_id.is_some_and(|r| r != self.root_id()) {
             return;
         }

@@ -75,6 +75,7 @@ mod org_ctx;
 // `intake` (fitness) reuses pantry's client helpers, so the module
 // compiles under either plugin.
 mod files;
+mod files_bytes;
 #[cfg(any(feature = "plugin-mealplan", feature = "plugin-fitness"))]
 mod pantry;
 mod patch;
@@ -101,6 +102,7 @@ mod sample;
 /// the move is legible as a move.
 pub(crate) use task_client::session as session_store;
 mod setup;
+mod share_cmd;
 mod shared;
 mod skills;
 mod task_cmd;
@@ -270,6 +272,11 @@ enum Commands {
     /// (`<org>/assets/charts/<slug>.md`, ADR 0004) — save, read, list,
     /// delete. The
     /// same four RPCs Keyflow itself calls (ADR 0003).
+    /// Share links — a folder of a File Root for someone with no
+    /// account (a band, a client, a public demo): mint, list, pause,
+    /// revoke, and read who used them.
+    #[command(subcommand)]
+    Share(share_cmd::ShareCmd),
     #[command(subcommand)]
     Chart(chart::ChartCmd),
     /// Signal patches kept in the org's resources tier
@@ -848,6 +855,9 @@ async fn run(cli: Cli) -> eyre::Result<()> {
         Commands::Files(cmd) => {
             return run_files(cmd, cli.org.as_deref()).await;
         }
+        Commands::Share(cmd) => {
+            return share_cmd::run_share(cmd, cli.org.as_deref()).await;
+        }
         Commands::Chart(cmd) => {
             return chart::run_chart(cmd, cli.org.as_deref()).await;
         }
@@ -1156,7 +1166,7 @@ where
 /// (`(embedded)` in-process).
 async fn establish_server_client<C>(server: Option<&str>) -> eyre::Result<(C, String)>
 where
-    C: vox_core::FromVoxLane + 'static,
+    C: vox_core::FromVoxLane + vox::MaybeSend + 'static,
 {
     client(server).server().await.map_err(client_error)
 }

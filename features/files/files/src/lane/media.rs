@@ -950,7 +950,7 @@ const FRAME: usize = 64 * 1024;
 impl files_proto::service::media::MediaServiceStreamSource for FilesBackend {
     // t[impl files.scale.large-media] — streamed, ranged, never held whole
     // t[impl files.scale.transport] — bytes ride vox, with vox's flow control
-    fn bytes_attach(&self, request: ByteRequest, sink: architect::vox::Tx<ByteFrame>) {
+    fn bytes_attach(&self, request: ByteRequest, sink: architect::EventSink<ByteFrame>) {
         let backend = self.clone();
         tokio::spawn(async move {
             stream_bytes(&backend, &request, &sink).await;
@@ -967,7 +967,7 @@ impl files_proto::service::media::MediaServiceStreamSource for FilesBackend {
 async fn stream_bytes(
     backend: &FilesBackend,
     request: &ByteRequest,
-    sink: &architect::vox::Tx<ByteFrame>,
+    sink: &architect::EventSink<ByteFrame>,
 ) {
     let ticket = match backend.byte_ticket(&request.token) {
         Ok(t) => t,

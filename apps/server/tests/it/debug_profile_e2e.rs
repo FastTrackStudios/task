@@ -15,13 +15,10 @@ const TOKEN: &str = "debug-profile-operator";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn debug_profile_routes_answer_operators_only() {
-    // SAFETY: one test per binary; the static token is read per request,
-    // not at boot, so setting it before `boot_app_state` takes its env
-    // lock is race-free here.
-    unsafe {
-        std::env::set_var("TASK_MCP_TOKEN", TOKEN);
-    }
-    let (state, _tmp) = support::boot_app_state().await.expect("boot");
+    // The static token is read per request.
+    let (state, _tmp) = support::boot_app_state_env(&[("TASK_MCP_TOKEN", TOKEN)])
+        .await
+        .expect("boot");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -55,6 +52,23 @@ async fn debug_profile_routes_answer_operators_only() {
         .await
         .unwrap();
     assert_eq!(res.status(), 400);
+
+    // ── off Linux: the routes say they are Linux-only ────────────
+    // Per-thread CPU reads /proc and the profiler samples on SIGPROF; the
+    // gate runs on Linux. Elsewhere (a developer's Mac) both routes
+    // answer 501 plainly, and there is nothing more to check.
+    if cfg!(not(target_os = "linux")) {
+        for path in ["/server/debug/profile?seconds=1", "/server/debug/threads"] {
+            let res = client
+                .get(format!("{base}{path}"))
+                .bearer_auth(TOKEN)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), 501, "{path} off Linux");
+        }
+        return;
+    }
 
     // ── threads: a non-empty table with a tokio worker in it ─────
     let res = client

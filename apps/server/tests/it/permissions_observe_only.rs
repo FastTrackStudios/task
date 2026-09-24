@@ -16,12 +16,10 @@
 use task_server::{AppState, permission_deny_ledger, router};
 use vault_proto::VaultSyncClient;
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 #[tokio::test(flavor = "multi_thread")]
 async fn observe_only_passes_through_and_records_what_it_would_deny() {
     let tmp = tempfile::tempdir().expect("temp data root");
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` while `AppState::new` reads the env.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());

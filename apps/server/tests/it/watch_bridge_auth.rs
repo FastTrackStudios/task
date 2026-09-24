@@ -14,8 +14,6 @@
 use architect_auth::CreateEmailPasswordUser;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 const SLUG: &str = "watch-test";
 const DEVICE_TOKEN: &str = "watch-bridge-test-device-token";
 
@@ -28,7 +26,7 @@ async fn boot_server() -> eyre::Result<(String, AuthState, tempfile::TempDir)> {
     let keypair = ServerKeypair::generate_ephemeral();
 
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` while `AppState` reads the env.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());

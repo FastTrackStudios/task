@@ -20,14 +20,12 @@ use files_transcode::transcoder::FakeTranscoder;
 use share_proto::{NewShareLink, ShareCapabilities, ShareService as _, ShareTarget};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 /// Boot a server with a Media root holding `cut.mov` (reviewed) and
 /// `secret.mov` (not shared).
 async fn boot() -> eyre::Result<(String, AppState, uuid::Uuid, tempfile::TempDir)> {
     let auth = AuthState::open("sqlite::memory:", "test-secret-at-least-32-bytes!!!").await?;
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` while `AppState` reads the env.
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
@@ -81,7 +79,7 @@ fn svc(state: &AppState) -> task_server::share::ShareServiceImpl {
 /// One lane of the guest surface, dialled anonymously at the link.
 async fn guest_client<C>(base: &str, token: &str, pw: &str) -> eyre::Result<C>
 where
-    C: vox_core::FromVoxLane + 'static,
+    C: vox_core::FromVoxLane + vox::MaybeSend + 'static,
 {
     let ws = base.replace("http://", "ws://");
     let suffix = if pw.is_empty() {
@@ -143,6 +141,7 @@ async fn guest_lane_comments_scoped_and_attributed() -> eyre::Result<()> {
                     comment: true,
                     download: false,
                     file_request: false,
+                    documents: false,
                 }),
                 password: None,
                 expires_unix: None,
@@ -408,6 +407,7 @@ async fn file_request_uploads_land_incoming_and_promote() -> eyre::Result<()> {
                     comment: false,
                     download: false,
                     file_request: true,
+                    documents: false,
                 }),
                 password: None,
                 expires_unix: None,
@@ -513,6 +513,7 @@ async fn file_request_uploads_land_incoming_and_promote() -> eyre::Result<()> {
                     comment: false,
                     download: false,
                     file_request: true,
+                    documents: false,
                 }),
                 password: None,
                 expires_unix: None,

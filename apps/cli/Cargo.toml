@@ -145,6 +145,8 @@ links.workspace = true
 # sidecar stores them).
 resources-proto = { workspace = true, features = ["vox"] }
 resources = { workspace = true }
+# `task share …` — the share-link lane (mint / list / revoke / log).
+share-proto = { workspace = true }
 wiki-proto = { workspace = true, optional = true }
 wiki-search = { workspace = true, optional = true }
 # `task-cli wiki archive <url|file>` — URL router + content
@@ -171,6 +173,9 @@ timer = { workspace = true }
 # `task files …` — the Files RPC surface v1 (issue #259, ADR 0001);
 # client-only, no direct-disk fallback (unlike timer's local SQLite).
 files-proto = { workspace = true, features = ["vox"] }
+# `task files put / get / render / root ensure` — the lanes as an app
+# uses them (ADR 0005).
+files-client = { workspace = true }
 sea-orm = { workspace = true }
 sea-orm-migration = { workspace = true }
 # `task-cli auth …` — local-sqlite ArchitectAuth flow. Same

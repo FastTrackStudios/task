@@ -48,6 +48,8 @@ async fn next_event<Ev: Clone + vox::facet::Facet<'static> + 'static>(
 async fn entity_streams_deliver_mutations_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
     // SAFETY: one test per binary, so nothing races this env setup.
+    // The process environment is shared by every test in this binary.
+    let env_guard = crate::support::env_lock().await;
     unsafe {
         std::env::set_var("TASK_DATA_ROOT", tmp.path());
         for var in ["TASK_SERVER_ORG", "TASK_SERVER_VAULT_ROOT"] {
@@ -60,6 +62,7 @@ async fn entity_streams_deliver_mutations_end_to_end() {
     std::fs::create_dir_all(org_root.vault_dir()).unwrap();
 
     let state = AppState::new(None).await.expect("boot AppState");
+    drop(env_guard);
     let scope = Scope::new();
     let local = state
         .local_server("alpha", &scope)

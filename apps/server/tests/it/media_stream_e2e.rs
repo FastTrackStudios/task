@@ -9,11 +9,9 @@ use attachments_proto::{AttachmentServiceClient, CompleteUpload, InitiateUpload}
 use media_proto::{AttachmentMediaServiceClient, MediaChunk, MediaError};
 use task_server::{AppState, router};
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn boot_server() -> eyre::Result<(String, String, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
-    let guard = ENV_LOCK.lock().await;
+    let guard = crate::support::env_lock().await;
     // SAFETY: held under `ENV_LOCK` for the duration of
     // `AppState::new`, which reads the vars exactly once (same boot
     // shape as `collection_e2e` — blobs land under the default data
@@ -47,7 +45,7 @@ async fn boot_server() -> eyre::Result<(String, String, tempfile::TempDir)> {
     ))
 }
 
-async fn connect<C: vox_core::FromVoxLane>(url: &str) -> eyre::Result<C> {
+async fn connect<C: vox_core::FromVoxLane + vox::MaybeSend>(url: &str) -> eyre::Result<C> {
     vox::connect_lane(url)
         .establish()
         .await
