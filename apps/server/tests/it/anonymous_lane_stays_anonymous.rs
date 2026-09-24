@@ -47,7 +47,6 @@ use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
 const ORG: &str = "lane-identity-test";
 
-
 /// Boot a sandboxed, ENFORCING server with one org. Returns the org
 /// lane's URL, the auth state to mint a session from, and the data root
 /// (which must outlive the test or the org vanishes underneath it).

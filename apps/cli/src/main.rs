@@ -102,8 +102,8 @@ mod sample;
 /// the move is legible as a move.
 pub(crate) use task_client::session as session_store;
 mod setup;
-mod shared;
 mod share_cmd;
+mod shared;
 mod skills;
 mod task_cmd;
 mod threads;

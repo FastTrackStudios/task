@@ -165,10 +165,15 @@ pub(crate) async fn put(vox_url: &str, args: PutArgs) -> eyre::Result<()> {
             SaveArg::KeepBoth => Save::keep_both(),
         })
     };
-    let meta = std::fs::metadata(&args.local)
-        .map_err(|e| eyre::eyre!("{}: {e}", args.local.display()))?;
+    let meta =
+        std::fs::metadata(&args.local).map_err(|e| eyre::eyre!("{}: {e}", args.local.display()))?;
     let uploads: Vec<(PathBuf, String)> = if meta.is_dir() {
-        let base = args.to.as_deref().unwrap_or("").trim_matches('/').to_owned();
+        let base = args
+            .to
+            .as_deref()
+            .unwrap_or("")
+            .trim_matches('/')
+            .to_owned();
         let mut found = Vec::new();
         walk(&args.local, &args.local, &mut found)?;
         found
@@ -296,8 +301,19 @@ fn is_media(name: &str) -> bool {
         .unwrap_or_default();
     matches!(
         ext.as_str(),
-        "wav" | "aif" | "aiff" | "flac" | "mp3" | "ogg" | "m4a" | "aac" | "caf" | "mp4" | "mov"
-            | "mkv" | "webm"
+        "wav"
+            | "aif"
+            | "aiff"
+            | "flac"
+            | "mp3"
+            | "ogg"
+            | "m4a"
+            | "aac"
+            | "caf"
+            | "mp4"
+            | "mov"
+            | "mkv"
+            | "webm"
     )
 }
 

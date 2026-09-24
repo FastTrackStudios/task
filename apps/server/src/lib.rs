@@ -49,6 +49,8 @@ pub mod memberships;
 // link store keeps its `NoFederation` default, which is the honest
 // answer for a single-org server.
 pub mod device_enrollment;
+#[cfg(feature = "plugin-fasttrackstudio")]
+pub mod live;
 #[cfg(feature = "plugin-wiki")]
 pub mod node_homes;
 pub mod notifier;
@@ -56,8 +58,6 @@ pub mod operator;
 pub mod org_roots;
 pub mod otlp;
 pub mod permits;
-#[cfg(feature = "plugin-fasttrackstudio")]
-pub mod live;
 pub mod presence;
 pub mod server_mgmt;
 pub mod share;
@@ -2060,7 +2060,11 @@ pub(crate) async fn build_org_state(
         permits::log_coverage(org_root.slug(), &permissions, enforce_permissions());
         let shares = Arc::new(share::ShareStore::open(org_root.path()));
         #[cfg(feature = "plugin-fasttrackstudio")]
-        let live = live::LiveHost::new(org_root.slug().to_owned(), collections.clone(), resources.clone());
+        let live = live::LiveHost::new(
+            org_root.slug().to_owned(),
+            collections.clone(),
+            resources.clone(),
+        );
 
         Ok(OrgAppState {
             slug: org_root.slug().to_owned(),
@@ -2747,7 +2751,15 @@ pub(crate) fn rendition_stream_response(
     total: u64,
     range: Option<(u64, u64)>,
 ) -> axum::response::Response {
-    stream_response(org, root_id, file_id, StreamFrom::Rendition, mime, total, range)
+    stream_response(
+        org,
+        root_id,
+        file_id,
+        StreamFrom::Rendition,
+        mime,
+        total,
+        range,
+    )
 }
 
 /// Which store a streamed response reads from.
@@ -4415,7 +4427,10 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 /// vault files to the vault's registry.
 #[cfg(feature = "plugin-fasttrackstudio")]
 fn org_doc_sync(org: &OrgAppState) -> live::DocSyncRouter {
-    live::DocSyncRouter { live: org.live.clone(), vault: org.vault_collab.registry().clone() }
+    live::DocSyncRouter {
+        live: org.live.clone(),
+        vault: org.vault_collab.registry().clone(),
+    }
 }
 
 #[cfg(not(feature = "plugin-fasttrackstudio"))]

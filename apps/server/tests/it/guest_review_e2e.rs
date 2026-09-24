@@ -20,7 +20,6 @@ use files_transcode::transcoder::FakeTranscoder;
 use share_proto::{NewShareLink, ShareCapabilities, ShareService as _, ShareTarget};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 /// Boot a server with a Media root holding `cut.mov` (reviewed) and
 /// `secret.mov` (not shared).
 async fn boot() -> eyre::Result<(String, AppState, uuid::Uuid, tempfile::TempDir)> {

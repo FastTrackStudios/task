@@ -14,7 +14,6 @@
 use architect_auth::CreateEmailPasswordUser;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 const SLUG: &str = "watch-test";
 const DEVICE_TOKEN: &str = "watch-bridge-test-device-token";
 

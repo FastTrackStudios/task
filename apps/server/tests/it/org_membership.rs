@@ -21,7 +21,6 @@
 use architect_auth::CreateEmailPasswordUser;
 use task_server::{AppState, router};
 
-
 /// 32+ chars, as `auth_secret` requires.
 const TEST_AUTH_SECRET: &str = "task-server-test-auth-secret-32+!";
 

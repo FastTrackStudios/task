@@ -9,7 +9,6 @@ use attachments_proto::{AttachmentServiceClient, CompleteUpload, InitiateUpload}
 use media_proto::{AttachmentMediaServiceClient, MediaChunk, MediaError};
 use task_server::{AppState, router};
 
-
 async fn boot_server() -> eyre::Result<(String, String, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
     let guard = crate::support::env_lock().await;

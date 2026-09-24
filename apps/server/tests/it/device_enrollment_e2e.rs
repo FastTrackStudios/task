@@ -16,7 +16,6 @@ use task_server::{AppState, router};
 const TOKEN: &str = "central-session-token";
 const ENDPOINT: &str = "4bca942e5de4cda31d40c920ee4b88b01bf08cfd34ed1777cfcb953fcd072c6f";
 
-
 async fn boot() -> eyre::Result<(AppState, String, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
     unsafe {

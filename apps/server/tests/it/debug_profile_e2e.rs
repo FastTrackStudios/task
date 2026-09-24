@@ -16,7 +16,9 @@ const TOKEN: &str = "debug-profile-operator";
 #[tokio::test(flavor = "multi_thread")]
 async fn debug_profile_routes_answer_operators_only() {
     // The static token is read per request.
-    let (state, _tmp) = support::boot_app_state_env(&[("TASK_MCP_TOKEN", TOKEN)]).await.expect("boot");
+    let (state, _tmp) = support::boot_app_state_env(&[("TASK_MCP_TOKEN", TOKEN)])
+        .await
+        .expect("boot");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -57,7 +59,12 @@ async fn debug_profile_routes_answer_operators_only() {
     // answer 501 plainly, and there is nothing more to check.
     if cfg!(not(target_os = "linux")) {
         for path in ["/server/debug/profile?seconds=1", "/server/debug/threads"] {
-            let res = client.get(format!("{base}{path}")).bearer_auth(TOKEN).send().await.unwrap();
+            let res = client
+                .get(format!("{base}{path}"))
+                .bearer_auth(TOKEN)
+                .send()
+                .await
+                .unwrap();
             assert_eq!(res.status(), 501, "{path} off Linux");
         }
         return;

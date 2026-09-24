@@ -20,7 +20,11 @@ use task_server::memberships::Memberships;
 /// the returned guard for as long as the test reads it.
 async fn data_root(
     with: &[(&str, &str, bool)],
-) -> (tempfile::TempDir, org_proto::DataRoot, tokio::sync::MutexGuard<'static, ()>) {
+) -> (
+    tempfile::TempDir,
+    org_proto::DataRoot,
+    tokio::sync::MutexGuard<'static, ()>,
+) {
     let tmp = tempfile::tempdir().unwrap();
     let env_guard = crate::support::env_lock().await;
     // SAFETY: held under the binary's one `ENV_LOCK`.
@@ -48,7 +52,8 @@ async fn a_rename_moves_the_directory_manifest_roots_and_memberships() {
     let (_tmp, root, _env) = data_root(&[
         ("home", "Home", true),
         ("fasttrackstudios", "FastTrackStudios", false),
-    ]).await;
+    ])
+    .await;
     let old = root.org("fasttrackstudios");
     let home = root.org("home");
 
@@ -186,7 +191,8 @@ async fn an_existing_target_is_refused() {
         ("home", "Home", true),
         ("alpha", "Alpha", false),
         ("beta", "Beta", false),
-    ]).await;
+    ])
+    .await;
     let err = rename_org(&args(&[("--from", "alpha"), ("--to", "beta")]))
         .await
         .expect_err("collision must be refused");

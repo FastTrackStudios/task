@@ -52,6 +52,8 @@ mod email_to_task_e2e;
 mod entity_events_stream;
 mod guest_review_e2e;
 mod iroh_peer_dir;
+#[cfg(feature = "plugin-fasttrackstudio")]
+mod live_e2e;
 mod local_transport;
 mod mcp_account_e2e;
 mod mcp_chart_e2e;
@@ -67,8 +69,6 @@ mod permissions_observe_only;
 mod permits_cover_router;
 mod personal_org_e2e;
 mod plugin_toggle_e2e;
-#[cfg(feature = "plugin-fasttrackstudio")]
-mod live_e2e;
 mod presence_relay;
 mod rename_org;
 mod rendition_route;

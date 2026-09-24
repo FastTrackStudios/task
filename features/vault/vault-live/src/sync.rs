@@ -1025,7 +1025,10 @@ fn forward_watcher_events(
             watcher::VaultEvent::Changed { abs_path } => abs_path,
             watcher::VaultEvent::Removed { abs_path } => abs_path,
         };
-        let Ok(rel_path) = abs.strip_prefix(&root).or_else(|_| abs.strip_prefix(&canonical)) else {
+        let Ok(rel_path) = abs
+            .strip_prefix(&root)
+            .or_else(|_| abs.strip_prefix(&canonical))
+        else {
             continue;
         };
         let rel = rel_path.to_string_lossy().replace('\\', "/");

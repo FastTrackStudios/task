@@ -49,7 +49,10 @@ const SETLIST_KIND: &str = "songlist";
 /// A song's (or a set's presence channel's) doc id in one epoch.
 #[must_use]
 pub fn doc_id(org: &str, setlist: &str, epoch: u64, part: &str) -> Uuid {
-    Uuid::new_v5(&NAMESPACE, format!("{org}/{setlist}/{epoch}/{part}").as_bytes())
+    Uuid::new_v5(
+        &NAMESPACE,
+        format!("{org}/{setlist}/{epoch}/{part}").as_bytes(),
+    )
 }
 
 /// Where a set is.
@@ -89,7 +92,11 @@ impl LiveHost {
     /// The live sessions of the org `org`, its setlists read from
     /// `collections` and their songs' titles from `resources`.
     #[must_use]
-    pub fn new(org: String, collections: collection::Store, resources: resources::ResourcesBackend) -> Self {
+    pub fn new(
+        org: String,
+        collections: collection::Store,
+        resources: resources::ResourcesBackend,
+    ) -> Self {
         let admitted: Arc<Mutex<HashSet<Uuid>>> = Arc::default();
         let admit = Arc::clone(&admitted);
         // Every doc starts empty — the first peer on a song seeds it —
@@ -152,16 +159,22 @@ impl LiveHost {
             .collect();
         let (epoch, start_resetting) = {
             let mut sets = lock(&self.inner.sets);
-            let state = sets
-                .entry(setlist.to_owned())
-                .or_insert_with(|| SetState { epoch: 0, reset: None, started_at: now_micros(), ids: Vec::new() });
+            let state = sets.entry(setlist.to_owned()).or_insert_with(|| SetState {
+                epoch: 0,
+                reset: None,
+                started_at: now_micros(),
+                ids: Vec::new(),
+            });
             let start = state.reset.is_none() && reset.is_some();
             if start {
                 state.reset = reset.map(|r| r.max(SHORTEST_RESET));
                 state.started_at = now_micros();
             }
             let epoch = state.epoch;
-            let mut ids: Vec<Uuid> = slugs.iter().map(|s| doc_id(&self.inner.org, setlist, epoch, s)).collect();
+            let mut ids: Vec<Uuid> = slugs
+                .iter()
+                .map(|s| doc_id(&self.inner.org, setlist, epoch, s))
+                .collect();
             ids.push(doc_id(&self.inner.org, setlist, epoch, "presence"));
             lock(&self.inner.admitted).extend(ids.iter().copied());
             state.ids = ids;
@@ -183,7 +196,10 @@ impl LiveHost {
             .get(setlist)
             .and_then(|s| Some((s.reset?, s.started_at)))
             .map_or((None, None), |(every, started)| {
-                (u32::try_from(every.as_secs()).ok(), Some(started + every.as_secs_f64() * 1e6))
+                (
+                    u32::try_from(every.as_secs()).ok(),
+                    Some(started + every.as_secs_f64() * 1e6),
+                )
             });
         wide::set("live.setlist", setlist.to_owned());
         wide::set("live.epoch", i64::try_from(epoch).unwrap_or(i64::MAX));
@@ -200,7 +216,11 @@ impl LiveHost {
 
     fn title(&self, slug: &str) -> String {
         use resources_proto::ResourcesService as _;
-        self.inner.resources.song(slug).map(|s| s.title).unwrap_or_else(|_| slug.to_owned())
+        self.inner
+            .resources
+            .song(slug)
+            .map(|s| s.title)
+            .unwrap_or_else(|_| slug.to_owned())
     }
 
     /// Move `setlist` on to its next epoch: the old ids are no longer
@@ -217,8 +237,15 @@ impl LiveHost {
             state.started_at = now_micros();
             state.epoch
         };
-        tracing::info!(live.setlist = setlist, live.epoch = epoch, "live: the set starts over");
-        self.inner.epochs.publish(LiveEpoch { setlist: setlist.to_owned(), epoch });
+        tracing::info!(
+            live.setlist = setlist,
+            live.epoch = epoch,
+            "live: the set starts over"
+        );
+        self.inner.epochs.publish(LiveEpoch {
+            setlist: setlist.to_owned(),
+            epoch,
+        });
         Some(epoch)
     }
 
@@ -276,7 +303,11 @@ pub struct GuestLiveLane {
 impl live_proto::LiveSessions for GuestLiveLane {
     /// `setlist` empty joins the link's set — a guest need not know its id.
     async fn join(&self, setlist: String) -> Result<LiveSet, LiveError> {
-        let setlist = if setlist.is_empty() { self.setlist.clone() } else { setlist };
+        let setlist = if setlist.is_empty() {
+            self.setlist.clone()
+        } else {
+            setlist
+        };
         if setlist != self.setlist {
             tracing::warn!(live.setlist = %setlist, "live: a guest asked for a set its link does not share");
             return Err(LiveError::NotAllowed("this link shares another set".into()));
@@ -340,7 +371,12 @@ impl DocSync for LiveOnly {
 }
 
 impl DocPresence for LiveOnly {
-    async fn presence(&self, doc_id: Uuid, up: vox::Rx<Vec<u8>>, down: vox::Tx<Vec<u8>>) -> Result<(), SyncError> {
+    async fn presence(
+        &self,
+        doc_id: Uuid,
+        up: vox::Rx<Vec<u8>>,
+        down: vox::Tx<Vec<u8>>,
+    ) -> Result<(), SyncError> {
         self.0.registry().presence(doc_id, up, down).await
     }
 }
@@ -352,8 +388,20 @@ mod tests {
     #[test]
     fn a_songs_doc_is_the_same_everywhere_and_new_each_epoch() {
         let a = doc_id("days-to-praise", "worship-set", 0, "washed");
-        assert_eq!(a, doc_id("days-to-praise", "worship-set", 0, "washed"), "every peer meets in one doc");
-        assert_ne!(a, doc_id("days-to-praise", "worship-set", 1, "washed"), "a reset starts it over");
-        assert_ne!(a, doc_id("acme-audio", "worship-set", 0, "washed"), "orgs never share one");
+        assert_eq!(
+            a,
+            doc_id("days-to-praise", "worship-set", 0, "washed"),
+            "every peer meets in one doc"
+        );
+        assert_ne!(
+            a,
+            doc_id("days-to-praise", "worship-set", 1, "washed"),
+            "a reset starts it over"
+        );
+        assert_ne!(
+            a,
+            doc_id("acme-audio", "worship-set", 0, "washed"),
+            "orgs never share one"
+        );
     }
 }

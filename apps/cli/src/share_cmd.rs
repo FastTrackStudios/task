@@ -16,7 +16,9 @@
 //! collide on the two-line dispatch arm.
 
 use clap::Subcommand;
-use share_proto::{NewShareLink, ShareCapabilities, ShareLinkInfo, ShareServiceClient, ShareTarget};
+use share_proto::{
+    NewShareLink, ShareCapabilities, ShareLinkInfo, ShareServiceClient, ShareTarget,
+};
 
 use crate::{establish_for_url, resolve_org_vox_url};
 
@@ -137,11 +139,25 @@ pub async fn run_share(cmd: ShareCmd, org_override: Option<&str>) -> eyre::Resul
                 .map_err(|e| eyre::eyre!("create link: {e}"))?;
             print_link(&link, json)?;
         }
-        ShareCmd::Live { setlist, label, reset_minutes, password, json } => {
+        ShareCmd::Live {
+            setlist,
+            label,
+            reset_minutes,
+            password,
+            json,
+        } => {
             let link = share
                 .create_link(
-                    ShareTarget::Live { setlist, reset_secs: reset_minutes.saturating_mul(60) },
-                    NewShareLink { label, capabilities: None, password, expires_unix: None },
+                    ShareTarget::Live {
+                        setlist,
+                        reset_secs: reset_minutes.saturating_mul(60),
+                    },
+                    NewShareLink {
+                        label,
+                        capabilities: None,
+                        password,
+                        expires_unix: None,
+                    },
                 )
                 .await
                 .map_err(|e| eyre::eyre!("create link: {e}"))?;

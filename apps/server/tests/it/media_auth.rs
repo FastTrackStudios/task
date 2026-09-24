@@ -18,7 +18,6 @@
 
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 /// Boot a server with one org and a media file on disk.
 /// `enforce` drives `TASK_ENFORCE_MEDIA_TOKEN`.
 async fn boot(enforce: bool) -> eyre::Result<(String, AppState, tempfile::TempDir)> {

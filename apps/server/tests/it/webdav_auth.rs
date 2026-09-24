@@ -20,7 +20,6 @@ use base64::Engine as _;
 use files::RootFlavor;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 const EMAIL: &str = "producer@example.test";
 const PASSWORD: &str = "correct-horse-battery-staple";
 

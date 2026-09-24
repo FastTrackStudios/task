@@ -16,7 +16,6 @@
 use task_server::{AppState, permission_deny_ledger, router};
 use vault_proto::VaultSyncClient;
 
-
 #[tokio::test(flavor = "multi_thread")]
 async fn observe_only_passes_through_and_records_what_it_would_deny() {
     let tmp = tempfile::tempdir().expect("temp data root");

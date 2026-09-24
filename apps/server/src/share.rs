@@ -949,7 +949,9 @@ pub async fn share_list_handler(
     let mut pending = vec![String::new()];
     while let Some(rel) = pending.pop() {
         let full = join_scope(&scope.subpath, &rel);
-        let Ok(path) = files::RootPath::parse(&full) else { continue };
+        let Ok(path) = files::RootPath::parse(&full) else {
+            continue;
+        };
         let Ok(listed) = org
             .files
             .browse_at(files::RootId::new(scope.root_id), path, version.clone())
@@ -958,7 +960,11 @@ pub async fn share_list_handler(
             continue;
         };
         for e in listed {
-            let child = if rel.is_empty() { e.name.clone() } else { format!("{rel}/{}", e.name) };
+            let child = if rel.is_empty() {
+                e.name.clone()
+            } else {
+                format!("{rel}/{}", e.name)
+            };
             if e.is_dir {
                 pending.push(child);
             } else {
@@ -968,7 +974,11 @@ pub async fn share_list_handler(
                     Some(n) => Some(n),
                     None => org
                         .files
-                        .resolve_source(scope.root_id, join_scope(&scope.subpath, &child), scope.at.clone())
+                        .resolve_source(
+                            scope.root_id,
+                            join_scope(&scope.subpath, &child),
+                            scope.at.clone(),
+                        )
                         .await
                         .ok()
                         .map(|(len, _)| len),
@@ -978,7 +988,10 @@ pub async fn share_list_handler(
         }
     }
     wide::set("share.outcome", "list");
-    wide::set("share.list_len", i64::try_from(entries.len()).unwrap_or(i64::MAX));
+    wide::set(
+        "share.list_len",
+        i64::try_from(entries.len()).unwrap_or(i64::MAX),
+    );
     org.shares.log_access(&token, "list", "");
     axum::Json(serde_json::json!({ "entries": entries })).into_response()
 }
@@ -1322,7 +1335,11 @@ pub async fn share_guest_vox_handler(
         Err(resp) => return *resp,
     };
     #[cfg(feature = "plugin-fasttrackstudio")]
-    if let ShareTarget::Live { setlist, reset_secs } = link.target() {
+    if let ShareTarget::Live {
+        setlist,
+        reset_secs,
+    } = link.target()
+    {
         return live_guest(&state, &org, &token, setlist, reset_secs, ws).await;
     }
     let ShareTarget::Review { id } = link.target() else {
@@ -1397,7 +1414,10 @@ async fn live_guest(
         }
     };
     wide::set("share.outcome", "live-guest");
-    wide::set("live.songs_linked", i64::try_from(files.len()).unwrap_or(i64::MAX));
+    wide::set(
+        "live.songs_linked",
+        i64::try_from(files.len()).unwrap_or(i64::MAX),
+    );
     let lane = crate::live::GuestLiveLane {
         host: org.live.clone(),
         setlist,
@@ -1406,10 +1426,19 @@ async fn live_guest(
     };
     let only = crate::live::LiveOnly(org.live.clone());
     let router = architect::LayerRouter::new()
-        .with(live_proto::live_sessions_rpc_service_descriptor(), live_proto::serve(lane.clone()))
+        .with(
+            live_proto::live_sessions_rpc_service_descriptor(),
+            live_proto::serve(lane.clone()),
+        )
         .merge(live_proto::stream_layer(lane))
-        .with(crdt::sync::doc_sync_service_descriptor(), crdt::sync::DocSyncDispatcher::new(only.clone()))
-        .with(crdt::sync::doc_presence_service_descriptor(), crdt::sync::DocPresenceDispatcher::new(only));
+        .with(
+            crdt::sync::doc_sync_service_descriptor(),
+            crdt::sync::DocSyncDispatcher::new(only.clone()),
+        )
+        .with(
+            crdt::sync::doc_presence_service_descriptor(),
+            crdt::sync::DocPresenceDispatcher::new(only),
+        );
     let router = crate::snapshot::GatedRouter::new(router, state.write_gate.clone());
     ws.protocols([crate::VOX_SUBPROTOCOL])
         .on_upgrade(move |socket| architect::axum_ws::serve_router(socket, router))
@@ -1430,7 +1459,11 @@ async fn live_files(
         .get(setlist)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no setlist {setlist}"))?;
-    let roots = org.files.list().await.map_err(|e| format!("roots: {e:?}"))?;
+    let roots = org
+        .files
+        .list()
+        .await
+        .map_err(|e| format!("roots: {e:?}"))?;
     let shares = ShareServiceImpl::new(
         org.shares.clone(),
         org.slug.clone(),
@@ -1438,16 +1471,24 @@ async fn live_files(
         Some(org.files.clone()),
     );
     let mut out = std::collections::HashMap::new();
-    for item in collection.items.iter().filter(|i| i.node.kind == collection::NodeKind::Song) {
+    for item in collection
+        .items
+        .iter()
+        .filter(|i| i.node.kind == collection::NodeKind::Song)
+    {
         let slug = &item.node.id;
         let dir = format!("session/{slug}");
-        let Some(root) = roots
-            .iter()
-            .find(|r| r.path.as_deref().is_some_and(|p| p.trim_end_matches('/').ends_with(&dir)))
-        else {
+        let Some(root) = roots.iter().find(|r| {
+            r.path
+                .as_deref()
+                .is_some_and(|p| p.trim_end_matches('/').ends_with(&dir))
+        }) else {
             continue;
         };
-        let target = ShareTarget::Slice { root_id: root.id, subpath: String::new() };
+        let target = ShareTarget::Slice {
+            root_id: root.id,
+            subpath: String::new(),
+        };
         let existing = shares
             .links_for_target(target.clone())
             .await
@@ -1461,7 +1502,10 @@ async fn live_files(
                     target,
                     NewShareLink {
                         label: format!("live: {slug}"),
-                        capabilities: Some(ShareCapabilities { documents: true, ..ShareCapabilities::default() }),
+                        capabilities: Some(ShareCapabilities {
+                            documents: true,
+                            ..ShareCapabilities::default()
+                        }),
                         password: None,
                         expires_unix: None,
                     },

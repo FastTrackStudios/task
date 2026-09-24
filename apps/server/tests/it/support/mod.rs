@@ -56,7 +56,9 @@ pub async fn boot_app_state() -> eyre::Result<(AppState, tempfile::TempDir)> {
 /// after every other test's settings are cleared ([`env_lock`]). A
 /// variable read per request, not at boot, stays set after the boot —
 /// sound one-test-per-process (nextest), as the suite runs.
-pub async fn boot_app_state_env(env: &[(&str, &str)]) -> eyre::Result<(AppState, tempfile::TempDir)> {
+pub async fn boot_app_state_env(
+    env: &[(&str, &str)],
+) -> eyre::Result<(AppState, tempfile::TempDir)> {
     let tmp = tempfile::tempdir()?;
     let state = boot_over_env(tmp.path(), |_| {}, env).await?;
     Ok((state, tmp))

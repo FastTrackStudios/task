@@ -19,7 +19,6 @@ use files_proto::RenditionKind;
 use files_transcode::transcoder::FakeTranscoder;
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 /// Boot a server with one org, a Media File Root holding one video file
 /// (checkpointed), and the fake transcoder wired in. Returns the base
 /// URL, the state, the root id, and the tempdir keeping it all alive.

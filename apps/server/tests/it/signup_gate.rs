@@ -18,7 +18,6 @@
 
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 async fn boot(enforce: bool) -> eyre::Result<(String, tempfile::TempDir)> {
     let auth = AuthState::open("sqlite::memory:", "test-secret-at-least-32-bytes!!!").await?;
     let tmp = tempfile::tempdir()?;

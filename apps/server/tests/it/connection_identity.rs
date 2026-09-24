@@ -27,7 +27,6 @@ use architect_auth::CreateEmailPasswordUser;
 use task_server::{AppState, AuthState, capability::ServerKeypair, permission_deny_ledger, router};
 use vault_proto::VaultSyncClient;
 
-
 /// Boot a sandboxed server. Returns `(ws url, auth state, data root)` —
 /// the `TempDir` must outlive the test or the org vanishes underneath it.
 async fn boot() -> eyre::Result<(String, AuthState, tempfile::TempDir)> {

@@ -1384,9 +1384,21 @@ pub fn mounts() -> Vec<Mount> {
     v.extend([m("core", links::links_service_descriptor(), LINKS)]);
     #[cfg(feature = "plugin-fasttrackstudio")]
     v.extend([
-        m("fasttrackstudio", collection::collection_service_descriptor(), COLLECTION),
-        m("fasttrackstudio", live_proto::live_sessions_rpc_service_descriptor(), LIVE),
-        m("fasttrackstudio", live_proto::live_sessions_stream_service_descriptor(), LIVE_STREAM),
+        m(
+            "fasttrackstudio",
+            collection::collection_service_descriptor(),
+            COLLECTION,
+        ),
+        m(
+            "fasttrackstudio",
+            live_proto::live_sessions_rpc_service_descriptor(),
+            LIVE,
+        ),
+        m(
+            "fasttrackstudio",
+            live_proto::live_sessions_stream_service_descriptor(),
+            LIVE_STREAM,
+        ),
     ]);
     v.extend([m(
         "core",

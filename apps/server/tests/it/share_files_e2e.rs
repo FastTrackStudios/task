@@ -11,7 +11,6 @@ use files_transcode::transcoder::FakeTranscoder;
 use share_proto::{NewShareLink, ShareCapabilities, ShareService as _, ShareTarget};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 const V1_BYTES: &[u8] = b"VIDEOv1 the client cut ..............";
 
 /// Boot a server whose org has a Media root:
@@ -430,14 +429,26 @@ async fn a_documents_link_opens_the_session_not_its_media() -> eyre::Result<()> 
         .iter()
         .filter_map(|e| e["path"].as_str())
         .collect();
-    assert!(paths.contains(&"Song.RPP") && paths.contains(&"Song.kf"), "{paths:?}");
-    let rpp = listed["entries"].as_array().unwrap().iter().find(|e| e["path"] == "Song.RPP").unwrap();
+    assert!(
+        paths.contains(&"Song.RPP") && paths.contains(&"Song.kf"),
+        "{paths:?}"
+    );
+    let rpp = listed["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "Song.RPP")
+        .unwrap();
     let rpp_len = b"<REAPER_PROJECT 0.1 \"7.0\"\n>\n".len();
-    assert_eq!(rpp["size"], rpp_len, "with the length the byte routes serve");
+    assert_eq!(
+        rpp["size"], rpp_len,
+        "with the length the byte routes serve"
+    );
 
     let log = share.access_log(demo.token.clone()).await.expect("log");
     assert!(
-        log.iter().any(|a| a.kind == "document" && a.path == "Song.RPP"),
+        log.iter()
+            .any(|a| a.kind == "document" && a.path == "Song.RPP"),
         "document reads are receipted: {log:?}"
     );
     Ok(())
@@ -455,7 +466,10 @@ async fn a_committed_proxy_is_the_audio_rendition() -> eyre::Result<()> {
     let org = state.org("share-test").expect("org hosted");
     let takes = tmp.path().join("orgs/share-test/files/session/takes");
     std::fs::create_dir_all(takes.join("Proxies"))?;
-    std::fs::write(takes.join("Bass.wav"), b"RIFF\x24\x00\x00\x00WAVE the original")?;
+    std::fs::write(
+        takes.join("Bass.wav"),
+        b"RIFF\x24\x00\x00\x00WAVE the original",
+    )?;
     std::fs::write(takes.join("Proxies/Bass.ogg"), PROXY)?;
     std::fs::write(takes.join("Keys.wav"), b"AUDIO keys, with no proxy")?;
     crate::support::checkpoint(&org.files, root_id).await?;
@@ -475,7 +489,11 @@ async fn a_committed_proxy_is_the_audio_rendition() -> eyre::Result<()> {
     let r = reqwest::get(format!("{link}/rendition/audio/Bass.wav")).await?;
     assert_eq!(r.status().as_u16(), 200);
     assert_eq!(r.headers()[reqwest::header::CONTENT_TYPE], "audio/ogg");
-    assert_eq!(&r.bytes().await?[..], PROXY, "the committed proxy, not a derived one");
+    assert_eq!(
+        &r.bytes().await?[..],
+        PROXY,
+        "the committed proxy, not a derived one"
+    );
 
     let r = reqwest::Client::new()
         .get(format!("{link}/rendition/audio/Bass.wav"))
@@ -493,12 +511,18 @@ async fn a_committed_proxy_is_the_audio_rendition() -> eyre::Result<()> {
     assert_eq!(status, 403, "the original still never serves");
     let (status, body) = get(&format!("{link}/rendition/audio/Keys.wav")).await;
     assert_eq!(status, 200);
-    assert!(body.starts_with("audio-aac:"), "no proxy beside it: the derived rendition: {body}");
+    assert!(
+        body.starts_with("audio-aac:"),
+        "no proxy beside it: the derived rendition: {body}"
+    );
 
     assert_eq!(
         task_server::share::proxy_path("Media/Bass.wav").as_deref(),
         Some("Media/Proxies/Bass.ogg")
     );
-    assert_eq!(task_server::share::proxy_path("Media/Proxies/Bass.ogg"), None);
+    assert_eq!(
+        task_server::share::proxy_path("Media/Proxies/Bass.ogg"),
+        None
+    );
     Ok(())
 }

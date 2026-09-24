@@ -14,7 +14,6 @@
 use architect_auth::{CreateEmailPasswordUser, SignInEmailPassword};
 use task_server::{AppState, AuthState, capability::ServerKeypair, router};
 
-
 /// Returns the `TempDir` so the caller keeps the data root alive for the
 /// duration of the test — dropping it early would delete the org out from
 /// under the running server.

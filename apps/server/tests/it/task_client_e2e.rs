@@ -38,8 +38,9 @@ async fn one_client_type_two_transports() {
     let session_home = tempfile::tempdir().expect("tempdir");
     let session_file = session_home.path().join("session.json");
     let session_file = session_file.to_string_lossy().into_owned();
-    let (base_with_path, _tmp) =
-        support::boot_ws_env(&[("TASK_SESSION_FILE", &session_file)]).await.expect("boot ws server");
+    let (base_with_path, _tmp) = support::boot_ws_env(&[("TASK_SESSION_FILE", &session_file)])
+        .await
+        .expect("boot ws server");
     // `boot_ws` hands back the per-org hint shape (`…/vox`); the client
     // normalizes it to a base, which is exactly the case
     // `normalize_server_base` exists for.
