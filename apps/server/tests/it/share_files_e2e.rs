@@ -449,6 +449,49 @@ async fn a_documents_link_opens_the_session_not_its_media() -> eyre::Result<()> 
         "with the length the byte routes serve"
     );
 
+    // Many documents in one request, each told apart by its status: the
+    // session and its chart whole, the take refused, the stranger missing,
+    // and nothing from outside the slice.
+    let batch = reqwest::Client::new()
+        .post(format!("{link}/docs"))
+        .header(reqwest::header::CONTENT_TYPE, "text/plain")
+        .body("Song.RPP\nSong.kf\ntake.txt\nnot-here.txt\n../mix.wav\n")
+        .send()
+        .await?;
+    assert_eq!(batch.status().as_u16(), 200);
+    let records = batch_records(&batch.bytes().await?);
+    let status = |path: &str| {
+        records
+            .iter()
+            .find(|(p, ..)| p == path)
+            .map(|(_, s, b)| (*s, b.clone()))
+            .unwrap_or_else(|| panic!("{path} has a record: {records:?}"))
+    };
+    assert_eq!(
+        status("Song.RPP"),
+        (0, b"<REAPER_PROJECT 0.1 \"7.0\"\n>\n".to_vec())
+    );
+    assert_eq!(status("Song.kf"), (0, b"Title: Song\n".to_vec()));
+    assert_eq!(status("take.txt").0, 2, "a take is not a document, batched");
+    assert_eq!(status("not-here.txt").0, 1);
+    assert_eq!(
+        status("../mix.wav").0,
+        1,
+        "traversal must not escape the slice"
+    );
+    let (status_code, _) = get(&format!("{base}/org/share-test/share/{}/docs", plain.token)).await;
+    assert_ne!(status_code, 200, "a batch is a POST");
+    let refused = reqwest::Client::new()
+        .post(format!("{base}/org/share-test/share/{}/docs", plain.token))
+        .body("Song.RPP\n")
+        .send()
+        .await?;
+    assert_eq!(
+        refused.status().as_u16(),
+        403,
+        "a view-only link opens no documents, batched"
+    );
+
     let log = share.access_log(demo.token.clone()).await.expect("log");
     assert!(
         log.iter()
@@ -456,6 +499,25 @@ async fn a_documents_link_opens_the_session_not_its_media() -> eyre::Result<()> 
         "document reads are receipted: {log:?}"
     );
     Ok(())
+}
+
+/// A documents batch's records: (path, status, bytes).
+fn batch_records(mut body: &[u8]) -> Vec<(String, u8, Vec<u8>)> {
+    let mut out = Vec::new();
+    let take = |n: usize, body: &mut &[u8]| {
+        let (head, rest) = body.split_at(n);
+        *body = rest;
+        head.to_vec()
+    };
+    while !body.is_empty() {
+        let status = take(1, &mut body)[0];
+        let path_len = u32::from_le_bytes(take(4, &mut body).try_into().unwrap()) as usize;
+        let path = String::from_utf8(take(path_len, &mut body)).unwrap();
+        let len = u32::from_le_bytes(take(4, &mut body).try_into().unwrap()) as usize;
+        let bytes = take(len, &mut body);
+        out.push((path, status, bytes));
+    }
+    out
 }
 
 /// A take with its proxy committed beside it streams that proxy — whole

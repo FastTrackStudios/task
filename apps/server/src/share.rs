@@ -1238,19 +1238,90 @@ pub async fn share_document_handler(
     {
         return (StatusCode::NOT_FOUND, "this link serves one file").into_response();
     }
-    let full = join_scope(&scope.subpath, &rel);
-    let (len, content_id) = match org
+    let bytes = match read_document(&org, &scope, &rel).await {
+        Ok(bytes) => bytes,
+        Err(refused) => {
+            wide::set("share.outcome", refused.outcome());
+            return refused.into_response();
+        }
+    };
+    wide::set(
+        "share.document_len",
+        i64::try_from(bytes.len()).unwrap_or(i64::MAX),
+    );
+    wide::set("share.outcome", "document");
+    org.shares.log_access(&token, "document", &rel);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, document_mime(&rel))],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Why a document was not served.
+#[derive(Debug)]
+enum DocumentRefused {
+    NotFound(String),
+    TooLarge,
+    Media,
+    ReadFailed,
+}
+
+impl DocumentRefused {
+    /// The `share.outcome` it is recorded as.
+    const fn outcome(&self) -> &'static str {
+        match self {
+            Self::NotFound(_) => "document-not-found",
+            Self::TooLarge => "document-too-large",
+            Self::Media => "document-is-media",
+            Self::ReadFailed => "document-read-failed",
+        }
+    }
+
+    /// Its status in a batch ([`share_documents_batch_handler`]).
+    const fn batch_status(&self) -> u8 {
+        match self {
+            Self::NotFound(_) => BATCH_NOT_FOUND,
+            Self::TooLarge | Self::Media => BATCH_REFUSED,
+            Self::ReadFailed => BATCH_FAILED,
+        }
+    }
+
+    fn into_response(self) -> Response {
+        match self {
+            Self::NotFound(why) => {
+                (StatusCode::NOT_FOUND, format!("document: {why}")).into_response()
+            }
+            Self::TooLarge => (StatusCode::FORBIDDEN, "too large to be a document").into_response(),
+            Self::Media => (
+                StatusCode::FORBIDDEN,
+                "media is served as renditions, not documents",
+            )
+                .into_response(),
+            Self::ReadFailed => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "document read failed").into_response()
+            }
+        }
+    }
+}
+
+/// One of a scope's documents, whole: resolved at the scope's commit (or
+/// its head), refused past [`DOCUMENT_MAX`] and when it is media
+/// ([`is_media`]). `rel` is already clean ([`clean_rel`]).
+async fn read_document(
+    org: &crate::OrgAppState,
+    scope: &FilesScope,
+    rel: &str,
+) -> Result<Vec<u8>, DocumentRefused> {
+    let full = join_scope(&scope.subpath, rel);
+    let (len, content_id) = org
         .files
         .resolve_source(scope.root_id, full, scope.at.clone())
         .await
-    {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::NOT_FOUND, format!("document: {e}")).into_response(),
-    };
-    wide::set("share.document_len", i64::try_from(len).unwrap_or(i64::MAX));
+        .map_err(|e| DocumentRefused::NotFound(e.to_string()))?;
     if len > DOCUMENT_MAX {
-        wide::set("share.outcome", "document-too-large");
-        return (StatusCode::FORBIDDEN, "too large to be a document").into_response();
+        return Err(DocumentRefused::TooLarge);
     }
     let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
     if let Err(e) = org
@@ -1259,22 +1330,135 @@ pub async fn share_document_handler(
         .await
     {
         tracing::error!(?e, "share document: read failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "document read failed").into_response();
+        return Err(DocumentRefused::ReadFailed);
     }
-    if is_media(&rel, &bytes) {
-        wide::set("share.outcome", "document-is-media");
-        return (
-            StatusCode::FORBIDDEN,
-            "media is served as renditions, not documents",
-        )
-            .into_response();
+    if is_media(rel, &bytes) {
+        return Err(DocumentRefused::Media);
     }
-    wide::set("share.outcome", "document");
-    org.shares.log_access(&token, "document", &rel);
+    Ok(bytes)
+}
+
+/// A batch record's status: the document follows.
+pub const BATCH_OK: u8 = 0;
+/// Not in the scope at this commit.
+pub const BATCH_NOT_FOUND: u8 = 1;
+/// Media, or past [`DOCUMENT_MAX`]: never served as a document.
+pub const BATCH_REFUSED: u8 = 2;
+/// Could not be read, or the batch ran past [`BATCH_BYTES_MAX`]: ask for
+/// it on its own.
+pub const BATCH_FAILED: u8 = 3;
+/// The most paths one batch names.
+pub const BATCH_PATHS_MAX: usize = 1024;
+/// The most one batch sends: past it the rest are [`BATCH_FAILED`], and
+/// the client fetches them one by one.
+pub const BATCH_BYTES_MAX: usize = 64 * 1024 * 1024;
+
+/// `POST /org/{slug}/share/{token}/docs` — many of the slice's documents
+/// in one response (`files.access.link-documents`, batched): what a
+/// session folder is opened by when it is a few hundred files of a few
+/// hundred bytes each (a prepared session's content-addressed objects),
+/// where one `doc/` request per file spent the whole load in round
+/// trips.
+///
+/// The body is the paths, one per line, relative to the scope (the same
+/// paths `list` returns). The body is `text/plain` so a browser sends it
+/// without a preflight. The response is one record per path, in the
+/// order they are read:
+///
+/// ```text
+/// u8 status | u32le path length | path | u32le length | bytes
+/// ```
+///
+/// `status` is [`BATCH_OK`] (the bytes follow) or why not; a refused
+/// path has no bytes. Everything is read at one commit — the head when
+/// the batch starts — so a batch never mixes two versions of a folder.
+// t[impl files.access.link-documents]
+pub async fn share_documents_batch_handler(
+    State(state): State<AppState>,
+    AxPath((slug, token)): AxPath<(String, String)>,
+    Query(q): Query<ShareQuery>,
+    body: String,
+) -> Response {
+    use architect_telemetry::wide;
+    use futures_util::StreamExt as _;
+    /// Documents read at once.
+    const AT_ONCE: usize = 16;
+    let (org, link) = match gate(&state, &slug, &token, q.pw.as_deref(), false) {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
+    if !link.capabilities().documents {
+        wide::set("share.outcome", "documents-not-granted");
+        return (StatusCode::FORBIDDEN, "this link does not open documents").into_response();
+    }
+    let mut scope = match files_scope(&org, &link).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return (StatusCode::NOT_FOUND, "not a files link").into_response(),
+        Err(resp) => return resp,
+    };
+    if scope.file_only.is_some() {
+        wide::set("share.outcome", "batch-one-file-link");
+        return (StatusCode::NOT_FOUND, "this link serves one file").into_response();
+    }
+    if scope.at.is_none() {
+        match org.files.head_commit_hex(scope.root_id).await {
+            Ok(head) => scope.at = Some(head),
+            Err(e) => return (StatusCode::NOT_FOUND, format!("root: {e}")).into_response(),
+        }
+    }
+    let paths: Vec<String> = body
+        .lines()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if paths.len() > BATCH_PATHS_MAX {
+        wide::set("share.outcome", "batch-too-many");
+        return (StatusCode::PAYLOAD_TOO_LARGE, "too many paths in one batch").into_response();
+    }
+    let (org, scope) = (&org, &scope);
+    let mut read = futures_util::stream::iter(paths)
+        .map(|path: String| async move {
+            let result = match clean_rel(&path) {
+                Ok(rel) => read_document(org, scope, &rel).await,
+                Err(_) => Err(DocumentRefused::NotFound("not in the slice".into())),
+            };
+            (path, result)
+        })
+        .buffer_unordered(AT_ONCE);
+    let mut out = Vec::new();
+    let (mut served, mut refused) = (0_i64, 0_i64);
+    while let Some((path, result)) = read.next().await {
+        let (status, bytes) = match result {
+            Ok(bytes) if out.len() + bytes.len() <= BATCH_BYTES_MAX => (BATCH_OK, bytes),
+            Ok(_) => (BATCH_FAILED, Vec::new()),
+            Err(why) => (why.batch_status(), Vec::new()),
+        };
+        if status == BATCH_OK {
+            served += 1;
+            org.shares.log_access(&token, "document", &path);
+        } else {
+            refused += 1;
+        }
+        out.push(status);
+        let path_len = u32::try_from(path.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&path_len.to_le_bytes());
+        out.extend_from_slice(path.as_bytes());
+        let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&bytes);
+    }
+    wide::set("share.outcome", "documents-batch");
+    wide::set("share.batch_served", served);
+    wide::set("share.batch_refused", refused);
+    wide::set(
+        "share.batch_len",
+        i64::try_from(out.len()).unwrap_or(i64::MAX),
+    );
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, document_mime(&rel))],
-        bytes,
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        out,
     )
         .into_response()
 }
@@ -1473,52 +1657,59 @@ async fn live_files(
         crate::share_public_base(),
         Some(org.files.clone()),
     );
-    let mut out = std::collections::HashMap::new();
-    for item in collection
+    // Each song's link looked up (or minted) at once: in turn, a set of
+    // a dozen songs kept a guest waiting on a dozen round trips to the
+    // share store before its first song could start.
+    let wanted: Vec<(String, uuid::Uuid)> = collection
         .items
         .iter()
         .filter(|i| i.node.kind == collection::NodeKind::Song)
-    {
-        let slug = &item.node.id;
-        let dir = format!("session/{slug}");
-        let Some(root) = roots.iter().find(|r| {
-            r.path
-                .as_deref()
-                .is_some_and(|p| p.trim_end_matches('/').ends_with(&dir))
-        }) else {
-            continue;
-        };
-        let target = ShareTarget::Slice {
-            root_id: root.id,
-            subpath: String::new(),
-        };
-        let existing = shares
-            .links_for_target(target.clone())
-            .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|l| !l.disabled && l.capabilities.documents && !l.password_protected);
-        let link = match existing {
-            Some(link) => link,
-            None => shares
-                .create_link(
-                    target,
-                    NewShareLink {
-                        label: format!("live: {slug}"),
-                        capabilities: Some(ShareCapabilities {
-                            documents: true,
-                            ..ShareCapabilities::default()
-                        }),
-                        password: None,
-                        expires_unix: None,
-                    },
-                )
+        .filter_map(|item| {
+            let slug = item.node.id.clone();
+            let dir = format!("session/{slug}");
+            let root = roots.iter().find(|r| {
+                r.path
+                    .as_deref()
+                    .is_some_and(|p| p.trim_end_matches('/').ends_with(&dir))
+            })?;
+            Some((slug, root.id))
+        })
+        .collect();
+    let shares = &shares;
+    let linked: Vec<Result<(String, String), String>> =
+        futures_util::future::join_all(wanted.into_iter().map(|(slug, root_id)| async move {
+            let target = ShareTarget::Slice {
+                root_id,
+                subpath: String::new(),
+            };
+            let existing = shares
+                .links_for_target(target.clone())
                 .await
-                .map_err(|e| e.to_string())?,
-        };
-        out.insert(slug.clone(), link.url);
-    }
-    Ok(out)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|l| !l.disabled && l.capabilities.documents && !l.password_protected);
+            let link = match existing {
+                Some(link) => link,
+                None => shares
+                    .create_link(
+                        target,
+                        NewShareLink {
+                            label: format!("live: {slug}"),
+                            capabilities: Some(ShareCapabilities {
+                                documents: true,
+                                ..ShareCapabilities::default()
+                            }),
+                            password: None,
+                            expires_unix: None,
+                        },
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?,
+            };
+            Ok((slug, link.url))
+        }))
+        .await;
+    linked.into_iter().collect()
 }
 
 /// `POST /org/{slug}/share/{token}/upload/{name}` — the file-request

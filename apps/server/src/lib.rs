@@ -2910,6 +2910,14 @@ pub fn router(state: AppState) -> Router {
             "/org/{slug}/share/{token}/doc/{*rel}",
             get(share::share_document_handler),
         )
+        // Many of them in one response: a prepared session is hundreds of
+        // tiny content-addressed objects, and one request each spent a
+        // song's whole load in round trips.
+        .route(
+            "/org/{slug}/share/{token}/docs",
+            axum::routing::post(share::share_documents_batch_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(256 * 1024)),
+        )
         // The guest lane (issue #272): the real RPC surface over an
         // anonymous WebSocket, scoped to the link's Review.
         .route(
