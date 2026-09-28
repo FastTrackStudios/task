@@ -69,9 +69,27 @@ pub const APP: PluginApp = PluginApp {
 /// would quietly eat every one of them. Requiring the numbers is what
 /// makes "always wins" safe to say.
 fn claim_link(text: &str) -> Option<Claim> {
-    ScriptureRef::parse(text)
+    let reference = without_source(text);
+    ScriptureRef::parse(reference)
         .ok()
-        .map(|_| Claim::Always(passage(text)))
+        .map(|_| Claim::Always(passage(reference)))
+}
+
+/// A wiki page names scripture as the `bible` Resource —
+/// `[[bible::John.3.16]]`, or qualified by domain — where a vault note
+/// writes the bare `[[John 3:16]]`. Both are the same passage.
+fn without_source(text: &str) -> &str {
+    match text.split_once("::") {
+        Some((source, rest))
+            if source
+                .rsplit('/')
+                .next()
+                .is_some_and(|slug| slug.trim().eq_ignore_ascii_case("bible")) =>
+        {
+            rest.trim()
+        }
+        _ => text,
+    }
 }
 
 /// This app's own scheme, for widgets and generated notes.
@@ -121,6 +139,20 @@ mod tests {
     fn a_reference_always_beats_a_note_of_the_same_name() {
         let claim = claim_link("John 3:16").expect("a reference is claimed");
         assert!(claim.beats_a_page());
+    }
+
+    /// The form a wiki page writes opens the same passage as the bare one.
+    #[test]
+    fn a_bible_resource_reference_is_claimed_as_its_passage() {
+        for text in ["bible::John.3.16", "acme.test/bible::John.3.16"] {
+            let claim = claim_link(text).expect("a bible:: reference is claimed");
+            assert!(claim.beats_a_page());
+            assert_eq!(claim.target(), &passage("John.3.16"), "{text}");
+        }
+        assert!(
+            claim_link("music-theory::Ionian").is_none(),
+            "another wiki's page is not scripture"
+        );
     }
 
     /// The bug this app would otherwise introduce for everybody with a

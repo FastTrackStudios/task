@@ -93,11 +93,25 @@ fn decode_reference(text: &str) -> Option<ReferenceTarget> {
     })
 }
 
+/// The Resource scripture references name: `[[bible::John.3.16]]`.
+const SCRIPTURE_SOURCE: &str = "bible";
+
+/// The scripture reference inside a `bible::` link (qualified or short),
+/// or `None` when the target does not name the scripture Resource.
+fn scripture_target(target: &str) -> Option<&str> {
+    let (source, rest) = target.split_once("::")?;
+    let slug = source.rsplit('/').next().unwrap_or(source).trim();
+    slug.eq_ignore_ascii_case(SCRIPTURE_SOURCE)
+        .then_some(rest.trim())
+}
+
 /// Whether a link target is a reference into a wiki rather than a page
-/// of this vault (the `::` of ADR 0002's `source::Page`).
+/// of this vault (the `::` of ADR 0002's `source::Page`). Scripture
+/// (`bible::…`) is a Resource, not a wiki: it resolves through the
+/// scripture lookup and its own link claim, never the wiki resolver.
 #[must_use]
 pub fn is_wiki_reference(target: &str) -> bool {
-    target.contains("::")
+    target.contains("::") && scripture_target(target).is_none()
 }
 
 /// Edition used for verse cards / chip tooltips when the link carries
@@ -436,6 +450,9 @@ impl VaultLookup for ClientVaultIndex {
     /// lazily through the same worker as page content, keyed
     /// `scripture://<TX>/<osis>`.
     fn lookup_scripture(&self, target: &str) -> Option<editor::markdown::VaultScriptureHit> {
+        // `[[bible::John.3.16]]` — the form wiki pages write — as well
+        // as a bare `[[John 3:16]]`.
+        let target = scripture_target(target).unwrap_or(target);
         let scref = scripture_proto::ScriptureRef::parse(target).ok()?;
         let translation = scref
             .translation
@@ -733,6 +750,20 @@ mod tests {
             icon: String::new(),
             aliases: aliases.iter().map(|s| (*s).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn scripture_is_a_resource_not_a_wiki_reference() {
+        assert!(!is_wiki_reference("bible::John.3.16"));
+        assert!(!is_wiki_reference("acme.test/bible::Deut.20.16-Deut.20.17"));
+        assert_eq!(
+            scripture_target("bible::Deut.20.16-Deut.20.17"),
+            Some("Deut.20.16-Deut.20.17")
+        );
+        assert!(is_wiki_reference(
+            "acme.test/music-theory::Modes@2026-09-01"
+        ));
+        assert!(!is_wiki_reference("Modes"));
     }
 
     #[test]

@@ -111,7 +111,9 @@ pub fn AppShell() -> Element {
                                 crate::shell::project_sidebar::ProjectSidebar { id: id.clone() }
                             } else if let Route::WikiHomeRoute { org, wiki }
                                 | Route::WikiDocRoute { org, wiki, .. }
-                                | Route::WikiRequestRoute { org, wiki, .. } = &current
+                                | Route::WikiRequestRoute { org, wiki, .. }
+                                | Route::WikiScopedSourcesRoute { org, wiki }
+                                | Route::WikiScopedSourceRoute { org, wiki, .. } = &current
                             {
                                 // Inside a wiki the column is THAT wiki's
                                 // pages, not the vault's folders — the same
