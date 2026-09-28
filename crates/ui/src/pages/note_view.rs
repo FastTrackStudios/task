@@ -351,6 +351,7 @@ pub(crate) fn NoteView(
     // note. The first claimant with a render fn mounts below; boolean
     // flags aggregate (OR) across all claimants.
     let nav_links = use_navigator();
+    let notify_links = architect::try_use_notifications();
     // Which route a note of THIS vault opens on: the vault page for the
     // org's vault, the wiki page route for a wiki. Same decision for
     // widget-opened notes below and wikilink clicks further down.
@@ -432,6 +433,47 @@ pub(crate) fn NoteView(
             return; // the editor already window.open()s external links
         }
         let page = href.split(['#', '|']).next().unwrap_or(&href).trim();
+        // A reference into a wiki (ADR 0002): open the page it names, in
+        // its own wiki and org. One that points nowhere says so rather
+        // than offering to create a page named after the reference.
+        if vault_lookup::is_wiki_reference(page) {
+            let cached = lookup_for_links
+                .peek()
+                .as_ref()
+                .and_then(|ix| ix.reference(page));
+            let reference = page.to_owned();
+            let slug = home();
+            spawn(async move {
+                let target = match cached {
+                    Some(known) => known,
+                    None => vault_lookup::resolve_reference(&slug, &reference)
+                        .await
+                        .map(|r| vault_lookup::ReferenceTarget {
+                            org: r.org,
+                            wiki: r.wiki,
+                            path: r.path,
+                            title: r.title,
+                        }),
+                };
+                match target {
+                    Some(t) => {
+                        nav_links.push(crate::routes::Route::WikiDocRoute {
+                            org: t.org,
+                            wiki: t.wiki,
+                            path: t.path,
+                        });
+                    }
+                    None => {
+                        if let Some(n) = notify_links {
+                            n.error(format!(
+                                "“{reference}” points to a page this server doesn't hold."
+                            ));
+                        }
+                    }
+                }
+            });
+            return;
+        }
         let known = lookup_for_links
             .peek()
             .as_ref()

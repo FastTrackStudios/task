@@ -928,6 +928,9 @@ const WIKI_SUBSCRIPTIONS: ServicePermits = ServicePermits {
         MethodPermit::new("trust_source", Action::WRITE, "wiki/subscriptions/**").audited(),
         MethodPermit::new("distrust_source", Action::WRITE, "wiki/subscriptions/**").audited(),
         MethodPermit::new("trusted_sources", Action::READ, "wiki/subscriptions/**"),
+        // Where a reference points; resolves only through sources that
+        // admit this org, so it reads nothing the org could not.
+        MethodPermit::new("resolve_reference", Action::READ, "wiki/subscriptions/**"),
     ],
 };
 #[cfg(feature = "plugin-wiki")]

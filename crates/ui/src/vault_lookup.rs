@@ -62,6 +62,44 @@ const LOADING: &str = "Loading…";
 /// worker with page content; the worker routes on the prefix.
 const SCRIPTURE_SCHEME: &str = "scripture://";
 
+/// Cache-key scheme for a reference into a wiki (ADR 0002,
+/// `acme.test/music-theory::Modes@2026-09-01`) — `ref://<reference>`.
+/// The server resolves it (`Subscriptions::resolve_reference`); the
+/// cached text is [`encode_reference`]'s, empty when it points nowhere.
+const REF_SCHEME: &str = "ref://";
+
+/// Where a wiki reference points, as the page to open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReferenceTarget {
+    pub org: String,
+    pub wiki: String,
+    pub path: String,
+    pub title: String,
+}
+
+fn encode_reference(r: &wiki_proto::service::subscriptions::ResolvedReference) -> String {
+    [&r.org, &r.wiki, &r.path, &r.title]
+        .map(|s| s.replace('\t', " "))
+        .join("\t")
+}
+
+fn decode_reference(text: &str) -> Option<ReferenceTarget> {
+    let mut parts = text.split('\t');
+    Some(ReferenceTarget {
+        org: parts.next()?.to_owned(),
+        wiki: parts.next()?.to_owned(),
+        path: parts.next()?.to_owned(),
+        title: parts.next()?.to_owned(),
+    })
+}
+
+/// Whether a link target is a reference into a wiki rather than a page
+/// of this vault (the `::` of ADR 0002's `source::Page`).
+#[must_use]
+pub fn is_wiki_reference(target: &str) -> bool {
+    target.contains("::")
+}
+
 /// Edition used for verse cards / chip tooltips when the link carries
 /// no `@TX` qualifier. WEB is always bundled (public domain).
 const DEFAULT_TRANSLATION: &str = "WEB";
@@ -178,6 +216,34 @@ impl ClientVaultIndex {
     pub fn meta(&self, name: &str) -> Option<&PageMeta> {
         self.by_basename.get(&name.to_lowercase())
     }
+
+    /// A wiki reference's resolution: `Some(Some(..))` resolved,
+    /// `Some(None)` points nowhere, `None` not known yet (a resolution
+    /// is then queued, and the editor redraws when it lands).
+    pub fn reference(&self, name: &str) -> Option<Option<ReferenceTarget>> {
+        self.content(&format!("{REF_SCHEME}{name}"))
+            .map(|text| decode_reference(&text))
+    }
+}
+
+/// Where a wiki reference points, asked of `slug`'s server. `None` for
+/// "nowhere", and for a failure to ask (said in the log, not the page).
+pub async fn resolve_reference(
+    slug: &str,
+    reference: &str,
+) -> Option<wiki_proto::service::subscriptions::ResolvedReference> {
+    let client = crate::vox_clients::establish_for::<
+        wiki_proto::service::subscriptions::SubscriptionsClient,
+    >(slug)
+    .await
+    .map_err(|e| tracing::debug!("resolve {reference}: {e}"))
+    .ok()?;
+    client
+        .resolve_reference(reference.to_owned())
+        .await
+        .map_err(|e| tracing::debug!("resolve {reference}: {e:?}"))
+        .ok()
+        .flatten()
 }
 
 /// Page-owned worker draining the lazy-fetch requests that
@@ -227,6 +293,14 @@ pub fn use_vault_fetch_worker(
                             Err(e) => format!("⚠ {e}"),
                         },
                     )
+                } else if let Some(reference) = path.strip_prefix(REF_SCHEME) {
+                    // A wiki reference: the server says where it points.
+                    // Every answer is cached — "nowhere" as empty text —
+                    // so a dangling reference is asked about once.
+                    Ok(resolve_reference(&slug, reference)
+                        .await
+                        .map(|r| encode_reference(&r))
+                        .unwrap_or_default())
                 } else {
                     crate::document_session::fetch_file(slug, vault_id, path.clone()).await
                 };
@@ -263,6 +337,20 @@ impl VaultLookup for ClientVaultIndex {
     }
 
     fn lookup_page(&self, name: &str) -> Option<VaultPageHit> {
+        // A reference into a wiki: resolved by the server, not by this
+        // vault's basenames. Unknown yet reads as loading, not missing,
+        // so the link does not flash red before the answer lands.
+        if is_wiki_reference(name) {
+            return match self.reference(name) {
+                None => Some(VaultPageHit {
+                    preview: LOADING.to_owned(),
+                }),
+                Some(None) => None,
+                Some(Some(t)) => Some(VaultPageHit {
+                    preview: format!("{} — in {}", t.title, t.wiki),
+                }),
+            };
+        }
         let meta = self.meta(name)?;
         let preview = match self.content(&meta.path) {
             Some(raw) => preview_of_page(&raw, 200),

@@ -27,7 +27,7 @@ use std::sync::Arc;
 use wiki_proto::WikiError;
 use wiki_proto::config::Visibility;
 use wiki_proto::service::subscriptions::{
-    HeldSubscription, RefreshReport, SourceGrant, Subscriptions, TrustedSource,
+    HeldSubscription, RefreshReport, ResolvedReference, SourceGrant, Subscriptions, TrustedSource,
 };
 use wiki_proto::subscription::{SourceKind, Subscriber, Subscription};
 
@@ -71,6 +71,15 @@ pub trait Upstream: Send + Sync + 'static {
     /// nothing else, so the remote half had nowhere to go and went
     /// unwritten. Naming the two cases is what carries it.
     fn source(&self, subscription: &Subscription) -> Option<Source>;
+
+    /// The org on this data root that publishes under `domain`, when this
+    /// resolver knows one — the other direction of `domain_of`. What a
+    /// reader needs to *open* a referenced page rather than subscribe
+    /// to its wiki.
+    fn org_of(&self, domain: &str) -> Option<String> {
+        let _ = domain;
+        None
+    }
 
     /// Whether the source admits `subscriber_org`.
     fn admits(&self, subscriber_org: &str, subscription: &Subscription) -> Admission {
@@ -318,6 +327,10 @@ impl Upstream for LocalOrgs {
 
     fn domain_of(&self, org: &str) -> Option<String> {
         self.domain_for(org).map(str::to_owned)
+    }
+
+    fn org_of(&self, domain: &str) -> Option<String> {
+        self.domains.get(domain).cloned()
     }
 
     /// t[impl wiki.access.visibility] — private is a refusal for
@@ -605,6 +618,61 @@ fn count_files(dir: &Path) -> u32 {
         }
     }
     n
+}
+
+/// The page of the wiki at `root` a reference's target names: by
+/// basename, else by frontmatter `title`, ignoring case. Returns its
+/// wiki-relative path and title. The wiki's own state (`_state`) and
+/// dot-directories are not pages.
+fn find_page(root: &Path, target: &str) -> Option<(String, String)> {
+    let want = target.trim().trim_end_matches(".md");
+    if want.is_empty() {
+        return None;
+    }
+    let mut by_title = None;
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            e.depth() == 0 || !(name.starts_with('.') || name == "_state")
+        })
+        .flatten()
+    {
+        let path = entry.path();
+        if !entry.file_type().is_file() || path.extension().and_then(|x| x.to_str()) != Some("md") {
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let title = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| frontmatter_title(&text))
+            .unwrap_or_else(|| stem.to_owned());
+        if stem.eq_ignore_ascii_case(want) {
+            return Some((rel, title));
+        }
+        if by_title.is_none() && title.eq_ignore_ascii_case(want) {
+            by_title = Some((rel, title));
+        }
+    }
+    by_title
+}
+
+/// A page's frontmatter `title:`, unquoted.
+fn frontmatter_title(text: &str) -> Option<String> {
+    let body = text.strip_prefix("---")?;
+    let end = body.find("\n---")?;
+    body[..end].lines().find_map(|line| {
+        let value = line.strip_prefix("title:")?.trim();
+        let value = value.trim_matches(['"', '\'']);
+        (!value.is_empty()).then(|| value.to_owned())
+    })
 }
 
 fn store_err(e: crate::subscriptions::SubscriptionError) -> WikiError {
@@ -941,6 +1009,60 @@ impl Subscriptions for SubscriptionsBackend {
                 slug,
             })
             .collect())
+    }
+
+    /// t[impl wiki.ref.format] — a qualified reference names one page in
+    /// the federation; a short one names this org's own wiki. Resolved
+    /// only through a source that admits this org, so a private wiki's
+    /// page titles are not discoverable by guessing references.
+    fn resolve_reference(&self, reference: &str) -> Result<Option<ResolvedReference>, WikiError> {
+        let inner = reference
+            .trim()
+            .trim_start_matches('!')
+            .trim_start_matches("[[")
+            .trim_end_matches("]]");
+        let parsed = wiki_proto::reference::Reference::parse(inner);
+        let Some(slug) = parsed.source.clone() else {
+            return Ok(None);
+        };
+        let domain = match parsed.domain.clone() {
+            Some(d) => d,
+            None => match self.upstream.domain_of(&self.org_slug) {
+                Some(d) => d,
+                None => return Ok(None),
+            },
+        };
+        let Some(org) = self.upstream.org_of(&domain) else {
+            return Ok(None);
+        };
+        let subscription = Subscription {
+            domain,
+            slug: slug.clone(),
+            kind: SourceKind::Wiki,
+            title: String::new(),
+            core: false,
+            declined: false,
+            selection: Default::default(),
+        };
+        if org != self.org_slug
+            && !matches!(
+                self.upstream.admits(&self.org_slug, &subscription),
+                Admission::Admitted
+            )
+        {
+            return Ok(None);
+        }
+        let Some(Source::Local(root)) = self.upstream.source(&subscription) else {
+            return Ok(None);
+        };
+        Ok(
+            find_page(&root, &parsed.target).map(|(path, title)| ResolvedReference {
+                org,
+                wiki: slug,
+                path,
+                title,
+            }),
+        )
     }
 }
 
