@@ -409,11 +409,6 @@ pub fn TopBar() -> Element {
         _ => 0,
     };
 
-    // Both hooks every render (a `||` would skip the second one).
-    let running = use_active_timer().is_some();
-    let paused = use_resume_hint().read().is_some();
-    let timing = running || paused;
-
     // Obsidian-shaped window bar: sidebar toggle at the far left,
     // the tab strip in the middle (real route tabs — crate::tabs),
     // actions + the right-panel toggle at the far right.
@@ -442,30 +437,16 @@ pub fn TopBar() -> Element {
                 label: "{inbox_count}",
                 route: Route::InboxRoute {},
             }
-            // Time logged today — only once there is some; not every
-            // day is a timed one.
-            if logged > 0 {
-                StatChip {
-                    icon: rsx! { architect_ui::lucide_dioxus::Clock { size: 14 } },
-                    label: "Today {fmt_hms(logged)}",
-                    route: Route::TimerRoute {},
-                }
+            StatChip {
+                icon: rsx! { architect_ui::lucide_dioxus::Clock { size: 14 } },
+                label: "Today {fmt_hms(logged)}",
+                route: Route::TimerRoute {},
             }
 
             div { class: "mx-1 h-5 w-px bg-border" }
 
-            // Capture, and the timer: a running or paused timer shows
-            // its live pill; an idle one is just the clock on the
-            // capture button's end.
-            if timing {
-                FleetingButton { compact: true }
-                TimerWidget {}
-            } else {
-                div { class: "flex items-center",
-                    FleetingButton { compact: true, joined: true }
-                    TimerWidget {}
-                }
-            }
+            FleetingButton { compact: true }
+            TimerWidget {}
 
             // Who's here — avatar group opening the full roster.
             crate::presence::PresenceAvatarBar {}
@@ -593,19 +574,12 @@ fn StatChip(icon: Element, label: String, route: Route) -> Element {
 /// renders icon-only (for the top bar); otherwise icon + label (for
 /// the sidebar / bottom bar).
 #[component]
-pub fn FleetingButton(
-    #[props(default = false)] compact: bool,
-    /// Squared off on the right, for the idle timer's clock to sit
-    /// against it as one control.
-    #[props(default = false)]
-    joined: bool,
-) -> Element {
+pub fn FleetingButton(#[props(default = false)] compact: bool) -> Element {
     let mut open = use_fleeting_open();
     if compact {
-        let corners = if joined { "rounded-l-lg" } else { "rounded-lg" };
         rsx! {
             button {
-                class: "flex items-center gap-1.5 {corners} bg-primary px-2.5 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80",
+                class: "flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80",
                 title: "Capture a fleeting note",
                 onclick: move |_| open.set(true),
                 Feather { size: 15 }
@@ -644,8 +618,9 @@ pub fn FleetingModal() -> Element {
         return rsx! {};
     }
 
-    // The other thing a thought can be: what you are about to do. Its
-    // text becomes the timer's description (none is fine).
+    // On a phone the capture box is also where a timer starts (there is
+    // no timer in the top bar there): its text becomes the description,
+    // and none is fine.
     let start_timer = move |_| {
         let Some((slug, org_id)) = target() else {
             return;
@@ -726,7 +701,7 @@ pub fn FleetingModal() -> Element {
                     if !timing {
                         button {
                             r#type: "button",
-                            class: "mr-auto flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                            class: "mr-auto flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden",
                             title: "Start a timer with this as its description",
                             onclick: start_timer,
                             architect_ui::lucide_dioxus::Clock { size: 15 }
@@ -781,9 +756,7 @@ pub fn FleetingFab() -> Element {
 ///   one-click Resume. Pause closes the session (the segment is logged)
 ///   but stashes its context in [`TimerResumeHint`] so resuming re-opens
 ///   the same work.
-/// - **Idle** — a clock on the end of the capture button, opening the
-///   task picker; a timer with a typed description starts from the
-///   capture box ([`FleetingModal`]).
+/// - **Idle** — a description input + Start.
 #[component]
 pub fn TimerWidget() -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
@@ -799,8 +772,30 @@ pub fn TimerWidget() -> Element {
     use_second_tick(tick);
     let _ = tick();
 
+    let mut draft = use_signal(String::new);
     let mut switching = use_signal(|| false);
     let mut menu_open = use_signal(|| false);
+
+    // Fresh start from the idle input — clears any paused work.
+    let mut start = move || {
+        let Some((slug, org_id)) = target() else {
+            return;
+        };
+        let desc = draft.peek().trim().to_string();
+        draft.set(String::new());
+        hint.set(None);
+        muts.start(
+            slug,
+            timer_proto::StartTimerRequest {
+                user_id: owner_id(org_id),
+                org_id,
+                project_id: None,
+                project_path: String::new(),
+                task_note_path: String::new(),
+                description: desc,
+            },
+        );
+    };
 
     let Some((cur_slug, cur_org)) = target() else {
         return rsx! {};
@@ -928,20 +923,33 @@ pub fn TimerWidget() -> Element {
                         muts.start(slug.clone(), req);
                     }
                 };
-                // Idle, the timer is only a clock on the end of the
-                // capture button: a task or a recent timer from the
-                // picker, or — from the capture box — a timer for
-                // whatever you are about to do.
                 rsx! {
-                    div { class: "relative flex items-center",
+                    div { class: "relative flex items-center gap-1 rounded-lg border border-border bg-card/40 py-1 pl-2.5 pr-1",
+                        input {
+                            class: "w-32 bg-transparent text-xs outline-none placeholder:text-muted-foreground focus:w-44 xl:w-40 xl:focus:w-56",
+                            placeholder: "Start a timer…",
+                            value: "{draft}",
+                            oninput: move |e| draft.set(e.value()),
+                            onkeydown: move |e| {
+                                if e.key() == Key::Enter {
+                                    start();
+                                }
+                            },
+                        }
                         button {
-                            class: "flex items-center self-stretch rounded-r-lg border-l border-primary-foreground/25 bg-primary px-2 py-1.5 text-primary-foreground transition-colors hover:bg-primary/80",
-                            title: "Start a timer",
+                            class: "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sky-500/15 hover:text-sky-300",
+                            title: "Pick a task or recent timer",
                             onclick: move |_| {
                                 let cur = *menu_open.peek();
                                 menu_open.set(!cur);
                             },
-                            architect_ui::lucide_dioxus::Clock { size: 15 }
+                            ChevronDown { size: 14 }
+                        }
+                        button {
+                            class: "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sky-500/15 hover:text-sky-300",
+                            title: "Start timer",
+                            onclick: move |_| start(),
+                            Play { size: 14 }
                         }
                         if menu_open() {
                             TimerMenu {
