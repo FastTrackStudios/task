@@ -499,11 +499,110 @@ fn render_source(prov: &Provenance, blocks: &[Block]) -> Element {
             }
         }
         article { class: "flex flex-col gap-3 pb-12",
-            for (i, block) in blocks.iter().enumerate() {
-                {render_block(i, block, player)}
+            {
+                let (lead, sections) = sections_of(blocks);
+                rsx! {
+                    for (i, block) in lead {
+                        {render_block(i, block, player)}
+                    }
+                    // Each `##` section folds: a video's description,
+                    // chapters and transcript are long, and the player
+                    // is what a reader came for. Closed until opened.
+                    for (s, section) in sections.into_iter().enumerate() {
+                        details {
+                            key: "section-{s}",
+                            class: "group rounded-xl border border-border/70 bg-card/30",
+                            summary {
+                                class: "flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold tracking-tight hover:bg-accent/30",
+                                span { class: "text-muted-foreground transition-transform group-open:rotate-90", "›" }
+                                span { "{section.title}" }
+                                if let Some(count) = section.count_label() {
+                                    span { class: "text-xs font-normal text-muted-foreground", "· {count}" }
+                                }
+                            }
+                            div { class: "flex flex-col gap-3 border-t border-border/60 px-3 py-3",
+                                for (i, block) in section.blocks {
+                                    {render_block(i, block, player)}
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/// One `##` section of an archived source: its title and its blocks
+/// (with their indices, which are the render keys).
+struct Section<'a> {
+    title: String,
+    blocks: Vec<(usize, &'a Block)>,
+}
+
+impl Section<'_> {
+    /// "70 blocks", "9 chapters" — what is folded inside, so a closed
+    /// section still says how much it holds.
+    fn count_label(&self) -> Option<String> {
+        let timed = self
+            .blocks
+            .iter()
+            .filter(|(_, b)| {
+                matches!(
+                    b,
+                    Block::Para {
+                        anchor: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        let bullets = self
+            .blocks
+            .iter()
+            .filter(|(_, b)| matches!(b, Block::Bullet(_)))
+            .count();
+        let noun = if self.title.eq_ignore_ascii_case("chapters") {
+            "chapters"
+        } else {
+            "items"
+        };
+        match (timed, bullets) {
+            (0, 0) => None,
+            (t, _) if t > 0 => Some(format!("{t} blocks")),
+            (_, b) => Some(format!("{b} {noun}")),
+        }
+    }
+}
+
+/// Split the blocks at each `##` heading: what comes before the first
+/// one renders open, each section after it folds.
+fn sections_of(blocks: &[Block]) -> (Vec<(usize, &Block)>, Vec<Section<'_>>) {
+    let mut lead = Vec::new();
+    let mut sections: Vec<Section<'_>> = Vec::new();
+    for (i, block) in blocks.iter().enumerate() {
+        match (block, sections.last_mut()) {
+            (Block::Heading(2, title), _) => sections.push(Section {
+                title: title.clone(),
+                blocks: Vec::new(),
+            }),
+            (_, Some(section)) => section.blocks.push((i, block)),
+            (_, None) => lead.push((i, block)),
+        }
+    }
+    (lead, sections)
+}
+
+/// A chapter line's leading `[m:ss]` / `[h:mm:ss]`, as seconds, and the
+/// rest of the line.
+fn chapter_stamp(text: &str) -> Option<(u64, &str)> {
+    let rest = text.strip_prefix('[')?;
+    let (stamp, title) = rest.split_once("] ")?;
+    let mut secs = 0u64;
+    for part in stamp.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some((secs, title))
 }
 
 fn render_block(key: usize, block: &Block, player: Player) -> Element {
@@ -528,6 +627,27 @@ fn render_block(key: usize, block: &Block, player: Player) -> Element {
                 }
             }
         },
+        // A chapter line (`[4:52] Historicity`) seeks like a transcript
+        // block does.
+        Block::Bullet(text) if player != Player::None && chapter_stamp(text).is_some() => {
+            let (sec, title) = chapter_stamp(text).expect("checked");
+            let stamp = mmss(sec);
+            let title = title.to_owned();
+            rsx! {
+                div { key: "{key}", class: "flex items-center gap-2 text-sm",
+                    button {
+                        class: "shrink-0 rounded-md border border-border/70 bg-card/60 px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground hover:border-primary/60 hover:text-foreground",
+                        title: "Seek player to {stamp}",
+                        onclick: move |_| match player {
+                            Player::Audio => seek_audio(sec),
+                            Player::YouTube | Player::None => seek_embed(sec),
+                        },
+                        "{stamp}"
+                    }
+                    span { "{title}" }
+                }
+            }
+        }
         Block::Bullet(text) => rsx! {
             div { key: "{key}", class: "flex gap-2 text-sm",
                 span { class: "text-muted-foreground", "•" }
@@ -656,6 +776,26 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn sections_fold_at_each_h2_and_chapters_carry_their_time() {
+        let blocks = parse_blocks(
+            "_Channel · 3:33_\n\n## Chapters\n\n- [0:00] Start\n- [1:04:05] Late\n\n## Transcript\n\n[0:01] First ^t1\n\n[0:47] Second ^t47\n",
+        );
+        let (lead, sections) = sections_of(&blocks);
+        assert_eq!(lead.len(), 1, "the lede stays open above the sections");
+        assert_eq!(
+            sections
+                .iter()
+                .map(|s| s.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Chapters", "Transcript"]
+        );
+        assert_eq!(sections[0].count_label().as_deref(), Some("2 chapters"));
+        assert_eq!(sections[1].count_label().as_deref(), Some("2 blocks"));
+        assert_eq!(chapter_stamp("[1:04:05] Late"), Some((3845, "Late")));
+        assert_eq!(chapter_stamp("no stamp"), None);
     }
 
     #[test]
