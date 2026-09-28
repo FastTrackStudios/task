@@ -51,27 +51,44 @@ const READING_RULES: &str = r##"
 }
 .wiki-reading .editor-root .md-bold { font-weight: 600; }
 
+/* Vertical rhythm. Markdown separates paragraphs with a blank line, and
+   the editor draws every blank line as a full empty row — a whole
+   line-height of nothing between paragraphs, two of them (plus the
+   heading's margin) above a heading. Here a blank line is a paragraph
+   gap, not a line: about half a line, and next to nothing right after a
+   heading, whose own margin already says where the section begins. A
+   blank line is still a row you can click into and type on. */
+.wiki-reading .editor-root .cm-line:has(> br:only-child) {
+    min-height: 0;
+    height: 0.55lh;
+}
+.wiki-reading .editor-root .cm-line.md-h1 + .cm-line:has(> br:only-child),
+.wiki-reading .editor-root .cm-line.md-h2 + .cm-line:has(> br:only-child),
+.wiki-reading .editor-root .cm-line.md-h3 + .cm-line:has(> br:only-child) {
+    height: 0.2lh;
+}
+
 /* Headings: the title is the title; a section heading sits with the
-   text under it. */
+   text under it (more room above than below). */
 .wiki-reading .editor-root .cm-line.md-h1 {
     font-size: 1.95em;
     font-weight: 600;
     line-height: 1.2;
     letter-spacing: -0.012em;
-    margin: 0.1em 0 0.35em;
+    margin: 0 0 0.2em;
 }
 .wiki-reading .editor-root .cm-line.md-h2 {
     font-size: 1.32em;
     font-weight: 600;
     line-height: 1.3;
     letter-spacing: -0.006em;
-    margin: 1.5em 0 0.2em;
+    margin: 0.9em 0 0.1em;
 }
 .wiki-reading .editor-root .cm-line.md-h3 {
     font-size: 1.1em;
     font-weight: 600;
     line-height: 1.35;
-    margin: 1.2em 0 0.15em;
+    margin: 0.7em 0 0.05em;
 }
 
 /* Links to pages: the accent, a light underline that firms on hover. */
@@ -138,7 +155,7 @@ const READING_RULES: &str = r##"
     font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
     font-size: 0.8em;
     line-height: 1.45;
-    margin: 0.6em 0 1em;
+    margin: 0.35em 0 0.5em;
 }
 .wiki-reading .editor-root .md-table th,
 .wiki-reading .editor-root .md-table td {
@@ -157,6 +174,56 @@ const READING_RULES: &str = r##"
 }
 .wiki-reading .editor-root .md-table tr:nth-child(even) td { background: none; }
 .wiki-reading .editor-root .md-table .md-scripture-chip { font-weight: 500; }
+
+/* ── Phones ──────────────────────────────────────────────────
+   A narrow screen gets a size that holds ~40 characters, headings that
+   do not wrap to three lines, and tables that scroll sideways inside
+   themselves rather than pushing the page wider than the screen. */
+@media (max-width: 640px) {
+    .wiki-reading .editor-root { font-size: 16px; line-height: 1.6; }
+    .wiki-reading .editor-root .cm-line.md-h1 { font-size: 1.65em; }
+    .wiki-reading .editor-root .cm-line.md-h2 { font-size: 1.22em; margin-top: 0.8em; }
+    .wiki-reading .editor-root .md-table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        font-size: 0.85em;
+    }
+    .wiki-reading .editor-root .md-table td,
+    .wiki-reading .editor-root .md-table th { min-width: 7.5rem; }
+}
+
+/* ── Touch ───────────────────────────────────────────────────
+   A finger needs a bigger target than a pointer, and there is no hover:
+   timestamp tags and scripture references grow a tap area without
+   changing how the line looks. */
+@media (pointer: coarse) {
+    .wiki-reading .editor-root .md-wikilink[data-href*="#^t"] {
+        padding: 0.25em 0.7em;
+        font-size: 0.78em;
+    }
+    .wiki-reading .editor-root .md-scripture-chip {
+        padding: 0.15em 0;
+        margin: -0.15em 0;
+    }
+    .wiki-reading .editor-root .md-scripture-chip:hover { background: none; }
+    /* The page's ⋯ and its menu rows: 44px, the touch minimum. */
+    .wiki-reading .page-menu-button { min-width: 44px; min-height: 44px; margin: -12px -8px -12px auto; }
+    .wiki-reading .page-menu button { min-height: 44px; }
+    .wiki-reading .editor-root .md-wikilink:active,
+    .wiki-reading .editor-root .md-scripture-chip:active {
+        background: color-mix(in srgb, var(--ed-accent) 16%, transparent);
+        border-radius: 3px;
+    }
+}
+
+/* ── Large screens ───────────────────────────────────────────
+   The measure stays the same — a wider column is harder to read, not
+   easier — but on a big display the type grows with it. */
+@media (min-width: 1800px) {
+    .wiki-reading .editor-root { font-size: 18px; }
+    .wiki-reading .note-column { max-width: 46rem; }
+}
 "##;
 
 /// The stylesheet: Literata's faces, then the reading rules.

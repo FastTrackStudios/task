@@ -324,7 +324,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                         if has_page && can_create {
                             button {
                                 r#type: "button",
-                                class: "ml-auto rounded px-1.5 text-base leading-none hover:bg-accent hover:text-foreground",
+                                class: "page-menu-button ml-auto rounded px-1.5 text-base leading-none hover:bg-accent hover:text-foreground",
                                 title: "Page actions",
                                 onclick: move |_| {
                                     let open = *menu_open.peek();
@@ -334,7 +334,13 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                             }
                         }
                         if has_page && can_create && menu_open() {
-                            span { class: "absolute right-0 top-6 z-20 flex min-w-40 flex-col rounded-lg border border-border bg-popover p-1 text-sm text-foreground shadow-lg",
+                            // A tap anywhere else closes the menu — on a
+                            // phone there is no pointer to move away.
+                            div {
+                                class: "fixed inset-0 z-10",
+                                onclick: move |_| menu_open.set(false),
+                            }
+                            span { class: "page-menu absolute right-0 top-6 z-20 flex min-w-40 flex-col rounded-lg border border-border bg-popover p-1 text-sm text-foreground shadow-lg",
                                 button {
                                     r#type: "button",
                                     class: "rounded px-2 py-1 text-left hover:bg-accent",
