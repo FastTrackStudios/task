@@ -164,6 +164,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let mut action_error = use_signal(|| None::<String>);
     let mut move_folder = use_signal(String::new);
     let mut move_new_folder = use_signal(String::new);
+    let mut move_name = use_signal(String::new);
     let folders = use_memo(move || {
         let mut out: Vec<String> = pages_memo
             .read()
@@ -326,16 +327,19 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                             .rsplit_once('/')
                                             .map(|(dir, _)| dir.to_owned())
                                             .unwrap_or_default();
+                                        let name = basename_of(&path).to_owned();
                                         move |_| {
                                             action_error.set(None);
-                                            // Start from where the page is, not
-                                            // from the last move's answers.
+                                            // Start from where the page is and
+                                            // what it is called, not from the
+                                            // last move's answers.
                                             move_folder.set(here.clone());
                                             move_new_folder.set(String::new());
+                                            move_name.set(name.clone());
                                             page_action.set(Some(PageAction::Move));
                                         }
                                     },
-                                    "Move"
+                                    "Move / rename"
                                 }
                                 button {
                                     r#type: "button",
@@ -364,7 +368,12 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                     PageAction::Move => {
                                         let typed = move_new_folder.peek().trim().to_owned();
                                         let folder = if typed.is_empty() { move_folder.peek().clone() } else { typed };
-                                        let name = basename_of(&from).to_owned();
+                                        let typed_name = move_name.peek().trim().to_owned();
+                                        let name = if typed_name.is_empty() {
+                                            basename_of(&from).to_owned()
+                                        } else {
+                                            typed_name
+                                        };
                                         let Some(to) = new_page_path(&folder, &name) else { return };
                                         if to == from {
                                             page_action.set(None);
@@ -400,7 +409,14 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                     "data-testid": "page-action",
                                     match act {
                                         PageAction::Move => rsx! {
-                                            span { class: "text-muted-foreground", "Move to" }
+                                            input {
+                                                class: "min-w-0 basis-full rounded-md border border-border/70 bg-background px-2 py-1 sm:basis-auto sm:flex-1",
+                                                placeholder: "Page name",
+                                                title: "The page's name — renaming updates the links that point to it",
+                                                value: "{move_name}",
+                                                oninput: move |e| move_name.set(e.value()),
+                                            }
+                                            span { class: "text-muted-foreground", "in" }
                                             select {
                                                 class: "rounded-md border border-border/70 bg-background px-2 py-1",
                                                 value: "{move_folder}",
@@ -416,7 +432,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                                 value: "{move_new_folder}",
                                                 oninput: move |e| move_new_folder.set(e.value()),
                                             }
-                                            Button { variant: ButtonVariant::Primary, size: ButtonSize::Small, on_click: run, "Move" }
+                                            Button { variant: ButtonVariant::Primary, size: ButtonSize::Small, on_click: run, "Save" }
                                         },
                                         PageAction::Delete => rsx! {
                                             span { class: "flex-1",

@@ -706,7 +706,9 @@ pub(crate) fn NoteView(
                         // duplicate header when a claimant says so. Inside the
                         // centered column so the title and the note body share
                         // the same left edge.
-                        if !hide_note_header {
+                        // A note whose body opens with its own `# Title` has
+                        // its title already; the header would say it twice.
+                        if !hide_note_header && !opens_with_title(&session.state.read().doc.to_string()) {
                             crate::pages::note_header::NoteHeader {
                                 home,
                                 props_open,
@@ -757,6 +759,17 @@ pub(crate) fn NoteView(
 const READING_STYLE: &str =
     ".editor-frame--flush .editor-root.reading-mode { padding-left: 24px; }";
 
+/// Whether the note's body (after its frontmatter) opens with an H1 —
+/// the note naming itself, as every wiki page and most imported notes
+/// do. The shell's title header is then a second copy of the title.
+fn opens_with_title(text: &str) -> bool {
+    raw_body_text(text)
+        .trim_start()
+        .lines()
+        .next()
+        .is_some_and(|line| line.starts_with("# ") && line.len() > 2)
+}
+
 /// The Raw view's text: the file minus its YAML frontmatter fence (the
 /// properties live in the right-sidebar Properties tab).
 fn raw_body_text(text: &str) -> String {
@@ -778,6 +791,24 @@ fn raw_body_text(text: &str) -> String {
 /// opening). Not mounting it removes that sink entirely.
 fn note_body_visible(is_experience_note: bool, fullscreen: bool) -> bool {
     !(is_experience_note && fullscreen)
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::opens_with_title;
+
+    #[test]
+    fn a_body_that_opens_with_an_h1_already_has_its_title() {
+        assert!(opens_with_title(
+            "---\ntitle: Modes\n---\n\n# Modes\n\nText.\n"
+        ));
+        assert!(opens_with_title("# Untitled page\n"));
+        assert!(!opens_with_title(
+            "---\ntitle: Modes\n---\n\nText first.\n\n# Later\n"
+        ));
+        assert!(!opens_with_title("## A section first\n"));
+        assert!(!opens_with_title(""));
+    }
 }
 
 #[cfg(test)]
