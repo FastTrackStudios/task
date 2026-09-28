@@ -219,8 +219,18 @@ fn pick_json3_track(v: &Value) -> Option<(String, String, bool)> {
             continue;
         };
         let mut langs: Vec<&String> = map.keys().collect();
-        // `en`, `en-US`, `en-orig`, … sort before the rest.
-        langs.sort_by_key(|l| (!l.starts_with("en"), l.as_str().to_string()));
+        // English first, and within it the ORIGINAL speech track
+        // (`en-orig`) before plain `en`. On a video with dubbed audio
+        // tracks, YouTube's automatic `en` can be a machine translation
+        // of one of the dubs (`lang=ar&tlang=en`) — a worse transcript
+        // of what was said, and a rate-limited one (HTTP 429).
+        langs.sort_by_key(|l| {
+            (
+                !l.starts_with("en"),
+                !l.ends_with("-orig"),
+                l.as_str().to_string(),
+            )
+        });
         for lang in langs {
             let Some(tracks) = map.get(lang).and_then(Value::as_array) else {
                 continue;
@@ -428,6 +438,28 @@ mod tests {
             ))
         );
         assert!(!m.json3_manual, "ASR is the auto kind");
+    }
+
+    /// A video with dubbed audio: its automatic `en` is a translation of
+    /// a dub, `en-orig` is what the speaker said.
+    #[test]
+    fn asr_prefers_the_original_english_over_a_translated_one() {
+        let probe = r#"{
+          "id": "CweAM530ryc", "title": "t",
+          "automatic_captions": {
+            "ar-orig": [{"ext": "json3", "url": "https://example.com/ar-orig.json3"}],
+            "en": [{"ext": "json3", "url": "https://example.com/en-from-ar.json3"}],
+            "en-orig": [{"ext": "json3", "url": "https://example.com/en-orig.json3"}]
+          }
+        }"#;
+        let m = parse_probe_json(probe).unwrap();
+        assert_eq!(
+            m.json3_track,
+            Some((
+                "en-orig".to_string(),
+                "https://example.com/en-orig.json3".to_string()
+            ))
+        );
     }
 
     #[test]
