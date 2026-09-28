@@ -700,7 +700,7 @@ pub(crate) fn NoteView(
                         // right-sidebar Properties tab. Read renders the
                         // editor's reading view (not editable, no source
                         // markers), as does a note this person may not write.
-                        div { class: "mx-auto w-full max-w-3xl",
+                        div { class: "note-column mx-auto w-full max-w-3xl",
                         // A claimed note may render its own title (the editor's
                         // typed title widget IS the title) — skip the shell's
                         // duplicate header when a claimant says so. Inside the

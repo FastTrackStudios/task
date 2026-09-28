@@ -39,6 +39,7 @@ pub mod plugin_gate;
 pub mod prefs;
 pub mod presence;
 pub mod project_declaration;
+pub mod reading;
 pub mod routes;
 pub mod search;
 pub mod server_registry;

@@ -165,6 +165,11 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let mut move_folder = use_signal(String::new);
     let mut move_new_folder = use_signal(String::new);
     let mut move_name = use_signal(String::new);
+    let mut menu_open = use_signal(|| false);
+    let wiki_title = access
+        .read()
+        .as_ref()
+        .map_or_else(|| wiki.clone(), |a| a.title.clone());
     let folders = use_memo(move || {
         let mut out: Vec<String> = pages_memo
             .read()
@@ -292,36 +297,47 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
 
     rsx! {
         div { class: "flex h-full min-h-0 w-full",
-            div { class: "flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
-                div { class: "mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-4 sm:px-6 lg:px-8",
-                    Link {
-                        to: Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
-                        class: "text-xs text-muted-foreground hover:text-foreground",
-                        "← {wiki}"
-                    }
-                    div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
-                        if ai_generated {
-                            span {
-                                class: "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-medium text-primary",
-                                title: if generated_by.is_empty() { "Machine-produced content".to_string() } else { format!("Machine-produced by {generated_by}") },
-                                if generated_by.is_empty() {
-                                    "✨ AI generated"
-                                } else {
-                                    "✨ AI generated · {generated_by}"
-                                }
-                            }
+            // `wiki-reading`: a wiki page is set for reading — see
+            // `crate::reading`.
+            div { class: "wiki-reading flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
+                div { class: "note-column mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pt-5",
+                    // One quiet line: where this page belongs, what it is,
+                    // who wrote it — and its actions behind ⋯. The path is
+                    // in the tab and the sidebar already.
+                    div { class: "relative flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground",
+                        Link {
+                            to: Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
+                            class: "hover:text-foreground",
+                            "← {wiki_title}"
                         }
                         if !page_type.is_empty() {
-                            span { class: "rounded-full border border-border/70 bg-card/60 px-2 py-0.5 font-medium uppercase tracking-wide",
-                                "{page_type}"
+                            span { class: "text-muted-foreground/60", "·" }
+                            span { class: "capitalize", "{page_type}" }
+                        }
+                        if ai_generated {
+                            span { class: "text-muted-foreground/60", "·" }
+                            span {
+                                title: if generated_by.is_empty() { "Machine-produced content".to_string() } else { format!("Machine-produced by {generated_by}") },
+                                "✨ AI draft"
                             }
                         }
-                        span { class: "font-mono", "{path}" }
                         if has_page && can_create {
-                            span { class: "ml-auto flex items-center gap-1",
+                            button {
+                                r#type: "button",
+                                class: "ml-auto rounded px-1.5 text-base leading-none hover:bg-accent hover:text-foreground",
+                                title: "Page actions",
+                                onclick: move |_| {
+                                    let open = *menu_open.peek();
+                                    menu_open.set(!open);
+                                },
+                                "⋯"
+                            }
+                        }
+                        if has_page && can_create && menu_open() {
+                            span { class: "absolute right-0 top-6 z-20 flex min-w-40 flex-col rounded-lg border border-border bg-popover p-1 text-sm text-foreground shadow-lg",
                                 button {
                                     r#type: "button",
-                                    class: "rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground",
+                                    class: "rounded px-2 py-1 text-left hover:bg-accent",
                                     onclick: {
                                         let here = path
                                             .rsplit_once('/')
@@ -336,19 +352,21 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                             move_folder.set(here.clone());
                                             move_new_folder.set(String::new());
                                             move_name.set(name.clone());
+                                            menu_open.set(false);
                                             page_action.set(Some(PageAction::Move));
                                         }
                                     },
-                                    "Move / rename"
+                                    "Move / rename…"
                                 }
                                 button {
                                     r#type: "button",
-                                    class: "rounded px-1.5 py-0.5 hover:bg-destructive/10 hover:text-destructive",
+                                    class: "rounded px-2 py-1 text-left text-destructive hover:bg-destructive/10",
                                     onclick: move |_| {
                                         action_error.set(None);
+                                        menu_open.set(false);
                                         page_action.set(Some(PageAction::Delete));
                                     },
-                                    "Delete"
+                                    "Delete…"
                                 }
                             }
                         }
@@ -468,6 +486,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 }
                 div { class: "flex min-h-0 flex-1 flex-col pb-12", {body} }
                 document::Link { rel: "stylesheet", href: editor::EDITOR_STYLE }
+                document::Style { {crate::reading::reading_style()} }
                 document::Style { {crate::collab::COLLAB_STYLE} }
             }
             // ── Right sidebar (md+): the same inspector as the vault ──
