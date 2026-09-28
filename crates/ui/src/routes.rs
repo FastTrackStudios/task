@@ -126,6 +126,10 @@ pub enum Route {
         #[route("/wiki/w/:org/:wiki/page?:path")]
         WikiDocRoute { org: String, wiki: String, path: String },
 
+        // One Edit Request against one wiki: its diff, and review.
+        #[route("/wiki/w/:org/:wiki/request/:id")]
+        WikiRequestRoute { org: String, wiki: String, id: String },
+
         #[route("/connections")]
         ConnectionsRoute {},
 
@@ -408,6 +412,13 @@ fn WikiHomeRoute(org: String, wiki: String) -> Element {
 fn WikiDocRoute(org: String, wiki: String, path: String) -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { org, wiki, path } }
+    }
+}
+
+#[component]
+fn WikiRequestRoute(org: String, wiki: String, id: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_request::WikiRequestView { org, wiki, id } }
     }
 }
 

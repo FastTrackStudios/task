@@ -94,6 +94,10 @@ pub enum SaveError {
         server_sha: String,
         server_text: String,
     },
+    /// The server will not take this write from this person — a wiki
+    /// governed by its Editors. Carries the server's reason, which says
+    /// what to do instead.
+    Refused(String),
     /// Transport / IO / anything else, stringly (the vox error
     /// chain bottoms out in debug formatting today).
     Other(String),
@@ -109,6 +113,23 @@ pub enum SaveStatus {
     Saving,
     Saved,
     Failed(String),
+}
+
+/// A buffer's change against the version it was opened from.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Draft {
+    pub path: String,
+    pub base_sha256: String,
+    pub base_text: String,
+    pub text: String,
+}
+
+impl Draft {
+    /// Whether the buffer differs from what it was opened from.
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        self.text != self.base_text
+    }
 }
 
 /// The open file's wire identity: path + last-known server sha.
@@ -270,6 +291,28 @@ impl DocumentSession {
 
     /// Unresolved conflict, when a conditional write lost.
     /// Reactive.
+    /// What the buffer was opened from — the last-known server sha and
+    /// the text it had — and what it holds now. The three parts of an
+    /// Edit Request's page change (`base_sha256`, `base_markdown`,
+    /// `markdown`). `None` before a file is open.
+    #[must_use]
+    pub fn draft(&self) -> Option<Draft> {
+        let open = self.open.read().clone()?;
+        Some(Draft {
+            path: open.path,
+            base_sha256: open.sha.unwrap_or_default(),
+            base_text: self.saved_text.read().clone(),
+            text: self.state.read().doc.to_string(),
+        })
+    }
+
+    /// Put the buffer back to what it was opened from.
+    pub fn discard_draft(&self) {
+        let base = self.saved_text.peek().clone();
+        let mut state = self.state;
+        state.set(EditorState::new(base));
+    }
+
     pub fn conflict(&self) -> Option<Conflict> {
         self.conflict.read().clone()
     }
@@ -457,6 +500,18 @@ impl DocumentSession {
                     "Conflict — file changed on server".to_owned(),
                 ));
             }
+            Err(SaveError::Refused(reason)) => {
+                // Not a transient failure: retrying on the next keystroke
+                // would be refused the same way. Stop autosaving; the
+                // edits stay in the buffer for the person to take
+                // elsewhere (an Edit Request).
+                let mut paused = self.autosave_paused;
+                paused.set(true);
+                status.set(SaveStatus::Failed(reason.clone()));
+                if let Some(n) = self.notify {
+                    n.error(reason);
+                }
+            }
             Err(SaveError::Other(e)) => {
                 status.set(SaveStatus::Failed(format!("Save failed: {e}")));
                 if let Some(n) = self.notify {
@@ -532,6 +587,7 @@ async fn save_file(
                     server_sha,
                     server_text: String::from_utf8_lossy(&server_bytes).into_owned(),
                 }),
+                VaultSyncError::Refused(reason) => Err(SaveError::Refused(reason)),
                 other => Err(SaveError::Other(format!("{other:?}"))),
             },
             Err(e) => Err(SaveError::Other(format!("{e:?}"))),

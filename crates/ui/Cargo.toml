@@ -132,6 +132,9 @@ vault-proto = { workspace = true, features = ["vox"] }
 # (archived articles + ^t-anchored video transcripts). `vox`
 # feature only, wasm-clean like the other proto clients.
 wiki-proto = { workspace = true, features = ["vox"] }
+# The Edit Request review screen's line diff (`pages/wiki_request.rs`) —
+# the same crate the wiki lane merges with, pure Rust, wasm-clean.
+diffy = "0.4"
 # Git wire surface — `RepoCatalog` / `IssueTracker` clients the
 # `/repos` page binds to list repos + their issues for the
 # selected org. `vox` feature only, wasm-clean like the others.

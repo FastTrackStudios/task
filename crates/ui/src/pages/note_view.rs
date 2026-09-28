@@ -41,6 +41,20 @@ use crate::document_session::{SaveStatus, use_document_session};
 use crate::pages::vault::{FileMeta, basename_of};
 use crate::vault_lookup::{self, ClientVaultIndex};
 
+/// How a person may change an open note.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum WriteMode {
+    /// Edits save to the file (autosave, Ctrl+S, the live session).
+    #[default]
+    Direct,
+    /// Edits stay in the buffer — nothing saves, nothing joins the live
+    /// session — for the host to submit some other way (an Edit Request
+    /// to a wiki governed by its Editors).
+    Draft,
+    /// Not editable at all.
+    ReadOnly,
+}
+
 /// One open note. Mount keyed by `"{pane}:{path}"`.
 #[allow(clippy::too_many_arguments)]
 #[component]
@@ -76,12 +90,34 @@ pub(crate) fn NoteView(
     on_open: Callback<FileMeta>,
     /// Refresh the folder index after a rename commits.
     on_renamed: Callback<()>,
+    /// How this person may change the note — see [`WriteMode`]. Unset is
+    /// [`WriteMode::Direct`] (the vault).
+    #[props(default)]
+    write_mode: Option<ReadSignal<WriteMode>>,
+    /// Handed the view's document session once it exists, for a host
+    /// that acts on the buffer from outside — the wiki page submitting a
+    /// draft as an Edit Request.
+    #[props(default)]
+    session_out: Option<Signal<Option<crate::document_session::DocumentSession>>>,
 ) -> Element {
     let is_focused = use_memo(move || *focused.read() == pane_index);
+    let mode = use_memo(move || write_mode.map_or(WriteMode::Direct, |m| m()));
+    // Saves, the live session and renames go to the file only in Direct.
+    let may_write = use_memo(move || mode() == WriteMode::Direct);
+    // Read mode (the status-bar toggle) and a note this person may not
+    // change both render the editor's reading view: not editable, every
+    // source marker hidden. A Draft is editable, but only in the buffer.
+    let view_mode = use_context::<crate::chrome::NoteViewMode>().0;
+    let reading = use_memo(move || {
+        mode() == WriteMode::ReadOnly || view_mode() == crate::chrome::ViewMode::Read
+    });
 
     // ── Session ───────────────────────────────────────────────
     let session = use_document_session(home, vault_id.clone());
     use_context_provider(|| session);
+    if let Some(mut out) = session_out {
+        use_hook(move || out.set(Some(session)));
+    }
     // Open exactly once — this instance is keyed by pane:path, so the
     // props never change under it (a tab switch remounts). No signal
     // reads → the effect fires a single time after mount.
@@ -142,11 +178,15 @@ pub(crate) fn NoteView(
         // and whenever this pane gains/loses focus.
         let _generation = conn.generation();
         let focused_now = is_focused();
+        let writing = may_write();
         collab_doc.set(None);
         collab.set(None);
         handles.reset();
         if !focused_now {
             return; // unfocused pane stays in plain sha mode
+        }
+        if !writing {
+            return; // a reader does not join the live session
         }
         let slug = home.peek().clone();
         let path = collab_path.clone();
@@ -163,10 +203,22 @@ pub(crate) fn NoteView(
             }
         });
     });
-    // Autosave pauses exactly while collab is live.
+    // Autosave pauses exactly while collab is live — and for good when
+    // this person may not write.
     use_effect(move || {
         let live = collab.read().as_ref().is_some_and(|c| c.is_live());
-        session.set_autosave_paused(live);
+        session.set_autosave_paused(live || !may_write());
+    });
+    // The editor's reading view follows Read mode and write permission.
+    use_effect(move || {
+        let on = reading();
+        if session.state.peek().reading_mode != on {
+            editor::dispatch_spec(
+                session.state,
+                editor::TransactionSpec::new().reading_mode(on),
+                None,
+            );
+        }
     });
     // Live → Offline teardown: fall back to sha saves.
     use_effect(move || {
@@ -246,6 +298,7 @@ pub(crate) fn NoteView(
                     claim,
                     state: session.state,
                     on_transaction,
+                    writable: mode() != WriteMode::ReadOnly,
                 }));
             } else if (*focused_doc.peek()).map(|d| d.claim) == Some(claim) {
                 focused_doc.set(None);
@@ -456,13 +509,20 @@ pub(crate) fn NoteView(
             .read()
             .as_ref()
             .map(|c| if c.is_live() { "live" } else { "connecting…" });
+        // A draft or a read-only note has nothing to save: say what it is
+        // instead of offering a Save that would be refused.
+        let (save, dirty, on_save) = match mode() {
+            WriteMode::Direct => (save, session.dirty(), Some(on_save_cb)),
+            WriteMode::Draft => ("Draft — not saved".to_owned(), false, None),
+            WriteMode::ReadOnly => ("Read only".to_owned(), false, None),
+        };
         info.set(Some(crate::chrome::DocStatus {
             file,
-            dirty: session.dirty(),
+            dirty,
             save,
             collab: collab_label.map(str::to_owned),
             vim: vim_label,
-            on_save: Some(on_save_cb),
+            on_save,
         }));
     });
     use_drop(|| crate::shortcuts::set_editor_vim_normal(false));
@@ -493,7 +553,9 @@ pub(crate) fn NoteView(
                 let key = evt.key().to_string();
                 if (m.ctrl() || m.meta()) && key == "s" {
                     evt.prevent_default();
-                    session.save();
+                    if may_write() {
+                        session.save();
+                    }
                     return;
                 }
                 let normal = vim
@@ -593,8 +655,9 @@ pub(crate) fn NoteView(
                     if note_body_visible(is_experience_note, widget_fullscreen()) {
                         // Raw view (status-bar toggle): the literal file text
                         // MINUS the YAML frontmatter — properties stay in the
-                        // right-sidebar Properties tab. Read currently renders
-                        // the editor (the reading-view design comes later).
+                        // right-sidebar Properties tab. Read renders the
+                        // editor's reading view (not editable, no source
+                        // markers), as does a note this person may not write.
                         div { class: "mx-auto w-full max-w-3xl",
                         // A claimed note may render its own title (the editor's
                         // typed title widget IS the title) — skip the shell's
@@ -607,6 +670,7 @@ pub(crate) fn NoteView(
                                 props_open,
                                 focus_req: focus_title,
                                 on_renamed: move |_| on_renamed.call(()),
+                                renamable: may_write(),
                             }
                         }
                         if use_context::<crate::chrome::NoteViewMode>().0() == crate::chrome::ViewMode::Raw {
@@ -625,6 +689,7 @@ pub(crate) fn NoteView(
                                         completion: completion.clone(),
                                         on_transaction,
                                         on_link_click,
+                                        editable: !reading(),
                                     }
                                     CommandPalette { state: session.state, palette, on_transaction }
                                 }
@@ -634,6 +699,7 @@ pub(crate) fn NoteView(
                     }
                 }
             }
+            document::Style { {READING_STYLE} }
             // Keyed collab child: remount per doc id = fresh replica.
             if let Some(doc_id) = collab_doc() {
                 crate::collab::CollabSession { key: "{doc_id}", doc_id, handles }
@@ -641,6 +707,13 @@ pub(crate) fn NoteView(
         }
     }
 }
+
+/// The editor's reading view inside Task's flush frame. `editor.css`
+/// drops the reading view's left padding (it has no gutter to reserve)
+/// with a rule as specific as, and later than, the flush frame's 24px —
+/// so reading text sat 24px left of the title. Put it back.
+const READING_STYLE: &str =
+    ".editor-frame--flush .editor-root.reading-mode { padding-left: 24px; }";
 
 /// The Raw view's text: the file minus its YAML frontmatter fence (the
 /// properties live in the right-sidebar Properties tab).

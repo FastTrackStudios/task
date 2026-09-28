@@ -33,6 +33,10 @@ pub fn NoteHeader(
     /// Refresh the folder index after a rename commits (the tree row
     /// path changed).
     on_renamed: EventHandler<()>,
+    /// `false` shows the title as text: renaming is a write, and a
+    /// reader of a wiki governed by its Editors may not make one.
+    #[props(default = true)]
+    renamable: bool,
 ) -> Element {
     let session = use_context::<DocumentSession>();
     let notify = architect::try_use_notifications();
@@ -122,7 +126,7 @@ pub fn NoteHeader(
     let _ = props_open;
     rsx! {
         div { class: "flex flex-col gap-1 px-6 pt-5 pb-0",
-            TitleField { title, focus_req, on_commit: do_rename }
+            TitleField { title, focus_req, on_commit: do_rename, renamable }
         }
     }
 }
@@ -140,7 +144,12 @@ fn focus_editor_body() {
 /// commits and returns focus to the document. A `focus_req` bump
 /// enters edit mode with the whole title selected (type to replace).
 #[component]
-fn TitleField(title: String, focus_req: Signal<u32>, on_commit: EventHandler<String>) -> Element {
+fn TitleField(
+    title: String,
+    focus_req: Signal<u32>,
+    on_commit: EventHandler<String>,
+    renamable: bool,
+) -> Element {
     let mut editing = use_signal(|| false);
     let mut draft = use_signal(String::new);
     // Whether the next mount of the input should select-all (keyboard
@@ -150,7 +159,7 @@ fn TitleField(title: String, focus_req: Signal<u32>, on_commit: EventHandler<Str
     {
         let title = title.clone();
         use_effect(move || {
-            if focus_req() > 0 && !*editing.peek() {
+            if focus_req() > 0 && !*editing.peek() && renamable {
                 draft.set(title.clone());
                 select_all.set(true);
                 editing.set(true);
@@ -198,6 +207,12 @@ fn TitleField(title: String, focus_req: Signal<u32>, on_commit: EventHandler<Str
                         on_commit.call(draft.peek().clone());
                     }
                 },
+            }
+        }
+    } else if !renamable {
+        rsx! {
+            h1 { class: "w-full truncate text-3xl font-bold tracking-tight text-foreground",
+                "{title}"
             }
         }
     } else {

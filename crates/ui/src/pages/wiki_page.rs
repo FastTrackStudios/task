@@ -147,6 +147,18 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     });
     let on_renamed = use_callback(move |()| files.restart());
 
+    // ── Who may change it ─────────────────────────────────────
+    // A wiki governed by its Editors opens read-only for everyone
+    // else, with the way in (an Edit Request) above the page.
+    let access = crate::pages::wiki_access::use_wiki_access(home, wiki.clone());
+    let proposing = use_signal(|| false);
+    let write_mode = use_memo(move || {
+        crate::pages::wiki_access::write_mode(access.read().as_ref(), proposing())
+    });
+    let session_out = use_signal(|| None::<crate::document_session::DocumentSession>);
+    let can_create = access.read().as_ref().is_some_and(|a| a.can_edit);
+    let mut create_error = use_signal(|| None::<String>);
+
     // ── The inspector ─────────────────────────────────────────
     // Open state is the shell's (the top-bar toggle), the tab is
     // this page's — the desktop aside and the mobile sheet share it.
@@ -206,6 +218,8 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 focus_tick,
                 on_open,
                 on_renamed,
+                write_mode: Some(write_mode.into()),
+                session_out,
             }
         },
         (Some(Ok(_)), None) => {
@@ -217,6 +231,11 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 div { class: "flex flex-col items-start gap-3 rounded-xl border border-border/70 bg-card/30 p-6",
                     Heading { level: HeadingLevel::H3, "{create_title}" }
                     Text { variant: TextVariant::Muted, "This page doesn't exist yet." }
+                    if !can_create {
+                        Text { variant: TextVariant::Muted,
+                            "Only this wiki's Editors can start new pages."
+                        }
+                    } else {
                     Button {
                         variant: ButtonVariant::Primary,
                         size: ButtonSize::Small,
@@ -226,13 +245,17 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                             let p = create_path.clone();
                             let title = create_title.clone();
                             spawn(async move {
-                                let seed = format!("---\ntitle: \"{title}\"\n---\n\n# {title}\n");
-                                if create_page(slug, vault, p, seed).await.is_ok() {
-                                    files.restart();
+                                match create_page(slug, vault, p, page_seed(&title)).await {
+                                    Ok(_) => files.restart(),
+                                    Err(e) => create_error.set(Some(e)),
                                 }
                             });
                         },
                         "Create page"
+                    }
+                    if let Some(e) = create_error() {
+                        span { class: "text-sm text-destructive", "{e}" }
+                    }
                     }
                 }
             }
@@ -277,6 +300,17 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                             }
                         }
                         span { class: "font-mono", "{path}" }
+                    }
+                }
+                if let Some(a) = access.read().clone().filter(|a| has_page && !a.can_edit) {
+                    div { class: "px-4 sm:px-6 lg:px-8",
+                        crate::pages::wiki_access::ProposeBar {
+                            org: home,
+                            wiki: wiki.clone(),
+                            access: a,
+                            proposing,
+                            session: session_out,
+                        }
                     }
                 }
                 div { class: "flex min-h-0 flex-1 flex-col pb-12", {body} }
@@ -352,21 +386,85 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
 /// Start a page that a link named but nobody wrote: a create-only
 /// write over the wiki's vault id, so a race with another author is
 /// a visible failure rather than a silent overwrite.
-async fn create_page(
+///
+/// Shared with the wiki home's "Add page". The error is a sentence for
+/// the person who asked: a page already at that path, or the server's
+/// reason for refusing (a wiki governed by its Editors).
+pub(crate) async fn create_page(
     slug: String,
     vault_id: String,
     path: String,
     seed: String,
 ) -> Result<String, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
-    client
+    match client
         .put_file(
             vault_id,
-            path,
+            path.clone(),
             seed.into_bytes(),
             vault_proto::IfMatch::CreateOnly,
         )
         .await
-        .map(|ack| ack.sha256)
-        .map_err(|e| format!("put_file: {e:?}"))
+    {
+        Ok(ack) => Ok(ack.sha256),
+        Err(vox::VoxError::User(e)) => Err(match *e {
+            vault_proto::VaultSyncError::Conflict { .. } => {
+                format!("There's already a page at {path}.")
+            }
+            vault_proto::VaultSyncError::Refused(reason) => reason,
+            vault_proto::VaultSyncError::BadPath => format!("“{path}” isn't a usable page name."),
+            other => format!("Couldn't create it: {other}"),
+        }),
+        Err(e) => Err(format!("Couldn't create it: {e:?}")),
+    }
+}
+
+/// A seeded page for `title`: frontmatter naming it, and its heading.
+#[must_use]
+pub(crate) fn page_seed(title: &str) -> String {
+    let quoted = title.replace('"', "\\\"");
+    format!("---\ntitle: \"{quoted}\"\n---\n\n# {title}\n\n")
+}
+
+/// Where a new page titled `title` goes in `folder` (wiki-relative, ""
+/// for the root). `None` when nothing usable is left of the title.
+#[must_use]
+pub(crate) fn new_page_path(folder: &str, title: &str) -> Option<String> {
+    let name: String = title
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c => c,
+        })
+        .collect();
+    let name = name.trim_matches(['.', ' ', '-']);
+    if name.is_empty() {
+        return None;
+    }
+    let folder = folder.trim_matches('/');
+    Some(if folder.is_empty() {
+        format!("{name}.md")
+    } else {
+        format!("{folder}/{name}.md")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::new_page_path;
+
+    #[test]
+    fn a_title_becomes_a_file_in_its_folder() {
+        assert_eq!(new_page_path("", "Dorian"), Some("Dorian.md".into()));
+        assert_eq!(
+            new_page_path("Concepts", "Dorian"),
+            Some("Concepts/Dorian.md".into())
+        );
+        assert_eq!(
+            new_page_path("/Concepts/", "Is it A/B?"),
+            Some("Concepts/Is it A-B.md".into())
+        );
+        assert_eq!(new_page_path("Concepts", "  ...  "), None);
+    }
 }

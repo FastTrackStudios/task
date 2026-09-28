@@ -20007,6 +20007,7 @@ dependencies = [
  "chrono",
  "contacts-proto",
  "crdt",
+ "diffy",
  "dioxus",
  "dioxus-icons",
  "dioxus-router",
