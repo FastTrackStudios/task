@@ -34,7 +34,7 @@ use crate::pages::note_inspector::{InspectorTab, NoteInspector};
 use crate::pages::note_view::NoteView;
 use crate::pages::vault::{FileMeta, basename_of, fetch_folder_index};
 use crate::routes::Route;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
+use crate::shell::mobile::BottomSheet;
 use crate::vault_lookup;
 
 #[component]
@@ -166,6 +166,8 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let mut move_new_folder = use_signal(String::new);
     let mut move_name = use_signal(String::new);
     let mut menu_open = use_signal(|| false);
+    // The inspector as a bottom sheet on phones — closed until asked for.
+    let mut sheet_open = use_signal(|| false);
     let wiki_title = access
         .read()
         .as_ref()
@@ -204,8 +206,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
         }
     });
 
-    // The status line (the focused NoteView writes it; the mobile
-    // action bar's Save reads it). Cleared on leave.
+    // The status line (the focused NoteView writes it). Cleared on leave.
     let status_info = use_context::<crate::chrome::StatusBarInfo>().0;
     use_drop(move || {
         let mut info = status_info;
@@ -321,7 +322,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                 "✨ AI draft"
                             }
                         }
-                        if has_page && can_create {
+                        if has_page {
                             button {
                                 r#type: "button",
                                 class: "page-menu-button ml-auto rounded px-1.5 text-base leading-none hover:bg-accent hover:text-foreground",
@@ -333,7 +334,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                 "⋯"
                             }
                         }
-                        if has_page && can_create && menu_open() {
+                        if has_page && menu_open() {
                             // A tap anywhere else closes the menu — on a
                             // phone there is no pointer to move away.
                             div {
@@ -341,6 +342,18 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                 onclick: move |_| menu_open.set(false),
                             }
                             span { class: "page-menu absolute right-0 top-6 z-20 flex min-w-40 flex-col rounded-lg border border-border bg-popover p-1 text-sm text-foreground shadow-lg",
+                                // The phone's inspector (properties, links,
+                                // outline) — the desktop has its side panel.
+                                button {
+                                    r#type: "button",
+                                    class: "rounded px-2 py-1 text-left hover:bg-accent md:hidden",
+                                    onclick: move |_| {
+                                        menu_open.set(false);
+                                        sheet_open.set(true);
+                                    },
+                                    "Details"
+                                }
+                                if can_create {
                                 button {
                                     r#type: "button",
                                     class: "rounded px-2 py-1 text-left hover:bg-accent",
@@ -373,6 +386,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                         page_action.set(Some(PageAction::Delete));
                                     },
                                     "Delete…"
+                                }
                                 }
                             }
                         }
@@ -516,37 +530,10 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 }
             }
         }
-        // ── Mobile chrome: Save + the inspector as a sheet ────
-        MobileActionBar {
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85 disabled:opacity-50",
-                disabled: !has_page,
-                onclick: move |_| {
-                    if let Some(cb) = status_info.peek().as_ref().and_then(|d| d.on_save) {
-                        cb.call(());
-                    }
-                },
-                if status_info.read().as_ref().is_some_and(|d| d.dirty) { "Save •" } else { "Save" }
-            }
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent disabled:opacity-50",
-                disabled: !has_page,
-                onclick: move |_| {
-                    let mut o = shell_right;
-                    let cur = o.peek().0;
-                    o.set(crate::chrome::RightPanelOpen(!cur));
-                },
-                "Backlinks"
-            }
-        }
+        // ── Mobile: the inspector as a sheet, opened from ⋯ ──
         BottomSheet {
-            open: has_page && panel_open,
-            on_close: move |_| {
-                let mut o = shell_right;
-                o.set(crate::chrome::RightPanelOpen(false));
-            },
+            open: has_page && sheet_open(),
+            on_close: move |_| sheet_open.set(false),
             title: right_tab().label().to_string(),
             NoteInspector {
                 org: home,

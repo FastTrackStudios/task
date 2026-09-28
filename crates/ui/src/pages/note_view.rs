@@ -611,7 +611,7 @@ pub(crate) fn NoteView(
                 }
             },
             // Mobile-only name + save-state strip.
-            div { class: "flex items-center justify-between gap-3 border-b border-border/60 px-4 py-1.5 md:hidden",
+            div { class: "note-mobile-status flex items-center justify-between gap-3 border-b border-border/60 px-4 py-1.5 md:hidden",
                 div { class: "flex min-w-0 items-center gap-2",
                     if is_dirty {
                         span { class: "size-2 shrink-0 rounded-full bg-primary", title: "Unsaved changes" }

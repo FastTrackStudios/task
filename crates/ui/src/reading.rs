@@ -179,6 +179,10 @@ const READING_RULES: &str = r##"
    A narrow screen gets a size that holds ~40 characters, headings that
    do not wrap to three lines, and tables that scroll sideways inside
    themselves rather than pushing the page wider than the screen. */
+/* The phone's file-name strip repeats the tab; the action bar already
+   says when there is something to save. */
+.wiki-reading .note-mobile-status { display: none; }
+
 @media (max-width: 640px) {
     .wiki-reading .editor-root { font-size: 16px; line-height: 1.6; }
     .wiki-reading .editor-root .cm-line.md-h1 { font-size: 1.65em; }

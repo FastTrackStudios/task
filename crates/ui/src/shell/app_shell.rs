@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 
 use crate::chrome::{FleetingFab, FleetingModal, TopBar, provide_chrome_contexts};
 use crate::routes::Route;
-use crate::shell::mobile::{BottomTabBar, MobileHeader};
+use crate::shell::mobile::{BottomTabBar, MobileTimerDock};
 
 #[component]
 pub fn AppShell() -> Element {
@@ -125,13 +125,10 @@ pub fn AppShell() -> Element {
                         }
                     }
                     div { class: "flex min-h-screen min-w-0 flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
-                        if !share {
-                            MobileHeader {}
-                        }
                         // Bottom padding keeps content clear of the fixed
                         // tab bar (56px + safe area). On desktop `main` is
                         // the scroll container.
-                        main { class: "flex-1 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] md:min-h-0 md:overflow-y-auto md:pb-0",
+                        main { class: "flex-1 pt-[env(safe-area-inset-top,0px)] pb-[calc(6rem+env(safe-area-inset-bottom,0px))] md:min-h-0 md:overflow-y-auto md:pt-0 md:pb-0",
                             SuspenseBoundary {
                                 fallback: |_| rsx! { RouteFallback {} },
                                 Outlet::<Route> {}
@@ -140,6 +137,7 @@ pub fn AppShell() -> Element {
                         if !share {
                             BottomTabBar { current }
                             FleetingFab {}
+                            MobileTimerDock {}
                         }
                     }
                     // The right dock: whatever an app puts beside the
