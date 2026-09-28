@@ -291,7 +291,12 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
                                 if editors == 1 { "1 editor" } else { "{editors} editors" }
                             }
                             Link {
-                                to: Route::GraphRoute {},
+                                to: Route::WikiScopedSourcesRoute { org: route_org.clone(), wiki: wiki.clone() },
+                                class: "underline decoration-border underline-offset-2 hover:text-foreground",
+                                "Sources"
+                            }
+                            Link {
+                                to: Route::GraphRoute { org: route_org.clone(), wiki: wiki.clone() },
                                 class: "underline decoration-border underline-offset-2 hover:text-foreground",
                                 "Graph →"
                             }

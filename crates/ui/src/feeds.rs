@@ -648,16 +648,6 @@ pub async fn fetch_wiki_files(slug: &str) -> Result<Vec<view_knowledge_graph::Wi
         .collect())
 }
 
-feeds! {
-    wiki_proto::service::pages::PagesClient {
-        /// Catalog of the org's curated wiki pages (`<org>/wiki/Knowledge/`)
-        /// via the `wiki_proto` Pages service — drives the explorer's Wiki
-        /// tree. Path-sorted; carries the `ai_generated` provenance flag.
-        fetch_wiki_pages() -> Vec<wiki_proto::pages::PageInfo>
-            = list_pages("default".to_owned()) as "wiki pages";
-    }
-}
-
 /// Fetch the **curated wiki** graph for one org — the server-built
 /// 4-signal relevance graph over `<org>/wiki/Knowledge/` (the
 /// `wiki_proto` Graph service), adapted to the renderer's

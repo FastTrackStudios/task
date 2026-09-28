@@ -246,38 +246,6 @@ fn build_tag_tree(
     (root, untagged)
 }
 
-/// One physical folder of the wiki shelf's tree (the default wiki
-/// uses real directories — `Concepts/…`, `People/…` — unlike the
-/// vault's virtual folders).
-#[derive(Default)]
-struct WikiDirNode {
-    dirs: std::collections::BTreeMap<String, WikiDirNode>,
-    pages: Vec<wiki_proto::pages::PageInfo>,
-}
-
-/// Nest the flat, path-sorted wiki page list into its directory tree.
-fn build_wiki_tree(pages: &[wiki_proto::pages::PageInfo]) -> WikiDirNode {
-    let mut root = WikiDirNode::default();
-    for page in pages {
-        let mut node = &mut root;
-        let mut segs: Vec<&str> = page.path.split('/').collect();
-        let _file = segs.pop();
-        for seg in segs {
-            node = node.dirs.entry(seg.to_string()).or_default();
-        }
-        node.pages.push(page.clone());
-    }
-    fn sort(node: &mut WikiDirNode) {
-        node.pages
-            .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
-        for child in node.dirs.values_mut() {
-            sort(child);
-        }
-    }
-    sort(&mut root);
-    root
-}
-
 /// The sidebar tree over one vault. Bare, the org switcher's vault;
 /// with `org` + `wiki`, that wiki's pages (vault `wiki:<slug>`), with
 /// the way back to the wiki list and the wiki's name above the tree.
@@ -412,41 +380,35 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
         }
     });
 
-    // The org wiki (`<org>/wiki/Knowledge/`) — reference material,
-    // AI-generated summaries, skills: everything that ISN'T the
-    // user's own writing. Its own section below the vault tree so
-    // the vault stays purely personal. A wiki explorer is already
+    // The org's wikis — reference material, AI-generated summaries,
+    // skills: everything that ISN'T the user's own writing. A shelf
+    // below the vault tree, one row per wiki, each opening its home, so
+    // the vault stays purely personal and every wiki is a click away
+    // rather than only the default one. A wiki explorer is already
     // inside a wiki and has no shelf.
-    let wiki_files = use_resource(move || {
+    let wikis = use_resource(move || {
         let slug = active();
         let shelf = !scope.read().is_wiki();
         async move {
             if !shelf {
                 return Ok(Vec::new());
             }
-            crate::feeds::fetch_wiki_pages(&slug).await
+            crate::feeds::fetch_wikis(&slug).await
         }
     });
-    let wiki_expanded = use_signal(HashSet::<String>::new);
-    // The whole section starts collapsed — the vault is the primary
-    // navigation substrate; the wiki is the reference shelf.
+    // Starts collapsed — the vault is the primary navigation substrate;
+    // the wikis are the reference shelf.
     let mut wiki_open = use_signal(|| false);
 
     // Selection = the current route's path in THIS vault.
     let route = use_route::<Route>();
-    let (selected, wiki_selected) = match (&route, &*scope.read()) {
-        (Route::VaultRoute { path, .. }, s) if !s.is_wiki() => (path.clone(), String::new()),
+    let selected = match (&route, &*scope.read()) {
+        (Route::VaultRoute { path, .. }, s) if !s.is_wiki() => path.clone(),
         (Route::WikiDocRoute { wiki, path, .. }, s) if s.wiki.as_deref() == Some(wiki) => {
-            (path.clone(), String::new())
+            path.clone()
         }
-        (Route::WikiPageRoute { path }, s) if !s.is_wiki() => (String::new(), path.clone()),
-        _ => (String::new(), String::new()),
+        _ => String::new(),
     };
-    // Auto-open the shelf when a shelf page is the current route
-    // (deep link / graph click), so the selection is visible.
-    if !wiki_selected.is_empty() && !*wiki_open.peek() {
-        wiki_open.set(true);
-    }
 
     let scope_now = scope.read().clone();
     let heading = wiki_title
@@ -544,13 +506,13 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
                         }
                     },
                 }
-                // ── Wiki: the org's knowledge shelf (not personal notes) ──
-                if let Some(Ok(pages)) = &*wiki_files.read_unchecked() {
-                    if !pages.is_empty() {
+                // ── Wikis: the org's reference shelf (not personal notes) ──
+                if let Some(Ok(list)) = &*wikis.read_unchecked() {
+                    if !list.is_empty() {
                         {
                             let chevron = if wiki_open() { "rotate-90" } else { "" };
-                            let count = pages.len();
-                            let tree = build_wiki_tree(pages);
+                            let count = list.len();
+                            let org_slug = active();
                             rsx! {
                                 div { class: "mt-2 border-t border-border/40 pt-1 px-1.5",
                                     button {
@@ -566,12 +528,27 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
                                         span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground/80",
                                             BookOpen { size: 13 }
                                         }
-                                        span { class: "truncate", "Wiki" }
+                                        span { class: "truncate", "Wikis" }
                                         span { class: "ml-auto text-[0.65rem] tabular-nums text-muted-foreground/60", "{count}" }
                                     }
                                     if wiki_open() {
                                         nav { class: "flex flex-col gap-px",
-                                            {wiki_dir_children(&tree, String::new(), 0, wiki_expanded, wiki_selected.clone())}
+                                            for w in list.iter() {
+                                                Link {
+                                                    key: "{w.slug}",
+                                                    "data-testid": "wiki-shelf-wiki",
+                                                    to: Route::WikiHomeRoute { org: org_slug.clone(), wiki: w.slug.clone() },
+                                                    class: "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+                                                    style: "padding-left: 18px",
+                                                    span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center",
+                                                        BookOpen { size: 12 }
+                                                    }
+                                                    span { class: "truncate",
+                                                        if w.title.is_empty() { "{w.slug}" } else { "{w.title}" }
+                                                    }
+                                                    span { class: "ml-auto text-[0.65rem] tabular-nums text-muted-foreground/60", "{w.pages}" }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -830,133 +807,6 @@ fn page_row(
             if is_base {
                 span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary",
                     SquareKanban { size: 12 }
-                }
-            } else {
-                span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center",
-                    FileText { size: 12 }
-                }
-            }
-            span { class: "truncate", "{title}" }
-        }
-    }
-}
-
-/// A wiki directory's children: pages first, then subdirectories —
-/// both at the same depth. `prefix` is the dir path so expand keys
-/// stay unique across same-named subdirs.
-fn wiki_dir_children(
-    node: &WikiDirNode,
-    prefix: String,
-    depth: usize,
-    expanded: Signal<HashSet<String>>,
-    selected: String,
-) -> Element {
-    rsx! {
-        for page in &node.pages {
-            {wiki_page_row(page, depth, selected.clone())}
-        }
-        for (seg, child) in &node.dirs {
-            {wiki_dir_node(seg, child, prefix.clone(), depth, expanded, selected.clone())}
-        }
-    }
-}
-
-/// One wiki directory row + its children. Directories are physical
-/// (the wiki root's real layout), collapsed by default.
-fn wiki_dir_node(
-    seg: &str,
-    node: &WikiDirNode,
-    prefix: String,
-    depth: usize,
-    mut expanded: Signal<HashSet<String>>,
-    selected: String,
-) -> Element {
-    let dir_path = if prefix.is_empty() {
-        seg.to_string()
-    } else {
-        format!("{prefix}/{seg}")
-    };
-    let key = format!("wiki-dir:{dir_path}");
-    // Auto-expand ancestors of the selected page so deep links land
-    // visible.
-    let is_collapsed = !expanded.read().contains(&key)
-        && !(!selected.is_empty() && selected.starts_with(&format!("{dir_path}/")));
-    let indent = depth * 12;
-    let chevron = if is_collapsed { "" } else { "rotate-90" };
-    let toggle_key = key.clone();
-    fn count_pages(n: &WikiDirNode) -> usize {
-        n.pages.len() + n.dirs.values().map(count_pages).sum::<usize>()
-    }
-    let count = count_pages(node);
-
-    rsx! {
-        div { key: "{dir_path}",
-            button {
-                r#type: "button",
-                class: "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground",
-                style: "padding-left: {indent + 6}px",
-                onclick: move |_| {
-                    let mut set = expanded.write();
-                    if !set.remove(&toggle_key) {
-                        set.insert(toggle_key.clone());
-                    }
-                },
-                span { class: "flex h-3 w-3 shrink-0 items-center justify-center transition-transform {chevron}",
-                    ChevronRight { size: 11 }
-                }
-                span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground/80",
-                    BookOpen { size: 13 }
-                }
-                span { class: "truncate", "{seg}" }
-                span { class: "ml-auto text-[0.65rem] tabular-nums text-muted-foreground/60", "{count}" }
-            }
-            if !is_collapsed {
-                {wiki_dir_children(node, dir_path.clone(), depth + 1, expanded, selected.clone())}
-            }
-        }
-    }
-}
-
-/// A single shelf page row — clicking opens the default wiki's page
-/// view. AI-generated pages (frontmatter `ai_generated: true`) carry a
-/// sparkles glyph: machine-produced content, not the user's writing.
-fn wiki_page_row(page: &wiki_proto::pages::PageInfo, depth: usize, selected: String) -> Element {
-    let nav = use_navigator();
-    let is_selected = !selected.is_empty() && page.path == selected;
-    let indent = depth * 12;
-    let row_cls = if is_selected {
-        "flex w-full items-center gap-1.5 rounded-md bg-accent px-1.5 py-1 text-left text-[13px] text-foreground"
-    } else {
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-    };
-    let path = page.path.clone();
-    let title = page.title.clone();
-    let ai = page.ai_generated;
-    let tooltip = if ai {
-        if page.generated_by.is_empty() {
-            "AI generated".to_string()
-        } else {
-            format!("AI generated · {}", page.generated_by)
-        }
-    } else {
-        String::new()
-    };
-
-    rsx! {
-        button {
-            key: "{page.path}",
-            "data-testid": "wiki-shelf-page",
-            "data-path": "{page.path}",
-            r#type: "button",
-            class: "{row_cls}",
-            style: "padding-left: {indent + 6}px",
-            title: "{tooltip}",
-            onclick: move |_| {
-                nav.push(Route::WikiPageRoute { path: path.clone() });
-            },
-            if ai {
-                span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary",
-                    Sparkles { size: 12 }
                 }
             } else {
                 span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center",

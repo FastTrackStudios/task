@@ -25,21 +25,26 @@ use dioxus::prelude::*;
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 
-const WIKI_ID: &str = "default";
+/// The wiki the unscoped routes (`/wiki/sources`, `/wiki/source/:name`) read:
+/// the default tier, which is what they meant before wikis were many.
+const DEFAULT_WIKI: &str = "default";
 const EMBED_ID: &str = "source-viewer-embed";
 
 // ── data ────────────────────────────────────────────────────
 
-async fn fetch_sources(slug: &str) -> Result<Vec<wiki_proto::raw::RawSourceRef>, String> {
+async fn fetch_sources(
+    slug: &str,
+    wiki: &str,
+) -> Result<Vec<wiki_proto::raw::RawSourceRef>, String> {
     let c =
         crate::vox_clients::establish_for::<wiki_proto::service::raw_layer::RawLayerClient>(slug)
             .await?;
-    c.list_raw_sources(WIKI_ID.to_owned())
+    c.list_raw_sources(wiki.to_owned())
         .await
         .map_err(|e| format!("list_raw_sources: {e:?}"))
 }
 
-async fn fetch_source_text(slug: &str, name: &str) -> Result<String, String> {
+async fn fetch_source_text(slug: &str, wiki: &str, name: &str) -> Result<String, String> {
     // `name` is the bare filename; sources are flat under
     // raw/sources/ by convention.
     let path = format!("raw/sources/{name}");
@@ -47,7 +52,7 @@ async fn fetch_source_text(slug: &str, name: &str) -> Result<String, String> {
         crate::vox_clients::establish_for::<wiki_proto::service::raw_layer::RawLayerClient>(slug)
             .await?;
     let bytes = c
-        .read_raw_source(WIKI_ID.to_owned(), path)
+        .read_raw_source(wiki.to_owned(), path)
         .await
         .map_err(|e| format!("read_raw_source: {e:?}"))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -265,20 +270,50 @@ if (f && f.contentWindow) {{
 
 // ── pages ───────────────────────────────────────────────────
 
-/// `/wiki/sources` — every archived raw source, linked to its
-/// viewer.
+/// Which org and wiki a sources page reads: the route's, or — on the
+/// unscoped routes — the switcher's org and the default wiki.
+fn scope_of(
+    org: &str,
+    wiki: &str,
+    selection: &Signal<OrgSelection>,
+    org_list: &Signal<Vec<OrgMeta>>,
+) -> Result<(String, String), String> {
+    let slug = if org.is_empty() {
+        first_slug(selection, org_list).ok_or_else(|| "no organization selected".to_string())?
+    } else {
+        org.to_owned()
+    };
+    let wiki = if wiki.is_empty() { DEFAULT_WIKI } else { wiki };
+    Ok((slug, wiki.to_owned()))
+}
+
+/// The route a source row opens: scoped to its wiki when this page is.
+fn source_route(org: &str, wiki: &str, name: String) -> crate::routes::Route {
+    if org.is_empty() || wiki.is_empty() {
+        crate::routes::Route::WikiSourceRoute { name }
+    } else {
+        crate::routes::Route::WikiScopedSourceRoute {
+            org: org.to_owned(),
+            wiki: wiki.to_owned(),
+            name,
+        }
+    }
+}
+
+/// `/wiki/w/:org/:wiki/sources` (and the unscoped `/wiki/sources`) —
+/// every archived raw source of one wiki, linked to its viewer.
 #[component]
-pub fn WikiSourcesView() -> Element {
+pub fn WikiSourcesView(#[props(default)] org: String, #[props(default)] wiki: String) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
-    let sources = use_resource(move || async move {
-        let slug = first_slug(&selection, &org_list)
-            .ok_or_else(|| "no organization selected".to_string())?;
-        let mut rows = fetch_sources(&slug).await?;
+    let scope = (org.clone(), wiki.clone());
+    let sources = use_resource(use_reactive!(|scope| async move {
+        let (slug, wiki) = scope_of(&scope.0, &scope.1, &selection, &org_list)?;
+        let mut rows = fetch_sources(&slug, &wiki).await?;
         rows.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok::<_, String>(rows)
-    });
+    }));
 
     let body = match &*sources.read() {
         Some(Ok(rows)) if rows.is_empty() => rsx! {
@@ -292,7 +327,7 @@ pub fn WikiSourcesView() -> Element {
                 for r in rows.clone() {
                     Link {
                         key: "{r.filename}",
-                        to: crate::routes::Route::WikiSourceRoute { name: r.filename.clone() },
+                        to: source_route(&org, &wiki, r.filename.clone()),
                         class: "flex items-baseline justify-between gap-3 px-4 py-2.5 text-sm hover:bg-accent/40",
                         span { class: "truncate font-medium", "{r.filename}" }
                         span { class: "shrink-0 text-xs text-muted-foreground", "{r.size} bytes" }
@@ -329,18 +364,30 @@ pub fn WikiSourcesView() -> Element {
     }
 }
 
-/// `/wiki/source/:name` — the SourceViewer proper.
+/// `/wiki/w/:org/:wiki/source/:name` (and the unscoped
+/// `/wiki/source/:name`) — the SourceViewer proper.
 #[component]
-pub fn WikiSourceView(name: String) -> Element {
+pub fn WikiSourceView(
+    name: String,
+    #[props(default)] org: String,
+    #[props(default)] wiki: String,
+) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
-    let fetch_name = name.clone();
-    let source = use_resource(use_reactive!(|(fetch_name,)| async move {
-        let slug = first_slug(&selection, &org_list)
-            .ok_or_else(|| "no organization selected".to_string())?;
-        fetch_source_text(&slug, &fetch_name).await
+    let scope = (org.clone(), wiki.clone(), name.clone());
+    let source = use_resource(use_reactive!(|scope| async move {
+        let (slug, wiki) = scope_of(&scope.0, &scope.1, &selection, &org_list)?;
+        fetch_source_text(&slug, &wiki, &scope.2).await
     }));
+    let back = if org.is_empty() || wiki.is_empty() {
+        crate::routes::Route::WikiSourcesRoute {}
+    } else {
+        crate::routes::Route::WikiScopedSourcesRoute {
+            org: org.clone(),
+            wiki: wiki.clone(),
+        }
+    };
 
     let body = match &*source.read() {
         Some(Ok(raw)) => {
@@ -363,7 +410,7 @@ pub fn WikiSourceView(name: String) -> Element {
     rsx! {
         div { class: "mx-auto flex h-full w-full max-w-3xl flex-col gap-4 overflow-y-auto p-4 sm:p-6 lg:p-8",
             Link {
-                to: crate::routes::Route::WikiSourcesRoute {},
+                to: back,
                 class: "text-xs text-muted-foreground hover:text-foreground",
                 "← All archived sources"
             }

@@ -1,13 +1,13 @@
-//! `/wiki` — knowledge-graph view of the org's knowledge.
+//! `/graph?:org&:wiki` — knowledge-graph view of one wiki, or the vault.
 //!
 //! Two data sources, toggled in the header:
 //!
-//! - **Wiki** (default): the curated wiki tree
-//!   (`<org>/wiki/Knowledge/`) through the `wiki_proto` Graph
-//!   service — the server-built 4-signal relevance graph +
-//!   Louvain clusters ([`crate::feeds::fetch_wiki_service_graph`]).
-//!   Clicking a node opens the page reader/editor
-//!   (`/wiki/page?:path`).
+//! - **Wiki** (default): one of the org's wikis — the one the URL
+//!   names (a wiki home's "Graph" link), else the org's default tier,
+//!   switchable in the picker — through the `wiki_proto` Graph
+//!   service: the server-built 4-signal relevance graph + Louvain
+//!   clusters ([`crate::feeds::fetch_wiki_service_graph`]). Clicking a
+//!   node opens that page (`WikiDocRoute`).
 //! - **Vault**: the raw vault's `[[wikilink]]` web, fetched via
 //!   `VaultSyncClient` and built client-side with
 //!   [`view_knowledge_graph::build_wiki_graph`]. Clicking a node
@@ -19,8 +19,8 @@
 //! [`GraphLegend`] overlay keys the node colors and
 //! double-clicking a legend row toggles that kind's visibility
 //! (page-owned [`GraphFilterState`]). The graph is scoped to one
-//! org (the selected org, or the home org when viewing All), so
-//! the org switcher swaps wikis.
+//! org — the URL's, else the selected org (the home org when viewing
+//! All) — so without one the org switcher swaps wikis.
 
 use std::collections::HashMap;
 
@@ -31,14 +31,6 @@ use view_knowledge_graph::{
 };
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
-
-/// The wiki this page shows when the org's set has not loaded yet, and
-/// the id the live-event stream filters on until then.
-///
-/// An org holds many wikis now (`wiki.many.set`), so this is a
-/// starting point rather than *the* wiki — the picker below replaces
-/// it as soon as `list_wikis` answers.
-const FALLBACK_WIKI_ID: &str = "knowledge";
 
 /// Which corpus the graph shows.
 ///
@@ -62,14 +54,27 @@ enum GraphSource {
 /// Lives at `/graph`. The wiki page itself is a list of wikis you open;
 /// this is one way of looking at a wiki, reached from there.
 #[component]
-pub fn GraphView() -> Element {
+pub fn GraphView(
+    /// The org whose wiki to show — a wiki home's "Graph" link names it,
+    /// since under "All" the switcher does not. Empty: the switcher's.
+    #[props(default)]
+    org: String,
+    /// The wiki to show first. Empty: the org's default tier.
+    #[props(default)]
+    wiki: String,
+) -> Element {
     let nav = use_navigator();
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
     let mut source = use_signal(|| GraphSource::Wiki);
     // The org a wiki node's deep link belongs to: the one the graph reads.
+    let route_org = use_memo(use_reactive!(|org| org));
     let graph_org = use_memo(move || {
+        let fixed = route_org();
+        if !fixed.is_empty() {
+            return fixed;
+        }
         selected_slugs(&selection.read(), &org_list.read())
             .first()
             .cloned()
@@ -89,10 +94,10 @@ pub fn GraphView() -> Element {
     let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
     let wikis = use_resource(move || async move {
         let _session = account.read().as_ref().map(|a| a.user_id);
-        let slugs = selected_slugs(&selection.read(), &org_list.read());
-        let Some(slug) = slugs.first().cloned() else {
+        let slug = graph_org();
+        if slug.is_empty() {
             return Vec::new();
-        };
+        }
         match crate::feeds::fetch_wikis(&slug).await {
             Ok(list) => {
                 let slugs: Vec<&str> = list.iter().map(|w| w.slug.as_str()).collect();
@@ -110,7 +115,7 @@ pub fn GraphView() -> Element {
             }
         }
     });
-    let mut picked = use_signal(String::new);
+    let mut picked = use_signal(|| wiki.clone());
     // Settle on a wiki once the list arrives: the org's default tier
     // if it has one, else the first. Only when nothing is picked, so a
     // person's choice survives a refetch.
@@ -136,19 +141,19 @@ pub fn GraphView() -> Element {
     // Fetch + build once per (org, source) change; the live stream
     // below restarts it when the corpus changes under us.
     let graph = use_resource(move || async move {
-        let slugs = selected_slugs(&selection.read(), &org_list.read());
-        let slug = slugs
-            .first()
-            .cloned()
-            .ok_or_else(|| "no organization selected".to_string())?;
+        let slug = graph_org();
+        if slug.is_empty() {
+            return Err("no organization selected".to_string());
+        }
         match source() {
             GraphSource::Wiki => {
+                // Nothing picked yet: the wiki list is still arriving,
+                // and the effect above picks as soon as it does. Asking
+                // for a guessed id first would only draw the wrong wiki.
                 let id = picked();
-                let id = if id.is_empty() {
-                    FALLBACK_WIKI_ID.to_owned()
-                } else {
-                    id
-                };
+                if id.is_empty() {
+                    return Ok(WikiGraph::default());
+                }
                 crate::feeds::fetch_wiki_service_graph(&slug, &id).await
             }
             GraphSource::Vault => {
@@ -179,9 +184,7 @@ pub fn GraphView() -> Element {
             // Signals are `Copy`; the hook takes `Fn`, so take fresh
             // mutable handles per call.
             let (mut graph, mut subscribed_once) = (graph, subscribed_once);
-            let slug = selected_slugs(&selection.read(), &org_list.read())
-                .first()
-                .cloned();
+            let slug = Some(graph_org()).filter(|s| !s.is_empty());
             if *subscribed_once.peek() {
                 graph.restart();
             }
@@ -207,12 +210,7 @@ pub fn GraphView() -> Element {
             // One backend serves several wikis, so the stream is
             // unfiltered. Keep the one this page is showing.
             let showing = picked();
-            let showing = if showing.is_empty() {
-                FALLBACK_WIKI_ID.to_owned()
-            } else {
-                showing
-            };
-            if change.wiki_id != showing {
+            if showing.is_empty() || change.wiki_id != showing {
                 return;
             }
             // Only corpus changes move the graph; queue traffic
@@ -265,10 +263,7 @@ pub fn GraphView() -> Element {
                                     let route = match src {
                                         GraphSource::Wiki => crate::routes::Route::WikiDocRoute {
                                             org: graph_org(),
-                                            wiki: {
-                                                let p = picked();
-                                                if p.is_empty() { FALLBACK_WIKI_ID.to_owned() } else { p }
-                                            },
+                                            wiki: picked(),
                                             path: path.clone(),
                                         },
                                         GraphSource::Vault | GraphSource::Subscriptions => {
@@ -355,7 +350,12 @@ pub fn GraphView() -> Element {
                         }
                     }
                     Link {
-                        to: crate::routes::Route::WikiSourcesRoute {},
+                        // The sources of the wiki on screen.
+                        to: if picked().is_empty() || graph_org().is_empty() {
+                            crate::routes::Route::WikiSourcesRoute {}
+                        } else {
+                            crate::routes::Route::WikiScopedSourcesRoute { org: graph_org(), wiki: picked() }
+                        },
                         class: "shrink-0 text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground",
                         "Archived sources →"
                     }
