@@ -168,7 +168,7 @@ pub fn CollabSession(doc_id: Uuid, handles: CollabHandles) -> Element {
                 if buffer == committed {
                     apply_remote_to_editor(session.state, &remote);
                 } else {
-                    let base = Doc::from_str(&committed);
+                    let base = Doc::new(&committed);
                     let changes = editor_crdt::remote_text_to_changes(base.rope(), &buffer);
                     let ops = editor_crdt::changes_to_text_ops(base.rope(), &changes);
                     let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
@@ -216,7 +216,7 @@ fn apply_remote_to_editor(state: Signal<EditorState>, remote: &str) {
 pub fn push_full_text(c: &CollabHandles, new_text: &str) {
     let Some(doc) = c.doc.doc() else { return };
     let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
-    let base = Doc::from_str(&text.to_string());
+    let base = Doc::new(&text.to_string());
     let changes = editor_crdt::remote_text_to_changes(base.rope(), new_text);
     if changes.is_empty() {
         return;
@@ -259,7 +259,7 @@ pub fn on_editor_transaction(
             // diff onto the post-change text. Not minimal, always
             // convergent.
             let after = event.doc_after.to_string();
-            let base = Doc::from_str(&replica);
+            let base = Doc::new(&replica);
             let changes = editor_crdt::remote_text_to_changes(base.rope(), &after);
             let ops = editor_crdt::changes_to_text_ops(base.rope(), &changes);
             apply_ops_clamped(&text, &ops);
@@ -575,7 +575,7 @@ mod tests {
             ("", Changes::insert(0, "fresh")),
         ];
         for (text, changes) in cases {
-            let doc_before = Doc::from_str(text);
+            let doc_before = Doc::new(text);
             let expected = changes.apply(&doc_before).to_string();
 
             let loro = crdt::loro::LoroDoc::new();

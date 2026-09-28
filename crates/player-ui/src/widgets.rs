@@ -4,15 +4,12 @@
 //!
 //! Three specs:
 //!
-//! - `player.song` (`type: song`): a song note IS its player. On mount
-//!   it drops straight into the fullscreen experience; `Esc`/minimize
-//!   falls back to the compact streaming card ([`SongCard`]).
+//! - `player.song` (`type: song`): a compact card above the note — Play
+//!   (the global Now Playing stream) and Open in Session.
 //! - `player.setlist` (`type: setlist`, or `experience: setlist` on any
-//!   note): the fullscreen setlist experience while
-//!   [`WidgetCtx::fullscreen`] is set. The *embedded* view mounts
-//!   nothing — the visible header + song strips are the editor's own
-//!   setlist-title/song-strip decorations, whose ▶/Open clicks arrive
-//!   as hrefs.
+//!   note): nothing mounted — the visible header + song strips are the
+//!   editor's own setlist-title/song-strip decorations, whose ▶/Open
+//!   clicks arrive as hrefs.
 //! - `player.embed` (a note embedding `type: song` / `type: setlist`
 //!   targets via standalone wikilinks): href handling only, so an event
 //!   note's embedded set still gets a working queue.
@@ -22,33 +19,27 @@
 //! channel. Playback goes to the GLOBAL Now Playing player (mounted in
 //! the app shell, so it survives navigation) via the [`NowPlaying`]
 //! context; the queue is resolved from the live note text + vault
-//! resolver at click time.
+//! resolver at click time. Rehearsal — stems, mixer, the engraved chart,
+//! the fullscreen performance view — is Session's: "Open" leaves for it
+//! ([`crate::session_link`]).
 
 use dioxus::prelude::*;
 use task_ui_core::frontmatter::{
     frontmatter_value, setlist_song_links_from_body, setlist_songs_from, slugify, song_slug_from,
 };
-use task_widgets::{FullscreenExperience, WidgetCtx, WidgetMatch, WidgetSpec, WidgetTarget};
+use task_widgets::{WidgetCtx, WidgetMatch, WidgetSpec, WidgetTarget};
 
 use crate::context::{NowPlaying, NowPlayingRequest};
+use crate::session_link::{SessionTarget, open_in_new_tab, session_url};
 
 /// The player's widget specs — the `fasttrackstudio` plugin's widget
 /// contribution, registered (per provider) at the app root.
 #[must_use]
 pub fn widgets() -> Vec<WidgetSpec> {
-    // The renders are lazy: what a song or setlist note *is* (the
-    // matches, the href handling) stays in the shell, but the player
-    // they mount — the multitrack Web Audio graph, the daw worklet,
-    // the engraved chart pane — downloads the first time one opens.
-    // ONE boundary for both specs — a second `lazy_render!` would be a
-    // second split point with its own copy of the player (see
-    // `player_note_widget`).
-    let player_render = task_plugin_ui::lazy_render!("player_widget", player_note_widget);
     vec![
         WidgetSpec::new("player.song", vec![WidgetMatch::NoteType("song")])
-            .render(player_render)
+            .render(song_note_widget)
             .on_href(player_href)
-            .fullscreen_owns_body()
             .plugin("fasttrackstudio"),
         WidgetSpec::new(
             "player.setlist",
@@ -57,11 +48,9 @@ pub fn widgets() -> Vec<WidgetSpec> {
                 WidgetMatch::NoteExperience("setlist"),
             ],
         )
-        .render(player_render)
         .on_href(player_href)
         // The editor's typed setlist-title widget IS the title.
         .hide_note_header()
-        .fullscreen_owns_body()
         .plugin("fasttrackstudio"),
         WidgetSpec::new(
             "player.embed",
@@ -163,11 +152,10 @@ fn player_href(href: &str, ctx: &WidgetCtx) -> bool {
         return true;
     }
     if href.starts_with("setlist-open:") {
-        // Open the full-screen setlist experience (the button lives in the
-        // editor's setlist-title widget, so it travels with an embedded
-        // setlist too).
-        let mut fullscreen = ctx.fullscreen;
-        fullscreen.set(true);
+        // Open the host setlist in Session (the button is the editor's
+        // setlist-title widget).
+        let slug = slugify(&ctx.title);
+        open_in_new_tab(&session_url(&ctx.org, SessionTarget::Setlist(&slug)));
         return true;
     }
     if href.starts_with("setlist-play:") {
@@ -180,96 +168,26 @@ fn player_href(href: &str, ctx: &WidgetCtx) -> bool {
     false
 }
 
-/// The song and setlist block renders, as ONE chunk boundary.
-///
-/// One function for both specs, deliberately: the splitter puts what a
-/// split point reaches and the main module does not into that point's
-/// own module, and code two split points share is not pooled — a song
-/// render and a setlist render would each carry their own copy of the
-/// whole player (12 MB apiece, measured). Which experience to mount is
-/// the same question the specs' matches already answered, asked again
-/// of the note: setlist-shaped, or a song.
-fn player_note_widget(ctx: WidgetCtx) -> Element {
-    if is_setlist_note(&ctx, &(ctx.doc)()) {
-        rsx! { SetlistNoteWidget { ctx } }
-    } else {
-        rsx! { SongNoteWidget { ctx } }
-    }
-}
-
-/// The `type: song` note view. A song IS its player: on mount it drops
-/// straight into the full-screen experience (the same immersive view as
-/// a one-song set); `Esc`/minimize falls back to the compact streaming
-/// card, which stays minimized until the next note (this widget mounts
-/// fresh per note — the host note view is keyed by pane:path).
-#[component]
-fn SongNoteWidget(ctx: WidgetCtx) -> Element {
-    let mut fullscreen = ctx.fullscreen;
-    // Auto-fullscreen exactly once per mount ("armed" so a later
-    // minimize isn't fought by this effect).
-    let mut armed = use_signal(|| true);
-    use_effect(move || {
-        if *armed.peek() {
-            armed.set(false);
-            fullscreen.set(true);
-        }
-    });
-    let doc = (ctx.doc)();
-    let slug = song_slug_from(&doc, &ctx.title);
-    if fullscreen() {
-        rsx! {
-            FullscreenExperience {
-                title: ctx.title.clone(),
-                on_exit: move |_| fullscreen.set(false),
-                crate::SetlistPlayer {
-                    songs: vec![slug.clone()],
-                    org: ctx.org.clone(),
-                    fullscreen: true,
-                }
-            }
-        }
-    } else {
-        rsx! {
-            SongCard {
-                title: ctx.title.clone(),
-                on_play: {
-                    let ctx = ctx.clone();
-                    let slug = slug.clone();
-                    move |_| request_now_playing(&ctx, vec![slug.clone()], 0, true)
-                },
-                on_open: move |_| fullscreen.set(true),
-            }
-        }
-    }
-}
-
-/// The `type: setlist` note view: the full-screen Experience while the
-/// host's fullscreen signal is set; the embedded view mounts nothing
-/// (the note's own editor widgets are the visible setlist — their ▶ and
-/// Open clicks arrive through [`player_href`]).
-#[component]
-fn SetlistNoteWidget(ctx: WidgetCtx) -> Element {
-    let mut fullscreen = ctx.fullscreen;
-    if !fullscreen() {
-        return rsx! {};
-    }
-    let songs = setlist_songs_from(&(ctx.doc)());
+/// The `type: song` note's card, above its editor.
+fn song_note_widget(ctx: WidgetCtx) -> Element {
+    let slug = song_slug_from(&(ctx.doc)(), &ctx.title);
+    let session = session_url(&ctx.org, SessionTarget::Song(&slug));
     rsx! {
-        FullscreenExperience {
+        SongCard {
             title: ctx.title.clone(),
-            on_exit: move |_| fullscreen.set(false),
-            crate::SetlistPlayer { songs, org: ctx.org.clone(), fullscreen: true }
+            session,
+            on_play: move |_| request_now_playing(&ctx, vec![slug.clone()], 0, true),
         }
     }
 }
 
-/// The compact, Apple-Music-style card for a song note in its minimized
-/// (embedded) state: artwork tile + title / artist + a Play button (drives the
-/// global Now Playing stream) and an "Open" that launches the full-screen
-/// player experience. The title splits on `" - "` (`Praise - Elevation
-/// Worship` → title `Praise`, artist `Elevation Worship`).
+/// The compact, Apple-Music-style card for a song note: artwork tile +
+/// title / artist + a Play button (drives the global Now Playing stream)
+/// and "Open in Session" for rehearsal. The title splits on `" - "`
+/// (`Praise - Elevation Worship` → title `Praise`, artist `Elevation
+/// Worship`).
 #[component]
-fn SongCard(title: String, on_play: EventHandler<()>, on_open: EventHandler<()>) -> Element {
+fn SongCard(title: String, session: String, on_play: EventHandler<()>) -> Element {
     let (name, artist) = match title.split_once(" - ") {
         Some((t, a)) => (t.trim().to_string(), a.trim().to_string()),
         None => (title.clone(), String::new()),
@@ -303,11 +221,13 @@ fn SongCard(title: String, on_play: EventHandler<()>, on_open: EventHandler<()>)
                     path { d: "M8 5v14l11-7z" }
                 }
             }
-            // Open → the full-screen player experience.
-            button {
+            // Rehearsal — stems, mixer, the chart — is Session's.
+            a {
                 class: "shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                onclick: move |_| on_open.call(()),
-                "Open"
+                href: "{session}",
+                target: "_blank",
+                rel: "noopener",
+                "Open in Session"
             }
         }
     }

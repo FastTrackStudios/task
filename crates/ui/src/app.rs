@@ -53,13 +53,6 @@ pub fn App() -> Element {
         };
     }
 
-    // Stage 4b-1: the in-browser session engine is no longer seeded with the
-    // demo setlist at app boot. The `type: setlist` page now builds a
-    // per-setlist engine on demand via `session_engine::build_for_setlist`
-    // (seeded from that setlist's real songs) and mounts the event bridge.
-    // The demo `session_engine::bootstrap()` remains available as a
-    // self-contained fallback but is intentionally not called here.
-
     // App-wide architect registries (notifications + reactivity) and
     // the shared per-org connection: one `Connection<vox::Caller>` for
     // the active org (the selected one, or home under "All"),

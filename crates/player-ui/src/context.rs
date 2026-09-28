@@ -9,13 +9,6 @@
 
 use dioxus::prelude::*;
 
-/// A song-strip play click (`data-href="song-play:<Note Name>"` from the
-/// editor's inline song widgets). `(generation, note name)` — the counter
-/// makes replaying the same song observable. Consumed by whichever player
-/// is mounted (the setlist stream player's header today).
-#[derive(Clone, Copy)]
-pub struct SongPlayRequest(pub Signal<(u64, String)>);
-
 /// A request to the GLOBAL Now Playing player (mounted in the app shell,
 /// so playback survives navigation). Carries the whole queue captured at
 /// play time — the player owns its copy, independent of whichever note
@@ -43,7 +36,6 @@ pub struct NowPlaying(pub Signal<NowPlayingRequest>);
 /// Install every context the player reads. Call once in the app shell,
 /// above both the headless engine and the status bar.
 pub fn provide_player_contexts() {
-    use_context_provider(|| SongPlayRequest(Signal::new((0, String::new()))));
     use_context_provider(|| NowPlaying(Signal::new(NowPlayingRequest::default())));
     crate::now_playing::provide_now_playing_ctl();
 }

@@ -29,7 +29,7 @@
 //!   materialiser resolve a *foreign* org's chart through
 //!   `resources/charts/`;
 //! - `GET /org/{slug}/media/songs/<slug>/song.md` is how the global
-//!   player finds a song's arrangements (`player_ui::song_session`);
+//!   player finds a song's arrangements (`task_player_ui::song_source`);
 //! - a person who wants to check the migration wants to read both
 //!   copies.
 //!

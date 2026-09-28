@@ -33,7 +33,7 @@ use std::rc::Rc;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use editor::Editor;
-use editor::editor_view::slash::{SlashMenu, SlashState};
+use editor::editor_view::palette::{CommandPalette, PaletteState};
 use editor::editor_vim::VimState;
 use vault_proto::{PageMeta, TagCount};
 
@@ -111,7 +111,7 @@ pub(crate) fn NoteView(
     let vim_pref = use_context::<crate::prefs::PrefsCtx>().prefs;
     let vim =
         (vim_pref.read().vim_mode && !use_hook(editor::editor_view::coarse_pointer)).then_some(vim);
-    let slash = use_signal(|| None::<SlashState>);
+    let palette = use_signal(|| None::<PaletteState>);
 
     // ── Cross-file lookup + lazy fetch worker ─────────────────
     let mut lookup = use_signal(|| None::<Rc<ClientVaultIndex>>);
@@ -621,12 +621,12 @@ pub(crate) fn NoteView(
                                         keymap: keymap.read().clone(),
                                         decorations: decorations.clone(),
                                         vim,
-                                        slash: Some(slash),
+                                        palette: Some(palette),
                                         completion: completion.clone(),
                                         on_transaction,
                                         on_link_click,
                                     }
-                                    SlashMenu { state: session.state, slash }
+                                    CommandPalette { state: session.state, palette, on_transaction }
                                 }
                             }
                         }

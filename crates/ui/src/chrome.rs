@@ -74,7 +74,7 @@ pub struct NoteViewMode(pub Signal<ViewMode>);
 // The player's request channels moved out with the player itself
 // (`task_player_ui::context`) — re-exported here so `crate::chrome::NowPlaying`
 // and friends resolve at their historical paths.
-pub use task_player_ui::{NowPlaying, NowPlayingRequest, SongPlayRequest};
+pub use task_player_ui::{NowPlaying, NowPlayingRequest};
 
 /// Anonymous share-link mode (`?share=1` in the URL — appended by the
 /// share landing page's Open button): render NO app chrome at all — no
@@ -104,7 +104,7 @@ pub fn provide_chrome_contexts() {
     use_context_provider(|| ZenMode(Signal::new(false)));
     use_context_provider(|| ShareMode(detect_share_mode()));
     use_context_provider(|| NoteViewMode(Signal::new(ViewMode::Edit)));
-    // Player contexts (SongPlayRequest / NowPlaying / NowPlayingCtl).
+    // Player contexts (NowPlaying / NowPlayingCtl).
     task_player_ui::provide_player_contexts();
     // The unified media session (dock ⇄ zoomed review) — needs the
     // player contexts above (it tells the song engine to yield).
