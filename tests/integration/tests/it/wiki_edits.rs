@@ -21,10 +21,13 @@
 
 use std::path::Path;
 
+use crdt::CrdtDoc;
+use crdt::sync::SyncedDoc;
 use files::service::access::Subject;
 use integration::client::Session;
 use integration::people::Person;
 use integration::scenario::Scenario;
+use vault_proto::IfMatch;
 use wiki_proto::config::{ProposerGate, WikiConfig};
 use wiki_proto::service::edits::{EditStatus, NewEditRequest, PageChange};
 
@@ -770,4 +773,105 @@ async fn a_claim_excludes_a_second_editor_until_it_expires() {
         .release_edit_request(WIKI.to_string(), req.id)
         .await
         .expect("Sam releases");
+}
+
+/// t[verify wiki.edit.editor] — the editor's path is the Edit lane too.
+///
+/// The web editor saves a wiki page as `wiki:<slug>` over `VaultSync`
+/// and writes live through the page's CRDT doc — not through `Pages`.
+/// Sam can read Ionian that way, but a save, a delete, a re-file and
+/// joining the page's live session are all refused, naming the Edit
+/// Request as the way in; attaching to the doc Alice opened is refused
+/// too; and the page on disk is untouched. Alice, the Editor, does all
+/// of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_editor_path_answers_to_the_edit_lane() {
+    let s = Scenario::open().await;
+    make_editor(&s, &s.people.alice);
+    let root = s.orgs.acme.org_root().join("wikis").join(WIKI);
+    let before = snapshot(&root);
+    let vault_id = format!("wiki:{WIKI}");
+    let sam = as_sam(&s).await;
+    let vault = sam.vault().await;
+
+    let bytes = vault
+        .get_file(vault_id.clone(), IONIAN.to_string())
+        .await
+        .expect("Sam reads Ionian through the vault path");
+    let edited = String::from_utf8(bytes.0)
+        .expect("utf-8")
+        .replace(SAMS_LINE, SAMS_EDIT);
+
+    let put = error_of(
+        vault
+            .put_file(
+                vault_id.clone(),
+                IONIAN.to_string(),
+                edited.clone().into_bytes(),
+                IfMatch::Force,
+            )
+            .await,
+    );
+    assert!(
+        put.contains("Refused") && put.contains("Edit Request"),
+        "a non-Editor's save was not refused with the way in: {put}"
+    );
+    let delete = error_of(
+        vault
+            .delete_file(vault_id.clone(), IONIAN.to_string(), IfMatch::Force)
+            .await,
+    );
+    assert!(delete.contains("Refused"), "delete: {delete}");
+    let refile = error_of(
+        vault
+            .set_folder(
+                vault_id.clone(),
+                IONIAN.to_string(),
+                Some("Modes".into()),
+                IfMatch::Force,
+            )
+            .await,
+    );
+    assert!(refile.contains("Refused"), "set_folder: {refile}");
+    let join = error_of(
+        vault
+            .open_collab(vault_id.clone(), IONIAN.to_string())
+            .await,
+    );
+    assert!(join.contains("Refused"), "open_collab: {join}");
+
+    // Alice opens the live session; Sam attaching to its doc by id —
+    // which is a function of the path, so anyone can compute it — is
+    // refused as well.
+    let alice = Session::open(&s.orgs.acme, s.people.alice.token.clone()).await;
+    let ack = alice
+        .vault()
+        .await
+        .open_collab(vault_id.clone(), IONIAN.to_string())
+        .await
+        .expect("the Editor joins the live session");
+    let mut synced = SyncedDoc::new(ack.doc_id, CrdtDoc::ephemeral());
+    let attach = synced.run(&sam.doc_sync().await).await;
+    assert!(
+        format!("{attach:?}").contains("Edit Request"),
+        "Sam attached to the Editor's live doc: {attach:?}"
+    );
+
+    assert_eq!(snapshot(&root), before, "a refused write changed the wiki");
+
+    alice
+        .vault()
+        .await
+        .put_file(
+            vault_id,
+            IONIAN.to_string(),
+            edited.into_bytes(),
+            IfMatch::Sha(ack.sha256),
+        )
+        .await
+        .expect("the Editor saves through the vault path");
+    assert!(
+        page(&sam).await.contains(SAMS_EDIT),
+        "the Editor's save did not land"
+    );
 }

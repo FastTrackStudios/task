@@ -335,7 +335,7 @@ impl live_proto::LiveSessionsStreamSource for GuestLiveLane {
 #[derive(Clone)]
 pub struct DocSyncRouter {
     pub live: LiveHost,
-    pub vault: DocRegistry,
+    pub vault: crate::doc_guard::GuardedVaultDocs,
 }
 
 impl DocSync for DocSyncRouter {

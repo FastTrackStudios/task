@@ -235,6 +235,12 @@ impl Session {
         self.establish().await
     }
 
+    /// The per-file CRDT sync lane — what the collaborative editor
+    /// attaches to once `open_collab` has named a file's doc.
+    pub async fn doc_sync(&self) -> crdt::sync::DocSyncClient {
+        self.establish().await
+    }
+
     /// The resources tier — sermons, and the asset lanes.
     ///
     /// This is the lane a sibling app is a client of: Keyflow saving a
@@ -384,6 +390,7 @@ signable!(
     collection_proto::CollectionServiceClient,
     links_proto::LinksServiceClient,
     vault_proto::VaultSyncClient,
+    crdt::sync::DocSyncClient,
     email_proto::EmailSyncClient,
     email_proto::EmailLinksClient,
 );

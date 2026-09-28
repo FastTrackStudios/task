@@ -9646,6 +9646,7 @@ dependencies = [
  "blake3",
  "chrono",
  "collection-proto",
+ "crdt",
  "email-proto",
  "files",
  "files-client",
@@ -20375,6 +20376,7 @@ name = "vault-live"
 version = "0.1.0"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.3)",
+ "architect-permissions 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.3)",
  "chrono",
  "editor-state",
  "facet",

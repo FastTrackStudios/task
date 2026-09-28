@@ -36,6 +36,8 @@ resources-proto = { workspace = true, features = ["vox"] }
 # chart lane also read it back through `VaultSync` — being a vault item
 # is the claim, and it is only checkable from the vault lane.
 vault-proto = { workspace = true, features = ["vox"] }
+# The per-file collab lane (`DocSyncClient`, `SyncedDoc`).
+crdt = { workspace = true, features = ["vox"] }
 collection-proto = { workspace = true, features = ["vox"] }
 links-proto = { workspace = true, features = ["vox"] }
 # The mail lane: the mailbox itself (`EmailSync`) and the links that

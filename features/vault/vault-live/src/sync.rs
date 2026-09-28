@@ -49,6 +49,7 @@ use vault_proto::{
 
 use crate::vault::Vault;
 use crate::watcher::{self, WatchError};
+use crate::write_guard::{WriteGuard, current_caller};
 use editor_state::markdown::{FrontMatter, PropValue, parse_frontmatter};
 
 /// Debounce window for the FS watcher attached by
@@ -93,6 +94,7 @@ enum Layout {
 /// - [`Backend::under_parent`]: open-ended, one subdir per
 ///   vault under a shared parent. Unknown ids auto-create.
 #[derive(Clone, architect::HasDispatcher)]
+#[dispatch(crate::write_guard::CallerDispatcher)]
 pub struct Backend {
     layout: Layout,
     /// Coarse global write lock. Reads bypass it; writes
@@ -132,6 +134,12 @@ pub struct Backend {
     /// manifest, are never synced through here, and stay owned by the
     /// `cookbook` service. Empty by default.
     recipe_roots: Arc<HashMap<String, PathBuf>>,
+    /// Asked before every caller write — see [`crate::write_guard`].
+    /// Unset allows everything, which is what a desktop vault wants.
+    /// Shared across clones, like the roots: the server hands clones of
+    /// this backend to the collab and shelf machinery before the wiki
+    /// backend that answers for wikis exists.
+    guard: Arc<std::sync::OnceLock<Arc<dyn WriteGuard>>>,
 }
 
 impl Backend {
@@ -203,6 +211,7 @@ impl Backend {
             changes: architect::PubSub::sliding(256),
             collab: Arc::new(std::sync::RwLock::new(HashMap::new())),
             recipe_roots: Arc::new(HashMap::new()),
+            guard: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -216,6 +225,36 @@ impl Backend {
     pub fn with_recipe_roots(mut self, roots: HashMap<String, PathBuf>) -> Self {
         self.recipe_roots = Arc::new(roots);
         self
+    }
+
+    /// Ask `guard` before every write a caller makes. Every clone sees
+    /// it at once. Set once; a second call is ignored and returns
+    /// `false`, since a guard swapped under running writes would make
+    /// the rule depend on timing.
+    pub fn set_write_guard(&self, guard: Arc<dyn WriteGuard>) -> bool {
+        self.guard.set(guard).is_ok()
+    }
+
+    /// May the caller running on this thread write `path`?
+    fn guard_write(&self, vault_id: &str, path: &str) -> Result<(), VaultSyncError> {
+        self.check_write(vault_id, path, current_caller().as_deref())
+    }
+
+    /// Would `principal` be allowed to write `path`? For a host that
+    /// reaches a file some other way — the collab sync lane, which
+    /// knows a doc id rather than a path — and must apply the same rule.
+    pub fn check_write(
+        &self,
+        vault_id: &str,
+        path: &str,
+        principal: Option<&str>,
+    ) -> Result<(), VaultSyncError> {
+        match self.guard.get() {
+            Some(guard) => guard
+                .check(vault_id, path, principal)
+                .map_err(VaultSyncError::Refused),
+            None => Ok(()),
+        }
     }
 
     /// Announce a committed change: onto `vault_id`'s in-process
@@ -395,6 +434,7 @@ impl VaultSync for Backend {
         if_match: IfMatch,
     ) -> Result<PutAck, VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        self.guard_write(vault_id, path)?;
         let g = self
             .write_lock
             .lock()
@@ -453,6 +493,7 @@ impl VaultSync for Backend {
         if_match: IfMatch,
     ) -> Result<(), VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        self.guard_write(vault_id, path)?;
         let g = self
             .write_lock
             .lock()
@@ -655,6 +696,7 @@ impl VaultSync for Backend {
         if_match: IfMatch,
     ) -> Result<PutAck, VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        self.guard_write(vault_id, path)?;
         let g = self
             .write_lock
             .lock()
@@ -717,6 +759,9 @@ impl VaultSync for Backend {
 
     fn open_collab(&self, vault_id: &str, path: &str) -> Result<CollabAck, VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        // Joining a file's live session is how the collaborative editor
+        // writes, so it takes the same permission a save does.
+        self.guard_write(vault_id, path)?;
         if !abs.exists() {
             return Err(VaultSyncError::NotFound);
         }

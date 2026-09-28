@@ -25,4 +25,9 @@ pub enum VaultSyncError {
     Io(String),
     #[error("internal: {0}")]
     Internal(String),
+    /// The caller may read this vault but not write this file — a wiki
+    /// governed by its Editors, written by someone who is not one. The
+    /// message says what to do instead (open an Edit Request).
+    #[error("refused: {0}")]
+    Refused(String),
 }
