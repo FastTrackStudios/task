@@ -163,6 +163,12 @@ const READING_RULES: &str = r##"
     border-bottom: 1px solid var(--ed-border);
     padding: 0.55em 0.8em 0.55em 0;
     vertical-align: top;
+    /* Break between words, never inside one: `anywhere` lets the table
+       shrink a column to a letter's width, and a short first column
+       came out as "Rea/ding". A word too long for any column still
+       wraps (`break-word` does not count toward the column's minimum). */
+    overflow-wrap: break-word;
+    word-break: normal;
 }
 .wiki-reading .editor-root .md-table th {
     background: none;
