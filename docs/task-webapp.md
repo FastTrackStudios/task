@@ -39,7 +39,8 @@ route's chunk.
 | `[profile.wasm-release]` below (`z`, fat LTO, 1 CGU, `panic = "abort"`) | 54.6 MB | 16.72 MB |
 | + one engraver (the `[patch]` in the root `Cargo.toml`) | 53.5 MB | 16.67 MB |
 | + `--wasm-split` (main chunk 18.3 MB + Home route 0.15 MB) | 18.5 MB | 5.4 MB |
-| + lazy player, engraver, widgets, panels and store providers (main 6.8 MB + Home route 0.15 MB + 7 provider chunks 0.26 MB) | **7.2 MB** | **1.93 MB** |
+| + lazy player, engraver, widgets, panels and store providers (main 6.8 MB + Home route 0.15 MB + 7 provider chunks 0.26 MB) | 7.2 MB | 1.93 MB |
+| + editor v0.1.21 without Typst/Mermaid, setlist player gone to Session (main 6.5 MB + Home route 0.15 MB) | **6.65 MB** | **1.75 MB** |
 | same profile with `opt-level = "s"` instead of `"z"`, unsplit, for the record | 58.7 MB | 17.69 MB |
 
 The split bundle is 54 lazy chunks next to the main one. The main chunk
@@ -50,26 +51,24 @@ boundary of its own. Where each subsystem lives, and when it downloads:
 
 | subsystem | chunk | raw / brotli | downloaded when |
 |---|---|---|---|
-| shell (router, nav, auth, explorer, stores machinery, fuzzy search) | `task-app-web_bg` (main) | 6.8 MB / 1.79 MB | first load |
+| shell (router, nav, auth, explorer, stores machinery, fuzzy search) | `task-app-web_bg` (main) | 6.5 MB / 1.69 MB | first load |
 | each route page | `module_*_route<Name>Route*` | 0.003–2.5 MB | the route is visited |
-| the vault/editor route (markdown editor, tree-sitter, typst, mermaid, the chart pane's engraver copy) | `module_*_routeVaultRoute*` | 31.1 MB / 10.9 MB | a note is opened |
-| song / setlist note widgets (the multitrack player, daw worklet bytes, `daw-standalone` + `symphonia`, the in-tab session engine) | `module_*_player_note_widget` | 11.2 MB / 3.44 MB | a `type: song` / `type: setlist` note is opened |
-| chart fences (`editor-keyflow`: engraver + notation fonts) | `module_*_engrave_fence` | 4.4 MB / 1.86 MB | a ```` ```kf ```` fence is first rendered |
-| the global now-playing engine + setlist-row highlighter | `module_*_player_engine` | 0.49 MB / 0.18 MB | the first play request |
-| the agent dock panel | `module_*_agent_panel` | 0.74 MB / 0.25 MB | the dock is opened |
-| the note inspector's local graph (the knowledge-graph layout + SVG renderer, shared with `/graph`) | `module_*_local_graph` | not yet measured — see below | the inspector's Graph tab is first opened, on a vault note or a wiki page |
+| the vault/editor route (markdown editor, tree-sitter; the wiki page route is the same editor) | `module_*_routeVaultRoute*`, `…WikiDocRoute*` | 9.6 MB / 1.77 MB each | a note or wiki page is opened |
+| chart fences (`editor-keyflow`: engraver + notation fonts) | `module_*_engrave_fence` | 4.4 MB / 1.87 MB | a ```` ```kf ```` fence is first rendered |
+| the global now-playing engine + setlist-row highlighter | `module_*_player_engine` | 0.17 MB / 0.06 MB | the first play request |
+| the agent dock panel | `module_*_agent_panel` | 0.72 MB / 0.24 MB | the dock is opened |
+| the note inspector's local graph (the knowledge-graph layout + SVG renderer, shared with `/graph`) | `module_*_local_graph_surface` | 0.14 MB / 0.05 MB | the inspector's Graph tab is first opened, on a vault note or a wiki page |
 | each plugin's screens | `module_*_<app>_screen` | 0.15–0.82 MB | the app is visited |
 | each plugin's store providers (7 apps) | `module_*_provide_stores` / `provide_all` | 3–144 KB each | at boot, after the shell paints |
 | `type: video` note widget | `module_*_video_note_widget` | 0.15 MB | a video note is opened |
 
-The local-graph chunk has no number yet: at the time it was added the
-split build (`just web-release`) died in dx's splitter (a walrus
-`!self.dead.contains(&id)` assertion while emitting the main module) on
-`main` itself, before and after the change, so nothing could be
-measured. It is behind `task_plugin_ui::lazy_element_with!` — the
-`lazy_element!` shape with an argument — reached only from the vault and
-wiki route chunks, so the main chunk cannot have grown; fill the sizes
-in from the next split build that completes.
+Measured 2026-09-28, after the editor moved to v0.1.21 with its Typst
+and Mermaid fence renderers off (Task registers only ```` ```kf ````) and
+the setlist player left for Session. The editor route was 31.1 MB /
+10.9 MB — a Typst compiler and a Mermaid layout engine rode in it for
+fences Task never registered — and the song/setlist widget chunk (the
+multitrack player, the daw worklet, `daw-standalone`, 11.2 MB / 3.44 MB)
+no longer exists. First load is now 6.65 MB / 1.75 MB.
 
 Before this, the main chunk carried the player, the engraver and every
 plugin's providers and panel — 18.3 MB — because the shell mounted them
