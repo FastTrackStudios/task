@@ -212,6 +212,9 @@ const VAULT: ServicePermits = ServicePermits {
         MethodPermit::new("get_file", Action::READ, "vault/{path}"),
         MethodPermit::new("put_file", Action::WRITE, "vault/{path}"),
         MethodPermit::new("delete_file", Action::WRITE, "vault/{path}"),
+        // Two paths (`from`, `to`), neither called `path`: the coarse
+        // resource. The backend asks its write guard about both.
+        MethodPermit::new("move_file", Action::WRITE, "vault/**"),
         MethodPermit::new("folder_index", Action::READ, "vault/**"),
         MethodPermit::new("set_folder", Action::WRITE, "vault/{path}"),
         MethodPermit::new("open_collab", Action::READ, "vault/{path}"),

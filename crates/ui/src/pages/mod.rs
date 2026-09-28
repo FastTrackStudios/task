@@ -18,6 +18,7 @@ pub mod note_header;
 pub mod note_inspector;
 pub mod note_properties;
 pub mod note_view;
+pub mod page_actions;
 pub mod project_detail;
 pub mod projects;
 pub mod schedule;

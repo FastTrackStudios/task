@@ -57,6 +57,8 @@ pub mod lookup;
 pub mod mutate;
 pub mod property_schema;
 pub mod refs;
+/// Rewriting the wikilinks that named a page after it is renamed.
+pub mod relink;
 /// `VaultSync` backend — canonical filesystem impl of the
 /// [`vault_proto::VaultSync`] wire trait. Consumers use
 /// `vault::sync::Backend` (also re-exported as

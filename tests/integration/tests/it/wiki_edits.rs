@@ -875,3 +875,67 @@ async fn the_editor_path_answers_to_the_edit_lane() {
         "the Editor's save did not land"
     );
 }
+
+/// A rename carries its links (`wiki.link.repair`, the local half): when
+/// the Editor renames Ionian through the vault path, the Modes table and
+/// the Harmonic Series "See also" that named `[[Ionian]]` name the new
+/// page, and the qualified reference to Modes beside it is untouched.
+/// Sam, who is not an Editor, cannot move a page at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rename_carries_the_links_that_named_the_page() {
+    let s = Scenario::open().await;
+    make_editor(&s, &s.people.alice);
+    let root = s.orgs.acme.org_root().join("wikis").join(WIKI);
+    let vault_id = format!("wiki:{WIKI}");
+    let renamed = "Concepts/Major Scale.md";
+
+    let sam = as_sam(&s).await;
+    let before = snapshot(&root);
+    let refused = error_of(
+        sam.vault()
+            .await
+            .move_file(
+                vault_id.clone(),
+                IONIAN.to_string(),
+                renamed.to_string(),
+                IfMatch::Force,
+            )
+            .await,
+    );
+    assert!(refused.contains("Refused"), "Sam moved a page: {refused}");
+    assert_eq!(snapshot(&root), before, "a refused move changed the wiki");
+
+    let alice = Session::open(&s.orgs.acme, s.people.alice.token.clone()).await;
+    let ack = alice
+        .vault()
+        .await
+        .move_file(
+            vault_id.clone(),
+            IONIAN.to_string(),
+            renamed.to_string(),
+            IfMatch::Force,
+        )
+        .await
+        .expect("the Editor renames Ionian");
+    let mut relinked = ack.relinked.clone();
+    relinked.sort();
+    assert_eq!(
+        relinked,
+        vec![
+            "Concepts/Harmonic Series.md".to_string(),
+            "Concepts/Modes.md".to_string()
+        ]
+    );
+    let modes = std::fs::read_to_string(root.join("Concepts/Modes.md")).expect("Modes");
+    assert!(
+        modes.contains("| [[Major Scale]] | 1 | major 7th |"),
+        "{modes}"
+    );
+    assert!(!modes.contains("[[Ionian]]"));
+    assert!(
+        modes.contains("[[acme.test/music-theory::Harmonic Series@2026-09-01#^partials|"),
+        "a qualified reference was rewritten: {modes}"
+    );
+    assert!(!root.join(IONIAN).exists(), "the old page is still there");
+    assert!(root.join(renamed).exists(), "the new page is missing");
+}

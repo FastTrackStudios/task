@@ -159,6 +159,22 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let can_create = access.read().as_ref().is_some_and(|a| a.can_edit);
     let mut create_error = use_signal(|| None::<String>);
 
+    // ── Move / Delete ─────────────────────────────────────────
+    let mut page_action = use_signal(|| None::<PageAction>);
+    let mut action_error = use_signal(|| None::<String>);
+    let mut move_folder = use_signal(String::new);
+    let mut move_new_folder = use_signal(String::new);
+    let folders = use_memo(move || {
+        let mut out: Vec<String> = pages_memo
+            .read()
+            .iter()
+            .filter_map(|p| p.path.rsplit_once('/').map(|(dir, _)| dir.to_owned()))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    });
+
     // ── The inspector ─────────────────────────────────────────
     // Open state is the shell's (the top-bar toggle), the tab is
     // this page's — the desktop aside and the mobile sheet share it.
@@ -300,6 +316,127 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                             }
                         }
                         span { class: "font-mono", "{path}" }
+                        if has_page && can_create {
+                            span { class: "ml-auto flex items-center gap-1",
+                                button {
+                                    r#type: "button",
+                                    class: "rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground",
+                                    onclick: {
+                                        let here = path
+                                            .rsplit_once('/')
+                                            .map(|(dir, _)| dir.to_owned())
+                                            .unwrap_or_default();
+                                        move |_| {
+                                            action_error.set(None);
+                                            // Start from where the page is, not
+                                            // from the last move's answers.
+                                            move_folder.set(here.clone());
+                                            move_new_folder.set(String::new());
+                                            page_action.set(Some(PageAction::Move));
+                                        }
+                                    },
+                                    "Move"
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "rounded px-1.5 py-0.5 hover:bg-destructive/10 hover:text-destructive",
+                                    onclick: move |_| {
+                                        action_error.set(None);
+                                        page_action.set(Some(PageAction::Delete));
+                                    },
+                                    "Delete"
+                                }
+                            }
+                        }
+                    }
+                    if let Some(act) = page_action() {
+                        {
+                            let from = path.clone();
+                            let (org_c, wiki_c) = (org.clone(), wiki.clone());
+                            let run = move |_| {
+                                let slug = home();
+                                let vault = vault_sig();
+                                let from = from.clone();
+                                let draft = session_out.peek().as_ref().and_then(|s| s.draft());
+                                let org_nav = org_c.clone();
+                                let wiki_nav = wiki_c.clone();
+                                match act {
+                                    PageAction::Move => {
+                                        let typed = move_new_folder.peek().trim().to_owned();
+                                        let folder = if typed.is_empty() { move_folder.peek().clone() } else { typed };
+                                        let name = basename_of(&from).to_owned();
+                                        let Some(to) = new_page_path(&folder, &name) else { return };
+                                        if to == from {
+                                            page_action.set(None);
+                                            return;
+                                        }
+                                        let buffer = draft.map(|d| d.text.into_bytes());
+                                        spawn(async move {
+                                            match crate::pages::page_actions::move_page(slug, vault, from, to.clone(), buffer).await {
+                                                Ok(_) => {
+                                                    page_action.set(None);
+                                                    nav.push(Route::WikiDocRoute { org: org_nav, wiki: wiki_nav, path: to });
+                                                }
+                                                Err(e) => action_error.set(Some(e)),
+                                            }
+                                        });
+                                    }
+                                    PageAction::Delete => {
+                                        let sha = draft.map(|d| d.base_sha256).filter(|s| !s.is_empty());
+                                        spawn(async move {
+                                            match crate::pages::page_actions::delete_page(slug, vault, from, sha).await {
+                                                Ok(()) => {
+                                                    page_action.set(None);
+                                                    nav.push(Route::WikiHomeRoute { org: org_nav, wiki: wiki_nav });
+                                                }
+                                                Err(e) => action_error.set(Some(e)),
+                                            }
+                                        });
+                                    }
+                                }
+                            };
+                            rsx! {
+                                div { class: "flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-card/40 px-3 py-2 text-sm",
+                                    "data-testid": "page-action",
+                                    match act {
+                                        PageAction::Move => rsx! {
+                                            span { class: "text-muted-foreground", "Move to" }
+                                            select {
+                                                class: "rounded-md border border-border/70 bg-background px-2 py-1",
+                                                value: "{move_folder}",
+                                                onchange: move |e| move_folder.set(e.value()),
+                                                option { value: "", "(top level)" }
+                                                for f in folders.read().iter() {
+                                                    option { key: "{f}", value: "{f}", "{f}" }
+                                                }
+                                            }
+                                            input {
+                                                class: "min-w-0 flex-1 rounded-md border border-border/70 bg-background px-2 py-1",
+                                                placeholder: "or a new folder",
+                                                value: "{move_new_folder}",
+                                                oninput: move |e| move_new_folder.set(e.value()),
+                                            }
+                                            Button { variant: ButtonVariant::Primary, size: ButtonSize::Small, on_click: run, "Move" }
+                                        },
+                                        PageAction::Delete => rsx! {
+                                            span { class: "flex-1",
+                                                "Delete this page? Links to it will show as missing."
+                                            }
+                                            Button { variant: ButtonVariant::Destructive, size: ButtonSize::Small, on_click: run, "Delete" }
+                                        },
+                                    }
+                                    Button {
+                                        variant: ButtonVariant::Ghost,
+                                        size: ButtonSize::Small,
+                                        on_click: move |_| page_action.set(None),
+                                        "Cancel"
+                                    }
+                                    if let Some(e) = action_error() {
+                                        span { class: "basis-full text-destructive", "{e}" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 if let Some(a) = access.read().clone().filter(|a| has_page && !a.can_edit) {
@@ -381,6 +518,13 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
             }
         }
     }
+}
+
+/// What the page strip is asking about.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PageAction {
+    Move,
+    Delete,
 }
 
 /// Start a page that a link named but nobody wrote: a create-only

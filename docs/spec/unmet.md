@@ -280,6 +280,12 @@ grouped:
 - **Linking and references** — `wiki.link.*`, `wiki.ref.{picker,stamp,
   redirect}`: backlinks across wikis, rename repair from history, the
   editor's picker, staleness from the stamp, and the org-registry redirect.
+  Rename repair has its local half: `VaultSync::move_file` rewrites the
+  links *within the vault or wiki* that named a renamed page
+  (`vault_live::relink`; pinned by `wiki_edits::
+  a_rename_carries_the_links_that_named_the_page`). What `wiki.link.repair`
+  still wants is the rest — across wikis and subscribers, driven by the
+  page's recorded history rather than a scan, and itself a version.
 - **Lifecycle** — `wiki.life.*`: adoption, signed handover, orphans.
 - **Resources** — `wiki.resource.{not-a-wiki,addressing,no-annotations,
   layers}`; `wiki.resource.rights` is met by `scripture`, and
