@@ -817,20 +817,34 @@ async fn adopt_principal(args: &[String]) -> eyre::Result<()> {
     )? {
         PrincipalChoice::Given(id) => id,
         PrincipalChoice::FromHomeOrg => {
-            let home_auth = open_org_auth(&home_slug).await?;
-            home_auth
-                .auth
-                .find_user_by_email(&email)
-                .await
-                .map_err(|e| eyre::eyre!("look up `{email}` in home org `{home_slug}`: {e:?}"))?
-                .ok_or_else(|| {
-                    eyre::eyre!(
-                        "no account with email `{email}` in the home org `{home_slug}` — the \
-                         principal must exist there first (`admin create-user --org \
-                         {home_slug} --email {email}`)"
-                    )
-                })?
-                .id
+            // A root can hold several orgs that are each home to their own
+            // accounts (the demo's ACME root: acme-audio, alice-personal,
+            // rockstars-of-tomorrow). The principal is whichever home org
+            // holds the address — the first home org, when more than one does.
+            let mut found = None;
+            for (root, manifest) in &orgs {
+                if !manifest.is_home || !root.auth_db().exists() {
+                    continue;
+                }
+                let slug = root.slug().to_owned();
+                let auth = open_org_auth(&slug).await?;
+                if let Some(user) = auth
+                    .auth
+                    .find_user_by_email(&email)
+                    .await
+                    .map_err(|e| eyre::eyre!("look up `{email}` in home org `{slug}`: {e:?}"))?
+                {
+                    found = Some(user.id);
+                    break;
+                }
+            }
+            found.ok_or_else(|| {
+                eyre::eyre!(
+                    "no account with email `{email}` in the home org `{home_slug}` — the \
+                     principal must exist there first (`admin create-user --org \
+                     {home_slug} --email {email}`)"
+                )
+            })?
         }
     };
 
