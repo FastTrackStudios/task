@@ -5297,7 +5297,7 @@ dependencies = [
 [[package]]
 name = "editor"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.21#01cb65d0e2c293e1e019762a235a8708d306f105"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.22#f63ace4cce08cd3608e0de3d8a2a4944158b030f"
 dependencies = [
  "dioxus",
  "editor-state",
@@ -5308,7 +5308,7 @@ dependencies = [
 [[package]]
 name = "editor-crdt"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.21#01cb65d0e2c293e1e019762a235a8708d306f105"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.22#f63ace4cce08cd3608e0de3d8a2a4944158b030f"
 dependencies = [
  "editor-state",
  "ropey",
@@ -5317,7 +5317,7 @@ dependencies = [
 [[package]]
 name = "editor-keyflow"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.4#0c4c3cd5e13f7f12e263cfeb21ebae3ccadce871"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.5#c39695d4eef32568177edd5d1715b8e144795aad"
 dependencies = [
  "editor-state",
  "engraver",
@@ -5329,7 +5329,7 @@ dependencies = [
 [[package]]
 name = "editor-state"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.21#01cb65d0e2c293e1e019762a235a8708d306f105"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.22#f63ace4cce08cd3608e0de3d8a2a4944158b030f"
 dependencies = [
  "editor-syntax",
  "ropey",
@@ -5342,7 +5342,7 @@ dependencies = [
 [[package]]
 name = "editor-syntax"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.21#01cb65d0e2c293e1e019762a235a8708d306f105"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.22#f63ace4cce08cd3608e0de3d8a2a4944158b030f"
 dependencies = [
  "arborium",
  "arborium-theme",
@@ -5352,7 +5352,7 @@ dependencies = [
 [[package]]
 name = "editor-view"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.21#01cb65d0e2c293e1e019762a235a8708d306f105"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.22#f63ace4cce08cd3608e0de3d8a2a4944158b030f"
 dependencies = [
  "dioxus",
  "editor-state",
@@ -5368,7 +5368,7 @@ dependencies = [
 [[package]]
 name = "editor-vim"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.21#01cb65d0e2c293e1e019762a235a8708d306f105"
+source = "git+https://github.com/FastTrackStudios/editor?tag=v0.1.22#f63ace4cce08cd3608e0de3d8a2a4944158b030f"
 dependencies = [
  "editor-state",
  "tracing",
@@ -5750,7 +5750,7 @@ dependencies = [
 [[package]]
 name = "engraver"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.4#0c4c3cd5e13f7f12e263cfeb21ebae3ccadce871"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.5#c39695d4eef32568177edd5d1715b8e144795aad"
 dependencies = [
  "engraver-proto",
 ]
@@ -5758,7 +5758,7 @@ dependencies = [
 [[package]]
 name = "engraver-proto"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.4#0c4c3cd5e13f7f12e263cfeb21ebae3ccadce871"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.5#c39695d4eef32568177edd5d1715b8e144795aad"
 dependencies = [
  "bitflags 2.13.1",
  "color-eyre",
@@ -10513,12 +10513,12 @@ dependencies = [
 [[package]]
 name = "keyflow-chordpro"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.4#0c4c3cd5e13f7f12e263cfeb21ebae3ccadce871"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.5#c39695d4eef32568177edd5d1715b8e144795aad"
 
 [[package]]
 name = "keyflow-proto"
 version = "0.1.0"
-source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.4#0c4c3cd5e13f7f12e263cfeb21ebae3ccadce871"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.5#c39695d4eef32568177edd5d1715b8e144795aad"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.2)",
  "color-palette",
@@ -10535,7 +10535,7 @@ dependencies = [
 [[package]]
 name = "keyflow-syntax"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.4#0c4c3cd5e13f7f12e263cfeb21ebae3ccadce871"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.5#c39695d4eef32568177edd5d1715b8e144795aad"
 dependencies = [
  "facet",
  "serde",
@@ -10545,7 +10545,7 @@ dependencies = [
 [[package]]
 name = "keyflow-text"
 version = "0.0.1-alpha"
-source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.4#0c4c3cd5e13f7f12e263cfeb21ebae3ccadce871"
+source = "git+https://github.com/FastTrackStudios/keyflow?tag=v0.2.5#c39695d4eef32568177edd5d1715b8e144795aad"
 dependencies = [
  "keyflow-chordpro",
  "keyflow-proto",
