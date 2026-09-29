@@ -452,14 +452,29 @@ pub(crate) fn NoteView(
             && let Some(src) = editor::markdown::VaultLookup::lookup_source(ix.as_ref(), page)
             && let Some(video) = crate::pages::wiki_source::youtube_id(&src.url)
         {
-            let path = ix
-                .meta(page)
-                .map_or_else(|| format!("{page}.md"), |m| m.path.clone());
+            // "Open source" goes to the source's page — in this wiki, or
+            // in the wiki a reference names (a page taken into a study
+            // cites the library's sources).
+            let open = match ix.reference(page) {
+                Some(Some(t)) if vault_lookup::is_wiki_reference(page) => {
+                    crate::routes::Route::WikiDocRoute {
+                        org: t.org,
+                        wiki: t.wiki,
+                        path: t.path,
+                    }
+                }
+                _ => {
+                    let path = ix
+                        .meta(page)
+                        .map_or_else(|| format!("{page}.md"), |m| m.path.clone());
+                    crate::routes::note_route(&home(), &link_vault, path)
+                }
+            };
             dock.set(Some(crate::source_dock::DockedSource {
                 video,
                 start,
                 title: src.short,
-                open: crate::routes::note_route(&home(), &link_vault, path),
+                open,
             }));
             return;
         }

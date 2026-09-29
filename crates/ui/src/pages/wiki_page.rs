@@ -208,22 +208,77 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
 
     // A word page's Strong's codes (`strongs:`), for the original-
     // language word study under it.
-    let strongs_path = path.clone();
-    let strongs_vault = vault_id.clone();
-    let strongs = use_resource(move || {
+    // The page's own text, for the frontmatter the strip and footer read:
+    // `strongs:` (a word's study), `promoted_from:` / `promoted_to:` (a
+    // page taken from, or into, another wiki).
+    let front_path = path.clone();
+    let front_vault = vault_id.clone();
+    let front = use_resource(move || {
         let slug = home();
-        let vault = strongs_vault.clone();
-        let path = strongs_path.clone();
+        let vault = front_vault.clone();
+        let path = front_path.clone();
         let _refresh = refresh_key();
         async move {
             crate::document_session::fetch_file(slug, vault, path)
                 .await
                 .ok()
-                .and_then(|raw| crate::pages::vault::frontmatter_value(&raw, "strongs"))
-                .map(|v| super::word_study::codes(v.trim().trim_matches(['"', '\''])))
+        }
+    });
+    let field = |key: &str| {
+        front
+            .read()
+            .clone()
+            .flatten()
+            .and_then(|raw| crate::pages::vault::frontmatter_value(&raw, key))
+            .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
+    let strongs_codes: Vec<String> = field("strongs")
+        .map(|v| super::word_study::codes(&v))
+        .unwrap_or_default();
+    let promoted_from = field("promoted_from").and_then(|v| super::take_into_study::split_ref(&v));
+    let promoted_to = field("promoted_to").and_then(|v| super::take_into_study::split_ref(&v));
+    let promoted_at = field("promoted_at")
+        .and_then(|v| chrono::DateTime::parse_from_rfc3339(&v).ok())
+        .map(|t| t.with_timezone(&chrono::Utc));
+    // Has the page this was taken from changed since? Its modified time
+    // against the moment of taking (the back-reference is written in the
+    // same second, so a margin keeps that write from counting).
+    let upstream_from = promoted_from.clone();
+    let upstream_changed = use_resource(move || {
+        let slug = home();
+        let from = upstream_from.clone();
+        async move {
+            let (wiki, path) = from?;
+            let at = promoted_at?;
+            let pages =
+                crate::vox_clients::establish_for::<wiki_proto::service::pages::PagesClient>(&slug)
+                    .await
+                    .ok()?;
+            let doc = pages.read_page(wiki, path).await.ok()?;
+            Some(doc.modified > at + chrono::Duration::seconds(60))
+        }
+    });
+    let upstream_changed = upstream_changed.read().clone().flatten().unwrap_or(false);
+    // Where "Take into my study" can send this page: the org's other wikis.
+    let take_wiki = wiki.clone();
+    let take_targets = use_resource(move || {
+        let slug = home();
+        let here = take_wiki.clone();
+        async move {
+            crate::feeds::fetch_wikis(&slug)
+                .await
+                .map(|list| {
+                    list.into_iter()
+                        .filter(|w| w.slug != here && !w.default)
+                        .map(|w| (w.slug, w.title))
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default()
         }
     });
+    let mut take_to = use_signal(String::new);
+    let take_home_wiki = wiki.clone();
 
     // Whether this page rests on one voice (the wiki's `gaps` check) —
     // said quietly in the strip, with the reason as its tooltip.
@@ -300,7 +355,7 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                     div { class: "note-column mx-auto w-full max-w-3xl px-6 pb-8",
                         super::word_study::WordStudyPanel {
                             org: home,
-                            codes: strongs.read().clone().unwrap_or_default(),
+                            codes: strongs_codes.clone(),
                         }
                         if footer_type != "path" {
                             super::study_path::StudyPathBar {
@@ -394,6 +449,24 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                             span { class: "text-muted-foreground/60", "·" }
                             span { class: "text-sky-500/80", title: "{why}", "Style notes" }
                         }
+                        if let Some((to_wiki, to_path)) = promoted_to.clone() {
+                            span { class: "text-muted-foreground/60", "·" }
+                            Link {
+                                to: Route::WikiDocRoute { org: org.clone(), wiki: to_wiki.clone(), path: to_path.clone() },
+                                class: "text-emerald-500/90 hover:underline",
+                                title: "This page has been taken into {to_wiki}",
+                                "In your study →"
+                            }
+                        }
+                        if let Some((from_wiki, from_path)) = promoted_from.clone() {
+                            span { class: "text-muted-foreground/60", "·" }
+                            Link {
+                                to: Route::WikiDocRoute { org: org.clone(), wiki: from_wiki.clone(), path: from_path.clone() },
+                                class: if upstream_changed { "text-amber-500/90 hover:underline" } else { "hover:text-foreground hover:underline" },
+                                title: if upstream_changed { "The page you took this from has changed since — open it to compare".to_string() } else { format!("Taken from {from_wiki}") },
+                                if upstream_changed { "From the library · changed since" } else { "From the library" }
+                            }
+                        }
                         if ai_generated {
                             span { class: "text-muted-foreground/60", "·" }
                             span {
@@ -431,6 +504,34 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                         sheet_open.set(true);
                                     },
                                     "Details"
+                                }
+                                if promoted_to.is_none() && promoted_from.is_none() && !take_targets.read().clone().unwrap_or_default().is_empty() {
+                                    button {
+                                        r#type: "button",
+                                        class: "rounded px-2 py-1 text-left hover:bg-accent",
+                                        onclick: {
+                                            let here = take_home_wiki.clone();
+                                            move |_| {
+                                                action_error.set(None);
+                                                menu_open.set(false);
+                                                // The wiki whose name this one's extends
+                                                // (Bible Study Library → Bible Study), else
+                                                // the first; the last choice sticks.
+                                                if take_to.peek().is_empty() {
+                                                    let targets = take_targets.peek().clone().unwrap_or_default();
+                                                    let guess = targets
+                                                        .iter()
+                                                        .find(|(slug, _)| here.starts_with(slug.as_str()))
+                                                        .or_else(|| targets.first())
+                                                        .map(|(slug, _)| slug.clone())
+                                                        .unwrap_or_default();
+                                                    take_to.set(guess);
+                                                }
+                                                page_action.set(Some(PageAction::Take));
+                                            }
+                                        },
+                                        "Take into my study…"
+                                    }
                                 }
                                 if can_create {
                                 button {
@@ -507,6 +608,19 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                             }
                                         });
                                     }
+                                    PageAction::Take => {
+                                        let to = take_to.peek().clone();
+                                        let here_wiki = wiki_nav.clone();
+                                        spawn(async move {
+                                            match super::take_into_study::take_into(&slug, &here_wiki, &from, &to).await {
+                                                Ok(landed) => {
+                                                    page_action.set(None);
+                                                    nav.push(Route::WikiDocRoute { org: org_nav, wiki: to, path: landed });
+                                                }
+                                                Err(e) => action_error.set(Some(e)),
+                                            }
+                                        });
+                                    }
                                     PageAction::Delete => {
                                         let sha = draft.map(|d| d.base_sha256).filter(|s| !s.is_empty());
                                         spawn(async move {
@@ -550,6 +664,21 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                                                 oninput: move |e| move_new_folder.set(e.value()),
                                             }
                                             Button { variant: ButtonVariant::Primary, size: ButtonSize::Small, on_click: run, "Save" }
+                                        },
+                                        PageAction::Take => rsx! {
+                                            span { class: "text-muted-foreground", "Take a copy into" }
+                                            select {
+                                                class: "rounded-md border border-border/70 bg-background px-2 py-1",
+                                                value: "{take_to}",
+                                                onchange: move |e| take_to.set(e.value()),
+                                                for (slug , title) in take_targets.read().clone().unwrap_or_default() {
+                                                    option { key: "{slug}", value: "{slug}", "{title}" }
+                                                }
+                                            }
+                                            span { class: "basis-full text-xs text-muted-foreground",
+                                                "It becomes yours to rewrite, and remembers where it came from. This page stays as it is."
+                                            }
+                                            Button { variant: ButtonVariant::Primary, size: ButtonSize::Small, on_click: run, "Take it" }
                                         },
                                         PageAction::Delete => rsx! {
                                             span { class: "flex-1",
@@ -645,6 +774,9 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
 enum PageAction {
     Move,
     Delete,
+    /// Copy the page into another of the org's wikis — a working wiki's
+    /// page into a person's own study (`wiki.promote.*`).
+    Take,
 }
 
 /// Start a page that a link named but nobody wrote: a create-only
