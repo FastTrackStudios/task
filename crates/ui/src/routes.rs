@@ -114,8 +114,8 @@ pub enum Route {
 
         // The knowledge graph over one wiki or the vault — its own
         // surface, not the front door of the wiki.
-        #[route("/graph")]
-        GraphRoute {},
+        #[route("/graph?:org&:wiki")]
+        GraphRoute { org: String, wiki: String },
 
         // One wiki: what it is for, who edits it, and its pages.
         #[route("/wiki/w/:org/:wiki")]
@@ -125,6 +125,16 @@ pub enum Route {
         // value, like `VaultRoute`).
         #[route("/wiki/w/:org/:wiki/page?:path")]
         WikiDocRoute { org: String, wiki: String, path: String },
+
+        // One Edit Request against one wiki: its diff, and review.
+        #[route("/wiki/w/:org/:wiki/request/:id")]
+        WikiRequestRoute { org: String, wiki: String, id: String },
+
+        // One wiki's archived raw sources, and one of them.
+        #[route("/wiki/w/:org/:wiki/sources")]
+        WikiScopedSourcesRoute { org: String, wiki: String },
+        #[route("/wiki/w/:org/:wiki/source/:name")]
+        WikiScopedSourceRoute { org: String, wiki: String, name: String },
 
         #[route("/connections")]
         ConnectionsRoute {},
@@ -391,9 +401,9 @@ fn WikiRoute() -> Element {
 }
 
 #[component]
-fn GraphRoute() -> Element {
+fn GraphRoute(org: String, wiki: String) -> Element {
     rsx! {
-        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki::GraphView {} }
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki::GraphView { org, wiki } }
     }
 }
 
@@ -408,6 +418,27 @@ fn WikiHomeRoute(org: String, wiki: String) -> Element {
 fn WikiDocRoute(org: String, wiki: String, path: String) -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_page::WikiPageView { org, wiki, path } }
+    }
+}
+
+#[component]
+fn WikiRequestRoute(org: String, wiki: String, id: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_request::WikiRequestView { org, wiki, id } }
+    }
+}
+
+#[component]
+fn WikiScopedSourcesRoute(org: String, wiki: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_source::WikiSourcesView { org, wiki } }
+    }
+}
+
+#[component]
+fn WikiScopedSourceRoute(org: String, wiki: String, name: String) -> Element {
+    rsx! {
+        crate::plugin_gate::PluginGate { plugin: "wiki", pages::wiki_source::WikiSourceView { name, org, wiki } }
     }
 }
 

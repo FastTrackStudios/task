@@ -405,6 +405,10 @@ impl Upstream for FederatedOrgs {
     fn domain_of(&self, org: &str) -> Option<String> {
         self.local.domain_of(org)
     }
+
+    fn org_of(&self, domain: &str) -> Option<String> {
+        self.local.org_of(domain)
+    }
 }
 
 #[cfg(test)]

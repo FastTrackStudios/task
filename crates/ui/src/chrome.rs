@@ -74,7 +74,7 @@ pub struct NoteViewMode(pub Signal<ViewMode>);
 // The player's request channels moved out with the player itself
 // (`task_player_ui::context`) — re-exported here so `crate::chrome::NowPlaying`
 // and friends resolve at their historical paths.
-pub use task_player_ui::{NowPlaying, NowPlayingRequest, SongPlayRequest};
+pub use task_player_ui::{NowPlaying, NowPlayingRequest};
 
 /// Anonymous share-link mode (`?share=1` in the URL — appended by the
 /// share landing page's Open button): render NO app chrome at all — no
@@ -104,7 +104,7 @@ pub fn provide_chrome_contexts() {
     use_context_provider(|| ZenMode(Signal::new(false)));
     use_context_provider(|| ShareMode(detect_share_mode()));
     use_context_provider(|| NoteViewMode(Signal::new(ViewMode::Edit)));
-    // Player contexts (SongPlayRequest / NowPlaying / NowPlayingCtl).
+    // Player contexts (NowPlaying / NowPlayingCtl).
     task_player_ui::provide_player_contexts();
     // The unified media session (dock ⇄ zoomed review) — needs the
     // player contexts above (it tells the song engine to yield).
@@ -610,10 +610,37 @@ pub fn FleetingModal() -> Element {
     let muts = crate::stores::use_inbox_mutations();
 
     let mut draft = use_signal(String::new);
+    let timers = crate::stores::use_timer_mutations();
+    let timing = use_active_timer().is_some();
+    let mut hint = use_resume_hint();
 
     if !open() {
         return rsx! {};
     }
+
+    // On a phone the capture box is also where a timer starts (there is
+    // no timer in the top bar there): its text becomes the description,
+    // and none is fine.
+    let start_timer = move |_| {
+        let Some((slug, org_id)) = target() else {
+            return;
+        };
+        let desc = draft.peek().trim().to_string();
+        draft.set(String::new());
+        hint.set(None);
+        timers.start(
+            slug,
+            timer_proto::StartTimerRequest {
+                user_id: owner_id(org_id),
+                org_id,
+                project_id: None,
+                project_path: String::new(),
+                task_note_path: String::new(),
+                description: desc,
+            },
+        );
+        open.set(false);
+    };
 
     // Optimistic: the capture lands in the shared inbox store
     // instantly (chip + /inbox update), persists in the background,
@@ -671,6 +698,16 @@ pub fn FleetingModal() -> Element {
                     },
                 }
                 div { class: "flex items-center justify-end gap-2",
+                    if !timing {
+                        button {
+                            r#type: "button",
+                            class: "mr-auto flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden",
+                            title: "Start a timer with this as its description",
+                            onclick: start_timer,
+                            architect_ui::lucide_dioxus::Clock { size: 15 }
+                            "Start timer"
+                        }
+                    }
                     Button {
                         variant: ButtonVariant::Ghost,
                         size: ButtonSize::Small,

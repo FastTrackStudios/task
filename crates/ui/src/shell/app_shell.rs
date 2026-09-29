@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 
 use crate::chrome::{FleetingFab, FleetingModal, TopBar, provide_chrome_contexts};
 use crate::routes::Route;
-use crate::shell::mobile::{BottomTabBar, MobileHeader};
+use crate::shell::mobile::{BottomTabBar, MobileTimerDock};
 
 #[component]
 pub fn AppShell() -> Element {
@@ -15,6 +15,8 @@ pub fn AppShell() -> Element {
 
     // Quick-capture + data-refresh signals for the persistent chrome.
     provide_chrome_contexts();
+    // The docked player a citation's timestamp plays in.
+    crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
     crate::palette::provide_palette_context();
     // Obsidian-style route tabs (the strip lives in the TopBar) —
@@ -110,7 +112,10 @@ pub fn AppShell() -> Element {
                             } else if let Route::ProjectDetailRoute { id } = &current {
                                 crate::shell::project_sidebar::ProjectSidebar { id: id.clone() }
                             } else if let Route::WikiHomeRoute { org, wiki }
-                                | Route::WikiDocRoute { org, wiki, .. } = &current
+                                | Route::WikiDocRoute { org, wiki, .. }
+                                | Route::WikiRequestRoute { org, wiki, .. }
+                                | Route::WikiScopedSourcesRoute { org, wiki }
+                                | Route::WikiScopedSourceRoute { org, wiki, .. } = &current
                             {
                                 // Inside a wiki the column is THAT wiki's
                                 // pages, not the vault's folders — the same
@@ -122,13 +127,10 @@ pub fn AppShell() -> Element {
                         }
                     }
                     div { class: "flex min-h-screen min-w-0 flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
-                        if !share {
-                            MobileHeader {}
-                        }
                         // Bottom padding keeps content clear of the fixed
                         // tab bar (56px + safe area). On desktop `main` is
                         // the scroll container.
-                        main { class: "flex-1 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] md:min-h-0 md:overflow-y-auto md:pb-0",
+                        main { class: "flex-1 pt-[env(safe-area-inset-top,0px)] pb-[calc(6rem+env(safe-area-inset-bottom,0px))] md:min-h-0 md:overflow-y-auto md:pt-0 md:pb-0",
                             SuspenseBoundary {
                                 fallback: |_| rsx! { RouteFallback {} },
                                 Outlet::<Route> {}
@@ -137,6 +139,7 @@ pub fn AppShell() -> Element {
                         if !share {
                             BottomTabBar { current }
                             FleetingFab {}
+                            MobileTimerDock {}
                         }
                     }
                     // The right dock: whatever an app puts beside the
@@ -217,6 +220,7 @@ pub fn AppShell() -> Element {
         }
         // Single global capture modal, toggled from any fleeting button.
         FleetingModal {}
+        crate::source_dock::SourceDockView {}
         // Ctrl+P command palette — pages + vault notes, fuzzy-ranked.
         // Mounts its own document-level hotkey listener.
         crate::palette::CommandPalette {}

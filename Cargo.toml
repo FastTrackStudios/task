@@ -431,24 +431,21 @@ view-table = { path = "features/view/view-table" }
 # and depends on dioxus and crates.io only — that is what makes it
 # embeddable, and why it is no longer hosted here.
 #
-# `editor-keyflow` and `editor-keyflow-lang` stayed: they need
-# `keyflow-text` and `engraver`, so they belong above the editor. The
-# chart renderer registers itself through `editor_state::fence_renderer`
+# `default-features = false` on both: the ```typst and ```mermaid fence
+# renderers (a Typst compiler, a Mermaid layout engine) are features of
+# the editor, and Task registers only ```kf. Off, a fence of either kind
+# shows its source — which is also what a failed render shows. Turning
+# them on is the single largest thing the editor can add to the wasm.
+#
+# The chart renderer registers itself through `editor_state::fence_renderer`
 # rather than editor-state depending on it. See docs/SPLIT.md in that repo.
-editor = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-lsp = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-mermaid = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-syntax = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-typst = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-view = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
-editor-vim = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.0.3" }
+editor ={ git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.22", default-features = false }
+editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.22" }
+editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.22", default-features = false }
 # The editor's keyflow half moved to the keyflow repo with v0.2.0: both
 # crates need `editor-state` from below AND `keyflow-text`/`engraver` from
 # above, so that is the only repo where they can live.
-editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
-editor-keyflow-lang = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
@@ -487,18 +484,7 @@ crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
 # surface underneath this tree.
 actions-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
 actions-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-daw = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-daw-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-daw-standalone = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-dioxus-test = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-engraver = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0", default-features = false }
 input = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-keyflow = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-keyflow-text = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-session = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-session-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-session-ui = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0", default-features = false }
-song = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
 
 # ── Facet reflection + vox RPC — the rc.7 fleet ───────────────────────
 #
@@ -707,14 +693,16 @@ vox-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.3.0" 
 # copies (or the keyflow repo should stop carrying them). Until one of
 # those ships, this is that fix, applied at the consumer.
 [patch."https://github.com/FastTrackStudios/FastTrackStudio"]
-engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
-engraver-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
-keyflow-text = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
-keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.0.3" }
+engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+engraver-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+keyflow-text = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
 
 [patch."https://github.com/FastTrackStudios/daw"]
-keyflow-proto = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
-keyflow-syntax = { git = "https://github.com/FastTrackStudios/FastTrackStudio", tag = "v0.1.0" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
 
 # dioxus-core with DioxusLabs/dioxus#5668's suspense fixes. With the
 # web bundle split into lazily loaded chunks every route sits behind a

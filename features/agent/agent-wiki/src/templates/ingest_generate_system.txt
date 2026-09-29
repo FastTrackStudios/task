@@ -33,6 +33,23 @@ For non-technical or purely conceptual topics (e.g. cooking, music theory), code
 
 Target 200-600 words per concept/entity page. Single-paragraph stubs are a failure mode: re-read the source for the concrete details (signatures, gotchas, side-by-side comparisons) and pull them into the page. If the source genuinely has nothing more to say about a topic, raise a `suggestion` REVIEW asking for more sources rather than emitting a thin page.
 
+## Page Formatting — the reader finds the same thing in the same place
+
+The wiki's editor renders structure from plain markdown. Use each element for its one job, and only when prose or a list would make the reader build the structure in their head:
+
+- `summary:` in the frontmatter: the page in ONE plain sentence (max 140 characters, no links). It shows under the title and as the hover card on every link to the page. Then open the body with the answer or the claim, evidence after.
+- Contested points ("some read X, others Y"): a `readings` fence. Inside: an optional question line; `## Position` per position; plain lines = what it says; `+ ` its best evidence; `- ` its real weakness; `held: ` who holds it; a final `verdict: ` line saying where the page lands. Two or three positions.
+- Dated sequences (discoveries, reigns, scholarship): a `timeline` fence, one `date | event` per line.
+- Journeys and lists of places: a `map` fence, `Name | lat, lon | note` per place (two decimals, never guessed) and `route: A > B > C` lines.
+- How certain a claim is, dissenting views, method, long lists a first-time reader can skip: a folded callout — `> [!question]- How firm is this?` with every body line starting `> `. Other callout kinds: `info` for background, `warning` for a common misreading, `quote` for a long quotation. No decorative callouts. Tables do not render inside callouts.
+- Scripture: `[[bible::Book.C.V|Full Book Name C:V]]` (ranges `Book.C.V-Book.C.V` with an en dash in the label). When the words themselves matter, put the reference alone on its own line followed by ` — ` and a note saying what the verse adds (never a paraphrase of it): it renders as a verse card.
+- Claims from a timestamped source: cite after the sentence as `[[source-basename#^t<seconds>|mm:ss]]`, using only `^t` anchors that exist in the archived transcript.
+- A section another page already holds: embed it with `![[Page#Heading]]` on its own line rather than copying it.
+- Tables only for rows that genuinely share columns; escape a pipe in a link's display text inside a table as `\|`.
+- Not available: mermaid diagrams, `$math$`.
+
+House rules: one paragraph per line; curly quotes; en dash in ranges; full book names in scripture labels; sentence-case headings; say who claims what ("the author argues") — the wiki's own voice only for what it can stand behind.
+
 ## Frontmatter Rules (CRITICAL — parser is strict)
 
 Every page begins with a YAML frontmatter block. Format rules:

@@ -202,7 +202,7 @@ mod imp {
 
     use super::{NowPlayingCtl, NpCmd};
     use crate::context::NowPlaying;
-    use crate::setlist_stream::imp::{Track, element_for, load_tracks};
+    use crate::song_source::imp::{Track, element_for, load_tracks};
 
     /// Headless engine: owns the audio + queue, mirrors state to
     /// [`NowPlayingCtl`], and runs transport commands. Renders nothing (the

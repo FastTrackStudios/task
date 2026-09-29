@@ -16,7 +16,7 @@
 //! for tests / in-process callers.
 
 use crate::{
-    BaseView, CollabAck, FileBytes, FolderIndex, IfMatch, Manifest, PutAck, VaultChange,
+    BaseView, CollabAck, FileBytes, FolderIndex, IfMatch, Manifest, MoveAck, PutAck, VaultChange,
     VaultSyncError,
 };
 
@@ -53,6 +53,21 @@ pub trait VaultSync {
         path: &str,
         if_match: IfMatch,
     ) -> Result<(), VaultSyncError>;
+
+    /// Move one file to `to` — a rename, a move to another folder, or
+    /// both. `if_match` guards the source; the destination must not
+    /// exist (a move never overwrites). When a markdown page's name
+    /// changes, every wikilink in the vault that named it is rewritten
+    /// to name it by its new one, and those pages are listed in the
+    /// ack. Each rewrite is an ordinary committed write, so an open
+    /// document receives it as it would any other.
+    fn move_file(
+        &self,
+        vault_id: &str,
+        from: &str,
+        to: &str,
+        if_match: IfMatch,
+    ) -> Result<MoveAck, VaultSyncError>;
 
     /// Frontmatter-derived metadata for every `.md` page —
     /// path, basename, title, type, and the `folder` parent

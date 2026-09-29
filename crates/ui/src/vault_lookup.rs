@@ -48,10 +48,12 @@ use editor::editor_view::trigger::{Candidate, CompletionKind};
 use editor::markdown::{VaultBlockHit, VaultLookup, VaultPageHit};
 use vault_proto::{PageMeta, TagCount};
 
-/// Max lazily-fetched file bodies kept in memory. Small on
-/// purpose — embeds on one open page rarely touch more than a
-/// handful of other notes.
-const CONTENT_CACHE_CAP: usize = 32;
+/// Max lazily-fetched bodies kept in memory: other pages, verse texts,
+/// transcripts. A study page asks for a lot of them at once — a source
+/// badge's passage, every linked page's summary, each verse card in
+/// three translations — and a cache smaller than one page's asks evicts
+/// what the same render needs again, and fetches it again, forever.
+const CONTENT_CACHE_CAP: usize = 256;
 
 /// Placeholder preview while a referenced page's content is in
 /// flight.
@@ -61,6 +63,61 @@ const LOADING: &str = "Loading…";
 /// `scripture://<TX>/<osis-range>`. Shares the content cache + fetch
 /// worker with page content; the worker routes on the prefix.
 const SCRIPTURE_SCHEME: &str = "scripture://";
+
+/// Cache-key scheme for a reference into a wiki (ADR 0002,
+/// `acme.test/music-theory::Modes@2026-09-01`) — `ref://<reference>`.
+/// The server resolves it (`Subscriptions::resolve_reference`); the
+/// cached text is [`encode_reference`]'s, empty when it points nowhere.
+const REF_SCHEME: &str = "ref://";
+/// The org's installed translations, as a cache key: fetched once, the
+/// ids joined by commas — what a verse card offers to switch between.
+const TRANSLATIONS_KEY: &str = "scripture-translations://";
+
+/// Where a wiki reference points, as the page to open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReferenceTarget {
+    pub org: String,
+    pub wiki: String,
+    pub path: String,
+    pub title: String,
+}
+
+fn encode_reference(r: &wiki_proto::service::subscriptions::ResolvedReference) -> String {
+    [&r.org, &r.wiki, &r.path, &r.title]
+        .map(|s| s.replace('\t', " "))
+        .join("\t")
+}
+
+fn decode_reference(text: &str) -> Option<ReferenceTarget> {
+    let mut parts = text.split('\t');
+    Some(ReferenceTarget {
+        org: parts.next()?.to_owned(),
+        wiki: parts.next()?.to_owned(),
+        path: parts.next()?.to_owned(),
+        title: parts.next()?.to_owned(),
+    })
+}
+
+/// The Resource scripture references name: `[[bible::John.3.16]]`.
+const SCRIPTURE_SOURCE: &str = "bible";
+
+/// The scripture reference inside a `bible::` link (qualified or short),
+/// or `None` when the target does not name the scripture Resource.
+fn scripture_target(target: &str) -> Option<&str> {
+    let (source, rest) = target.split_once("::")?;
+    let slug = source.rsplit('/').next().unwrap_or(source).trim();
+    slug.eq_ignore_ascii_case(SCRIPTURE_SOURCE)
+        .then_some(rest.trim())
+}
+
+/// Whether a link target is a reference into a wiki rather than a page
+/// of this vault (the `::` of ADR 0002's `source::Page`). Scripture
+/// (`bible::…`) is a Resource, not a wiki: it resolves through the
+/// scripture lookup and its own link claim, never the wiki resolver.
+#[must_use]
+pub fn is_wiki_reference(target: &str) -> bool {
+    target.contains("::") && scripture_target(target).is_none()
+}
 
 /// Edition used for verse cards / chip tooltips when the link carries
 /// no `@TX` qualifier. WEB is always bundled (public domain).
@@ -76,6 +133,9 @@ pub struct ClientVaultIndex {
     state: Signal<EditorState>,
     /// Lowercased basename → page meta.
     by_basename: HashMap<String, PageMeta>,
+    /// The `raw/` archives a curated page of the same basename shadows —
+    /// where a citation's `#^t1226` anchor actually lives.
+    shadowed: HashMap<String, PageMeta>,
     cache: RefCell<ContentCache>,
     /// Page-owned lazy-fetch worker ([`use_vault_fetch_worker`]).
     fetcher: Coroutine<String>,
@@ -122,13 +182,30 @@ impl ClientVaultIndex {
         state: Signal<EditorState>,
         fetcher: Coroutine<String>,
     ) -> Rc<Self> {
-        let by_basename = pages
-            .iter()
-            .map(|p| (p.basename.to_lowercase(), p.clone()))
-            .collect();
+        // Two pages can share a basename: a wiki's summary of a source
+        // (`Sources/talk-ac25.md`) and the archive it summarises
+        // (`raw/sources/talk-ac25.md`). A link means the curated page —
+        // it carries the short title and author — so it wins over
+        // anything under `raw/`, whatever order the index came in.
+        let mut by_basename: HashMap<String, PageMeta> = HashMap::new();
+        let mut shadowed: HashMap<String, PageMeta> = HashMap::new();
+        for p in pages {
+            let key = p.basename.to_lowercase();
+            let keep_existing = by_basename
+                .get(&key)
+                .is_some_and(|have| !have.path.starts_with("raw/") && p.path.starts_with("raw/"));
+            if keep_existing {
+                shadowed.insert(key, p.clone());
+            } else if let Some(prev) = by_basename.insert(key.clone(), p.clone())
+                && prev.path.starts_with("raw/")
+            {
+                shadowed.insert(key, prev);
+            }
+        }
         Rc::new(Self {
             state,
             by_basename,
+            shadowed,
             cache: RefCell::new(ContentCache {
                 map: HashMap::new(),
                 order: VecDeque::new(),
@@ -178,6 +255,34 @@ impl ClientVaultIndex {
     pub fn meta(&self, name: &str) -> Option<&PageMeta> {
         self.by_basename.get(&name.to_lowercase())
     }
+
+    /// A wiki reference's resolution: `Some(Some(..))` resolved,
+    /// `Some(None)` points nowhere, `None` not known yet (a resolution
+    /// is then queued, and the editor redraws when it lands).
+    pub fn reference(&self, name: &str) -> Option<Option<ReferenceTarget>> {
+        self.content(&format!("{REF_SCHEME}{name}"))
+            .map(|text| decode_reference(&text))
+    }
+}
+
+/// Where a wiki reference points, asked of `slug`'s server. `None` for
+/// "nowhere", and for a failure to ask (said in the log, not the page).
+pub async fn resolve_reference(
+    slug: &str,
+    reference: &str,
+) -> Option<wiki_proto::service::subscriptions::ResolvedReference> {
+    let client = crate::vox_clients::establish_for::<
+        wiki_proto::service::subscriptions::SubscriptionsClient,
+    >(slug)
+    .await
+    .map_err(|e| tracing::debug!("resolve {reference}: {e}"))
+    .ok()?;
+    client
+        .resolve_reference(reference.to_owned())
+        .await
+        .map_err(|e| tracing::debug!("resolve {reference}: {e:?}"))
+        .ok()
+        .flatten()
 }
 
 /// Page-owned worker draining the lazy-fetch requests that
@@ -199,7 +304,18 @@ pub fn use_vault_fetch_worker(
             while let Some(path) = rx.next().await {
                 let slug = org.peek().clone();
                 let vault_id = vault_id.clone();
-                let fetched = if let Some(rest) = path.strip_prefix(SCRIPTURE_SCHEME) {
+                let fetched = if path == TRANSLATIONS_KEY {
+                    Ok(scripture_ui::fetch_translations(&slug)
+                        .await
+                        .map(|list| {
+                            list.into_iter()
+                                .filter(|t| t.bundled)
+                                .map(|t| t.id)
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default())
+                } else if let Some(rest) = path.strip_prefix(SCRIPTURE_SCHEME) {
                     // `scripture://<TX>/<osis>` → passage text via the
                     // compare verb (handles single verses and ranges).
                     // Errors are cached as text (not Err) so a missing
@@ -227,6 +343,14 @@ pub fn use_vault_fetch_worker(
                             Err(e) => format!("⚠ {e}"),
                         },
                     )
+                } else if let Some(reference) = path.strip_prefix(REF_SCHEME) {
+                    // A wiki reference: the server says where it points.
+                    // Every answer is cached — "nowhere" as empty text —
+                    // so a dangling reference is asked about once.
+                    Ok(resolve_reference(&slug, reference)
+                        .await
+                        .map(|r| encode_reference(&r))
+                        .unwrap_or_default())
                 } else {
                     crate::document_session::fetch_file(slug, vault_id, path.clone()).await
                 };
@@ -263,9 +387,29 @@ impl VaultLookup for ClientVaultIndex {
     }
 
     fn lookup_page(&self, name: &str) -> Option<VaultPageHit> {
+        // A reference into a wiki: resolved by the server, not by this
+        // vault's basenames. Unknown yet reads as loading, not missing,
+        // so the link does not flash red before the answer lands.
+        if is_wiki_reference(name) {
+            return match self.reference(name) {
+                None => Some(VaultPageHit {
+                    preview: LOADING.to_owned(),
+                }),
+                Some(None) => None,
+                Some(Some(t)) => Some(VaultPageHit {
+                    preview: format!("{} — in {}", t.title, t.wiki),
+                }),
+            };
+        }
         let meta = self.meta(name)?;
+        // The page's own one-line `summary:` when it has one — the page in
+        // a sentence is the best preview of it — else its opening lines.
         let preview = match self.content(&meta.path) {
-            Some(raw) => preview_of_page(&raw, 200),
+            Some(raw) => crate::pages::vault::frontmatter_value(&raw, "summary")
+                .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+                .filter(|v| !v.is_empty())
+                .map(|v| plain_summary(&v))
+                .unwrap_or_else(|| preview_of_page(&raw, 200)),
             None => LOADING.to_owned(),
         };
         Some(VaultPageHit { preview })
@@ -299,6 +443,53 @@ impl VaultLookup for ClientVaultIndex {
                 .or_else(|| front.sections.last().map(|s| s.end_sec))
                 .unwrap_or(0.0),
             stem_count: front.stems.len(),
+        })
+    }
+
+    fn lookup_source(&self, name: &str) -> Option<editor::markdown::VaultSourceHit> {
+        let meta = self.meta(name)?;
+        let raw = self.content(&meta.path)?;
+        let field = |key: &str| {
+            crate::pages::vault::frontmatter_value(&raw, key)
+                .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let content_type = field("content_type");
+        let is_source = meta.page_type == "source"
+            || field("type").as_deref() == Some("source")
+            || content_type.is_some()
+            || meta.path.starts_with("raw/sources/");
+        if !is_source {
+            return None;
+        }
+        let url = field("source_url").or_else(|| field("media"));
+        let title = field("title").unwrap_or_else(|| meta.title.clone());
+        Some(editor::markdown::VaultSourceHit {
+            kind: source_kind(content_type.as_deref(), url.as_deref()).to_owned(),
+            short: field("short_title").unwrap_or_else(|| short_title(&title)),
+            author: field("author").unwrap_or_default(),
+            url: url.unwrap_or_default(),
+            title,
+        })
+    }
+
+    fn lookup_word(&self, name: &str) -> Option<editor::markdown::VaultWordHit> {
+        let meta = self.meta(name)?;
+        let raw = self.content(&meta.path)?;
+        let field = |key: &str| {
+            crate::pages::vault::frontmatter_value(&raw, key)
+                .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let lemma = field("lemma")?;
+        Some(editor::markdown::VaultWordHit {
+            lemma,
+            translit: field("translit")
+                .or_else(|| field("transliteration"))
+                .unwrap_or_else(|| meta.title.clone()),
+            gloss: field("gloss").unwrap_or_default(),
+            strongs: field("strongs").unwrap_or_default(),
+            language: field("language").unwrap_or_else(|| "hebrew".to_owned()),
         })
     }
 
@@ -348,6 +539,9 @@ impl VaultLookup for ClientVaultIndex {
     /// lazily through the same worker as page content, keyed
     /// `scripture://<TX>/<osis>`.
     fn lookup_scripture(&self, target: &str) -> Option<editor::markdown::VaultScriptureHit> {
+        // `[[bible::John.3.16]]` — the form wiki pages write — as well
+        // as a bare `[[John 3:16]]`.
+        let target = scripture_target(target).unwrap_or(target);
         let scref = scripture_proto::ScriptureRef::parse(target).ok()?;
         let translation = scref
             .translation
@@ -360,7 +554,36 @@ impl VaultLookup for ClientVaultIndex {
             osis,
             text,
             translation,
+            alternates: Vec::new(),
         })
+    }
+
+    fn lookup_translations(&self, target: &str) -> Vec<(String, String)> {
+        // The same passage in the org's other installed translations, for
+        // a verse card's switcher (only cards ask). Each arrives as it
+        // lands; one that is missing or failed is simply not offered.
+        let target = scripture_target(target).unwrap_or(target);
+        let Ok(scref) = scripture_proto::ScriptureRef::parse(target) else {
+            return Vec::new();
+        };
+        let shown = scref
+            .translation
+            .clone()
+            .unwrap_or_else(|| DEFAULT_TRANSLATION.to_owned());
+        let osis = scref.range.osis();
+        self.content(TRANSLATIONS_KEY)
+            .map(|list| {
+                list.split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case(&shown))
+                    .filter_map(|t| {
+                        let text = self.content(&format!("{SCRIPTURE_SCHEME}{t}/{osis}"))?;
+                        (!text.starts_with('(') && !text.starts_with('⚠'))
+                            .then(|| (t.to_owned(), text))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn lookup_block_short(&self, page: &str, short_id: &str) -> Option<String> {
@@ -370,12 +593,55 @@ impl VaultLookup for ClientVaultIndex {
             None => return Some(LOADING.to_owned()),
         };
         let needle = format!("^{short_id}");
-        let pos = raw.find(&needle)?;
+        // Not on the curated page: a citation's anchor lives in the
+        // archive it summarises (`raw/sources/…`), which shares its name.
+        let raw = if anchor_at(&raw, &needle).is_some() {
+            raw
+        } else {
+            let twin = self.shadowed.get(&page.to_lowercase())?;
+            match self.content(&twin.path) {
+                Some(raw) => raw,
+                None => return Some(LOADING.to_owned()),
+            }
+        };
+        let pos = anchor_at(&raw, &needle)?;
         let line_start = raw[..pos].rfind('\n').map_or(0, |n| n + 1);
         let line_end = raw[pos..].find('\n').map_or(raw.len(), |n| pos + n);
         let line = &raw[line_start..line_end];
         Some(line[..line.len() - needle.len()].trim_end().to_string())
     }
+}
+
+/// Where a block anchor (`^t46`) is *defined* in `raw`: after a space,
+/// at the end of its line. Not inside `^t460`, and not where a link
+/// merely points at it (`[[talk#^t46|0:46]]`).
+fn anchor_at(raw: &str, needle: &str) -> Option<usize> {
+    raw.match_indices(needle).map(|(i, _)| i).find(|&i| {
+        let before = raw[..i].chars().next_back();
+        let after = raw[i + needle.len()..].chars().next();
+        before.is_some_and(char::is_whitespace) && after.is_none_or(|c| c == '\n' || c == '\r')
+    })
+}
+
+/// A frontmatter summary as plain text for a hover card: emphasis
+/// markers dropped, `[[target|label]]` read as its label.
+fn plain_summary(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("[[") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        let Some(end) = after.find("]]") else {
+            out.push_str(&rest[i..]);
+            rest = "";
+            break;
+        };
+        let inner = &after[..end];
+        out.push_str(inner.rsplit_once('|').map_or(inner, |(_, label)| label));
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace(['*', '`'], "")
 }
 
 // ── Editor source bridges ─────────────────────────────────────────
@@ -474,6 +740,54 @@ pub struct LinkCandidate {
     pub path: String,
     /// `insert` is an alias rather than the basename.
     pub is_alias: bool,
+}
+
+/// Which icon a source badge gets: its `content_type`, sharpened by
+/// where it lives (a video on YouTube is `youtube`).
+#[must_use]
+pub fn source_kind(content_type: Option<&str>, url: Option<&str>) -> &'static str {
+    let url = url.unwrap_or_default().to_lowercase();
+    match content_type.unwrap_or_default().to_lowercase().as_str() {
+        "video" if url.contains("youtube.com/") || url.contains("youtu.be/") => "youtube",
+        "video" => "video",
+        "audio" | "podcast" => "podcast",
+        "book" | "ebook" => "book",
+        "article" | "blog" | "news" | "post" => "article",
+        "paper" | "pdf" | "journal" => "paper",
+        "" if !url.is_empty() => "web",
+        _ => "text",
+    }
+}
+
+/// A title short enough for a badge that sits in a sentence: the part
+/// before a subtitle (`God Told Them to Kill Everyone. Here's Why.` →
+/// `God Told Them to Kill Everyone`), cut at a word near 32 characters.
+/// A page's own `short_title` wins over this.
+#[must_use]
+pub fn short_title(title: &str) -> String {
+    let title = title.trim();
+    let head = [". ", ": ", " | ", " — ", " - ", "? ", "! "]
+        .iter()
+        .filter_map(|sep| title.find(sep).map(|i| (i, sep)))
+        .filter(|(i, _)| *i >= 12)
+        .min_by_key(|(i, _)| *i)
+        .map_or(title, |(i, sep)| {
+            // Keep a question's own mark: `Did God …?` stays a question.
+            let end = if sep.starts_with(['?', '!']) {
+                i + 1
+            } else {
+                i
+            };
+            &title[..end]
+        })
+        .trim_end_matches(['.', ',', ';']);
+    const MAX: usize = 32;
+    if head.chars().count() <= MAX + 4 {
+        return head.to_owned();
+    }
+    let cut: String = head.chars().take(MAX).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(a, _)| a);
+    format!("{}…", cut.trim_end_matches([',', ';', ':']))
 }
 
 /// Wikilink candidates from the folder index: every page's
@@ -645,6 +959,62 @@ mod tests {
             icon: String::new(),
             aliases: aliases.iter().map(|s| (*s).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn scripture_is_a_resource_not_a_wiki_reference() {
+        assert!(!is_wiki_reference("bible::John.3.16"));
+        assert!(!is_wiki_reference("acme.test/bible::Deut.20.16-Deut.20.17"));
+        assert_eq!(
+            scripture_target("bible::Deut.20.16-Deut.20.17"),
+            Some("Deut.20.16-Deut.20.17")
+        );
+        assert!(is_wiki_reference(
+            "acme.test/music-theory::Modes@2026-09-01"
+        ));
+        assert!(!is_wiki_reference("Modes"));
+    }
+
+    #[test]
+    fn a_block_anchor_is_where_it_is_defined() {
+        let raw = "### Head [[talk#^t0|0:00]]\n[0:00] Words here ^t0\n[0:46] More ^t46\n";
+        let at = super::anchor_at(raw, "^t0").unwrap();
+        assert!(raw[..at].ends_with("Words here "), "{}", &raw[..at]);
+        assert!(super::anchor_at(raw, "^t4").is_none());
+        assert_eq!(
+            super::plain_summary("Not a *name*: see [[Elohim|elohim]] and [[Ugarit]]."),
+            "Not a name: see elohim and Ugarit."
+        );
+    }
+
+    #[test]
+    fn a_source_badge_knows_its_kind() {
+        use super::source_kind as k;
+        let yt = Some("https://www.youtube.com/watch?v=CweAM530ryc");
+        assert_eq!(k(Some("video"), yt), "youtube");
+        assert_eq!(k(Some("video"), Some("https://vimeo.com/1")), "video");
+        assert_eq!(k(Some("book"), None), "book");
+        assert_eq!(k(Some("Article"), Some("https://example.com/a")), "article");
+        assert_eq!(k(None, Some("https://example.com/a")), "web");
+        assert_eq!(k(None, None), "text");
+    }
+
+    #[test]
+    fn a_source_badge_takes_a_short_title() {
+        use super::short_title as s;
+        assert_eq!(
+            s("God Told Them to Kill Everyone. Here's Why."),
+            "God Told Them to Kill Everyone"
+        );
+        assert_eq!(s("Ancient Conquest Accounts"), "Ancient Conquest Accounts");
+        assert_eq!(
+            s("What the Bible REALLY Says About the other gods"),
+            "What the Bible REALLY Says…"
+        );
+        assert_eq!(
+            s("Did God Really Command Genocide? Coming to Terms"),
+            "Did God Really Command Genocide?"
+        );
     }
 
     #[test]

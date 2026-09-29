@@ -21,6 +21,15 @@ pub struct PutAck {
     pub mtime_ms: i64,
 }
 
+/// What a move did: the moved file's sha at its new path, and the pages
+/// whose wikilinks were rewritten to follow it (empty when the name did
+/// not change, or nothing linked to it).
+#[derive(Debug, Clone, Facet)]
+pub struct MoveAck {
+    pub sha256: String,
+    pub relinked: Vec<String>,
+}
+
 /// Conditional-write mode. Mirror of the original HTTP
 /// `If-Match` header semantics:
 /// - [`Self::CreateOnly`] — fail if the path already exists.

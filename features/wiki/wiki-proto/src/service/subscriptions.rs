@@ -317,4 +317,30 @@ pub trait Subscriptions {
     ///
     /// [`WikiError`] when the table cannot be read.
     fn trusted_sources(&self) -> Result<Vec<TrustedSource>, WikiError>;
+
+    /// Where a reference into another wiki points, as a page this reader
+    /// can open: `acme.test/music-theory::Ionian@2026-09-01#^x|Ionian`
+    /// (with or without the brackets) → the org, the wiki and the page's
+    /// path. A short `music-theory::Ionian` is this org's own wiki.
+    ///
+    /// `None` when it points nowhere this server can see — an unknown
+    /// domain, a wiki that does not admit this org, or no such page — so
+    /// the editor renders it as unresolved rather than offering to
+    /// create a page named after the whole reference.
+    fn resolve_reference(&self, reference: &str) -> Result<Option<ResolvedReference>, WikiError>;
+}
+
+/// A reference into a wiki, resolved to a page ([`Subscriptions::resolve_reference`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "vox", derive(facet::Facet))]
+#[repr(C)]
+pub struct ResolvedReference {
+    /// The org slug that publishes the wiki — the one to open it in.
+    pub org: String,
+    /// The wiki's slug.
+    pub wiki: String,
+    /// The page's wiki-relative path.
+    pub path: String,
+    /// The page's title (its frontmatter `title`, else its basename).
+    pub title: String,
 }

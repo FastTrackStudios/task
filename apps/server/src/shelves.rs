@@ -250,6 +250,36 @@ impl ShelfRegistry {
     }
 }
 
+/// The Edit lane, applied to the vault path a wiki page is also
+/// reachable through.
+///
+/// t[impl wiki.edit.editor] — once a wiki has declared Editors, only
+/// they write to it directly. `Pages::write_page` enforces that; but the
+/// web editor saves a wiki page as `wiki:<slug>` over `VaultSync`, and
+/// joins its live session over the collab lane, and without this guard
+/// both were a way around the rule for anyone who could open the page.
+pub struct WikiEditLane(pub wiki_live::WikiBackend);
+
+impl vault::WriteGuard for WikiEditLane {
+    fn check(&self, vault_id: &str, path: &str, principal: Option<&str>) -> Result<(), String> {
+        // Not a wiki, or the server acting on its own behalf (the
+        // collab write-behind, a seed): not the lane's business.
+        let (Some(wiki), Some(who)) = (wiki_of(vault_id), principal) else {
+            return Ok(());
+        };
+        let config = self
+            .0
+            .config_of(wiki)
+            .map_err(|e| format!("`{wiki}`: its configuration could not be read: {e}"))?;
+        if config.has_edit_lane() && !config.is_editor(who) {
+            return Err(format!(
+                "`{wiki}` is governed by its Editors; open an Edit Request to change `{path}`"
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{vault_id, wiki_of};

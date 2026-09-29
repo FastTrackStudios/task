@@ -489,7 +489,7 @@ impl ResourcesBackend {
     ///
     /// The global player fetches
     /// `GET /org/{org}/media/songs/{slug}/song.md` and the
-    /// `arrangement.md` it points at (`player_ui::song_session`). Those
+    /// `arrangement.md` it points at (`task_player_ui::song_source`). Those
     /// files are **copied, not moved**, so it keeps working — against a
     /// snapshot frozen at migration time. Repointing the player at the
     /// Assets tier needs a cross-tier read path the vault does not

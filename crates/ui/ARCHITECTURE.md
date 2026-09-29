@@ -192,13 +192,11 @@ precedence. Widgets are one contribution type of the plugin system
 
 ## Also here
 
-- `crates/task/player-ui` — the browser session player (Web Audio, the
-  engraved chart pane, the Now Playing engine, the in-tab
-  daw-standalone session engine). It lives under `crates/task/` rather
-  than `crates/session/` because it parses `type: song` vault
-  frontmatter and dials `/org/<slug>/vox`; putting it under
-  `crates/session/` would make the session domain depend on the Task
-  app. See that crate's module docs.
+- `crates/player-ui` — what Task plays of a song: the global Now
+  Playing stream, the song/setlist note widgets, and the ```` ```kf ````
+  chart fences. Rehearsal (stems, mixer, the engraved chart pane, the
+  fullscreen performance view) is the Session app's; the widgets link
+  to it. See that crate's module docs.
 - `feeds.rs` and `stores.rs` are declaration tables, not lists of
   functions. Adding a feed is a `feeds!` entry; adding a store is a
   `stores!` row. Both have a "The shape" note above the macro.

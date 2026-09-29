@@ -64,12 +64,15 @@ pub use vault_obsidian::GraphBackend;
 pub use vault_live::sync;
 #[cfg(feature = "live")]
 pub use vault_live::watcher;
+/// Who may write a file: the guard a host installs on the backend.
+#[cfg(feature = "live")]
+pub use vault_live::write_guard;
 #[cfg(feature = "live")]
 pub use vault_live::{
     Backend, BlockIndex, BlockLocation, LoadError, MutateError, PageSink, PropertyTypes, SaveError,
     Vault, VaultBase, VaultEntry, VaultEntryKind, VaultEvent, VaultLookupView, VaultPage,
-    WatchError, append_to_page, bind_sink, create_page, delete_page, delete_page_at, move_page_at,
-    save_page, save_page_at, sink_for, unbind_sink, walk_vault, watch, write_atomic,
+    WatchError, WriteGuard, append_to_page, bind_sink, create_page, delete_page, delete_page_at,
+    move_page_at, save_page, save_page_at, sink_for, unbind_sink, walk_vault, watch, write_atomic,
 };
 
 // ── Obsidian translation layer ────────────────────────────────────

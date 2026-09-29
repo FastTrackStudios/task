@@ -3,15 +3,15 @@
 //! Three pieces, all hidden at `md:` and up (where the desktop
 //! sidebar takes over):
 //!
-//! - [`MobileHeader`] — sticky top app bar: the [`MobileTimerBar`]
-//!   (current tracked task + live clock + start/stop, opening a timer
-//!   management sheet) and an avatar button that opens the **account &
-//!   status** bottom sheet (the desktop [`crate::auth::AccountSwitcher`]'s
-//!   content via [`crate::auth::AccountSheetBody`] — same `AuthCtx` /
-//!   `PresenceLocal` logic, touch-sized presentation).
+//! - No top bar: the page starts at the top of the screen.
+//! - [`MobileTimerDock`] — the timer, beside the capture button: a live
+//!   clock pill while a timer runs (opening the timer sheet), nothing
+//!   while none does (a timer starts from the capture box).
 //! - [`BottomTabBar`] — fixed bottom bar (safe-area padded): four
-//!   primary destinations + a "More" tab opening the full nav as a
-//!   bottom sheet, with the org switcher and the presence roster.
+//!   primary destinations + a "More" tab, drawn as your avatar, opening
+//!   your account (the desktop [`crate::auth::AccountSwitcher`]'s content
+//!   via [`crate::auth::AccountSheetBody`]), the full nav, the org
+//!   switcher and the presence roster.
 //! - [`BottomSheet`] — the shared mobile sheet primitive (architect-ui's
 //!   `Sheet` only slides from the sides; mobile wants bottom sheets).
 //!
@@ -19,7 +19,6 @@
 //! shell-lifetime component (see `crate::collab` docs for the keyed-
 //! child rule).
 
-use architect_ui::lucide_dioxus::{Menu, Play, Square};
 use architect_ui::prelude::{Button, ButtonVariant, Text, TextVariant};
 use chrono::Utc;
 use dioxus::prelude::*;
@@ -56,173 +55,62 @@ pub fn MobileActionBar(children: Element) -> Element {
     }
 }
 
-// ── top app bar ─────────────────────────────────────────────────────
+// ── the timer, beside the capture button ────────────────────────────
 
+/// A phone has no top bar: the page starts at the top of the screen.
+/// The timer lives with the capture button instead — nothing while no
+/// timer runs (start one from the capture box), and a live clock pill
+/// beside the button while one does, which opens the timer sheet.
 #[component]
-pub fn MobileHeader() -> Element {
-    let mut account_open = use_signal(|| false);
-    // Timer sheet open state — shared by the in-header bar and the sheet,
-    // which is rendered *outside* the header (see below).
-    let timer_open = use_signal(|| false);
-
-    // Avatar trigger state — same identity the desktop switcher shows.
-    let ctx = use_context::<AuthCtx>();
-    let local = use_context::<PresenceLocal>();
-    let account = ctx.active.read().clone();
-    let (name, email) = account.as_ref().map_or_else(
-        || ("Signing in…".to_owned(), String::new()),
-        |a| (a.name.clone(), a.email.clone()),
-    );
-    let effective = local.effective_status();
-    let dot = effective.dot_class();
-
+pub fn MobileTimerDock() -> Element {
+    let open = use_signal(|| false);
     rsx! {
-        header {
-            class: "sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-background/95 px-3 py-2 backdrop-blur md:hidden",
-            style: "padding-top: max(0.5rem, env(safe-area-inset-top, 0px));",
-            // The timer carries the bar now — current task + live clock,
-            // tap to manage (start/stop, history).
-            MobileTimerBar { open: timer_open }
-            div { class: "ml-auto flex shrink-0 items-center",
-                // Account & status — opens the bottom sheet.
-                button {
-                    r#type: "button",
-                    class: "flex h-11 w-11 items-center justify-center rounded-full active:bg-accent",
-                    aria_label: "Account & status",
-                    onclick: move |_| account_open.set(true),
-                    span { class: "relative",
-                        Avatar { name: name.clone(), email: email.clone(), size: 32 }
-                        span { class: "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background {dot}",
-                            title: "{effective.label()}",
-                        }
-                    }
-                }
-            }
-        }
-        // Rendered OUTSIDE `header`: the header's `backdrop-blur`
-        // establishes a containing block for `fixed` descendants, which
-        // would anchor the sheet to the header box instead of the
-        // viewport. Keeping it a sibling (like the account sheet) lets
-        // `fixed inset-x-0 bottom-0` resolve against the viewport.
-        MobileTimerSheet { open: timer_open }
-        BottomSheet {
-            open: account_open(),
-            title: "Account & status".to_string(),
-            on_close: move |()| account_open.set(false),
-            AccountSheetBody { on_done: move |()| account_open.set(false) }
-        }
+        MobileTimerPill { open }
+        MobileTimerSheet { open }
     }
 }
 
-// ── mobile timer bar ────────────────────────────────────────────────
-
-/// The header's primary affordance on mobile: a live view of the
-/// session being tracked right now (pulsing dot + description + elapsed
-/// clock) with an inline Stop, or a "Start a timer" prompt when nothing
-/// runs. Tapping the bar opens a bottom sheet to start / stop and jump
-/// to the full `/timer` history.
+/// The running timer as a small pill left of the capture button: a
+/// pulsing dot and the live clock. Tapping it opens the timer sheet
+/// (stop, what it is on, recent sessions). Absent when nothing runs.
 ///
 /// Org-scoped off the shared [`OrgSelection`] and the optimistic session
 /// store — the same source the desktop [`crate::chrome::TimerWidget`]
 /// and the `/timer` page read, so all three stay in lockstep.
 #[component]
-fn MobileTimerBar(mut open: Signal<bool>) -> Element {
-    let selection = use_context::<Signal<OrgSelection>>();
-    let org_list = use_context::<Signal<Vec<OrgMeta>>>();
-    let target = use_memo(move || resolve_org(&selection.read(), &org_list.read()));
-
-    let session_rows = stores::use_session_list();
-    let muts = stores::use_timer_mutations();
-
-    // Running session = the open row for the active org + owner.
-    let active: Option<stores::OrgSession> = target().and_then(|(slug, org_id)| {
-        let owner = owner_id(org_id);
-        session_rows.value().and_then(|rows| {
-            rows.iter()
-                .map(|(_, r)| r)
-                .find(|r| {
-                    r.slug == slug && r.session.user_id == owner && r.session.end_time.is_none()
-                })
-                .cloned()
-        })
-    });
+fn MobileTimerPill(mut open: Signal<bool>) -> Element {
+    let active = crate::chrome::use_active_timer();
 
     // Live clock — re-render once a second so the elapsed advances.
     let tick = use_signal(|| 0u64);
     use_second_tick(tick);
     let _ = tick();
 
-    // Stop the running session (optimistic). `active` isn't `Copy`, so
-    // the handler takes a clone; `target`/`muts` are `Copy`.
-    let running = active.clone();
-    let stop_bar = move || {
-        let Some((slug, org_id)) = target() else {
-            return;
-        };
-        let Some(sess) = running.as_ref() else {
-            return;
-        };
-        muts.stop(slug, owner_id(org_id), sess.session.id);
+    let Some(at) = active else {
+        return rsx! {};
     };
-
-    let elapsed = active
-        .as_ref()
-        .map_or(0, |r| (Utc::now() - r.session.start_time).num_seconds());
-    let title = active.as_ref().map_or_else(
-        || "(no description)".to_string(),
-        |r| {
-            if r.session.description.trim().is_empty() {
-                "(no description)".to_string()
-            } else {
-                r.session.description.clone()
-            }
-        },
-    );
-    let tracking = active.is_some();
-
+    let elapsed = (Utc::now() - at.session.start_time).num_seconds();
     rsx! {
-        div { class: "flex min-w-0 flex-1 items-center gap-1",
-            if tracking {
-                // Stop sits on the left, in the same slot the Play badge
-                // occupies when idle.
-                button {
-                    r#type: "button",
-                    class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive active:bg-destructive/20",
-                    aria_label: "Stop timer",
-                    onclick: move |_| stop_bar(),
-                    Square { size: 16 }
-                }
-                button {
-                    r#type: "button",
-                    class: "flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 pr-2 text-left active:bg-accent",
-                    onclick: move |_| open.set(true),
-                    span { class: "flex min-w-0 flex-col leading-tight",
-                        span { class: "truncate text-sm font-medium text-foreground", "{title}" }
-                        span { class: "font-mono text-xs tabular-nums text-sky-400", "{fmt_hms(elapsed)}" }
-                    }
-                }
-            } else {
-                button {
-                    r#type: "button",
-                    class: "flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 pr-2 text-left text-muted-foreground active:bg-accent",
-                    onclick: move |_| open.set(true),
-                    span { class: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary",
-                        Play { size: 16 }
-                    }
-                    span { class: "truncate text-sm", "Start a timer" }
-                }
+        button {
+            r#type: "button",
+            // Level with the capture button (bottom-24, 48px tall), just
+            // to its left.
+            class: "fixed bottom-[6.375rem] right-[4.5rem] z-30 flex h-9 items-center gap-2 rounded-full border border-sky-500/40 bg-background/95 px-3 shadow-lg backdrop-blur active:bg-accent md:hidden",
+            style: "margin-bottom: env(safe-area-inset-bottom, 0px);",
+            aria_label: "Timer running — open",
+            onclick: move |_| open.set(true),
+            span { class: "relative flex size-2 shrink-0",
+                span { class: "absolute inline-flex size-full animate-ping rounded-full bg-sky-400/70" }
+                span { class: "relative inline-flex size-2 rounded-full bg-sky-400" }
             }
+            span { class: "font-mono text-sm font-semibold tabular-nums text-sky-400", "{fmt_hms(elapsed)}" }
         }
     }
 }
 
-/// The timer management sheet — rendered **outside** the mobile header so
-/// its `fixed inset-x-0 bottom-0` panel resolves against the viewport.
-/// (The header's `backdrop-blur` establishes a containing block for
-/// `fixed` descendants, which would otherwise pin the sheet to the
-/// header.) Start / stop, today's total, recent sessions, and a link to
-/// the full `/timer` page. Derives the same org-scoped session state the
-/// bar does, so the two never disagree.
+/// The timer management sheet: start / stop, today's total, recent
+/// sessions, and a link to the full `/timer` page. Derives the same
+/// org-scoped session state the pill does, so the two never disagree.
 #[component]
 fn MobileTimerSheet(mut open: Signal<bool>) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
@@ -462,7 +350,20 @@ fn MobileTimerSheet(mut open: Signal<bool>) -> Element {
 #[component]
 pub fn BottomTabBar(current: Route) -> Element {
     let mut more_open = use_signal(|| false);
+    let mut account_open = use_signal(|| false);
     let primary = primary_mobile_tabs();
+
+    // "More" is you: your avatar and presence dot, opening every section
+    // and, at the top of that sheet, your account.
+    let ctx = use_context::<AuthCtx>();
+    let local = use_context::<PresenceLocal>();
+    let account = ctx.active.read().clone();
+    let (name, email) = account.as_ref().map_or_else(
+        || ("Signing in…".to_owned(), String::new()),
+        |a| (a.name.clone(), a.email.clone()),
+    );
+    let effective = local.effective_status();
+    let dot = effective.dot_class();
     rsx! {
         nav {
             class: "fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur md:hidden",
@@ -477,9 +378,14 @@ pub fn BottomTabBar(current: Route) -> Element {
                     button {
                         r#type: "button",
                         class: "flex min-h-[56px] w-full flex-col items-center justify-center gap-1 py-2 text-muted-foreground active:text-foreground",
-                        aria_label: "More sections",
+                        aria_label: "More sections and your account",
                         onclick: move |_| more_open.set(true),
-                        Menu { size: 20 }
+                        span { class: "relative flex h-5 w-5 items-center justify-center",
+                            Avatar { name: name.clone(), email: email.clone(), size: 22 }
+                            span { class: "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border-2 border-background {dot}",
+                                title: "{effective.label()}",
+                            }
+                        }
                         span { class: "text-[10px] font-semibold uppercase tracking-widest", "More" }
                     }
                 }
@@ -489,7 +395,30 @@ pub fn BottomTabBar(current: Route) -> Element {
             open: more_open(),
             title: "All sections".to_string(),
             on_close: move |()| more_open.set(false),
+            // Your account — the sheet the phone's top bar used to open.
+            button {
+                r#type: "button",
+                class: "mb-3 flex min-h-[52px] w-full items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2 text-left active:bg-accent",
+                onclick: move |_| {
+                    more_open.set(false);
+                    account_open.set(true);
+                },
+                span { class: "relative shrink-0",
+                    Avatar { name: name.clone(), email: email.clone(), size: 32 }
+                    span { class: "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background {dot}" }
+                }
+                span { class: "flex min-w-0 flex-col leading-tight",
+                    span { class: "truncate text-sm font-medium text-foreground", "{name}" }
+                    span { class: "truncate text-xs text-muted-foreground", "{effective.label()} · Account & status" }
+                }
+            }
             MoreSheetBody { on_navigate: move |()| more_open.set(false) }
+        }
+        BottomSheet {
+            open: account_open(),
+            title: "Account & status".to_string(),
+            on_close: move |()| account_open.set(false),
+            AccountSheetBody { on_done: move |()| account_open.set(false) }
         }
     }
 }

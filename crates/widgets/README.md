@@ -121,10 +121,10 @@ widgets do — focus inside a widget suspends editor key handling.
 ## The proof providers
 
 - `task-player-ui::widgets()` (`plugin: fasttrackstudio`) —
-  `player.song` (`type: song` → auto-fullscreen player / compact song
-  card), `player.setlist` (`type: setlist` / `experience: setlist` →
-  fullscreen `SetlistPlayer`; the embedded view is the editor's own
-  setlist-title + song-strip decorations), `player.embed` (song/setlist
+  `player.song` (`type: song` → a song card: Play into Now Playing,
+  Open in Session), `player.setlist` (`type: setlist` / `experience:
+  setlist` → no render; the view is the editor's own setlist-title +
+  song-strip decorations, and its Open leaves for Session), `player.embed` (song/setlist
   wikilink embeds → the `song-play:`/`setlist-play:`/`setlist-open:`/
   `song-more:` hrefs, queue resolved at click time).
 - `task-note-tabs::widgets()` (`plugin: core`) — section tabs for

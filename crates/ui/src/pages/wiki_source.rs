@@ -25,21 +25,26 @@ use dioxus::prelude::*;
 
 use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
 
-const WIKI_ID: &str = "default";
+/// The wiki the unscoped routes (`/wiki/sources`, `/wiki/source/:name`) read:
+/// the default tier, which is what they meant before wikis were many.
+const DEFAULT_WIKI: &str = "default";
 const EMBED_ID: &str = "source-viewer-embed";
 
 // ── data ────────────────────────────────────────────────────
 
-async fn fetch_sources(slug: &str) -> Result<Vec<wiki_proto::raw::RawSourceRef>, String> {
+async fn fetch_sources(
+    slug: &str,
+    wiki: &str,
+) -> Result<Vec<wiki_proto::raw::RawSourceRef>, String> {
     let c =
         crate::vox_clients::establish_for::<wiki_proto::service::raw_layer::RawLayerClient>(slug)
             .await?;
-    c.list_raw_sources(WIKI_ID.to_owned())
+    c.list_raw_sources(wiki.to_owned())
         .await
         .map_err(|e| format!("list_raw_sources: {e:?}"))
 }
 
-async fn fetch_source_text(slug: &str, name: &str) -> Result<String, String> {
+async fn fetch_source_text(slug: &str, wiki: &str, name: &str) -> Result<String, String> {
     // `name` is the bare filename; sources are flat under
     // raw/sources/ by convention.
     let path = format!("raw/sources/{name}");
@@ -47,7 +52,7 @@ async fn fetch_source_text(slug: &str, name: &str) -> Result<String, String> {
         crate::vox_clients::establish_for::<wiki_proto::service::raw_layer::RawLayerClient>(slug)
             .await?;
     let bytes = c
-        .read_raw_source(WIKI_ID.to_owned(), path)
+        .read_raw_source(wiki.to_owned(), path)
         .await
         .map_err(|e| format!("read_raw_source: {e:?}"))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -224,7 +229,7 @@ fn mmss(total: u64) -> String {
 }
 
 /// YouTube video id out of the provenance `media:` URL.
-fn youtube_id(media: &str) -> Option<String> {
+pub(crate) fn youtube_id(media: &str) -> Option<String> {
     let rest = if let Some(i) = media.find("v=") {
         &media[i + 2..]
     } else {
@@ -265,20 +270,50 @@ if (f && f.contentWindow) {{
 
 // ── pages ───────────────────────────────────────────────────
 
-/// `/wiki/sources` — every archived raw source, linked to its
-/// viewer.
+/// Which org and wiki a sources page reads: the route's, or — on the
+/// unscoped routes — the switcher's org and the default wiki.
+fn scope_of(
+    org: &str,
+    wiki: &str,
+    selection: &Signal<OrgSelection>,
+    org_list: &Signal<Vec<OrgMeta>>,
+) -> Result<(String, String), String> {
+    let slug = if org.is_empty() {
+        first_slug(selection, org_list).ok_or_else(|| "no organization selected".to_string())?
+    } else {
+        org.to_owned()
+    };
+    let wiki = if wiki.is_empty() { DEFAULT_WIKI } else { wiki };
+    Ok((slug, wiki.to_owned()))
+}
+
+/// The route a source row opens: scoped to its wiki when this page is.
+fn source_route(org: &str, wiki: &str, name: String) -> crate::routes::Route {
+    if org.is_empty() || wiki.is_empty() {
+        crate::routes::Route::WikiSourceRoute { name }
+    } else {
+        crate::routes::Route::WikiScopedSourceRoute {
+            org: org.to_owned(),
+            wiki: wiki.to_owned(),
+            name,
+        }
+    }
+}
+
+/// `/wiki/w/:org/:wiki/sources` (and the unscoped `/wiki/sources`) —
+/// every archived raw source of one wiki, linked to its viewer.
 #[component]
-pub fn WikiSourcesView() -> Element {
+pub fn WikiSourcesView(#[props(default)] org: String, #[props(default)] wiki: String) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
-    let sources = use_resource(move || async move {
-        let slug = first_slug(&selection, &org_list)
-            .ok_or_else(|| "no organization selected".to_string())?;
-        let mut rows = fetch_sources(&slug).await?;
+    let scope = (org.clone(), wiki.clone());
+    let sources = use_resource(use_reactive!(|scope| async move {
+        let (slug, wiki) = scope_of(&scope.0, &scope.1, &selection, &org_list)?;
+        let mut rows = fetch_sources(&slug, &wiki).await?;
         rows.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok::<_, String>(rows)
-    });
+    }));
 
     let body = match &*sources.read() {
         Some(Ok(rows)) if rows.is_empty() => rsx! {
@@ -292,7 +327,7 @@ pub fn WikiSourcesView() -> Element {
                 for r in rows.clone() {
                     Link {
                         key: "{r.filename}",
-                        to: crate::routes::Route::WikiSourceRoute { name: r.filename.clone() },
+                        to: source_route(&org, &wiki, r.filename.clone()),
                         class: "flex items-baseline justify-between gap-3 px-4 py-2.5 text-sm hover:bg-accent/40",
                         span { class: "truncate font-medium", "{r.filename}" }
                         span { class: "shrink-0 text-xs text-muted-foreground", "{r.size} bytes" }
@@ -329,18 +364,30 @@ pub fn WikiSourcesView() -> Element {
     }
 }
 
-/// `/wiki/source/:name` — the SourceViewer proper.
+/// `/wiki/w/:org/:wiki/source/:name` (and the unscoped
+/// `/wiki/source/:name`) — the SourceViewer proper.
 #[component]
-pub fn WikiSourceView(name: String) -> Element {
+pub fn WikiSourceView(
+    name: String,
+    #[props(default)] org: String,
+    #[props(default)] wiki: String,
+) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
 
-    let fetch_name = name.clone();
-    let source = use_resource(use_reactive!(|(fetch_name,)| async move {
-        let slug = first_slug(&selection, &org_list)
-            .ok_or_else(|| "no organization selected".to_string())?;
-        fetch_source_text(&slug, &fetch_name).await
+    let scope = (org.clone(), wiki.clone(), name.clone());
+    let source = use_resource(use_reactive!(|scope| async move {
+        let (slug, wiki) = scope_of(&scope.0, &scope.1, &selection, &org_list)?;
+        fetch_source_text(&slug, &wiki, &scope.2).await
     }));
+    let back = if org.is_empty() || wiki.is_empty() {
+        crate::routes::Route::WikiSourcesRoute {}
+    } else {
+        crate::routes::Route::WikiScopedSourcesRoute {
+            org: org.clone(),
+            wiki: wiki.clone(),
+        }
+    };
 
     let body = match &*source.read() {
         Some(Ok(raw)) => {
@@ -363,7 +410,7 @@ pub fn WikiSourceView(name: String) -> Element {
     rsx! {
         div { class: "mx-auto flex h-full w-full max-w-3xl flex-col gap-4 overflow-y-auto p-4 sm:p-6 lg:p-8",
             Link {
-                to: crate::routes::Route::WikiSourcesRoute {},
+                to: back,
                 class: "text-xs text-muted-foreground hover:text-foreground",
                 "← All archived sources"
             }
@@ -452,11 +499,110 @@ fn render_source(prov: &Provenance, blocks: &[Block]) -> Element {
             }
         }
         article { class: "flex flex-col gap-3 pb-12",
-            for (i, block) in blocks.iter().enumerate() {
-                {render_block(i, block, player)}
+            {
+                let (lead, sections) = sections_of(blocks);
+                rsx! {
+                    for (i, block) in lead {
+                        {render_block(i, block, player)}
+                    }
+                    // Each `##` section folds: a video's description,
+                    // chapters and transcript are long, and the player
+                    // is what a reader came for. Closed until opened.
+                    for (s, section) in sections.into_iter().enumerate() {
+                        details {
+                            key: "section-{s}",
+                            class: "group rounded-xl border border-border/70 bg-card/30",
+                            summary {
+                                class: "flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold tracking-tight hover:bg-accent/30",
+                                span { class: "text-muted-foreground transition-transform group-open:rotate-90", "›" }
+                                span { "{section.title}" }
+                                if let Some(count) = section.count_label() {
+                                    span { class: "text-xs font-normal text-muted-foreground", "· {count}" }
+                                }
+                            }
+                            div { class: "flex flex-col gap-3 border-t border-border/60 px-3 py-3",
+                                for (i, block) in section.blocks {
+                                    {render_block(i, block, player)}
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/// One `##` section of an archived source: its title and its blocks
+/// (with their indices, which are the render keys).
+struct Section<'a> {
+    title: String,
+    blocks: Vec<(usize, &'a Block)>,
+}
+
+impl Section<'_> {
+    /// "70 blocks", "9 chapters" — what is folded inside, so a closed
+    /// section still says how much it holds.
+    fn count_label(&self) -> Option<String> {
+        let timed = self
+            .blocks
+            .iter()
+            .filter(|(_, b)| {
+                matches!(
+                    b,
+                    Block::Para {
+                        anchor: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        let bullets = self
+            .blocks
+            .iter()
+            .filter(|(_, b)| matches!(b, Block::Bullet(_)))
+            .count();
+        let noun = if self.title.eq_ignore_ascii_case("chapters") {
+            "chapters"
+        } else {
+            "items"
+        };
+        match (timed, bullets) {
+            (0, 0) => None,
+            (t, _) if t > 0 => Some(format!("{t} blocks")),
+            (_, b) => Some(format!("{b} {noun}")),
+        }
+    }
+}
+
+/// Split the blocks at each `##` heading: what comes before the first
+/// one renders open, each section after it folds.
+fn sections_of(blocks: &[Block]) -> (Vec<(usize, &Block)>, Vec<Section<'_>>) {
+    let mut lead = Vec::new();
+    let mut sections: Vec<Section<'_>> = Vec::new();
+    for (i, block) in blocks.iter().enumerate() {
+        match (block, sections.last_mut()) {
+            (Block::Heading(2, title), _) => sections.push(Section {
+                title: title.clone(),
+                blocks: Vec::new(),
+            }),
+            (_, Some(section)) => section.blocks.push((i, block)),
+            (_, None) => lead.push((i, block)),
+        }
+    }
+    (lead, sections)
+}
+
+/// A chapter line's leading `[m:ss]` / `[h:mm:ss]`, as seconds, and the
+/// rest of the line.
+fn chapter_stamp(text: &str) -> Option<(u64, &str)> {
+    let rest = text.strip_prefix('[')?;
+    let (stamp, title) = rest.split_once("] ")?;
+    let mut secs = 0u64;
+    for part in stamp.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some((secs, title))
 }
 
 fn render_block(key: usize, block: &Block, player: Player) -> Element {
@@ -481,6 +627,27 @@ fn render_block(key: usize, block: &Block, player: Player) -> Element {
                 }
             }
         },
+        // A chapter line (`[4:52] Historicity`) seeks like a transcript
+        // block does.
+        Block::Bullet(text) if player != Player::None && chapter_stamp(text).is_some() => {
+            let (sec, title) = chapter_stamp(text).expect("checked");
+            let stamp = mmss(sec);
+            let title = title.to_owned();
+            rsx! {
+                div { key: "{key}", class: "flex items-center gap-2 text-sm",
+                    button {
+                        class: "shrink-0 rounded-md border border-border/70 bg-card/60 px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground hover:border-primary/60 hover:text-foreground",
+                        title: "Seek player to {stamp}",
+                        onclick: move |_| match player {
+                            Player::Audio => seek_audio(sec),
+                            Player::YouTube | Player::None => seek_embed(sec),
+                        },
+                        "{stamp}"
+                    }
+                    span { "{title}" }
+                }
+            }
+        }
         Block::Bullet(text) => rsx! {
             div { key: "{key}", class: "flex gap-2 text-sm",
                 span { class: "text-muted-foreground", "•" }
@@ -609,6 +776,26 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn sections_fold_at_each_h2_and_chapters_carry_their_time() {
+        let blocks = parse_blocks(
+            "_Channel · 3:33_\n\n## Chapters\n\n- [0:00] Start\n- [1:04:05] Late\n\n## Transcript\n\n[0:01] First ^t1\n\n[0:47] Second ^t47\n",
+        );
+        let (lead, sections) = sections_of(&blocks);
+        assert_eq!(lead.len(), 1, "the lede stays open above the sections");
+        assert_eq!(
+            sections
+                .iter()
+                .map(|s| s.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Chapters", "Transcript"]
+        );
+        assert_eq!(sections[0].count_label().as_deref(), Some("2 chapters"));
+        assert_eq!(sections[1].count_label().as_deref(), Some("2 blocks"));
+        assert_eq!(chapter_stamp("[1:04:05] Late"), Some((3845, "Late")));
+        assert_eq!(chapter_stamp("no stamp"), None);
     }
 
     #[test]

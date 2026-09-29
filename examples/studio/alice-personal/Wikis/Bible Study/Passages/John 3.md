@@ -1,6 +1,7 @@
 ---
 title: John 3
 type: passage
+summary: "Nicodemus comes to Jesus by night — and where Jesus stops speaking, the text never says."
 anchors:
   - John.3.1
   - John.3.16

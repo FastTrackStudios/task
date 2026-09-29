@@ -40,6 +40,7 @@ mod louvain;
 mod parse;
 mod scan;
 mod scoring;
+mod style;
 mod tier_lint;
 
 pub use analyze::{

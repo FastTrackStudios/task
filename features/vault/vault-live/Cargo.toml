@@ -55,6 +55,8 @@ regex = { workspace = true }
 # canonical filesystem backend mounted on a `task-server` vox route.
 vault-proto = { workspace = true, features = ["vox"] }
 architect = { workspace = true, features = ["dispatch-tokio"] }
+# `Principal`, to read the account the permissions gate resolved.
+architect-permissions = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 sha2 = "0.10"
 

@@ -28,6 +28,10 @@ task wiki list                      # the org's wikis: slug, visibility, page co
 task wiki describe bible-study      # title, visibility, editors, purpose, root
 ```
 
+What goes *inside* a page — which element to use for what, and the
+house style — is [`wiki-style.md`](wiki-style.md). Read it before writing
+or restyling pages.
+
 ## Mental model
 
 ```

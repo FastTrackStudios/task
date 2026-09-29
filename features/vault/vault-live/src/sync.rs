@@ -43,12 +43,13 @@ use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 use vault_proto::{
     BaseGroup, BaseRowView, BaseView, CollabAck, FileBytes, FolderIndex, IfMatch, Manifest,
-    ManifestEntry, PageMeta, PutAck, VaultChange, VaultEvent, VaultSync, VaultSyncError,
+    ManifestEntry, MoveAck, PageMeta, PutAck, VaultChange, VaultEvent, VaultSync, VaultSyncError,
     VaultSyncStreamSource, collab_doc_id,
 };
 
 use crate::vault::Vault;
 use crate::watcher::{self, WatchError};
+use crate::write_guard::{WriteGuard, current_caller};
 use editor_state::markdown::{FrontMatter, PropValue, parse_frontmatter};
 
 /// Debounce window for the FS watcher attached by
@@ -93,6 +94,7 @@ enum Layout {
 /// - [`Backend::under_parent`]: open-ended, one subdir per
 ///   vault under a shared parent. Unknown ids auto-create.
 #[derive(Clone, architect::HasDispatcher)]
+#[dispatch(crate::write_guard::CallerDispatcher)]
 pub struct Backend {
     layout: Layout,
     /// Coarse global write lock. Reads bypass it; writes
@@ -132,6 +134,12 @@ pub struct Backend {
     /// manifest, are never synced through here, and stay owned by the
     /// `cookbook` service. Empty by default.
     recipe_roots: Arc<HashMap<String, PathBuf>>,
+    /// Asked before every caller write — see [`crate::write_guard`].
+    /// Unset allows everything, which is what a desktop vault wants.
+    /// Shared across clones, like the roots: the server hands clones of
+    /// this backend to the collab and shelf machinery before the wiki
+    /// backend that answers for wikis exists.
+    guard: Arc<std::sync::OnceLock<Arc<dyn WriteGuard>>>,
 }
 
 impl Backend {
@@ -203,6 +211,7 @@ impl Backend {
             changes: architect::PubSub::sliding(256),
             collab: Arc::new(std::sync::RwLock::new(HashMap::new())),
             recipe_roots: Arc::new(HashMap::new()),
+            guard: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -216,6 +225,97 @@ impl Backend {
     pub fn with_recipe_roots(mut self, roots: HashMap<String, PathBuf>) -> Self {
         self.recipe_roots = Arc::new(roots);
         self
+    }
+
+    /// Ask `guard` before every write a caller makes. Every clone sees
+    /// it at once. Set once; a second call is ignored and returns
+    /// `false`, since a guard swapped under running writes would make
+    /// the rule depend on timing.
+    pub fn set_write_guard(&self, guard: Arc<dyn WriteGuard>) -> bool {
+        self.guard.set(guard).is_ok()
+    }
+
+    /// After `from` moved to `to`: when a markdown page's name changed,
+    /// rewrite every wikilink in the vault that named it (see
+    /// [`crate::relink`]). Each rewrite is a committed write under the
+    /// same guard as any other, and announced, so an open document
+    /// merges it in. Returns the pages rewritten.
+    fn relink_after_move(
+        &self,
+        vault_id: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<String>, VaultSyncError> {
+        use crate::relink::{PageName, relink};
+        let is_md = |p: &str| p.to_ascii_lowercase().ends_with(".md");
+        let (old, new) = (PageName::of(from), PageName::of(to));
+        if !is_md(from) || !is_md(to) || old == new {
+            return Ok(Vec::new());
+        }
+        let mut relinked = Vec::new();
+        for entry in self.manifest(vault_id)?.files {
+            if !is_md(&entry.path) {
+                continue;
+            }
+            let abs = self.file_path(vault_id, &entry.path)?;
+            let Ok(text) = std::fs::read_to_string(&abs) else {
+                continue;
+            };
+            let Some(rewritten) = relink(&text, &old, &new) else {
+                continue;
+            };
+            // A page this person may not write keeps its link, and the
+            // move still stands: the link now dangles, which is visible
+            // and fixable, where refusing the whole move would not be.
+            if self.guard_write(vault_id, &entry.path).is_err() {
+                continue;
+            }
+            let g = self
+                .write_lock
+                .lock()
+                .expect("vault::sync write_lock poisoned");
+            // Written only if nobody changed it since it was read.
+            let current = std::fs::read_to_string(&abs).unwrap_or_default();
+            if current != text {
+                continue;
+            }
+            let bytes = rewritten.into_bytes();
+            let (sha256, mtime_ms) = write_file_atomic(&abs, &bytes)?;
+            drop(g);
+            self.emit(
+                vault_id,
+                VaultEvent::Put {
+                    path: entry.path.clone(),
+                    sha256,
+                    mtime_ms,
+                    size: bytes.len() as u64,
+                },
+            );
+            relinked.push(entry.path);
+        }
+        Ok(relinked)
+    }
+
+    /// May the caller running on this thread write `path`?
+    fn guard_write(&self, vault_id: &str, path: &str) -> Result<(), VaultSyncError> {
+        self.check_write(vault_id, path, current_caller().as_deref())
+    }
+
+    /// Would `principal` be allowed to write `path`? For a host that
+    /// reaches a file some other way — the collab sync lane, which
+    /// knows a doc id rather than a path — and must apply the same rule.
+    pub fn check_write(
+        &self,
+        vault_id: &str,
+        path: &str,
+        principal: Option<&str>,
+    ) -> Result<(), VaultSyncError> {
+        match self.guard.get() {
+            Some(guard) => guard
+                .check(vault_id, path, principal)
+                .map_err(VaultSyncError::Refused),
+            None => Ok(()),
+        }
     }
 
     /// Announce a committed change: onto `vault_id`'s in-process
@@ -395,6 +495,7 @@ impl VaultSync for Backend {
         if_match: IfMatch,
     ) -> Result<PutAck, VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        self.guard_write(vault_id, path)?;
         let g = self
             .write_lock
             .lock()
@@ -412,24 +513,7 @@ impl VaultSync for Backend {
             }
             _ => {}
         }
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).map_err(io_err)?;
-        }
-        // Atomic write via temp+rename so concurrent reads never
-        // see a half-written body.
-        let tmp = abs.with_extension(format!(
-            "{}.tmp.{}",
-            abs.extension().and_then(|s| s.to_str()).unwrap_or(""),
-            std::process::id()
-        ));
-        std::fs::write(&tmp, &bytes).map_err(io_err)?;
-        std::fs::rename(&tmp, &abs).map_err(io_err)?;
-        let new_sha = sha256_hex(&bytes);
-        let mtime_ms = std::fs::metadata(&abs)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_millis() as i64);
+        let (new_sha, mtime_ms) = write_file_atomic(&abs, &bytes)?;
         drop(g);
         self.emit(
             vault_id,
@@ -453,6 +537,7 @@ impl VaultSync for Backend {
         if_match: IfMatch,
     ) -> Result<(), VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        self.guard_write(vault_id, path)?;
         let g = self
             .write_lock
             .lock()
@@ -472,6 +557,7 @@ impl VaultSync for Backend {
             }
         }
         std::fs::remove_file(&abs).map_err(io_err)?;
+        prune_empty_parents(&self.root(vault_id)?, &abs);
         drop(g);
         self.emit(
             vault_id,
@@ -480,6 +566,75 @@ impl VaultSync for Backend {
             },
         );
         Ok(())
+    }
+
+    fn move_file(
+        &self,
+        vault_id: &str,
+        from: &str,
+        to: &str,
+        if_match: IfMatch,
+    ) -> Result<MoveAck, VaultSyncError> {
+        let src = self.file_path(vault_id, from)?;
+        let dst = self.file_path(vault_id, to)?;
+        self.guard_write(vault_id, from)?;
+        self.guard_write(vault_id, to)?;
+        let g = self
+            .write_lock
+            .lock()
+            .expect("vault::sync write_lock poisoned");
+        if !src.exists() {
+            return Err(VaultSyncError::NotFound);
+        }
+        let bytes = std::fs::read(&src).map_err(io_err)?;
+        let have = sha256_hex(&bytes);
+        if let IfMatch::Sha(want) = &if_match
+            && *want != have
+        {
+            return Err(VaultSyncError::Conflict {
+                server_sha: have,
+                server_bytes: bytes,
+            });
+        }
+        if from == to {
+            return Ok(MoveAck {
+                sha256: have,
+                relinked: Vec::new(),
+            });
+        }
+        // A move never overwrites — the same promise as CreateOnly. A
+        // case-only rename on a case-insensitive filesystem finds the
+        // source here, which is the one "existing" file it may replace.
+        if dst.exists() && !from.eq_ignore_ascii_case(to) {
+            let existing = std::fs::read(&dst).map_err(io_err)?;
+            return Err(VaultSyncError::Conflict {
+                server_sha: sha256_hex(&existing),
+                server_bytes: existing,
+            });
+        }
+        let (sha256, mtime_ms) = write_file_atomic(&dst, &bytes)?;
+        if !src.eq(&dst) {
+            std::fs::remove_file(&src).map_err(io_err)?;
+            prune_empty_parents(&self.root(vault_id)?, &src);
+        }
+        drop(g);
+        self.emit(
+            vault_id,
+            VaultEvent::Delete {
+                path: from.to_string(),
+            },
+        );
+        self.emit(
+            vault_id,
+            VaultEvent::Put {
+                path: to.to_string(),
+                sha256: sha256.clone(),
+                mtime_ms,
+                size: bytes.len() as u64,
+            },
+        );
+        let relinked = self.relink_after_move(vault_id, from, to)?;
+        Ok(MoveAck { sha256, relinked })
     }
 
     fn folder_index(&self, vault_id: &str) -> Result<FolderIndex, VaultSyncError> {
@@ -655,6 +810,7 @@ impl VaultSync for Backend {
         if_match: IfMatch,
     ) -> Result<PutAck, VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        self.guard_write(vault_id, path)?;
         let g = self
             .write_lock
             .lock()
@@ -717,6 +873,9 @@ impl VaultSync for Backend {
 
     fn open_collab(&self, vault_id: &str, path: &str) -> Result<CollabAck, VaultSyncError> {
         let abs = self.file_path(vault_id, path)?;
+        // Joining a file's live session is how the collaborative editor
+        // writes, so it takes the same permission a save does.
+        self.guard_write(vault_id, path)?;
         if !abs.exists() {
             return Err(VaultSyncError::NotFound);
         }
@@ -823,6 +982,46 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<ManifestEntry>) -> Result<(), 
         });
     }
     Ok(())
+}
+
+/// After a file left `abs`'s folder: remove the folders it leaves empty,
+/// up to but never including `root`. A wiki's tree is its folders, so a
+/// move out of the last page of one must not leave a husk behind.
+fn prune_empty_parents(root: &Path, abs: &Path) {
+    let mut dir = abs.parent();
+    while let Some(d) = dir {
+        if d == root || !d.starts_with(root) {
+            break;
+        }
+        // `remove_dir` only removes an empty directory; anything else
+        // (a sibling file, a permission error) ends the walk.
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
+}
+
+/// Write `bytes` to `abs` atomically (temp + rename, so a concurrent read
+/// never sees half a body), creating its folder. Returns the new sha and
+/// mtime. Call under the write lock.
+fn write_file_atomic(abs: &Path, bytes: &[u8]) -> Result<(String, i64), VaultSyncError> {
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).map_err(io_err)?;
+    }
+    let tmp = abs.with_extension(format!(
+        "{}.tmp.{}",
+        abs.extension().and_then(|s| s.to_str()).unwrap_or(""),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, bytes).map_err(io_err)?;
+    std::fs::rename(&tmp, abs).map_err(io_err)?;
+    let mtime_ms = std::fs::metadata(abs)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as i64);
+    Ok((sha256_hex(bytes), mtime_ms))
 }
 
 fn conflict(abs: &Path, existing_sha: Option<&str>) -> VaultSyncError {
@@ -1298,6 +1497,70 @@ mod tests {
         .unwrap();
         assert_eq!(backend.manifest("b").unwrap().files.len(), 0);
         assert_eq!(backend.manifest("a").unwrap().files.len(), 1);
+    }
+
+    #[test]
+    fn a_move_never_overwrites_and_a_rename_carries_its_links() {
+        let (_tmp, b) = make_backend();
+        b.put_file(
+            "v1",
+            "Concepts/Ionian.md",
+            b"# Ionian\n".to_vec(),
+            IfMatch::CreateOnly,
+        )
+        .unwrap();
+        b.put_file(
+            "v1",
+            "Modes.md",
+            b"The first is [[Ionian|the major mode]].\n".to_vec(),
+            IfMatch::CreateOnly,
+        )
+        .unwrap();
+        b.put_file("v1", "Taken.md", b"x".to_vec(), IfMatch::CreateOnly)
+            .unwrap();
+
+        assert!(matches!(
+            b.move_file("v1", "Concepts/Ionian.md", "Taken.md", IfMatch::Force),
+            Err(VaultSyncError::Conflict { .. })
+        ));
+
+        // A move to another folder keeps the name: no link changes.
+        let moved = b
+            .move_file(
+                "v1",
+                "Concepts/Ionian.md",
+                "Scales/Ionian.md",
+                IfMatch::Force,
+            )
+            .unwrap();
+        assert!(moved.relinked.is_empty());
+        assert!(matches!(
+            b.get_file("v1", "Concepts/Ionian.md"),
+            Err(VaultSyncError::NotFound)
+        ));
+        assert!(
+            !b.root("v1").unwrap().join("Concepts").exists(),
+            "the emptied folder was left behind"
+        );
+
+        // A rename rewrites the link, alias intact.
+        let renamed = b
+            .move_file(
+                "v1",
+                "Scales/Ionian.md",
+                "Scales/Major Scale.md",
+                IfMatch::Sha(moved.sha256),
+            )
+            .unwrap();
+        assert_eq!(renamed.relinked, vec!["Modes.md".to_string()]);
+        assert_eq!(
+            b.get_file("v1", "Modes.md").unwrap().0,
+            b"The first is [[Major Scale|the major mode]].\n"
+        );
+        assert_eq!(
+            b.get_file("v1", "Scales/Major Scale.md").unwrap().0,
+            b"# Ionian\n"
+        );
     }
 
     #[test]

@@ -47,7 +47,7 @@ pub use error::VaultSyncError;
 // `vault_graph_rpc_service_descriptor`, `vault_graph_serve`,
 // `vault_graph_layer`, `VaultGraphService`.
 pub use event::{VaultChange, VaultEvent};
-pub use file::{FileBytes, IfMatch, PutAck};
+pub use file::{FileBytes, IfMatch, MoveAck, PutAck};
 pub use graph::prelude::*;
 pub use graph::{GraphLink, GraphUnresolved, TagCount};
 pub use manifest::{Manifest, ManifestEntry};

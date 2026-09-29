@@ -22,7 +22,8 @@ use crate::bible::LoadError;
 struct RawEntry {
     #[serde(default)]
     lemma: String,
-    #[serde(default)]
+    /// `translit` in the Greek dictionary; the Hebrew one calls it `xlit`.
+    #[serde(default, alias = "xlit")]
     translit: String,
     #[serde(default)]
     strongs_def: String,
@@ -145,6 +146,16 @@ mod tests {
         "G25": {"derivation":"of uncertain affinity;","strongs_def":" to love","kjv_def":"(be-)love","lemma":"ἀγαπάω","translit":"agapáō"},
         "G26": {"strongs_def":" love","derivation":"from G25;","translit":"agápē","lemma":"ἀγάπη","kjv_def":"love"}
     }"#;
+
+    /// The Hebrew dictionary spells the transliteration `xlit`.
+    #[test]
+    fn a_hebrew_entry_keeps_its_transliteration() {
+        let lx = Lexicon::from_json(
+            r#"{"H430": {"lemma":"אֱלֹהִים","xlit":"ʼĕlôhîym","strongs_def":"gods","kjv_def":"God","derivation":"plural of H433;"}}"#,
+        )
+        .unwrap();
+        assert_eq!(lx.get("H430").unwrap().translit, "ʼĕlôhîym");
+    }
 
     #[test]
     fn loads_and_looks_up() {

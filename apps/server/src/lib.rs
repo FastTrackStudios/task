@@ -49,6 +49,7 @@ pub mod memberships;
 // link store keeps its `NoFederation` default, which is the honest
 // answer for a single-org server.
 pub mod device_enrollment;
+pub mod doc_guard;
 #[cfg(feature = "plugin-fasttrackstudio")]
 pub mod live;
 #[cfg(feature = "plugin-wiki")]
@@ -1067,6 +1068,12 @@ pub(crate) async fn build_org_state(
             // alias is not a shelf — it is the `knowledge` tier under
             // another name, and one vault id per directory is enough.
             let shelf_registry = shelf_registry.with_wiki(backend.clone());
+            // Those same files are the Edit lane's: a wiki with declared
+            // Editors takes direct writes from them only, through the
+            // vault path as much as through `Pages`.
+            vault_sync_state.set_write_guard(std::sync::Arc::new(crate::shelves::WikiEditLane(
+                backend.clone(),
+            )));
             let backend = backend
                 .with_on_created(shelf_registry.created_hook(tokio::runtime::Handle::current()));
             // Hand this org's vault and each of its wikis the core
@@ -4429,13 +4436,22 @@ fn upgrade_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 fn org_doc_sync(org: &OrgAppState) -> live::DocSyncRouter {
     live::DocSyncRouter {
         live: org.live.clone(),
-        vault: org.vault_collab.registry().clone(),
+        vault: vault_docs(org),
     }
 }
 
 #[cfg(not(feature = "plugin-fasttrackstudio"))]
-fn org_doc_sync(org: &OrgAppState) -> crdt::registry::DocRegistry {
-    org.vault_collab.registry().clone()
+fn org_doc_sync(org: &OrgAppState) -> doc_guard::GuardedVaultDocs {
+    vault_docs(org)
+}
+
+/// The vault's docs over the collab lane, under the same write guard a
+/// save answers to.
+fn vault_docs(org: &OrgAppState) -> doc_guard::GuardedVaultDocs {
+    doc_guard::GuardedVaultDocs {
+        registry: org.vault_collab.registry().clone(),
+        sync: org.vault_sync.clone(),
+    }
 }
 
 pub fn org_router_guarded(

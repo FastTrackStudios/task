@@ -34,7 +34,7 @@ use crate::pages::note_inspector::{InspectorTab, NoteInspector};
 use crate::pages::note_view::NoteView;
 use crate::pages::vault::{FileMeta, basename_of, fetch_folder_index};
 use crate::routes::Route;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
+use crate::shell::mobile::BottomSheet;
 use crate::vault_lookup;
 
 #[component]
@@ -147,6 +147,42 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     });
     let on_renamed = use_callback(move |()| files.restart());
 
+    // ── Who may change it ─────────────────────────────────────
+    // A wiki governed by its Editors opens read-only for everyone
+    // else, with the way in (an Edit Request) above the page.
+    let access = crate::pages::wiki_access::use_wiki_access(home, wiki.clone());
+    let proposing = use_signal(|| false);
+    let write_mode = use_memo(move || {
+        crate::pages::wiki_access::write_mode(access.read().as_ref(), proposing())
+    });
+    let session_out = use_signal(|| None::<crate::document_session::DocumentSession>);
+    let can_create = access.read().as_ref().is_some_and(|a| a.can_edit);
+    let mut create_error = use_signal(|| None::<String>);
+
+    // ── Move / Delete ─────────────────────────────────────────
+    let mut page_action = use_signal(|| None::<PageAction>);
+    let mut action_error = use_signal(|| None::<String>);
+    let mut move_folder = use_signal(String::new);
+    let mut move_new_folder = use_signal(String::new);
+    let mut move_name = use_signal(String::new);
+    let mut menu_open = use_signal(|| false);
+    // The inspector as a bottom sheet on phones — closed until asked for.
+    let mut sheet_open = use_signal(|| false);
+    let wiki_title = access
+        .read()
+        .as_ref()
+        .map_or_else(|| wiki.clone(), |a| a.title.clone());
+    let folders = use_memo(move || {
+        let mut out: Vec<String> = pages_memo
+            .read()
+            .iter()
+            .filter_map(|p| p.path.rsplit_once('/').map(|(dir, _)| dir.to_owned()))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    });
+
     // ── The inspector ─────────────────────────────────────────
     // Open state is the shell's (the top-bar toggle), the tab is
     // this page's — the desktop aside and the mobile sheet share it.
@@ -170,8 +206,40 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
         }
     });
 
-    // The status line (the focused NoteView writes it; the mobile
-    // action bar's Save reads it). Cleared on leave.
+    // A word page's Strong's codes (`strongs:`), for the original-
+    // language word study under it.
+    let strongs_path = path.clone();
+    let strongs_vault = vault_id.clone();
+    let strongs = use_resource(move || {
+        let slug = home();
+        let vault = strongs_vault.clone();
+        let path = strongs_path.clone();
+        let _refresh = refresh_key();
+        async move {
+            crate::document_session::fetch_file(slug, vault, path)
+                .await
+                .ok()
+                .and_then(|raw| crate::pages::vault::frontmatter_value(&raw, "strongs"))
+                .map(|v| super::word_study::codes(v.trim().trim_matches(['"', '\''])))
+                .unwrap_or_default()
+        }
+    });
+
+    // Whether this page rests on one voice (the wiki's `gaps` check) —
+    // said quietly in the strip, with the reason as its tooltip.
+    let gaps_wiki = wiki.clone();
+    let gaps = use_resource(move || {
+        let slug = home();
+        let wiki = gaps_wiki.clone();
+        let _refresh = refresh_key();
+        async move {
+            crate::feeds::fetch_wiki_gaps(&slug, &wiki)
+                .await
+                .unwrap_or_default()
+        }
+    });
+
+    // The status line (the focused NoteView writes it). Cleared on leave.
     let status_info = use_context::<crate::chrome::StatusBarInfo>().0;
     use_drop(move || {
         let mut info = status_info;
@@ -183,6 +251,20 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
         .as_ref()
         .map(|m| m.page_type.clone())
         .unwrap_or_default();
+    let one_voice: Option<String> = gaps.read().as_ref().and_then(|list| {
+        list.iter()
+            .find(|g| {
+                matches!(g.kind, wiki_proto::graph::GapKind::OneVoice) && g.subjects.contains(&path)
+            })
+            .map(|g| g.explanation.clone())
+    });
+    let style_notes: Option<String> = gaps.read().as_ref().and_then(|list| {
+        list.iter()
+            .find(|g| {
+                matches!(g.kind, wiki_proto::graph::GapKind::Style) && g.subjects.contains(&path)
+            })
+            .map(|g| g.explanation.clone())
+    });
     let (ai_generated, generated_by) = provenance
         .read()
         .as_ref()
@@ -192,7 +274,11 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let has_page = meta.is_some();
 
     let body = match (&*files.read_unchecked(), meta) {
-        (Some(Ok(_)), Some(meta)) => rsx! {
+        (Some(Ok(_)), Some(meta)) => {
+            let footer_type = meta.page_type.clone();
+            let footer_wiki = wiki.clone();
+            let footer_vault = vault_id.clone();
+            rsx! {
             NoteView {
                 key: "{meta.path}",
                 path: meta.path.clone(),
@@ -206,8 +292,30 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 focus_tick,
                 on_open,
                 on_renamed,
+                write_mode: Some(write_mode.into()),
+                session_out,
+                // The end of the page: a word's study in the original
+                // language, and where the page sits on a study path.
+                footer: rsx! {
+                    div { class: "note-column mx-auto w-full max-w-3xl px-6 pb-8",
+                        super::word_study::WordStudyPanel {
+                            org: home,
+                            codes: strongs.read().clone().unwrap_or_default(),
+                        }
+                        if footer_type != "path" {
+                            super::study_path::StudyPathBar {
+                                org: home,
+                                wiki: footer_wiki.clone(),
+                                vault_id: footer_vault.clone(),
+                                pages: pages_memo,
+                                current: meta.path.clone(),
+                            }
+                        }
+                    }
+                },
             }
-        },
+            }
+        }
         (Some(Ok(_)), None) => {
             // Not a page of this wiki (yet). A link to a page nobody has
             // written is how a wiki grows; offer to start it.
@@ -217,6 +325,11 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 div { class: "flex flex-col items-start gap-3 rounded-xl border border-border/70 bg-card/30 p-6",
                     Heading { level: HeadingLevel::H3, "{create_title}" }
                     Text { variant: TextVariant::Muted, "This page doesn't exist yet." }
+                    if !can_create {
+                        Text { variant: TextVariant::Muted,
+                            "Only this wiki's Editors can start new pages."
+                        }
+                    } else {
                     Button {
                         variant: ButtonVariant::Primary,
                         size: ButtonSize::Small,
@@ -226,13 +339,17 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                             let p = create_path.clone();
                             let title = create_title.clone();
                             spawn(async move {
-                                let seed = format!("---\ntitle: \"{title}\"\n---\n\n# {title}\n");
-                                if create_page(slug, vault, p, seed).await.is_ok() {
-                                    files.restart();
+                                match create_page(slug, vault, p, page_seed(&title)).await {
+                                    Ok(_) => files.restart(),
+                                    Err(e) => create_error.set(Some(e)),
                                 }
                             });
                         },
                         "Create page"
+                    }
+                    if let Some(e) = create_error() {
+                        span { class: "text-sm text-destructive", "{e}" }
+                    }
                     }
                 }
             }
@@ -252,35 +369,236 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
 
     rsx! {
         div { class: "flex h-full min-h-0 w-full",
-            div { class: "flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
-                div { class: "mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-4 sm:px-6 lg:px-8",
-                    Link {
-                        to: Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
-                        class: "text-xs text-muted-foreground hover:text-foreground",
-                        "← {wiki}"
-                    }
-                    div { class: "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
+            // `wiki-reading`: a wiki page is set for reading — see
+            // `crate::reading`.
+            div { class: "wiki-reading flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
+                div { class: "note-column mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pt-5",
+                    // One quiet line: where this page belongs, what it is,
+                    // who wrote it — and its actions behind ⋯. The path is
+                    // in the tab and the sidebar already.
+                    div { class: "relative flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground",
+                        Link {
+                            to: Route::WikiHomeRoute { org: org.clone(), wiki: wiki.clone() },
+                            class: "hover:text-foreground",
+                            "← {wiki_title}"
+                        }
+                        if !page_type.is_empty() {
+                            span { class: "text-muted-foreground/60", "·" }
+                            span { class: "capitalize", "{page_type}" }
+                        }
+                        if let Some(why) = one_voice.clone() {
+                            span { class: "text-muted-foreground/60", "·" }
+                            span { class: "text-amber-500/90", title: "{why}", "One voice" }
+                        }
+                        if let Some(why) = style_notes.clone() {
+                            span { class: "text-muted-foreground/60", "·" }
+                            span { class: "text-sky-500/80", title: "{why}", "Style notes" }
+                        }
                         if ai_generated {
+                            span { class: "text-muted-foreground/60", "·" }
                             span {
-                                class: "rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-medium text-primary",
                                 title: if generated_by.is_empty() { "Machine-produced content".to_string() } else { format!("Machine-produced by {generated_by}") },
-                                if generated_by.is_empty() {
-                                    "✨ AI generated"
-                                } else {
-                                    "✨ AI generated · {generated_by}"
+                                "✨ AI draft"
+                            }
+                        }
+                        if has_page {
+                            button {
+                                r#type: "button",
+                                class: "page-menu-button ml-auto rounded px-1.5 text-base leading-none hover:bg-accent hover:text-foreground",
+                                title: "Page actions",
+                                onclick: move |_| {
+                                    let open = *menu_open.peek();
+                                    menu_open.set(!open);
+                                },
+                                "⋯"
+                            }
+                        }
+                        if has_page && menu_open() {
+                            // A tap anywhere else closes the menu — on a
+                            // phone there is no pointer to move away.
+                            div {
+                                class: "fixed inset-0 z-10",
+                                onclick: move |_| menu_open.set(false),
+                            }
+                            span { class: "page-menu absolute right-0 top-6 z-20 flex min-w-40 flex-col rounded-lg border border-border bg-popover p-1 text-sm text-foreground shadow-lg",
+                                // The phone's inspector (properties, links,
+                                // outline) — the desktop has its side panel.
+                                button {
+                                    r#type: "button",
+                                    class: "rounded px-2 py-1 text-left hover:bg-accent md:hidden",
+                                    onclick: move |_| {
+                                        menu_open.set(false);
+                                        sheet_open.set(true);
+                                    },
+                                    "Details"
+                                }
+                                if can_create {
+                                button {
+                                    r#type: "button",
+                                    class: "rounded px-2 py-1 text-left hover:bg-accent",
+                                    onclick: {
+                                        let here = path
+                                            .rsplit_once('/')
+                                            .map(|(dir, _)| dir.to_owned())
+                                            .unwrap_or_default();
+                                        let name = basename_of(&path).to_owned();
+                                        move |_| {
+                                            action_error.set(None);
+                                            // Start from where the page is and
+                                            // what it is called, not from the
+                                            // last move's answers.
+                                            move_folder.set(here.clone());
+                                            move_new_folder.set(String::new());
+                                            move_name.set(name.clone());
+                                            menu_open.set(false);
+                                            page_action.set(Some(PageAction::Move));
+                                        }
+                                    },
+                                    "Move / rename…"
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "rounded px-2 py-1 text-left text-destructive hover:bg-destructive/10",
+                                    onclick: move |_| {
+                                        action_error.set(None);
+                                        menu_open.set(false);
+                                        page_action.set(Some(PageAction::Delete));
+                                    },
+                                    "Delete…"
+                                }
                                 }
                             }
                         }
-                        if !page_type.is_empty() {
-                            span { class: "rounded-full border border-border/70 bg-card/60 px-2 py-0.5 font-medium uppercase tracking-wide",
-                                "{page_type}"
+                    }
+                    if let Some(act) = page_action() {
+                        {
+                            let from = path.clone();
+                            let (org_c, wiki_c) = (org.clone(), wiki.clone());
+                            let run = move |_| {
+                                let slug = home();
+                                let vault = vault_sig();
+                                let from = from.clone();
+                                let draft = session_out.peek().as_ref().and_then(|s| s.draft());
+                                let org_nav = org_c.clone();
+                                let wiki_nav = wiki_c.clone();
+                                match act {
+                                    PageAction::Move => {
+                                        let typed = move_new_folder.peek().trim().to_owned();
+                                        let folder = if typed.is_empty() { move_folder.peek().clone() } else { typed };
+                                        let typed_name = move_name.peek().trim().to_owned();
+                                        let name = if typed_name.is_empty() {
+                                            basename_of(&from).to_owned()
+                                        } else {
+                                            typed_name
+                                        };
+                                        let Some(to) = new_page_path(&folder, &name) else { return };
+                                        if to == from {
+                                            page_action.set(None);
+                                            return;
+                                        }
+                                        let buffer = draft.map(|d| d.text.into_bytes());
+                                        spawn(async move {
+                                            match crate::pages::page_actions::move_page(slug, vault, from, to.clone(), buffer).await {
+                                                Ok(_) => {
+                                                    page_action.set(None);
+                                                    nav.push(Route::WikiDocRoute { org: org_nav, wiki: wiki_nav, path: to });
+                                                }
+                                                Err(e) => action_error.set(Some(e)),
+                                            }
+                                        });
+                                    }
+                                    PageAction::Delete => {
+                                        let sha = draft.map(|d| d.base_sha256).filter(|s| !s.is_empty());
+                                        spawn(async move {
+                                            match crate::pages::page_actions::delete_page(slug, vault, from, sha).await {
+                                                Ok(()) => {
+                                                    page_action.set(None);
+                                                    nav.push(Route::WikiHomeRoute { org: org_nav, wiki: wiki_nav });
+                                                }
+                                                Err(e) => action_error.set(Some(e)),
+                                            }
+                                        });
+                                    }
+                                }
+                            };
+                            rsx! {
+                                div { class: "flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-card/40 px-3 py-2 text-sm",
+                                    "data-testid": "page-action",
+                                    match act {
+                                        PageAction::Move => rsx! {
+                                            input {
+                                                class: "min-w-0 basis-full rounded-md border border-border/70 bg-background px-2 py-1 sm:basis-auto sm:flex-1",
+                                                placeholder: "Page name",
+                                                title: "The page's name — renaming updates the links that point to it",
+                                                value: "{move_name}",
+                                                oninput: move |e| move_name.set(e.value()),
+                                            }
+                                            span { class: "text-muted-foreground", "in" }
+                                            select {
+                                                class: "rounded-md border border-border/70 bg-background px-2 py-1",
+                                                value: "{move_folder}",
+                                                onchange: move |e| move_folder.set(e.value()),
+                                                option { value: "", "(top level)" }
+                                                for f in folders.read().iter() {
+                                                    option { key: "{f}", value: "{f}", "{f}" }
+                                                }
+                                            }
+                                            input {
+                                                class: "min-w-0 flex-1 rounded-md border border-border/70 bg-background px-2 py-1",
+                                                placeholder: "or a new folder",
+                                                value: "{move_new_folder}",
+                                                oninput: move |e| move_new_folder.set(e.value()),
+                                            }
+                                            Button { variant: ButtonVariant::Primary, size: ButtonSize::Small, on_click: run, "Save" }
+                                        },
+                                        PageAction::Delete => rsx! {
+                                            span { class: "flex-1",
+                                                "Delete this page? Links to it will show as missing."
+                                            }
+                                            Button { variant: ButtonVariant::Destructive, size: ButtonSize::Small, on_click: run, "Delete" }
+                                        },
+                                    }
+                                    Button {
+                                        variant: ButtonVariant::Ghost,
+                                        size: ButtonSize::Small,
+                                        on_click: move |_| page_action.set(None),
+                                        "Cancel"
+                                    }
+                                    if let Some(e) = action_error() {
+                                        span { class: "basis-full text-destructive", "{e}" }
+                                    }
+                                }
                             }
                         }
-                        span { class: "font-mono", "{path}" }
+                    }
+                }
+                if let Some(a) = access.read().clone().filter(|a| has_page && !a.can_edit) {
+                    div { class: "px-4 sm:px-6 lg:px-8",
+                        crate::pages::wiki_access::ProposeBar {
+                            org: home,
+                            wiki: wiki.clone(),
+                            access: a,
+                            proposing,
+                            session: session_out,
+                        }
+                    }
+                }
+                // A study path's progress sits over the path page; every
+                // page on a path gets the path's footer under it.
+                if has_page && page_type == "path" {
+                    div { class: "note-column mx-auto w-full max-w-3xl px-6",
+                        super::study_path::StudyPathBar {
+                            org: home,
+                            wiki: wiki.clone(),
+                            vault_id: vault_id.clone(),
+                            pages: pages_memo,
+                            current: path.clone(),
+                        }
                     }
                 }
                 div { class: "flex min-h-0 flex-1 flex-col pb-12", {body} }
                 document::Link { rel: "stylesheet", href: editor::EDITOR_STYLE }
+                document::Style { {crate::reading::reading_style()} }
                 document::Style { {crate::collab::COLLAB_STYLE} }
             }
             // ── Right sidebar (md+): the same inspector as the vault ──
@@ -304,37 +622,10 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 }
             }
         }
-        // ── Mobile chrome: Save + the inspector as a sheet ────
-        MobileActionBar {
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85 disabled:opacity-50",
-                disabled: !has_page,
-                onclick: move |_| {
-                    if let Some(cb) = status_info.peek().as_ref().and_then(|d| d.on_save) {
-                        cb.call(());
-                    }
-                },
-                if status_info.read().as_ref().is_some_and(|d| d.dirty) { "Save •" } else { "Save" }
-            }
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent disabled:opacity-50",
-                disabled: !has_page,
-                onclick: move |_| {
-                    let mut o = shell_right;
-                    let cur = o.peek().0;
-                    o.set(crate::chrome::RightPanelOpen(!cur));
-                },
-                "Backlinks"
-            }
-        }
+        // ── Mobile: the inspector as a sheet, opened from ⋯ ──
         BottomSheet {
-            open: has_page && panel_open,
-            on_close: move |_| {
-                let mut o = shell_right;
-                o.set(crate::chrome::RightPanelOpen(false));
-            },
+            open: has_page && sheet_open(),
+            on_close: move |_| sheet_open.set(false),
             title: right_tab().label().to_string(),
             NoteInspector {
                 org: home,
@@ -349,24 +640,95 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     }
 }
 
+/// What the page strip is asking about.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PageAction {
+    Move,
+    Delete,
+}
+
 /// Start a page that a link named but nobody wrote: a create-only
 /// write over the wiki's vault id, so a race with another author is
 /// a visible failure rather than a silent overwrite.
-async fn create_page(
+///
+/// Shared with the wiki home's "Add page". The error is a sentence for
+/// the person who asked: a page already at that path, or the server's
+/// reason for refusing (a wiki governed by its Editors).
+pub(crate) async fn create_page(
     slug: String,
     vault_id: String,
     path: String,
     seed: String,
 ) -> Result<String, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
-    client
+    match client
         .put_file(
             vault_id,
-            path,
+            path.clone(),
             seed.into_bytes(),
             vault_proto::IfMatch::CreateOnly,
         )
         .await
-        .map(|ack| ack.sha256)
-        .map_err(|e| format!("put_file: {e:?}"))
+    {
+        Ok(ack) => Ok(ack.sha256),
+        Err(vox::VoxError::User(e)) => Err(match *e {
+            vault_proto::VaultSyncError::Conflict { .. } => {
+                format!("There's already a page at {path}.")
+            }
+            vault_proto::VaultSyncError::Refused(reason) => reason,
+            vault_proto::VaultSyncError::BadPath => format!("“{path}” isn't a usable page name."),
+            other => format!("Couldn't create it: {other}"),
+        }),
+        Err(e) => Err(format!("Couldn't create it: {e:?}")),
+    }
+}
+
+/// A seeded page for `title`: frontmatter naming it, and its heading.
+#[must_use]
+pub(crate) fn page_seed(title: &str) -> String {
+    let quoted = title.replace('"', "\\\"");
+    format!("---\ntitle: \"{quoted}\"\n---\n\n# {title}\n\n")
+}
+
+/// Where a new page titled `title` goes in `folder` (wiki-relative, ""
+/// for the root). `None` when nothing usable is left of the title.
+#[must_use]
+pub(crate) fn new_page_path(folder: &str, title: &str) -> Option<String> {
+    let name: String = title
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c => c,
+        })
+        .collect();
+    let name = name.trim_matches(['.', ' ', '-']);
+    if name.is_empty() {
+        return None;
+    }
+    let folder = folder.trim_matches('/');
+    Some(if folder.is_empty() {
+        format!("{name}.md")
+    } else {
+        format!("{folder}/{name}.md")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::new_page_path;
+
+    #[test]
+    fn a_title_becomes_a_file_in_its_folder() {
+        assert_eq!(new_page_path("", "Dorian"), Some("Dorian.md".into()));
+        assert_eq!(
+            new_page_path("Concepts", "Dorian"),
+            Some("Concepts/Dorian.md".into())
+        );
+        assert_eq!(
+            new_page_path("/Concepts/", "Is it A/B?"),
+            Some("Concepts/Is it A-B.md".into())
+        );
+        assert_eq!(new_page_path("Concepts", "  ...  "), None);
+    }
 }

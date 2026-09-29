@@ -34,6 +34,9 @@ pub struct FocusedDoc {
     /// The note's `on_transaction` sink — routes edits to the CRDT
     /// host so sidebar property edits replicate + autosave.
     pub on_transaction: Callback<TransactionEvent>,
+    /// Whether this person may write the note. `false` shows the
+    /// properties without the controls that change them.
+    pub writable: bool,
 }
 
 /// A process-unique claim id for a `NoteView` instance.
@@ -46,6 +49,9 @@ pub fn next_claim() -> u64 {
 /// Dispatch a document edit against the focused doc through its own
 /// transaction sink (same path as an in-editor edit).
 fn dispatch(doc: FocusedDoc, changes: Changes) {
+    if !doc.writable {
+        return;
+    }
     dispatch_spec(
         doc.state,
         TransactionSpec::new()
@@ -194,17 +200,22 @@ pub fn NoteProperties() -> Element {
                                 "{prop.key}"
                             }
                             {value_field(doc, &key, &prop.value)}
-                            button {
-                                class: "flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100",
-                                title: "Remove property",
-                                onclick: move |_| delete_prop(doc, &del_key),
-                                X { class: "size-3.5" }
+                            if doc.writable {
+                                button {
+                                    class: "flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100",
+                                    title: "Remove property",
+                                    onclick: move |_| delete_prop(doc, &del_key),
+                                    X { class: "size-3.5" }
+                                }
+                            } else {
+                                span {}
                             }
                         }
                     }
                 }
             }
             // Add-property row.
+            if doc.writable {
             div { class: "mt-2 grid grid-cols-[7rem_1fr_auto] items-center gap-1.5 border-t border-border/50 pt-3",
                 input {
                     class: INPUT,
@@ -236,6 +247,7 @@ pub fn NoteProperties() -> Element {
                     Plus { class: "size-3.5" }
                 }
             }
+            }
         }
     }
 }
@@ -251,6 +263,7 @@ fn value_field(doc: FocusedDoc, key: &str, value: &PropValue) -> Element {
             rsx! {
                 input {
                     r#type: "checkbox",
+                    disabled: !doc.writable,
                     class: "size-4 justify-self-start accent-primary",
                     checked,
                     onchange: move |e| {
@@ -268,6 +281,7 @@ fn value_field(doc: FocusedDoc, key: &str, value: &PropValue) -> Element {
                 input {
                     class: INPUT,
                     value: "{shown}",
+                    disabled: !doc.writable,
                     onchange: move |e| {
                         let raw = e.value();
                         let new_value = if is_list {

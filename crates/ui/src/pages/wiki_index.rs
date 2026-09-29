@@ -136,7 +136,7 @@ pub fn WikiIndexView() -> Element {
                             if composing() { "Cancel" } else { "New wiki" }
                         }
                         Link {
-                            to: Route::GraphRoute {},
+                            to: Route::GraphRoute { org: String::new(), wiki: String::new() },
                             class: "text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground",
                             "Graph →"
                         }

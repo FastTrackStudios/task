@@ -35,6 +35,7 @@ pub mod refs;
 pub mod sources;
 pub mod stepbible;
 pub mod store;
+pub mod study_pull;
 pub mod topics;
 pub mod usfm;
 pub mod versification;

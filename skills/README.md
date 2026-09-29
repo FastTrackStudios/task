@@ -35,6 +35,12 @@ on the CLI for idempotence + audit.
   videos as sermon resources (video + captions, scripture backlinks),
   synced nightly by `task resources sermons sync`; how a sermon is
   opened at a timestamp, annotated, and referenced. No model.
+- [`wiki-style.md`](wiki-style.md) — what goes inside a wiki page:
+  the anatomy per page type, which rendered element carries which
+  content (summary lede, folded callouts, verse cards, readings,
+  timelines, maps, tabs, badges, section embeds), the syntax, house
+  rules and a pre-save check. The in-app ingest prompt carries a
+  condensed copy.
 - [`llm-wiki.md`](llm-wiki.md) — one named wiki end to end: scaffold
   it from a purpose (`task wiki scaffold`), write pages, ingest
   sources, drain the review queue, lint/gaps/research, Edit Requests,

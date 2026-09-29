@@ -217,6 +217,12 @@ impl Session {
         self.establish().await
     }
 
+    /// One wiki's graph — relevance, clusters, and the gaps a curator
+    /// works from (orphans, missing pages, pages on one voice).
+    pub async fn wiki_graph(&self) -> wiki_proto::service::graph::GraphClient {
+        self.establish().await
+    }
+
     /// The Edit lane: how someone without Editor changes a wiki, and
     /// how an Editor lands it (`wiki.edit.*`).
     pub async fn wiki_edits(&self) -> wiki_proto::service::edits::EditsClient {
@@ -232,6 +238,12 @@ impl Session {
     /// in the folder index has none of the collaboration, search or
     /// linking the whole decision was for.
     pub async fn vault(&self) -> vault_proto::VaultSyncClient {
+        self.establish().await
+    }
+
+    /// The per-file CRDT sync lane — what the collaborative editor
+    /// attaches to once `open_collab` has named a file's doc.
+    pub async fn doc_sync(&self) -> crdt::sync::DocSyncClient {
         self.establish().await
     }
 
@@ -380,10 +392,12 @@ signable!(
     wiki_proto::service::schema::SchemaClient,
     wiki_proto::service::subscriptions::SubscriptionsClient,
     wiki_proto::service::edits::EditsClient,
+    wiki_proto::service::graph::GraphClient,
     resources_proto::ResourcesServiceClient,
     collection_proto::CollectionServiceClient,
     links_proto::LinksServiceClient,
     vault_proto::VaultSyncClient,
+    crdt::sync::DocSyncClient,
     email_proto::EmailSyncClient,
     email_proto::EmailLinksClient,
 );

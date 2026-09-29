@@ -11,9 +11,8 @@
 //!   endpoint + connection root, display formatting, frontmatter
 //!   reads). It is re-exported here as [`format`] / [`vox_session`] so
 //!   existing `crate::…` paths still resolve.
-//! - [`task_player_ui`] owns the browser session player (audio, charts,
-//!   Now Playing) — the only reason this crate ever depended on `daw`,
-//!   `daw-standalone`, `session` or the keyflow engraver.
+//! - [`task_player_ui`] owns what Task plays of a song (the global Now
+//!   Playing stream, the song/setlist widgets, the chart fences).
 //!
 //! See `ARCHITECTURE.md` for the recipe for extracting the next slice.
 
@@ -40,11 +39,13 @@ pub mod plugin_gate;
 pub mod prefs;
 pub mod presence;
 pub mod project_declaration;
+pub mod reading;
 pub mod routes;
 pub mod search;
 pub mod server_registry;
 pub mod shell;
 pub mod shortcuts;
+pub mod source_dock;
 pub mod stores;
 pub mod tabs;
 pub mod tag_icon;

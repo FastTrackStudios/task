@@ -57,11 +57,14 @@ pub mod lookup;
 pub mod mutate;
 pub mod property_schema;
 pub mod refs;
+/// Rewriting the wikilinks that named a page after it is renamed.
+pub mod relink;
 /// `VaultSync` backend — canonical filesystem impl of the
 /// [`vault_proto::VaultSync`] wire trait. Consumers use
 /// `vault::sync::Backend` (also re-exported as
 /// [`Backend`]).
 pub mod sync;
+pub mod write_guard;
 
 /// Where one registered root stops and a nested one begins — the
 /// prune that lets a shelf hold a shelf.
@@ -81,3 +84,4 @@ pub use vault::{LoadError, SaveError, Vault, VaultPage};
 pub use vault::{PropertyTypes, VaultBase};
 pub use walker::{VaultEntry, VaultEntryKind, walk_vault};
 pub use watcher::{FsEvent, VaultEvent, WatchError, watch, watch_any};
+pub use write_guard::WriteGuard;

@@ -730,17 +730,6 @@ pub fn VaultView(
             }
             button {
                 r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85 disabled:opacity-50",
-                disabled: !has_file,
-                onclick: move |_| {
-                    if let Some(cb) = status_info.peek().as_ref().and_then(|d| d.on_save) {
-                        cb.call(());
-                    }
-                },
-                if status_info.read().as_ref().is_some_and(|d| d.dirty) { "Save •" } else { "Save" }
-            }
-            button {
-                r#type: "button",
                 class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent disabled:opacity-50",
                 disabled: !has_file,
                 onclick: move |_| {
