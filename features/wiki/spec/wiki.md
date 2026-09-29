@@ -834,6 +834,20 @@ edits that arrived through the filesystem.
 
 ---
 
+## Sources
+
+### A wiki says where it rests on one voice
+
+t[wiki.gaps.one-voice]
+A page whose sources are all by one author — or which cites a single source —
+is flagged as resting on one voice, by name. The author is the source page's
+own `author:`; a source with none counts as a voice of its own. A study wiki
+built from one video, or from several by one person, looks well sourced and is
+not; the wiki home lists what needs a second voice and the page says so where
+it is read, so the gap is visible before anyone relies on the page.
+
+---
+
 ## What this asks of the seed
 
 Per `CLAUDE.md`, the planted world is part of the feature. Every rule above is

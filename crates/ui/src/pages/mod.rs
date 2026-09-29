@@ -35,5 +35,7 @@ pub mod wiki_home;
 pub mod wiki_index;
 pub mod wiki_page;
 pub mod wiki_request;
+pub mod study_path;
 pub mod wiki_source;
+pub mod word_study;
 pub mod wiki_subscriptions;

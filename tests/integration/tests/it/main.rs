@@ -71,4 +71,5 @@ mod versions;
 mod wiki_edits;
 mod wiki_promote;
 mod wiki_references;
+mod wiki_gaps;
 mod wiki_repo;

@@ -125,7 +125,8 @@ fn scripture_screen(path: &str, query: &str) -> Option<Element> {
         // opens (John 1) when nobody asked for anything in particular.
         "" => {
             let reference = task_plugin_ui::query_param(query, "reference").unwrap_or_default();
-            Some(rsx! { scripture_ui::ScriptureView { reference } })
+            let strongs = task_plugin_ui::query_param(query, "strongs").unwrap_or_default();
+            Some(rsx! { scripture_ui::ScriptureView { reference, strongs } })
         }
         _ => None,
     }

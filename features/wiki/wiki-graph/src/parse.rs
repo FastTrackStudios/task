@@ -20,6 +20,9 @@ pub(crate) struct Page {
     pub tags: Vec<String>,
     /// Source ids from `sources: [a.md, b.md]`.
     pub sources: Vec<String>,
+    /// `author:` from frontmatter — on a source page, whose voice it is.
+    /// Empty when absent.
+    pub author: String,
     /// Wikilink targets extracted from the body — `[[Foo]]`
     /// → `"Foo"`. Section refs (`[[Foo#Bar]]`) and alias
     /// labels (`[[Foo|alias]]`) are normalized to the page
@@ -48,6 +51,10 @@ pub(crate) fn parse_page(rel_path: String, body: &str) -> Page {
         .unwrap_or_else(|| "untyped".to_string());
     let tags = parse_array(fm_kv.get("tags").map(String::as_str));
     let sources = parse_array(fm_kv.get("sources").map(String::as_str));
+    let author = fm_kv
+        .get("author")
+        .map(|a| a.trim().trim_matches(['"', '\'']).trim().to_owned())
+        .unwrap_or_default();
     let outlinks = extract_wikilinks(rest);
 
     Page {
@@ -56,6 +63,7 @@ pub(crate) fn parse_page(rel_path: String, body: &str) -> Page {
         page_type,
         tags,
         sources,
+        author,
         outlinks,
         body: rest.to_string(),
     }

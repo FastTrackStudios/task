@@ -128,6 +128,9 @@ pub struct ClientVaultIndex {
     state: Signal<EditorState>,
     /// Lowercased basename → page meta.
     by_basename: HashMap<String, PageMeta>,
+    /// The `raw/` archives a curated page of the same basename shadows —
+    /// where a citation's `#^t1226` anchor actually lives.
+    shadowed: HashMap<String, PageMeta>,
     cache: RefCell<ContentCache>,
     /// Page-owned lazy-fetch worker ([`use_vault_fetch_worker`]).
     fetcher: Coroutine<String>,
@@ -180,18 +183,24 @@ impl ClientVaultIndex {
         // it carries the short title and author — so it wins over
         // anything under `raw/`, whatever order the index came in.
         let mut by_basename: HashMap<String, PageMeta> = HashMap::new();
+        let mut shadowed: HashMap<String, PageMeta> = HashMap::new();
         for p in pages {
             let key = p.basename.to_lowercase();
             let keep_existing = by_basename
                 .get(&key)
                 .is_some_and(|have| !have.path.starts_with("raw/") && p.path.starts_with("raw/"));
-            if !keep_existing {
-                by_basename.insert(key, p.clone());
+            if keep_existing {
+                shadowed.insert(key, p.clone());
+            } else if let Some(prev) = by_basename.insert(key.clone(), p.clone())
+                && prev.path.starts_with("raw/")
+            {
+                shadowed.insert(key, prev);
             }
         }
         Rc::new(Self {
             state,
             by_basename,
+            shadowed,
             cache: RefCell::new(ContentCache {
                 map: HashMap::new(),
                 order: VecDeque::new(),
@@ -377,8 +386,14 @@ impl VaultLookup for ClientVaultIndex {
             };
         }
         let meta = self.meta(name)?;
+        // The page's own one-line `summary:` when it has one — the page in
+        // a sentence is the best preview of it — else its opening lines.
         let preview = match self.content(&meta.path) {
-            Some(raw) => preview_of_page(&raw, 200),
+            Some(raw) => crate::pages::vault::frontmatter_value(&raw, "summary")
+                .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+                .filter(|v| !v.is_empty())
+                .map(|v| plain_summary(&v))
+                .unwrap_or_else(|| preview_of_page(&raw, 200)),
             None => LOADING.to_owned(),
         };
         Some(VaultPageHit { preview })
@@ -437,7 +452,28 @@ impl VaultLookup for ClientVaultIndex {
             kind: source_kind(content_type.as_deref(), url.as_deref()).to_owned(),
             short: field("short_title").unwrap_or_else(|| short_title(&title)),
             author: field("author").unwrap_or_default(),
+            url: url.unwrap_or_default(),
             title,
+        })
+    }
+
+    fn lookup_word(&self, name: &str) -> Option<editor::markdown::VaultWordHit> {
+        let meta = self.meta(name)?;
+        let raw = self.content(&meta.path)?;
+        let field = |key: &str| {
+            crate::pages::vault::frontmatter_value(&raw, key)
+                .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let lemma = field("lemma")?;
+        Some(editor::markdown::VaultWordHit {
+            lemma,
+            translit: field("translit")
+                .or_else(|| field("transliteration"))
+                .unwrap_or_else(|| meta.title.clone()),
+            gloss: field("gloss").unwrap_or_default(),
+            strongs: field("strongs").unwrap_or_default(),
+            language: field("language").unwrap_or_else(|| "hebrew".to_owned()),
         })
     }
 
@@ -512,12 +548,55 @@ impl VaultLookup for ClientVaultIndex {
             None => return Some(LOADING.to_owned()),
         };
         let needle = format!("^{short_id}");
-        let pos = raw.find(&needle)?;
+        // Not on the curated page: a citation's anchor lives in the
+        // archive it summarises (`raw/sources/…`), which shares its name.
+        let raw = if anchor_at(&raw, &needle).is_some() {
+            raw
+        } else {
+            let twin = self.shadowed.get(&page.to_lowercase())?;
+            match self.content(&twin.path) {
+                Some(raw) => raw,
+                None => return Some(LOADING.to_owned()),
+            }
+        };
+        let pos = anchor_at(&raw, &needle)?;
         let line_start = raw[..pos].rfind('\n').map_or(0, |n| n + 1);
         let line_end = raw[pos..].find('\n').map_or(raw.len(), |n| pos + n);
         let line = &raw[line_start..line_end];
         Some(line[..line.len() - needle.len()].trim_end().to_string())
     }
+}
+
+/// Where a block anchor (`^t46`) is *defined* in `raw`: after a space,
+/// at the end of its line. Not inside `^t460`, and not where a link
+/// merely points at it (`[[talk#^t46|0:46]]`).
+fn anchor_at(raw: &str, needle: &str) -> Option<usize> {
+    raw.match_indices(needle).map(|(i, _)| i).find(|&i| {
+        let before = raw[..i].chars().next_back();
+        let after = raw[i + needle.len()..].chars().next();
+        before.is_some_and(char::is_whitespace) && after.is_none_or(|c| c == '\n' || c == '\r')
+    })
+}
+
+/// A frontmatter summary as plain text for a hover card: emphasis
+/// markers dropped, `[[target|label]]` read as its label.
+fn plain_summary(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("[[") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        let Some(end) = after.find("]]") else {
+            out.push_str(&rest[i..]);
+            rest = "";
+            break;
+        };
+        let inner = &after[..end];
+        out.push_str(inner.rsplit_once('|').map_or(inner, |(_, label)| label));
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace(['*', '`'], "")
 }
 
 // ── Editor source bridges ─────────────────────────────────────────
@@ -845,6 +924,15 @@ mod tests {
             "acme.test/music-theory::Modes@2026-09-01"
         ));
         assert!(!is_wiki_reference("Modes"));
+    }
+
+    #[test]
+    fn a_block_anchor_is_where_it_is_defined() {
+        let raw = "### Head [[talk#^t0|0:00]]\n[0:00] Words here ^t0\n[0:46] More ^t46\n";
+        let at = super::anchor_at(raw, "^t0").unwrap();
+        assert!(raw[..at].ends_with("Words here "), "{}", &raw[..at]);
+        assert!(super::anchor_at(raw, "^t4").is_none());
+        assert_eq!(super::plain_summary("Not a *name*: see [[Elohim|elohim]] and [[Ugarit]]."), "Not a name: see elohim and Ugarit.");
     }
 
     #[test]

@@ -206,6 +206,35 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
         }
     });
 
+    // A word page's Strong's codes (`strongs:`), for the original-
+    // language word study under it.
+    let strongs_path = path.clone();
+    let strongs_vault = vault_id.clone();
+    let strongs = use_resource(move || {
+        let slug = home();
+        let vault = strongs_vault.clone();
+        let path = strongs_path.clone();
+        let _refresh = refresh_key();
+        async move {
+            crate::document_session::fetch_file(slug, vault, path)
+                .await
+                .ok()
+                .and_then(|raw| crate::pages::vault::frontmatter_value(&raw, "strongs"))
+                .map(|v| super::word_study::codes(v.trim().trim_matches(['"', '\''])))
+                .unwrap_or_default()
+        }
+    });
+
+    // Whether this page rests on one voice (the wiki's `gaps` check) —
+    // said quietly in the strip, with the reason as its tooltip.
+    let gaps_wiki = wiki.clone();
+    let gaps = use_resource(move || {
+        let slug = home();
+        let wiki = gaps_wiki.clone();
+        let _refresh = refresh_key();
+        async move { crate::feeds::fetch_wiki_gaps(&slug, &wiki).await.unwrap_or_default() }
+    });
+
     // The status line (the focused NoteView writes it). Cleared on leave.
     let status_info = use_context::<crate::chrome::StatusBarInfo>().0;
     use_drop(move || {
@@ -218,6 +247,14 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
         .as_ref()
         .map(|m| m.page_type.clone())
         .unwrap_or_default();
+    let one_voice: Option<String> = gaps.read().as_ref().and_then(|list| {
+        list.iter()
+            .find(|g| {
+                matches!(g.kind, wiki_proto::graph::GapKind::OneVoice)
+                    && g.subjects.contains(&path)
+            })
+            .map(|g| g.explanation.clone())
+    });
     let (ai_generated, generated_by) = provenance
         .read()
         .as_ref()
@@ -227,7 +264,11 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let has_page = meta.is_some();
 
     let body = match (&*files.read_unchecked(), meta) {
-        (Some(Ok(_)), Some(meta)) => rsx! {
+        (Some(Ok(_)), Some(meta)) => {
+            let footer_type = meta.page_type.clone();
+            let footer_wiki = wiki.clone();
+            let footer_vault = vault_id.clone();
+            rsx! {
             NoteView {
                 key: "{meta.path}",
                 path: meta.path.clone(),
@@ -243,8 +284,28 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                 on_renamed,
                 write_mode: Some(write_mode.into()),
                 session_out,
+                // The end of the page: a word's study in the original
+                // language, and where the page sits on a study path.
+                footer: rsx! {
+                    div { class: "note-column mx-auto w-full max-w-3xl px-6 pb-8",
+                        super::word_study::WordStudyPanel {
+                            org: home,
+                            codes: strongs.read().clone().unwrap_or_default(),
+                        }
+                        if footer_type != "path" {
+                            super::study_path::StudyPathBar {
+                                org: home,
+                                wiki: footer_wiki.clone(),
+                                vault_id: footer_vault.clone(),
+                                pages: pages_memo,
+                                current: meta.path.clone(),
+                            }
+                        }
+                    }
+                },
             }
-        },
+            }
+        }
         (Some(Ok(_)), None) => {
             // Not a page of this wiki (yet). A link to a page nobody has
             // written is how a wiki grows; offer to start it.
@@ -314,6 +375,10 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                         if !page_type.is_empty() {
                             span { class: "text-muted-foreground/60", "·" }
                             span { class: "capitalize", "{page_type}" }
+                        }
+                        if let Some(why) = one_voice.clone() {
+                            span { class: "text-muted-foreground/60", "·" }
+                            span { class: "text-amber-500/90", title: "{why}", "One voice" }
                         }
                         if ai_generated {
                             span { class: "text-muted-foreground/60", "·" }
@@ -501,6 +566,19 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                             access: a,
                             proposing,
                             session: session_out,
+                        }
+                    }
+                }
+                // A study path's progress sits over the path page; every
+                // page on a path gets the path's footer under it.
+                if has_page && page_type == "path" {
+                    div { class: "note-column mx-auto w-full max-w-3xl px-6",
+                        super::study_path::StudyPathBar {
+                            org: home,
+                            wiki: wiki.clone(),
+                            vault_id: vault_id.clone(),
+                            pages: pages_memo,
+                            current: path.clone(),
                         }
                     }
                 }

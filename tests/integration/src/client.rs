@@ -217,6 +217,12 @@ impl Session {
         self.establish().await
     }
 
+    /// One wiki's graph — relevance, clusters, and the gaps a curator
+    /// works from (orphans, missing pages, pages on one voice).
+    pub async fn wiki_graph(&self) -> wiki_proto::service::graph::GraphClient {
+        self.establish().await
+    }
+
     /// The Edit lane: how someone without Editor changes a wiki, and
     /// how an Editor lands it (`wiki.edit.*`).
     pub async fn wiki_edits(&self) -> wiki_proto::service::edits::EditsClient {
@@ -386,6 +392,7 @@ signable!(
     wiki_proto::service::schema::SchemaClient,
     wiki_proto::service::subscriptions::SubscriptionsClient,
     wiki_proto::service::edits::EditsClient,
+    wiki_proto::service::graph::GraphClient,
     resources_proto::ResourcesServiceClient,
     collection_proto::CollectionServiceClient,
     links_proto::LinksServiceClient,

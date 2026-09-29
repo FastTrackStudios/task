@@ -92,7 +92,13 @@ struct SelectedVerse {
 }
 
 #[component]
-pub fn ScriptureView(reference: String) -> Element {
+pub fn ScriptureView(
+    reference: String,
+    /// Deep link into the word study: `?strongs=H430` opens the lexicon
+    /// and concordance for that word at the referenced verse.
+    #[props(default)]
+    strongs: String,
+) -> Element {
     // Backlinks link out to the vault note. The shell owns the router,
     // so it hands the href builder down (see `task_ui_core::nav`).
     let note_href = use_note_href();
@@ -124,7 +130,7 @@ pub fn ScriptureView(reference: String) -> Element {
     // Deep link: `?reference=John 3:16-20@ESV` positions the reader
     // (translation qualifier included) and pre-selects the start verse.
     // Re-runs when the route param changes (chip → chip navigation).
-    use_effect(use_reactive!(|(reference,)| {
+    use_effect(use_reactive!(|(reference, strongs)| {
         let Ok(scref) = ScriptureRef::parse(&reference) else {
             return;
         };
@@ -139,7 +145,7 @@ pub fn ScriptureView(reference: String) -> Element {
             display: start.to_string(),
         }));
         anchor.set(Some(start.osis()));
-        strongs_sel.set(None);
+        strongs_sel.set((!strongs.is_empty()).then(|| strongs.clone()));
         topic_sel.set(None);
     }));
 

@@ -99,6 +99,11 @@ pub(crate) fn NoteView(
     /// draft as an Edit Request.
     #[props(default)]
     session_out: Option<Signal<Option<crate::document_session::DocumentSession>>>,
+    /// Shown after the note, inside its scroll — a wiki page's word
+    /// study and study-path footer read as the end of the page, not a
+    /// bar pinned under it.
+    #[props(default)]
+    footer: Option<Element>,
 ) -> Element {
     let is_focused = use_memo(move || *focused.read() == pane_index);
     let mode = use_memo(move || write_mode.map_or(WriteMode::Direct, |m| m()));
@@ -418,6 +423,7 @@ pub(crate) fn NoteView(
     let registry_for_links = registry.clone();
     let link_ctx = widget_ctx.clone();
     let link_vault = vault_id.clone();
+    let dock_for_links = crate::source_dock::use_source_dock();
     let on_link_click = use_callback(move |href: String| {
         if registry_for_links.handle_href(&href, &link_ctx) {
             return;
@@ -433,6 +439,22 @@ pub(crate) fn NoteView(
             return; // the editor already window.open()s external links
         }
         let page = href.split(['#', '|']).next().unwrap_or(&href).trim();
+        // A timestamp into a YouTube source plays where you are, in the
+        // dock, rather than leaving the page for the source's.
+        if let (Some(mut dock), Some(start)) = (dock_for_links, crate::source_dock::anchor_seconds(&href))
+            && let Some(ix) = lookup_for_links.peek().as_ref()
+            && let Some(src) = editor::markdown::VaultLookup::lookup_source(ix.as_ref(), page)
+            && let Some(video) = crate::pages::wiki_source::youtube_id(&src.url)
+        {
+            let path = ix.meta(page).map_or_else(|| format!("{page}.md"), |m| m.path.clone());
+            dock.set(Some(crate::source_dock::DockedSource {
+                video,
+                start,
+                title: src.short,
+                open: crate::routes::note_route(&home(), &link_vault, path),
+            }));
+            return;
+        }
         // A reference into a wiki (ADR 0002): open the page it names, in
         // its own wiki and org. One that points nowhere says so rather
         // than offering to create a page named after the reference.
@@ -742,6 +764,7 @@ pub(crate) fn NoteView(
                         }
                     }
                 }
+                {footer}
             }
             document::Style { {READING_STYLE} }
             // Keyed collab child: remount per doc id = fresh replica.

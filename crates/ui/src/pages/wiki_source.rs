@@ -229,7 +229,7 @@ fn mmss(total: u64) -> String {
 }
 
 /// YouTube video id out of the provenance `media:` URL.
-fn youtube_id(media: &str) -> Option<String> {
+pub(crate) fn youtube_id(media: &str) -> Option<String> {
     let rest = if let Some(i) = media.find("v=") {
         &media[i + 2..]
     } else {

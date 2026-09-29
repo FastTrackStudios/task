@@ -953,6 +953,20 @@ pub async fn fetch_wiki_pages_of(
         .map_err(|e| format!("list_pages: {e:?}"))
 }
 
+/// A wiki's knowledge gaps (`gaps`) — orphans, missing pages, pages that
+/// rest on one voice.
+pub async fn fetch_wiki_gaps(
+    slug: &str,
+    wiki: &str,
+) -> Result<Vec<wiki_proto::graph::KnowledgeGap>, String> {
+    let client =
+        crate::vox_clients::establish_for::<wiki_proto::service::graph::GraphClient>(slug).await?;
+    client
+        .gaps(wiki.to_owned())
+        .await
+        .map_err(|e| format!("gaps: {e:?}"))
+}
+
 /// Add a wiki to the org's set (`wiki.many.set`). The caller becomes its
 /// first Editor (`wiki.edit.editor`); the slug derives from the title.
 pub async fn create_wiki(

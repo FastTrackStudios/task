@@ -45,6 +45,7 @@ pub mod search;
 pub mod server_registry;
 pub mod shell;
 pub mod shortcuts;
+pub mod source_dock;
 pub mod stores;
 pub mod tabs;
 pub mod tag_icon;

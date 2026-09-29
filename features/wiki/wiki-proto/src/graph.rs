@@ -143,4 +143,7 @@ pub enum GapKind {
     Bridge,
     /// Concept mentioned in N pages but lacks its own page.
     MissingPage,
+    /// A page whose sources are all one voice — one author, or a single
+    /// source. Its claims have not been tested against anyone else yet.
+    OneVoice,
 }

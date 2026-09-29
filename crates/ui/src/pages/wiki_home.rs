@@ -242,6 +242,15 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
         });
     };
 
+    // ── Gaps: pages that rest on one voice ────────────────────
+    let wiki_for_gaps = wiki.clone();
+    let gaps = use_resource(move || {
+        let _tick = wiki_tick();
+        let slug = org_sig();
+        let wiki = wiki_for_gaps.clone();
+        async move { crate::feeds::fetch_wiki_gaps(&slug, &wiki).await }
+    });
+
     // ── Edit Requests ─────────────────────────────────────────
     // Open ones, for everyone who can read the wiki: Editors review
     // them, a proposer sees where theirs stands.
@@ -363,6 +372,8 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
             rsx! {
                 section { class: "flex flex-col gap-3",
                     {requests_section(&requests.read(), &names.read(), &org_for_rows, &wiki_for_rows)}
+                    {paths_section(&content, &org_for_rows, &wiki_for_rows)}
+                    {one_voice_section(&gaps.read(), &content, &org_for_rows, &wiki_for_rows)}
                     if can_edit {
                     form { class: "flex flex-wrap items-center gap-2", onsubmit: on_new_page,
                         input {
@@ -476,6 +487,81 @@ fn folder_paths(node: &DirNode) -> Vec<String> {
 }
 
 /// The wiki's open Edit Requests, each a link to its review.
+/// "Start here": the wiki's study paths (pages of `type: path`), first
+/// thing on its home — a way in when there are thirty pages.
+fn paths_section(pages: &[wiki_proto::pages::PageInfo], org: &str, wiki: &str) -> Element {
+    let paths: Vec<&wiki_proto::pages::PageInfo> =
+        pages.iter().filter(|p| p.page_type == "path").collect();
+    if paths.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "flex flex-col gap-2", "data-testid": "wiki-study-paths",
+            h2 { class: "text-xs font-semibold uppercase tracking-wider text-muted-foreground", "Start here" }
+            div { class: "grid gap-2 sm:grid-cols-2",
+                for p in paths {
+                    Link {
+                        key: "{p.path}",
+                        to: Route::WikiDocRoute { org: org.to_owned(), wiki: wiki.to_owned(), path: p.path.clone() },
+                        class: "rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 hover:bg-primary/10",
+                        div { class: "text-[10px] font-semibold uppercase tracking-wider text-primary", "Study path" }
+                        div { class: "font-medium text-foreground", "{p.title}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// "Needs a second voice": pages whose sources are all one author (the
+/// `gaps` check). Folded — it is a to-do list, not the front page.
+fn one_voice_section(
+    gaps: &Option<Result<Vec<wiki_proto::graph::KnowledgeGap>, String>>,
+    pages: &[wiki_proto::pages::PageInfo],
+    org: &str,
+    wiki: &str,
+) -> Element {
+    let Some(Ok(gaps)) = gaps else {
+        return rsx! {};
+    };
+    let one: Vec<(String, String, String)> = gaps
+        .iter()
+        .filter(|g| matches!(g.kind, wiki_proto::graph::GapKind::OneVoice))
+        .filter_map(|g| {
+            let path = g.subjects.first()?.clone();
+            let title = pages
+                .iter()
+                .find(|p| p.path == path)
+                .map_or_else(|| path.clone(), |p| p.title.clone());
+            Some((path, title, g.explanation.clone()))
+        })
+        .collect();
+    if one.is_empty() {
+        return rsx! {};
+    }
+    let n = one.len();
+    rsx! {
+        details { class: "rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-2", "data-testid": "wiki-one-voice",
+            summary { class: "cursor-pointer text-sm",
+                span { class: "font-medium", "Needs a second voice" }
+                span { class: "ml-2 text-muted-foreground", "{n} pages rest on one author's sources" }
+            }
+            ul { class: "mt-2 flex flex-col gap-1 pb-1 text-sm",
+                for (path , title , why) in one {
+                    li { key: "{path}",
+                        Link {
+                            to: Route::WikiDocRoute { org: org.to_owned(), wiki: wiki.to_owned(), path: path.clone() },
+                            class: "text-foreground hover:underline",
+                            title: "{why}",
+                            "{title}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn requests_section(
     requests: &Option<Result<Vec<wiki_proto::service::edits::EditRequest>, String>>,
     names: &std::collections::HashMap<String, String>,

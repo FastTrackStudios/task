@@ -15,6 +15,8 @@ pub fn AppShell() -> Element {
 
     // Quick-capture + data-refresh signals for the persistent chrome.
     provide_chrome_contexts();
+    // The docked player a citation's timestamp plays in.
+    crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
     crate::palette::provide_palette_context();
     // Obsidian-style route tabs (the strip lives in the TopBar) —
@@ -218,6 +220,7 @@ pub fn AppShell() -> Element {
         }
         // Single global capture modal, toggled from any fleeting button.
         FleetingModal {}
+        crate::source_dock::SourceDockView {}
         // Ctrl+P command palette — pages + vault notes, fuzzy-ranked.
         // Mounts its own document-level hotkey listener.
         crate::palette::CommandPalette {}
