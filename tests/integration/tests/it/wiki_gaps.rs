@@ -84,7 +84,7 @@ async fn a_page_citing_one_author_is_flagged_as_one_voice() {
     // style check says, page by page.
     let style = gaps
         .iter()
-        .find(|g| matches!(g.kind, GapKind::Style) && g.subjects.iter().any(|p| *p == one))
+        .find(|g| matches!(g.kind, GapKind::Style) && g.subjects.contains(&one))
         .expect("a page without a summary has style notes");
     assert!(
         style.explanation.contains("no summary"),
