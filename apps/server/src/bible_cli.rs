@@ -32,6 +32,8 @@ pub async fn bible(args: &[String]) -> eyre::Result<()> {
             Ok(())
         }
         Some("install") => install(&args[1..]).await,
+        Some("lexicon") => lexicon(&args[1..]).await,
+        Some("original") => original(&args[1..]).await,
         other => {
             eprintln!(
                 "usage:\n  \
@@ -39,7 +41,12 @@ pub async fn bible(args: &[String]) -> eyre::Result<()> {
                  task-server admin bible install --org <slug> [--translation WEB] \\\n    \
                  [--from <usfm-dir-or-zip>]\n    \
                  (downloads from the recorded public-domain source when --from is omitted;\n     \
-                 archives are cached under $TASK_BIBLE_CACHE so a re-plant does not refetch)\n"
+                 archives are cached under $TASK_BIBLE_CACHE so a re-plant does not refetch)\n  \
+                 task-server admin bible lexicon --org <slug>\n    \
+                 (the Strong's dictionaries, for word study)\n  \
+                 task-server admin bible original --org <slug> [--edition OSHB|SBLGNT]\n    \
+                 (an original-language text, for the interlinear and every occurrence;\n     \
+                 both editions when --edition is omitted)\n"
             );
             bail!("unknown bible subcommand: {}", other.unwrap_or("(none)"));
         }
@@ -63,6 +70,56 @@ fn list() {
         "\nlicensed editions (NIV, ESV, …) are read per passage through their own API \
          with your key, and are never installed."
     );
+}
+
+/// The org's resource library, or an error naming what to do.
+fn org_resources(args: &[String]) -> eyre::Result<std::path::PathBuf> {
+    let Some(slug) = flag(args, "--org") else {
+        bail!("--org is required");
+    };
+    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
+    let org = data_root.org(&slug);
+    if !org.path().is_dir() {
+        bail!(
+            "no org `{slug}` on this data root ({}). \
+             `task-server admin demo --org {slug}` plants one.",
+            data_root.path().display()
+        );
+    }
+    Ok(org.resources_dir())
+}
+
+/// `admin bible lexicon` — the Strong's dictionaries, which the word
+/// study reads. The server loads them at start.
+async fn lexicon(args: &[String]) -> eyre::Result<()> {
+    let dest = org_resources(args)?.join("lexicon").join("strongs");
+    let (greek, hebrew) = scripture::study_pull::pull_lexicon(&dest)
+        .await
+        .map_err(|e| eyre::eyre!("lexicon: {e}"))?;
+    println!(
+        "installed the Strong's lexicon ({greek} Greek, {hebrew} Hebrew entries) into {} — restart the server to load it",
+        dest.display()
+    );
+    Ok(())
+}
+
+/// `admin bible original` — an original-language edition (or both), for
+/// the interlinear and the word study's occurrences.
+async fn original(args: &[String]) -> eyre::Result<()> {
+    let root = org_resources(args)?.join("original");
+    let editions: Vec<String> = match flag(args, "--edition") {
+        Some(e) => vec![e.to_ascii_uppercase()],
+        None => scripture::study_pull::ORIGINALS.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    for id in editions {
+        let dest = root.join(&id);
+        let verses = scripture::study_pull::pull_original(&id, &dest)
+            .await
+            .map_err(|e| eyre::eyre!("{id}: {e}"))?;
+        println!("installed {id} ({verses} verses) into {}", dest.display());
+    }
+    println!("restart the server to load them");
+    Ok(())
 }
 
 async fn install(args: &[String]) -> eyre::Result<()> {

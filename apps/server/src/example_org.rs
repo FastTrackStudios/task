@@ -855,7 +855,11 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
         title: "Bible Study",
         visibility: Visibility::Private,
         demonstrates: "a wiki that annotates a Resource without writing into it — every \
-                       page anchors to a VerseId, so it survives a translation swap",
+                       page anchors to a VerseId, so it survives a translation swap — and \
+                       the study tools built on it: summaries, source and word badges, \
+                       verse cards that switch translations, readings, timelines, maps, \
+                       folded doubt, section embeds, study paths and the one-voice and \
+                       style checks",
     },
     DeclaredWiki {
         org: "alice-personal",

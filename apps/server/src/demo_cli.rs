@@ -700,6 +700,59 @@ async fn plant_bible(org: &org_proto::OrgRoot) {
             org.slug()
         ),
     }
+    plant_study(org).await;
+}
+
+/// The Bible Study wiki's study data: two more translations (so a verse
+/// card has something to switch to and compare), the Strong's lexicon
+/// and the Hebrew and Greek texts (so a word page's study has an entry
+/// and every occurrence). Only for an org whose seed has that wiki — the
+/// others would carry fifty megabytes nobody reads. Never fails the
+/// plant, and installs from the download cache after the first time.
+#[cfg(feature = "plugin-scripture")]
+async fn plant_study(org: &org_proto::OrgRoot) {
+    if !org.path().join("wikis").join("bible-study").is_dir() {
+        return;
+    }
+    let resources = org.resources_dir();
+    let filled = |dir: &std::path::Path| {
+        std::fs::read_dir(dir)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false)
+    };
+    for tx in ["KJV", "BSB"] {
+        let dest = org.bible_dir(tx);
+        if filled(&dest) {
+            continue;
+        }
+        match scripture::pull(tx, &dest).await {
+            Ok(p) => println!("  bible: {} books of {}", p.books.len(), p.id),
+            Err(e) => println!("  bible: {tx} not installed ({e})"),
+        }
+    }
+    let lexicon = resources.join("lexicon").join("strongs");
+    if !filled(&lexicon) {
+        match scripture::study_pull::pull_lexicon(&lexicon).await {
+            Ok((g, h)) => println!("  lexicon: {g} Greek, {h} Hebrew entries"),
+            Err(e) => println!(
+                "  lexicon: not installed ({e}) — `task-server admin bible lexicon --org {}`",
+                org.slug()
+            ),
+        }
+    }
+    for id in scripture::study_pull::ORIGINALS {
+        let dest = resources.join("original").join(id);
+        if filled(&dest) {
+            continue;
+        }
+        match scripture::study_pull::pull_original(id, &dest).await {
+            Ok(n) => println!("  original: {id}, {n} verses"),
+            Err(e) => println!(
+                "  original: {id} not installed ({e}) — `task-server admin bible original --org {}`",
+                org.slug()
+            ),
+        }
+    }
 }
 
 /// Hand the freshly planted org's vault and wikis the core set.
