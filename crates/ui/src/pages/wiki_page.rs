@@ -232,7 +232,11 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
         let slug = home();
         let wiki = gaps_wiki.clone();
         let _refresh = refresh_key();
-        async move { crate::feeds::fetch_wiki_gaps(&slug, &wiki).await.unwrap_or_default() }
+        async move {
+            crate::feeds::fetch_wiki_gaps(&slug, &wiki)
+                .await
+                .unwrap_or_default()
+        }
     });
 
     // The status line (the focused NoteView writes it). Cleared on leave.
@@ -250,14 +254,15 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
     let one_voice: Option<String> = gaps.read().as_ref().and_then(|list| {
         list.iter()
             .find(|g| {
-                matches!(g.kind, wiki_proto::graph::GapKind::OneVoice)
-                    && g.subjects.contains(&path)
+                matches!(g.kind, wiki_proto::graph::GapKind::OneVoice) && g.subjects.contains(&path)
             })
             .map(|g| g.explanation.clone())
     });
     let style_notes: Option<String> = gaps.read().as_ref().and_then(|list| {
         list.iter()
-            .find(|g| matches!(g.kind, wiki_proto::graph::GapKind::Style) && g.subjects.contains(&path))
+            .find(|g| {
+                matches!(g.kind, wiki_proto::graph::GapKind::Style) && g.subjects.contains(&path)
+            })
             .map(|g| g.explanation.clone())
     });
     let (ai_generated, generated_by) = provenance

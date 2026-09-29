@@ -93,6 +93,9 @@ mod tests {
         }
         assert!(template("question", "Q?", "d").contains("```readings"));
         assert!(template("word", "W", "d").contains("strongs:"));
-        assert_eq!(template("", "Plain", "d"), "---\ntitle: \"Plain\"\ncreated: d\n---\n\n# Plain\n\n");
+        assert_eq!(
+            template("", "Plain", "d"),
+            "---\ntitle: \"Plain\"\ncreated: d\n---\n\n# Plain\n\n"
+        );
     }
 }

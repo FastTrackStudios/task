@@ -89,7 +89,10 @@ fn use_paths(org: Memo<String>, vault_id: String, pages: Memo<Vec<PageMeta>>) ->
         async move {
             let mut out = Vec::new();
             for p in path_pages {
-                if let Ok(md) = crate::document_session::fetch_file(slug.clone(), vault.clone(), p.path.clone()).await {
+                if let Ok(md) =
+                    crate::document_session::fetch_file(slug.clone(), vault.clone(), p.path.clone())
+                        .await
+                {
                     out.push((p, md));
                 }
             }

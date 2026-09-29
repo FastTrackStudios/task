@@ -109,7 +109,10 @@ async fn original(args: &[String]) -> eyre::Result<()> {
     let root = org_resources(args)?.join("original");
     let editions: Vec<String> = match flag(args, "--edition") {
         Some(e) => vec![e.to_ascii_uppercase()],
-        None => scripture::study_pull::ORIGINALS.iter().map(|s| (*s).to_owned()).collect(),
+        None => scripture::study_pull::ORIGINALS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
     };
     for id in editions {
         let dest = root.join(&id);

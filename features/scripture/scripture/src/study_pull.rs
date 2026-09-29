@@ -62,7 +62,8 @@ pub async fn pull_lexicon(dest: &Path) -> Result<(usize, usize), PullError> {
         let json = crate::js_to_json(&js)
             .ok_or_else(|| parse_error(&url, "no dictionary object in the file"))?
             .to_owned();
-        let lexicon = crate::Lexicon::from_json(&json).map_err(|e| parse_error(&url, &e.to_string()))?;
+        let lexicon =
+            crate::Lexicon::from_json(&json).map_err(|e| parse_error(&url, &e.to_string()))?;
         if let Some(n) = counts.get_mut(i) {
             *n = lexicon.len();
         }
@@ -106,7 +107,8 @@ pub async fn pull_original(id: &str, dest: &Path) -> Result<usize, PullError> {
                 let file = format!("{n}-{book}-morphgnt.txt");
                 let url = format!("{SBLGNT_BASE}/{file}");
                 let raw = fetch_cached(&url, &format!("sblgnt/{file}")).await?;
-                for (vid, w) in crate::morphgnt::parse_morphgnt_rows(&String::from_utf8_lossy(&raw)) {
+                for (vid, w) in crate::morphgnt::parse_morphgnt_rows(&String::from_utf8_lossy(&raw))
+                {
                     map.entry(vid).or_default().push(w);
                 }
             }
@@ -117,7 +119,10 @@ pub async fn pull_original(id: &str, dest: &Path) -> Result<usize, PullError> {
             )
         }
         _ => {
-            return Err(parse_error(id, "not an edition this can pull (OSHB, SBLGNT)"));
+            return Err(parse_error(
+                id,
+                "not an edition this can pull (OSHB, SBLGNT)",
+            ));
         }
     };
     let text = OrigText::from_verses(map);
@@ -132,7 +137,8 @@ pub async fn pull_original(id: &str, dest: &Path) -> Result<usize, PullError> {
         license: license.to_owned(),
     };
     let meta_path = dest.join("meta.json");
-    let meta_json = serde_json::to_string_pretty(&meta).map_err(|e| parse_error(id, &e.to_string()))?;
+    let meta_json =
+        serde_json::to_string_pretty(&meta).map_err(|e| parse_error(id, &e.to_string()))?;
     std::fs::write(&meta_path, meta_json).map_err(io(&meta_path))?;
     Ok(verses)
 }
@@ -143,18 +149,12 @@ async fn fetch_cached(url: &str, key: &str) -> Result<Vec<u8>, PullError> {
     if let Ok(bytes) = std::fs::read(&path) {
         return Ok(bytes);
     }
-    let fetched = async {
-        reqwest::get(url)
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await
-    }
-    .await
-    .map_err(|source| PullError::Fetch {
-        url: url.to_owned(),
-        source,
-    })?;
+    let fetched = async { reqwest::get(url).await?.error_for_status()?.bytes().await }
+        .await
+        .map_err(|source| PullError::Fetch {
+            url: url.to_owned(),
+            source,
+        })?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(io(dir))?;
     }

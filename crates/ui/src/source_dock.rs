@@ -101,7 +101,10 @@ fn clock(secs: u64) -> String {
 #[must_use]
 pub fn anchor_seconds(href: &str) -> Option<u64> {
     let rest = href.split_once("#^t")?.1;
-    rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+    rest.split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
 }
 
 #[cfg(test)]

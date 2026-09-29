@@ -566,7 +566,10 @@ impl VaultLookup for ClientVaultIndex {
         let Ok(scref) = scripture_proto::ScriptureRef::parse(target) else {
             return Vec::new();
         };
-        let shown = scref.translation.clone().unwrap_or_else(|| DEFAULT_TRANSLATION.to_owned());
+        let shown = scref
+            .translation
+            .clone()
+            .unwrap_or_else(|| DEFAULT_TRANSLATION.to_owned());
         let osis = scref.range.osis();
         self.content(TRANSLATIONS_KEY)
             .map(|list| {
@@ -575,7 +578,8 @@ impl VaultLookup for ClientVaultIndex {
                     .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case(&shown))
                     .filter_map(|t| {
                         let text = self.content(&format!("{SCRIPTURE_SCHEME}{t}/{osis}"))?;
-                        (!text.starts_with('(') && !text.starts_with('⚠')).then(|| (t.to_owned(), text))
+                        (!text.starts_with('(') && !text.starts_with('⚠'))
+                            .then(|| (t.to_owned(), text))
                     })
                     .collect()
             })
@@ -769,7 +773,11 @@ pub fn short_title(title: &str) -> String {
         .min_by_key(|(i, _)| *i)
         .map_or(title, |(i, sep)| {
             // Keep a question's own mark: `Did God …?` stays a question.
-            let end = if sep.starts_with(['?', '!']) { i + 1 } else { i };
+            let end = if sep.starts_with(['?', '!']) {
+                i + 1
+            } else {
+                i
+            };
             &title[..end]
         })
         .trim_end_matches(['.', ',', ';']);
@@ -973,7 +981,10 @@ mod tests {
         let at = super::anchor_at(raw, "^t0").unwrap();
         assert!(raw[..at].ends_with("Words here "), "{}", &raw[..at]);
         assert!(super::anchor_at(raw, "^t4").is_none());
-        assert_eq!(super::plain_summary("Not a *name*: see [[Elohim|elohim]] and [[Ugarit]]."), "Not a name: see elohim and Ugarit.");
+        assert_eq!(
+            super::plain_summary("Not a *name*: see [[Elohim|elohim]] and [[Ugarit]]."),
+            "Not a name: see elohim and Ugarit."
+        );
     }
 
     #[test]
@@ -991,10 +1002,19 @@ mod tests {
     #[test]
     fn a_source_badge_takes_a_short_title() {
         use super::short_title as s;
-        assert_eq!(s("God Told Them to Kill Everyone. Here's Why."), "God Told Them to Kill Everyone");
+        assert_eq!(
+            s("God Told Them to Kill Everyone. Here's Why."),
+            "God Told Them to Kill Everyone"
+        );
         assert_eq!(s("Ancient Conquest Accounts"), "Ancient Conquest Accounts");
-        assert_eq!(s("What the Bible REALLY Says About the other gods"), "What the Bible REALLY Says…");
-        assert_eq!(s("Did God Really Command Genocide? Coming to Terms"), "Did God Really Command Genocide?");
+        assert_eq!(
+            s("What the Bible REALLY Says About the other gods"),
+            "What the Bible REALLY Says…"
+        );
+        assert_eq!(
+            s("Did God Really Command Genocide? Coming to Terms"),
+            "Did God Really Command Genocide?"
+        );
     }
 
     #[test]

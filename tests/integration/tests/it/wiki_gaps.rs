@@ -31,7 +31,11 @@ async fn a_page_citing_one_author_is_flagged_as_one_voice() {
                 .unwrap_or_else(|e| panic!("write {path}: {e:?}"));
         }
     };
-    for (stem, author) in [("talk-a", "Ada Lovelace"), ("talk-b", "Ada Lovelace"), ("book-c", "Mark Smith")] {
+    for (stem, author) in [
+        ("talk-a", "Ada Lovelace"),
+        ("talk-b", "Ada Lovelace"),
+        ("book-c", "Mark Smith"),
+    ] {
         write(
             format!("{dir}/Sources/{dir}-{stem}.md"),
             format!("---\ntitle: {stem}\ntype: source\nauthor: {author}\n---\n\n# {stem}\n"),
@@ -71,7 +75,10 @@ async fn a_page_citing_one_author_is_flagged_as_one_voice() {
         "{}",
         flagged.explanation
     );
-    assert!(one_voice(&two).is_none(), "a second author is a second voice");
+    assert!(
+        one_voice(&two).is_none(),
+        "a second author is a second voice"
+    );
 
     // t[verify wiki.gaps.style] — neither page has a summary, which the
     // style check says, page by page.
@@ -79,5 +86,9 @@ async fn a_page_citing_one_author_is_flagged_as_one_voice() {
         .iter()
         .find(|g| matches!(g.kind, GapKind::Style) && g.subjects.iter().any(|p| *p == one))
         .expect("a page without a summary has style notes");
-    assert!(style.explanation.contains("no summary"), "{}", style.explanation);
+    assert!(
+        style.explanation.contains("no summary"),
+        "{}",
+        style.explanation
+    );
 }

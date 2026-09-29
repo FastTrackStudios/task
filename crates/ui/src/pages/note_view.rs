@@ -446,12 +446,15 @@ pub(crate) fn NoteView(
         let page = href.split(['#', '|']).next().unwrap_or(&href).trim();
         // A timestamp into a YouTube source plays where you are, in the
         // dock, rather than leaving the page for the source's.
-        if let (Some(mut dock), Some(start)) = (dock_for_links, crate::source_dock::anchor_seconds(&href))
+        if let (Some(mut dock), Some(start)) =
+            (dock_for_links, crate::source_dock::anchor_seconds(&href))
             && let Some(ix) = lookup_for_links.peek().as_ref()
             && let Some(src) = editor::markdown::VaultLookup::lookup_source(ix.as_ref(), page)
             && let Some(video) = crate::pages::wiki_source::youtube_id(&src.url)
         {
-            let path = ix.meta(page).map_or_else(|| format!("{page}.md"), |m| m.path.clone());
+            let path = ix
+                .meta(page)
+                .map_or_else(|| format!("{page}.md"), |m| m.path.clone());
             dock.set(Some(crate::source_dock::DockedSource {
                 video,
                 start,

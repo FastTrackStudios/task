@@ -79,7 +79,10 @@ pub fn find_gaps(vault_root: &Path) -> Result<Vec<KnowledgeGap>, ScanError> {
     out.extend(one_voice_gaps(&pages));
     // ── The house style, where a program can check it ─
     // The wiki's own furniture (its goals list) is not a page to style.
-    for p in pages.iter().filter(|p| !matches!(p.page_type.as_str(), "goals" | "index" | "log")) {
+    for p in pages
+        .iter()
+        .filter(|p| !matches!(p.page_type.as_str(), "goals" | "index" | "log"))
+    {
         let notes = crate::style::style_notes(p);
         if !notes.is_empty() {
             out.push(KnowledgeGap {
@@ -187,9 +190,21 @@ mod one_voice_tests {
     fn a_page_on_one_authors_sources_is_one_voice() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        write(root, "Sources/a-1.md", "---\ntitle: A\ntype: source\nauthor: Nils Glenn\n---\n# A\n");
-        write(root, "Sources/b-2.md", "---\ntitle: B\ntype: source\nauthor: Nils Glenn\n---\n# B\n");
-        write(root, "Sources/c-3.md", "---\ntitle: C\ntype: source\nauthor: Mark Smith\n---\n# C\n");
+        write(
+            root,
+            "Sources/a-1.md",
+            "---\ntitle: A\ntype: source\nauthor: Nils Glenn\n---\n# A\n",
+        );
+        write(
+            root,
+            "Sources/b-2.md",
+            "---\ntitle: B\ntype: source\nauthor: Nils Glenn\n---\n# B\n",
+        );
+        write(
+            root,
+            "Sources/c-3.md",
+            "---\ntitle: C\ntype: source\nauthor: Mark Smith\n---\n# C\n",
+        );
         write(
             root,
             "Topics/One.md",
@@ -201,9 +216,16 @@ mod one_voice_tests {
             "---\ntitle: Two\ntype: topic\nsources: [\"raw/sources/a-1.md\", \"raw/sources/c-3.md\"]\n---\n# Two\n[[One]]\n",
         );
         let gaps = find_gaps(root).unwrap();
-        let one: Vec<_> = gaps.iter().filter(|g| matches!(g.kind, GapKind::OneVoice)).collect();
+        let one: Vec<_> = gaps
+            .iter()
+            .filter(|g| matches!(g.kind, GapKind::OneVoice))
+            .collect();
         assert_eq!(one.len(), 1, "{one:?}");
         assert_eq!(one[0].subjects, ["Topics/One.md"]);
-        assert!(one[0].explanation.contains("all by Nils Glenn"), "{}", one[0].explanation);
+        assert!(
+            one[0].explanation.contains("all by Nils Glenn"),
+            "{}",
+            one[0].explanation
+        );
     }
 }

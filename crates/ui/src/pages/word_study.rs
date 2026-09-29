@@ -26,7 +26,8 @@ pub fn codes(field: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|c| {
             let mut ch = c.chars();
-            matches!(ch.next(), Some('H' | 'G' | 'h' | 'g')) && ch.next().is_some_and(|d| d.is_ascii_digit())
+            matches!(ch.next(), Some('H' | 'G' | 'h' | 'g'))
+                && ch.next().is_some_and(|d| d.is_ascii_digit())
         })
         .map(str::to_uppercase)
         .collect()

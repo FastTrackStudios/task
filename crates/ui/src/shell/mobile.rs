@@ -19,7 +19,6 @@
 //! shell-lifetime component (see `crate::collab` docs for the keyed-
 //! child rule).
 
-
 use architect_ui::prelude::{Button, ButtonVariant, Text, TextVariant};
 use chrono::Utc;
 use dioxus::prelude::*;

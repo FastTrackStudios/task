@@ -79,7 +79,10 @@ pub(crate) fn style_notes(page: &Page) -> Vec<String> {
             bold_year_bullets += 1;
         }
         if shows_bible_code(line) {
-            notes.push("a bible:: code shows as text — make it a [[bible::…|Full Name C:V]] link".to_owned());
+            notes.push(
+                "a bible:: code shows as text — make it a [[bible::…|Full Name C:V]] link"
+                    .to_owned(),
+            );
         }
         if page.page_type != "source" && bare_timestamp(line) {
             notes.push("a bare timestamp — cite it: [[source#^t<seconds>|mm:ss]]".to_owned());
@@ -104,7 +107,10 @@ fn bare_timestamp(line: &str) -> bool {
     b.iter().enumerate().any(|(i, &open)| {
         (open == b'(' || open == b'[') && {
             let rest = &text[i + 1..];
-            let stamp: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == ':').collect();
+            let stamp: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == ':')
+                .collect();
             let close = rest[stamp.len()..].chars().next();
             stamp.contains(':')
                 && stamp.split(':').all(|p| !p.is_empty())
@@ -150,7 +156,14 @@ mod tests {
     fn what_the_check_finds() {
         let md = "---\ntitle: T\ntype: topic\n---\n\n# T\n\nText bible::Ps.82.1 and a stamp (12:34).\n\n- **1928** — a\n- **1929** — b\n\n```mermaid\ngraph\n```\n\n## Contested\n\nMaybe.\n";
         let n = notes(md).join(" | ");
-        for want in ["no summary", "bible::", "bare timestamp", "timeline", "mermaid", "“## contested” is open"] {
+        for want in [
+            "no summary",
+            "bible::",
+            "bare timestamp",
+            "timeline",
+            "mermaid",
+            "“## contested” is open",
+        ] {
             assert!(n.contains(want), "missing {want}: {n}");
         }
     }
