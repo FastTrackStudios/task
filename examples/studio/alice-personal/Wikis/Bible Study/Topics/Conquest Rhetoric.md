@@ -25,8 +25,9 @@ Egyptian royal inscriptions claim enemies annihilated in campaigns whose other r
 
 ## Inside Joshua
 
-- [[bible::Josh.10.20|Joshua 10:20]]: they strike the enemy “until they were wiped out” — and in the same sentence, “the remnant that remained” reaches the fortified cities [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2016|33:36]].
-- [[bible::Josh.15.63|Joshua 15:63]]: Judah could not drive out the Jebusites of Jerusalem, who “dwell there to this day” — a people on the [[Herem|ḥērem]] list, still in the land [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2061|34:21]].
+[[bible::Josh.10.20|Joshua 10:20]] — “Wiped out”, and in the same sentence “the remnant that remained” reaching the fortified cities [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2016|33:36]].
+
+[[bible::Josh.15.63|Joshua 15:63]] — A people on the [[Herem|ḥērem]] list, still living in Jerusalem “to this day” [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2061|34:21]].
 
 The same book holds the total language and the survivors side by side, and does not treat them as a contradiction.
 
@@ -34,6 +35,5 @@ The same book holds the total language and the survivors side by side, and does 
 
 God speaks to people in the idioms they use. Jesus describes the fall of Jerusalem with the sun darkened and stars falling ([[bible::Matt.24.29|Matthew 24:29]]) — the conventions of Jewish apocalyptic, not a forecast of astronomy [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2106|35:06]]. A command to 13th-century BC Israelites comes in 13th-century BC military idiom.
 
-## Limits
-
-This explains the *language*. It does not make a war gentle, and it leaves the command itself to be accounted for — which is what [[Herem]] and [[Nephilim and Anakim]] try to do.
+> [!question]- What this does not explain
+> This explains the *language*. It does not make a war gentle, and it leaves the command itself to be accounted for — which is what [[Herem]] and [[Nephilim and Anakim]] try to do.

@@ -24,7 +24,7 @@ Hazor, “formerly the head of all those kingdoms” ([[bible::Josh.11.10|Joshua
 
 ## The after-action report
 
-[[bible::Josh.11.21-Josh.11.22|Joshua 11:21–22]]: Joshua cut off the Anakim from the hill country — Hebron, Debir, Anab, all the hill country of Judah and of Israel — and devoted them and their cities to destruction. “There were none of the Anakim left in the land of the people of Israel. Only in Gaza, in Gath, and in Ashdod did some remain.” [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2744|45:44]]
+[[bible::Josh.11.21-Josh.11.22|Joshua 11:21–22]] — The whole conquest summed up by one people: the Anakim cut off from the hill country, “only in Gaza, in Gath, and in Ashdod did some remain” [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2744|45:44]].
 
 Two things to notice:
 

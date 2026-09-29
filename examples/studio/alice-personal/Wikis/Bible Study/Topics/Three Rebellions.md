@@ -31,7 +31,11 @@ In Heiser’s reading, Genesis 3–11 is three rebellions by members of the [[Di
 
 The [[Nachash|nāḥāš]] of [[bible::Gen.3.1|Genesis 3:1]] is not a garden snake. The word can mean serpent, diviner, or shining one; the creature knows what God said and what eating would mean, and it is inside God’s space — a council member who should have guarded it [[what-the-bible-really-says-about-the-other-gods-ac256dcf#^t2140|35:40]].
 
-Its curse carries the first promise: enmity between its seed and the woman’s, and a crushed head ([[bible::Gen.3.15|Genesis 3:15]]). The Bible takes the rest of its length to resolve it — the powers disarmed in [[bible::Col.2.15|Colossians 2:15]], the ancient serpent bound and thrown down in [[bible::Rev.20.2|Revelation 20:2]] [[what-the-bible-really-says-about-the-other-gods-ac256dcf#^t2186|36:26]].
+Its curse carries the first promise:
+
+[[bible::Gen.3.15|Genesis 3:15]] — Enmity between the serpent’s seed and the woman’s, and a crushed head: the promise the rest of the Bible keeps.
+
+The Bible takes the rest of its length to resolve it — the powers disarmed in [[bible::Col.2.15|Colossians 2:15]], the ancient serpent bound and thrown down in [[bible::Rev.20.2|Revelation 20:2]] [[what-the-bible-really-says-about-the-other-gods-ac256dcf#^t2186|36:26]].
 
 (The triple meaning of *nāḥāš* is Heiser’s argument and is not widely shared; the case for a divine being here does not depend on it.)
 

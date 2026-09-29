@@ -25,7 +25,7 @@ Four beasts rise from the sea; then the scene moves to heaven, and a court sits.
 
 ## The Son of Man
 
-One like a son of man comes with the clouds of heaven to the Ancient of Days and is given dominion, glory and a kingdom, “that all peoples, nations and languages should serve him” ([[bible::Dan.7.13-Dan.7.14|Daniel 7:13–14]]).
+[[bible::Dan.7.13-Dan.7.14|Daniel 7:13–14]] — One like a son of man, given the kingdom of “all peoples, nations and languages”.
 
 *Peoples, nations and languages* is Babel’s vocabulary. The nations divided there and handed to the sons of God ([[Deuteronomy 32]]), the nations [[Psalm 82]] asks God to inherit, are here given to one figure [[what-the-bible-really-says-about-the-other-gods-ac256dcf#^t3282|54:42]].
 

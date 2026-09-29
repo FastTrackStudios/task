@@ -31,7 +31,7 @@ King Kirta has lost his wives and heirs. El appears in a dream: raise an army, m
 | Obligation broken | Kirta’s unpaid vow | [[Achan]]’s theft of [[Herem|ḥērem]] |
 | Siege | six quiet days, seventh decisive | six circuits, seventh day walls fall ([[bible::Josh.6.3-Josh.6.4\|Joshua 6:3–4]]) |
 
- [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2424|40:24]]
+The same beats, in the same order [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t2424|40:24]].
 
 ## Not borrowing
 

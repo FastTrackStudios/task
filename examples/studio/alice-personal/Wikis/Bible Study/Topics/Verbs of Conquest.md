@@ -32,7 +32,7 @@ Displacement dominates. God “will send hornets” ahead of Israel to drive peo
 
 ## The texts assume survivors
 
-[[bible::Deut.7.2-Deut.7.3|Deuteronomy 7:2–3]] puts “devote them to destruction” and “do not intermarry with them” two verses apart. A marriage law for a people who are all dead makes no sense; the law presupposes survivors [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t1004|16:44]].
+[[bible::Deut.7.2-Deut.7.3|Deuteronomy 7:2–3]] — “Devote them to destruction” and “do not intermarry with them”, two verses apart. A marriage law for a people who are all dead makes no sense; the law presupposes survivors [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t1004|16:44]].
 
 And there are survivors in the narrative:
 

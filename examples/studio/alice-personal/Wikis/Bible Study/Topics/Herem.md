@@ -30,7 +30,7 @@ Set apart wholly for God: taken out of human use and human reach, placed under d
 
 ## Objects
 
-At Jericho the silver, gold, bronze and iron are *ḥērem* — they go into the treasury of the LORD ([[bible::Josh.6.19|Joshua 6:19]]). No soldier pockets anything [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t1742|29:02]].
+[[bible::Josh.6.19|Joshua 6:19]] — At Jericho the metals are *ḥērem*: they go to the treasury, not to the soldiers. No one pockets anything [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t1742|29:02]].
 
 [[Achan]] hides a Babylonian robe, silver and gold in his tent ([[bible::Josh.7.21|Joshua 7:21]]), and the campaign stalls until it is dealt with. The objects are not evil; they are off limits, and he crossed a sacred boundary.
 
@@ -41,6 +41,9 @@ Applied to people, *ḥērem* is God claiming exclusive judgment over **these** 
 ## Not Israel’s idea
 
 The first generation refused to go in and died in the wilderness ([[bible::Num.14.1-Num.14.4|Numbers 14:1–4]]). The second were ex-slaves facing fortified cities, and the text credits every victory to intervention they could not claim [[god-told-them-to-kill-everyone-here-s-why-76b70b2b#^t1833|30:33]].
+
+> [!question]- How firm is this?
+> The consecration sense is well attested outside war — a devoted field or animal belongs to God and cannot be redeemed ([[bible::Lev.27.28-Lev.27.29|Leviticus 27:28–29]]). How far it softens the war texts is debated: John Walton reads *ḥērem* in war as removal from human use rather than a kill order; others read it there as plainly destructive.
 
 ## Related
 
