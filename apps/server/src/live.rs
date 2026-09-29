@@ -45,6 +45,8 @@ const IDLE: Duration = Duration::from_secs(15 * 60);
 const SHORTEST_RESET: Duration = Duration::from_secs(30);
 /// The library kind a setlist is.
 const SETLIST_KIND: &str = "songlist";
+/// A set for a service or a show — played live as a song list is.
+const SET_KIND: &str = "setlist";
 
 /// A song's (or a set's presence channel's) doc id in one epoch.
 #[must_use]
@@ -149,7 +151,7 @@ impl LiveHost {
             .collections
             .get(setlist)
             .map_err(|e| LiveError::Failed(e.to_string()))?
-            .filter(|c| c.kind.as_str() == SETLIST_KIND)
+            .filter(|c| matches!(c.kind.as_str(), SETLIST_KIND | SET_KIND))
             .ok_or_else(|| LiveError::NotFound(setlist.to_owned()))?;
         let slugs: Vec<String> = collection
             .items
