@@ -1,41 +1,31 @@
 # Bible Study — schema
 
-The contract between the curator (human) and the maintainer (LLM agent) for the `bible-study` wiki. The agent reads this on every ingest.
+Alice’s own Bible Study: what she has studied, in her words. A page arrives here two ways — she writes it, or she takes it from the **Bible Study Library** (`bible-study-library`) once she has studied it enough. A taken page carries `promoted_from:` and `promoted_at:`; it is hers to rewrite from then on, and it says when the library’s version has changed since. `skills/wiki-style.md` says how a page is laid out.
 
 ## Page types
 
-Every page carries a `type:` frontmatter field and lives in the directory for its type.
+The kinds of page this wiki holds — the same as the library’s, so any library page can be taken in as what it is.
 
 | `type:` | Lives in | What |
 |---|---|---|
-| `passage` | `Passages/` | One chapter or pericope: its setting, how it has been read, and where it connects. Anchors to verses (`anchors:`) rather than quoting them. |
-| `topic` | `Topics/` | One subject the wiki covers, synthesised across its sources. |
-| `question` | `Questions/` | A question the wiki set out to answer: the answer, and the citations behind it. |
-| `person` | `People/` | A person: who they are, and what they said or did that matters here. |
-| `source` | `Sources/` | A summary of one imported document under `raw/sources/`. |
-
-Pages outside this wiki use other types (`task`, `daily`, `meeting`, …) — those are not wiki pages.
+| `passage` | `Passages/` | A chapter or pericope, as she reads it. |
+| `topic` | `Topics/` | A subject she has worked through. |
+| `question` | `Questions/` | A question she has answered for herself, with her reasons. |
+| `person` | `People/` | A person, and why they matter to what she studies. |
+| `word` | `Words/` | A Hebrew or Greek word she has studied. |
+| `source` | `Sources/` | A source she has read or watched, and what she took from it. |
+| `path` | `Paths/` | An order to read her own pages in. |
 
 ## Required frontmatter
 
 ```yaml
 title: Page title
-type: passage              # one of the table above
-tags: [comma, separated]   # optional but recommended
-sources: ["raw/sources/<file>", ...]  # required for source pages, and for any claim taken from one
+type: passage
+summary: "The page in one sentence."
 created: YYYY-MM-DD
 ```
 
-Pages the agent writes also carry `ai_generated: true` and `generated_by: <model>`.
-
 ## Cross-references
 
-- A page in this wiki: `[[Page title]]` — bare basename, so folder moves don’t break links.
-- A page in a wiki this one subscribes to: `[[slug::Page]]`, resolved through the subscription rather than copied here. Scripture is `[[bible::Book.Chapter.Verse]]` — `[[bible::John.3.16|John 3:16]]`.
-- Never link out to the vault; the vault links in.
-
-## Catalog + log
-
-- `index.md` is the catalog, organised by `type:`. The agent updates it on every ingest; `task wiki catalog rebuild --wiki bible-study` rebuilds it from the tree.
-- `log.md` is append-only. Each entry starts `## [YYYY-MM-DD] <op> | <title>` so `grep '^## \['` gives a clean timeline.
-- `purpose.md` says what belongs here; `Goals.md` says what to write next.
+- A page here: `[[Page title]]`. A library page: `[[bible-study-library::Page]]` — a taken page’s links to what it did not bring along already point there.
+- Scripture: `[[bible::Book.Chapter.Verse|Full Name C:V]]`.

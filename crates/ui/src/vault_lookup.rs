@@ -69,6 +69,12 @@ const SCRIPTURE_SCHEME: &str = "scripture://";
 /// The server resolves it (`Subscriptions::resolve_reference`); the
 /// cached text is [`encode_reference`]'s, empty when it points nowhere.
 const REF_SCHEME: &str = "ref://";
+/// A file in another wiki, as a cache key:
+/// `wikifile://<org>/<wiki>/<path>`. What a reference to another wiki's
+/// page (`[[bible-study-library::Herem]]`) is read through, so its source
+/// badge, word badge, passage and summary work as a local page's do.
+const WIKI_FILE_SCHEME: &str = "wikifile://";
+
 /// The org's installed translations, as a cache key: fetched once, the
 /// ids joined by commas — what a verse card offers to switch between.
 const TRANSLATIONS_KEY: &str = "scripture-translations://";
@@ -263,6 +269,52 @@ impl ClientVaultIndex {
         self.content(&format!("{REF_SCHEME}{name}"))
             .map(|text| decode_reference(&text))
     }
+
+    /// The page a link's name means — this wiki's own (`Herem`), or
+    /// another wiki's by reference (`bible-study-library::Herem`) — as
+    /// the cache key its text is read through. `None` while a reference
+    /// is still being resolved, or when it points nowhere.
+    fn named(&self, name: &str) -> Option<Named> {
+        if is_wiki_reference(name) {
+            let t = self.reference(name)??;
+            let base = format!("{WIKI_FILE_SCHEME}{}/{}/", t.org, t.wiki);
+            let stem = basename_of(&t.path).trim_end_matches(".md").to_owned();
+            return Some(Named {
+                key: format!("{base}{}", t.path),
+                title: t.title,
+                page_type: String::new(),
+                path: t.path,
+                // A source summary's timestamps live in the archive it
+                // summarises, which shares its name.
+                twin: Some(format!("{base}raw/sources/{stem}.md")),
+            });
+        }
+        let meta = self.meta(name)?;
+        Some(Named {
+            key: meta.path.clone(),
+            title: meta.title.clone(),
+            page_type: meta.page_type.clone(),
+            path: meta.path.clone(),
+            twin: self
+                .shadowed
+                .get(&name.to_lowercase())
+                .map(|m| m.path.clone()),
+        })
+    }
+}
+
+/// See [`ClientVaultIndex::named`].
+struct Named {
+    /// What [`ClientVaultIndex::content`] reads the page's text by.
+    key: String,
+    title: String,
+    /// The folder index's `type:` for a local page; empty for another
+    /// wiki's (the frontmatter says).
+    page_type: String,
+    path: String,
+    /// The archive a curated source page shares its name with, when
+    /// there is one.
+    twin: Option<String>,
 }
 
 /// Where a wiki reference points, asked of `slug`'s server. `None` for
@@ -343,6 +395,19 @@ pub fn use_vault_fetch_worker(
                             Err(e) => format!("⚠ {e}"),
                         },
                     )
+                } else if let Some(rest) = path.strip_prefix(WIKI_FILE_SCHEME) {
+                    let mut parts = rest.splitn(3, '/');
+                    match (parts.next(), parts.next(), parts.next()) {
+                        (Some(org), Some(wiki), Some(file)) => {
+                            crate::document_session::fetch_file(
+                                org.to_owned(),
+                                crate::document_session::wiki_vault_id(wiki),
+                                file.to_owned(),
+                            )
+                            .await
+                        }
+                        _ => Ok(String::new()),
+                    }
                 } else if let Some(reference) = path.strip_prefix(REF_SCHEME) {
                     // A wiki reference: the server says where it points.
                     // Every answer is cached — "nowhere" as empty text —
@@ -396,9 +461,22 @@ impl VaultLookup for ClientVaultIndex {
                     preview: LOADING.to_owned(),
                 }),
                 Some(None) => None,
-                Some(Some(t)) => Some(VaultPageHit {
-                    preview: format!("{} — in {}", t.title, t.wiki),
-                }),
+                Some(Some(t)) => {
+                    // Another wiki's page reads like a local one once its
+                    // text lands: its summary, else its opening lines.
+                    let key = format!("{WIKI_FILE_SCHEME}{}/{}/{}", t.org, t.wiki, t.path);
+                    let preview = self.content(&key).map_or_else(
+                        || format!("{} — in {}", t.title, t.wiki),
+                        |raw| {
+                            crate::pages::vault::frontmatter_value(&raw, "summary")
+                                .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+                                .filter(|v| !v.is_empty())
+                                .map(|v| plain_summary(&v))
+                                .unwrap_or_else(|| preview_of_page(&raw, 200))
+                        },
+                    );
+                    Some(VaultPageHit { preview })
+                }
             };
         }
         let meta = self.meta(name)?;
@@ -447,8 +525,8 @@ impl VaultLookup for ClientVaultIndex {
     }
 
     fn lookup_source(&self, name: &str) -> Option<editor::markdown::VaultSourceHit> {
-        let meta = self.meta(name)?;
-        let raw = self.content(&meta.path)?;
+        let meta = self.named(name)?;
+        let raw = self.content(&meta.key)?;
         let field = |key: &str| {
             crate::pages::vault::frontmatter_value(&raw, key)
                 .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
@@ -474,8 +552,8 @@ impl VaultLookup for ClientVaultIndex {
     }
 
     fn lookup_word(&self, name: &str) -> Option<editor::markdown::VaultWordHit> {
-        let meta = self.meta(name)?;
-        let raw = self.content(&meta.path)?;
+        let meta = self.named(name)?;
+        let raw = self.content(&meta.key)?;
         let field = |key: &str| {
             crate::pages::vault::frontmatter_value(&raw, key)
                 .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
@@ -587,8 +665,8 @@ impl VaultLookup for ClientVaultIndex {
     }
 
     fn lookup_block_short(&self, page: &str, short_id: &str) -> Option<String> {
-        let meta = self.meta(page)?;
-        let raw = match self.content(&meta.path) {
+        let meta = self.named(page)?;
+        let raw = match self.content(&meta.key) {
             Some(raw) => raw,
             None => return Some(LOADING.to_owned()),
         };
@@ -598,8 +676,8 @@ impl VaultLookup for ClientVaultIndex {
         let raw = if anchor_at(&raw, &needle).is_some() {
             raw
         } else {
-            let twin = self.shadowed.get(&page.to_lowercase())?;
-            match self.content(&twin.path) {
+            let twin = meta.twin?;
+            match self.content(&twin) {
                 Some(raw) => raw,
                 None => return Some(LOADING.to_owned()),
             }

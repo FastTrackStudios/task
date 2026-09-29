@@ -27,6 +27,7 @@ pub mod settings;
 pub mod share_panel;
 pub mod study_path;
 pub mod sync;
+pub mod take_into_study;
 pub mod task_detail;
 pub mod tasks;
 pub mod timer;

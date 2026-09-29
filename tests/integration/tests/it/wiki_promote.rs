@@ -355,3 +355,110 @@ async fn an_occupied_target_is_refused_and_a_stale_guard_conflicts() {
         now.markdown
     );
 }
+
+/// t[verify wiki.promote.copy] — the same crossing in a person's own
+/// org: Alice takes a Bible Study Library page into her Bible Study.
+///
+/// The library is agent-written research and her study holds only what
+/// she has studied, so almost everything a library page links to stays
+/// behind. The taken copy has to keep working anyway: every link to a
+/// library page it did not bring along points back at the library by
+/// reference, and scripture links — which belong to no wiki — are left
+/// exactly as written.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_library_page_taken_into_the_study_keeps_its_links_working() {
+    use task_server::example_org::{SEED_STUDY_PAGE, STUDY_PAIR};
+    let (library, study) = STUDY_PAIR;
+
+    let s = Scenario::open().await;
+    let org = s
+        .orgs
+        .acme
+        .start_beside("Alice Personal", "alice-personal", |_| {})
+        .await;
+    let owner = integration::people::account(&org, "alice@alice.test", "Alice").await;
+    let alice = Session::open(&org, owner.token.clone()).await;
+    let pages = alice.wiki_pages().await;
+
+    let source = pages
+        .read_page(library.to_string(), SEED_STUDY_PAGE.to_string())
+        .await
+        .expect("the library holds the seeded passage");
+    let schema = alice
+        .wiki_schema()
+        .await
+        .read_schema(study.to_string())
+        .await
+        .expect("the study commits a schema");
+    let names = names_of(&alice, study).await;
+    assert!(
+        !names.contains("Divine Council"),
+        "the study already holds Divine Council — this test's premise is gone"
+    );
+
+    let plan = promote::plan(
+        &source.markdown,
+        &PromoteRequest {
+            from_wiki: library,
+            from_path: SEED_STUDY_PAGE,
+            to_wiki: study,
+            to_path: None,
+            as_type: None,
+            target_schema: &schema.markdown,
+            target_names: &names,
+            at: chrono::Utc::now(),
+        },
+    )
+    .expect("a passage is a type the study declares");
+    assert_eq!(
+        plan.to_path, SEED_STUDY_PAGE,
+        "a passage lands where passages live"
+    );
+
+    pages
+        .write_page(
+            study.to_string(),
+            plan.to_path.clone(),
+            plan.promoted_markdown.clone(),
+            String::new(),
+        )
+        .await
+        .expect("write the taken copy");
+    pages
+        .write_page(
+            library.to_string(),
+            SEED_STUDY_PAGE.to_string(),
+            plan.annotated_source.clone(),
+            source.sha256.clone(),
+        )
+        .await
+        .expect("write the library's back-reference");
+
+    let taken = pages
+        .read_page(study.to_string(), plan.to_path.clone())
+        .await
+        .expect("the study now holds it")
+        .markdown;
+    assert!(
+        taken.contains(&format!("promoted_from: \"{library}::{SEED_STUDY_PAGE}\"")),
+        "the copy names the library page it came from:\n{taken}"
+    );
+    assert!(
+        taken.contains(&format!("[[{library}::Divine Council]]")),
+        "a link to a library page the study does not hold points back at the library:\n{taken}"
+    );
+    assert!(
+        taken.contains("[[bible::Ps.82.1\\|Psalm 82:1]]"),
+        "scripture belongs to no wiki, so its links are left exactly as written:\n{taken}"
+    );
+
+    let library_after = pages
+        .read_page(library.to_string(), SEED_STUDY_PAGE.to_string())
+        .await
+        .expect("the library page is still there — taking copies")
+        .markdown;
+    assert!(
+        library_after.contains(&format!("promoted_to: \"{study}::{}\"", plan.to_path)),
+        "the library page says where its studied copy went:\n{library_after}"
+    );
+}

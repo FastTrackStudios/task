@@ -854,12 +854,19 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
         org: "alice-personal",
         title: "Bible Study",
         visibility: Visibility::Private,
-        demonstrates: "a wiki that annotates a Resource without writing into it — every \
-                       page anchors to a VerseId, so it survives a translation swap — and \
-                       the study tools built on it: summaries, source and word badges, \
-                       verse cards that switch translations, readings, timelines, maps, \
-                       folded doubt, section embeds, study paths and the one-voice and \
-                       style checks",
+        demonstrates: "a person's own study: a wiki that annotates a Resource without \
+                       writing into it — every page anchors to a VerseId, so it survives a \
+                       translation swap — holding only what she has studied, written by her \
+                       or taken from the Bible Study Library once she stands behind it",
+    },
+    DeclaredWiki {
+        org: "alice-personal",
+        title: "Bible Study Library",
+        visibility: Visibility::Private,
+        demonstrates: "the working half of a person's study: an agent-written library of \
+                       sources, summaries, topics, words and paths, from which a page is \
+                       taken into Bible Study (a promotion — copied, recorded on both ends) \
+                       once it has been studied enough",
     },
     DeclaredWiki {
         org: "alice-personal",
@@ -888,6 +895,17 @@ pub const SEED_PROMOTABLE_PAGE: &str = "Concepts/Dynamic Range.md";
 /// refusal is the feature, so the seed carries the case that triggers
 /// it.
 pub const SEED_UNPROMOTABLE_PAGE: &str = "Questions/Do small speakers need a different master.md";
+
+/// Alice's study pair, as `(library, study)` slugs in `alice-personal`:
+/// the agent-written Bible Study Library, and her own Bible Study that
+/// a page is taken into once she has studied it. The same promotion as
+/// [`PROMOTION_PAIR`], told in a person's own org.
+pub const STUDY_PAIR: (&str, &str) = ("bible-study-library", "bible-study");
+
+/// A library page ready to take into the study: a `passage` (a type
+/// the study declares) that links library pages the study does not
+/// hold, so the taken copy's links have to point back at the library.
+pub const SEED_STUDY_PAGE: &str = "Passages/Psalm 82.md";
 
 /// The wiki the seed's Edit lane story is told on: the owner holds
 /// Editor here, one request is open from a cast member without the

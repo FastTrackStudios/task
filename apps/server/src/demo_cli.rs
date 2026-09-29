@@ -706,12 +706,18 @@ async fn plant_bible(org: &org_proto::OrgRoot) {
 /// The Bible Study wiki's study data: two more translations (so a verse
 /// card has something to switch to and compare), the Strong's lexicon
 /// and the Hebrew and Greek texts (so a word page's study has an entry
-/// and every occurrence). Only for an org whose seed has that wiki — the
-/// others would carry fifty megabytes nobody reads. Never fails the
-/// plant, and installs from the download cache after the first time.
+/// and every occurrence). Only for an org whose seed has the Bible Study
+/// Library — the others would carry fifty megabytes nobody reads. Never
+/// fails the plant, and installs from the download cache after the first
+/// time.
 #[cfg(feature = "plugin-scripture")]
 async fn plant_study(org: &org_proto::OrgRoot) {
-    if !org.path().join("wikis").join("bible-study").is_dir() {
+    if !org
+        .path()
+        .join("wikis")
+        .join("bible-study-library")
+        .is_dir()
+    {
         return;
     }
     let resources = org.resources_dir();

@@ -166,6 +166,15 @@ What it does, and does not do:
 - **Does not launder.** `ai_generated:` / `generated_by:` cross over
   untouched. Vetting vouches for the claim, not the authorship.
 
+The same pair shape serves a person's own study. Alice's
+`bible-study-library` is the working wiki: an agent ingests sources and
+writes topics, passages and words into it. Her `bible-study` holds only
+what she has studied, and a page reaches it when she picks **Take into
+my study…** on the library page in the web app, which is this same
+promotion. An agent writes into the library and **never** into the
+study; if something looks ready to take, say so and leave the taking to
+her. A taken page tells her when its library original has changed since.
+
 ## 2. Ingest sources
 
 Three ways a source lands under `raw/sources/`, all SHA-256 deduplicated
