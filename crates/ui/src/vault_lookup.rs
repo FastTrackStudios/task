@@ -174,10 +174,21 @@ impl ClientVaultIndex {
         state: Signal<EditorState>,
         fetcher: Coroutine<String>,
     ) -> Rc<Self> {
-        let by_basename = pages
-            .iter()
-            .map(|p| (p.basename.to_lowercase(), p.clone()))
-            .collect();
+        // Two pages can share a basename: a wiki's summary of a source
+        // (`Sources/talk-ac25.md`) and the archive it summarises
+        // (`raw/sources/talk-ac25.md`). A link means the curated page —
+        // it carries the short title and author — so it wins over
+        // anything under `raw/`, whatever order the index came in.
+        let mut by_basename: HashMap<String, PageMeta> = HashMap::new();
+        for p in pages {
+            let key = p.basename.to_lowercase();
+            let keep_existing = by_basename
+                .get(&key)
+                .is_some_and(|have| !have.path.starts_with("raw/") && p.path.starts_with("raw/"));
+            if !keep_existing {
+                by_basename.insert(key, p.clone());
+            }
+        }
         Rc::new(Self {
             state,
             by_basename,
@@ -404,6 +415,32 @@ impl VaultLookup for ClientVaultIndex {
         })
     }
 
+    fn lookup_source(&self, name: &str) -> Option<editor::markdown::VaultSourceHit> {
+        let meta = self.meta(name)?;
+        let raw = self.content(&meta.path)?;
+        let field = |key: &str| {
+            crate::pages::vault::frontmatter_value(&raw, key)
+                .map(|v| v.trim().trim_matches(['"', '\'']).trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let content_type = field("content_type");
+        let is_source = meta.page_type == "source"
+            || field("type").as_deref() == Some("source")
+            || content_type.is_some()
+            || meta.path.starts_with("raw/sources/");
+        if !is_source {
+            return None;
+        }
+        let url = field("source_url").or_else(|| field("media"));
+        let title = field("title").unwrap_or_else(|| meta.title.clone());
+        Some(editor::markdown::VaultSourceHit {
+            kind: source_kind(content_type.as_deref(), url.as_deref()).to_owned(),
+            short: field("short_title").unwrap_or_else(|| short_title(&title)),
+            author: field("author").unwrap_or_default(),
+            title,
+        })
+    }
+
     fn lookup_note_kind(&self, name: &str) -> Option<String> {
         let meta = self.meta(name)?;
         let raw = self.content(&meta.path)?;
@@ -579,6 +616,50 @@ pub struct LinkCandidate {
     pub path: String,
     /// `insert` is an alias rather than the basename.
     pub is_alias: bool,
+}
+
+/// Which icon a source badge gets: its `content_type`, sharpened by
+/// where it lives (a video on YouTube is `youtube`).
+#[must_use]
+pub fn source_kind(content_type: Option<&str>, url: Option<&str>) -> &'static str {
+    let url = url.unwrap_or_default().to_lowercase();
+    match content_type.unwrap_or_default().to_lowercase().as_str() {
+        "video" if url.contains("youtube.com/") || url.contains("youtu.be/") => "youtube",
+        "video" => "video",
+        "audio" | "podcast" => "podcast",
+        "book" | "ebook" => "book",
+        "article" | "blog" | "news" | "post" => "article",
+        "paper" | "pdf" | "journal" => "paper",
+        "" if !url.is_empty() => "web",
+        _ => "text",
+    }
+}
+
+/// A title short enough for a badge that sits in a sentence: the part
+/// before a subtitle (`God Told Them to Kill Everyone. Here's Why.` →
+/// `God Told Them to Kill Everyone`), cut at a word near 32 characters.
+/// A page's own `short_title` wins over this.
+#[must_use]
+pub fn short_title(title: &str) -> String {
+    let title = title.trim();
+    let head = [". ", ": ", " | ", " — ", " - ", "? ", "! "]
+        .iter()
+        .filter_map(|sep| title.find(sep).map(|i| (i, sep)))
+        .filter(|(i, _)| *i >= 12)
+        .min_by_key(|(i, _)| *i)
+        .map_or(title, |(i, sep)| {
+            // Keep a question's own mark: `Did God …?` stays a question.
+            let end = if sep.starts_with(['?', '!']) { i + 1 } else { i };
+            &title[..end]
+        })
+        .trim_end_matches(['.', ',', ';']);
+    const MAX: usize = 32;
+    if head.chars().count() <= MAX + 4 {
+        return head.to_owned();
+    }
+    let cut: String = head.chars().take(MAX).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(a, _)| a);
+    format!("{}…", cut.trim_end_matches([',', ';', ':']))
 }
 
 /// Wikilink candidates from the folder index: every page's
@@ -764,6 +845,27 @@ mod tests {
             "acme.test/music-theory::Modes@2026-09-01"
         ));
         assert!(!is_wiki_reference("Modes"));
+    }
+
+    #[test]
+    fn a_source_badge_knows_its_kind() {
+        use super::source_kind as k;
+        let yt = Some("https://www.youtube.com/watch?v=CweAM530ryc");
+        assert_eq!(k(Some("video"), yt), "youtube");
+        assert_eq!(k(Some("video"), Some("https://vimeo.com/1")), "video");
+        assert_eq!(k(Some("book"), None), "book");
+        assert_eq!(k(Some("Article"), Some("https://example.com/a")), "article");
+        assert_eq!(k(None, Some("https://example.com/a")), "web");
+        assert_eq!(k(None, None), "text");
+    }
+
+    #[test]
+    fn a_source_badge_takes_a_short_title() {
+        use super::short_title as s;
+        assert_eq!(s("God Told Them to Kill Everyone. Here's Why."), "God Told Them to Kill Everyone");
+        assert_eq!(s("Ancient Conquest Accounts"), "Ancient Conquest Accounts");
+        assert_eq!(s("What the Bible REALLY Says About the other gods"), "What the Bible REALLY Says…");
+        assert_eq!(s("Did God Really Command Genocide? Coming to Terms"), "Did God Really Command Genocide?");
     }
 
     #[test]

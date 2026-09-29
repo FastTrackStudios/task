@@ -12,9 +12,9 @@
 //!   clearly sections, with more space above a heading than below it so
 //!   it belongs to what follows.
 //! - **Three kinds of reference, told apart.** A link to another page is
-//!   the accent colour with a light underline; scripture is inline text
-//!   with a dotted underline (no pill, so it never stretches the line); a
-//!   timestamp into a video is a small muted `▶ 12:34` tag.
+//!   the accent colour with a light underline; scripture is the editor's
+//!   badge — a book icon on a tint, inline so it never stretches the
+//!   line; a timestamp into a video is a small muted `▶ 12:34` tag.
 //! - **Tables.** Set smaller, in the UI face, with rule lines only
 //!   between rows, and references that never break mid-reference.
 //!
@@ -67,6 +67,10 @@ const READING_RULES: &str = r##"
 .wiki-reading .editor-root .cm-line.md-h3 + .cm-line:has(> br:only-child) {
     height: 0.2lh;
 }
+/* Between verse cards the card's own margin is the gap. */
+.wiki-reading .editor-root .cm-line:has(.md-scripture-card) + .cm-line:has(> br:only-child) {
+    height: 0.1lh;
+}
 
 /* Headings: the title is the title; a section heading sits with the
    text under it (more room above than below). */
@@ -105,7 +109,7 @@ const READING_RULES: &str = r##"
 
 /* Timestamps into a video (`[[source#^t870|14:30]]`): a small muted tag,
    not a link-coloured word. */
-.wiki-reading .editor-root .md-wikilink[data-href*="#^t"] {
+.wiki-reading .editor-root .md-wikilink[data-href*="#^t"]:not(.md-source-chip) {
     font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
     font-size: 0.7em;
     font-variant-numeric: tabular-nums;
@@ -118,36 +122,21 @@ const READING_RULES: &str = r##"
     vertical-align: 0.15em;
     white-space: nowrap;
 }
-.wiki-reading .editor-root .md-wikilink[data-href*="#^t"]::before {
+.wiki-reading .editor-root .md-wikilink[data-href*="#^t"]:not(.md-source-chip)::before {
     content: "\25B6\FE0E\00A0";
     font-size: 0.8em;
 }
-.wiki-reading .editor-root .md-wikilink[data-href*="#^t"]:hover {
+.wiki-reading .editor-root .md-wikilink[data-href*="#^t"]:not(.md-source-chip):hover {
     color: var(--ed-text);
     border-color: color-mix(in srgb, var(--ed-accent) 60%, transparent);
 }
 
-/* Scripture: inline, never a pill — a chip taller than the line spread
-   every line it sat on. Dotted underline in the scripture colour; the
-   verse is the tooltip. */
-.wiki-reading .editor-root .md-scripture-chip {
-    display: inline;
-    padding: 0;
-    border: 0;
-    border-radius: 2px;
-    background: none;
+/* Scripture keeps the editor's badge (book icon, tinted, inline so it
+   never spreads the line); here it only takes the page's weight. */
+.wiki-reading .editor-root .md-wikilink.md-scripture-chip {
     color: var(--ed-text);
     font-weight: 500;
-    white-space: nowrap;
-    text-decoration-line: underline;
-    text-decoration-style: dotted;
-    text-decoration-thickness: 1.5px;
-    text-decoration-color: color-mix(in srgb, var(--ed-tag) 80%, transparent);
-    text-underline-offset: 3px;
-}
-.wiki-reading .editor-root .md-scripture-chip::before { content: none; }
-.wiki-reading .editor-root .md-scripture-chip:hover {
-    background: color-mix(in srgb, var(--ed-tag) 14%, transparent);
+    text-decoration: none;
 }
 
 /* Tables: smaller, in the UI face, rules between rows only. */
@@ -179,7 +168,7 @@ const READING_RULES: &str = r##"
     text-transform: uppercase;
 }
 .wiki-reading .editor-root .md-table tr:nth-child(even) td { background: none; }
-.wiki-reading .editor-root .md-table .md-scripture-chip { font-weight: 500; }
+.wiki-reading .editor-root .md-table .md-scripture-chip { font-size: 0.95em; }
 
 /* ── Phones ──────────────────────────────────────────────────
    A narrow screen gets a size that holds ~40 characters, headings that
@@ -208,15 +197,14 @@ const READING_RULES: &str = r##"
    timestamp tags and scripture references grow a tap area without
    changing how the line looks. */
 @media (pointer: coarse) {
-    .wiki-reading .editor-root .md-wikilink[data-href*="#^t"] {
+    .wiki-reading .editor-root .md-wikilink[data-href*="#^t"]:not(.md-source-chip) {
         padding: 0.25em 0.7em;
         font-size: 0.78em;
     }
-    .wiki-reading .editor-root .md-scripture-chip {
-        padding: 0.15em 0;
-        margin: -0.15em 0;
+    /* No hover on glass: the badge keeps its resting tint. */
+    .wiki-reading .editor-root .md-scripture-chip:hover {
+        background: color-mix(in srgb, var(--ed-scripture) 9%, transparent);
     }
-    .wiki-reading .editor-root .md-scripture-chip:hover { background: none; }
     /* The page's ⋯ and its menu rows: 44px, the touch minimum. */
     .wiki-reading .page-menu-button { min-width: 44px; min-height: 44px; margin: -12px -8px -12px auto; }
     .wiki-reading .page-menu button { min-height: 44px; }
