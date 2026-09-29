@@ -848,6 +848,18 @@ it is read, so the gap is visible before anyone relies on the page.
 
 ---
 
+### A wiki says where it breaks its own style
+
+t[wiki.gaps.style]
+The house style (`skills/wiki-style.md`) is mostly judgment, but the parts a
+program can see are checked: a page with no `summary:`, a summary too long to
+be a lede, the title twice, a "contested" section left open, a `bible::` code
+or a bare timestamp showing as text, bold-year bullets that are a timeline, a
+block Task cannot render. Each page's notes are listed by the wiki and shown
+where the page is read — a tidying list, never a gate.
+
+---
+
 ## What this asks of the seed
 
 Per `CLAUDE.md`, the planted world is part of the feature. Every rule above is

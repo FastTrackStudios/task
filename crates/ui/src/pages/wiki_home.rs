@@ -188,6 +188,7 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
     // already at that path is a message, never an overwrite.
     let mut new_page = use_signal(String::new);
     let mut new_folder = use_signal(String::new);
+    let mut new_type = use_signal(String::new);
     let mut page_error = use_signal(|| Option::<String>::None);
     let access = crate::pages::wiki_access::use_wiki_access(org_sig, wiki.clone());
     let names = crate::pages::wiki_access::use_member_names(org_sig);
@@ -212,14 +213,21 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
             page_error.set(Some("no organization selected".to_owned()));
             return;
         };
-        let Some(path) = crate::pages::wiki_page::new_page_path(&new_folder.read(), &title) else {
+        // No folder chosen: the type's own (`Topics/`, `Words/` …).
+        let page_type = new_type.read().clone();
+        let folder = match new_folder.read().as_str() {
+            "" => crate::pages::page_templates::default_folder(&page_type).to_owned(),
+            f => f.to_owned(),
+        };
+        let Some(path) = crate::pages::wiki_page::new_page_path(&folder, &title) else {
             page_error.set(Some("Give the page a name.".to_owned()));
             return;
         };
         let wiki_id = wiki_for_new.clone();
         let org_for_nav = org_for_nav.clone();
         spawn(async move {
-            let seed = crate::pages::wiki_page::page_seed(&title);
+            let today = chrono::Utc::now().date_naive().to_string();
+            let seed = crate::pages::page_templates::template(&page_type, &title, &today);
             match crate::pages::wiki_page::create_page(
                 slug,
                 wiki_vault_id(&wiki_id),
@@ -374,6 +382,7 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
                     {requests_section(&requests.read(), &names.read(), &org_for_rows, &wiki_for_rows)}
                     {paths_section(&content, &org_for_rows, &wiki_for_rows)}
                     {one_voice_section(&gaps.read(), &content, &org_for_rows, &wiki_for_rows)}
+                    {style_section(&gaps.read(), &content, &org_for_rows, &wiki_for_rows)}
                     if can_edit {
                     form { class: "flex flex-wrap items-center gap-2", onsubmit: on_new_page,
                         input {
@@ -382,13 +391,24 @@ pub fn WikiHomeView(org: String, wiki: String) -> Element {
                             value: "{new_page}",
                             oninput: move |e| new_page.set(e.value()),
                         }
+                        // What kind of page: it starts as that kind's layout.
+                        select {
+                            class: "rounded-lg border border-border/70 bg-background px-2 py-1 text-sm",
+                            title: "Kind of page",
+                            value: "{new_type}",
+                            onchange: move |e| new_type.set(e.value()),
+                            option { value: "", "Blank page" }
+                            for (t , label , _) in crate::pages::page_templates::TYPES.iter() {
+                                option { key: "{t}", value: "{t}", "{label}" }
+                            }
+                        }
                         if !folders.is_empty() {
                             select {
                                 class: "rounded-lg border border-border/70 bg-background px-2 py-1 text-sm",
                                 title: "Folder",
                                 value: "{new_folder}",
                                 onchange: move |e| new_folder.set(e.value()),
-                                option { value: "", "(top level)" }
+                                option { value: "", "(folder for its kind)" }
                                 for f in folders.iter() {
                                     option { key: "{f}", value: "{f}", "{f}" }
                                 }
@@ -555,6 +575,56 @@ fn one_voice_section(
                             title: "{why}",
                             "{title}"
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// "Style notes": pages that break the house style where a program can
+/// see it (no summary, an open "contested" section, a bare timestamp …).
+/// Folded, like the one-voice list — a to-do list for tidying.
+fn style_section(
+    gaps: &Option<Result<Vec<wiki_proto::graph::KnowledgeGap>, String>>,
+    pages: &[wiki_proto::pages::PageInfo],
+    org: &str,
+    wiki: &str,
+) -> Element {
+    let Some(Ok(gaps)) = gaps else {
+        return rsx! {};
+    };
+    let notes: Vec<(String, String, String)> = gaps
+        .iter()
+        .filter(|g| matches!(g.kind, wiki_proto::graph::GapKind::Style))
+        .filter_map(|g| {
+            let path = g.subjects.first()?.clone();
+            let title = pages
+                .iter()
+                .find(|p| p.path == path)
+                .map_or_else(|| path.clone(), |p| p.title.clone());
+            Some((path, title, g.explanation.clone()))
+        })
+        .collect();
+    if notes.is_empty() {
+        return rsx! {};
+    }
+    let n = notes.len();
+    rsx! {
+        details { class: "rounded-lg border border-border/70 bg-card/40 px-4 py-2", "data-testid": "wiki-style-notes",
+            summary { class: "cursor-pointer text-sm",
+                span { class: "font-medium", "Style notes" }
+                span { class: "ml-2 text-muted-foreground", "{n} pages could follow the house style more closely" }
+            }
+            ul { class: "mt-2 flex flex-col gap-1.5 pb-1 text-sm",
+                for (path , title , why) in notes {
+                    li { key: "{path}", class: "flex flex-col",
+                        Link {
+                            to: Route::WikiDocRoute { org: org.to_owned(), wiki: wiki.to_owned(), path: path.clone() },
+                            class: "text-foreground hover:underline",
+                            "{title}"
+                        }
+                        span { class: "text-xs text-muted-foreground", "{why}" }
                     }
                 }
             }

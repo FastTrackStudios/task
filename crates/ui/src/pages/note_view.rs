@@ -105,6 +105,11 @@ pub(crate) fn NoteView(
     #[props(default)]
     footer: Option<Element>,
 ) -> Element {
+    // Task's notes and wikis are prose: `/` opens the snippet menu, as in
+    // most writing apps (at a line start or after a space, so URLs and
+    // "and/or" never do). The editor's own default is `\`, for Keyflow,
+    // where `/` is chord and rhythm syntax.
+    use_hook(|| editor::editor_view::palette::set_trigger('/'));
     let is_focused = use_memo(move || *focused.read() == pane_index);
     let mode = use_memo(move || write_mode.map_or(WriteMode::Direct, |m| m()));
     // Saves, the live session and renames go to the file only in Direct.

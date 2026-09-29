@@ -255,6 +255,11 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
             })
             .map(|g| g.explanation.clone())
     });
+    let style_notes: Option<String> = gaps.read().as_ref().and_then(|list| {
+        list.iter()
+            .find(|g| matches!(g.kind, wiki_proto::graph::GapKind::Style) && g.subjects.contains(&path))
+            .map(|g| g.explanation.clone())
+    });
     let (ai_generated, generated_by) = provenance
         .read()
         .as_ref()
@@ -379,6 +384,10 @@ pub fn WikiPageView(org: String, wiki: String, path: ReadSignal<String>) -> Elem
                         if let Some(why) = one_voice.clone() {
                             span { class: "text-muted-foreground/60", "·" }
                             span { class: "text-amber-500/90", title: "{why}", "One voice" }
+                        }
+                        if let Some(why) = style_notes.clone() {
+                            span { class: "text-muted-foreground/60", "·" }
+                            span { class: "text-sky-500/80", title: "{why}", "Style notes" }
                         }
                         if ai_generated {
                             span { class: "text-muted-foreground/60", "·" }

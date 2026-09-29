@@ -1890,7 +1890,14 @@ pub(crate) async fn run_wiki(cmd: WikiCmd) -> eyre::Result<()> {
                     missing
                 );
                 for g in &gaps {
-                    println!("  [{:?}] {}", g.kind, g.explanation);
+                    // A style note is about one page and does not name it in
+                    // its text, so the page leads the line.
+                    match (&g.kind, g.subjects.first()) {
+                        (wiki_proto::graph::GapKind::Style, Some(page)) => {
+                            println!("  [Style] {page}: {}", g.explanation);
+                        }
+                        _ => println!("  [{:?}] {}", g.kind, g.explanation),
+                    }
                 }
             }
             Ok(())

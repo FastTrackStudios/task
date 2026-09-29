@@ -77,6 +77,19 @@ pub fn find_gaps(vault_root: &Path) -> Result<Vec<KnowledgeGap>, ScanError> {
     }
 
     out.extend(one_voice_gaps(&pages));
+    // ── The house style, where a program can check it ─
+    // The wiki's own furniture (its goals list) is not a page to style.
+    for p in pages.iter().filter(|p| !matches!(p.page_type.as_str(), "goals" | "index" | "log")) {
+        let notes = crate::style::style_notes(p);
+        if !notes.is_empty() {
+            out.push(KnowledgeGap {
+                id: format!("style-{}", slug(&p.rel_path)),
+                kind: GapKind::Style,
+                subjects: vec![p.rel_path.clone()],
+                explanation: notes.join("; "),
+            });
+        }
+    }
     Ok(out)
 }
 

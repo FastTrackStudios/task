@@ -72,4 +72,12 @@ async fn a_page_citing_one_author_is_flagged_as_one_voice() {
         flagged.explanation
     );
     assert!(one_voice(&two).is_none(), "a second author is a second voice");
+
+    // t[verify wiki.gaps.style] — neither page has a summary, which the
+    // style check says, page by page.
+    let style = gaps
+        .iter()
+        .find(|g| matches!(g.kind, GapKind::Style) && g.subjects.iter().any(|p| *p == one))
+        .expect("a page without a summary has style notes");
+    assert!(style.explanation.contains("no summary"), "{}", style.explanation);
 }

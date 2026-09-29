@@ -117,6 +117,9 @@ em dash:
 - A run of cards separated by blank lines replaces a “passage | what it
   says” table: the reader gets the text instead of a summary of it.
 - Not in a list item (`- [[…]] — …` stays an inline badge).
+- The card carries every translation the org has installed: the reader
+  switches between them or compares them all on the card itself. Write
+  the reference once; don't paste two translations.
 
 ### Callouts — a box with a job
 
@@ -208,9 +211,9 @@ In the beginning…
 ```
 ````
 
-For parallel versions of one thing — translations, the same example in
-two forms. **Links and badges do not resolve inside tabs**: plain text
-and emphasis only.
+For parallel versions of one thing — the same example in two forms, a
+passage read two ways. Links, badges and emphasis work inside. (For
+translations of one verse, a verse card already switches between them.)
 
 ### Tables — genuinely two-dimensional data
 
@@ -236,6 +239,17 @@ heading on the page that owns it.
 - `%%comment%%` — a note to the next editor; invisible when reading.
 - `#tag` in text — no; tags live in frontmatter.
 - Not available in Task: mermaid diagrams, `$math$`. Don't write them.
+
+## Writing faster
+
+- **`/` in the editor** opens the snippet menu (at the start of a line or
+  after a space). The **Study** group inserts each element's boilerplate
+  with its first field selected — type to replace it: `/readings`,
+  `/timeline`, `/map`, `/verse` (card), `/folded` (section), `/tabs`,
+  `/embed`, `/step` (path), `/citation`, `/scripture`, `/word`.
+- **Add page** asks what kind of page it is and seeds that type's layout
+  from this guide, with `%%hints%%` that vanish when reading. Pick the
+  type; the folder follows it.
 
 ## House rules
 
@@ -284,7 +298,11 @@ heading on the page that owns it.
 Then upload (`task wiki page write <wiki> <path> --from <file>`) and
 open it in the app — the editor is the renderer, and a block that does
 not parse shows as source, which is the fastest check there is.
-`task wiki gaps --wiki <slug>` lists pages that rest on one voice.
+`task wiki gaps --wiki <slug>` lists pages that rest on one voice and
+the **style notes** — the rules above a program can check (no summary,
+a long summary, the title twice, an open “contested” section, a
+`bible::` code or bare timestamp showing, bold-year bullets, an
+unrenderable block). The wiki home lists them too; aim for none.
 
 ## Restyling an existing page
 

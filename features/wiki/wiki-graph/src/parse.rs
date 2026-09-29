@@ -23,6 +23,9 @@ pub(crate) struct Page {
     /// `author:` from frontmatter — on a source page, whose voice it is.
     /// Empty when absent.
     pub author: String,
+    /// `summary:` from frontmatter — the page in one sentence. Empty when
+    /// absent.
+    pub summary: String,
     /// Wikilink targets extracted from the body — `[[Foo]]`
     /// → `"Foo"`. Section refs (`[[Foo#Bar]]`) and alias
     /// labels (`[[Foo|alias]]`) are normalized to the page
@@ -55,6 +58,10 @@ pub(crate) fn parse_page(rel_path: String, body: &str) -> Page {
         .get("author")
         .map(|a| a.trim().trim_matches(['"', '\'']).trim().to_owned())
         .unwrap_or_default();
+    let summary = fm_kv
+        .get("summary")
+        .map(|a| a.trim().trim_matches(['"', '\'']).trim().to_owned())
+        .unwrap_or_default();
     let outlinks = extract_wikilinks(rest);
 
     Page {
@@ -64,6 +71,7 @@ pub(crate) fn parse_page(rel_path: String, body: &str) -> Page {
         tags,
         sources,
         author,
+        summary,
         outlinks,
         body: rest.to_string(),
     }

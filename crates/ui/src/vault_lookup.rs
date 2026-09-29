@@ -48,10 +48,12 @@ use editor::editor_view::trigger::{Candidate, CompletionKind};
 use editor::markdown::{VaultBlockHit, VaultLookup, VaultPageHit};
 use vault_proto::{PageMeta, TagCount};
 
-/// Max lazily-fetched file bodies kept in memory. Small on
-/// purpose — embeds on one open page rarely touch more than a
-/// handful of other notes.
-const CONTENT_CACHE_CAP: usize = 32;
+/// Max lazily-fetched bodies kept in memory: other pages, verse texts,
+/// transcripts. A study page asks for a lot of them at once — a source
+/// badge's passage, every linked page's summary, each verse card in
+/// three translations — and a cache smaller than one page's asks evicts
+/// what the same render needs again, and fetches it again, forever.
+const CONTENT_CACHE_CAP: usize = 256;
 
 /// Placeholder preview while a referenced page's content is in
 /// flight.
@@ -67,6 +69,9 @@ const SCRIPTURE_SCHEME: &str = "scripture://";
 /// The server resolves it (`Subscriptions::resolve_reference`); the
 /// cached text is [`encode_reference`]'s, empty when it points nowhere.
 const REF_SCHEME: &str = "ref://";
+/// The org's installed translations, as a cache key: fetched once, the
+/// ids joined by commas — what a verse card offers to switch between.
+const TRANSLATIONS_KEY: &str = "scripture-translations://";
 
 /// Where a wiki reference points, as the page to open.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -299,7 +304,18 @@ pub fn use_vault_fetch_worker(
             while let Some(path) = rx.next().await {
                 let slug = org.peek().clone();
                 let vault_id = vault_id.clone();
-                let fetched = if let Some(rest) = path.strip_prefix(SCRIPTURE_SCHEME) {
+                let fetched = if path == TRANSLATIONS_KEY {
+                    Ok(scripture_ui::fetch_translations(&slug)
+                        .await
+                        .map(|list| {
+                            list.into_iter()
+                                .filter(|t| t.bundled)
+                                .map(|t| t.id)
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default())
+                } else if let Some(rest) = path.strip_prefix(SCRIPTURE_SCHEME) {
                     // `scripture://<TX>/<osis>` → passage text via the
                     // compare verb (handles single verses and ranges).
                     // Errors are cached as text (not Err) so a missing
@@ -538,7 +554,32 @@ impl VaultLookup for ClientVaultIndex {
             osis,
             text,
             translation,
+            alternates: Vec::new(),
         })
+    }
+
+    fn lookup_translations(&self, target: &str) -> Vec<(String, String)> {
+        // The same passage in the org's other installed translations, for
+        // a verse card's switcher (only cards ask). Each arrives as it
+        // lands; one that is missing or failed is simply not offered.
+        let target = scripture_target(target).unwrap_or(target);
+        let Ok(scref) = scripture_proto::ScriptureRef::parse(target) else {
+            return Vec::new();
+        };
+        let shown = scref.translation.clone().unwrap_or_else(|| DEFAULT_TRANSLATION.to_owned());
+        let osis = scref.range.osis();
+        self.content(TRANSLATIONS_KEY)
+            .map(|list| {
+                list.split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case(&shown))
+                    .filter_map(|t| {
+                        let text = self.content(&format!("{SCRIPTURE_SCHEME}{t}/{osis}"))?;
+                        (!text.starts_with('(') && !text.starts_with('⚠')).then(|| (t.to_owned(), text))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn lookup_block_short(&self, page: &str, short_id: &str) -> Option<String> {
