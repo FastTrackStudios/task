@@ -592,3 +592,86 @@ async fn a_committed_proxy_is_the_audio_rendition() -> eyre::Result<()> {
     );
     Ok(())
 }
+
+/// The org's own members, as the files lane asks: one person, a member.
+#[derive(Debug)]
+struct OneMember(uuid::Uuid);
+
+impl files::lane::caller::Memberships for OneMember {
+    fn role(&self, person: files_proto::id::PrincipalId) -> files::lane::caller::RoleFuture<'_> {
+        let role = (person.get() == self.0).then_some(files::lane::caller::OrgRole::Member);
+        Box::pin(async move { role })
+    }
+}
+
+/// A File Root's documents in one request, for a signed-in person
+/// (`files_docs`): nobody is refused, a stranger to the org reads nothing
+/// (it answers as missing, as the files lane does), and a member reads the
+/// documents — never the media.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_reads_a_roots_documents_in_one_request() -> eyre::Result<()> {
+    let (base, state, root_id, _tmp) = boot().await?;
+    let org = state.org("share-test").expect("org hosted");
+    let url = format!("{base}/org/share-test/files/{root_id}/docs");
+    let body = "takes/notes.txt\nmix.wav\nnot-here.txt\n";
+    let post = |token: Option<String>| {
+        let url = url.clone();
+        async move {
+            let mut request = reqwest::Client::new()
+                .post(url)
+                .header(reqwest::header::CONTENT_TYPE, "text/plain")
+                .body(body);
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            request.send().await
+        }
+    };
+
+    let anonymous = post(None).await?;
+    assert_eq!(anonymous.status().as_u16(), 401, "no one reads a root");
+
+    let bundle = org
+        .auth
+        .auth
+        .create_email_password_user(architect_auth::CreateEmailPasswordUser {
+            email: "member@example.test".into(),
+            password: "correct-horse-battery-staple".into(),
+            name: Some("Member".into()),
+            username: None,
+            image: None,
+            metadata_json: None,
+            ip_address: None,
+            user_agent: None,
+        })
+        .await
+        .map_err(|e| eyre::eyre!("seed user: {e:?}"))?;
+    let person: uuid::Uuid = bundle.user.id.to_string().parse()?;
+
+    let stranger = post(Some(bundle.token.clone())).await?;
+    assert_eq!(stranger.status().as_u16(), 200);
+    let records = batch_records(&stranger.bytes().await?);
+    assert_eq!(records.len(), 3, "{records:?}");
+    assert!(
+        records
+            .iter()
+            .all(|(_, status, bytes)| *status == 1 && bytes.is_empty()),
+        "a stranger to the org reads nothing, and is not told what is there: {records:?}"
+    );
+
+    org.files.set_memberships(Arc::new(OneMember(person)));
+    let member = post(Some(bundle.token)).await?;
+    assert_eq!(member.status().as_u16(), 200);
+    let records = batch_records(&member.bytes().await?);
+    let status = |path: &str| {
+        records
+            .iter()
+            .find(|(p, ..)| p == path)
+            .map(|(_, s, b)| (*s, b.clone()))
+            .unwrap_or_else(|| panic!("{path} has a record: {records:?}"))
+    };
+    assert_eq!(status("takes/notes.txt"), (0, b"take notes".to_vec()));
+    assert_eq!(status("mix.wav").0, 2, "media is never a document");
+    assert_eq!(status("not-here.txt").0, 1);
+    Ok(())
+}

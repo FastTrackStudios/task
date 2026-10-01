@@ -38,6 +38,7 @@ pub mod example_org;
 // the wiki feature like the resolver it wraps.
 #[cfg(feature = "plugin-wiki")]
 pub mod federated_orgs;
+pub mod files_docs;
 pub mod identity_mgmt;
 pub mod iroh_host;
 pub mod link_sync;
@@ -2938,6 +2939,13 @@ pub fn router(state: AppState) -> Router {
         // Account-scoped MCP: one endpoint for every org the caller
         // can reach, instead of one registration per org.
         .route("/mcp", axum::routing::post(mcp::mcp_account_handler))
+        // A File Root's documents, many in one request, for a signed-in
+        // member — how an app mirrors a song's session (see `files_docs`).
+        .route(
+            "/org/{slug}/files/{root}/docs",
+            axum::routing::post(files_docs::root_documents_batch_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(256 * 1024)),
+        )
         .route("/org/{slug}/media/{*path}", get(per_org_media_handler))
         // Derived-rendition streaming for the Review page (issue #270).
         .route(

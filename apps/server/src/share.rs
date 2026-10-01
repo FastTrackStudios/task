@@ -772,7 +772,7 @@ fn gate(
 }
 
 /// Reject a slice-relative path that tries to escape.
-fn clean_rel(rel: &str) -> Result<String, Box<Response>> {
+pub(crate) fn clean_rel(rel: &str) -> Result<String, Box<Response>> {
     let rel = rel.trim_matches('/');
     if rel.split('/').any(|s| s == "..") {
         return Err(Box::new(StatusCode::NOT_FOUND.into_response()));
@@ -791,17 +791,17 @@ fn join_scope(subpath: &str, rel: &str) -> String {
 
 /// What a Files share resolves to: the root and (for a Named Version)
 /// the exact commit to serve.
-struct FilesScope {
-    root_id: uuid::Uuid,
-    subpath: String,
+pub(crate) struct FilesScope {
+    pub(crate) root_id: uuid::Uuid,
+    pub(crate) subpath: String,
     /// `None` = the checkpoint head, re-resolved per request (a slice
     /// link follows the root as it moves; a Named Version link pins).
     /// Browse LISTINGS resolve the head too ([`render_browse`]), so a
     /// link never lists a file its byte routes can't serve.
-    at: Option<String>,
+    pub(crate) at: Option<String>,
     /// A Review link (issue #272) is scoped to ONE file: only this
     /// root-relative path is addressable; browsing is refused.
-    file_only: Option<String>,
+    pub(crate) file_only: Option<String>,
 }
 
 /// Resolve a link's Files scope; `None` for note links.
@@ -1380,9 +1380,6 @@ pub async fn share_documents_batch_handler(
     body: String,
 ) -> Response {
     use architect_telemetry::wide;
-    use futures_util::StreamExt as _;
-    /// Documents read at once.
-    const AT_ONCE: usize = 16;
     let (org, link) = match gate(&state, &slug, &token, q.pw.as_deref(), false) {
         Ok(v) => v,
         Err(resp) => return *resp,
@@ -1416,7 +1413,39 @@ pub async fn share_documents_batch_handler(
         wide::set("share.outcome", "batch-too-many");
         return (StatusCode::PAYLOAD_TOO_LARGE, "too many paths in one batch").into_response();
     }
-    let (org, scope) = (&org, &scope);
+    let (out, served, refused) = documents_batch(&org, &scope, paths, |path| {
+        org.shares.log_access(&token, "document", path);
+    })
+    .await;
+    wide::set("share.outcome", "documents-batch");
+    wide::set("share.batch_served", served);
+    wide::set("share.batch_refused", refused);
+    wide::set(
+        "share.batch_len",
+        i64::try_from(out.len()).unwrap_or(i64::MAX),
+    );
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        out,
+    )
+        .into_response()
+}
+
+/// The batch body for `paths` in `scope`: one record per path, in the
+/// order they are read (see [`share_documents_batch_handler`] for the
+/// record), `served` called with each path that was. Shared by the share
+/// lane and the library's own (`crate::files_docs`), which differ only in
+/// who may ask. Returns the body, and how many were served and refused.
+pub(crate) async fn documents_batch(
+    org: &crate::OrgAppState,
+    scope: &FilesScope,
+    paths: Vec<String>,
+    served_one: impl Fn(&str),
+) -> (Vec<u8>, i64, i64) {
+    use futures_util::StreamExt as _;
+    /// Documents read at once.
+    const AT_ONCE: usize = 16;
     let mut read = futures_util::stream::iter(paths)
         .map(|path: String| async move {
             let result = match clean_rel(&path) {
@@ -1436,31 +1465,25 @@ pub async fn share_documents_batch_handler(
         };
         if status == BATCH_OK {
             served += 1;
-            org.shares.log_access(&token, "document", &path);
+            served_one(&path);
         } else {
             refused += 1;
         }
-        out.push(status);
-        let path_len = u32::try_from(path.len()).unwrap_or(u32::MAX);
-        out.extend_from_slice(&path_len.to_le_bytes());
-        out.extend_from_slice(path.as_bytes());
-        let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&bytes);
+        push_record(&mut out, status, &path, &bytes);
     }
-    wide::set("share.outcome", "documents-batch");
-    wide::set("share.batch_served", served);
-    wide::set("share.batch_refused", refused);
-    wide::set(
-        "share.batch_len",
-        i64::try_from(out.len()).unwrap_or(i64::MAX),
-    );
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        out,
-    )
-        .into_response()
+    (out, served, refused)
+}
+
+/// One batch record onto `out`: `u8 status | u32le path length | path |
+/// u32le length | bytes`.
+pub(crate) fn push_record(out: &mut Vec<u8>, status: u8, path: &str, bytes: &[u8]) {
+    out.push(status);
+    let path_len = u32::try_from(path.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&path_len.to_le_bytes());
+    out.extend_from_slice(path.as_bytes());
+    let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(bytes);
 }
 
 /// Whether a file is media rather than a document: by its name, and by
