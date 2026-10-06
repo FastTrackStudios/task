@@ -45,10 +45,6 @@ const LOCATIONS: &[&str] = &["home", "studio", "out"];
 #[derive(Clone, PartialEq)]
 struct BoardData {
     ui_tasks: Vec<UiTask>,
-    /// Condensation leftovers: `(representative task id, the rest of
-    /// that anchor's queue)` — the list renders them behind an
-    /// inline "N more in {group}" expander.
-    more: Vec<(uuid::Uuid, Vec<UiTask>)>,
     /// Non-project belonging per task id — the chip that keeps a
     /// project-less row from reading as a bare title.
     anchors: Vec<(uuid::Uuid, task_ui::AnchorChip)>,
@@ -210,39 +206,10 @@ pub fn TasksView() -> Element {
         });
         let hidden = total - domain.len() - triage.len();
 
-        // One row per anchor: the flat list keeps each group's next
-        // action; the rest folds behind the row's inline expander.
-        // Unlike the domain condense this keeps the leftovers, so the
-        // list can reveal them without a navigation.
-        let next_key = task_proto::next_action_key;
-        let mut winner: std::collections::HashMap<task_proto::Anchor, usize> =
-            std::collections::HashMap::new();
-        for (i, t) in domain.iter().enumerate() {
-            let Some(a) = resolve_anchor(t) else { continue };
-            match winner.get(&a) {
-                Some(&best) if next_key(domain[best]) <= next_key(t) => {}
-                _ => {
-                    winner.insert(a, i);
-                }
-            }
-        }
-        let keep: std::collections::HashSet<usize> = winner.values().copied().collect();
-        // anchor → the winning task's id, for pairing leftovers to
-        // the representative row after the sort below reorders it.
-        let winner_task: std::collections::HashMap<task_proto::Anchor, uuid::Uuid> =
-            winner.iter().map(|(a, &i)| (*a, domain[i].id)).collect();
-        let mut rest_by_anchor: std::collections::HashMap<
-            task_proto::Anchor,
-            Vec<&task_proto::TaskInfo>,
-        > = std::collections::HashMap::new();
-        let mut condensed: Vec<&task_proto::TaskInfo> = Vec::with_capacity(domain.len());
-        for (i, t) in domain.iter().enumerate() {
-            match resolve_anchor(t) {
-                Some(a) if !keep.contains(&i) => rest_by_anchor.entry(a).or_default().push(t),
-                _ => condensed.push(t),
-            }
-        }
-        domain = condensed;
+        // Every remaining task is a row: the list sorts them into Today
+        // / Upcoming / Anytime itself, and nothing folds out of sight —
+        // folding to one "next action" per project is how overdue work
+        // used to vanish behind an undated row.
         if relevant_only {
             domain.sort_by_key(|t| task_proto::relevance_rank(t, &ctx));
         }
@@ -285,24 +252,13 @@ pub fn TasksView() -> Element {
                 }),
             }
         };
-        // Every row the list can show — the condensed board plus the
-        // leftovers its expanders reveal.
         let anchors: Vec<(uuid::Uuid, task_ui::AnchorChip)> = domain
             .iter()
-            .chain(rest_by_anchor.values().flatten())
             .filter_map(|t| chip_for(t).map(|c| (t.id, c)))
             .collect();
 
         let ui_tasks: Vec<UiTask> = domain.iter().map(|t| to_ui(t)).collect();
         let triage: Vec<UiTask> = triage.iter().map(|t| to_ui(t)).collect();
-        let more: Vec<(uuid::Uuid, Vec<UiTask>)> = winner_task
-            .iter()
-            .filter_map(|(a, &task_id)| {
-                let mut rest = rest_by_anchor.remove(a)?;
-                rest.sort_by_key(|t| next_key(t));
-                Some((task_id, rest.iter().map(|t| to_ui(t)).collect()))
-            })
-            .collect();
 
         // The Now bar reflects the open work session (the unified timer
         // source) for the active org + owner — not task markdown — so a
@@ -347,7 +303,6 @@ pub fn TasksView() -> Element {
 
         Some(BoardData {
             ui_tasks,
-            more,
             anchors,
             triage,
             projects: project_names.into_iter().collect(),
@@ -360,7 +315,6 @@ pub fn TasksView() -> Element {
         (Some(data), _) => {
             let BoardData {
                 ui_tasks,
-                more,
                 anchors,
                 triage,
                 projects: project_choices,
@@ -423,7 +377,6 @@ pub fn TasksView() -> Element {
                     div { class: "min-h-0 flex-1",
                         TasksApp {
                             tasks: ui_tasks,
-                            more,
                             anchors,
                             triage,
                             header_extra: chips,

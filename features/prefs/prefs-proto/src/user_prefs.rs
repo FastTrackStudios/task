@@ -72,7 +72,10 @@ impl UserPrefs {
             user_id,
             default_page: String::new(),
             tasks_active: true,
-            tasks_relevant: true,
+            // Off: the task list hides nothing until asked. Relevance
+            // gating (`@studio` while at home) is one tap away, and the
+            // count of what it hides is always shown.
+            tasks_relevant: false,
             location: String::new(),
             theme_preset: String::new(),
             theme_mode: String::new(),

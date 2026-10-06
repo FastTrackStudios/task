@@ -34,6 +34,22 @@ use crate::routes::Route;
 #[derive(Clone, Copy)]
 pub struct FleetingOpen(pub Signal<bool>);
 
+/// How many [`crate::shell::mobile::MobileActionBar`]s are mounted. The
+/// phone's floating capture button and timer pill sit above the bar
+/// while one is showing, instead of on top of its primary action.
+#[derive(Clone, Copy)]
+pub struct MobileActionBars(pub Signal<u32>);
+
+/// Extra lift for the floating capture controls while a page's action
+/// bar is mounted: the bar's own height.
+pub(crate) fn action_bar_lift() -> &'static str {
+    if use_context::<MobileActionBars>().0() > 0 {
+        "4rem"
+    } else {
+        "0px"
+    }
+}
+
 /// Visibility of the telescope-style everything-search window
 /// (`<space> <space>`, [`crate::search::SearchOverlay`]).
 #[derive(Clone, Copy)]
@@ -98,6 +114,7 @@ fn detect_share_mode() -> bool {
 /// Install the chrome contexts. Call once in the app shell.
 pub fn provide_chrome_contexts() {
     use_context_provider(|| FleetingOpen(Signal::new(false)));
+    use_context_provider(|| MobileActionBars(Signal::new(0)));
     use_context_provider(|| SearchOpen(Signal::new(false)));
     use_context_provider(|| PendingTitleEdit(Signal::new(None)));
     use_context_provider(|| StatusBarInfo(Signal::new(None)));
@@ -732,10 +749,11 @@ pub fn FleetingModal() -> Element {
 #[component]
 pub fn FleetingFab() -> Element {
     let mut open = use_fleeting_open();
+    let lift = action_bar_lift();
     rsx! {
         button {
-            class: "fixed bottom-24 right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform active:scale-95 md:hidden",
-            style: "margin-bottom: env(safe-area-inset-bottom, 0px);",
+            class: "fixed bottom-24 right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-[transform,margin] active:scale-95 md:hidden",
+            style: "margin-bottom: calc({lift} + env(safe-area-inset-bottom, 0px));",
             title: "Capture a fleeting note",
             onclick: move |_| open.set(true),
             Feather { size: 20 }
