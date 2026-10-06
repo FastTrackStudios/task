@@ -4,8 +4,9 @@
 //! the resource library, `<org>/resources/bible/<TX>/`) and **API**
 //! editions (ESV / NIV) fetched live over HTTP with the user's key (see
 //! [`crate::api`]). Reads route to whichever owns the translation;
-//! `compare` happily mixes the two. Bundled text is immutable, so the
-//! in-memory side needs no lock.
+//! `compare` happily mixes the two. The bundled side is one immutable
+//! generation at a time ([`crate::corpus`]): a request takes the current
+//! one, and an install swaps in the next without a restart.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use scripture_proto::{
 
 use crate::api::{ApiTranslation, fetch_chapter};
 use crate::bible::{Bible, LoadError};
+use crate::corpus::{Corpus, Live, Stamp};
 use crate::crossref::CrossRefs;
 use crate::lexicon::Lexicon;
 use crate::original::OrigText;
@@ -32,17 +34,17 @@ const DEFAULT_OCCURRENCE_LIMIT: usize = 150;
 /// Read-only scripture backend.
 #[derive(Clone, architect::HasDispatcher)]
 pub struct Store {
-    bibles: Arc<BTreeMap<String, Bible>>,
+    /// Installed editions and the Strong's lexicon, re-read from disk
+    /// when an install changes them.
+    corpus: Live,
     /// Copyright-restricted editions fetched over HTTP.
     api: Arc<Vec<ApiTranslation>>,
     http: reqwest::Client,
-    /// Strong's lexicon for word study (`None` ⇒ not installed).
-    lexicon: Arc<Lexicon>,
     /// Resource root holding original-language editions
     /// (`<org>/resources/original/`), loaded lazily.
     originals_root: Option<PathBuf>,
     /// Lazily-loaded original-language editions, keyed by id (uppercase).
-    originals: Arc<Mutex<HashMap<String, Arc<OrigText>>>>,
+    originals: Arc<Mutex<HashMap<String, (Stamp, Arc<OrigText>)>>>,
     /// Versification mappings — reconcile English vs Hebrew numbering.
     versification: Arc<Versification>,
     /// OpenBible cross-references file; loaded lazily.
@@ -60,30 +62,6 @@ pub struct Store {
     media_links: Option<(links::Store, PathBuf)>,
 }
 
-/// Every edition directory directly under one Bible root, sorted.
-///
-/// A root that is not there is not an error: most orgs install nothing,
-/// and a subscription that has never refreshed has no directory yet.
-fn edition_dirs(bible_root: &Path) -> Result<Vec<PathBuf>, LoadError> {
-    let entries = match std::fs::read_dir(bible_root) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => {
-            return Err(LoadError::Io {
-                path: bible_root.display().to_string(),
-                source,
-            });
-        }
-    };
-    let mut out: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    out.sort();
-    Ok(out)
-}
-
 impl Store {
     /// Build from already-loaded bibles (tests, custom wiring).
     #[must_use]
@@ -92,11 +70,14 @@ impl Store {
             .into_iter()
             .map(|b| (b.translation.clone(), b))
             .collect();
+        Self::from_corpus(Live::fixed(map))
+    }
+
+    fn from_corpus(corpus: Live) -> Self {
         Self {
-            bibles: Arc::new(map),
+            corpus,
             api: Arc::new(Vec::new()),
             http: reqwest::Client::new(),
-            lexicon: Arc::new(Lexicon::default()),
             originals_root: None,
             originals: Arc::new(Mutex::new(HashMap::new())),
             versification: Arc::new(Versification::default()),
@@ -182,20 +163,28 @@ impl Store {
     }
 
     /// Load (and cache) one original-language edition by id.
+    ///
+    /// The cache is kept against the edition folder's [`Stamp`], so an
+    /// edition installed or reinstalled while the server runs is read
+    /// on its next use rather than at the next restart.
     fn original(&self, edition: &str) -> Result<Arc<OrigText>, ScriptureError> {
         let key = edition.trim().to_ascii_uppercase();
-        let mut cache = self.originals.lock().expect("originals cache poisoned");
-        if let Some(text) = cache.get(&key) {
-            return Ok(text.clone());
-        }
         let root = self
             .originals_root
             .as_ref()
             .ok_or_else(|| ScriptureError::NotFound("no original-language editions".into()))?;
-        let text = OrigText::load_dir(&root.join(&key))
+        let dir = root.join(&key);
+        let stamp = Stamp::of_dir(&dir);
+        let mut cache = self.originals.lock().expect("originals cache poisoned");
+        if let Some((seen, text)) = cache.get(&key)
+            && *seen == stamp
+        {
+            return Ok(text.clone());
+        }
+        let text = OrigText::load_dir(&dir)
             .map_err(|_| ScriptureError::NotFound(format!("edition {key:?}")))?;
         let arc = Arc::new(text);
-        cache.insert(key, arc.clone());
+        cache.insert(key, (stamp, arc.clone()));
         Ok(arc)
     }
 
@@ -206,16 +195,41 @@ impl Store {
         self
     }
 
-    /// Attach the Strong's lexicon for word study.
+    /// Attach a fixed Strong's lexicon for word study (tests, custom
+    /// wiring). [`Self::with_lexicon_dir`] is the installed one.
     #[must_use]
     pub fn with_lexicon(mut self, lexicon: Lexicon) -> Self {
-        self.lexicon = Arc::new(lexicon);
+        self.corpus = self.corpus.with_lexicon(lexicon);
+        self
+    }
+
+    /// Read the Strong's lexicon from `dir` (`<org>/resources/lexicon/strongs/`)
+    /// now, and again whenever an install changes it. A missing directory
+    /// is an empty lexicon until something is installed there.
+    ///
+    /// # Errors
+    ///
+    /// A lexicon file that exists and will not parse.
+    pub fn with_lexicon_dir(mut self, dir: impl Into<PathBuf>) -> Result<Self, LoadError> {
+        self.corpus = self.corpus.with_lexicon_dir(dir.into())?;
+        Ok(self)
+    }
+
+    /// Also read the editions every subscription brings down
+    /// (`<org>/subscribed/<domain>/bible/`), after the installed roots —
+    /// rediscovered as subscriptions arrive, without a restart.
+    #[must_use]
+    pub fn with_subscribed_bibles(mut self, subscribed_dir: impl Into<PathBuf>) -> Self {
+        self.corpus = self.corpus.with_subscribed(subscribed_dir.into());
         self
     }
 
     /// A bundled, Strong's-tagged edition for word study, by id.
-    fn tagged_bible(&self, translation: &str) -> Result<&Bible, ScriptureError> {
-        let bible = self.bibles.get(translation).ok_or_else(|| {
+    fn tagged_bible<'a>(
+        corpus: &'a Corpus,
+        translation: &str,
+    ) -> Result<&'a Bible, ScriptureError> {
+        let bible = corpus.bibles.get(translation).ok_or_else(|| {
             ScriptureError::BadRequest(format!("{translation:?} is not a bundled edition"))
         })?;
         if !bible.is_tagged() {
@@ -257,21 +271,8 @@ impl Store {
     pub fn load_resource_roots<'a>(
         roots: impl IntoIterator<Item = &'a Path>,
     ) -> Result<Self, LoadError> {
-        let mut bibles: Vec<Bible> = Vec::new();
-        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for root in roots {
-            for path in edition_dirs(root)? {
-                let id = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                if !seen.insert(id.clone()) {
-                    continue;
-                }
-                bibles.push(Bible::load_dir(&path, id)?);
-            }
-        }
-        Ok(Self::from_bibles(bibles))
+        let roots = roots.into_iter().map(Path::to_path_buf).collect();
+        Ok(Self::from_corpus(Live::bibles_from(roots)?))
     }
 
     /// Load every translation subdirectory of a Bible resource root
@@ -310,7 +311,7 @@ impl Store {
         start: VerseId,
         end: VerseId,
     ) -> Result<Vec<(VerseId, String)>, ScriptureError> {
-        if let Some(bible) = self.bibles.get(tx) {
+        if let Some(bible) = self.corpus.get().bibles.get(tx) {
             return Ok(bible
                 .verses_in_range(start, end)
                 .into_iter()
@@ -335,7 +336,8 @@ impl Store {
 
 impl ScriptureService for Store {
     fn translations(&self) -> Result<Vec<TranslationInfo>, ScriptureError> {
-        let mut out: Vec<TranslationInfo> = self
+        let corpus = self.corpus.get();
+        let mut out: Vec<TranslationInfo> = corpus
             .bibles
             .keys()
             .map(|id| {
@@ -377,7 +379,8 @@ impl ScriptureService for Store {
         let book = Book::lookup(book)
             .ok_or_else(|| ScriptureError::BadRequest(format!("unknown book {book:?}")))?;
 
-        let (tx_id, verses) = if let Some(bible) = self.bibles.get(translation) {
+        let corpus = self.corpus.get();
+        let (tx_id, verses) = if let Some(bible) = corpus.bibles.get(translation) {
             (
                 bible.translation.clone(),
                 self.chapter_local(bible, book, chapter),
@@ -438,10 +441,11 @@ impl ScriptureService for Store {
         let cols: Vec<String> = if translations.is_empty() {
             self.translations()?.into_iter().map(|t| t.id).collect()
         } else {
+            let corpus = self.corpus.get();
             translations
                 .into_iter()
                 .map(|t| t.to_ascii_uppercase())
-                .filter(|id| self.bibles.contains_key(id) || self.api_translation(id).is_some())
+                .filter(|id| corpus.bibles.contains_key(id) || self.api_translation(id).is_some())
                 .collect()
         };
         if cols.is_empty() {
@@ -551,7 +555,9 @@ impl ScriptureService for Store {
     }
 
     fn lexicon(&self, strongs: &str) -> Result<LexiconEntry, ScriptureError> {
-        self.lexicon
+        self.corpus
+            .get()
+            .lexicon
             .get(strongs.trim())
             .cloned()
             .ok_or_else(|| ScriptureError::NotFound(format!("lexicon entry {strongs:?}")))
@@ -564,7 +570,8 @@ impl ScriptureService for Store {
     ) -> Result<Vec<WordToken>, ScriptureError> {
         let id = VerseId::parse(reference)
             .map_err(|e| ScriptureError::BadRequest(format!("{reference:?}: {e}")))?;
-        let bible = self.tagged_bible(translation)?;
+        let corpus = self.corpus.get();
+        let bible = Self::tagged_bible(&corpus, translation)?;
         let words = bible.words_of(id);
         if words.is_empty() {
             return Err(ScriptureError::NotFound(format!(
@@ -576,7 +583,7 @@ impl ScriptureService for Store {
             .map(|w| {
                 // Enrich from the first Strong's code's lexicon entry.
                 let first = w.strongs.split_whitespace().next().unwrap_or_default();
-                let entry = self.lexicon.get(first);
+                let entry = corpus.lexicon.get(first);
                 WordToken {
                     surface: w.surface.clone(),
                     strongs: w.strongs.clone(),
@@ -602,7 +609,8 @@ impl ScriptureService for Store {
         translation: &str,
         limit: u32,
     ) -> Result<Vec<Occurrence>, ScriptureError> {
-        let bible = self.tagged_bible(translation)?;
+        let corpus = self.corpus.get();
+        let bible = Self::tagged_bible(&corpus, translation)?;
         let cap = if limit == 0 {
             DEFAULT_OCCURRENCE_LIMIT
         } else {
@@ -627,7 +635,8 @@ impl ScriptureService for Store {
                 "not a Strong's code: {strongs:?}"
             )));
         }
-        let lex = self.lexicon.get(strongs);
+        let corpus = self.corpus.get();
+        let lex = corpus.lexicon.get(strongs);
 
         // Draw the concordance from the fully-tagged original-language
         // edition for the code's language (Greek `G…` / Hebrew `H…`),
@@ -653,10 +662,10 @@ impl ScriptureService for Store {
 
         // English text per occurrence: map the (edition-scheme) verse to
         // English and pull the reading text from WEB (or any bundled).
-        let eng_bible = self
+        let eng_bible = corpus
             .bibles
             .get("WEB")
-            .or_else(|| self.bibles.values().next());
+            .or_else(|| corpus.bibles.values().next());
         let cap = if limit == 0 {
             DEFAULT_OCCURRENCE_LIMIT
         } else {
@@ -814,12 +823,13 @@ impl ScriptureService for Store {
                 "{reference} in {edition}"
             )));
         }
+        let corpus = self.corpus.get();
         Ok(words
             .iter()
             .map(|w| {
                 // Fill lemma / translit / gloss from the lexicon where the
                 // edition itself doesn't carry them (e.g. OSHB).
-                let lex = self.lexicon.get(&w.strong);
+                let lex = corpus.lexicon.get(&w.strong);
                 let fill = |own: &str, from: Option<&str>| {
                     if own.is_empty() {
                         from.unwrap_or_default().to_string()
