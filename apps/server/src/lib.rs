@@ -1804,34 +1804,22 @@ pub(crate) async fn build_org_state(
                 ));
             }
         }
-        // Strong's lexicon for word study (`<org>/resources/lexicon/strongs/`);
-        // empty if not installed.
-        #[cfg(feature = "plugin-scripture")]
-        let scripture_lexicon =
-            scripture::Lexicon::load_dir(&org_root.resources_dir().join("lexicon").join("strongs"))
-                .map_err(|e| eyre::eyre!("load lexicon: {e}"))?;
-        #[cfg(feature = "plugin-scripture")]
         // Two places hold editions and the difference is who put them
         // there: this org installed the first, a subscription brought the
-        // second (`materialize::resource_copy_dir`). Installed wins.
+        // second (`materialize::resource_copy_dir`). Installed wins. The
+        // store re-reads both — and the Strong's lexicon — when an
+        // install changes them, so `admin bible install|lexicon` needs no
+        // restart.
         #[cfg(feature = "plugin-scripture")]
-        let bible_roots = {
-            let mut roots = vec![org_root.resources_dir().join("bible")];
-            if let Ok(domains) = std::fs::read_dir(org_root.path().join("subscribed")) {
-                roots.extend(
-                    domains
-                        .filter_map(Result::ok)
-                        .map(|d| d.path().join("bible"))
-                        .filter(|p| p.is_dir()),
-                );
-            }
-            roots
-        };
-        #[cfg(feature = "plugin-scripture")]
-        let scripture = scripture::Store::load_resource_roots(
-            bible_roots.iter().map(std::path::PathBuf::as_path),
-        )
+        let scripture = scripture::Store::load_resource_roots([org_root
+            .resources_dir()
+            .join("bible")
+            .as_path()])
         .map_err(|e| eyre::eyre!("load scripture: {e}"))?
+        .with_subscribed_bibles(org_root.path().join("subscribed"))
+        // Strong's lexicon for word study; empty until installed.
+        .with_lexicon_dir(org_root.resources_dir().join("lexicon").join("strongs"))
+        .map_err(|e| eyre::eyre!("load lexicon: {e}"))?
         // The vault powers per-verse backlinks: notes that link
         // `[[John 3:16]]` surface in the reader.
         .with_vault(vault_root.clone())
@@ -1840,7 +1828,6 @@ pub(crate) async fn build_org_state(
         // by the sermon sync) is listed at the moment it said it.
         .with_media_links(links.clone(), org_root.resources_dir())
         .with_api(scripture_api)
-        .with_lexicon(scripture_lexicon)
         // Original-language editions (TAGNT/TAHOT/SBLGNT/OSHB),
         // loaded lazily per edition on first interlinear request.
         .with_originals_root(org_root.resources_dir().join("original"))
