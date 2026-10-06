@@ -88,10 +88,9 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
 
     // Progress counts route through state groups (is_done), not
     // the Status enum, so custom completed-group names count. The
-    // triage strip's tasks are open work too — the count covers
-    // everything on the page, so it agrees with Home's.
+    // triage strip's tasks are in `tasks` too, so they count once.
     let done = props.tasks.iter().filter(|t| t.is_done()).count();
-    let open_count = props.tasks.len() - done + props.triage.len();
+    let open_count = props.tasks.len() - done;
     // Time tracked today across the board — the day's receipt.
     let now = chrono::Utc::now();
     let today = chrono::Local::now().date_naive();
@@ -216,6 +215,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     on_event: props.on_event,
                     on_close: move |()| open_id.set(None),
                     on_open_full: props.on_open_full,
+                    projects: props.projects.clone(),
                 }
             }
         }

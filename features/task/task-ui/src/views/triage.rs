@@ -3,12 +3,10 @@
 //!
 //! `task_proto::filing` calls a task unfiled when it hangs off
 //! nothing: no project, no parent, no workstream, no milestone, not
-//! even a GTD context. Those rows are excluded from the Relevant view
-//! because `Telemetry + Observability: Sentry` on its own is not an
-//! answer to "what should I do now" — but excluding without offering
-//! anywhere to put them would just be losing work. So they surface
-//! here, above the list, with a project picker per row: file it and it
-//! rejoins the working list on the next render.
+//! even a GTD context. Unfiled tasks stay in the list under their date
+//! like any other — a task due tomorrow is due tomorrow — and this
+//! strip, above the list, is where they get filed: a project picker per
+//! row.
 //!
 //! Collapsed by default. The count is the point — a number you want to
 //! drive to zero, not a section you read every morning.
@@ -52,13 +50,11 @@ pub fn TriageStrip(props: TriageStripProps) -> Element {
                 }
                 Inbox { size: 12 }
                 if n == 1 {
-                    "1 task needs filing"
+                    "1 task has no project"
                 } else {
-                    "{n} tasks need filing"
+                    "{n} tasks have no project"
                 }
-                span { class: "font-normal text-muted-foreground",
-                    "— hidden from Relevant until they say what they belong to"
-                }
+                span { class: "font-normal text-muted-foreground", "— file them" }
             }
             if open() {
                 div { class: "flex flex-col gap-0.5 pl-1",

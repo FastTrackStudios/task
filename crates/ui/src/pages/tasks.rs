@@ -142,7 +142,11 @@ pub fn TasksView() -> Element {
             device: None,
             active_project,
         };
-        let all: Vec<&task_proto::TaskInfo> = rows.iter().map(|(_, r)| &r.task).collect();
+        // One row per task id — see `stores::unique_tasks`.
+        let all: Vec<&task_proto::TaskInfo> = stores::unique_tasks(&rows)
+            .into_iter()
+            .map(|r| &r.task)
+            .collect();
         let mut domain = all.clone();
         let total = domain.len();
         if active_only {
@@ -184,27 +188,27 @@ pub fn TasksView() -> Element {
             }
         };
 
-        // Unfiled work is triage, not list content — it goes above
-        // the board with a picker instead of sitting in the queue
-        // saying nothing. Wikilink-only membership counts as filed,
-        // so this uses the widened resolver, not the raw domain
-        // predicate.
-        let mut triage: Vec<&task_proto::TaskInfo> = Vec::new();
-        domain.retain(|t| {
-            let unfiled = resolve_anchor(t).is_none() && t.contexts.is_empty();
-            if unfiled && task_proto::status_is_open(&t.status) {
-                triage.push(t);
-                false
-            } else {
-                true
-            }
-        });
+        // Unfiled work is also listed above the board, with a picker to
+        // file it. Wikilink-only membership counts as filed, so this
+        // uses the widened resolver, not the raw domain predicate.
+        // They stay in the list too: a task due tomorrow is due
+        // tomorrow whether or not it has a project yet, and hiding it
+        // in a collapsed strip is how it gets missed.
+        let mut triage: Vec<&task_proto::TaskInfo> = domain
+            .iter()
+            .copied()
+            .filter(|t| {
+                resolve_anchor(t).is_none()
+                    && t.contexts.is_empty()
+                    && task_proto::status_is_open(&t.status)
+            })
+            .collect();
         triage.sort_by(|a, b| {
             a.date_created
                 .cmp(&b.date_created)
                 .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
         });
-        let hidden = total - domain.len() - triage.len();
+        let hidden = total - domain.len();
 
         // Every remaining task is a row: the list sorts them into Today
         // / Upcoming / Anytime itself, and nothing folds out of sight —

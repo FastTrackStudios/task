@@ -255,6 +255,28 @@ impl StoreEntity for OrgTask {
     }
 }
 
+/// One row per task, from a task store's entries.
+///
+/// A create's live `Upserted` event can land before the create's own
+/// reply, and the optimistic store then holds the draft and the
+/// server's row for the same task at once (fixed in architect's `atom`
+/// store; this guards the versions before it). Keyed lists panic on the
+/// duplicate and counts come out one high, so every reader of the task
+/// list goes through here. The server's row wins; order is kept.
+pub fn unique_tasks(rows: &[(Id<Uuid>, OrgTask)]) -> Vec<&OrgTask> {
+    let real: HashSet<Uuid> = rows
+        .iter()
+        .filter(|(id, _)| !id.is_temp())
+        .map(|(_, r)| r.task.id)
+        .collect();
+    let mut seen = HashSet::new();
+    rows.iter()
+        .filter(|(id, r)| !(id.is_temp() && real.contains(&r.task.id)))
+        .map(|(_, r)| r)
+        .filter(|r| seen.insert(r.task.id))
+        .collect()
+}
+
 /// Tasks across the selected orgs as one [`AtomResult`].
 pub fn use_task_list() -> AtomResult<Vec<(Id<Uuid>, OrgTask)>, String> {
     use_multi_org_list(use_task_store(), |slugs| async move {

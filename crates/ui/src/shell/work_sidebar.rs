@@ -48,9 +48,10 @@ pub fn WorkSidebar(current: Route) -> Element {
 
     let counts = use_memo(move || {
         let today = chrono::Local::now().date_naive();
-        let tasks = task_store.list();
-        let open: Vec<_> = tasks
-            .iter()
+        // One row per task, the same set the Tasks page counts.
+        let entries = task_store.entries();
+        let open: Vec<_> = stores::unique_tasks(&entries)
+            .into_iter()
             .map(|r| &r.task)
             .filter(|t| is_open_task(t))
             .collect();
@@ -63,11 +64,11 @@ pub fn WorkSidebar(current: Route) -> Element {
             projects: Vec::new(),
         };
         for t in &open {
-            // The Tasks page lifts work that belongs to nothing out of
-            // the list into its triage strip; count it the same way.
+            // Work that belongs to nothing is counted in its section
+            // like everything else, and once more as Unfiled — the
+            // number to drive to zero.
             if task_proto::anchor(t).is_none() && t.projects.is_empty() && t.contexts.is_empty() {
                 c.unfiled += 1;
-                continue;
             }
             match task_ui::task_section(t, today) {
                 TaskSection::Today => {
