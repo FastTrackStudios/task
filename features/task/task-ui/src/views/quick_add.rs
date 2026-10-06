@@ -59,14 +59,16 @@ pub fn QuickAdd(props: QuickAddProps) -> Element {
                 r#type: "text",
                 value: "{value}",
                 placeholder: "Add a task — try \"Buy milk tomorrow #errands\"",
-                class: "flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none",
+                // `min-w-0`: an input's intrinsic width otherwise
+                // pushes the project picker off a phone's edge.
+                class: "min-w-0 flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground outline-none sm:text-sm",
                 oninput: move |e| value.set(e.value()),
             }
             // Explicit project filing — "(no project)" stays the
             // default; `[[Project]]` in the title infers instead.
             if !props.projects.is_empty() {
                 select {
-                    class: "shrink-0 rounded-md border border-border/60 bg-transparent px-1.5 py-0.5 text-xs text-muted-foreground outline-none focus:border-border",
+                    class: "max-w-[35%] shrink-0 truncate rounded-md border border-border/60 bg-transparent px-1.5 py-0.5 text-xs text-muted-foreground outline-none focus:border-border",
                     value: "{chosen_project}",
                     onchange: move |e| chosen_project.set(e.value()),
                     option { value: "", selected: chosen_project.read().is_empty(), "(no project)" }
@@ -80,8 +82,16 @@ pub fn QuickAdd(props: QuickAddProps) -> Element {
                     }
                 }
             }
-            kbd { class: "rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground",
+            // A keyboard hint where there is a keyboard; a button to
+            // press where there is a thumb.
+            kbd { class: "hidden rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline",
                 "⏎"
+            }
+            button {
+                r#type: "submit",
+                class: "shrink-0 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-40 sm:hidden",
+                disabled: value.read().trim().is_empty(),
+                "Add"
             }
         }
     }

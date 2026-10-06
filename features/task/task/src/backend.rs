@@ -119,7 +119,11 @@ impl TaskService for TaskBackend {
             task.id = Uuid::new_v4();
         }
         if task.path.is_empty() {
-            task.path = default_task_path(&task.title, None);
+            // The file name comes from the title, and two tasks may
+            // share a title ("Call the venue" twice a year). A name the
+            // caller did not choose is never a reason to refuse: take
+            // the first free `-2`, `-3`, … beside it.
+            task.path = free_path(&self.vault_root, &default_task_path(&task.title, None));
         }
         let now = Utc::now();
         if task.date_created.is_none() {
@@ -127,6 +131,7 @@ impl TaskService for TaskBackend {
         }
         task.date_modified = Some(now);
 
+        // A path the caller chose is theirs: never overwrite what is there.
         let abs = self.vault_root.join(&task.path);
         if abs.exists() {
             return Err(TaskError::AlreadyExists(task.path.clone()));
@@ -346,11 +351,46 @@ impl crate::service::TaskServiceStreamSource for TaskBackend {
     }
 }
 
+/// `path` if nothing is there, else the first of `stem-2.md`,
+/// `stem-3.md`, … that is free.
+fn free_path(vault_root: &Path, path: &str) -> String {
+    if !vault_root.join(path).exists() {
+        return path.to_owned();
+    }
+    let stem = path.strip_suffix(".md").unwrap_or(path);
+    (2..)
+        .map(|n| format!("{stem}-{n}.md"))
+        .find(|p| !vault_root.join(p).exists())
+        .expect("an unbounded range always finds a free name")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{Relation, RelationKind, RelationList, WorkflowAttrs};
     use crate::service::TaskListFilter;
+
+    /// Two tasks may share a title; the second gets its own file
+    /// rather than an `AlreadyExists` the person never caused.
+    #[test]
+    fn tasks_with_the_same_title_are_both_created() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let be = TaskBackend::new(tmp.path());
+        let first = be.create(crate::capture("Buy strings")).expect("first");
+        let second = be.create(crate::capture("Buy strings")).expect("second");
+        let third = be.create(crate::capture("Buy strings")).expect("third");
+        assert_eq!(first.path, "Task/buy-strings.md");
+        assert_eq!(second.path, "Task/buy-strings-2.md");
+        assert_eq!(third.path, "Task/buy-strings-3.md");
+
+        // A path the caller chose is still never overwritten.
+        let mut chosen = crate::capture("Other");
+        chosen.path = first.path.clone();
+        assert!(matches!(
+            be.create(chosen),
+            Err(TaskError::AlreadyExists(_))
+        ));
+    }
 
     fn make(
         be: &TaskBackend,

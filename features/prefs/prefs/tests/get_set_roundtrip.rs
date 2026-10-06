@@ -20,7 +20,10 @@ async fn get_without_row_returns_defaults() {
     let prefs = store.get(user).await.unwrap();
     assert_eq!(prefs, UserPrefs::defaults_for(user));
     assert!(prefs.tasks_active, "tasks.active defaults on");
-    assert!(prefs.tasks_relevant, "tasks.relevant defaults on");
+    assert!(
+        !prefs.tasks_relevant,
+        "tasks.relevant defaults off — the list hides nothing until asked"
+    );
     assert_eq!(prefs.default_page, "");
     assert_eq!(prefs.location, "");
     assert!(prefs.shortcuts_priority, "app shortcuts win by default");

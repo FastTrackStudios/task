@@ -98,31 +98,26 @@ pub fn AppShell() -> Element {
             // vault explorer stops just above it (VS Code-style).
             div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
                 div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:flex-row",
-                    if explorer.read().0 && !chromeless() {
+                    if explorer.read().0 && !chromeless() && side_panel_for(&current) != SidePanel::None {
                         div { class: "hidden w-[17rem] shrink-0 border-r border-border/60 md:flex md:min-h-0 md:flex-col md:overflow-hidden",
-                            // On the Files page the sidebar column IS
-                            // the file sidebar — the whole screen is
-                            // the file manager. On a project page it is
-                            // the PROJECT's own map (parts, neighbours)
-                            // — inside one piece of work, the whole
-                            // vault is the wrong companion, and its own
-                            // page is one click away.
-                            if matches!(current, Route::FilesRoute {}) {
-                                files_ui::FilesSidebar {}
-                            } else if let Route::ProjectDetailRoute { id } = &current {
-                                crate::shell::project_sidebar::ProjectSidebar { id: id.clone() }
-                            } else if let Route::WikiHomeRoute { org, wiki }
-                                | Route::WikiDocRoute { org, wiki, .. }
-                                | Route::WikiRequestRoute { org, wiki, .. }
-                                | Route::WikiScopedSourcesRoute { org, wiki }
-                                | Route::WikiScopedSourceRoute { org, wiki, .. } = &current
-                            {
+                            // The column shows the best companion for
+                            // where the person is ([`side_panel_for`]).
+                            match side_panel_for(&current) {
+                                SidePanel::Files => rsx! { files_ui::FilesSidebar {} },
+                                SidePanel::Project(id) => rsx! {
+                                    crate::shell::project_sidebar::ProjectSidebar { id }
+                                },
                                 // Inside a wiki the column is THAT wiki's
                                 // pages, not the vault's folders — the same
                                 // explorer, over the wiki's vault id.
-                                crate::shell::explorer::VaultExplorer { org: org.clone(), wiki: wiki.clone() }
-                            } else {
-                                crate::shell::explorer::VaultExplorer {}
+                                SidePanel::Wiki { org, wiki } => rsx! {
+                                    crate::shell::explorer::VaultExplorer { org, wiki }
+                                },
+                                SidePanel::Vault => rsx! { crate::shell::explorer::VaultExplorer {} },
+                                SidePanel::Work => rsx! {
+                                    crate::shell::work_sidebar::WorkSidebar { current: current.clone() }
+                                },
+                                SidePanel::None => rsx! {},
                             }
                         }
                     }
@@ -398,10 +393,71 @@ fn RouteFallback() -> Element {
     }
 }
 
+/// What the desktop side column holds.
+#[derive(Clone, PartialEq, Debug)]
+enum SidePanel {
+    /// The file manager's own tree — on Files the column IS the app.
+    Files,
+    /// One project's map (parts, neighbours) on its own page.
+    Project(String),
+    /// One wiki's pages, inside that wiki.
+    Wiki { org: String, wiki: String },
+    /// The org's vault tree, where notes are the subject.
+    Vault,
+    /// Smart lists and active projects, wherever work is planned.
+    Work,
+    /// Nothing worth a column (settings, people, connections, plugin
+    /// apps with their own layout): the view gets the width.
+    None,
+}
+
+/// The best companion for `route` — the column follows what the person
+/// is doing instead of always being the vault.
+fn side_panel_for(route: &Route) -> SidePanel {
+    match route {
+        Route::FilesRoute {} => SidePanel::Files,
+        Route::ProjectDetailRoute { id } => SidePanel::Project(id.clone()),
+        Route::WikiHomeRoute { org, wiki }
+        | Route::WikiDocRoute { org, wiki, .. }
+        | Route::WikiRequestRoute { org, wiki, .. }
+        | Route::WikiScopedSourcesRoute { org, wiki }
+        | Route::WikiScopedSourceRoute { org, wiki, .. } => SidePanel::Wiki {
+            org: org.clone(),
+            wiki: wiki.clone(),
+        },
+        Route::VaultRoute { .. }
+        | Route::BasesRoute {}
+        | Route::GraphRoute { .. }
+        | Route::WikiRoute {}
+        | Route::WikiPageRoute { .. }
+        | Route::WikiSourcesRoute {}
+        | Route::WikiSourceRoute { .. } => SidePanel::Vault,
+        Route::HomeRoute {}
+        | Route::DashboardRoute {}
+        | Route::InboxRoute {}
+        | Route::ProjectsRoute {}
+        | Route::GoalsRoute {}
+        | Route::TasksRoute {}
+        | Route::TaskDetailRoute { .. }
+        | Route::MilestonesRoute {}
+        | Route::ScheduleRoute {}
+        | Route::GanttRoute {}
+        | Route::TimerRoute {} => SidePanel::Work,
+        _ => SidePanel::None,
+    }
+}
+
+/// Where a phone opens when the person has not picked a start page:
+/// the task list, whose first section is Today. On a phone the app is
+/// for doing the next thing, and the dashboard is a tab away.
+const PHONE_START: &str = "/tasks";
+
 /// Redirect `/` to the user's preferred start page, once per session,
-/// when their prefs load (renders nothing). Deep links and manual
-/// navigation are never hijacked: the redirect only fires while the
-/// current route is still the root and no redirect has happened yet.
+/// when their prefs load (renders nothing). With no preference set, a
+/// phone-sized screen opens on [`PHONE_START`]; wider screens stay on
+/// Home. Deep links and manual navigation are never hijacked: the
+/// redirect only fires while the current route is still the root and
+/// no redirect has happened yet.
 #[component]
 fn StartPageRedirect() -> Element {
     let prefs = use_context::<crate::prefs::PrefsCtx>().prefs;
@@ -411,15 +467,63 @@ fn StartPageRedirect() -> Element {
 
     use_effect(move || {
         let target = prefs.read().default_page.clone();
-        if *done.peek() || target.is_empty() {
-            return;
-        }
         // `use_route` in an effect: read once via the captured value —
         // only fire from the root route.
-        if matches!(route, Route::HomeRoute {}) {
+        if *done.peek() || !matches!(route, Route::HomeRoute {}) {
+            return;
+        }
+        if !target.is_empty() {
             done.set(true);
             nav.replace(target.as_str());
+            return;
         }
+        // The same breakpoint the phone layout (bottom tab bar) uses.
+        spawn(async move {
+            let phone =
+                dioxus::document::eval("return window.matchMedia('(max-width: 640px)').matches;")
+                    .await
+                    .ok()
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            if phone && !*done.peek() {
+                done.set(true);
+                nav.replace(PHONE_START);
+            }
+        });
     });
     rsx! {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SidePanel, side_panel_for};
+    use crate::routes::Route;
+
+    /// The vault tree is for notes; planning screens get the work
+    /// column, and screens with no companion give the view the width.
+    #[test]
+    fn the_side_column_follows_the_screen() {
+        assert_eq!(side_panel_for(&Route::TasksRoute {}), SidePanel::Work);
+        assert_eq!(side_panel_for(&Route::HomeRoute {}), SidePanel::Work);
+        assert_eq!(side_panel_for(&Route::ProjectsRoute {}), SidePanel::Work);
+        assert_eq!(
+            side_panel_for(&Route::VaultRoute {
+                path: String::new(),
+                org: String::new()
+            }),
+            SidePanel::Vault
+        );
+        assert_eq!(
+            side_panel_for(&Route::WikiHomeRoute {
+                org: "o".into(),
+                wiki: "w".into()
+            }),
+            SidePanel::Wiki {
+                org: "o".into(),
+                wiki: "w".into()
+            }
+        );
+        assert_eq!(side_panel_for(&Route::SettingsRoute {}), SidePanel::None);
+        assert_eq!(side_panel_for(&Route::FilesRoute {}), SidePanel::Files);
+    }
 }

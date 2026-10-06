@@ -6,8 +6,9 @@
 //!   tasks, due today, active projects).
 //! - **Quick actions** — the four doors: new note (the `<space> n`
 //!   flow, straight into naming), search everything, capture, tasks.
-//! - **Today** — the open tasks due today or overdue, behind the same
-//!   three-state checkbox as the board.
+//! - **Today** — the task list's own Today section (in progress,
+//!   overdue, due today), behind the same three-state checkbox as the
+//!   board.
 //! - **Projects** — each active project's pulse (status, done/total
 //!   progress) and its first action. Capped; the full grid lives at
 //!   `/projects`.
@@ -79,24 +80,23 @@ pub fn HomeView() -> Element {
         build_cards(&project_refs, &task_refs)
     });
 
-    // The Today rail: open tasks due today or overdue, soonest first.
+    // The Today rail: the task list's own Today section — in progress,
+    // then overdue, then due today — so Home and Tasks never disagree
+    // about what today holds.
     let today_tasks = use_memo(move || {
         let today = chrono::Local::now().date_naive();
-        let mut due: Vec<DbTask> = task_store
-            .list()
-            .iter()
+        let entries = task_store.entries();
+        let mut due: Vec<DbTask> = stores::unique_tasks(&entries)
+            .into_iter()
             .map(|r| r.task.clone())
             .filter(|t| is_open_task(t))
-            .filter(|t| {
-                t.due
-                    .as_deref()
-                    .and_then(|d| chrono::NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d").ok())
-                    .is_some_and(|d| d <= today)
-            })
+            .filter(|t| task_ui::task_section(t, today) == task_ui::TaskSection::Today)
             .collect();
         due.sort_by(|a, b| {
-            a.due
-                .cmp(&b.due)
+            let working = |t: &DbTask| t.status != "in-progress";
+            working(a)
+                .cmp(&working(b))
+                .then_with(|| a.due.cmp(&b.due))
                 .then_with(|| priority_rank(&a.priority).cmp(&priority_rank(&b.priority)))
                 .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
         });
@@ -105,8 +105,11 @@ pub fn HomeView() -> Element {
 
     // The day's numbers for the header line.
     let stats = use_memo(move || {
-        let rows = task_store.list();
-        let open = rows.iter().filter(|r| is_open_task(&r.task)).count();
+        let entries = task_store.entries();
+        let open = stores::unique_tasks(&entries)
+            .into_iter()
+            .filter(|r| is_open_task(&r.task))
+            .count();
         let due_today = today_tasks.read().len();
         let active_projects = project_store
             .list()
@@ -175,7 +178,7 @@ pub fn HomeView() -> Element {
                     }
                     div { class: "flex items-center gap-2",
                         StatChip { value: open, label: "open" }
-                        StatChip { value: due_today, label: "due today" }
+                        StatChip { value: due_today, label: "today" }
                         StatChip { value: active_projects, label: "projects" }
                     }
                 }
@@ -238,11 +241,13 @@ pub fn HomeView() -> Element {
                     }
                     // Projects — the pulse grid.
                     div { class: if has_today { "flex flex-col gap-2.5 lg:col-span-2" } else { "flex flex-col gap-2.5 lg:col-span-3" },
-                        div { class: "flex items-center justify-between gap-3",
-                            span { class: "text-xs font-semibold uppercase tracking-wider text-muted-foreground",
+                        // Wraps on a phone: the org picker gets its own
+                        // line instead of squeezing the label to two.
+                        div { class: "flex flex-wrap items-center justify-between gap-x-3 gap-y-2",
+                            span { class: "shrink-0 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground",
                                 "Active work"
                             }
-                            div { class: "flex items-center gap-2",
+                            div { class: "flex min-w-0 flex-wrap items-center gap-2",
                                 {quick_add}
                                 Link {
                                     to: Route::ProjectsRoute {},
@@ -489,12 +494,24 @@ fn ProjectCard(
                 } else if let Some(u) = art_url {
                     // The deliverable itself: a muted, metadata-only
                     // stream — the first frame paints, nothing plays.
-                    video {
-                        src: "{u}",
-                        preload: "metadata",
-                        muted: true,
-                        playsinline: true,
-                        class: "h-full w-full object-cover pointer-events-none transition-transform duration-300 group-hover:scale-[1.02]",
+                    // Over the monogram, so a frame that never paints
+                    // (no rendition yet, a slow link) leaves the card's
+                    // own art showing rather than a blank band.
+                    div { class: "relative h-full w-full",
+                        div {
+                            class: "absolute inset-0 flex items-center justify-center",
+                            style: "background:{monogram_bg(&project.title)}",
+                            span { class: "text-2xl font-bold tracking-tight text-white/25",
+                                {project.title.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()}
+                            }
+                        }
+                        video {
+                            src: "{u}",
+                            preload: "metadata",
+                            muted: true,
+                            playsinline: true,
+                            class: "relative h-full w-full object-cover pointer-events-none transition-transform duration-300 group-hover:scale-[1.02]",
+                        }
                     }
                 } else {
                     div {

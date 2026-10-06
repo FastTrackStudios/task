@@ -23,6 +23,7 @@ pub mod api;
 pub mod backlinks;
 pub mod bible;
 pub mod compare;
+mod corpus;
 pub mod crossref;
 pub mod entities;
 pub mod install;

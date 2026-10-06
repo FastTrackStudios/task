@@ -33,11 +33,6 @@ impl ViewMode {
 #[derive(Props, Clone, PartialEq)]
 pub struct TasksAppProps {
     pub tasks: Vec<TaskInfo>,
-    /// Per-anchor condensation leftovers (see
-    /// [`super::list::TaskListProps::more`]): the list view renders
-    /// them behind an inline "N more in {group}" expander.
-    #[props(default)]
-    pub more: Vec<(Uuid, Vec<TaskInfo>)>,
     /// Non-project belonging per task (see
     /// [`super::row::AnchorChip`]) — what keeps a row from reading as
     /// a bare title when it has no project.
@@ -77,16 +72,13 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
     let mut view = use_signal(|| props.initial_view.unwrap_or_default());
     let mut open_id: Signal<Option<Uuid>> = use_signal(|| None);
 
-    // Condensed-away rows are still openable (from the expander), so
-    // every lookup scans the visible list AND the leftovers.
+    // Triage rows open the same detail as list rows.
     let find_task = {
         let tasks = props.tasks.clone();
-        let more = props.more.clone();
         let triage = props.triage.clone();
         move |id: Uuid| -> Option<TaskInfo> {
             tasks
                 .iter()
-                .chain(more.iter().flat_map(|(_, rest)| rest.iter()))
                 .chain(triage.iter())
                 .find(|t| t.id == id)
                 .cloned()
@@ -94,11 +86,11 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
     };
     let selected: Option<TaskInfo> = open_id.read().and_then(&find_task);
 
-    let total = props.tasks.len();
     // Progress counts route through state groups (is_done), not
-    // the Status enum, so custom completed-group names count.
+    // the Status enum, so custom completed-group names count. The
+    // triage strip's tasks are in `tasks` too, so they count once.
     let done = props.tasks.iter().filter(|t| t.is_done()).count();
-    let open_count = total - done;
+    let open_count = props.tasks.len() - done;
     // Time tracked today across the board — the day's receipt.
     let now = chrono::Utc::now();
     let today = chrono::Local::now().date_naive();
@@ -182,7 +174,6 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     ViewMode::List => rsx! {
                         TaskList {
                             tasks: props.tasks.clone(),
-                            more: props.more.clone(),
                             anchors: props.anchors.clone(),
                             on_event: props.on_event,
                             on_toggle: {
@@ -224,6 +215,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     on_event: props.on_event,
                     on_close: move |()| open_id.set(None),
                     on_open_full: props.on_open_full,
+                    projects: props.projects.clone(),
                 }
             }
         }

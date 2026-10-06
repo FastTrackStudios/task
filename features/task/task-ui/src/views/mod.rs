@@ -5,6 +5,7 @@ mod detail_full;
 mod kanban;
 mod links;
 mod list;
+pub use list::{TaskSection, classify as task_section};
 mod palette;
 mod quick_add;
 mod row;

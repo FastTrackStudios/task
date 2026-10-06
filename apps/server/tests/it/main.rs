@@ -73,6 +73,8 @@ mod presence_relay;
 mod rename_org;
 mod rendition_route;
 mod scheduling_durability;
+#[cfg(feature = "plugin-scripture")]
+mod scripture_install_e2e;
 mod sermon_resources_e2e;
 mod share_files_e2e;
 mod share_wiki_note_e2e;

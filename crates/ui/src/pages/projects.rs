@@ -351,10 +351,6 @@ fn render_loaded(
             }
         }
 
-        div { class: "pointer-events-none fixed right-3 top-20 z-40 md:hidden",
-            MobileViewToggle { view: view_mode }
-        }
-
         if groups.is_empty() {
             div { class: "flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border/70 bg-card/40 px-6 py-14 text-center",
                 Heading { level: HeadingLevel::H3, "Nothing current" }
@@ -493,8 +489,11 @@ struct PageHeaderProps {
 #[component]
 fn page_header(props: PageHeaderProps) -> Element {
     rsx! {
-        header { class: "hidden flex-col gap-2 md:flex",
-            span { class: "text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground",
+        // On a phone: the title, the filter and the view toggle on one
+        // line — a phone has no top bar, so without this the page opens
+        // on a bare list with nothing saying where you are.
+        header { class: "flex flex-col gap-2",
+            span { class: "hidden text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground md:block",
                 "Workspace"
             }
             div { class: "flex flex-wrap items-end justify-between gap-3",
@@ -523,18 +522,19 @@ fn page_header(props: PageHeaderProps) -> Element {
                         }
                     }
                     if let Some(line) = &props.count_line {
-                        span { class: "rounded-full border border-border/70 bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground tabular-nums",
+                        span { class: "hidden rounded-full border border-border/70 bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground tabular-nums md:inline",
                             "{line}"
                         }
                     }
                     if let Some(vm) = props.view_mode {
-                        ViewToggle { view: vm }
+                        div { class: "hidden md:block", ViewToggle { view: vm } }
+                        div { class: "md:hidden", MobileViewToggle { view: vm } }
                     }
                 }
             }
             Text {
                 variant: TextVariant::Muted,
-                class: "max-w-prose",
+                class: "hidden max-w-prose md:block",
                 "Everything in flight across the org, live from the project service."
             }
             if let Some(qa) = &props.quick_add {

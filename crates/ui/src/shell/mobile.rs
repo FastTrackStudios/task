@@ -46,6 +46,14 @@ pub use task_ui_core::sheet::BottomSheet;
 /// covers the last row of content.
 #[component]
 pub fn MobileActionBar(children: Element) -> Element {
+    // Counted while mounted, so the floating capture controls lift
+    // clear of the bar instead of covering its primary action.
+    let mut bars = use_context::<crate::chrome::MobileActionBars>().0;
+    use_hook(move || *bars.write() += 1);
+    use_drop(move || {
+        let n = *bars.peek();
+        bars.set(n.saturating_sub(1));
+    });
     rsx! {
         div {
             class: "fixed inset-x-0 z-30 flex items-center gap-2 border-t border-border bg-background/95 px-3 py-2 backdrop-blur md:hidden",
@@ -85,6 +93,8 @@ fn MobileTimerPill(mut open: Signal<bool>) -> Element {
     let tick = use_signal(|| 0u64);
     use_second_tick(tick);
     let _ = tick();
+    // A hook: read before the early return so the hook order holds.
+    let lift = crate::chrome::action_bar_lift();
 
     let Some(at) = active else {
         return rsx! {};
@@ -96,7 +106,7 @@ fn MobileTimerPill(mut open: Signal<bool>) -> Element {
             // Level with the capture button (bottom-24, 48px tall), just
             // to its left.
             class: "fixed bottom-[6.375rem] right-[4.5rem] z-30 flex h-9 items-center gap-2 rounded-full border border-sky-500/40 bg-background/95 px-3 shadow-lg backdrop-blur active:bg-accent md:hidden",
-            style: "margin-bottom: env(safe-area-inset-bottom, 0px);",
+            style: "margin-bottom: calc({lift} + env(safe-area-inset-bottom, 0px));",
             aria_label: "Timer running — open",
             onclick: move |_| open.set(true),
             span { class: "relative flex size-2 shrink-0",

@@ -90,14 +90,14 @@ fn org_resources(args: &[String]) -> eyre::Result<std::path::PathBuf> {
 }
 
 /// `admin bible lexicon` — the Strong's dictionaries, which the word
-/// study reads. The server loads them at start.
+/// study reads. A running server picks them up within seconds.
 async fn lexicon(args: &[String]) -> eyre::Result<()> {
     let dest = org_resources(args)?.join("lexicon").join("strongs");
     let (greek, hebrew) = scripture::study_pull::pull_lexicon(&dest)
         .await
         .map_err(|e| eyre::eyre!("lexicon: {e}"))?;
     println!(
-        "installed the Strong's lexicon ({greek} Greek, {hebrew} Hebrew entries) into {} — restart the server to load it",
+        "installed the Strong's lexicon ({greek} Greek, {hebrew} Hebrew entries) into {} — a running server reads it within a few seconds",
         dest.display()
     );
     Ok(())
@@ -121,7 +121,7 @@ async fn original(args: &[String]) -> eyre::Result<()> {
             .map_err(|e| eyre::eyre!("{id}: {e}"))?;
         println!("installed {id} ({verses} verses) into {}", dest.display());
     }
-    println!("restart the server to load them");
+    println!("a running server reads them on their next use");
     Ok(())
 }
 

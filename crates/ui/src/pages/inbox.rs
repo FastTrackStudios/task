@@ -44,6 +44,8 @@ pub fn InboxView() -> Element {
     // store optimistically — never reshuffle the cards under the cursor.
     let mut queue = use_signal(Vec::<InboxItem>::new);
     let mut seeded = use_signal(|| false);
+    // Hook: taken before any early return so the order never changes.
+    let mut fleeting = crate::chrome::use_fleeting_open();
     let seed_result = result.clone();
     use_effect(move || {
         if *seeded.peek() {
@@ -75,6 +77,48 @@ pub fn InboxView() -> Element {
                 title: "Couldn't reach the inbox",
                 message: err.clone(),
                 on_retry: move |()| store.reload(),
+            }
+        };
+    }
+
+    // Nothing due: not a deck to step into but an ordinary page, inside
+    // the app's chrome (tab bar, sidebar), saying so and offering the
+    // two things a person does next — capture, or go do the work.
+    // Decided from the loaded rows, not the seeded queue: the queue is
+    // filled by an effect, and the page must not open a deck only to
+    // announce it is empty.
+    let today = Utc::now().date_naive().to_string();
+    let nothing_due = queue.read().is_empty()
+        && result.value().is_some_and(|rows| {
+            !rows.iter().any(|(_, it)| {
+                it.is_open()
+                    && it
+                        .resurface_on
+                        .as_deref()
+                        .is_none_or(|d| d <= today.as_str())
+            })
+        });
+    if nothing_due {
+        return rsx! {
+            div { class: "mx-auto flex max-w-md flex-col items-center gap-4 px-6 py-24 text-center",
+                Heading { level: HeadingLevel::H2, "Inbox clear" }
+                Text { variant: TextVariant::Muted,
+                    "Nothing waiting to be sorted. Captures land here until you file them."
+                }
+                div { class: "flex flex-wrap justify-center gap-2",
+                    Button {
+                        variant: ButtonVariant::Primary,
+                        on_click: move |_| fleeting.set(true),
+                        "Capture"
+                    }
+                    Button {
+                        variant: ButtonVariant::Outline,
+                        on_click: move |_| {
+                            nav.push(crate::routes::Route::TasksRoute {});
+                        },
+                        "Go to Today"
+                    }
+                }
             }
         };
     }
@@ -332,7 +376,7 @@ fn ProcessReview(
                 Button {
                     variant: ButtonVariant::Primary,
                     on_click: move |_| on_exit.call(()),
-                    "Back to inbox"
+                    "Done"
                 }
             }
         };
