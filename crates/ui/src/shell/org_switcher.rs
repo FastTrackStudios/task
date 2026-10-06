@@ -112,12 +112,12 @@ pub fn OrgSwitcher(#[props(default = false)] compact: bool) -> Element {
                 PopoverContent {
                     side: ContentSide::Top,
                     align: ContentAlign::End,
-                    class: "w-[17rem] p-3 max-h-[70vh] overflow-y-auto",
+                    class: "w-[20rem] p-3 max-h-[80vh] overflow-y-auto",
                     div { class: "flex flex-col gap-2",
                         span { class: "text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                            "Theme"
+                            "Appearance"
                         }
-                        ThemeSwitcher { state: switcher_state }
+                        crate::appearance::AppearancePanel { state: switcher_state }
                     }
                 }
             }
@@ -160,12 +160,12 @@ pub fn RailThemeButton() -> Element {
             PopoverContent {
                 side: ContentSide::Top,
                 align: ContentAlign::Start,
-                class: "w-[17rem] p-3 max-h-[70vh] overflow-y-auto",
+                class: "w-[20rem] p-3 max-h-[80vh] overflow-y-auto",
                 div { class: "flex flex-col gap-2",
                     span { class: "text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                        "Theme"
+                        "Appearance"
                     }
-                    ThemeSwitcher { state: switcher_state }
+                    crate::appearance::AppearancePanel { state: switcher_state }
                 }
             }
         }

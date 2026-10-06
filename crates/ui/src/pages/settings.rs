@@ -40,9 +40,9 @@ pub fn SettingsView() -> Element {
                 Heading { level: HeadingLevel::H3, "Appearance" }
                 Text {
                     variant: TextVariant::Muted,
-                    "Theme preset and light/dark mode for the active organization. Follows your account on every device."
+                    "Theme and mode follow your account on every device. Text size, density, corners, contrast and font are kept per device — a phone and a big monitor rarely want the same."
                 }
-                ThemeSwitcher { state: theme_state, class: "max-w-md" }
+                crate::appearance::AppearancePanel { state: theme_state, class: "max-w-md" }
             }
 
             // Linked accounts live with the account, on the issuer:
