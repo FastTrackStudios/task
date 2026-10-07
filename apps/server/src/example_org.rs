@@ -477,6 +477,16 @@ pub const TASK_OWNERS: &[(&str, &str)] = &[
     ("Rough cut review", "victor@vnt.test"),
 ];
 
+/// Where or when a seeded task can be done, as `(task title, contexts)`
+/// — what the board's Relevant filter gates on. A place (`@studio`,
+/// `@out`, matched by "I'm at") and a time window (`@evening`), so the
+/// demo shows Relevant holding work back and the list saying so.
+pub const TASK_CONTEXTS: &[(&str, &[&str])] = &[
+    ("Restring the studio guitars", &["@studio"]),
+    ("Pick up the test pressings", &["@out"]),
+    ("Listen back to the rough mixes", &["@evening"]),
+];
+
 /// The example's members of one org.
 #[must_use]
 pub fn cast_of(slug: &str) -> Vec<Member> {
@@ -607,6 +617,8 @@ pub const DECLARED: &[DeclaredProject] = &[
             ("Re-track drums — Track Three", "done", None),
             ("Master review with the label", "open", Some(7)),
             ("Sequence the album", "open", Some(10)),
+            ("Restring the studio guitars", "open", None),
+            ("Listen back to the rough mixes", "open", None),
         ],
     },
     // The subproject, and the reason the seed has one: an album's song
@@ -675,6 +687,7 @@ pub const DECLARED: &[DeclaredProject] = &[
         tasks: &[
             ("Deliver final master to Example Client", "done", None),
             ("Collect streaming metadata", "open", Some(1)),
+            ("Pick up the test pressings", "open", None),
             (
                 "Cut the lyric video to the final master",
                 "in-progress",
@@ -1827,6 +1840,32 @@ mod declared_tests {
     /// Every owned task is a declared task, owned by a cast member of
     /// the org the task lives in — an owner from another company would
     /// plant an assignee the board can't name.
+    /// Every context-gated task is a declared one, and its contexts are
+    /// ones the app can satisfy: an "I'm at" place or a known time
+    /// window — a gate nothing can open would hide the task for good.
+    #[test]
+    fn every_task_context_can_be_met() {
+        const MEETABLE: &[&str] = &[
+            "@home",
+            "@studio",
+            "@out",
+            "@morning",
+            "@mealprep",
+            "@evening",
+        ];
+        for (title, contexts) in TASK_CONTEXTS {
+            assert!(
+                DECLARED
+                    .iter()
+                    .any(|p| p.tasks.iter().any(|(t, _, _)| t == title)),
+                "`{title}` is not a declared task"
+            );
+            for c in *contexts {
+                assert!(MEETABLE.contains(c), "`{title}`: nothing can satisfy `{c}`");
+            }
+        }
+    }
+
     #[test]
     fn every_task_owner_is_a_member_of_the_tasks_org() {
         for (title, email) in TASK_OWNERS {

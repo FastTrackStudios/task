@@ -59,6 +59,9 @@ struct BoardData {
     hidden: usize,
     /// What those are, for the header ("3 done hidden").
     hidden_note: Option<String>,
+    /// `(count, contexts)` the Relevant filter holds back — the list
+    /// says so at its foot, with a way to show them.
+    held: (usize, Vec<String>),
     /// `(task id, org)` when the board spans several orgs.
     org_of: Vec<(uuid::Uuid, String)>,
     /// The running work session (the unified timer source), if any —
@@ -145,6 +148,7 @@ pub fn TasksView() -> Element {
         let filtered = crate::task_board::filter(&all, active_only, relevant_only, &ctx);
         let hidden = filtered.hidden_done + filtered.hidden_elsewhere;
         let hidden_note = filtered.hidden_note();
+        let held = (filtered.hidden_elsewhere, filtered.held_by.clone());
         let mut domain = filtered.visible;
         let index = crate::task_board::ProjectIndex::new(
             project_store
@@ -300,6 +304,7 @@ pub fn TasksView() -> Element {
                 .collect(),
             hidden,
             hidden_note,
+            held,
             org_of,
             now,
         })
@@ -339,6 +344,7 @@ pub fn TasksView() -> Element {
                 projects: project_choices,
                 hidden,
                 hidden_note,
+                held: (held_count, held_by),
                 org_of,
                 now,
             } = data;
@@ -388,10 +394,7 @@ pub fn TasksView() -> Element {
                         NowBar {
                             now: n,
                             on_complete: move |id| {
-                                muts.apply(
-                                    &crate::orgs::create_target(&selection.read(), &org_list.read()),
-                                    TaskMutation::SetStatus { id, status: "done".into() },
-                                );
+                                apply_with_undo(TaskMutation::SetStatus { id, status: "done".into() });
                             },
                         }
                     }
@@ -404,6 +407,9 @@ pub fn TasksView() -> Element {
                             projects: project_choices,
                             org_of,
                             hidden_note,
+                            held_count,
+                            held_by,
+                            on_show_held: move |()| prefs_ctx.update(|p| p.tasks_relevant = false),
                             people: people(),
                             initial_view: stored_view(),
                             on_view_change: move |v| remember_view(v),

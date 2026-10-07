@@ -34,6 +34,10 @@ pub struct Filtered<'a> {
     pub hidden_done: usize,
     /// Open tasks the Relevant filter (time, place, timer) holds back.
     pub hidden_elsewhere: usize,
+    /// The contexts those tasks wait for (`@home`, `@evening`), sorted
+    /// and distinct — what the list names when it says what Relevant
+    /// is holding back.
+    pub held_by: Vec<String>,
 }
 
 impl Filtered<'_> {
@@ -43,8 +47,8 @@ impl Filtered<'_> {
         match (self.hidden_done, self.hidden_elsewhere) {
             (0, 0) => None,
             (d, 0) => Some(format!("{d} done hidden")),
-            (0, e) => Some(format!("{e} not relevant now")),
-            (d, e) => Some(format!("{d} done, {e} not relevant now hidden")),
+            (0, e) => Some(format!("{e} for later or elsewhere")),
+            (d, e) => Some(format!("{d} done hidden · {e} for later or elsewhere")),
         }
     }
 }
@@ -60,6 +64,7 @@ pub fn filter<'a>(
 ) -> Filtered<'a> {
     let mut hidden_done = 0;
     let mut hidden_elsewhere = 0;
+    let mut held_by = std::collections::BTreeSet::new();
     let visible = all
         .iter()
         .copied()
@@ -70,6 +75,11 @@ pub fn filter<'a>(
             }
             if relevant_only && !task_proto::is_relevant(t, ctx) {
                 hidden_elsewhere += 1;
+                held_by.extend(
+                    t.contexts
+                        .iter()
+                        .map(|c| format!("@{}", c.trim().trim_start_matches('@').to_lowercase())),
+                );
                 return false;
             }
             true
@@ -79,6 +89,7 @@ pub fn filter<'a>(
         visible,
         hidden_done,
         hidden_elsewhere,
+        held_by: held_by.into_iter().collect(),
     }
 }
 
@@ -205,6 +216,20 @@ mod tests {
         assert_eq!(f.visible.len(), 1);
         assert_eq!(f.hidden_note().as_deref(), Some("1 done hidden"));
         assert!(filter(&all, false, false, &ctx).hidden_note().is_none());
+    }
+
+    #[test]
+    fn relevant_names_the_contexts_it_holds_back() {
+        let mut home = task("water plants", "open");
+        home.contexts.push("@home".to_owned());
+        let mut errand = task("buy strings", "open");
+        errand.contexts.push("errands".to_owned());
+        let plain = task("mix", "open");
+        let all = [&home, &errand, &plain];
+        let f = filter(&all, true, true, &relevance_ctx("studio", None));
+        assert_eq!(f.visible.len(), 1);
+        assert_eq!(f.held_by, ["@errands", "@home"]);
+        assert_eq!(f.hidden_note().as_deref(), Some("2 for later or elsewhere"));
     }
 
     #[test]

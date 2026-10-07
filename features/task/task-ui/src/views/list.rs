@@ -380,9 +380,10 @@ fn Section(props: SectionProps) -> Element {
         div { id: "{props.id}", class: "flex scroll-mt-4 flex-col gap-1",
             button {
                 r#type: "button",
-                class: "flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground py-1",
+                class: "flex items-center gap-1 self-start rounded-sm py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                aria_expanded: "{open()}",
                 onclick: move |_| open.toggle(),
-                span { class: "transition-transform {icon_rotation}",
+                span { class: "transition-transform {icon_rotation}", aria_hidden: "true",
                     ChevronRight { size: 12 }
                 }
                 span { "{props.label}" }

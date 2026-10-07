@@ -189,7 +189,10 @@ pub fn TaskRow(props: TaskRowProps) -> Element {
 
     rsx! {
         div {
-            class: "group flex min-h-[44px] items-center gap-2.5 rounded-md border border-transparent px-2 py-2 hover:border-border hover:bg-accent/30 cursor-pointer sm:min-h-0 sm:py-1.5",
+            // The focused row is the keyboard cursor (j/k, x, t…): it
+            // reads as selected, not just as a ring around the title.
+            class: "group flex min-h-[44px] items-center gap-2.5 rounded-md border border-transparent px-2 py-2 hover:border-border hover:bg-accent/30 has-[[data-row-focus]:focus-visible]:border-border has-[[data-row-focus]:focus-visible]:bg-accent/40 cursor-pointer sm:min-h-0 sm:py-1.5",
+            "data-task-row": "{id}",
             onclick: move |_| props.on_open.call(id),
             CheckboxButton {
                 status,
@@ -200,10 +203,11 @@ pub fn TaskRow(props: TaskRowProps) -> Element {
             }
             div { class: "flex min-w-0 flex-1 flex-col gap-1",
                 div { class: "flex min-w-0 items-center gap-2",
-                    // The title is the row's keyboard handle: Tab lands
-                    // here, Enter opens the task.
+                    // The title is the row's keyboard handle: Tab (or
+                    // j/k) lands here, Enter opens the task.
                     button {
                         r#type: "button",
+                        "data-row-focus": "true",
                         class: "{title_cls} rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                         onclick: move |e: MouseEvent| {
                             e.stop_propagation();
