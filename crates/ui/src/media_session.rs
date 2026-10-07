@@ -221,7 +221,7 @@ pub fn MediaHost() -> Element {
                         span { class: "block truncate text-[13px] font-medium text-foreground hover:underline",
                             "{media.title}"
                         }
-                        span { class: "block font-mono text-[10px] tabular-nums text-muted-foreground",
+                        span { class: "block font-mono text-[11px] tabular-nums text-muted-foreground",
                             "{time_label}"
                         }
                     }

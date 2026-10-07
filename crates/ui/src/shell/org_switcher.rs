@@ -208,7 +208,7 @@ pub fn RailOrgButton() -> Element {
             DropdownTrigger {
                 button {
                     r#type: "button",
-                    class: "flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-[10px] font-bold uppercase tracking-wide text-primary hover:bg-primary/25",
+                    class: "flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-[11px] font-bold uppercase tracking-wide text-primary hover:bg-primary/25",
                     title: "Organization — {trigger_label}",
                     "{chip}"
                 }

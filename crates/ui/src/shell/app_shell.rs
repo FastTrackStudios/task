@@ -269,17 +269,19 @@ fn NotificationTray() -> Element {
         div { class: "pointer-events-none fixed bottom-20 right-4 z-50 flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 md:bottom-4",
             for n in list {
                 {
-                    let (accent, icon_cls) = match n.level {
-                        architect::NoticeLevel::Error => ("border-l-destructive", "text-destructive"),
-                        architect::NoticeLevel::Warning => ("border-l-amber-400", "text-amber-400"),
-                        architect::NoticeLevel::Success => ("border-l-emerald-500", "text-emerald-500"),
-                        architect::NoticeLevel::Info => ("border-l-border", "text-muted-foreground"),
+                    // The icon carries the level, as on the toasts — no
+                    // coloured edge.
+                    let icon_cls = match n.level {
+                        architect::NoticeLevel::Error => "text-destructive",
+                        architect::NoticeLevel::Warning => "text-amber-400",
+                        architect::NoticeLevel::Success => "text-emerald-500",
+                        architect::NoticeLevel::Info => "text-muted-foreground",
                     };
                     let count = n.count;
                     rsx! {
                         div {
                             key: "{n.id}",
-                            class: "pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border border-l-4 {accent} bg-popover/95 px-3 py-2.5 text-sm text-popover-foreground shadow-lg backdrop-blur",
+                            class: "pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-popover/95 px-3 py-2.5 text-sm text-popover-foreground shadow-lg backdrop-blur",
                             span { class: "mt-0.5 shrink-0 {icon_cls}",
                                 match n.level {
                                     architect::NoticeLevel::Error
@@ -290,7 +292,7 @@ fn NotificationTray() -> Element {
                             }
                             span { class: "min-w-0 flex-1 break-words", "{n.message}" }
                             if count > 1 {
-                                span { class: "shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground",
+                                span { class: "shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground",
                                     "×{count}"
                                 }
                             }

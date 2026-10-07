@@ -396,7 +396,7 @@ pub fn BottomTabBar(current: Route) -> Element {
                                 title: "{effective.label()}",
                             }
                         }
-                        span { class: "text-[10px] font-semibold uppercase tracking-widest", "More" }
+                        span { class: "text-[11px] font-medium", "More" }
                     }
                 }
             }
@@ -476,7 +476,7 @@ fn TabBarItem(tab: NavTab, active: bool) -> Element {
     rsx! {
         Link { to: tab.route.clone(), class,
             span { class: "flex h-5 w-5 items-center justify-center", {(tab.icon)()} }
-            span { class: "text-[10px] font-semibold uppercase tracking-widest", "{tab.label}" }
+            span { class: "text-[11px] font-medium", "{tab.label}" }
         }
     }
 }
