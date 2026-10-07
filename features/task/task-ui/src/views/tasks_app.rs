@@ -58,6 +58,21 @@ pub struct TasksAppProps {
     /// picker (empty = no picker).
     #[props(default)]
     pub projects: Vec<(uuid::Uuid, String)>,
+    /// `(task id, org label)` when the board spans several orgs, so a
+    /// row says whose it is. Empty in a single org.
+    #[props(default)]
+    pub org_of: Vec<(Uuid, String)>,
+    /// `(user id, name)` of the people a task can be given to — the
+    /// detail sheet's owner picker. Empty = no picker.
+    #[props(default)]
+    pub people: Vec<(String, String)>,
+    /// How many tasks the page's filters hold back, and why — the
+    /// header says so instead of "0 done".
+    #[props(default)]
+    pub hidden_note: Option<String>,
+    /// Remember the List / Kanban choice (the page persists it).
+    #[props(default)]
+    pub on_view_change: Option<EventHandler<ViewMode>>,
     /// Hosted inside another page (a project's board) rather than being
     /// the page: no own H1 — the host already named the context — and
     /// no `max-w` centering, the host owns the layout. The counts and
@@ -118,7 +133,13 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     Heading { level: HeadingLevel::H1, "Tasks" }
                 }
                 span { class: "text-xs tabular-nums text-muted-foreground",
-                    "{open_count} open · {done} done"
+                    "{open_count} open"
+                    if done > 0 {
+                        " · {done} done"
+                    }
+                    if let Some(note) = props.hidden_note.clone() {
+                        " · {note}"
+                    }
                     if tracked_today > 0 {
                         " · {crate::display::duration_label(tracked_today)} tracked today"
                     }
@@ -144,7 +165,13 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                                     key: "{v.label()}",
                                     r#type: "button",
                                     class: "{cls}",
-                                    onclick: move |_| view.set(v),
+                                    aria_pressed: active.to_string(),
+                                    onclick: move |_| {
+                                        view.set(v);
+                                        if let Some(remember) = props.on_view_change {
+                                            remember.call(v);
+                                        }
+                                    },
                                     "{v.label()}"
                                 }
                             }
@@ -161,37 +188,32 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     on_create: move |task: TaskInfo| props.on_event.call(TaskMutation::Create { task }),
                 }
             }
-            // Unfiled work, above the list in both views — excluded
-            // from Relevant, but never silently.
-            super::triage::TriageStrip {
-                tasks: props.triage.clone(),
-                projects: props.projects.clone(),
-                on_event: props.on_event,
-                on_open: move |id: Uuid| open_id.set(Some(id)),
-            }
-            div { class: "flex-1 min-h-0 overflow-y-auto",
+            div { class: "flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto",
                 match view() {
                     ViewMode::List => rsx! {
                         TaskList {
                             tasks: props.tasks.clone(),
                             anchors: props.anchors.clone(),
+                            org_of: props.org_of.clone(),
                             on_event: props.on_event,
+                            // The checkbox completes (or reopens) —
+                            // `task_proto::click_transition`.
                             on_toggle: {
                                 let find_task = find_task.clone();
                                 move |id: Uuid| {
-                                    // Domain click cycle: open → in-progress
-                                    // (timer starts) → done; a subtask under a
-                                    // running parent completes directly.
-                                    let next = find_task(id).map(|t| {
-                                        let parent_status = t.parent().and_then(|p| find_task(p));
-                                        task_proto::click_transition(
-                                            &t.status,
-                                            parent_status.as_ref().map(|p| p.status.as_str()),
-                                        )
-                                        .to_string()
-                                    });
-                                    if let Some(s) = next {
-                                        props.on_event.call(TaskMutation::SetStatus { id, status: s });
+                                    if let Some(t) = find_task(id) {
+                                        let status = task_proto::click_transition(&t.status, None).to_string();
+                                        props.on_event.call(TaskMutation::SetStatus { id, status });
+                                    }
+                                }
+                            },
+                            // Start / stop work — `task_proto::track_transition`.
+                            on_track: {
+                                let find_task = find_task.clone();
+                                move |id: Uuid| {
+                                    if let Some(t) = find_task(id) {
+                                        let status = task_proto::track_transition(&t.status).to_string();
+                                        props.on_event.call(TaskMutation::SetStatus { id, status });
                                     }
                                 }
                             },
@@ -208,6 +230,14 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                         }
                     },
                 }
+                // Unfiled work, after the list: it is housekeeping, and
+                // the tasks themselves already sit under their dates.
+                super::triage::TriageStrip {
+                    tasks: props.triage.clone(),
+                    projects: props.projects.clone(),
+                    on_event: props.on_event,
+                    on_open: move |id: Uuid| open_id.set(Some(id)),
+                }
             }
             if let Some(t) = selected {
                 TaskDetail {
@@ -216,6 +246,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     on_close: move |()| open_id.set(None),
                     on_open_full: props.on_open_full,
                     projects: props.projects.clone(),
+                    people: props.people.clone(),
                 }
             }
         }

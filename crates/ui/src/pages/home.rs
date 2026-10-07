@@ -119,8 +119,12 @@ pub fn HomeView() -> Element {
         (open, due_today, active_projects)
     });
 
+    // Same as the Tasks page: completing offers Undo.
+    let toast = use_toast();
     let on_status = move |(id, status): (uuid::Uuid, String)| {
-        muts.apply(
+        crate::task_board::apply_with_undo(
+            muts,
+            toast,
             &crate::orgs::create_target(&selection.read(), &org_list.read()),
             task_ui::TaskMutation::SetStatus { id, status },
         );
@@ -361,6 +365,8 @@ fn TodayRow(task: DbTask, on_status: EventHandler<(uuid::Uuid, String)>) -> Elem
             task_ui::CheckboxButton {
                 status: ui_status,
                 priority: ui_priority,
+                title: task.title.clone(),
+                live: task_ui::clock_running(&task),
                 on_click: move |()| {
                     let s = task_proto::click_transition(&status, None);
                     on_status.call((id, s.to_string()));
@@ -564,6 +570,8 @@ fn ProjectCard(
                             task_ui::CheckboxButton {
                                 status: ui_status,
                                 priority: ui_priority,
+                                title: next.title.clone(),
+                                live: task_ui::clock_running(&next),
                                 on_click: move |()| {
                                     let s = task_proto::click_transition(&next_status, None);
                                     on_status.call((next_id, s.to_string()));

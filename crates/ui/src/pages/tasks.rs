@@ -57,6 +57,10 @@ struct BoardData {
     projects: Vec<(uuid::Uuid, String)>,
     /// Rows the Active/Relevant chips filtered out.
     hidden: usize,
+    /// What those are, for the header ("3 done hidden").
+    hidden_note: Option<String>,
+    /// `(task id, org)` when the board spans several orgs.
+    org_of: Vec<(uuid::Uuid, String)>,
     /// The running work session (the unified timer source), if any —
     /// what the Now bar reflects. `None` when nothing is tracking.
     now: Option<NowInfo>,
@@ -132,83 +136,64 @@ pub fn TasksView() -> Element {
             .find(|r| r.session.end_time.is_none())
             .and_then(|r| r.session.project_id);
 
-        let now = chrono::Local::now();
-        let ctx = task_proto::RelevanceContext {
-            local_hhmm: Some(now.format("%H:%M").to_string()),
-            local_date: Some(now.format("%Y-%m-%d").to_string()),
-            // FUTURE(relevancy-and-inbox): device from
-            // user-agent.
-            location: (!at_location.is_empty()).then(|| at_location.clone()),
-            device: None,
-            active_project,
-        };
+        let ctx = crate::task_board::relevance_ctx(&at_location, active_project);
         // One row per task id — see `stores::unique_tasks`.
-        let all: Vec<&task_proto::TaskInfo> = stores::unique_tasks(&rows)
-            .into_iter()
-            .map(|r| &r.task)
-            .collect();
-        let mut domain = all.clone();
-        let total = domain.len();
-        if active_only {
-            domain.retain(|t| task_proto::status_is_open(&t.status));
-        }
-        if relevant_only {
-            domain.retain(|t| task_proto::is_relevant(t, &ctx));
-        }
-        // Project indication: resolve the authoritative project_id
-        // to its title when the frontmatter wikilink array is empty,
-        // so every project task carries its #project chip.
-        let project_names: std::collections::HashMap<uuid::Uuid, String> = project_store
-            .list()
-            .iter()
-            .map(|r| (r.project.id, r.project.title.clone()))
-            .collect();
-        let title_to_id: std::collections::HashMap<String, uuid::Uuid> = project_names
-            .iter()
-            .map(|(id, title)| (title.to_lowercase(), *id))
-            .collect();
-        // The domain's structural anchor, widened with this layer's
-        // extra knowledge: a `projects: [[Name]]` wikilink that
-        // matches a real project counts as project membership even
-        // before `projectId` is backfilled.
-        let resolve_anchor = |t: &task_proto::TaskInfo| -> Option<task_proto::Anchor> {
-            let by_wikilink = || {
-                t.projects.0.iter().find_map(|s| {
-                    let name = s
-                        .trim()
-                        .trim_start_matches("[[")
-                        .trim_end_matches("]]")
-                        .trim();
-                    title_to_id.get(&name.to_lowercase()).copied()
-                })
-            };
-            match task_proto::anchor(t) {
-                Some(a) => Some(a),
-                None => by_wikilink().map(task_proto::Anchor::Project),
-            }
-        };
+        let unique = stores::unique_tasks(&rows);
+        let all: Vec<&task_proto::TaskInfo> = unique.iter().map(|r| &r.task).collect();
+        // The board's filters — the same function the Work sidebar
+        // counts with, so the two agree (`crate::task_board`).
+        let filtered = crate::task_board::filter(&all, active_only, relevant_only, &ctx);
+        let hidden = filtered.hidden_done + filtered.hidden_elsewhere;
+        let hidden_note = filtered.hidden_note();
+        let mut domain = filtered.visible;
+        let index = crate::task_board::ProjectIndex::new(
+            project_store
+                .list()
+                .iter()
+                .map(|r| (r.project.id, r.project.title.clone())),
+        );
+        let project_names = &index.names;
+        let resolve_anchor = |t: &task_proto::TaskInfo| index.anchor(t);
 
         // Unfiled work is also listed above the board, with a picker to
-        // file it. Wikilink-only membership counts as filed, so this
-        // uses the widened resolver, not the raw domain predicate.
-        // They stay in the list too: a task due tomorrow is due
+        // file it. They stay in the list too: a task due tomorrow is due
         // tomorrow whether or not it has a project yet, and hiding it
         // in a collapsed strip is how it gets missed.
         let mut triage: Vec<&task_proto::TaskInfo> = domain
             .iter()
             .copied()
-            .filter(|t| {
-                resolve_anchor(t).is_none()
-                    && t.contexts.is_empty()
-                    && task_proto::status_is_open(&t.status)
-            })
+            .filter(|t| index.is_unfiled(t))
             .collect();
         triage.sort_by(|a, b| {
             a.date_created
                 .cmp(&b.date_created)
                 .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
         });
-        let hidden = total - domain.len();
+        // The org each task lives in, named only when the board spans
+        // more than one — a team's tasks and a client's look alike
+        // otherwise.
+        let slugs: std::collections::HashSet<&str> =
+            unique.iter().map(|r| r.slug.as_str()).collect();
+        let org_of: Vec<(uuid::Uuid, String)> = if slugs.len() > 1 {
+            let names: std::collections::HashMap<String, String> = org_list
+                .peek()
+                .iter()
+                .map(|o| (o.slug.clone(), o.name.clone()))
+                .collect();
+            unique
+                .iter()
+                .map(|r| {
+                    let label = names
+                        .get(&r.slug)
+                        .filter(|n| !n.is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| r.slug.clone());
+                    (r.task.id, label)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Every remaining task is a row: the list sorts them into Today
         // / Upcoming / Anytime itself, and nothing folds out of sight —
@@ -309,11 +294,41 @@ pub fn TasksView() -> Element {
             ui_tasks,
             anchors,
             triage,
-            projects: project_names.into_iter().collect(),
+            projects: project_names
+                .iter()
+                .map(|(id, t)| (*id, t.clone()))
+                .collect(),
             hidden,
+            hidden_note,
+            org_of,
             now,
         })
     });
+
+    // The people a task can be given to: the members of the org new
+    // work lands in.
+    let target_org =
+        use_memo(move || crate::orgs::create_target(&selection.read(), &org_list.read()));
+    let member_names = crate::pages::wiki_access::use_member_names(target_org);
+    let people = move || -> Vec<(String, String)> {
+        let mut list: Vec<(String, String)> = member_names
+            .read()
+            .iter()
+            .map(|(id, name)| (id.clone(), name.clone()))
+            .collect();
+        list.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        list
+    };
+
+    // Every board mutation goes through here: completing, dropping or
+    // deleting a task raises a toast with Undo. The Undo closure holds
+    // only app-lifetime handles (the store), so it still works after
+    // the row — or this page — is gone.
+    let toast = use_toast();
+    let apply_with_undo = move |mu: TaskMutation| {
+        let create_slug = crate::orgs::create_target(&selection.read(), &org_list.read());
+        crate::task_board::apply_with_undo(muts, toast, &create_slug, mu);
+    };
 
     let body = match (board(), result.error()) {
         (Some(data), _) => {
@@ -323,6 +338,8 @@ pub fn TasksView() -> Element {
                 triage,
                 projects: project_choices,
                 hidden,
+                hidden_note,
+                org_of,
                 now,
             } = data;
             // Inline chips are desktop chrome; on phones the same
@@ -342,7 +359,10 @@ pub fn TasksView() -> Element {
                         on_toggle: move |on| prefs_ctx.update(|p| p.tasks_relevant = on),
                     }
                     // "I'm at:" — feeds the @location relevance gates
-                    // and persists per user.
+                    // and persists per user. Labelled, so it reads as a
+                    // setting rather than a stray dropdown. (What the
+                    // filters hide is said once, in the header line.)
+                    span { class: "ml-1 whitespace-nowrap text-xs text-muted-foreground", "I'm at" }
                     Select {
                         value: location_pick,
                         placeholder: "anywhere".to_string(),
@@ -352,9 +372,6 @@ pub fn TasksView() -> Element {
                                 SelectItem { key: "{loc}", value: "{loc}", index: i, "@{loc}" }
                             }
                         }
-                    }
-                    if hidden > 0 {
-                        span { class: "text-xs tabular-nums text-muted-foreground", "{hidden} hidden" }
                     }
                 }
             };
@@ -385,11 +402,12 @@ pub fn TasksView() -> Element {
                             triage,
                             header_extra: chips,
                             projects: project_choices,
-                            on_event: move |mu: TaskMutation| {
-                                let create_slug =
-                                    crate::orgs::create_target(&selection.read(), &org_list.read());
-                                muts.apply(&create_slug, mu);
-                            },
+                            org_of,
+                            hidden_note,
+                            people: people(),
+                            initial_view: stored_view(),
+                            on_view_change: move |v| remember_view(v),
+                            on_event: move |mu: TaskMutation| apply_with_undo(mu),
                             on_open_full: move |id| {
                                 nav.push(crate::routes::Route::TaskDetailRoute { id });
                             },
@@ -459,6 +477,9 @@ pub fn TasksView() -> Element {
                         div { class: "pb-2",
                             QuickAdd {
                                 projects: sheet_projects,
+                                // The sheet opened to type: the keyboard
+                                // comes up with it.
+                                autofocus: true,
                                 on_create: move |task: task_ui::TaskInfo| {
                                     let create_slug =
                                         crate::orgs::create_target(&selection.read(), &org_list.read());
@@ -616,10 +637,52 @@ fn FilterChip(label: String, title: String, on: bool, on_toggle: EventHandler<bo
     rsx! {
         button {
             r#type: "button",
-            class: "{cls}",
+            class: "{cls} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             title: "{title}",
+            aria_pressed: on.to_string(),
             onclick: move |_| on_toggle.call(!on),
             "{label}"
         }
     }
 }
+
+/// Where the List / Kanban choice is kept on this device.
+#[cfg(target_arch = "wasm32")]
+const VIEW_KEY: &str = "task.tasks.view";
+
+/// The List / Kanban choice this device last made. Read synchronously:
+/// the board takes its initial view once, at mount.
+#[cfg(target_arch = "wasm32")]
+fn stored_view() -> Option<task_ui::ViewMode> {
+    let stored = web_sys::window()?
+        .local_storage()
+        .ok()??
+        .get_item(VIEW_KEY)
+        .ok()??;
+    match stored.as_str() {
+        "kanban" => Some(task_ui::ViewMode::Kanban),
+        "list" => Some(task_ui::ViewMode::List),
+        _ => None,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn remember_view(view: task_ui::ViewMode) {
+    let value = match view {
+        task_ui::ViewMode::Kanban => "kanban",
+        task_ui::ViewMode::List => "list",
+    };
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(VIEW_KEY, value);
+    }
+}
+
+/// Native shells start on the list (the webview's storage is not
+/// reachable synchronously from here).
+#[cfg(not(target_arch = "wasm32"))]
+fn stored_view() -> Option<task_ui::ViewMode> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn remember_view(_view: task_ui::ViewMode) {}

@@ -447,7 +447,7 @@ pub fn App() -> Element {
             // `use_toast()` to surface the result of a mutation (a named
             // version, a restored file, a resolved divergence — issue
             // #267 is the first consumer).
-            ToastProvider {
+            crate::toasts::ToastProvider {
                 crate::appearance::AppearanceScope {
                 div { class: "min-h-screen bg-background text-foreground",
                     // Unauthenticated visitors land on sign-in rather than on

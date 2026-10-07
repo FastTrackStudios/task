@@ -464,6 +464,19 @@ pub const CAST: &[Member] = &[
 /// credentials have to be looked up is a demo nobody runs.
 pub const PASSWORD: &str = "correct-horse-battery-staple";
 
+/// Who holds which seeded task, as `(task title, cast email)` — the
+/// team context a production board shows ("who is on Master review?").
+/// Some tasks are left unowned on purpose: an unclaimed task is part of
+/// the picture too.
+pub const TASK_OWNERS: &[(&str, &str)] = &[
+    ("Comp lead vocals — Track One", "alice@acme.test"),
+    ("Mix revisions — Track Two", "alice@acme.test"),
+    ("Master review with the label", "alice@acme.test"),
+    ("Collect streaming metadata", "sam@acme.test"),
+    ("Cut the visualiser to the album mix", "sam@acme.test"),
+    ("Rough cut review", "victor@vnt.test"),
+];
+
 /// The example's members of one org.
 #[must_use]
 pub fn cast_of(slug: &str) -> Vec<Member> {
@@ -1810,6 +1823,24 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
 #[cfg(test)]
 mod declared_tests {
     use super::*;
+
+    /// Every owned task is a declared task, owned by a cast member of
+    /// the org the task lives in — an owner from another company would
+    /// plant an assignee the board can't name.
+    #[test]
+    fn every_task_owner_is_a_member_of_the_tasks_org() {
+        for (title, email) in TASK_OWNERS {
+            let project = DECLARED
+                .iter()
+                .find(|p| p.tasks.iter().any(|(t, _, _)| t == title))
+                .unwrap_or_else(|| panic!("`{title}` is not a declared task"));
+            assert!(
+                cast_of(project.org).iter().any(|m| m.email == *email),
+                "`{email}` owns `{title}` but is not in {}",
+                project.org
+            );
+        }
+    }
 
     /// Every committed mail account is one a maildir backend will open.
     ///

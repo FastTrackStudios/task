@@ -16,6 +16,7 @@ license.workspace = true
 dioxus = { workspace = true, features = ["router"] }
 dioxus-router.workspace = true
 architect-ui = { workspace = true, features = ["router"] }
+dioxus-primitives.workspace = true
 # Icon foundation: dioxus-icons (Lucide-as-components) is the default
 # set; `tag-proto::TagIcon` is the persisted user choice the render
 # helper maps to a component.

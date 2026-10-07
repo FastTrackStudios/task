@@ -115,10 +115,12 @@ fn Card(props: CardProps) -> Element {
             span { class: "absolute left-0 top-1 bottom-1 w-0.5 rounded-r {rail}" }
             span { class: "text-sm text-foreground line-clamp-2", "{t.title}" }
             {
+                let owner = super::row::owner_name(&t);
                 let has_meta = t.due_date().is_some()
                     || !t.contexts.is_empty()
                     || !t.projects.is_empty()
-                    || priority != Priority::Normal;
+                    || owner.is_some()
+                    || (priority != Priority::Normal && priority != Priority::None);
                 if has_meta {
                     rsx! {
                         div { class: "flex flex-wrap items-center gap-1",
@@ -129,24 +131,34 @@ fn Card(props: CardProps) -> Element {
                                         "Today".to_string()
                                     } else { d.format("%b %-d").to_string() };
                                     let cls = match d.cmp(&today) {
-                                        std::cmp::Ordering::Less => "rounded-full border border-rose-500 bg-rose-700/50 px-1.5 py-0 text-[10px] text-rose-100",
-                                        std::cmp::Ordering::Equal => "rounded-full border border-amber-400 bg-amber-700/50 px-1.5 py-0 text-[10px] text-amber-50",
-                                        std::cmp::Ordering::Greater => "rounded-full border border-border bg-muted/40 px-1.5 py-0 text-[10px] text-muted-foreground",
+                                        std::cmp::Ordering::Less => "rounded-full bg-rose-500/20 px-2 py-0.5 text-xs font-medium text-foreground",
+                                        std::cmp::Ordering::Equal => "rounded-full bg-amber-500/25 px-2 py-0.5 text-xs font-medium text-foreground",
+                                        std::cmp::Ordering::Greater => "rounded-full px-2 py-0.5 text-xs text-muted-foreground ring-1 ring-inset ring-border",
                                     };
                                     rsx! { span { class: "{cls}", "{label}" } }
                                 }
                             }
-                            if priority != Priority::Normal {
-                                span { class: "rounded-full px-1.5 py-0 text-[10px] uppercase tracking-wider {priority_pill(priority)}",
+                            if priority != Priority::Normal && priority != Priority::None {
+                                span { class: "rounded-full px-2 py-0.5 text-xs uppercase tracking-wide {priority_pill(priority)}",
                                     "{priority.label()}"
+                                }
+                            }
+                            for p in t.projects.iter() {
+                                span {
+                                    key: "{p}",
+                                    class: "rounded-full bg-primary/10 px-2 py-0.5 text-xs text-foreground/85",
+                                    "#{super::row::strip_wikilink(p)}"
                                 }
                             }
                             for c in t.contexts.iter() {
                                 span {
                                     key: "{c}",
-                                    class: "rounded-full bg-muted/50 px-1.5 py-0 text-[10px] text-muted-foreground",
-                                    "@{c}"
+                                    class: "rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground",
+                                    "@{c.trim_start_matches('@')}"
                                 }
+                            }
+                            if let Some(name) = owner {
+                                span { class: "ml-auto text-xs text-muted-foreground", title: "Owner", "{name}" }
                             }
                         }
                     }

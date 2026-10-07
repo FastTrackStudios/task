@@ -312,10 +312,55 @@ pub fn provide_appearance() -> Signal<Appearance> {
 pub fn AppearanceScope(children: Element) -> Element {
     let appearance = use_appearance();
     let vars = appearance.read().css_vars();
+    let overrides = crate::theming::use_org_theme_overrides();
+
+    // Contrast guard for filled buttons and badges. Every preset picks
+    // its own primary, and some pair it with a foreground below WCAG AA
+    // (the default's violet with near-white text measured 3.8:1). After
+    // each theme or mode change, measure the pair and, if it fails, step
+    // the primary toward black (or white, for dark text) just until it
+    // passes. A preset that already passes is left exactly as authored.
+    use_effect(move || {
+        // Subscribe to the theme and mode.
+        let _ = overrides.map.read().len();
+        let _ = *overrides.mode.read();
+        let _ = appearance.read().contrast;
+        let _ = dioxus::document::eval(PRIMARY_CONTRAST_GUARD);
+    });
+
     rsx! {
-        div { class: "contents", style: "{vars}", {children} }
+        div { class: "contents", style: "{vars}",
+            // Owned by the guard's script (Dioxus never sets its style).
+            div { id: "appearance-contrast", class: "contents", {children} }
+        }
     }
 }
+
+/// See [`AppearanceScope`]. Colours are normalised through a canvas so
+/// any CSS colour syntax a preset uses (hex, oklch, color-mix) compares.
+const PRIMARY_CONTRAST_GUARD: &str = r#"
+requestAnimationFrame(() => {
+  const root = document.getElementById('appearance-contrast');
+  if (!root) return;
+  root.style.removeProperty('--primary');
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;background:var(--primary);color:var(--primary-foreground)';
+  root.appendChild(probe);
+  const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  const rgb = (css) => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = '#000'; ctx.fillStyle = css; ctx.fillRect(0, 0, 1, 1); const d = ctx.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2]]; };
+  const lum = ([r, g, b]) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const cs = getComputedStyle(probe);
+  const bg = rgb(cs.backgroundColor), fg = rgb(cs.color);
+  probe.remove();
+  if (ratio(bg, fg) >= 4.5) return;
+  const toward = lum(fg) > 0.5 ? [0, 0, 0] : [255, 255, 255];
+  for (let k = 0.05; k <= 0.6; k += 0.05) {
+    const c = bg.map((v, i) => Math.round(v + (toward[i] - v) * k));
+    if (ratio(c, fg) >= 4.5) { root.style.setProperty('--primary', `rgb(${c[0]} ${c[1]} ${c[2]})`); return; }
+  }
+});
+"#;
 
 // ── the panel ───────────────────────────────────────────────────────
 

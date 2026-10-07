@@ -40,10 +40,14 @@ pub fn TriageStrip(props: TriageStripProps) -> Element {
     let icon_rotation = if open() { "rotate-90" } else { "" };
 
     rsx! {
-        div { class: "flex flex-col gap-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2 py-1.5",
+        // Housekeeping, not the day's work: a quiet line after the list,
+        // never louder than what is due. `id` is what the sidebar's
+        // Unfiled count scrolls to.
+        div { id: "tasks-unfiled", class: "flex scroll-mt-4 flex-col gap-1 border-t border-border/60 px-1 pt-2",
             button {
                 r#type: "button",
-                class: "flex items-center gap-1.5 text-xs font-medium text-amber-500/90 transition-colors hover:text-amber-400",
+                class: "flex items-center gap-1.5 self-start rounded-sm text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                aria_expanded: open().to_string(),
                 onclick: move |_| open.toggle(),
                 span { class: "transition-transform {icon_rotation}",
                     ChevronRight { size: 12 }

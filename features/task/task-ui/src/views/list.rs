@@ -36,9 +36,25 @@ pub struct TaskListProps {
     /// page layer, which holds the stores those names live in.
     #[props(default)]
     pub anchors: Vec<(Uuid, AnchorChip)>,
+    /// `(task id, org label)` — filled only when the list spans more
+    /// than one org, so a row says whose it is.
+    #[props(default)]
+    pub org_of: Vec<(Uuid, String)>,
     pub on_toggle: EventHandler<Uuid>,
     pub on_open: EventHandler<Uuid>,
+    /// Start / stop work on a task.
+    pub on_track: EventHandler<Uuid>,
     pub on_event: EventHandler<TaskMutation>,
+}
+
+/// Everything a row reports back, bundled so the list threads one
+/// value instead of four.
+#[derive(Clone, Copy, PartialEq)]
+struct Handlers {
+    on_toggle: EventHandler<Uuid>,
+    on_open: EventHandler<Uuid>,
+    on_track: EventHandler<Uuid>,
+    on_event: EventHandler<TaskMutation>,
 }
 
 /// The list's sections, public so anything that counts them (the
@@ -105,17 +121,41 @@ fn priority_rank(p: Priority) -> u8 {
     }
 }
 
-/// In progress first, then by date (overdue before today, soonest
-/// upcoming first), then priority, then title.
+/// Dated work first, oldest date first (so overdue leads, then today,
+/// then soonest upcoming); undated work — in-progress among it — after;
+/// then priority, then title. Overdue is what a person must not miss,
+/// so nothing sorts above it.
 fn sort_bucket(bucket: &mut [TaskInfo]) {
     bucket.sort_by(|a, b| {
-        let working = |t: &TaskInfo| t.status_enum() != Status::InProgress;
-        working(a)
-            .cmp(&working(b))
+        let undated = |t: &TaskInfo| t.due_date().is_none();
+        undated(a)
+            .cmp(&undated(b))
             .then_with(|| a.due_date().cmp(&b.due_date()))
+            .then_with(|| {
+                let idle = |t: &TaskInfo| t.status_enum() != Status::InProgress;
+                idle(a).cmp(&idle(b))
+            })
             .then_with(|| priority_rank(a.priority_enum()).cmp(&priority_rank(b.priority_enum())))
             .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
     });
+}
+
+/// Today's overdue part, oldest first — the band at the top of Today.
+pub(crate) fn overdue_of(today_items: &[TaskInfo], today: NaiveDate) -> Vec<TaskInfo> {
+    today_items
+        .iter()
+        .filter(|t| t.due_date().is_some_and(|d| d < today))
+        .cloned()
+        .collect()
+}
+
+/// Move every overdue task to `day`, one write each.
+fn reschedule(overdue: &[TaskInfo], day: NaiveDate, on_event: EventHandler<TaskMutation>) {
+    for t in overdue {
+        let mut next = t.clone();
+        next.due = Some(day.to_string());
+        on_event.call(TaskMutation::Update { task: next });
+    }
 }
 
 /// The Anytime sub-heading a task files under: its project, else what
@@ -180,9 +220,20 @@ pub fn TaskList(props: TaskListProps) -> Element {
         .into_iter()
         .filter(|(_, items)| !items.is_empty())
         .collect();
+    let handlers = Handlers {
+        on_toggle: props.on_toggle,
+        on_open: props.on_open,
+        on_track: props.on_track,
+        on_event: props.on_event,
+    };
+    let anchors = props.anchors.clone();
+    let org_of = props.org_of.clone();
+    let rows = move |items: Vec<TaskInfo>| {
+        rsx! { Rows { items, anchors: anchors.clone(), org_of: org_of.clone(), handlers } }
+    };
 
     rsx! {
-        div { class: "flex min-w-0 flex-col gap-4",
+        div { class: "flex min-w-0 flex-col gap-5",
             if groups.is_empty() {
                 p { class: "px-1 py-6 text-sm text-muted-foreground", "Nothing to do. Add a task above." }
             }
@@ -194,8 +245,25 @@ pub fn TaskList(props: TaskListProps) -> Element {
                     count: items.len(),
                     // Done starts collapsed — Things 3 / Todoist.
                     initially_open: group != Group::Done,
-                    if group == Group::Anytime {
-                        {
+                    match group {
+                        Group::Today => {
+                            let overdue = overdue_of(&items, today);
+                            let rest: Vec<TaskInfo> = items
+                                .iter()
+                                .filter(|t| !overdue.iter().any(|o| o.id == t.id))
+                                .cloned()
+                                .collect();
+                            rsx! {
+                                if !overdue.is_empty() {
+                                    OverdueBand { overdue: overdue.clone(), today, on_event: props.on_event }
+                                    {rows(overdue)}
+                                }
+                                if !rest.is_empty() {
+                                    {rows(rest)}
+                                }
+                            }
+                        }
+                        Group::Anytime => {
                             let homes = by_home(items, &props.anchors);
                             let headed = homes.len() > 1;
                             rsx! {
@@ -206,14 +274,50 @@ pub fn TaskList(props: TaskListProps) -> Element {
                                                 {home.clone().unwrap_or_else(|| "No project".to_owned())}
                                             }
                                         }
-                                        Rows { items, anchors: props.anchors.clone(), on_toggle: props.on_toggle, on_open: props.on_open, on_event: props.on_event }
+                                        {rows(items)}
                                     }
                                 }
                             }
                         }
-                    } else {
-                        Rows { items, anchors: props.anchors.clone(), on_toggle: props.on_toggle, on_open: props.on_open, on_event: props.on_event }
+                        _ => rows(items),
                     }
+                }
+            }
+        }
+    }
+}
+
+/// The head of Today when work is late: how much, and the one action
+/// that clears the backlog without opening every task.
+#[component]
+fn OverdueBand(
+    overdue: Vec<TaskInfo>,
+    today: NaiveDate,
+    on_event: EventHandler<TaskMutation>,
+) -> Element {
+    let n = overdue.len();
+    let tomorrow = today.succ_opt().unwrap_or(today);
+    let to_today = overdue.clone();
+    let to_tomorrow = overdue;
+    let btn = "rounded-md px-2.5 py-1.5 text-xs font-medium text-foreground ring-1 ring-inset ring-rose-500/40 transition-colors hover:bg-rose-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    rsx! {
+        div { class: "flex flex-wrap items-center justify-between gap-2 rounded-lg bg-rose-500/10 px-3 py-2",
+            span { class: "text-sm font-semibold text-foreground",
+                span { class: "text-rose-500", "{n} overdue" }
+                span { class: "font-normal text-muted-foreground", " · oldest first" }
+            }
+            div { class: "flex items-center gap-1.5",
+                button {
+                    r#type: "button",
+                    class: "{btn}",
+                    onclick: move |_| reschedule(&to_today, today, on_event),
+                    "Move all to today"
+                }
+                button {
+                    r#type: "button",
+                    class: "{btn}",
+                    onclick: move |_| reschedule(&to_tomorrow, tomorrow, on_event),
+                    "Tomorrow"
                 }
             }
         }
@@ -225,9 +329,9 @@ struct RowsProps {
     items: Vec<TaskInfo>,
     #[props(default)]
     anchors: Vec<(Uuid, AnchorChip)>,
-    on_toggle: EventHandler<Uuid>,
-    on_open: EventHandler<Uuid>,
-    on_event: EventHandler<TaskMutation>,
+    #[props(default)]
+    org_of: Vec<(Uuid, String)>,
+    handlers: Handlers,
 }
 
 #[component]
@@ -235,6 +339,7 @@ fn Rows(props: RowsProps) -> Element {
     // Subtasks nest under their parent when both are in the bucket —
     // the same domain arrangement the CLI list prints.
     let arranged = task_proto::arrange_families(props.items.clone(), |t| t.id, TaskDisplay::parent);
+    let h = props.handlers;
     rsx! {
         div { class: "flex flex-col gap-0.5 pl-1",
             for (depth, t) in arranged.into_iter() {
@@ -245,10 +350,12 @@ fn Rows(props: RowsProps) -> Element {
                     class: if depth > 0 { "ml-2.5 border-l border-border/60 pl-2.5" } else { "" },
                     TaskRow {
                         anchor: props.anchors.iter().find(|(id, _)| *id == t.id).map(|(_, c)| c.clone()),
+                        org: props.org_of.iter().find(|(id, _)| *id == t.id).map(|(_, o)| o.clone()),
                         task: t,
-                        on_toggle: props.on_toggle,
-                        on_open: props.on_open,
-                        on_event: props.on_event,
+                        on_toggle: h.on_toggle,
+                        on_open: h.on_open,
+                        on_track: h.on_track,
+                        on_event: h.on_event,
                     }
                 }
             }
@@ -279,7 +386,7 @@ fn Section(props: SectionProps) -> Element {
                     ChevronRight { size: 12 }
                 }
                 span { "{props.label}" }
-                span { class: "ml-1 rounded-full bg-muted/50 px-1.5 py-0 text-[10px] text-muted-foreground",
+                span { class: "ml-1 rounded-full bg-muted px-1.5 py-0.5 text-xs leading-none text-muted-foreground",
                     "{props.count}"
                 }
             }
@@ -344,15 +451,29 @@ mod tests {
     }
 
     #[test]
-    fn in_progress_leads_then_the_oldest_date() {
+    fn the_oldest_date_leads_and_undated_work_follows() {
         let mut bucket = vec![
             task("due today", "open", Some("2026-10-06"), None),
-            task("overdue", "open", Some("2026-08-27"), None),
             task("working", "in-progress", None, None),
+            task("overdue", "open", Some("2026-08-27"), None),
+            task("undated", "open", None, None),
         ];
         sort_bucket(&mut bucket);
         let titles: Vec<&str> = bucket.iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, ["working", "overdue", "due today"]);
+        assert_eq!(titles, ["overdue", "due today", "working", "undated"]);
+    }
+
+    #[test]
+    fn the_overdue_band_holds_only_past_due_work() {
+        let today = day("2026-10-06");
+        let items = vec![
+            task("overdue", "open", Some("2026-08-27"), None),
+            task("due today", "open", Some("2026-10-06"), None),
+            task("working", "in-progress", None, None),
+        ];
+        let band = overdue_of(&items, today);
+        assert_eq!(band.len(), 1);
+        assert_eq!(band[0].title, "overdue");
     }
 
     /// Anytime groups by project alphabetically, with the project-less
