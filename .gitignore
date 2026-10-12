@@ -42,6 +42,10 @@ node_modules/
 # per-machine, never shared.
 .config/tracey/
 .config/wt.toml
+# Impeccable (design skill): the hook's per-machine consent and live
+# browser sessions. `config.json` and `critique/` are shared.
+.impeccable/config.local.json
+.impeccable/live/
 
 # IDE / agent scratch
 .claude/worktrees/
