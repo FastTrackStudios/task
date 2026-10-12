@@ -2,10 +2,10 @@
 //!
 //! A morning-briefing layout instead of a second task list:
 //!
-//! - **Header** — time-of-day greeting + the day's numbers (open
-//!   tasks, due today, active projects).
-//! - **Quick actions** — the four doors: new note (the `<space> n`
-//!   flow, straight into naming), search everything, capture, tasks.
+//! - **The day at a glance** — three numbers (due today, with how many
+//!   are overdue; open tasks; active projects), each a door to its page.
+//! - **Find or write** — search as a field, and a new note beside it
+//!   (the `<space> n` flow, straight into naming).
 //! - **Today** — the task list's own Today section (in progress,
 //!   overdue, due today), behind the same three-state checkbox as the
 //!   board.
@@ -18,9 +18,7 @@
 //! task store, so the board and the dashboard can't disagree.
 
 use crate::format::status_variant;
-use architect_ui::lucide_dioxus::{
-    ArrowRight, CalendarDays, CircleCheck, NotebookPen, Search, Zap,
-};
+use architect_ui::lucide_dioxus::{ArrowRight, CalendarDays, CircleCheck, NotebookPen, Search};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use project_proto::ProjectInfo;
@@ -67,7 +65,6 @@ pub fn HomeView() -> Element {
     let nav = use_navigator();
     let pending_title = use_context::<crate::chrome::PendingTitleEdit>().0;
     let mut search_open = use_context::<crate::chrome::SearchOpen>().0;
-    let mut fleeting = use_context::<crate::chrome::FleetingOpen>().0;
 
     let cards = use_memo(move || {
         let projects = project_store.list();
@@ -111,12 +108,24 @@ pub fn HomeView() -> Element {
             .filter(|r| is_open_task(&r.task))
             .count();
         let due_today = today_tasks.read().len();
+        // Of today's, how many are late — the number worth colouring.
+        let today = chrono::Local::now().date_naive();
+        let overdue = today_tasks
+            .read()
+            .iter()
+            .filter(|t| {
+                t.due
+                    .as_deref()
+                    .and_then(|s| chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok())
+                    .is_some_and(|d| d < today)
+            })
+            .count();
         let active_projects = project_store
             .list()
             .iter()
             .filter(|r| !r.project.archived && is_active(&r.project.status))
             .count();
-        (open, due_today, active_projects)
+        (open, due_today, overdue, active_projects)
     });
 
     // Same as the Tasks page: completing offers Undo.
@@ -143,7 +152,7 @@ pub fn HomeView() -> Element {
         projects.error().or(tasks.error()),
     ) {
         (Some(_), Some(_), _) => {
-            let (open, due_today, active_projects) = stats();
+            let (open, due_today, overdue, active_projects) = stats();
             let org_choices: Vec<(String, String)> = org_list
                 .read()
                 .iter()
@@ -167,54 +176,64 @@ pub fn HomeView() -> Element {
             let today_overflow = today_tasks.read().len().saturating_sub(today_list.len());
             // No rail when there is nothing due: an empty "Today" card
             // holding a congratulation is dead furniture — the projects
-            // take the full width instead, and the header's "0 due
-            // today" chip already tells the story.
+            // take the full width instead, and the "Due today" card
+            // already tells the story.
             let has_today = !today_list.is_empty() || today_overflow > 0;
+            let projects_label = if active_projects == 1 {
+                "Project"
+            } else {
+                "Projects"
+            };
 
             rsx! {
-                // ── Header: greeting + the day's numbers ──────────
-                div { class: "flex flex-wrap items-end justify-between gap-x-4 gap-y-2",
-                    div { class: "flex flex-col gap-0.5",
-                        Heading { level: HeadingLevel::H1, class: "tracking-tight", "{greeting()}" }
-                        span { class: "text-sm text-muted-foreground",
-                            {chrono::Local::now().format("%A, %B %-d").to_string()}
-                        }
+                // ── The day at a glance ───────────────────────────
+                // No greeting, no date: the phone's status bar has the
+                // time, and "Good afternoon" over three small chips spent
+                // a quarter of the screen saying nothing. Three numbers
+                // instead, each a door to the page that holds them.
+                div { class: "grid grid-cols-3 gap-2 sm:gap-3",
+                    SummaryCard {
+                        value: due_today,
+                        label: "Due today",
+                        note: (overdue > 0).then(|| format!("{overdue} overdue")),
+                        onclick: move |_| { nav.push(Route::TasksRoute {}); },
                     }
-                    div { class: "flex items-center gap-2",
-                        StatChip { value: open, label: "open" }
-                        StatChip { value: due_today, label: "today" }
-                        StatChip { value: active_projects, label: "projects" }
+                    SummaryCard {
+                        value: open,
+                        label: "Open",
+                        onclick: move |_| { nav.push(Route::TasksRoute {}); },
+                    }
+                    SummaryCard {
+                        value: active_projects,
+                        label: projects_label,
+                        onclick: move |_| { nav.push(Route::ProjectsRoute {}); },
                     }
                 }
 
-                // ── Quick actions ─────────────────────────────────
-                // Four equal tiles in a row on a phone — pills wrapped
-                // three-and-one, leaving "Tasks" alone on a second line —
-                // and a row of pills from `sm` up.
-                div { class: "grid grid-cols-4 gap-2 sm:flex sm:flex-wrap sm:items-center",
-                    ActionTile {
-                        label: "New note",
-                        hint: "Space n",
-                        onclick: new_note,
-                        NotebookPen { size: 16 }
-                    }
-                    ActionTile {
-                        label: "Search",
-                        hint: "Space Space",
+                // ── Find or write ─────────────────────────────────
+                // Search as a field, the way a phone app offers it, with
+                // a new note beside it. Capture and Tasks used to sit here
+                // too; the floating capture button and the tab bar are
+                // already one tap away.
+                div { class: "flex items-center gap-2",
+                    button {
+                        r#type: "button",
+                        class: "flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 px-3 text-left text-sm text-muted-foreground transition-colors hover:border-border active:bg-accent/40",
                         onclick: move |_| search_open.set(true),
                         Search { size: 16 }
+                        span { class: "truncate", "Search notes and tasks…" }
+                        kbd { class: "ml-auto hidden shrink-0 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] sm:inline",
+                            "Space Space"
+                        }
                     }
-                    ActionTile {
-                        label: "Capture",
-                        hint: "Space c",
-                        onclick: move |_| fleeting.set(true),
-                        Zap { size: 16 }
-                    }
-                    ActionTile {
-                        label: "Tasks",
-                        hint: "g t",
-                        onclick: move |_| { nav.push(Route::TasksRoute {}); },
-                        CircleCheck { size: 16 }
+                    button {
+                        r#type: "button",
+                        class: "flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-card/60 px-3 text-sm text-foreground transition-colors hover:border-border active:bg-accent/40",
+                        aria_label: "New note",
+                        title: "New note (Space n)",
+                        onclick: new_note,
+                        NotebookPen { size: 16 }
+                        span { class: "hidden sm:inline", "New note" }
                     }
                 }
 
@@ -250,14 +269,14 @@ pub fn HomeView() -> Element {
                     div { class: if has_today { "flex flex-col gap-2.5 lg:col-span-2" } else { "flex flex-col gap-2.5 lg:col-span-3" },
                         // Wraps on a phone: the org picker gets its own
                         // line instead of squeezing the label to two.
-                        // On a phone: the label and "All projects" on one
-                        // line, the new-project field full width beneath
-                        // them. From `sm` up the field sits between the two.
+                        // The label and "All projects" on one line. The
+                        // new-project field joins them from `sm` up; a phone
+                        // creates projects from the Projects tab's own bar.
                         div { class: "flex flex-wrap items-center gap-x-3 gap-y-2",
                             span { class: "shrink-0 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground",
                                 "Active work"
                             }
-                            div { class: "order-last w-full sm:order-none sm:ml-auto sm:w-auto", {quick_add} }
+                            div { class: "hidden sm:ml-auto sm:block", {quick_add} }
                             Link {
                                 to: Route::ProjectsRoute {},
                                 class: "ml-auto flex min-h-11 items-center gap-1 text-xs text-muted-foreground hover:text-foreground sm:ml-0 sm:min-h-0",
@@ -308,48 +327,27 @@ pub fn HomeView() -> Element {
     }
 }
 
-/// Time-of-day greeting for the header.
-fn greeting() -> &'static str {
-    match chrono::Local::now().format("%H").to_string().parse::<u8>() {
-        Ok(h) if h < 5 => "Up late",
-        Ok(h) if h < 12 => "Good morning",
-        Ok(h) if h < 17 => "Good afternoon",
-        _ => "Good evening",
-    }
-}
-
-/// One number + label in the header's stat strip.
+/// One of the day's numbers, as a door to the page that holds it: the
+/// count large, what it counts small, and — for "Due today" — how many
+/// of those are already late, in the overdue colour.
 #[component]
-fn StatChip(value: usize, label: &'static str) -> Element {
-    rsx! {
-        div { class: "flex items-baseline gap-1.5 rounded-lg border border-border/60 bg-card/50 px-2.5 py-1.5",
-            span { class: "text-sm font-semibold tabular-nums text-foreground", "{value}" }
-            span { class: "text-[11px] text-muted-foreground", "{label}" }
-        }
-    }
-}
-
-/// One quick-action door: icon, label, and its key sequence.
-#[component]
-fn ActionTile(
+fn SummaryCard(
+    value: usize,
     label: &'static str,
-    hint: &'static str,
+    #[props(default)] note: Option<String>,
     onclick: EventHandler<MouseEvent>,
-    children: Element,
 ) -> Element {
-    // Compact pills, not four equal panels: these are shortcuts, and
-    // shortcuts don't get to out-weigh the work below them.
     rsx! {
         button {
             r#type: "button",
-            class: "group flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-xl border border-border/70 bg-card/60 px-1 py-2 transition-colors active:bg-accent/40 hover:border-border hover:bg-accent/40 sm:min-h-0 sm:flex-row sm:gap-2 sm:rounded-full sm:py-1.5 sm:pl-3 sm:pr-2 sm:text-left",
+            class: "flex min-h-[4.5rem] flex-col items-start justify-between gap-1 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/30 active:bg-accent/40",
             onclick: move |e| onclick.call(e),
-            span { class: "text-muted-foreground transition-colors group-hover:text-foreground",
-                {children}
-            }
-            span { class: "whitespace-nowrap text-xs text-foreground sm:text-sm", "{label}" }
-            kbd { class: "hidden shrink-0 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline",
-                "{hint}"
+            span { class: "text-2xl font-semibold leading-none tabular-nums text-foreground", "{value}" }
+            span { class: "flex min-w-0 flex-col leading-tight",
+                span { class: "truncate text-xs text-muted-foreground", "{label}" }
+                if let Some(note) = note {
+                    span { class: "truncate text-[11px] font-medium text-rose-500", "{note}" }
+                }
             }
         }
     }
