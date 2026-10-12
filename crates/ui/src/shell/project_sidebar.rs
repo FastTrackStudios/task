@@ -49,7 +49,7 @@ pub fn ProjectSidebar(id: String) -> Element {
                         // page's masthead, at column width.
                         div { class: "flex flex-col gap-1.5",
                             if let Some(form) = p.form {
-                                span { class: "text-[10px] font-semibold uppercase tracking-[0.14em] text-primary",
+                                span { class: "text-[11px] font-semibold uppercase tracking-[0.14em] text-primary",
                                     "{form.as_str()}"
                                 }
                             }
@@ -61,7 +61,7 @@ pub fn ProjectSidebar(id: String) -> Element {
                                 for cap in p.capabilities.held.iter() {
                                     span {
                                         key: "{cap.as_str()}",
-                                        class: "rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground",
+                                        class: "rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground",
                                         "{cap.as_str()}"
                                     }
                                 }
@@ -73,7 +73,7 @@ pub fn ProjectSidebar(id: String) -> Element {
                         // work's table of contents.
                         if !p.parts.0.is_empty() {
                             div { class: "flex flex-col gap-1",
-                                span { class: "px-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground",
+                                span { class: "px-1 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground",
                                     "Parts"
                                 }
                                 div { class: "flex flex-col",
@@ -81,7 +81,7 @@ pub fn ProjectSidebar(id: String) -> Element {
                                         div {
                                             key: "{part.id}",
                                             class: "flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground",
-                                            span { class: "w-5 shrink-0 text-right font-mono text-[10px] tabular-nums",
+                                            span { class: "w-5 shrink-0 text-right font-mono text-[11px] tabular-nums",
                                                 {format!("{:02}", i + 1)}
                                             }
                                             span { class: "min-w-0 truncate", "{part.name}" }
@@ -102,7 +102,7 @@ pub fn ProjectSidebar(id: String) -> Element {
 
             if !others.is_empty() {
                 div { class: "flex flex-col gap-1",
-                    span { class: "px-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground",
+                    span { class: "px-1 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground",
                         "Other projects"
                     }
                     div { class: "flex flex-col",

@@ -324,6 +324,20 @@ impl TaskMutations {
 }
 
 impl TaskMutations {
+    /// The task's current row (its org slug and record), if loaded —
+    /// what an Undo needs to put things back as they were.
+    #[must_use]
+    pub fn row(&self, id: Uuid) -> Option<OrgTask> {
+        self.store.get_real(id)
+    }
+
+    /// Put a deleted task back exactly as it was (every field, its own
+    /// org) — Undo after Delete. Unlike `Create`, which re-reads a
+    /// typed title, this writes the record it is given.
+    pub fn restore(&self, row: OrgTask) {
+        self.create(row);
+    }
+
     /// Apply one `task_ui` board mutation: optimistic store patch +
     /// write-through to the owning org (`create_slug` for new rows).
     pub fn apply(&self, create_slug: &str, mu: TaskMutation) {

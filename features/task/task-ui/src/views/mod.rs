@@ -9,7 +9,7 @@ pub use list::{TaskSection, classify as task_section};
 mod palette;
 mod quick_add;
 mod row;
-pub use row::{AnchorChip, CheckboxButton};
+pub use row::{AnchorChip, CheckboxButton, clock_running, days_late, late_label, owner_name};
 mod session_history;
 mod subtasks;
 mod tasks_app;
@@ -29,7 +29,7 @@ pub use session_history::{
     payload_preview,
 };
 pub use subtasks::{SubtasksBoard, SubtasksBoardProps, subtask_summary};
-pub use tasks_app::{TasksApp, TasksAppProps};
+pub use tasks_app::{TasksApp, TasksAppProps, ViewMode};
 pub use time::{
     TimeSection, TimeSectionProps, format_minutes, recurrence_summary, sum_logged_minutes,
 };

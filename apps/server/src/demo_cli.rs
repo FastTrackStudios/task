@@ -292,6 +292,58 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         if seeded > 0 {
             println!("  tasks: {seeded} seeded for {}", declared.title);
         }
+        // Contexts: where or when a task can be done, so the Relevant
+        // filter has something to hold back. Topped up the same way.
+        for (title, contexts) in example_org::TASK_CONTEXTS {
+            if !declared.tasks.iter().any(|(t, _, _)| t == title) {
+                continue;
+            }
+            let Some(mut t) = tasks_backend
+                .list()
+                .ok()
+                .and_then(|ts| ts.into_iter().find(|t| t.title == *title))
+            else {
+                continue;
+            };
+            if !t.contexts.is_empty() {
+                continue;
+            }
+            for c in *contexts {
+                t.contexts.push((*c).to_owned());
+            }
+            tasks_backend
+                .update(t)
+                .map_err(|e| eyre::eyre!("give \"{title}\" its contexts: {e}"))?;
+        }
+        // Owners: a production board shows who is on what. Topped up
+        // like everything else — a task that already has an owner keeps
+        // it.
+        for (title, email) in example_org::TASK_OWNERS {
+            if !declared.tasks.iter().any(|(t, _, _)| t == title) {
+                continue;
+            }
+            let Ok(Some(user)) = auth.auth.find_user_by_email(email).await else {
+                continue;
+            };
+            let Some(mut t) = tasks_backend
+                .list()
+                .ok()
+                .and_then(|ts| ts.into_iter().find(|t| t.title == *title))
+            else {
+                continue;
+            };
+            let wf = t.workflow.get_or_insert_with(Default::default);
+            if !wf.assignees.0.is_empty() {
+                continue;
+            }
+            wf.assignees.0 = vec![task::workflows_proto::AgentRef::Human {
+                user_id: user.id.to_string(),
+                display_name: user.name.clone(),
+            }];
+            tasks_backend
+                .update(t)
+                .map_err(|e| eyre::eyre!("give \"{title}\" its owner: {e}"))?;
+        }
     }
 
     // Video deliverables: generated rather than committed — even a tiny

@@ -112,7 +112,7 @@ pub fn GuestShell(session: GuestShareSession) -> Element {
     let org = session.org.clone();
     rsx! {
         ThemeProvider { state: theme_state,
-            ToastProvider {
+            crate::toasts::ToastProvider {
                 div { class: "h-screen w-screen overflow-hidden bg-background text-foreground",
                     {match &*review.read_unchecked() {
                         None => rsx! {

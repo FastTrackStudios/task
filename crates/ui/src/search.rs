@@ -415,7 +415,7 @@ pub fn SearchOverlay() -> Element {
                                                 {highlight(&row.cand.detail, &row.detail_marks)}
                                             }
                                         }
-                                        span { class: "shrink-0 rounded bg-muted/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground",
+                                        span { class: "shrink-0 rounded bg-muted/50 px-1.5 py-0.5 text-[11px] uppercase tracking-wider text-muted-foreground",
                                             "{row.cand.kind_tag()}"
                                         }
                                     }

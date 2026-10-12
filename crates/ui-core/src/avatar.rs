@@ -4,15 +4,16 @@
 //! lives in files-ui and can't depend on the `ui` crate, hence this
 //! home).
 
-/// Tasteful gradient palette — `(from, to)` CSS colors. Six entries;
+/// Gradient palette — `(from, to)` CSS colors, all deep enough (the
+/// 700 shades) that white initials read at 4.5:1 or better. Six entries;
 /// [`gradient_index`] picks one deterministically per key.
 pub const AVATAR_GRADIENTS: [(&str, &str); 6] = [
-    ("#f59e0b", "#ef4444"), // amber → red
-    ("#8b5cf6", "#6366f1"), // violet → indigo
-    ("#06b6d4", "#3b82f6"), // cyan → blue
-    ("#10b981", "#14b8a6"), // emerald → teal
-    ("#ec4899", "#f43f5e"), // pink → rose
-    ("#84cc16", "#22c55e"), // lime → green
+    ("#b45309", "#b91c1c"), // amber → red
+    ("#6d28d9", "#4338ca"), // violet → indigo
+    ("#0369a1", "#1d4ed8"), // sky → blue
+    ("#047857", "#0f766e"), // emerald → teal
+    ("#be185d", "#be123c"), // pink → rose
+    ("#4d7c0f", "#15803d"), // lime → green
 ];
 
 /// FNV-1a over the key, mod the palette size. Deterministic across
@@ -66,6 +67,28 @@ mod tests {
         assert!(gradient_css("x").starts_with("linear-gradient(135deg,#"));
     }
 
+    /// White initials meet WCAG AA on both ends of every gradient.
+    #[test]
+    fn initials_read_on_every_gradient() {
+        fn lum(hex: &str) -> f64 {
+            let c = |i: usize| {
+                let v = f64::from(u8::from_str_radix(&hex[i..i + 2], 16).unwrap()) / 255.0;
+                if v <= 0.039_28 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * c(1) + 0.7152 * c(3) + 0.0722 * c(5)
+        }
+        for (from, to) in AVATAR_GRADIENTS {
+            for hex in [from, to] {
+                let ratio = 1.05 / (lum(hex) + 0.05);
+                assert!(ratio >= 4.5, "{hex}: white initials at {ratio:.2}:1");
+            }
+        }
+    }
+
     #[test]
     fn initials_cover_the_name_shapes() {
         assert_eq!(initials("Cody Wright"), "CW");
@@ -92,8 +115,8 @@ pub fn Avatar(name: String, email: String, #[props(default = 28)] size: u32) -> 
     let key = if email.is_empty() { &name } else { &email };
     let (from, to) = AVATAR_GRADIENTS[gradient_index(key)];
     let letters = initials(&name);
-    // ~0.38em type within the disc, floored so 16px stays legible.
-    let font = (size * 2 / 5).max(7);
+    // ~0.4em type within the disc, floored so small discs stay legible.
+    let font = (size * 2 / 5).max(10);
     rsx! {
         span {
             class: "flex shrink-0 select-none items-center justify-center rounded-full font-semibold leading-none text-white",

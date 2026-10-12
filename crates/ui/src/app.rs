@@ -347,6 +347,9 @@ pub fn App() -> Element {
     // Theme persistence: seed the org-theme overrides above from prefs
     // on boot, mirror picker changes back (localStorage + server).
     crate::theming::use_theme_prefs_sync();
+    // Per-device appearance (text size, density, corners, contrast,
+    // font, follow-the-system mode), applied by `AppearanceScope` below.
+    crate::appearance::provide_appearance();
 
     // The ONE derived-presence poll (agent sessions + open timers).
     // Every roster surface shares it; when each consumer owned its own,
@@ -444,7 +447,8 @@ pub fn App() -> Element {
             // `use_toast()` to surface the result of a mutation (a named
             // version, a restored file, a resolved divergence — issue
             // #267 is the first consumer).
-            ToastProvider {
+            crate::toasts::ToastProvider {
+                crate::appearance::AppearanceScope {
                 div { class: "min-h-screen bg-background text-foreground",
                     // Unauthenticated visitors land on sign-in rather than on
                     // a shell full of empty panels (#109 criterion 5). The
@@ -453,6 +457,7 @@ pub fn App() -> Element {
                     crate::auth::SignInGate {
                         Router::<Route> {}
                     }
+                }
                 }
             }
         }

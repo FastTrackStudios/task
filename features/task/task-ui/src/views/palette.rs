@@ -27,16 +27,3 @@ pub fn priority_pill(p: Priority) -> &'static str {
         Priority::Critical => "bg-rose-700/60 text-rose-50 border border-rose-400 font-semibold",
     }
 }
-
-/// Left-edge color stripe for a kanban card — keeps the card
-/// itself neutral but tints the rail.
-#[must_use]
-pub fn priority_rail(p: Priority) -> &'static str {
-    match p {
-        Priority::None => "bg-slate-600",
-        Priority::Low => "bg-slate-400",
-        Priority::Normal => "bg-sky-400",
-        Priority::High => "bg-amber-400",
-        Priority::Critical => "bg-rose-500",
-    }
-}

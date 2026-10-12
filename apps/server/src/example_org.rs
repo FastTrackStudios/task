@@ -464,6 +464,29 @@ pub const CAST: &[Member] = &[
 /// credentials have to be looked up is a demo nobody runs.
 pub const PASSWORD: &str = "correct-horse-battery-staple";
 
+/// Who holds which seeded task, as `(task title, cast email)` — the
+/// team context a production board shows ("who is on Master review?").
+/// Some tasks are left unowned on purpose: an unclaimed task is part of
+/// the picture too.
+pub const TASK_OWNERS: &[(&str, &str)] = &[
+    ("Comp lead vocals — Track One", "alice@acme.test"),
+    ("Mix revisions — Track Two", "alice@acme.test"),
+    ("Master review with the label", "alice@acme.test"),
+    ("Collect streaming metadata", "sam@acme.test"),
+    ("Cut the visualiser to the album mix", "sam@acme.test"),
+    ("Rough cut review", "victor@vnt.test"),
+];
+
+/// Where or when a seeded task can be done, as `(task title, contexts)`
+/// — what the board's Relevant filter gates on. A place (`@studio`,
+/// `@out`, matched by "I'm at") and a time window (`@evening`), so the
+/// demo shows Relevant holding work back and the list saying so.
+pub const TASK_CONTEXTS: &[(&str, &[&str])] = &[
+    ("Restring the studio guitars", &["@studio"]),
+    ("Pick up the test pressings", &["@out"]),
+    ("Listen back to the rough mixes", &["@evening"]),
+];
+
 /// The example's members of one org.
 #[must_use]
 pub fn cast_of(slug: &str) -> Vec<Member> {
@@ -594,6 +617,8 @@ pub const DECLARED: &[DeclaredProject] = &[
             ("Re-track drums — Track Three", "done", None),
             ("Master review with the label", "open", Some(7)),
             ("Sequence the album", "open", Some(10)),
+            ("Restring the studio guitars", "open", None),
+            ("Listen back to the rough mixes", "open", None),
         ],
     },
     // The subproject, and the reason the seed has one: an album's song
@@ -662,6 +687,7 @@ pub const DECLARED: &[DeclaredProject] = &[
         tasks: &[
             ("Deliver final master to Example Client", "done", None),
             ("Collect streaming metadata", "open", Some(1)),
+            ("Pick up the test pressings", "open", None),
             (
                 "Cut the lyric video to the final master",
                 "in-progress",
@@ -1810,6 +1836,50 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
 #[cfg(test)]
 mod declared_tests {
     use super::*;
+
+    /// Every owned task is a declared task, owned by a cast member of
+    /// the org the task lives in — an owner from another company would
+    /// plant an assignee the board can't name.
+    /// Every context-gated task is a declared one, and its contexts are
+    /// ones the app can satisfy: an "I'm at" place or a known time
+    /// window — a gate nothing can open would hide the task for good.
+    #[test]
+    fn every_task_context_can_be_met() {
+        const MEETABLE: &[&str] = &[
+            "@home",
+            "@studio",
+            "@out",
+            "@morning",
+            "@mealprep",
+            "@evening",
+        ];
+        for (title, contexts) in TASK_CONTEXTS {
+            assert!(
+                DECLARED
+                    .iter()
+                    .any(|p| p.tasks.iter().any(|(t, _, _)| t == title)),
+                "`{title}` is not a declared task"
+            );
+            for c in *contexts {
+                assert!(MEETABLE.contains(c), "`{title}`: nothing can satisfy `{c}`");
+            }
+        }
+    }
+
+    #[test]
+    fn every_task_owner_is_a_member_of_the_tasks_org() {
+        for (title, email) in TASK_OWNERS {
+            let project = DECLARED
+                .iter()
+                .find(|p| p.tasks.iter().any(|(t, _, _)| t == title))
+                .unwrap_or_else(|| panic!("`{title}` is not a declared task"));
+            assert!(
+                cast_of(project.org).iter().any(|m| m.email == *email),
+                "`{email}` owns `{title}` but is not in {}",
+                project.org
+            );
+        }
+    }
 
     /// Every committed mail account is one a maildir backend will open.
     ///

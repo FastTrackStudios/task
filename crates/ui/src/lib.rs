@@ -19,6 +19,7 @@
 pub mod actions;
 pub mod app;
 pub mod app_views;
+pub mod appearance;
 pub mod auth;
 pub mod central_login;
 pub mod chrome;
@@ -49,8 +50,10 @@ pub mod source_dock;
 pub mod stores;
 pub mod tabs;
 pub mod tag_icon;
+pub mod task_board;
 pub mod task_sort;
 pub mod theming;
+pub mod toasts;
 pub mod vault_lookup;
 pub mod vox_clients;
 pub mod watch_sync;

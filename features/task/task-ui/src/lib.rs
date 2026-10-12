@@ -29,5 +29,6 @@ pub use task_proto::{Priority, Status, TaskInfo, TimeEntry};
 pub use views::{
     AnchorChip, CheckboxButton, ClaimState, LinkChips, LinkedTaskRef, QuickAdd, SessionEvent,
     SessionHistory, SubtaskRow, SubtasksBoard, TaskDetailFull, TaskDetailFullProps, TaskSection,
-    TasksApp, TasksAppProps, TimeSection, TriageStrip, WorkflowSection, task_section,
+    TasksApp, TasksAppProps, TimeSection, TriageStrip, ViewMode, WorkflowSection, clock_running,
+    days_late, late_label, owner_name, task_section,
 };

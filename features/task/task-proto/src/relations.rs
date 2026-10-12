@@ -452,31 +452,35 @@ mod cascade_tests {
     }
 }
 
-/// The checkbox click state machine: first click starts work
-/// (`in-progress` — automatic time tracking begins), second click
-/// completes, a click on a completed task reopens it.
+/// The checkbox: a click completes the task, and a click on a finished
+/// one reopens it. Nothing else.
 ///
-/// Family exception: while a task's PARENT is in-progress, clicking
-/// the subtask goes straight to `done` — the parent's timer owns the
-/// whole process ("start Wind down, then tick the steps off; the
-/// wind-down timer is the one that matters"). To time an individual
-/// subtask instead, click it before starting the parent.
+/// It used to step `open → in-progress → done`, starting the clock on
+/// the first click. That made "check it off" take two taps and log a
+/// time entry nobody meant — and on a phone, checking things off
+/// between sessions is the commonest thing Task is used for. Starting
+/// work is its own control: [`track_transition`].
 ///
-/// Pure over status strings (caller resolves the parent) so every
-/// renderer's row model can use it directly.
+/// `_parent_status` is kept so every caller's call site stays the
+/// same; with completion one click everywhere, a running parent no
+/// longer changes the answer.
 #[must_use]
-pub fn click_transition(status: &str, parent_status: Option<&str>) -> &'static str {
-    use crate::model::{Status, status_is_terminal};
-    if status_is_terminal(status) {
-        return "open";
-    }
-    if Status::from_str(status) == Some(Status::InProgress) {
-        return "done";
-    }
-    let parent_in_progress =
-        parent_status.is_some_and(|p| Status::from_str(p) == Some(Status::InProgress));
-    if parent_in_progress {
+pub fn click_transition(status: &str, _parent_status: Option<&str>) -> &'static str {
+    if crate::model::status_is_terminal(status) {
+        "open"
+    } else {
         "done"
+    }
+}
+
+/// The start/stop control beside a task: start work (`in-progress` —
+/// automatic time tracking begins), or stop it (back to `open`, the
+/// entry closes). A finished task starts again from the top.
+#[must_use]
+pub fn track_transition(status: &str) -> &'static str {
+    use crate::model::Status;
+    if Status::from_str(status) == Some(Status::InProgress) {
+        "open"
     } else {
         "in-progress"
     }
@@ -484,21 +488,24 @@ pub fn click_transition(status: &str, parent_status: Option<&str>) -> &'static s
 
 #[cfg(test)]
 mod click_tests {
-    use super::click_transition;
+    use super::{click_transition, track_transition};
 
     #[test]
-    fn click_cycles_open_in_progress_done_open() {
-        assert_eq!(click_transition("open", None), "in-progress");
+    fn the_checkbox_completes_and_reopens() {
+        assert_eq!(click_transition("open", None), "done");
         assert_eq!(click_transition("in-progress", None), "done");
+        assert_eq!(click_transition("waiting", None), "done");
         assert_eq!(click_transition("done", None), "open");
+        assert_eq!(click_transition("cancelled", None), "open");
+        // A running parent changes nothing: completion is one click.
+        assert_eq!(click_transition("open", Some("in-progress")), "done");
     }
 
     #[test]
-    fn subtask_under_running_parent_completes_directly() {
-        // Parent idle → subtask gets its own in-progress leg.
-        assert_eq!(click_transition("open", Some("open")), "in-progress");
-        // Parent running → subtask is just a check.
-        assert_eq!(click_transition("open", Some("in-progress")), "done");
+    fn tracking_starts_and_stops_work() {
+        assert_eq!(track_transition("open"), "in-progress");
+        assert_eq!(track_transition("in-progress"), "open");
+        assert_eq!(track_transition("done"), "in-progress");
     }
 }
 

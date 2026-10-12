@@ -469,6 +469,10 @@ architect-permissions = { git = "https://github.com/FastTrackStudios/architect",
 architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
 architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
 architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
+# The primitives architect-ui is built on — the same git source and
+# branch, so cargo unifies them. Task renders its own toasts from these
+# (`crates/ui/src/toasts.rs`) to show toast action buttons.
+dioxus-primitives = { git = "https://github.com/FastTrackStudios/dioxus-components", package = "dioxus-primitives", branch = "main", default-features = false }
 auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
 auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the

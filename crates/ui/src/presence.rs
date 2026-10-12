@@ -445,7 +445,7 @@ pub fn ConnectionBadge() -> Element {
     };
     rsx! {
         span {
-            class: "flex items-center gap-1 text-[10px] font-normal normal-case text-muted-foreground",
+            class: "flex items-center gap-1 text-[11px] font-normal normal-case text-muted-foreground",
             title: "{title}",
             span { class: "h-1.5 w-1.5 rounded-full {dot}" }
             "{label}"
@@ -667,7 +667,7 @@ fn PresenceRow(entry: PresenceEntry) -> Element {
                     if let Some(badge) = kind_badge {
                         span {
                             "data-testid": "presence-agent",
-                            class: "rounded bg-muted px-1 text-[10px] uppercase tracking-wide text-muted-foreground",
+                            class: "rounded bg-muted px-1 text-[11px] uppercase tracking-wide text-muted-foreground",
                             "{badge}"
                         }
                     }

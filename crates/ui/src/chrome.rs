@@ -752,8 +752,9 @@ pub fn FleetingFab() -> Element {
     let lift = action_bar_lift();
     rsx! {
         button {
-            class: "fixed bottom-24 right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-[transform,margin] active:scale-95 md:hidden",
-            style: "margin-bottom: calc({lift} + env(safe-area-inset-bottom, 0px));",
+            class: "fixed bottom-24 right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-[translate,scale] active:scale-95 md:hidden",
+            // `translate`, not margin: the lift animates on the compositor.
+            style: "translate: 0 calc(-1 * ({lift} + env(safe-area-inset-bottom, 0px)));",
             title: "Capture a fleeting note",
             onclick: move |_| open.set(true),
             Feather { size: 20 }
@@ -915,7 +916,7 @@ pub fn TimerWidget() -> Element {
                         span { class: "flex shrink-0 items-center text-amber-400", Pause { size: 12 } }
                         span { class: "max-w-[9rem] truncate text-xs text-foreground", "{p.title}" }
                         span { class: "font-mono text-sm font-semibold tabular-nums text-amber-300/90", "{fmt_hms(p.banked)}" }
-                        span { class: "text-[10px] uppercase tracking-wide text-muted-foreground", "paused" }
+                        span { class: "text-[11px] uppercase tracking-wide text-muted-foreground", "paused" }
                         button {
                             class: "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sky-500/20 hover:text-sky-300",
                             title: "Resume timer",
@@ -1107,7 +1108,7 @@ fn TimerMenu(
                 },
                 span { class: "min-w-0 truncate text-foreground", "{p.title}" }
                 if let Some(project) = p.project_title.as_ref() {
-                    span { class: "shrink-0 rounded bg-muted px-1.5 py-px text-[10px] text-muted-foreground",
+                    span { class: "shrink-0 rounded bg-muted px-1.5 py-px text-[11px] text-muted-foreground",
                         "#{project}"
                     }
                 }
@@ -1136,13 +1137,13 @@ fn TimerMenu(
             } else {
                 div { class: "flex max-h-72 flex-col overflow-y-auto",
                     if !recents.is_empty() {
-                        div { class: "px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground", "Recent" }
+                        div { class: "px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground", "Recent" }
                         for p in recents.clone() {
                             {row(p)}
                         }
                     }
                     if !task_picks.is_empty() {
-                        div { class: "px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground", "Tasks" }
+                        div { class: "px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground", "Tasks" }
                         for p in task_picks.clone() {
                             {row(p)}
                         }
@@ -1282,7 +1283,7 @@ pub fn NotificationBell() -> Element {
                 architect_ui::lucide_dioxus::Bell { size: 15 }
                 if unread > 0 {
                     span {
-                        class: "absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-semibold leading-none text-primary-foreground",
+                        class: "absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold leading-none text-primary-foreground",
                         {if unread > 99 { "99+".to_string() } else { unread.to_string() }}
                     }
                 }
@@ -1373,7 +1374,7 @@ fn NotificationRow(n: notify_proto::Notification, on_open: EventHandler<()>) -> 
                     div { class: "truncate text-[11px] text-muted-foreground", "{n.body}" }
                 }
             }
-            span { class: "shrink-0 pt-px text-[10px] text-muted-foreground", "{when}" }
+            span { class: "shrink-0 pt-px text-[11px] text-muted-foreground", "{when}" }
         }
     }
 }
