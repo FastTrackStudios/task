@@ -2,8 +2,6 @@
 //!
 //! A morning-briefing layout instead of a second task list:
 //!
-//! - **The day at a glance** — three numbers (due today, with how many
-//!   are overdue; open tasks; active projects), each a door to its page.
 //! - **Find or write** — search as a field, and a new note beside it
 //!   (the `<space> n` flow, straight into naming).
 //! - **Today** — the task list's own Today section (in progress,
@@ -100,34 +98,6 @@ pub fn HomeView() -> Element {
         due
     });
 
-    // The day's numbers for the header line.
-    let stats = use_memo(move || {
-        let entries = task_store.entries();
-        let open = stores::unique_tasks(&entries)
-            .into_iter()
-            .filter(|r| is_open_task(&r.task))
-            .count();
-        let due_today = today_tasks.read().len();
-        // Of today's, how many are late — the number worth colouring.
-        let today = chrono::Local::now().date_naive();
-        let overdue = today_tasks
-            .read()
-            .iter()
-            .filter(|t| {
-                t.due
-                    .as_deref()
-                    .and_then(|s| chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok())
-                    .is_some_and(|d| d < today)
-            })
-            .count();
-        let active_projects = project_store
-            .list()
-            .iter()
-            .filter(|r| !r.project.archived && is_active(&r.project.status))
-            .count();
-        (open, due_today, overdue, active_projects)
-    });
-
     // Same as the Tasks page: completing offers Undo.
     let toast = use_toast();
     let on_status = move |(id, status): (uuid::Uuid, String)| {
@@ -152,7 +122,6 @@ pub fn HomeView() -> Element {
         projects.error().or(tasks.error()),
     ) {
         (Some(_), Some(_), _) => {
-            let (open, due_today, overdue, active_projects) = stats();
             let org_choices: Vec<(String, String)> = org_list
                 .read()
                 .iter()
@@ -176,39 +145,17 @@ pub fn HomeView() -> Element {
             let today_overflow = today_tasks.read().len().saturating_sub(today_list.len());
             // No rail when there is nothing due: an empty "Today" card
             // holding a congratulation is dead furniture — the projects
-            // take the full width instead, and the "Due today" card
-            // already tells the story.
+            // take the full width instead.
             let has_today = !today_list.is_empty() || today_overflow > 0;
-            let projects_label = if active_projects == 1 {
-                "Project"
-            } else {
-                "Projects"
-            };
+            // The Today list's own heading badge — the size of the list
+            // beneath it, not a dashboard figure.
+            let due_today = today_tasks.read().len();
 
             rsx! {
-                // ── The day at a glance ───────────────────────────
-                // No greeting, no date: the phone's status bar has the
-                // time, and "Good afternoon" over three small chips spent
-                // a quarter of the screen saying nothing. Three numbers
-                // instead, each a door to the page that holds them.
-                div { class: "grid grid-cols-3 gap-2 sm:gap-3",
-                    SummaryCard {
-                        value: due_today,
-                        label: "Due today",
-                        note: (overdue > 0).then(|| format!("{overdue} overdue")),
-                        onclick: move |_| { nav.push(Route::TasksRoute {}); },
-                    }
-                    SummaryCard {
-                        value: open,
-                        label: "Open",
-                        onclick: move |_| { nav.push(Route::TasksRoute {}); },
-                    }
-                    SummaryCard {
-                        value: active_projects,
-                        label: projects_label,
-                        onclick: move |_| { nav.push(Route::ProjectsRoute {}); },
-                    }
-                }
+                // No greeting, date or counts up top. The status bar has
+                // the time, and how many tasks are open or how many
+                // projects exist is what the Tasks and Projects pages are
+                // for — Home is the next thing to do, not a report on it.
 
                 // ── Find or write ─────────────────────────────────
                 // Search as a field, the way a phone app offers it, with
@@ -323,32 +270,6 @@ pub fn HomeView() -> Element {
     rsx! {
         div { class: "mx-auto flex w-full max-w-6xl flex-col gap-5 p-3 sm:p-5 lg:px-8 lg:py-6",
             {view}
-        }
-    }
-}
-
-/// One of the day's numbers, as a door to the page that holds it: the
-/// count large, what it counts small, and — for "Due today" — how many
-/// of those are already late, in the overdue colour.
-#[component]
-fn SummaryCard(
-    value: usize,
-    label: &'static str,
-    #[props(default)] note: Option<String>,
-    onclick: EventHandler<MouseEvent>,
-) -> Element {
-    rsx! {
-        button {
-            r#type: "button",
-            class: "flex min-h-[4.5rem] flex-col items-start justify-between gap-1 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/30 active:bg-accent/40",
-            onclick: move |e| onclick.call(e),
-            span { class: "text-2xl font-semibold leading-none tabular-nums text-foreground", "{value}" }
-            span { class: "flex min-w-0 flex-col leading-tight",
-                span { class: "truncate text-xs text-muted-foreground", "{label}" }
-                if let Some(note) = note {
-                    span { class: "truncate text-[11px] font-medium text-rose-500", "{note}" }
-                }
-            }
         }
     }
 }
