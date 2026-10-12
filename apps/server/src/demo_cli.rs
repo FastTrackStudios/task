@@ -315,6 +315,35 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                 .update(t)
                 .map_err(|e| eyre::eyre!("give \"{title}\" its contexts: {e}"))?;
         }
+        // Tags, topped up the same way: a tag already there is kept,
+        // one missing is added — `#chore` is how a maintenance hour
+        // finds a task with no `@context` at all.
+        for (title, tags) in example_org::TASK_TAGS {
+            if !declared.tasks.iter().any(|(t, _, _)| t == title) {
+                continue;
+            }
+            let Some(mut t) = tasks_backend
+                .list()
+                .ok()
+                .and_then(|ts| ts.into_iter().find(|t| t.title == *title))
+            else {
+                continue;
+            };
+            let missing: Vec<&str> = tags
+                .iter()
+                .copied()
+                .filter(|tag| !t.tags.iter().any(|have| have == tag))
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            for tag in missing {
+                t.tags.0.push(tag.to_owned());
+            }
+            tasks_backend
+                .update(t)
+                .map_err(|e| eyre::eyre!("give \"{title}\" its tags: {e}"))?;
+        }
         // Owners: a production board shows who is on what. Topped up
         // like everything else — a task that already has an owner keeps
         // it.

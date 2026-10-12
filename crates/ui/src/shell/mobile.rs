@@ -362,6 +362,7 @@ pub fn BottomTabBar(current: Route) -> Element {
     let mut more_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
     let primary = primary_mobile_tabs();
+    let to_process = crate::process::use_to_process_count();
 
     // "More" is you: your avatar and presence dot, opening every section
     // and, at the top of that sheet, your account.
@@ -381,7 +382,11 @@ pub fn BottomTabBar(current: Route) -> Element {
             ul { class: "mx-auto grid max-w-md grid-cols-5",
                 for tab in primary.iter() {
                     li { key: "{tab.label}",
-                        TabBarItem { tab: tab.clone(), active: tabs_match(&current, tab) }
+                        TabBarItem {
+                            tab: tab.clone(),
+                            active: tabs_match(&current, tab),
+                            badge: if matches!(tab.route, Route::InboxRoute {}) { to_process } else { 0 },
+                        }
                     }
                 }
                 li {
@@ -467,15 +472,29 @@ fn MoreSheetBody(on_navigate: EventHandler<()>) -> Element {
 }
 
 #[component]
-fn TabBarItem(tab: NavTab, active: bool) -> Element {
+fn TabBarItem(tab: NavTab, active: bool, #[props(default)] badge: usize) -> Element {
     let class = if active {
         "flex min-h-[56px] w-full flex-col items-center justify-center gap-1 py-2 text-primary"
     } else {
         "flex min-h-[56px] w-full flex-col items-center justify-center gap-1 py-2 text-muted-foreground active:text-foreground"
     };
+    let label = if badge > 99 {
+        "99+".to_owned()
+    } else {
+        badge.to_string()
+    };
     rsx! {
         Link { to: tab.route.clone(), class,
-            span { class: "flex h-5 w-5 items-center justify-center", {(tab.icon)()} }
+            span { class: "relative flex h-5 w-5 items-center justify-center",
+                {(tab.icon)()}
+                // What's waiting to be processed — the one number the
+                // tab bar shows, because processing is the core loop.
+                if badge > 0 {
+                    span { class: "absolute -right-2.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none tabular-nums text-primary-foreground",
+                        "{label}"
+                    }
+                }
+            }
             span { class: "text-[11px] font-medium", "{tab.label}" }
         }
     }

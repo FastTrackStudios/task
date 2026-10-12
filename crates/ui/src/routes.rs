@@ -82,6 +82,11 @@ pub enum Route {
         #[route("/tasks/:id")]
         TaskDetailRoute { id: uuid::Uuid },
 
+        // Issues and pieces of projects with no where or when — what
+        // the Tasks list (next actions) points to rather than shows.
+        #[route("/project-work")]
+        ProjectWorkRoute {},
+
         // `path` deep-links straight to a note (vault-relative path,
         // e.g. from a knowledge-graph node click); empty opens the
         // tree with nothing selected.
@@ -335,6 +340,11 @@ fn GoalsRoute() -> Element {
 #[component]
 fn TasksRoute() -> Element {
     rsx! { pages::tasks::TasksView {} }
+}
+
+#[component]
+fn ProjectWorkRoute() -> Element {
+    rsx! { pages::tasks::ProjectWorkView {} }
 }
 
 #[component]

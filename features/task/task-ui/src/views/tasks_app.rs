@@ -46,6 +46,11 @@ pub struct TasksAppProps {
     #[props(default)]
     pub triage: Vec<TaskInfo>,
     pub on_event: EventHandler<TaskMutation>,
+    /// One capture path: when set, the quick-add line goes here (the
+    /// page captures it and processes it on the spot) instead of being
+    /// created as a task directly.
+    #[props(default)]
+    pub on_capture: Option<EventHandler<String>>,
     #[props(default)]
     pub initial_view: Option<ViewMode>,
     /// When set, the quick-edit sheet offers "Open full view" and
@@ -80,6 +85,13 @@ pub struct TasksAppProps {
     /// not only in a tooltip.
     #[props(default)]
     pub held_count: usize,
+    /// The page heading. Empty for none — the Tasks list doesn't name
+    /// itself; the tab bar already says where you are.
+    #[props(default = "Tasks".to_string())]
+    pub title: String,
+    /// Rendered where the list ends, after what Relevant holds back.
+    #[props(default)]
+    pub footer: Option<Element>,
     #[props(default)]
     pub held_by: Vec<String>,
     /// "Show them": the page turns the Relevant filter off.
@@ -229,19 +241,23 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                 // the title instead of pushing the view switch onto a row
                 // of its own; side by side from `sm` up, as before.
                 div { class: "flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-3",
-                    if !props.embedded {
-                        Heading { level: HeadingLevel::H1, "Tasks" }
+                    if !props.embedded && !props.title.is_empty() {
+                        Heading { level: HeadingLevel::H1, "{props.title}" }
                     }
-                    span { class: "text-xs tabular-nums text-muted-foreground",
-                        "{open_count} open"
-                        if done > 0 {
-                            " · {done} done"
-                        }
-                        if let Some(note) = props.hidden_note.clone() {
-                            " · {note}"
-                        }
-                        if tracked_today > 0 {
-                            " · {crate::display::duration_label(tracked_today)} tracked today"
+                    // Said only when there's something to say: "0 open"
+                    // over an empty list is the empty state twice.
+                    if open_count > 0 || done > 0 || tracked_today > 0 {
+                        span { class: "text-xs tabular-nums text-muted-foreground",
+                            "{open_count} open"
+                            if done > 0 {
+                                " · {done} done"
+                            }
+                            if let Some(note) = props.hidden_note.clone() {
+                                " · {note}"
+                            }
+                            if tracked_today > 0 {
+                                " · {crate::display::duration_label(tracked_today)} tracked today"
+                            }
                         }
                     }
                 }
@@ -297,7 +313,10 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
             div { class: "hidden sm:block",
                 QuickAdd {
                     projects: props.projects.clone(),
-                    on_create: move |task: TaskInfo| props.on_event.call(TaskMutation::Create { task }),
+                    on_create: move |task: TaskInfo| match props.on_capture {
+                        Some(capture) => capture.call(task.title),
+                        None => props.on_event.call(TaskMutation::Create { task }),
+                    },
                 }
             }
             // Bottom room on phones: the capture button floats over the
@@ -373,6 +392,11 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                             }
                         }
                     }
+                }
+                // Whatever the page wants said where the list ends (the
+                // Tasks list's way to project work).
+                if let Some(footer) = props.footer.clone() {
+                    {footer}
                 }
                 // Unfiled work, after the list: it is housekeeping, and
                 // the tasks themselves already sit under their dates.

@@ -15,6 +15,7 @@ pub fn AppShell() -> Element {
 
     // Quick-capture + data-refresh signals for the persistent chrome.
     provide_chrome_contexts();
+    crate::process::provide_process_now();
     // The docked player a citation's timestamp plays in.
     crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
@@ -215,6 +216,8 @@ pub fn AppShell() -> Element {
         }
         // Single global capture modal, toggled from any fleeting button.
         FleetingModal {}
+        // Quick-add's capture-then-process sheet (one capture path).
+        crate::process::ProcessNowOverlay {}
         crate::source_dock::SourceDockView {}
         // Ctrl+P command palette — pages + vault notes, fuzzy-ranked.
         // Mounts its own document-level hotkey listener.

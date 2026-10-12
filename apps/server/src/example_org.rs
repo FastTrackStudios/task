@@ -156,6 +156,7 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
         &mut planted,
     )?;
     complete_mail_accounts(&mail)?;
+    plant_inbox(&vault, slug, &mut planted)?;
     // Before the declared collections: a setlist declared over a library
     // names songs this import creates.
     plant_chordsheet_library(org_root, slug);
@@ -485,7 +486,162 @@ pub const TASK_CONTEXTS: &[(&str, &[&str])] = &[
     ("Restring the studio guitars", &["@studio"]),
     ("Pick up the test pressings", &["@out"]),
     ("Listen back to the rough mixes", &["@evening"]),
+    // The maintenance hour's work. Neither is a place Alice says she is
+    // or a time window; both are opened by the committed day template's
+    // 16:00 maintenance block (`BlockCategory::surfaces`), which is what
+    // `every_task_context_can_be_met` checks.
+    ("Return the hired mic stands", &["@errands"]),
+    ("Vacuum the live room", &["@chores"]),
 ];
+
+/// Tags a seeded task carries, as `(task title, tags)` — no `#`, the
+/// way `task_proto::capture` stores them. `#chore` is the spelling
+/// people write as often as `@chores`, so the seed carries both and a
+/// maintenance hour brings forward each (`matches_focus` reads tags as
+/// well as contexts).
+pub const TASK_TAGS: &[(&str, &[&str])] = &[("Take the studio recycling out", &["chore"])];
+
+/// One capture sitting in an org's inbox at plant time — the input to
+/// processing, which is the centre of the app
+/// (`docs/spec/capture-and-process.md`).
+///
+/// Dates are relative to the plant, like task due dates: a fresh plant
+/// always has captures from the last few days and one snoozed into the
+/// future, whatever the date it runs on.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredCapture {
+    pub org: &'static str,
+    /// Fixed, so a replant finds the file it wrote and keeps it.
+    pub id: &'static str,
+    /// The capture, verbatim — quick-add syntax included, which is what
+    /// "make it a task" parses (`task_proto::capture`).
+    pub body: &'static str,
+    /// Where it came from: `ui`, `cli`, `watch`, or an agent's lane.
+    pub source: &'static str,
+    /// `open`, or `suggested` for something an agent proposed.
+    pub status: &'static str,
+    /// Captured this many days before the plant.
+    pub captured_days_ago: i64,
+    /// Snoozed: resurfaces this many days after the plant. `None` =
+    /// due now.
+    pub resurface_in_days: Option<i64>,
+}
+
+/// What is waiting in the inbox: plain thoughts, captures carrying
+/// quick-add syntax a maintenance hour can find once processed, one
+/// suggestion an agent made from mail, and one put off into the future
+/// that is NOT due today.
+pub const INBOX: &[DeclaredCapture] = &[
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a01",
+        body: "Call the piano tuner about Thursday",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 2,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a02",
+        body: "Pick up gaff tape and 9V batteries @errands",
+        source: "cli",
+        status: "open",
+        captured_days_ago: 1,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a03",
+        body: "Descale the espresso machine #chore",
+        source: "watch",
+        status: "open",
+        captured_days_ago: 1,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a04",
+        body: "Idea: a stems-only bonus edition of the album\n\nSell the multitracks of each song as a remix pack — Track Two first, it has the cleanest stems.",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 3,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a05",
+        body: "Reply to Example Client about the lyric video deadline",
+        source: "email",
+        status: "suggested",
+        captured_days_ago: 0,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a06",
+        body: "Look into a second pair of monitors for the B room",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 10,
+        resurface_in_days: Some(14),
+    },
+];
+
+/// The declared captures of one org.
+pub fn inbox_of(slug: &str) -> impl Iterator<Item = &'static DeclaredCapture> + '_ {
+    INBOX.iter().filter(move |c| c.org == slug)
+}
+
+/// The inbox item a declaration plants, dated against `now`.
+#[must_use]
+pub fn capture_item(c: &DeclaredCapture, now: chrono::DateTime<chrono::Utc>) -> inbox::InboxItem {
+    let created = (now - chrono::Duration::days(c.captured_days_ago))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut item = inbox::InboxItem::capture(c.id, c.body, c.source, created);
+    c.status.clone_into(&mut item.status);
+    if let Some(days) = c.resurface_in_days {
+        item.resurface_on = Some(
+            (now + chrono::Duration::days(days))
+                .date_naive()
+                .to_string(),
+        );
+        // Put off once already — that is how an item comes to have a
+        // resurface date (`inbox_proto::review`, "later").
+        item.reviews = 1;
+        item.interval = days;
+        item.ease = inbox::schedule::BASE_EASE;
+    }
+    item
+}
+
+/// Write `slug`'s declared captures into `vault/Records/inbox/`, in
+/// the inbox backend's own format (`inbox::serialize_inbox_item`).
+///
+/// Idempotent by omission, like the tree: a capture already on disk is
+/// left as it is — Alice may have processed it since, and a replant
+/// that reopened it would be undoing her work.
+///
+/// # Errors
+///
+/// Any filesystem or serialisation error.
+pub fn plant_inbox(vault: &Path, slug: &str, planted: &mut Planted) -> std::io::Result<()> {
+    let now = chrono::Utc::now();
+    let dir = vault.join("Records").join("inbox");
+    for c in inbox_of(slug) {
+        let dest = dir.join(format!("{}.md", c.id));
+        if dest.exists() {
+            planted.kept += 1;
+            continue;
+        }
+        let page =
+            inbox::serialize_inbox_item(&capture_item(c, now)).map_err(std::io::Error::other)?;
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(&dest, page)?;
+        planted.written += 1;
+    }
+    Ok(())
+}
 
 /// The example's members of one org.
 #[must_use]
@@ -619,6 +775,12 @@ pub const DECLARED: &[DeclaredProject] = &[
             ("Sequence the album", "open", Some(10)),
             ("Restring the studio guitars", "open", None),
             ("Listen back to the rough mixes", "open", None),
+            // The maintenance hour's share of the board — see
+            // `TASK_CONTEXTS` / `TASK_TAGS` and the committed
+            // `Projects/Scheduling/templates/weekday.md`.
+            ("Return the hired mic stands", "open", Some(3)),
+            ("Vacuum the live room", "open", None),
+            ("Take the studio recycling out", "open", None),
         ],
     },
     // The subproject, and the reason the seed has one: an album's song
@@ -1837,15 +1999,65 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
 mod declared_tests {
     use super::*;
 
-    /// Every owned task is a declared task, owned by a cast member of
-    /// the org the task lives in — an owner from another company would
-    /// plant an assignee the board can't name.
+    /// The org's committed day templates, parsed the way the scheduler
+    /// parses them.
+    #[cfg(feature = "plugin-scheduling")]
+    fn committed_templates(slug: &str) -> Vec<scheduling_proto::DayTemplate> {
+        let Some(dir) = STUDIO.get_dir(format!("{slug}/Vault/Projects/Scheduling/templates"))
+        else {
+            return Vec::new();
+        };
+        dir.files()
+            .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("md"))
+            .map(|f| {
+                let path = f.path().display().to_string();
+                let text = f.contents_utf8().expect("a template is utf-8");
+                let (fm, _) = scheduling::scan::frontmatter_split(text)
+                    .unwrap_or_else(|| panic!("{path}: no frontmatter"));
+                scheduling::parse::parse_day_template(&path, fm)
+                    .unwrap_or_else(|e| panic!("{path}: {e}"))
+            })
+            .collect()
+    }
+
+    /// Context / tag names (no sigil) some block of the org's committed
+    /// templates brings forward — what a time block can open. `None`
+    /// when this build has no scheduling to ask.
+    #[allow(clippy::unnecessary_wraps)]
+    fn surfaced_by_templates(slug: &str) -> Option<Vec<&'static str>> {
+        #[cfg(feature = "plugin-scheduling")]
+        {
+            Some(
+                committed_templates(slug)
+                    .iter()
+                    .flat_map(|t| t.blocks.iter().map(|b| b.category))
+                    .flat_map(|c| c.surfaces().iter().copied())
+                    .collect(),
+            )
+        }
+        #[cfg(not(feature = "plugin-scheduling"))]
+        {
+            let _ = slug;
+            None
+        }
+    }
+
+    fn org_of_task(title: &str) -> &'static str {
+        DECLARED
+            .iter()
+            .find(|p| p.tasks.iter().any(|(t, _, _)| *t == title))
+            .unwrap_or_else(|| panic!("`{title}` is not a declared task"))
+            .org
+    }
+
     /// Every context-gated task is a declared one, and its contexts are
-    /// ones the app can satisfy: an "I'm at" place or a known time
-    /// window — a gate nothing can open would hide the task for good.
+    /// ones the app can satisfy: an "I'm at" place, a known time
+    /// window, or a name one of the org's own day templates brings
+    /// forward (a maintenance hour's `@errands`) — a gate nothing can
+    /// open would hide the task for good.
     #[test]
     fn every_task_context_can_be_met() {
-        const MEETABLE: &[&str] = &[
+        const PLACES_AND_WINDOWS: &[&str] = &[
             "@home",
             "@studio",
             "@out",
@@ -1854,18 +2066,207 @@ mod declared_tests {
             "@evening",
         ];
         for (title, contexts) in TASK_CONTEXTS {
-            assert!(
-                DECLARED
-                    .iter()
-                    .any(|p| p.tasks.iter().any(|(t, _, _)| t == title)),
-                "`{title}` is not a declared task"
-            );
+            let org = org_of_task(title);
             for c in *contexts {
-                assert!(MEETABLE.contains(c), "`{title}`: nothing can satisfy `{c}`");
+                if PLACES_AND_WINDOWS.contains(c) {
+                    continue;
+                }
+                let Some(surfaced) = surfaced_by_templates(org) else {
+                    continue;
+                };
+                assert!(
+                    surfaced.iter().any(|s| c.strip_prefix('@') == Some(*s)),
+                    "`{title}`: nothing can satisfy `{c}` — not a place, not a \
+                     time window, and no block in {org}'s day templates surfaces it"
+                );
             }
         }
     }
 
+    /// The same contract for tags: a seeded `#chore` is only worth
+    /// carrying if some block of the org's day brings it forward.
+    #[test]
+    fn every_task_tag_is_brought_forward_by_a_block() {
+        for (title, tags) in TASK_TAGS {
+            let org = org_of_task(title);
+            let Some(surfaced) = surfaced_by_templates(org) else {
+                continue;
+            };
+            for tag in *tags {
+                assert!(
+                    !tag.starts_with('#'),
+                    "`{title}`: tags are stored without `#`"
+                );
+                assert!(
+                    surfaced.contains(tag),
+                    "`{title}`: no block in {org}'s day templates surfaces `#{tag}`"
+                );
+            }
+        }
+    }
+
+    // t[verify process.focus.steering]
+    /// The seed has a maintenance hour, on both kinds of day, and it is
+    /// for errands and chores — the block the task list leads with
+    /// during it.
+    #[cfg(feature = "plugin-scheduling")]
+    #[test]
+    fn the_committed_day_templates_carry_a_maintenance_hour() {
+        use scheduling_proto::BlockCategory;
+        let templates = committed_templates("acme-audio");
+        for id in ["weekday", "weekend"] {
+            let t = templates
+                .iter()
+                .find(|t| t.id.0 == id)
+                .unwrap_or_else(|| panic!("acme-audio has no `{id}` template"));
+            let hour = t
+                .blocks
+                .iter()
+                .find(|b| b.category == BlockCategory::Maintenance)
+                .unwrap_or_else(|| panic!("`{id}` has no maintenance block"));
+            assert!(
+                hour.start.minutes_since_midnight < hour.end.minutes_since_midnight,
+                "`{id}`: the hour is empty"
+            );
+            for name in ["errands", "chores", "chore"] {
+                assert!(
+                    hour.category.surfaces().contains(&name),
+                    "a maintenance block does not bring `{name}` forward"
+                );
+            }
+        }
+        let weekday = templates.iter().find(|t| t.id.0 == "weekday").unwrap();
+        let hour = weekday
+            .blocks
+            .iter()
+            .find(|b| b.category == BlockCategory::Maintenance)
+            .unwrap();
+        assert_eq!(
+            (
+                hour.start.minutes_since_midnight,
+                hour.end.minutes_since_midnight
+            ),
+            (16 * 60, 17 * 60),
+            "the weekday maintenance hour is 16:00–17:00"
+        );
+    }
+
+    #[test]
+    fn every_capture_belongs_to_a_seeded_org_once() {
+        let mut ids = std::collections::HashSet::new();
+        for c in INBOX {
+            assert!(
+                ORGS.iter().any(|(s, _)| *s == c.org),
+                "{}: no such org",
+                c.org
+            );
+            assert!(ids.insert(c.id), "{}: two captures share this id", c.id);
+            assert!(
+                [
+                    inbox::InboxItem::STATUS_OPEN,
+                    inbox::InboxItem::STATUS_SUGGESTED
+                ]
+                .contains(&c.status),
+                "{}: a seeded capture is waiting — open or suggested, not `{}`",
+                c.id,
+                c.status
+            );
+        }
+    }
+
+    // t[verify process.due]
+    /// What the plant leaves in Alice's inbox, read back through the
+    /// inbox backend the server mounts: captures due for processing
+    /// (open ones and one suggestion), one put off that is NOT due, and
+    /// captures whose quick-add syntax a maintenance hour can find once
+    /// they are tasks. A replant keeps what is there.
+    #[test]
+    fn the_planted_inbox_has_captures_to_process() {
+        use inbox::Inbox as _;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut planted = Planted::default();
+        plant_inbox(tmp.path(), "acme-audio", &mut planted).expect("plant");
+        assert_eq!(planted.written, inbox_of("acme-audio").count());
+
+        let backend = inbox::VaultInbox::new(tmp.path()).expect("inbox backend");
+        let items = backend.list_inbox().expect("list");
+        assert_eq!(items.len(), planted.written, "every capture parses back");
+
+        let today = chrono::Utc::now().date_naive().to_string();
+        // The deck's rule: open and resurfaced, or a suggestion awaiting
+        // a yes or no.
+        let due = |i: &inbox::InboxItem| {
+            i.status == inbox::InboxItem::STATUS_SUGGESTED || i.in_review_queue(&today)
+        };
+        let suggested: Vec<_> = items
+            .iter()
+            .filter(|i| i.status == inbox::InboxItem::STATUS_SUGGESTED)
+            .collect();
+        assert_eq!(suggested.len(), 1, "one agent suggestion");
+        assert!(due(suggested[0]), "a suggestion is due for a decision");
+        assert_ne!(
+            suggested[0].source, "ui",
+            "a suggestion came from elsewhere"
+        );
+
+        let snoozed: Vec<_> = items
+            .iter()
+            .filter(|i| i.is_open() && !i.in_review_queue(&today))
+            .collect();
+        assert_eq!(snoozed.len(), 1, "one capture put off into the future");
+        assert!(snoozed[0].resurface_on.as_deref() > Some(today.as_str()));
+
+        let due_now: Vec<_> = items.iter().filter(|i| due(i)).collect();
+        assert!(due_now.len() >= 4, "something to process: {due_now:?}");
+
+        // Processing turns a capture into a task by parsing it the way
+        // quick-add does — so these must parse into what a maintenance
+        // hour brings forward.
+        let errand = due_now
+            .iter()
+            .find(|i| i.body.contains("@errands"))
+            .expect("a capture with @errands");
+        let task = task::capture(&errand.body);
+        assert_eq!(task.contexts.0, vec!["@errands".to_owned()]);
+        let chore = due_now
+            .iter()
+            .find(|i| i.body.contains("#chore"))
+            .expect("a capture with #chore");
+        assert!(task::capture(&chore.body).tags.iter().any(|t| t == "chore"));
+        #[cfg(feature = "plugin-scheduling")]
+        {
+            let ctx = task::RelevanceContext {
+                focus: scheduling_proto::BlockCategory::Maintenance
+                    .surfaces()
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+                ..Default::default()
+            };
+            assert!(task::relevance::matches_focus(&task, &ctx));
+            assert!(task::relevance::matches_focus(
+                &task::capture(&chore.body),
+                &ctx
+            ));
+        }
+
+        // Idempotent by omission: a processed capture stays processed.
+        let mut processed = (*errand).clone();
+        processed.status = inbox::InboxItem::STATUS_PROCESSED.to_owned();
+        backend.upsert_inbox_item(&processed).expect("process");
+        let mut again = Planted::default();
+        plant_inbox(tmp.path(), "acme-audio", &mut again).expect("replant");
+        assert_eq!(again.written, 0, "a replant writes nothing new");
+        assert_eq!(
+            backend.get_inbox_item(&processed.id).expect("get").status,
+            inbox::InboxItem::STATUS_PROCESSED,
+            "a replant does not reopen what was processed"
+        );
+    }
+
+    /// Every owned task is a declared task, owned by a cast member of
+    /// the org the task lives in — an owner from another company would
+    /// plant an assignee the board can't name.
     #[test]
     fn every_task_owner_is_a_member_of_the_tasks_org() {
         for (title, email) in TASK_OWNERS {

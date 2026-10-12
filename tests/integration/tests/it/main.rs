@@ -51,6 +51,7 @@ mod parts;
 mod peer_to_peer;
 mod peering;
 mod people;
+mod process;
 mod projects_tier;
 mod reachable;
 mod rebuild;

@@ -25,6 +25,7 @@ pub struct InboxItem {
     /// `Records/inbox/<id>.md`.
     #[architect(primary_key, auto_increment = false)]
     pub id: String,
+    // t[impl process.capture.verbatim]
     /// The captured text, preserved **verbatim** — the paper trail
     /// back to the original thought even after it's been reworded
     /// into a task or atomic note. Markdown.

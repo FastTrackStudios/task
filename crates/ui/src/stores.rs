@@ -708,6 +708,62 @@ impl InboxMutations {
         );
     }
 
+    /// Process an item into the task the person shaped for it (title,
+    /// project, contexts, dates, estimate — or `in-progress` with a
+    /// running clock for "do it now"): optimistically mark it processed,
+    /// create the task, persist the back-link. Same shape as
+    /// [`Self::promote_to_task`], which makes a bare one.
+    // t[impl process.outcome.task]
+    pub fn process_into_task(
+        &self,
+        slug: String,
+        item: inbox_proto::InboxItem,
+        task: task_proto::TaskInfo,
+    ) {
+        let mut done = item;
+        done.status = inbox_proto::InboxItem::STATUS_PROCESSED.to_string();
+        let id = done.id.clone();
+        let row = done.clone();
+        self.write.run(
+            self.store,
+            move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
+            move || async move {
+                let task = crate::feeds::create_task_info(&slug, task).await?;
+                let mut done = done;
+                done.processed_into = Some(task.path);
+                crate::feeds::upsert_inbox_item(&slug, done.clone())
+                    .await
+                    .map(|()| Some(done))
+            },
+        );
+    }
+
+    /// Process an item into a project of its own ("too big for one
+    /// task"): mark it processed, create the project, link it back.
+    pub fn process_into_project(
+        &self,
+        slug: String,
+        item: inbox_proto::InboxItem,
+        project: project_proto::ProjectInfo,
+    ) {
+        let mut done = item;
+        done.status = inbox_proto::InboxItem::STATUS_PROCESSED.to_string();
+        let id = done.id.clone();
+        let row = done.clone();
+        self.write.run(
+            self.store,
+            move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
+            move || async move {
+                let project = crate::feeds::create_project(&slug, project).await?;
+                let mut done = done;
+                done.processed_into = Some(format!("project:{}", project.id));
+                crate::feeds::upsert_inbox_item(&slug, done.clone())
+                    .await
+                    .map(|()| Some(done))
+            },
+        );
+    }
+
     /// Promote an item into an atomic wiki note (same shape as
     /// [`Self::promote_to_task`], writing markdown to the vault).
     pub fn promote_to_note(

@@ -16,7 +16,9 @@
 //! task store, so the board and the dashboard can't disagree.
 
 use crate::format::status_variant;
-use architect_ui::lucide_dioxus::{ArrowRight, CalendarDays, CircleCheck, NotebookPen, Search};
+use architect_ui::lucide_dioxus::{
+    ArrowRight, CalendarDays, CircleCheck, Inbox as InboxIcon, NotebookPen, Search,
+};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use project_proto::ProjectInfo;
@@ -100,6 +102,19 @@ pub fn HomeView() -> Element {
 
     // Same as the Tasks page: completing offers Undo.
     let toast = use_toast();
+    let to_process = crate::process::use_to_process_count();
+    let now_block = crate::now_block::use_now_block();
+    let for_hour_memo = use_memo(move || {
+        let Some(block) = now_block() else {
+            return Vec::new();
+        };
+        let entries = task_store.entries();
+        let all: Vec<&DbTask> = stores::unique_tasks(&entries)
+            .into_iter()
+            .map(|r| &r.task)
+            .collect();
+        crate::now_block::tasks_for(&block, &all)
+    });
     let on_status = move |(id, status): (uuid::Uuid, String)| {
         crate::task_board::apply_with_undo(
             muts,
@@ -150,6 +165,7 @@ pub fn HomeView() -> Element {
             // The Today list's own heading badge — the size of the list
             // beneath it, not a dashboard figure.
             let due_today = today_tasks.read().len();
+            let for_hour = for_hour_memo();
 
             rsx! {
                 // No greeting, date or counts up top. The status bar has
@@ -182,6 +198,33 @@ pub fn HomeView() -> Element {
                         NotebookPen { size: 16 }
                         span { class: "hidden sm:inline", "New note" }
                     }
+                }
+
+                // ── Process ───────────────────────────────────────
+                // What's been captured and not yet decided comes first:
+                // the inbox is where the system stays trustworthy.
+                if to_process > 0 {
+                    Link {
+                        to: Route::InboxRoute {},
+                        class: "flex min-h-14 items-center gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 transition-colors hover:bg-primary/15 active:bg-primary/20",
+                        span { class: "flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/20 text-primary",
+                            InboxIcon { size: 18 }
+                        }
+                        span { class: "flex min-w-0 flex-1 flex-col leading-tight",
+                            span { class: "text-sm font-semibold text-foreground",
+                                if to_process == 1 { "1 capture to process" } else { "{to_process} captures to process" }
+                            }
+                            span { class: "text-xs text-muted-foreground", "Decide what each one is" }
+                        }
+                        ArrowRight { size: 16 }
+                    }
+                }
+
+                // ── This hour ─────────────────────────────────────
+                crate::now_block::NowBlockBand {
+                    block: now_block(),
+                    tasks: for_hour,
+                    on_status,
                 }
 
                 // ── Today + Projects ──────────────────────────────

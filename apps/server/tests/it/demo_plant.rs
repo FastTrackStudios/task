@@ -471,6 +471,104 @@ async fn demo_plants_the_collections_that_gather_the_assets() -> eyre::Result<()
     Ok(())
 }
 
+// t[verify process.due]
+// t[verify process.focus.surfaces]
+/// The planted world can show the capture-and-process loop: captures
+/// waiting in Alice's inbox (one suggested, one put off), a day with a
+/// maintenance hour, and tasks for that hour to bring forward —
+/// `@errands`, `@chores` and a `#chore` tag. Asserted through the
+/// backends the server mounts, after the real `admin demo`, twice: a
+/// replant tops up rather than duplicating or reopening.
+#[cfg(feature = "plugin-scheduling")]
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_an_inbox_to_process_and_a_maintenance_hour() -> eyre::Result<()> {
+    use inbox::Inbox as _;
+    use scheduling_proto::BlockCategory;
+    use scheduling_proto::service::day_templates::DayTemplates as _;
+    use task::TaskService as _;
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(tmp.path(), slug)?;
+    plant(tmp.path(), slug)?;
+    let org = org_proto::DataRoot::new(tmp.path().to_path_buf()).org(slug);
+
+    // The inbox: every declared capture, once.
+    let inbox = inbox::VaultInbox::new(org.vault_dir()).map_err(|e| eyre::eyre!("{e}"))?;
+    let items = inbox.list_inbox().map_err(|e| eyre::eyre!("{e:?}"))?;
+    let declared: Vec<_> = task_server::example_org::inbox_of(slug).collect();
+    eyre::ensure!(
+        items.len() == declared.len(),
+        "one item per declared capture, however often planted: {items:?}"
+    );
+    let today = chrono::Utc::now().date_naive().to_string();
+    let queue = inbox
+        .review_queue(today.clone())
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    eyre::ensure!(
+        items.iter().any(|i| i.status == "suggested"),
+        "an agent suggestion awaits a decision"
+    );
+    eyre::ensure!(
+        items
+            .iter()
+            .any(|i| i.is_open() && !queue.iter().any(|q| q.id == i.id)),
+        "one capture is put off, not due"
+    );
+    eyre::ensure!(queue.len() >= 4, "something to process today: {queue:?}");
+
+    // The day: a maintenance hour on both kinds of day.
+    let scheduler =
+        scheduling::VaultScheduler::new(org.vault_dir()).map_err(|e| eyre::eyre!("{e}"))?;
+    let templates = scheduler
+        .list_day_templates()
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    for id in ["weekday", "weekend"] {
+        let t = templates
+            .iter()
+            .find(|t| t.id.0 == id)
+            .ok_or_else(|| eyre::eyre!("no `{id}` template planted"))?;
+        eyre::ensure!(
+            t.blocks
+                .iter()
+                .any(|b| b.category == BlockCategory::Maintenance),
+            "`{id}` has no maintenance block"
+        );
+    }
+
+    // The board: work the hour is for, with its contexts and tags.
+    let focus: Vec<String> = BlockCategory::Maintenance
+        .surfaces()
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let ctx = task::RelevanceContext {
+        focus,
+        ..Default::default()
+    };
+    let tasks = task::TaskBackend::new(org.vault_dir())
+        .list()
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    for title in [
+        "Return the hired mic stands",
+        "Vacuum the live room",
+        "Take the studio recycling out",
+    ] {
+        let matching: Vec<_> = tasks.iter().filter(|t| t.title == title).collect();
+        eyre::ensure!(matching.len() == 1, "`{title}` planted once");
+        eyre::ensure!(
+            task::relevance::matches_focus(matching[0], &ctx),
+            "`{title}` is not brought forward by a maintenance hour: \
+             contexts {:?}, tags {:?}",
+            matching[0].contexts,
+            matching[0].tags
+        );
+    }
+    Ok(())
+}
+
 /// The seeded booking the finance integration is written against.
 ///
 /// The repo's policy is that a feature lives in the suite *and* in the

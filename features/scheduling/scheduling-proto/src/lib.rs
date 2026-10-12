@@ -38,6 +38,7 @@ pub mod cal_event;
 pub mod day_plan;
 pub mod error;
 pub mod event_type;
+pub mod focus;
 pub mod recurrence;
 pub mod resolve;
 pub mod schedule;
@@ -49,6 +50,7 @@ pub use cal_event::CalEvent;
 pub use day_plan::{BlockAssignment, DayPlan, PlannedBlock};
 pub use error::SchedulingError;
 pub use event_type::{EventType, EventTypeId, EventTypeLocation};
+pub use focus::steering_block_at;
 pub use resolve::{
     BlockRole, ChangeAction, ReconcileChange, ReconcileOutcome, ResolvedBlock, is_embedded,
     meal_slot_for_block, merge_template, reconcile, role_for,

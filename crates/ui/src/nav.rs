@@ -121,6 +121,14 @@ pub fn nav_tabs() -> Vec<NavTab> {
                 org: String::new(),
             },
         },
+        // Issues and pieces of projects with no where or when — kept
+        // off Tasks (next actions), one tap from here.
+        NavTab {
+            label: "Project work",
+            plugin: "core",
+            icon: icon_projects,
+            route: Route::ProjectWorkRoute {},
+        },
         NavTab {
             label: "Vault",
             plugin: "core",
@@ -267,7 +275,9 @@ pub fn use_active_plugins() -> task_plugin::PluginSet {
 }
 
 /// The bottom-tab-bar set: four primary destinations. Everything else
-/// lives behind the "More" tab the bar appends itself.
+/// (Projects among it) lives behind the "More" tab the bar appends
+/// itself. Inbox is second, after Home: capture → process is the core
+/// loop, and the tab carries the count of what's waiting.
 pub fn primary_mobile_tabs() -> Vec<NavTab> {
     vec![
         NavTab {
@@ -277,16 +287,16 @@ pub fn primary_mobile_tabs() -> Vec<NavTab> {
             route: Route::DashboardRoute {},
         },
         NavTab {
+            label: "Inbox",
+            plugin: "core",
+            icon: icon_inbox,
+            route: Route::InboxRoute {},
+        },
+        NavTab {
             label: "Tasks",
             plugin: "core",
             icon: icon_tasks,
             route: Route::TasksRoute {},
-        },
-        NavTab {
-            label: "Projects",
-            plugin: "core",
-            icon: icon_projects,
-            route: Route::ProjectsRoute {},
         },
         NavTab {
             label: "Schedule",
@@ -330,6 +340,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::GoalsRoute {} => "Goals",
         Route::TasksRoute {} => "Tasks",
         Route::TaskDetailRoute { .. } => "Task",
+        Route::ProjectWorkRoute {} => "Project work",
         Route::VaultRoute { .. } => "Vault",
         Route::MilestonesRoute {} => "Milestones",
         Route::ScheduleRoute {} => "Schedule",

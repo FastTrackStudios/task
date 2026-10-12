@@ -36,6 +36,7 @@
 //! disk-backed `TaskBackend`. Same split as `milestone` /
 //! `milestone-proto`.
 
+pub mod action;
 pub mod agent_lane;
 pub mod capture;
 pub mod filing;
@@ -45,6 +46,7 @@ pub mod relevance;
 pub mod service;
 pub mod wayfinder;
 
+pub use action::{is_next_action, is_project_work};
 pub use agent_lane::{TriageLabel, has_triage_label, is_untriaged, triage_label, triage_labels};
 pub use capture::{capture, infer_project_id};
 pub use filing::{Anchor, anchor, is_filed, is_unfiled};
@@ -57,7 +59,7 @@ pub use relations::{
 };
 pub use relevance::{
     RelevanceContext, condense_next_per_anchor, condense_next_per_project, filter_relevant,
-    is_relevant, next_action_key, partition_triage, relevance_rank,
+    is_relevant, matches_focus, next_action_key, partition_triage, relevance_rank,
 };
 pub use service::{
     TaskError, TaskEvent, TaskListFilter, TaskReverseRelations, TaskService, TaskServiceRpc,

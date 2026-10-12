@@ -32,6 +32,7 @@ use crate::orgs::{OrgMeta, OrgSelection};
 use crate::prefs::PrefsCtx;
 use crate::shell::mobile::{BottomSheet, MobileActionBar};
 use crate::stores;
+use crate::task_board::Scope;
 
 /// The "I'm at:" choices — matched against `@<location>` gate
 /// contexts by the relevance rules. FUTURE: personal named
@@ -67,6 +68,33 @@ struct BoardData {
     /// The running work session (the unified timer source), if any —
     /// what the Now bar reflects. `None` when nothing is tracking.
     now: Option<NowInfo>,
+    /// Open tasks the current time block is for (a maintenance hour's
+    /// errands and chores), for the band above the list.
+    for_hour: Vec<task_proto::TaskInfo>,
+    /// Open tasks in the other scope (on Tasks: the project work it
+    /// links to).
+    other_scope: usize,
+}
+
+/// The foot of the Tasks list: how much project work isn't shown here,
+/// and the way to it.
+#[component]
+fn ProjectWorkLink(count: usize) -> Element {
+    let what = if count == 1 {
+        "1 project item has".to_owned()
+    } else {
+        format!("{count} project items have")
+    };
+    rsx! {
+        div { class: "flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 px-2 pt-3 text-sm text-muted-foreground",
+            span { "{what} no context or date yet." }
+            Link {
+                to: crate::routes::Route::ProjectWorkRoute {},
+                class: "rounded-md px-2 py-1 text-sm font-medium text-primary transition-colors hover:bg-primary/10",
+                "Project work →"
+            }
+        }
+    }
 }
 
 /// The Now bar's data, derived from the open [`WorkSession`] rather
@@ -86,8 +114,22 @@ struct NowInfo {
     req: timer_proto::StartTimerRequest,
 }
 
+/// `/tasks` — next actions: what has a where or a when, or is already
+/// moving. Project work is one link away at the foot of the list.
 #[component]
 pub fn TasksView() -> Element {
+    rsx! { TaskBoard { scope: Scope::Actions } }
+}
+
+/// `/project-work` — issues and pieces of projects that have no where
+/// or when yet. Give one a context or a date and it joins Tasks.
+#[component]
+pub fn ProjectWorkView() -> Element {
+    rsx! { TaskBoard { scope: Scope::ProjectWork } }
+}
+
+#[component]
+fn TaskBoard(scope: Scope) -> Element {
     let nav = use_navigator();
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
@@ -120,6 +162,10 @@ pub fn TasksView() -> Element {
     let location_pick = use_signal(|| user_prefs.location.clone());
 
     let prefs_signal = prefs_ctx.prefs;
+    // What the hour is for (a maintenance hour → errands and chores),
+    // from today's day plan — it steers relevance and heads the list.
+    let now_block = crate::now_block::use_now_block();
+    let process_now = use_context::<crate::process::ProcessNow>();
     let board = use_memo(move || -> Option<BoardData> {
         let result = store.entries_result();
         let rows = result.value()?;
@@ -139,13 +185,23 @@ pub fn TasksView() -> Element {
             .find(|r| r.session.end_time.is_none())
             .and_then(|r| r.session.project_id);
 
-        let ctx = crate::task_board::relevance_ctx(&at_location, active_project);
+        let hour = now_block.read().clone();
+        let focus = hour.as_ref().map(|b| b.focus.clone()).unwrap_or_default();
+        let ctx = crate::task_board::relevance_ctx(&at_location, active_project, focus);
         // One row per task id — see `stores::unique_tasks`.
         let unique = stores::unique_tasks(&rows);
         let all: Vec<&task_proto::TaskInfo> = unique.iter().map(|r| &r.task).collect();
+        // The hour's band is a Tasks thing: project work has no where
+        // or when for a block to match.
+        let for_hour = hour
+            .as_ref()
+            .filter(|_| scope == Scope::Actions)
+            .map(|b| crate::now_block::tasks_for(b, &all))
+            .unwrap_or_default();
         // The board's filters — the same function the Work sidebar
         // counts with, so the two agree (`crate::task_board`).
-        let filtered = crate::task_board::filter(&all, active_only, relevant_only, &ctx);
+        let filtered = crate::task_board::filter(&all, scope, active_only, relevant_only, &ctx);
+        let other_scope = filtered.other_scope;
         let hidden = filtered.hidden_done + filtered.hidden_elsewhere;
         let hidden_note = filtered.hidden_note();
         let held = (filtered.hidden_elsewhere, filtered.held_by.clone());
@@ -307,6 +363,8 @@ pub fn TasksView() -> Element {
             held,
             org_of,
             now,
+            for_hour,
+            other_scope,
         })
     });
 
@@ -347,6 +405,8 @@ pub fn TasksView() -> Element {
                 held: (held_count, held_by),
                 org_of,
                 now,
+                for_hour,
+                other_scope,
             } = data;
             // Inline chips are desktop chrome; on phones the same
             // controls live in the Filters bottom sheet below.
@@ -398,6 +458,16 @@ pub fn TasksView() -> Element {
                             },
                         }
                     }
+                    // The hour's own work, before the whole list.
+                    div { class: "px-3 pt-3 empty:hidden sm:px-5 lg:px-8",
+                        crate::now_block::NowBlockBand {
+                            block: now_block().filter(|_| scope == Scope::Actions),
+                            tasks: for_hour,
+                            on_status: move |(id, status): (uuid::Uuid, String)| {
+                                apply_with_undo(TaskMutation::SetStatus { id, status });
+                            },
+                        }
+                    }
                     div { class: "min-h-0 flex-1",
                         TasksApp {
                             tasks: ui_tasks,
@@ -411,8 +481,28 @@ pub fn TasksView() -> Element {
                             held_by,
                             on_show_held: move |()| prefs_ctx.update(|p| p.tasks_relevant = false),
                             people: people(),
+                            title: match scope {
+                                Scope::Actions => String::new(),
+                                Scope::ProjectWork => "Project work".to_owned(),
+                            },
+                            footer: match scope {
+                                Scope::Actions if other_scope > 0 => rsx! {
+                                    ProjectWorkLink { count: other_scope }
+                                },
+                                Scope::ProjectWork => rsx! {
+                                    p { class: "px-2 pt-3 text-sm text-muted-foreground",
+                                        "Give one of these a context or a date and it moves to Tasks."
+                                    }
+                                },
+                                Scope::Actions => rsx! {},
+                            },
                             initial_view: stored_view(),
                             on_view_change: move |v| remember_view(v),
+                            on_capture: move |line: String| {
+                                let create_slug =
+                                    crate::orgs::create_target(&selection.read(), &org_list.read());
+                                process_now.start(create_slug, &line);
+                            },
                             on_event: move |mu: TaskMutation| apply_with_undo(mu),
                             on_open_full: move |id| {
                                 nav.push(crate::routes::Route::TaskDetailRoute { id });
@@ -486,11 +576,14 @@ pub fn TasksView() -> Element {
                                 // The sheet opened to type: the keyboard
                                 // comes up with it.
                                 autofocus: true,
+                                // One capture: the line goes to the inbox
+                                // and straight into processing, so it
+                                // leaves with a context and a date.
                                 on_create: move |task: task_ui::TaskInfo| {
                                     let create_slug =
                                         crate::orgs::create_target(&selection.read(), &org_list.read());
-                                    muts.apply(&create_slug, TaskMutation::Create { task });
                                     add_open.set(false);
+                                    process_now.start(create_slug, &task.title);
                                 },
                             }
                         }

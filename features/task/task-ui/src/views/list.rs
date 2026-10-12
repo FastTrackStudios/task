@@ -235,7 +235,7 @@ pub fn TaskList(props: TaskListProps) -> Element {
     rsx! {
         div { class: "flex min-w-0 flex-col gap-5",
             if groups.is_empty() {
-                p { class: "px-1 py-6 text-sm text-muted-foreground", "Nothing to do. Add a task above." }
+                p { class: "px-1 py-6 text-sm text-muted-foreground", "Nothing to do right now. Anything you capture and process lands here." }
             }
             for (group, items) in groups.into_iter() {
                 Section {

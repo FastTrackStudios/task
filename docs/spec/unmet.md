@@ -348,6 +348,49 @@ grouped:
 Remove entries as their rules gain markers; the section goes when the
 last does.
 
+**[`capture-and-process.md`](capture-and-process.md) — 22 rules: 8
+verified, 5 with an implementation marker, 3 not met, 11 built in the
+app and verified by nothing.** Tallied separately from the count at the
+top. What is checked: one capture path, a capture's words and back-link,
+the due rule and processing into a task over the Inbox and Task lanes
+(`tests/integration/tests/it/process.rs`), the planted inbox and
+maintenance hour (`example_org::declared_tests`), and the four
+`process.focus.{steering,surfaces,opens,ranks}` rules in
+`task-proto::relevance` / `scheduling-proto::focus` unit tests and over
+`TaskService::query`.
+
+Not met:
+
+- **`process.capture.process-now`** — quick-add (Tasks page) offers
+  process-now through `crate::process::ProcessNow`; the ✎ capture box
+  (`crates/ui/src/chrome.rs`, `FleetingModal`) only files the capture,
+  open, and offers no way to decide it there.
+- **`process.focus.everywhere`** — the web board, Home and the Tasks
+  page read the steering block (`crates/ui/src/now_block.rs`); the CLI
+  passes `focus: Vec::new()` (`apps/cli/src/task_cmd.rs`, marked
+  `FUTURE`), and the morning brief (`apps/cli/src/brief.rs`) fetches
+  today's plan but derives no focus from it — so `--relevant` during a
+  maintenance hour still hides `@errands` work.
+- **`process.context.device`** — no client fills
+  `RelevanceContext::device`: the web board leaves it `None`
+  (`crates/ui/src/task_board.rs`, `FUTURE(relevancy-and-inbox)`), and
+  the CLI only has it when the person passes `--device`.
+
+Built in the app, verified by nothing: `process.outcome.{waiting,now,
+project,note,later,done,delete}`, `process.suggestion`,
+`process.mode.{fast,clarify}` and `process.undo`. All live in
+`crates/ui/src/process.rs` and `crates/ui/src/pages/inbox.rs`, which carry
+no markers yet and have no test that drives them; each outcome is a pair
+of ordinary lane calls, so each can be pinned the way
+`process.rs::a_capture_processed_into_a_task_links_back_to_it` pins the
+task outcome. Two rules are verified without an implementation marker
+for the same reason — `process.capture.single-path` and `process.due`
+are implemented in the UI (`ProcessNow`, `pages::inbox::is_due`), and
+`process.outcome.task` in `stores::InboxMutations::process_into_task`.
+The due rule also has no home below the UI: `Inbox::review_queue` is the
+open half only, so a client other than the web app has to restate the
+`suggested` clause.
+
 ## Built since this file was written
 
 **Sync in both directions, in the shipped path.** The engine could

@@ -42,6 +42,16 @@ pub struct RelevanceContext {
     /// rank first.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub active_project: Option<Uuid>,
+    /// What the hour is *for*: context / tag names (no sigil,
+    /// lowercase) the current time block brings forward — a
+    /// maintenance hour's `errands`, `chores`, `home`. A gate context
+    /// named here is met, and tasks carrying one (as `@context` or
+    /// `#tag`) rank right after the task in progress. Empty = no block
+    /// is steering. The caller resolves the block
+    /// (`scheduling_proto::BlockCategory::surfaces`); this crate stays
+    /// ignorant of schedules.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub focus: Vec<String>,
 }
 
 /// The built-in time-window contexts: `(@name, [(start, end)])` in
@@ -79,6 +89,12 @@ fn time_window_matches(name: &str, now_min: u16) -> Option<bool> {
 
 /// Does the context satisfy one gate context name?
 fn gate_matches(name: &str, ctx: &RelevanceContext) -> bool {
+    // t[impl process.focus.opens]
+    // The hour's focus opens its own gates: `@errands` is the point
+    // of a maintenance hour, wherever the person says they are.
+    if ctx.focus.iter().any(|f| f == name) {
+        return true;
+    }
     if let Some(now) = ctx.local_hhmm.as_deref().and_then(parse_hhmm) {
         if let Some(hit) = time_window_matches(name, now) {
             return hit;
@@ -115,24 +131,44 @@ pub fn is_relevant(task: &TaskInfo, ctx: &RelevanceContext) -> bool {
     gates.iter().any(|g| gate_matches(g, ctx))
 }
 
+/// Whether the task is what the current block is for — it carries one
+/// of [`RelevanceContext::focus`] as an `@context` or a `#tag`.
+#[must_use]
+pub fn matches_focus(task: &TaskInfo, ctx: &RelevanceContext) -> bool {
+    if ctx.focus.is_empty() {
+        return false;
+    }
+    let tag_name = |raw: &String| raw.trim().trim_start_matches('#').to_ascii_lowercase();
+    task.contexts
+        .iter()
+        .map(|c| context_name(c))
+        .chain(task.tags.iter().map(tag_name))
+        .any(|n| ctx.focus.contains(&n))
+}
+
+// t[impl process.focus.ranks]
 /// Ordering weight — smaller sorts first. The task being worked on
-/// right now (in-progress — its timer is running) leads, then
-/// active-timer project tasks, then due/overdue, then everything else
-/// in the caller's existing order (stable sorts keep it).
+/// right now (in-progress — its timer is running) leads, then what the
+/// current block is for ([`matches_focus`]), then active-timer project
+/// tasks, then due/overdue, then everything else in the caller's
+/// existing order (stable sorts keep it).
 #[must_use]
 pub fn relevance_rank(task: &TaskInfo, ctx: &RelevanceContext) -> u8 {
     if crate::model::Status::from_str(&task.status) == Some(crate::model::Status::InProgress) {
         return 0;
     }
-    if ctx.active_project.is_some() && task.project_id == ctx.active_project {
+    if matches_focus(task, ctx) {
         return 1;
+    }
+    if ctx.active_project.is_some() && task.project_id == ctx.active_project {
+        return 2;
     }
     if let Some(today) = ctx.local_date.as_deref() {
         if is_due_on_or_before(task.due.as_deref(), task.scheduled.as_deref(), today) {
-            return 2;
+            return 3;
         }
     }
-    3
+    4
 }
 
 /// The shared "Active + Relevant" pipeline: keep open tasks that are
@@ -228,6 +264,35 @@ mod tests {
         let call = task(&["@phone"]);
         ctx.device = Some("phone".to_owned());
         assert!(is_relevant(&call, &ctx));
+    }
+
+    // t[verify process.focus.opens]
+    // t[verify process.focus.ranks]
+    #[test]
+    fn a_maintenance_hour_opens_its_gates_and_leads_with_its_tasks() {
+        // Outside the block, @errands waits for "I'm at errands".
+        let errand = task(&["@errands"]);
+        let mut mix = task(&[]);
+        mix.title = "mix".into();
+        mix.project_id = Some(Uuid::new_v4());
+        let mut chore = task(&[]);
+        chore.title = "chore by tag".into();
+        chore.tags.0.push("chore".into());
+        assert!(!is_relevant(&errand, &at("15:00")));
+
+        // Inside it, the gate is met and both errand and #chore rank
+        // ahead of ordinary work — but behind what's in progress.
+        let hour = RelevanceContext {
+            focus: vec!["errands".into(), "chore".into()],
+            ..at("15:00")
+        };
+        assert!(is_relevant(&errand, &hour));
+        assert!(matches_focus(&errand, &hour) && matches_focus(&chore, &hour));
+        assert!(!matches_focus(&mix, &hour));
+        let mut working = task(&[]);
+        working.status = "in-progress".into();
+        assert!(relevance_rank(&working, &hour) < relevance_rank(&chore, &hour));
+        assert!(relevance_rank(&chore, &hour) < relevance_rank(&mix, &hour));
     }
 
     #[test]

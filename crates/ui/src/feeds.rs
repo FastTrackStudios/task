@@ -292,7 +292,6 @@ pub async fn create_task(
     title: &str,
     details: &str,
 ) -> Result<task_proto::TaskInfo, String> {
-    let client = crate::vox_clients::establish_for::<task_proto::TaskServiceClient>(slug).await?;
     let t = task_proto::TaskInfo {
         id: uuid::Uuid::nil(),
         path: String::new(),
@@ -319,8 +318,19 @@ pub async fn create_task(
         details: details.to_owned(),
         workflow: None,
     };
+    create_task_info(slug, t).await
+}
+
+/// Create a fully-specified task — the processing flow's "make it a
+/// task", which arrives with its project, contexts, dates and estimate
+/// already chosen rather than as a bare title.
+pub async fn create_task_info(
+    slug: &str,
+    task: task_proto::TaskInfo,
+) -> Result<task_proto::TaskInfo, String> {
+    let client = crate::vox_clients::establish_for::<task_proto::TaskServiceClient>(slug).await?;
     client
-        .create(t)
+        .create(task)
         .await
         .map_err(|e| format!("{slug}: create task: {e:?}"))
 }

@@ -32,3 +32,9 @@ pub use views::{
     TasksApp, TasksAppProps, TimeSection, TriageStrip, ViewMode, WorkflowSection, clock_running,
     days_late, late_label, owner_name, task_section,
 };
+// The property system: one typeable picker, five chips, their icons.
+pub use views::{
+    AssigneeChip, Hotkey, LabelsChip, PRIORITIES, PersonDot, PickOption, PriorityChip,
+    PriorityIcon, ProjectChip, PropertyPicker, STATUSES, StatusChip, StatusIcon,
+    canonical_priority, canonical_status, label_color, match_rank, picker_filtered,
+};

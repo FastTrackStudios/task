@@ -7,6 +7,14 @@ mod links;
 mod list;
 pub use list::{TaskSection, classify as task_section};
 mod palette;
+mod picker;
+pub use picker::{PickOption, PropertyPicker, filtered as picker_filtered, match_rank};
+mod properties;
+pub use properties::{
+    AssigneeChip, Hotkey, LabelsChip, PRIORITIES, PersonDot, PriorityChip, PriorityIcon,
+    ProjectChip, STATUSES, StatusChip, StatusIcon, canonical_priority, canonical_status,
+    label_color,
+};
 mod quick_add;
 mod row;
 pub use row::{AnchorChip, CheckboxButton, clock_running, days_late, late_label, owner_name};
