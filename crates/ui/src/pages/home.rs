@@ -188,7 +188,10 @@ pub fn HomeView() -> Element {
                 }
 
                 // ── Quick actions ─────────────────────────────────
-                div { class: "flex flex-wrap items-center gap-2",
+                // Four equal tiles in a row on a phone — pills wrapped
+                // three-and-one, leaving "Tasks" alone on a second line —
+                // and a row of pills from `sm` up.
+                div { class: "grid grid-cols-4 gap-2 sm:flex sm:flex-wrap sm:items-center",
                     ActionTile {
                         label: "New note",
                         hint: "Space n",
@@ -247,18 +250,19 @@ pub fn HomeView() -> Element {
                     div { class: if has_today { "flex flex-col gap-2.5 lg:col-span-2" } else { "flex flex-col gap-2.5 lg:col-span-3" },
                         // Wraps on a phone: the org picker gets its own
                         // line instead of squeezing the label to two.
-                        div { class: "flex flex-wrap items-center justify-between gap-x-3 gap-y-2",
+                        // On a phone: the label and "All projects" on one
+                        // line, the new-project field full width beneath
+                        // them. From `sm` up the field sits between the two.
+                        div { class: "flex flex-wrap items-center gap-x-3 gap-y-2",
                             span { class: "shrink-0 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground",
                                 "Active work"
                             }
-                            div { class: "flex min-w-0 flex-wrap items-center gap-2",
-                                {quick_add}
-                                Link {
-                                    to: Route::ProjectsRoute {},
-                                    class: "flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground",
-                                    if overflow > 0 { "All projects · {card_list.len()}" } else { "All projects" }
-                                    ArrowRight { size: 12 }
-                                }
+                            div { class: "order-last w-full sm:order-none sm:ml-auto sm:w-auto", {quick_add} }
+                            Link {
+                                to: Route::ProjectsRoute {},
+                                class: "ml-auto flex min-h-11 items-center gap-1 text-xs text-muted-foreground hover:text-foreground sm:ml-0 sm:min-h-0",
+                                if overflow > 0 { "All projects · {card_list.len()}" } else { "All projects" }
+                                ArrowRight { size: 12 }
                             }
                         }
                         if shown.is_empty() {
@@ -338,12 +342,12 @@ fn ActionTile(
     rsx! {
         button {
             r#type: "button",
-            class: "group flex items-center gap-2 rounded-full border border-border/70 bg-card/60 py-1.5 pl-3 pr-2 text-left transition-colors hover:border-border hover:bg-accent/40",
+            class: "group flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-xl border border-border/70 bg-card/60 px-1 py-2 transition-colors active:bg-accent/40 hover:border-border hover:bg-accent/40 sm:min-h-0 sm:flex-row sm:gap-2 sm:rounded-full sm:py-1.5 sm:pl-3 sm:pr-2 sm:text-left",
             onclick: move |e| onclick.call(e),
             span { class: "text-muted-foreground transition-colors group-hover:text-foreground",
                 {children}
             }
-            span { class: "text-sm text-foreground", "{label}" }
+            span { class: "whitespace-nowrap text-xs text-foreground sm:text-sm", "{label}" }
             kbd { class: "hidden shrink-0 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline",
                 "{hint}"
             }
@@ -491,7 +495,9 @@ fn ProjectCard(
             // neighbour.
             Link {
                 to: detail.clone(),
-                class: "-mx-3.5 -mt-3.5 mb-0.5 block h-24 overflow-hidden rounded-t-xl border-b border-border/50",
+                // Shorter on a phone: one card per row there, and a 96px
+                // monogram pushed the card's actual content below the fold.
+                class: "-mx-3.5 -mt-3.5 mb-0.5 block h-16 overflow-hidden rounded-t-xl border-b border-border/50 sm:h-24",
                 if let Some(u) = cover {
                     div {
                         class: "h-full w-full transition-transform duration-300 group-hover:scale-[1.02]",
@@ -541,7 +547,10 @@ fn ProjectCard(
                 }
             }
             // Done/total as a hairline bar — the project's pulse in
-            // 6 vertical pixels.
+            // 6 vertical pixels. Only once there is something to count:
+            // an empty track reading "0/0" above "No open tasks" said
+            // the same nothing twice.
+            if total > 0 {
             div { class: "flex items-center gap-2",
                 div { class: "h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted/20",
                     div {
@@ -552,6 +561,7 @@ fn ProjectCard(
                 span { class: "shrink-0 text-[11px] tabular-nums text-muted-foreground",
                     "{done}/{total}"
                 }
+            }
             }
             // The first action — live checkbox, same click cycle as
             // the board (start the clock, complete, reopen). A project

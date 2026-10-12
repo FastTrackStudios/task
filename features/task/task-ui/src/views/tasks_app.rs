@@ -224,19 +224,25 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
             // The key listener stands down while the task sheet is open.
             "data-board-busy": "{open_id.read().is_some()}",
             div { class: "flex flex-wrap items-center gap-x-3 gap-y-2",
-                if !props.embedded {
-                    Heading { level: HeadingLevel::H1, "Tasks" }
-                }
-                span { class: "text-xs tabular-nums text-muted-foreground",
-                    "{open_count} open"
-                    if done > 0 {
-                        " · {done} done"
+                // Title and counts as one block: stacked on a phone, so a
+                // long count line ("57 open · 193 done hidden") wraps under
+                // the title instead of pushing the view switch onto a row
+                // of its own; side by side from `sm` up, as before.
+                div { class: "flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-3",
+                    if !props.embedded {
+                        Heading { level: HeadingLevel::H1, "Tasks" }
                     }
-                    if let Some(note) = props.hidden_note.clone() {
-                        " · {note}"
-                    }
-                    if tracked_today > 0 {
-                        " · {crate::display::duration_label(tracked_today)} tracked today"
+                    span { class: "text-xs tabular-nums text-muted-foreground",
+                        "{open_count} open"
+                        if done > 0 {
+                            " · {done} done"
+                        }
+                        if let Some(note) = props.hidden_note.clone() {
+                            " · {note}"
+                        }
+                        if tracked_today > 0 {
+                            " · {crate::display::duration_label(tracked_today)} tracked today"
+                        }
                     }
                 }
                 if let Some(extra) = props.header_extra.clone() {

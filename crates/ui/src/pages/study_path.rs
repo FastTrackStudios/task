@@ -129,32 +129,17 @@ fn read_key(org: &str, wiki: &str) -> String {
     format!("task.wiki-read.{org}.{wiki}")
 }
 
-#[cfg(target_arch = "wasm32")]
 fn load_read(key: &str) -> BTreeSet<String> {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|s| s.get_item(key).ok().flatten())
+    crate::local_store::get(key)
         .and_then(|j| serde_json::from_str(&j).ok())
         .unwrap_or_default()
 }
 
-#[cfg(target_arch = "wasm32")]
 fn save_read(key: &str, set: &BTreeSet<String>) {
-    if let (Some(s), Ok(json)) = (
-        web_sys::window().and_then(|w| w.local_storage().ok().flatten()),
-        serde_json::to_string(set),
-    ) {
-        let _ = s.set_item(key, &json);
+    if let Ok(json) = serde_json::to_string(set) {
+        crate::local_store::set(key, &json);
     }
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_read(_key: &str) -> BTreeSet<String> {
-    BTreeSet::new()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_read(_key: &str, _set: &BTreeSet<String>) {}
 
 /// The pages this browser has opened in the wiki, with the current one
 /// marked as it is opened.

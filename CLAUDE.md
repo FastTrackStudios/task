@@ -30,6 +30,7 @@ rebuilding. Don't ask the user to run them.
 just demo serve    # both example servers; plants the seed idempotently first
 just demo web      # webapp via dx serve on :8766 (proxies /org,/media,/blobs → :18080)
 just demo desktop  # native desktop app (frameless chrome; window pos via TASK_WINDOW_POS)
+just mobile-sim    # iPhone app on the booted simulator, signed in as the demo cast against :18080
 just demo telemetry  # local grafana/otel-lgtm on :3000, OTLP :4318 — servers auto-attach
 ```
 

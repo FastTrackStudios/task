@@ -166,56 +166,20 @@ BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plis
 # (the crate's "0.0.1-alpha" is rejected); CFBundleVersion just has to climb.
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
 MARKETING_VER="${MARKETING_VER:-0.0.1}"
-# App bundle OS type — App Store requires CFBundlePackageType=APPL (dx omits it).
-/usr/libexec/PlistBuddy -c "Set :CFBundlePackageType APPL" "$APP/Info.plist" 2>/dev/null \
-    || /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "$APP/Info.plist"
-# Launch screen — required because iPad multitasking is implied by the
-# orientation set. An empty UILaunchScreen dict = system default (fine).
-/usr/libexec/PlistBuddy -c "Add :UILaunchScreen dict" "$APP/Info.plist" 2>/dev/null || true
-# URL scheme = bundle id. The central sign-in (`ui::central_login::native`,
-# `ios_auth.rs`) sends the person to the issuer in an
-# ASWebAuthenticationSession and gets the redirect back on
-# `<bundle id>://auth/callback`; the issuer has exactly that URI
-# registered for this app (fts-auth.nix). Declaring the scheme here is
-# what lets the system hand the URL to this app and no other.
-/usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string $BUNDLE" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleTypeRole string Editor" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string $BUNDLE" "$APP/Info.plist"
+# Everything that changes how the app RUNS — the scene manifest iOS 27
+# requires, launch screen, orientations, URL scheme, display name, usage
+# strings — is shared with the simulator build (build-ios.sh), so a dev
+# build and a TestFlight build cannot differ in it.
+# shellcheck source=app-plist.sh
+source "$SCRIPT_DIR/app-plist.sh"
+task_app_plist "$APP"
 # Single supported platform — dx leaves both iPhoneOS+iPadOS, which Apple
 # rejects (91177). This is an iOS app; keep only iPhoneOS.
 /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$APP/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms:0 string iPhoneOS" "$APP/Info.plist"
-# Home-screen name. dx derives the bundle name from the Dioxus.toml
-# `[application] name`, so `task-app-mobile` shipped as "TaskAppMobile" on
-# the device. FTS only reads correctly because its package is already
-# called `fasttrackstudio`. CFBundleDisplayName is what iOS actually shows,
-# so set it explicitly rather than relying on the package name — the
-# macOS script and both watch targets already do.
-if [ -n "${APP_DISPLAY_NAME:-}" ]; then
-    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_DISPLAY_NAME" "$APP/Info.plist" 2>/dev/null \
-        || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_DISPLAY_NAME" "$APP/Info.plist"
-fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VER" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$APP/Info.plist"
-# Minimum OS — App Store rejects a bundle without it (dx doesn't emit one).
-/usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 15.0" "$APP/Info.plist" 2>/dev/null \
-    || /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 15.0" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Processes your guitar signal from the connected audio interface or microphone.'" "$APP/Info.plist" 2>/dev/null || true
-# Local network: pack downloads dial the studio engine peer-to-peer (iroh
-# direct paths / LAN WebSocket); without this key iOS silently drops the
-# traffic and the pack host is unreachable on the same Wi-Fi.
-/usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'Connects to your studio engine on the local network to stream and download sound packs.'" "$APP/Info.plist" 2>/dev/null || true
-# The Bonjour type the app browses to RAISE the local-network prompt —
-# iroh's raw UDP gets silently filtered instead of prompting without it.
-/usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _fts._tcp" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$APP/Info.plist" 2>/dev/null || true
 # TestFlight requires ITSAppUsesNonExemptEncryption declared (false = no
 # non-standard crypto → no export-compliance docs).
 /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$APP/Info.plist" 2>/dev/null || true

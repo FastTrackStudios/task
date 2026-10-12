@@ -35,41 +35,49 @@ pub fn NowLine(props: NowLineProps) -> Element {
     };
     let total_minutes = i64::from(now.hour()) * 60 + i64::from(now.minute());
     let top_px = (total_minutes * props.px_per_hour) / 60;
-    let col_one = col + 1;
+    let days = props.days.len().max(1);
     let time_label = format_now(now);
 
+    // One absolutely-positioned overlay over the whole grid (which is
+    // `relative`), NOT grid items. As grid items naming only a column,
+    // the bubble and line were auto-placed into a second row — below
+    // midnight, so the line never showed; pinned to row 1 instead, they
+    // took their cells first and pushed the hour axis and day columns
+    // out of place. Out of flow, they cannot move anything.
+    //
+    // `AXIS_PX` matches the grid's `grid-template-columns: 56px
+    // repeat(N, 1fr)` (time_grid.rs); today's column is found with the
+    // same arithmetic the grid uses.
+    let col_left = format!("calc({AXIS_PX}px + (100% - {AXIS_PX}px) * {col} / {days})");
+    let col_width = format!("calc((100% - {AXIS_PX}px) / {days})");
+
     rsx! {
-        // Time bubble — pinned to the hour-axis rail (grid column 1)
-        // at the same vertical as the line. Reads as a "you are
-        // here" pill, matching Google Calendar.
-        div {
-            class: "pointer-events-none relative",
-            style: "grid-column: 1;",
+        div { class: "pointer-events-none absolute inset-0 z-20",
+            // Time bubble on the hour-axis rail, level with the line —
+            // a "you are here" pill, matching Google Calendar.
             div {
-                class: "absolute right-1 px-1 py-px rounded-sm bg-rose-500 text-white text-[10px] font-semibold leading-none z-30 shadow",
-                style: "top: {top_px - 7}px;",
-                "{time_label}"
+                class: "absolute flex justify-end pr-1",
+                style: "top: {top_px - 7}px; left: 0; width: {AXIS_PX}px;",
+                span { class: "px-1 py-px rounded-sm bg-rose-500 text-white text-[10px] font-semibold leading-none shadow",
+                    "{time_label}"
+                }
             }
-        }
-        // Day column — the parent time-grid is a CSS grid with
-        // `grid-template-columns: 56px repeat(N, 1fr)`. Our
-        // `grid-column` lines up with today's day column.
-        div {
-            class: "pointer-events-none relative",
-            style: "grid-column: {col_one + 1};",
-            // Filled dot at left edge.
+            // Today's column: a dot at its left edge and a 2px line across.
             div {
-                class: "absolute w-2.5 h-2.5 rounded-full bg-rose-500 z-20 ring-2 ring-rose-500/30",
-                style: "top: {top_px - 5}px; left: -5px;",
-            }
-            // 2px line across the day column.
-            div {
-                class: "absolute left-0 right-0 h-0.5 bg-rose-500 z-20",
-                style: "top: {top_px - 1}px;",
+                class: "absolute",
+                style: "top: {top_px}px; left: {col_left}; width: {col_width};",
+                div {
+                    class: "absolute w-2.5 h-2.5 rounded-full bg-rose-500 ring-2 ring-rose-500/30",
+                    style: "top: -5px; left: -5px;",
+                }
+                div { class: "absolute left-0 right-0 h-0.5 bg-rose-500", style: "top: -1px;" }
             }
         }
     }
 }
+
+/// Width of the time grid's hour-axis column, in px.
+const AXIS_PX: u32 = 56;
 
 fn format_now(now: chrono::DateTime<chrono::Local>) -> String {
     let h = now.hour();

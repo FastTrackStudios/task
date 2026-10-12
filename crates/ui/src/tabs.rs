@@ -328,10 +328,8 @@ pub fn TabStrip() -> Element {
     }
 }
 
-// ── persistence (localStorage on web) ───────────────────────────────
+// ── persistence (per device, `crate::local_store`) ──────────────────
 
-// localStorage persistence exists only in the browser build.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const STORAGE_KEY: &str = "task.tabs";
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -341,28 +339,12 @@ struct Persisted {
     active: usize,
 }
 
-#[cfg(target_arch = "wasm32")]
 fn load_persisted() -> Option<Persisted> {
-    let storage = web_sys::window()?.local_storage().ok()??;
-    let json = storage.get_item(STORAGE_KEY).ok()??;
-    serde_json::from_str(&json).ok()
+    serde_json::from_str(&crate::local_store::get(STORAGE_KEY)?).ok()
 }
 
-#[cfg(target_arch = "wasm32")]
 fn save_persisted(snapshot: &Persisted) {
-    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
-        return;
-    };
-    let Ok(json) = serde_json::to_string(snapshot) else {
-        return;
-    };
-    let _ = storage.set_item(STORAGE_KEY, &json);
+    if let Ok(json) = serde_json::to_string(snapshot) {
+        crate::local_store::set(STORAGE_KEY, &json);
+    }
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_persisted() -> Option<Persisted> {
-    None
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_persisted(_snapshot: &Persisted) {}

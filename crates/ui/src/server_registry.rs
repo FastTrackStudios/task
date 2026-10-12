@@ -350,7 +350,7 @@ fn save_active(id: Option<Uuid>) {
 /// `XDG_DATA_HOME` still wins when explicitly set, so a Linux desktop or
 /// a test harness can point this wherever it likes.
 #[cfg(not(target_arch = "wasm32"))]
-fn data_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())

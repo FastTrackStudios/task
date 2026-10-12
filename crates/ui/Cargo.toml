@@ -256,8 +256,11 @@ crdt = { workspace = true, features = ["dioxus"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { workspace = true, features = ["futures"] }
 
-# Native session-token persistence (desktop/mobile) — architect-auth's
-# FileTokenStore, used in `cfg(not(target_arch = "wasm32"))` blocks in auth.rs.
+# Native session-token persistence (desktop/mobile) is `auth_client`'s
+# FileTokenStore, from the target-independent `auth-client` dep above —
+# NOT the `architect-auth` umbrella, whose `auth` crate carries the
+# server's webauthn-rs and so OpenSSL. On iOS that linked Nix's macOS
+# libssl into the phone binary and failed every TestFlight build.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The WebSocket transport, so `connect_lane("ws://…")` can reach the
 # sync agent's control socket on this machine. Without it that call
@@ -266,7 +269,6 @@ gloo-timers = { workspace = true, features = ["futures"] }
 # instead of telling the running agent. The browser has no agent to talk
 # to and its own transport.
 vox = { workspace = true, features = ["transport-websocket"] }
-architect-auth = { workspace = true, features = ["client"] }
 # Native org discovery (desktop/mobile/iOS) — `window.fetch` is wasm-only,
 # so `orgs::fetch_orgs` uses reqwest (rustls) for the `.well-known` GET.
 reqwest.workspace = true

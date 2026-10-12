@@ -43,6 +43,10 @@ const SNAP_MINUTES: i64 = 15;
 /// exactly fills it, and the container starts scrolled to 06:00.
 const WINDOW_START_HOUR: i64 = 6;
 const WINDOW_HOURS: i64 = 18;
+/// How far above 06:00 the grid opens. Hour labels sit centred on
+/// their line (`HourAxis`, `-translate-y-2`), so scrolled to exactly
+/// 06:00 the top half of "6 AM" was under the all-day strip.
+const LABEL_HEADROOM_PX: f64 = 10.0;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct TimeGridViewProps {
@@ -169,7 +173,7 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                             }
                         }
                         px_per_hour.set(p);
-                        let y = (WINDOW_START_HOUR * p) as f64;
+                        let y = ((WINDOW_START_HOUR * p) as f64 - LABEL_HEADROOM_PX).max(0.0);
                         let _ = e
                             .data()
                             .scroll(PixelsVector2D::new(0.0, y), ScrollBehavior::Instant)
@@ -195,7 +199,8 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                     }
                     let el = scroller.peek().clone();
                     spawn(async move {
-                        let mut y = (WINDOW_START_HOUR * new_p) as f64;
+                        let mut y =
+                            ((WINDOW_START_HOUR * new_p) as f64 - LABEL_HEADROOM_PX).max(0.0);
                         if let Some(el) = el {
                             if let Ok(off) = el.get_scroll_offset().await {
                                 y = off.y * new_p as f64 / old_p as f64;

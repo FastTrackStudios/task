@@ -202,37 +202,21 @@ fn agent_label(a: &task_proto::workflows_proto::AgentRef) -> String {
 }
 
 async fn claim_task(slug: &str, id: Uuid, claimant: &str) -> Result<(), String> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let client = crate::vox_clients::task_client(slug).await?;
-        client
-            .try_claim(id, claimant.to_owned(), false)
-            .await
-            .map_err(|e| format!("try_claim: {e:?}"))?;
-        Ok(())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (slug, id, claimant);
-        Err("native client not wired yet".to_owned())
-    }
+    let client = crate::vox_clients::task_client(slug).await?;
+    client
+        .try_claim(id, claimant.to_owned(), false)
+        .await
+        .map_err(|e| format!("try_claim: {e:?}"))?;
+    Ok(())
 }
 
 async fn update_task(slug: &str, task: TaskInfo) -> Result<(), String> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let client = crate::vox_clients::task_client(slug).await?;
-        client
-            .update(task)
-            .await
-            .map_err(|e| format!("update: {e:?}"))?;
-        Ok(())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (slug, task);
-        Err("native client not wired yet".to_owned())
-    }
+    let client = crate::vox_clients::task_client(slug).await?;
+    client
+        .update(task)
+        .await
+        .map_err(|e| format!("update: {e:?}"))?;
+    Ok(())
 }
 
 #[cfg(test)]
