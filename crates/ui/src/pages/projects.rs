@@ -428,9 +428,11 @@ pub(crate) fn ProjectQuickAdd(
         on_create.call((slug, title));
         value.set(String::new());
     };
+    // Full width on a phone, where it has a row of its own; a fixed
+    // slot beside the section label from `sm` up.
     let (form_cls, placeholder) = if compact {
         (
-            "flex w-56 items-center gap-1.5 rounded-lg border border-border/60 bg-transparent px-2 py-1 focus-within:border-border focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/50",
+            "flex w-full items-center gap-1.5 rounded-lg border border-border/60 bg-transparent px-2 py-1 focus-within:border-border focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/50 sm:w-72",
             "New project…",
         )
     } else {
@@ -461,7 +463,12 @@ pub(crate) fn ProjectQuickAdd(
                 Select {
                     value: chosen,
                     placeholder: "Org".to_string(),
-                    class: "shrink-0".to_string(),
+                    // `Select` is `w-full` by default, which inside this
+                    // one-line form took the whole row: the name field
+                    // shrank to nothing and the picker ran past the
+                    // form's edge (off screen on a phone). Sized to its
+                    // label instead, and capped.
+                    class: "w-auto max-w-[9rem] shrink-0".to_string(),
                     SelectContent {
                         for (i, (slug, name)) in orgs.iter().enumerate() {
                             SelectItem { key: "{slug}", value: "{slug}", index: i, "{name}" }
@@ -537,8 +544,11 @@ fn page_header(props: PageHeaderProps) -> Element {
                 class: "hidden max-w-prose md:block",
                 "Everything in flight across the org, live from the project service."
             }
+            // Desk only: a phone creates from the "New project" bar above
+            // the tab bar (the same form, in a sheet), and showing both
+            // put two ways to do one thing on a screen with one project.
             if let Some(qa) = &props.quick_add {
-                {qa.clone()}
+                div { class: "hidden md:block", {qa.clone()} }
             }
         }
     }

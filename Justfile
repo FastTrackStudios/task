@@ -129,6 +129,12 @@ sync *ARGS="status":
 # Regenerate apps/mobile/assets/tailwind.css (package `task-app-mobile`).
 mobile-css: css
 
+# The iPhone app on the booted simulator, signed in as the demo cast
+# against `just demo serve`. `--no-build` reinstalls the last build;
+# `--sim <udid>` picks a simulator. See apps/mobile/ios/build-ios.sh.
+mobile-sim *ARGS:
+    bash apps/mobile/ios/build-ios.sh {{ARGS}}
+
 # Canonical server. Default bind is 0.0.0.0:9090; override with
 # TASK_SERVER_BIND. See `.env.example` for the full env surface.
 server:

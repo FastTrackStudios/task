@@ -113,6 +113,9 @@ jobs:
           # credential. Both empty → the client stays telemetry-free.
           TASK_OTLP_ENDPOINT: ${{ vars.TASK_OTLP_ENDPOINT }}
           TASK_OTLP_TOKEN: ${{ secrets.TASK_OTLP_TOKEN }}
+          # The server a fresh install dials (option_env! in ui-core's
+          # vox_session); same default as the iPhone app.
+          TASK_VOX_URL_NATIVE: ${{ vars.TASK_VOX_URL_NATIVE || 'wss://task.fasttrackstudio.app/vox' }}
         run: |
           set -euo pipefail
           export PATH="/nix/var/nix/profiles/default/bin:$PATH"

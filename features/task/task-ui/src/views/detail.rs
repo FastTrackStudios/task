@@ -171,7 +171,13 @@ pub fn TaskDetail(props: TaskDetailProps) -> Element {
             side: SheetSide::Right,
             // The primitive caps at sm:max-w-sm; this sheet has
             // always been 28rem on desktop, full-width on phones.
-            class: "w-full max-w-[28rem] sm:max-w-[28rem] gap-4 overflow-y-auto p-4",
+            //
+            // Below the status bar, above the home indicator: the panel is
+            // `fixed inset-y-0 h-full` with its close button at `top-4`, so
+            // on an iPhone the ✕ and "Full view" sat under the clock and
+            // the sheet could not be closed. Offsetting the panel's top
+            // (and letting top/bottom size it) moves the button with it.
+            class: "top-[env(safe-area-inset-top)] h-auto w-full max-w-[28rem] sm:max-w-[28rem] gap-4 overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]",
             on_close: move |()| props.on_close.call(()),
             div { class: "flex items-center gap-2 pr-8",
                 if saved() {
@@ -230,12 +236,24 @@ pub fn TaskDetail(props: TaskDetailProps) -> Element {
                     }
                 }
             }
-            input {
-                r#type: "text",
+            // A textarea that grows with the title (`field-sizing`), so a
+            // long title wraps instead of running off a phone's edge. Enter
+            // still commits — a title is one line of meaning, not a note.
+            textarea {
                 aria_label: "Title",
-                class: "w-full rounded-sm border-b border-border bg-transparent py-1 text-lg font-medium text-foreground outline-none focus-visible:border-primary",
+                rows: "1",
+                class: "w-full resize-none rounded-sm border-b border-border bg-transparent py-1 text-lg font-medium leading-snug text-foreground outline-none [field-sizing:content] focus-visible:border-primary",
                 value: "{title}",
                 oninput: move |e| title.set(e.value()),
+                onkeydown: {
+                    let save = commit_if_changed.clone();
+                    move |e: KeyboardEvent| {
+                        if e.key() == Key::Enter {
+                            e.prevent_default();
+                            save();
+                        }
+                    }
+                },
                 onblur: {
                     let save = commit_if_changed.clone();
                     move |_| save()
@@ -321,18 +339,28 @@ pub fn TaskDetail(props: TaskDetailProps) -> Element {
                         }
                     }
                 }
-                input {
-                    r#type: "date",
-                    aria_label: "Due date",
-                    class: "{FIELD}",
-                    value: "{due}",
-                    onchange: {
-                        let commit = commit.clone();
-                        move |e: Event<FormData>| {
-                            due.set(e.value());
-                            commit();
+                div { class: "relative",
+                    input {
+                        r#type: "date",
+                        aria_label: "Due date",
+                        class: "{FIELD}",
+                        value: "{due}",
+                        onchange: {
+                            let commit = commit.clone();
+                            move |e: Event<FormData>| {
+                                due.set(e.value());
+                                commit();
+                            }
+                        },
+                    }
+                    // iOS draws an empty date field as a blank box; say what
+                    // it is for. Touch screens only — a desktop browser
+                    // already paints its own mm/dd/yyyy there.
+                    if due.read().is_empty() {
+                        span { class: "pointer-events-none absolute inset-y-0 left-3 hidden items-center text-sm text-muted-foreground pointer-coarse:flex",
+                            "Pick a date"
                         }
-                    },
+                    }
                 }
             }
             if !props.projects.is_empty() || unknown_project.is_some() {

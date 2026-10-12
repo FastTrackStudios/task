@@ -263,9 +263,12 @@ pub fn ScheduleView() -> Element {
                         }
                     }
                 },
+                // Having no templates is a normal state, not a fault: a
+                // hint on a desk, nothing on a phone, where three lines of
+                // file paths sat above the calendar on every visit.
                 Some(Ok(t)) if t.is_empty() => rsx! {
-                    div { class: "mx-3 mt-2 shrink-0 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground",
-                        "No day-plan templates for this org under Projects/Scheduling/templates/ (weekday.md / weekend.md) — showing events only."
+                    div { class: "mx-3 mt-2 hidden shrink-0 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground md:block",
+                        "Showing events only. Plan your days by adding weekday.md and weekend.md under Projects/Scheduling/templates."
                     }
                 },
                 _ => rsx! {},

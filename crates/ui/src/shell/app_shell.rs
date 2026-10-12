@@ -479,10 +479,11 @@ fn StartPageRedirect() -> Element {
             nav.replace(target.as_str());
             return;
         }
-        // The same breakpoint the phone layout (bottom tab bar) uses.
+        // The same breakpoint the phone layout (bottom tab bar) uses:
+        // Tailwind's `md` is 768px, so a phone is anything narrower.
         spawn(async move {
             let phone =
-                dioxus::document::eval("return window.matchMedia('(max-width: 640px)').matches;")
+                dioxus::document::eval("return window.matchMedia('(max-width: 767px)').matches;")
                     .await
                     .ok()
                     .and_then(|v| v.as_bool())

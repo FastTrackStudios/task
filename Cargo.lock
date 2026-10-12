@@ -19990,7 +19990,6 @@ dependencies = [
  "actions-standalone",
  "agent-proto",
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.3)",
- "architect-auth",
  "architect-ui",
  "auth-client",
  "auth-proto",

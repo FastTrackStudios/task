@@ -35,7 +35,7 @@ const MOBILE_BASELINE_CSS: &str = "\
 html,body{overflow-x:clip;-webkit-text-size-adjust:100%}\
 *{-webkit-tap-highlight-color:transparent}\
 .overflow-x-auto,.overflow-x-scroll{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}\
-@media (max-width:640px){\
+@media (max-width:767px){\
 input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{font-size:16px!important}\
 }";
 

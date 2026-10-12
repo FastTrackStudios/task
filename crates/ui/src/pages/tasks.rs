@@ -653,42 +653,22 @@ fn FilterChip(label: String, title: String, on: bool, on_toggle: EventHandler<bo
 }
 
 /// Where the List / Kanban choice is kept on this device.
-#[cfg(target_arch = "wasm32")]
 const VIEW_KEY: &str = "task.tasks.view";
 
 /// The List / Kanban choice this device last made. Read synchronously:
 /// the board takes its initial view once, at mount.
-#[cfg(target_arch = "wasm32")]
 fn stored_view() -> Option<task_ui::ViewMode> {
-    let stored = web_sys::window()?
-        .local_storage()
-        .ok()??
-        .get_item(VIEW_KEY)
-        .ok()??;
-    match stored.as_str() {
+    match crate::local_store::get(VIEW_KEY)?.as_str() {
         "kanban" => Some(task_ui::ViewMode::Kanban),
         "list" => Some(task_ui::ViewMode::List),
         _ => None,
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 fn remember_view(view: task_ui::ViewMode) {
     let value = match view {
         task_ui::ViewMode::Kanban => "kanban",
         task_ui::ViewMode::List => "list",
     };
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item(VIEW_KEY, value);
-    }
+    crate::local_store::set(VIEW_KEY, value);
 }
-
-/// Native shells start on the list (the webview's storage is not
-/// reachable synchronously from here).
-#[cfg(not(target_arch = "wasm32"))]
-fn stored_view() -> Option<task_ui::ViewMode> {
-    None
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn remember_view(_view: task_ui::ViewMode) {}

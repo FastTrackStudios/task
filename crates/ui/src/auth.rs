@@ -954,27 +954,25 @@ pub fn SignInGate(children: Element) -> Element {
         // surfaces WHY discovery hasn't resolved when it knows.
         let discovery = use_context::<crate::orgs::DiscoveryError>();
         let err = discovery.0.read().clone();
+        // Not booted = discovery (the server) has not answered yet;
+        // booted and busy = the session is being restored or made.
+        let status = if booted() {
+            "Signing you in…"
+        } else {
+            "Connecting…"
+        };
         return rsx! {
             // The gate sits ABOVE the router, so the frameless desktop
             // window has no top bar here — without this strip a signed-out
             // window could not be moved or closed.
             GateChrome {}
-            div { class: "flex min-h-screen items-center justify-center p-6",
-                div { class: "flex w-full max-w-sm flex-col items-center gap-3",
-                    p { class: "text-sm text-muted-foreground", "Restoring your session…" }
-                    if let Some(msg) = err {
-                        p { class: "text-center text-xs text-destructive", "{msg}" }
-                    }
-                    details { class: "w-full text-sm",
-                        summary { class: "cursor-pointer text-center text-muted-foreground",
-                            "Taking too long?"
-                        }
-                        div { class: "flex flex-col gap-4 pt-3",
-                            LoginForm {}
-                            crate::server_registry::ServersPanel {}
-                        }
-                    }
-                }
+            crate::loading_screen::LoadingScreen {
+                status: status.to_owned(),
+                error: err,
+                help: rsx! {
+                    LoginForm {}
+                    crate::server_registry::ServersPanel {}
+                },
             }
         };
     }
@@ -983,9 +981,14 @@ pub fn SignInGate(children: Element) -> Element {
         div { class: "flex min-h-screen items-center justify-center p-6",
             div { class: "flex w-full max-w-sm flex-col gap-4",
                 div { class: "flex flex-col gap-1",
+                    div { class: "pb-3", crate::loading_screen::TaskMark {} }
                     h1 { class: "text-lg font-semibold", "Sign in to Task" }
                     p { class: "text-sm text-muted-foreground",
-                        "This server's data is private to its members."
+                        if task_ui_core::central_auth::issuer().is_some() {
+                            "Your FastTrackStudio account opens your work in every app."
+                        } else {
+                            "This server's data is private to its members."
+                        }
                     }
                 }
                 LoginForm {}
@@ -1555,7 +1558,14 @@ pub fn LoginForm() -> Element {
                 on_change: move |_| error.set(None),
             }
             Button {
-                variant: ButtonVariant::Primary,
+                // One primary action per screen: with a central account
+                // on offer, that is "Continue with FastTrackStudio", and
+                // this server-only form is the alternative.
+                variant: if central_issuer.is_some() {
+                    ButtonVariant::Outline
+                } else {
+                    ButtonVariant::Primary
+                },
                 size: ButtonSize::Medium,
                 loading: busy(),
                 on_click: submit,
@@ -2283,15 +2293,14 @@ fn tokens_dir() -> Option<std::path::PathBuf> {
 /// A per-email token file. Emails are filename-safe on the targets we
 /// ship, but sanitize defensively (only `/` is illegal on unix).
 #[cfg(not(target_arch = "wasm32"))]
-fn token_store(email: &str) -> Option<architect_auth::client::FileTokenStore> {
+fn token_store(email: &str) -> Option<auth_client::FileTokenStore> {
     let safe = email.replace(['/', '\\'], "_");
-    tokens_dir()
-        .map(|d| architect_auth::client::FileTokenStore::new(d.join(format!("{safe}.json"))))
+    tokens_dir().map(|d| auth_client::FileTokenStore::new(d.join(format!("{safe}.json"))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_cached_token(email: &str) -> Option<String> {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     token_store(email)?
         .load()
         .ok()
@@ -2302,7 +2311,7 @@ fn load_cached_token(email: &str) -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn save_cached_token(email: &str, token: &str) {
-    use architect_auth::client::{StoredSession, TokenStore as _};
+    use auth_client::{StoredSession, TokenStore as _};
     if let Some(store) = token_store(email) {
         let _ = store.save(&StoredSession::new(token).with_email(email));
     }
@@ -2310,7 +2319,7 @@ fn save_cached_token(email: &str, token: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_cached_token(email: &str) {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     if let Some(store) = token_store(email) {
         let _ = store.clear();
     }
@@ -2321,16 +2330,14 @@ fn clear_cached_token(email: &str) {
 /// `StoredSession` whose `token` is the refresh token; the access
 /// token's expiry rides on the main file's `expires_at_unix`.
 #[cfg(not(target_arch = "wasm32"))]
-fn refresh_store(email: &str) -> Option<architect_auth::client::FileTokenStore> {
+fn refresh_store(email: &str) -> Option<auth_client::FileTokenStore> {
     let safe = email.replace(['/', '\\'], "_");
-    tokens_dir().map(|d| {
-        architect_auth::client::FileTokenStore::new(d.join(format!("{safe}.refresh.json")))
-    })
+    tokens_dir().map(|d| auth_client::FileTokenStore::new(d.join(format!("{safe}.refresh.json"))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_refresh(email: &str) -> Option<RefreshGrant> {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     let refresh_token = refresh_store(email)?
         .load()
         .ok()
@@ -2352,7 +2359,7 @@ fn load_refresh(email: &str) -> Option<RefreshGrant> {
 /// token's entry, which has to exist to carry it.
 #[cfg(not(target_arch = "wasm32"))]
 fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
-    use architect_auth::client::{StoredSession, TokenStore as _};
+    use auth_client::{StoredSession, TokenStore as _};
     if let Some(store) = refresh_store(email) {
         let _ = store.save(&StoredSession::new(refresh_token).with_email(email));
     }
@@ -2365,7 +2372,7 @@ fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_refresh(email: &str) {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     if let Some(store) = refresh_store(email) {
         let _ = store.clear();
     }

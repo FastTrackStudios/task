@@ -35,8 +35,19 @@ fn main() {
     // registered after that has no tab until something else redraws.
     task_plugins::register_all();
 
-    dioxus::launch(Root);
+    // The webview's own colour, set before any HTML renders. Without it
+    // a light-mode phone flashed white between the launch screen and the
+    // first paint — the app is dark by default, and so is the launch
+    // screen (LaunchBackground, apps/mobile/ios/app-plist.sh), so the
+    // flash was the only light frame in the whole start.
+    dioxus::LaunchBuilder::new()
+        .with_cfg(dioxus::mobile::Config::new().with_background_color(LAUNCH_BACKGROUND))
+        .launch(Root);
 }
+
+/// The brand theme's dark background (`#09090b`), the colour the launch
+/// screen and the loading screen sit on.
+const LAUNCH_BACKGROUND: (u8, u8, u8, u8) = (0x09, 0x09, 0x0b, 0xff);
 
 /// Make the webview behave like an app rather than a page.
 ///

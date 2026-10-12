@@ -45,6 +45,10 @@ pub struct TaskRowProps {
     /// otherwise.
     #[props(default)]
     pub org: Option<String>,
+    /// The heading this row is listed under, when the list groups by
+    /// project (Anytime): a project chip repeating it is left off.
+    #[props(default)]
+    pub under: Option<String>,
     /// Complete / reopen (the checkbox).
     pub on_toggle: EventHandler<Uuid>,
     pub on_open: EventHandler<Uuid>,
@@ -117,10 +121,14 @@ pub fn TaskRow(props: TaskRowProps) -> Element {
     let owner = owner_name(&t);
 
     let title_cls = if done {
-        "min-w-0 truncate text-left text-sm text-muted-foreground line-through"
+        "min-w-0 text-left text-sm text-muted-foreground line-through"
     } else {
-        "min-w-0 truncate text-left text-sm text-foreground"
+        "min-w-0 text-left text-sm text-foreground"
     };
+    // Two lines on a phone, where a one-line title is a few words and an
+    // ellipsis; one line from `sm` up, where the row is wide enough. On
+    // the inner span, not the button: WebKit does not clamp a <button>.
+    let title_text_cls = "line-clamp-2 break-words sm:block sm:truncate";
 
     let tracked = t.tracked_seconds(chrono::Utc::now());
     let anchor = props.anchor.clone();
@@ -137,7 +145,7 @@ pub fn TaskRow(props: TaskRowProps) -> Element {
         for c in t.contexts.iter() {
             span { key: "{c}", class: "{CHIP} bg-muted text-muted-foreground", "@{c.trim_start_matches('@')}" }
         }
-        for p in t.projects.iter() {
+        for p in t.projects.iter().filter(|p| props.under.as_deref() != Some(strip_wikilink(p).as_str())) {
             span { key: "{p}", class: "{CHIP} bg-primary/10 text-foreground/85",
                 span { class: "text-primary", Hash { size: 11 } }
                 "{strip_wikilink(p)}"
@@ -202,7 +210,9 @@ pub fn TaskRow(props: TaskRowProps) -> Element {
                 on_click: move |()| props.on_toggle.call(id),
             }
             div { class: "flex min-w-0 flex-1 flex-col gap-1",
-                div { class: "flex min-w-0 items-center gap-2",
+                // Top-aligned on a phone, so "2w late" sits on the title's
+                // first line when the title takes two.
+                div { class: "flex min-w-0 items-start gap-2 sm:items-center",
                     // The title is the row's keyboard handle: Tab (or
                     // j/k) lands here, Enter opens the task.
                     button {
@@ -213,7 +223,7 @@ pub fn TaskRow(props: TaskRowProps) -> Element {
                             e.stop_propagation();
                             props.on_open.call(id);
                         },
-                        "{t.title}"
+                        span { class: "{title_text_cls}", "{t.title}" }
                     }
                     if let Some(n) = late {
                         span { class: "shrink-0 text-xs font-semibold tabular-nums text-rose-500",

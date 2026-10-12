@@ -70,36 +70,21 @@ impl ExplorerMode {
     }
 }
 
-/// The `localStorage` key the toggle is remembered under — one per
+/// The per-device key the toggle is remembered under — one per
 /// vault id, so the vault and each wiki keep their own choice.
-#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
 fn mode_key(vault_id: &str) -> String {
     format!("task.explorer.mode.{vault_id}")
 }
 
 /// The remembered toggle, or the default for this kind of vault.
 fn initial_mode(vault_id: &str, is_wiki: bool) -> ExplorerMode {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let stored = web_sys::window()
-            .and_then(|w| w.local_storage().ok().flatten())
-            .and_then(|s| s.get_item(&mode_key(vault_id)).ok().flatten())
-            .and_then(|v| ExplorerMode::parse(&v));
-        if let Some(m) = stored {
-            return m;
-        }
-    }
-    let _ = vault_id;
-    ExplorerMode::default_for(is_wiki)
+    crate::local_store::get(&mode_key(vault_id))
+        .and_then(|v| ExplorerMode::parse(&v))
+        .unwrap_or_else(|| ExplorerMode::default_for(is_wiki))
 }
 
 fn remember_mode(vault_id: &str, mode: ExplorerMode) {
-    #[cfg(target_arch = "wasm32")]
-    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(&mode_key(vault_id), mode.as_str());
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = (vault_id, mode);
+    crate::local_store::set(&mode_key(vault_id), mode.as_str());
 }
 
 /// Which vault the explorer shows and where its rows go. `Clone`d into

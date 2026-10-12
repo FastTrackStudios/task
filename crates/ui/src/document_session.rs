@@ -522,7 +522,7 @@ impl DocumentSession {
     }
 }
 
-// ── RPC helpers (wasm-only bodies, same shape as the rest of the
+// ── RPC helpers (both targets, same shape as the rest of the
 //    vault page's client calls) ───────────────────────────────────
 
 /// Read one file's bytes as UTF-8 text. Shared with the
@@ -533,19 +533,11 @@ pub(crate) async fn fetch_file(
     path: String,
 ) -> Result<String, String> {
     let client = crate::vox_clients::vault_client(&slug).await?;
-    #[cfg(target_arch = "wasm32")]
-    {
-        let bytes = client
-            .get_file(vault_id, path)
-            .await
-            .map_err(|e| format!("get_file: {e:?}"))?;
-        Ok(String::from_utf8_lossy(&bytes.0).into_owned())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (client, vault_id, path);
-        Err("native client not wired yet".to_owned())
-    }
+    let bytes = client
+        .get_file(vault_id, path)
+        .await
+        .map_err(|e| format!("get_file: {e:?}"))?;
+    Ok(String::from_utf8_lossy(&bytes.0).into_owned())
 }
 
 /// Conditional-write the file back. `prev_sha` is the last-known
@@ -562,41 +554,33 @@ async fn save_file(
     let client = crate::vox_clients::vault_client(&slug)
         .await
         .map_err(SaveError::Other)?;
-    #[cfg(target_arch = "wasm32")]
-    {
-        use vault_proto::{IfMatch, VaultSyncError};
-        use vox::VoxError;
-        let if_match = if force {
-            IfMatch::Force
-        } else {
-            match prev_sha {
-                Some(s) => IfMatch::Sha(s),
-                None => IfMatch::CreateOnly,
-            }
-        };
-        match client
-            .put_file(vault_id, path, text.into_bytes(), if_match)
-            .await
-        {
-            Ok(ack) => Ok(ack.sha256),
-            Err(VoxError::User(user)) => match *user {
-                VaultSyncError::Conflict {
-                    server_sha,
-                    server_bytes,
-                } => Err(SaveError::Conflict {
-                    server_sha,
-                    server_text: String::from_utf8_lossy(&server_bytes).into_owned(),
-                }),
-                VaultSyncError::Refused(reason) => Err(SaveError::Refused(reason)),
-                other => Err(SaveError::Other(format!("{other:?}"))),
-            },
-            Err(e) => Err(SaveError::Other(format!("{e:?}"))),
+    use vault_proto::{IfMatch, VaultSyncError};
+    use vox::VoxError;
+    let if_match = if force {
+        IfMatch::Force
+    } else {
+        match prev_sha {
+            Some(s) => IfMatch::Sha(s),
+            None => IfMatch::CreateOnly,
         }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
+    };
+    match client
+        .put_file(vault_id, path, text.into_bytes(), if_match)
+        .await
     {
-        let _ = (client, vault_id, path, text, prev_sha, force);
-        Err(SaveError::Other("native client not wired yet".to_owned()))
+        Ok(ack) => Ok(ack.sha256),
+        Err(VoxError::User(user)) => match *user {
+            VaultSyncError::Conflict {
+                server_sha,
+                server_bytes,
+            } => Err(SaveError::Conflict {
+                server_sha,
+                server_text: String::from_utf8_lossy(&server_bytes).into_owned(),
+            }),
+            VaultSyncError::Refused(reason) => Err(SaveError::Refused(reason)),
+            other => Err(SaveError::Other(format!("{other:?}"))),
+        },
+        Err(e) => Err(SaveError::Other(format!("{e:?}"))),
     }
 }
 

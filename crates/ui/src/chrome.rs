@@ -1198,25 +1198,16 @@ pub(crate) fn fmt_hms(secs: i64) -> String {
     format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
 }
 
-/// Re-render once a second so running clocks advance. Wasm sleeps via
-/// `gloo-timers`; native parks (chrome is web-only today).
+/// Re-render once a second so running clocks advance — on every
+/// target: native used to park here, which froze the phone's timer
+/// dock at the second it was started.
 pub(crate) fn use_second_tick(mut tick: Signal<u64>) {
     use_future(move || async move {
         loop {
-            sleep_one_second().await;
+            architect::sleep(architect::Duration::from_secs(1)).await;
             tick += 1;
         }
     });
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn sleep_one_second() {
-    gloo_timers::future::TimeoutFuture::new(1000).await;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-async fn sleep_one_second() {
-    futures_util::future::pending::<()>().await;
 }
 
 // ── notification bell ───────────────────────────────────────────────
