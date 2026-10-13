@@ -68,13 +68,27 @@ pub struct CalendarProps {
     #[props(default = false)]
     pub readonly: bool,
     pub on_event: EventHandler<CalendarMutation>,
+    /// The page owns the day in view (its header and week strip move
+    /// it). Unset, the calendar keeps its own.
+    #[props(default)]
+    pub anchor: Option<Signal<NaiveDate>>,
+    /// The page owns the view mode (its ⋯ menu changes it).
+    #[props(default)]
+    pub view: Option<Signal<ViewMode>>,
+    /// The page draws the phone's header: the toolbar is desk-only.
+    #[props(default = false)]
+    pub phone_chrome: bool,
 }
 
 #[component]
 pub fn Calendar(props: CalendarProps) -> Element {
     let today = chrono::Local::now().date_naive();
-    let mut anchor = use_signal(|| props.initial_anchor.unwrap_or(today));
-    let mut view = use_signal(|| props.initial_view.unwrap_or_default());
+    let own_anchor = use_signal(|| props.initial_anchor.unwrap_or(today));
+    let own_view = use_signal(|| props.initial_view.unwrap_or_default());
+    let mut anchor = props.anchor.unwrap_or(own_anchor);
+    let mut view = props.view.unwrap_or(own_view);
+    // Where a possible day swipe began.
+    let mut swipe_from = use_signal(|| None::<(f64, f64)>);
     let mut editing: Signal<Option<EventId>> = use_signal(|| None);
 
     use_context_provider(|| DragContext {
@@ -111,7 +125,12 @@ pub fn Calendar(props: CalendarProps) -> Element {
     // small screens. One-shot probe at mount that only ever switches
     // *to* Day, so desktop keeps its `initial_view` and a failed/absent
     // probe is a harmless no-op (the requested view stands).
+    // A page that owns the view decides this itself.
+    let page_owns_view = props.view.is_some();
     use_hook(move || {
+        if page_owns_view {
+            return;
+        }
         spawn(async move {
             let mut probe = dioxus::document::eval(
                 "dioxus.send(window.matchMedia('(max-width: 640px)').matches)",
@@ -302,12 +321,15 @@ pub fn Calendar(props: CalendarProps) -> Element {
         div {
             class: "flex flex-col h-full w-full outline-none",
             tabindex: 0,
-            autofocus: true,
+            // Keyboard shortcuts are a desk thing; on a phone, focus only
+            // scrolls the page.
+            autofocus: !props.phone_chrome,
             onkeydown: on_keydown,
             onpointerup: on_pointer_up,
             onpointercancel: on_pointer_cancel,
             onpointermove: on_pointer_move,
             ontouchmove: on_touch_move,
+            div { class: if props.phone_chrome { "hidden md:block" } else { "" },
             Toolbar {
                 anchor: *anchor.read(),
                 view: *view.read(),
@@ -329,7 +351,30 @@ pub fn Calendar(props: CalendarProps) -> Element {
                 summary: props.summary.clone(),
                 readonly: props.readonly,
             }
-            div { class: "flex-1 min-h-0",
+            }
+            div {
+                class: "flex-1 min-h-0",
+                // Day view: swipe sideways for the next or previous day
+                // (a deliberate, mostly-horizontal stroke — scrolling
+                // and dragging a block both stay vertical).
+                onpointerdown: move |e: Event<PointerData>| {
+                    let p = e.data().client_coordinates();
+                    swipe_from.set(Some((p.x, p.y)));
+                },
+                onpointerup: move |e: Event<PointerData>| {
+                    let Some((x0, y0)) = swipe_from.take() else { return };
+                    if *view.peek() != ViewMode::Day {
+                        return;
+                    }
+                    let dragging = drag_ctx.state.peek().as_ref().is_some_and(|d| d.committed)
+                        || block_ctx.drag.peek().as_ref().is_some_and(|d| d.committed);
+                    let p = e.data().client_coordinates();
+                    let (dx, dy) = (p.x - x0, p.y - y0);
+                    if !dragging && dx.abs() > 70.0 && dy.abs() < 50.0 {
+                        let dir = if dx < 0.0 { 1 } else { -1 };
+                        anchor.with_mut(|d| *d = step(*d, ViewMode::Day, dir));
+                    }
+                },
                 match *view.read() {
                     ViewMode::Month => rsx! {
                         MonthView {

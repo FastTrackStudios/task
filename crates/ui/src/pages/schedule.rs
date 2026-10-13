@@ -99,6 +99,25 @@ pub fn ScheduleView() -> Element {
     let plan_muts = stores::use_dayplan_mutations();
     // Which (date, block_id) is being edited, if any.
     let mut editing = use_signal(|| None::<(NaiveDate, String)>);
+    // The day and view in sight — the page's, so the phone header and
+    // week strip drive the calendar.
+    let mut cal_anchor = use_signal(|| chrono::Local::now().date_naive());
+    // The view is remembered per device; with none chosen yet, a phone
+    // opens on Day (seven columns don't fit) and a desk on Week.
+    let stored_view = crate::local_store::get(VIEW_KEY).and_then(|v| view_from_key(&v));
+    let mut cal_view = use_signal(|| stored_view.unwrap_or(ViewMode::Week));
+    use_hook(move || {
+        if stored_view.is_none() {
+            spawn(async move {
+                let mut probe = dioxus::document::eval(
+                    "dioxus.send(window.matchMedia('(max-width: 640px)').matches)",
+                );
+                if let Ok(true) = probe.recv::<bool>().await {
+                    cal_view.set(ViewMode::Day);
+                }
+            });
+        }
+    });
     // Planned meals — previewed inside Meal-category blocks
     // ("what's for dinner on that date").
     let meals = use_resource(move || async move {
@@ -238,6 +257,55 @@ pub fn ScheduleView() -> Element {
         (alloc_min.max(0) as f64 / 60.0, blocks, assigned)
     };
 
+    // ── The phone header ──
+    let today = chrono::Local::now().date_naive();
+    let header_title = match cal_view() {
+        ViewMode::Day => view_calendar::day_title(cal_anchor(), today),
+        ViewMode::Month => cal_anchor().format("%B").to_string(),
+        // The week's own day header (full width, under the title) says
+        // which days; the title says the month — or both, across one.
+        ViewMode::Week | ViewMode::Blocks => {
+            let a = cal_anchor();
+            let monday = a - chrono::Duration::days(i64::from(a.weekday().num_days_from_monday()));
+            let sunday = monday + chrono::Duration::days(6);
+            if monday.month() == sunday.month() {
+                monday.format("%B").to_string()
+            } else {
+                format!("{} – {}", monday.format("%b"), sunday.format("%b"))
+            }
+        }
+    };
+    // A new block on the day in view: from the next hour today, else
+    // 09:00 — then straight into its sheet to name it.
+    let mut add_block_now = move || {
+        let Some(slug) = slug() else { return };
+        let date = cal_anchor();
+        let start = if date == chrono::Local::now().date_naive() {
+            use chrono::Timelike;
+            let h = chrono::Local::now().hour() + 1;
+            u16::try_from(h.min(23) * 60).unwrap_or(540)
+        } else {
+            540
+        };
+        let end = (start + 60).min(1440);
+        let id = plan_muts.add_block(
+            slug,
+            date,
+            "New block".to_owned(),
+            BlockCategory::Allocatable,
+            (start, end),
+        );
+        editing.set(Some((date, id)));
+    };
+    // Days with an event, for the week strip's dots (every day has
+    // plan blocks, so those would dot everything).
+    let busy_days: Vec<NaiveDate> = state
+        .read()
+        .events
+        .values()
+        .map(|e| e.start.with_timezone(&chrono::Local).date_naive())
+        .collect();
+
     // One-line usage context, folded into the calendar toolbar on
     // wide screens instead of costing the page its own row.
     let summary = (overview.1 > 0).then(|| {
@@ -253,7 +321,10 @@ pub fn ScheduleView() -> Element {
         // compact banners above it. Phones subtract the mobile chrome
         // with `dvh` (browser-UI collapse can't hide the grid bottom);
         // `md:`+ keeps the desktop top-bar math.
-        div { class: "flex h-[calc(100dvh-8rem)] flex-col overflow-hidden pb-14 md:h-[calc(100vh-3.5rem)] md:pb-0 lg:h-screen",
+        // Phone: exactly the screen under the status bar — the grid
+        // scrolls under the floating tab bar (the shell's bottom padding
+        // is given back), so the document itself never scrolls.
+        div { class: "flex h-[calc(100dvh-env(safe-area-inset-top,0px))] -mb-[calc(6rem+env(safe-area-inset-bottom,0px))] flex-col overflow-hidden md:mb-0 md:h-[calc(100vh-3.5rem)] lg:h-screen",
             match &*templates.read_unchecked() {
                 Some(Err(e)) => rsx! {
                     div { class: "mx-3 mt-2 shrink-0",
@@ -281,10 +352,68 @@ pub fn ScheduleView() -> Element {
                     }
                 }
             }
+            // Phone: the day as the title, + for a new block, ⋯ for the
+            // views and the day's plan; the week under it in reach.
+            div { class: "shrink-0 md:hidden",
+                task_ui_core::section_header::SectionHeader {
+                    title: header_title,
+                    // The week leads the header (tap a day, swipe for the
+                    // next week); the month view keeps its name.
+                    lead: (cal_view() == ViewMode::Day).then(|| rsx! {
+                        view_calendar::WeekStrip {
+                            anchor: cal_anchor(),
+                            on_pick: move |d: NaiveDate| {
+                                cal_anchor.set(d);
+                            },
+                            busy: busy_days.clone(),
+                            compact: true,
+                        }
+                    }),
+                    action: rsx! { architect_ui::lucide_dioxus::Plus { size: 21 } },
+                    action_label: "New block".to_owned(),
+                    on_action: move |()| add_block_now(),
+                    if cal_anchor() != today {
+                        task_ui_core::section_header::SectionMenuItem {
+                            label: "Go to today",
+                            icon: rsx! { architect_ui::lucide_dioxus::CalendarCheck { size: 18 } },
+                            on_click: move |()| cal_anchor.set(today),
+                        }
+                    }
+                    for (mode, name) in [
+                        (ViewMode::Day, "Day"),
+                        (ViewMode::Week, "Week"),
+                        (ViewMode::Month, "Month"),
+                        (ViewMode::Blocks, "Blocks"),
+                    ] {
+                        task_ui_core::section_header::SectionMenuItem {
+                            key: "{name}",
+                            label: name,
+                            icon: rsx! { architect_ui::lucide_dioxus::CalendarDays { size: 18 } },
+                            note: (cal_view() == mode).then(|| "✓".to_owned()),
+                            on_click: move |()| {
+                                cal_view.set(mode);
+                                crate::local_store::set(VIEW_KEY, view_key(mode));
+                            },
+                        }
+                    }
+                    task_ui_core::section_header::SectionMenuDivider {}
+                    task_ui_core::section_header::SectionMenuItem {
+                        label: "Reset day to template",
+                        icon: rsx! { architect_ui::lucide_dioxus::RotateCcw { size: 18 } },
+                        on_click: move |()| reset_day(cal_anchor()),
+                    }
+                }
+            }
+            // The calendar takes what is left under the header — sized to
+            // the whole page it overflowed, and its focus scrolled the
+            // header away.
+            div { class: "min-h-0 flex-1",
             Calendar {
                 events,
                 template_blocks,
-                initial_view: Some(ViewMode::Week),
+                anchor: Some(cal_anchor),
+                view: Some(cal_view),
+                phone_chrome: true,
                 summary,
                 slot_rows,
                 slot_items,
@@ -304,6 +433,7 @@ pub fn ScheduleView() -> Element {
                     move_block(orig, target, id, s, e);
                 },
                 on_event: move |mu| on_event(mu),
+            }
             }
         }
         if let Some((date, id, label, start_min, end_min, assignment)) = editor {
@@ -710,6 +840,28 @@ fn category_color(c: BlockCategory) -> ColorTag {
         BlockCategory::Meal => ColorTag::Warning,
         BlockCategory::Exercise => ColorTag::Danger,
         BlockCategory::Hygiene | BlockCategory::Sleep | BlockCategory::Other => ColorTag::Neutral,
+    }
+}
+
+/// Where this device remembers the Schedule's view.
+const VIEW_KEY: &str = "task.schedule.view";
+
+fn view_key(v: ViewMode) -> &'static str {
+    match v {
+        ViewMode::Day => "day",
+        ViewMode::Week => "week",
+        ViewMode::Month => "month",
+        ViewMode::Blocks => "blocks",
+    }
+}
+
+fn view_from_key(s: &str) -> Option<ViewMode> {
+    match s {
+        "day" => Some(ViewMode::Day),
+        "week" => Some(ViewMode::Week),
+        "month" => Some(ViewMode::Month),
+        "blocks" => Some(ViewMode::Blocks),
+        _ => None,
     }
 }
 

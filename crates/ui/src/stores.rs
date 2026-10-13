@@ -1031,6 +1031,43 @@ impl DayPlanMutations {
         });
     }
 
+    /// Add a block to a day's plan (the Schedule header's +). Returns
+    /// the new block's id, so the page can open it to edit.
+    pub fn add_block(
+        &self,
+        slug: String,
+        date: NaiveDate,
+        label: String,
+        category: scheduling_proto::BlockCategory,
+        minutes: (u16, u16),
+    ) -> String {
+        let id = format!("b-{}", Uuid::new_v4().simple());
+        let block = scheduling_proto::PlannedBlock {
+            id: scheduling_proto::TimeBlockId(id.clone()),
+            start: clamp_time(minutes.0),
+            end: clamp_time(minutes.1),
+            label,
+            category,
+            note: None,
+            assignment: None,
+            fixed: false,
+        };
+        self.save_day(slug, date, move |plan| {
+            plan.blocks.0.push(block);
+            plan.blocks
+                .0
+                .sort_by_key(|b| b.start.minutes_since_midnight);
+        });
+        id
+    }
+
+    /// Take a block off a day's plan.
+    pub fn remove_block(&self, slug: String, date: NaiveDate, id: String) {
+        self.save_day(slug, date, move |plan| {
+            plan.blocks.0.retain(|b| b.id.0 != id);
+        });
+    }
+
     /// Set just a block's assignment (drag-a-task-onto-a-block).
     pub fn assign_block(
         &self,

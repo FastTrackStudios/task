@@ -28,6 +28,10 @@ pub fn SectionHeader(
     #[props(default)]
     action_text: Option<String>,
     #[props(default)] badge: usize,
+    /// Something to lead with instead of the title — Schedule's week
+    /// strip. The title is still the header's name for screen readers.
+    #[props(default)]
+    lead: Option<Element>,
     /// The ⋯ menu's items.
     children: Element,
 ) -> Element {
@@ -35,8 +39,12 @@ pub fn SectionHeader(
     use_context_provider(|| MenuOpen(open));
     rsx! {
         header { class: "relative flex items-center justify-between gap-3 px-5 pb-2 pt-0",
-            h1 { class: "min-w-0 truncate text-[28px] font-bold leading-[34px] tracking-[-0.02em] text-foreground",
-                "{title}"
+            if let Some(lead) = lead {
+                div { class: "min-w-0 flex-1", aria_label: "{title}", {lead} }
+            } else {
+                h1 { class: "min-w-0 truncate text-[28px] font-bold leading-[34px] tracking-[-0.02em] text-foreground",
+                    "{title}"
+                }
             }
             div { class: "flex h-11 shrink-0 items-center rounded-full bg-foreground/[0.06] px-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08),0_8px_24px_-12px_rgb(0_0_0/0.6)] supports-[backdrop-filter]:backdrop-blur-md",
                 button {

@@ -47,6 +47,35 @@ const WINDOW_HOURS: i64 = 18;
 /// their line (`HourAxis`, `-translate-y-2`), so scrolled to exactly
 /// 06:00 the top half of "6 AM" was under the all-day strip.
 const LABEL_HEADROOM_PX: f64 = 10.0;
+/// On a phone the hours don't squeeze to fit the screen: an hour is a
+/// comfortable reading height and the day scrolls, as in Calendar.app.
+const PHONE_PX_PER_HOUR: i64 = 64;
+const PHONE_MAX_WIDTH: f64 = 640.0;
+
+/// The hour height for a scroll container of this size: fitted so
+/// 06:00–24:00 fills a desk, a fixed reading height on a phone.
+fn hour_height(width: f64, height: f64) -> i64 {
+    if width > 0.0 && width < PHONE_MAX_WIDTH {
+        return PHONE_PX_PER_HOUR;
+    }
+    if height > 100.0 {
+        ((height / WINDOW_HOURS as f64).floor() as i64).max(MIN_PX_PER_HOUR)
+    } else {
+        PX_PER_HOUR_DEFAULT
+    }
+}
+
+/// Where the grid opens: with today in view, now sits a third of the
+/// way down (what's next is on screen); otherwise the 06:00 window.
+fn opening_scroll(px_per_hour: i64, view_height: f64, days: &[NaiveDate]) -> f64 {
+    let now = chrono::Local::now();
+    if days.contains(&now.date_naive()) {
+        use chrono::Timelike;
+        let minutes = f64::from(now.hour() * 60 + now.minute());
+        return (minutes * px_per_hour as f64 / 60.0 - view_height / 3.0).max(0.0);
+    }
+    ((WINDOW_START_HOUR * px_per_hour) as f64 - LABEL_HEADROOM_PX).max(0.0)
+}
 
 #[derive(Props, Clone, PartialEq)]
 pub struct TimeGridViewProps {
@@ -78,8 +107,21 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
     // The scroll container element, kept so the resize handler can
     // read + restore the scroll position.
     let mut scroller: Signal<Option<Rc<MountedData>>> = use_signal(|| None);
+    // This grid's scroll container, addressable by id.
+    let scroll_id = use_hook(|| format!("cal-grid-{}", uuid::Uuid::new_v4().simple()));
+    let mount_scroll_id = scroll_id.clone();
     let pph = px_per_hour();
     let col_height_px = pph * 24;
+    let single = props.days.len() == 1;
+    // Measured as a phone (the fixed reading height is only used there).
+    let phone = pph == PHONE_PX_PER_HOUR;
+    let mount_days = props.days.clone();
+    // Today in view: the minute the now bubble marks on the hour rail.
+    let now_minute = props.days.contains(&today).then(|| {
+        use chrono::Timelike;
+        let n = chrono::Local::now();
+        i64::from(n.hour() * 60 + n.minute())
+    });
     // Split: all-day events go to the top strip, timed events to
     // the time grid itself. `position` would mis-classify multi-day
     // timed events; we treat duration ≥ 24h with midnight-aligned
@@ -104,7 +146,9 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
             // so header columns stay pixel-aligned with the grid.
             div { class: "shrink-0 overflow-y-hidden [scrollbar-gutter:stable]",
             // Day header strip
-            div { class: "grid border-b border-border/60",
+            // One day: the page already names it (a phone shows its week
+            // strip above), so the strip is a desk-only repeat.
+            div { class: if single { "hidden border-b border-border/60 md:grid" } else { "grid border-b border-border/60" },
                 style: "grid-template-columns: 56px repeat({props.days.len()}, 1fr);",
                 div {}
                 for date in props.days.iter() {
@@ -119,7 +163,7 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                             crate::cycle_overlay::cell_tint_class(header_cycle_kind)
                         };
                         let cell_cls = format!(
-                            "flex items-center justify-center gap-2 py-1.5 text-xs {header_tint}"
+                            "flex flex-col items-center justify-center gap-0.5 py-1 text-xs md:flex-row md:gap-2 md:py-1.5 {header_tint}"
                         );
                         rsx! {
                             div {
@@ -131,7 +175,10 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                                     } else {
                                         "text-muted-foreground uppercase tracking-wider text-[10px]"
                                     },
-                                    "{day_name}"
+                                    // A phone column fits a letter (M T W), a desk the
+                                    // short name.
+                                    span { class: "md:hidden", {day_name.chars().next().map(String::from).unwrap_or_default()} }
+                                    span { class: "hidden md:inline", "{day_name}" }
                                 }
                                 span {
                                     class: if is_today {
@@ -146,13 +193,18 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                     }
                 }
             }
-            // All-day strip
-            AllDayStrip {
-                days: props.days.clone(),
-                events: all_day_events,
-                readonly: props.readonly,
-                on_event: props.on_event,
-                on_open_editor: props.on_open_editor,
+            // All-day strip — a single day with nothing all-day skips
+            // the empty row.
+            // An empty all-day row is a desk affordance (drop an event
+            // there); on a phone it is only lost height.
+            if !(all_day_events.is_empty() && (single || phone)) {
+                AllDayStrip {
+                    days: props.days.clone(),
+                    events: all_day_events,
+                    readonly: props.readonly,
+                    on_event: props.on_event,
+                    on_open_editor: props.on_open_editor,
+                }
             }
             } // end fixed header block
             // Scrollable grid body. On mount: size the hour rows so
@@ -160,24 +212,31 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
             // scrolled to 06:00 (pre-06:00 stays reachable upward).
             // On resize: re-derive the row height and keep the
             // top-of-viewport hour anchored.
-            div { class: "flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]",
+            // Phone: room at the end to scroll the last hours clear of the
+            // floating tab bar.
+            div { class: "flex-1 min-h-0 overflow-y-auto pb-28 md:pb-0 [scrollbar-gutter:stable]",
+                id: "{scroll_id}",
                 onmounted: move |e: Event<MountedData>| {
                     scroller.set(Some(e.data()));
+                    let days = mount_days.clone();
+                    let scroll_id = mount_scroll_id.clone();
                     spawn(async move {
-                        let mut p = PX_PER_HOUR_DEFAULT;
+                        let (mut w, mut h) = (0.0, 0.0);
                         if let Ok(rect) = e.data().get_client_rect().await {
-                            let h = rect.size.height;
-                            if h > 100.0 {
-                                p = ((h / WINDOW_HOURS as f64).floor() as i64)
-                                    .max(MIN_PX_PER_HOUR);
-                            }
+                            (w, h) = (rect.size.width, rect.size.height);
                         }
+                        let p = hour_height(w, h);
                         px_per_hour.set(p);
-                        let y = ((WINDOW_START_HOUR * p) as f64 - LABEL_HEADROOM_PX).max(0.0);
-                        let _ = e
-                            .data()
-                            .scroll(PixelsVector2D::new(0.0, y), ScrollBehavior::Instant)
-                            .await;
+                        // Let the taller rows lay out first, or the scroll
+                        // clamps to the old, shorter grid.
+                        dioxus_sdk_time::sleep(std::time::Duration::from_millis(40)).await;
+                        let y = opening_scroll(p, h, &days);
+                        // The grid's own scrollTop: the native webview's
+                        // element scroll can carry the page along with it,
+                        // pushing the header off the screen.
+                        let _ = dioxus::document::eval(&format!(
+                            "const el = document.getElementById('{scroll_id}'); if (el) el.scrollTop = {y};"
+                        ));
                     });
                 },
                 // Viewport resize → re-derive the hour height (same
@@ -191,8 +250,7 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                     if h <= 100.0 {
                         return;
                     }
-                    let new_p = ((h / WINDOW_HOURS as f64).floor() as i64)
-                        .max(MIN_PX_PER_HOUR);
+                    let new_p = hour_height(size.width, h);
                     let old_p = *px_per_hour.peek();
                     if new_p == old_p {
                         return;
@@ -217,7 +275,7 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                 div {
                     class: "grid relative",
                     style: "grid-template-columns: 56px repeat({props.days.len()}, 1fr); height: {col_height_px}px;",
-                    HourAxis { px_per_hour: pph }
+                    HourAxis { px_per_hour: pph, now_minute }
                     for (idx, date) in props.days.iter().enumerate() {
                         DayColumn {
                             key: "{date}",
@@ -253,15 +311,19 @@ fn is_effectively_all_day(ev: &CalendarEvent) -> bool {
 }
 
 #[component]
-fn HourAxis(px_per_hour: i64) -> Element {
+fn HourAxis(px_per_hour: i64, #[props(default)] now_minute: Option<i64>) -> Element {
     rsx! {
         div { class: "relative border-r border-border/60 text-[10px] text-muted-foreground/80 tabular-nums",
             for (h, label) in hour_labels() {
-                div {
-                    key: "{h}",
-                    class: "absolute right-1 -translate-y-2",
-                    style: "top: {i64::from(h) * px_per_hour}px;",
-                    "{label}"
+                // The now bubble sits on this rail: an hour label it
+                // would cover steps aside rather than collide.
+                if now_minute.is_none_or(|m| (m - i64::from(h) * 60).abs() > 12) {
+                    div {
+                        key: "{h}",
+                        class: "absolute right-1 -translate-y-2",
+                        style: "top: {i64::from(h) * px_per_hour}px;",
+                        "{label}"
+                    }
                 }
             }
         }
@@ -382,6 +444,12 @@ fn DayColumn(props: DayColumnProps) -> Element {
         .collect();
     let on_block_click = props.on_block_click;
     let on_block_edit = props.on_block_edit;
+    // This column is today: the minute now is, to mark the block in it.
+    let now_min_today = {
+        use chrono::Timelike;
+        let n = chrono::Local::now();
+        (n.date_naive() == date).then(|| i64::from(n.hour() * 60 + n.minute()))
+    };
     let mut block_ctx = use_block_drag_context();
     // Pending block long-presses arm through the shared TouchContext
     // — disarm (slop / lift / cancel) lives at the Calendar root,
@@ -677,10 +745,13 @@ fn DayColumn(props: DayColumnProps) -> Element {
                         start_page_y: page_y,
                         committed: false,
                     };
+                    // The block running right now stands out.
+                    let is_now = now_min_today.is_some_and(|m| m >= tp.start_min && m < tp.end_min);
+                    let now_ring = if is_now { "ring-1 ring-primary/60 brightness-125" } else { "" };
                     rsx! {
                         div {
                             key: "tpl-{tp.id}-{tp.top}",
-                            class: "absolute left-0.5 right-0.5 rounded-[3px] overflow-hidden transition {cursor} {pe} {dim} {tp.pal} {softness}",
+                            class: "@container absolute left-0.5 right-1 rounded-[8px] overflow-hidden transition {cursor} {pe} {dim} {tp.pal} {softness} {now_ring}",
                             style: "top: {tp.top}px; height: {tp.h}px;",
                             onpointerdown: move |e: Event<PointerData>| {
                                 if !draggable_block {
@@ -765,16 +836,32 @@ fn DayColumn(props: DayColumnProps) -> Element {
                                     }
                                 }
                             }
-                            span {
-                                class: "block px-1.5 py-px text-[10px] font-medium leading-snug truncate",
-                                "{tp.label}"
+                            // The block, read at a glance: name and time on
+                            // one line (the time drops where the column is
+                            // too narrow — a container query, not a guess
+                            // at the view), what it's for under it.
+                            div { class: "flex min-w-0 items-baseline gap-1.5 px-1 pt-1 @[9rem]:px-2",
+                                // Narrow (a phone's week column): small, wrapping to a
+                                // few lines rather than one letter and an ellipsis.
+                                span { class: "min-w-0 text-[10px] font-semibold leading-[1.15] [overflow-wrap:anywhere] line-clamp-3 @[9rem]:line-clamp-1 @[9rem]:text-[13px] @[9rem]:leading-tight md:text-[11px]",
+                                    "{tp.label}"
+                                }
+                                if tp.h >= 18 {
+                                    span { class: "hidden shrink-0 text-[11px] tabular-nums opacity-70 @[9rem]:inline md:text-[10px]",
+                                        "{span_label(tp.start_min, tp.end_min)}"
+                                    }
+                                }
                             }
                             if let Some(a) = tp.assignment.as_ref() {
-                                if tp.h >= 30 {
-                                    span {
-                                        class: "block px-1.5 text-[10px] leading-snug truncate opacity-75 italic",
+                                if tp.h >= 36 {
+                                    span { class: "block truncate px-2 pt-0.5 text-[12px] leading-snug opacity-80 md:text-[10px]",
                                         "{a}"
                                     }
+                                }
+                            }
+                            if is_now {
+                                span { class: "absolute right-1.5 top-1 rounded-full bg-primary px-1.5 py-px text-[10px] font-semibold text-primary-foreground",
+                                    "Now"
                                 }
                             }
                         }
@@ -905,6 +992,28 @@ fn block_style(p: &TimeBlockPlacement, px_per_hour: i64) -> String {
     )
 }
 
+/// "9–12:30 PM", "4–5 PM", "11:30 AM–1 PM": a block's span, compact.
+fn span_label(start: i64, end: i64) -> String {
+    let part = |m: i64| {
+        let (h, min) = (m.div_euclid(60) % 24, m.rem_euclid(60));
+        let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+        let suffix = if h < 12 { "AM" } else { "PM" };
+        let clock = if min == 0 {
+            h12.to_string()
+        } else {
+            format!("{h12}:{min:02}")
+        };
+        (clock, suffix)
+    };
+    let (a, sa) = part(start);
+    let (b, sb) = part(end);
+    if sa == sb {
+        format!("{a}–{b} {sb}")
+    } else {
+        format!("{a} {sa}–{b} {sb}")
+    }
+}
+
 fn minutes_to_px(min: i64, px_per_hour: i64) -> i64 {
     (min * px_per_hour) / 60
 }
@@ -915,4 +1024,30 @@ fn px_to_minutes(px: i64, px_per_hour: i64) -> i64 {
 
 fn snap_minutes(min: i64) -> i64 {
     (min / SNAP_MINUTES) * SNAP_MINUTES
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_block_says_its_span_compactly() {
+        assert_eq!(
+            span_label(9 * 60, 12 * 60 + 30),
+            "9 AM–12:30 PM",
+            "across noon"
+        );
+        assert_eq!(span_label(13 * 60 + 30, 16 * 60), "1:30–4 PM");
+        assert_eq!(span_label(16 * 60, 17 * 60), "4–5 PM");
+        assert_eq!(span_label(11 * 60 + 30, 13 * 60), "11:30 AM–1 PM");
+        assert_eq!(span_label(0, 30), "12–12:30 AM");
+    }
+
+    #[test]
+    fn a_phone_reads_hours_at_a_fixed_height_a_desk_fits_the_day() {
+        assert_eq!(hour_height(402.0, 700.0), PHONE_PX_PER_HOUR);
+        assert_eq!(hour_height(1200.0, 900.0), 50, "18h fill 900px");
+        assert_eq!(hour_height(1200.0, 300.0), MIN_PX_PER_HOUR);
+        assert_eq!(hour_height(0.0, 0.0), PX_PER_HOUR_DEFAULT, "not measured");
+    }
 }
