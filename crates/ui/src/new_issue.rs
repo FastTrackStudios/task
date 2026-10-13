@@ -15,13 +15,21 @@ use uuid::Uuid;
 
 use crate::stores;
 
-/// Open the composer with this title text (`Some("")` for blank).
+/// Open the composer with this title text, as an issue or as a capture.
 #[derive(Clone, Copy)]
-pub struct NewIssue(pub Signal<Option<String>>);
+pub struct NewIssue(pub Signal<Option<(String, task_ui::CaptureKind)>>);
 
 impl NewIssue {
+    /// A new issue, with every property in reach.
     pub fn open(mut self, title: impl Into<String>) {
-        self.0.set(Some(title.into()));
+        self.0
+            .set(Some((title.into(), task_ui::CaptureKind::Issue)));
+    }
+
+    /// A capture: written down for later unless the text (or the
+    /// switch) says it is an issue or a project.
+    pub fn capture(mut self, text: impl Into<String>) {
+        self.0.set(Some((text.into(), task_ui::CaptureKind::Note)));
     }
 }
 
@@ -40,10 +48,13 @@ pub fn NewIssueHost() -> Element {
     let task_store = stores::use_task_store();
     let project_store = stores::use_project_store();
     let muts = stores::use_task_mutations();
+    let inbox = stores::use_inbox_mutations();
+    let timers = stores::use_timer_mutations();
+    let active_timer = crate::chrome::use_active_timer();
     let target = use_memo(move || crate::orgs::create_target(&selection.read(), &org_list.read()));
     let member_names = crate::pages::wiki_access::use_member_names(target);
 
-    let Some(initial) = open() else {
+    let Some((initial, kind)) = open() else {
         return rsx! {};
     };
     let slug = target();
@@ -90,6 +101,55 @@ pub fn NewIssueHost() -> Element {
             projects,
             known_labels,
             initial_title: initial,
+            kind,
+            // A note is a capture, kept verbatim in the inbox until it
+            // is processed (`process.capture.single-path`).
+            on_note: {
+                let slug = slug.clone();
+                move |text: String| {
+                    let item = inbox_proto::InboxItem::capture(
+                        Uuid::new_v4().to_string(),
+                        text,
+                        "ui",
+                        chrono::Utc::now().to_rfc3339(),
+                    );
+                    inbox.capture(slug.clone(), item);
+                }
+            },
+            // A project is made from a capture too, processed on the
+            // spot, so it keeps the words it started as.
+            on_project: {
+                let slug = slug.clone();
+                move |(name, about): (String, String)| {
+                    let body = if about.is_empty() { name.clone() } else { format!("{name}\n\n{about}") };
+                    let item = inbox_proto::InboxItem::capture(
+                        Uuid::new_v4().to_string(),
+                        body,
+                        "ui",
+                        chrono::Utc::now().to_rfc3339(),
+                    );
+                    let mut project = stores::draft_project(name);
+                    project.details = about;
+                    inbox.process_into_project(slug.clone(), item, project);
+                }
+            },
+            on_timer: move |desc: String| {
+                let Some((slug, org_id)) = crate::chrome::resolve_org(&selection.read(), &org_list.read()) else {
+                    return;
+                };
+                let req = timer_proto::StartTimerRequest {
+                    user_id: crate::chrome::owner_id(org_id),
+                    org_id,
+                    project_id: None,
+                    project_path: String::new(),
+                    task_note_path: String::new(),
+                    description: desc,
+                };
+                match active_timer.as_ref() {
+                    Some(at) => timers.switch(slug, at.session.id, req),
+                    None => timers.start(slug, req),
+                }
+            },
             place,
             on_create: move |(mut task, subs): (task_proto::TaskInfo, Vec<String>)| {
                 // The id is chosen here so the sub-issues can name their

@@ -52,6 +52,21 @@ gesture.
 
 ---
 
+### One capture surface, three outcomes
+
+t[process.capture.as]
+The capture button, the fleeting-note door and New issue open one
+full-screen surface with a switch at its top: **Note**, **Issue**,
+**Project**. A capture opens as a Note — written down, verbatim, into the
+inbox for later. Until a kind is picked by hand, the text decides: a
+line that files or schedules itself (`[[Project]]`, `@context`, a date,
+a repeat, `!priority`) reads as an Issue, with its property chips; one
+beginning `project:` or `new project` reads as a Project. A note may
+start a timer instead. A project made here is a capture processed on
+the spot (`process.outcome.project`), so it keeps its words.
+
+---
+
 ### A capture keeps its words
 
 t[process.capture.verbatim]

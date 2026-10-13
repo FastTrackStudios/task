@@ -19,7 +19,6 @@
 //! instantly — no refresh counter, no extra round-trips.
 
 use architect_ui::lucide_dioxus::{ChevronDown, Feather, Inbox as InboxIcon, Pause, Play, Square};
-use architect_ui::prelude::*;
 use chrono::Utc;
 use dioxus::prelude::*;
 use uuid::Uuid;
@@ -615,132 +614,22 @@ pub fn FleetingButton(#[props(default = false)] compact: bool) -> Element {
     }
 }
 
-/// The single global capture modal. Render once (in the app shell). A
-/// textarea + Capture; Enter submits, Shift+Enter newlines, Esc / click
-/// outside cancels. Captures into the active org's inbox.
+/// The fleeting-note door (the top bar's Feather, the sidebar, the
+/// Inbox's Capture, the shortcut) opens the one capture surface — the
+/// composer in Note mode ([`crate::new_issue::NewIssue::capture`]), where
+/// the same words can instead become an issue or a project. Render once
+/// in the app shell.
 #[component]
 pub fn FleetingModal() -> Element {
     let mut open = use_fleeting_open();
-    let selection = use_context::<Signal<OrgSelection>>();
-    let org_list = use_context::<Signal<Vec<OrgMeta>>>();
-    let target = use_memo(move || resolve_org(&selection.read(), &org_list.read()));
-    let muts = crate::stores::use_inbox_mutations();
-
-    let mut draft = use_signal(String::new);
-    let timers = crate::stores::use_timer_mutations();
-    let timing = use_active_timer().is_some();
-    let mut hint = use_resume_hint();
-
-    if !open() {
-        return rsx! {};
-    }
-
-    // On a phone the capture box is also where a timer starts (there is
-    // no timer in the top bar there): its text becomes the description,
-    // and none is fine.
-    let start_timer = move |_| {
-        let Some((slug, org_id)) = target() else {
-            return;
-        };
-        let desc = draft.peek().trim().to_string();
-        draft.set(String::new());
-        hint.set(None);
-        timers.start(
-            slug,
-            timer_proto::StartTimerRequest {
-                user_id: owner_id(org_id),
-                org_id,
-                project_id: None,
-                project_path: String::new(),
-                task_note_path: String::new(),
-                description: desc,
-            },
-        );
-        open.set(false);
-    };
-
-    // Optimistic: the capture lands in the shared inbox store
-    // instantly (chip + /inbox update), persists in the background,
-    // and rolls back + notifies on failure.
-    let mut submit = move || {
-        let text = draft.peek().trim().to_string();
-        if text.is_empty() {
+    let new_issue = use_context::<crate::new_issue::NewIssue>();
+    use_effect(move || {
+        if open() {
             open.set(false);
-            return;
+            new_issue.capture(String::new());
         }
-        let Some((slug, _)) = target() else {
-            return;
-        };
-        let id = uuid::Uuid::new_v4().to_string();
-        let created = Utc::now().to_rfc3339();
-        muts.capture(
-            slug,
-            inbox_proto::InboxItem::capture(id, text, "ui", created),
-        );
-        draft.set(String::new());
-        open.set(false);
-    };
-
-    rsx! {
-        div {
-            class: "fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[12vh]",
-            onclick: move |_| open.set(false),
-            div {
-                class: "flex w-full max-w-lg flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-xl",
-                onclick: move |e| e.stop_propagation(),
-                div { class: "flex items-center gap-2 text-sm text-muted-foreground",
-                    Feather { size: 15 }
-                    span { "Fleeting note" }
-                    span { class: "ml-auto text-xs", "↵ to capture · esc to close" }
-                }
-                textarea {
-                    class: "min-h-[7rem] w-full resize-none rounded-lg border border-input bg-input/30 px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 placeholder:text-muted-foreground",
-                    placeholder: "Get it out of your head…",
-                    // `autofocus` only fires on initial page load, not when
-                    // the modal is inserted dynamically — focus on mount.
-                    onmounted: move |e: Event<MountedData>| {
-                        spawn(async move {
-                            let _ = e.data().set_focus(true).await;
-                        });
-                    },
-                    value: "{draft}",
-                    oninput: move |e| draft.set(e.value()),
-                    onkeydown: move |e| {
-                        if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
-                            e.prevent_default();
-                            submit();
-                        } else if e.key() == Key::Escape {
-                            open.set(false);
-                        }
-                    },
-                }
-                div { class: "flex items-center justify-end gap-2",
-                    if !timing {
-                        button {
-                            r#type: "button",
-                            class: "mr-auto flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden",
-                            title: "Start a timer with this as its description",
-                            onclick: start_timer,
-                            architect_ui::lucide_dioxus::Clock { size: 15 }
-                            "Start timer"
-                        }
-                    }
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        size: ButtonSize::Small,
-                        on_click: move |_| open.set(false),
-                        "Cancel"
-                    }
-                    Button {
-                        variant: ButtonVariant::Primary,
-                        size: ButtonSize::Small,
-                        on_click: move |_| submit(),
-                        "Capture"
-                    }
-                }
-            }
-        }
-    }
+    });
+    rsx! {}
 }
 
 /// Mobile floating action button for fleeting capture — a circular

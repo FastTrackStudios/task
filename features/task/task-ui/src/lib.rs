@@ -40,4 +40,4 @@ pub use views::{
     picker_filtered, toggle_label, with_assignee,
 };
 // Making an issue: Linear's composer with Task's natural-language title.
-pub use views::{Composer, ComposerProps, compose};
+pub use views::{CaptureKind, Composer, ComposerProps, compose, kind_from_text, project_title};

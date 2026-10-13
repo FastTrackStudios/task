@@ -19,7 +19,7 @@
 //! shell-lifetime component (see `crate::collab` docs for the keyed-
 //! child rule).
 
-use architect_ui::lucide_dioxus::{ChevronsUpDown, Search, SlidersHorizontal, SquarePen};
+use architect_ui::lucide_dioxus::{ChevronsUpDown, Feather, Search, SlidersHorizontal};
 use architect_ui::prelude::{Button, ButtonVariant, Text, TextVariant};
 use chrono::Utc;
 use dioxus::prelude::*;
@@ -363,7 +363,7 @@ const SECTION_KEY: &str = "task.nav.section";
 
 /// The phone shell's bottom: a floating pill of four — Inbox, Tasks,
 /// Favorites, and a section switcher — and, apart from it on the right,
-/// the quick-input button that opens the composer.
+/// the capture button: a fleeting thought, into the inbox.
 ///
 /// The switcher shows the icon of the section you're in when that is
 /// none of the three (Projects, Schedule, Vault…), else the last one you
@@ -455,13 +455,15 @@ pub fn BottomTabBar(current: Route) -> Element {
                     span { class: "text-muted-foreground", ChevronsUpDown { size: 12 } }
                 }
             }
-            // Quick input — the composer, from anywhere.
+            // Quick capture — a fleeting thought, from anywhere; it waits in
+            // the inbox to be processed. (New issues are each section's
+            // header action.)
             button {
                 r#type: "button",
                 class: "flex size-[3.375rem] shrink-0 items-center justify-center rounded-full border border-border/70 bg-popover/95 text-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur active:bg-accent",
-                aria_label: "New issue",
-                onclick: move |_| new_issue.open(String::new()),
-                SquarePen { size: 22 }
+                aria_label: "Capture a fleeting thought",
+                onclick: move |_| new_issue.capture(String::new()),
+                Feather { size: 22 }
             }
         }
         if menu_open() {

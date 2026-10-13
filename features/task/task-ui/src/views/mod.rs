@@ -3,7 +3,10 @@
 mod composer;
 mod detail;
 mod detail_full;
-pub use composer::{Composer, ComposerProps, Trigger, compose, drop_last_word, trigger_at_end};
+pub use composer::{
+    CaptureKind, Composer, ComposerProps, Trigger, compose, drop_last_word, kind_from_text,
+    project_title, trigger_at_end,
+};
 mod issue_view;
 pub use issue_view::{
     IssueView, IssueViewProps, assignee_of, labels_of, toggle_label, with_assignee,

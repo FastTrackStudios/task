@@ -19,7 +19,7 @@
 //!
 //! On a phone it is a full-screen sheet; on a desk, a card. ⌘↩ creates.
 
-use architect_ui::lucide_dioxus::{CalendarDays, Ellipsis, Link2, ListTree, Repeat, X};
+use architect_ui::lucide_dioxus::{CalendarDays, Clock, Ellipsis, Link2, ListTree, Repeat, X};
 use dioxus::prelude::*;
 use uuid::Uuid;
 
@@ -108,6 +108,72 @@ pub fn compose(
     with_assignee(&t, assignee)
 }
 
+/// What a capture becomes: written down for later, an issue, a project.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CaptureKind {
+    /// A fleeting thought into the inbox, processed later.
+    #[default]
+    Note,
+    Issue,
+    Project,
+}
+
+impl CaptureKind {
+    const ALL: [Self; 3] = [Self::Note, Self::Issue, Self::Project];
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Note => "Note",
+            Self::Issue => "Issue",
+            Self::Project => "Project",
+        }
+    }
+}
+
+/// What the text says it is, for a capture whose kind nobody picked:
+/// `project: …` (or `new project …`) is a project; a line that files or
+/// schedules itself — `[[Project]]`, `@context`, a date, a repeat,
+/// `!priority` — is an issue; anything else is a note.
+#[must_use]
+// t[impl process.capture.as]
+pub fn kind_from_text(text: &str) -> CaptureKind {
+    let first = text.trim().lines().next().unwrap_or("").trim();
+    let lower = first.to_lowercase();
+    if lower.starts_with("project:") || lower.starts_with("new project ") {
+        return CaptureKind::Project;
+    }
+    let t = task_proto::capture(first);
+    let set = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+    if !t.projects.is_empty()
+        || !t.contexts.is_empty()
+        || set(&t.due)
+        || set(&t.scheduled)
+        || set(&t.recurrence)
+        || (t.priority != "normal" && t.priority != "none" && !t.priority.is_empty())
+    {
+        CaptureKind::Issue
+    } else {
+        CaptureKind::Note
+    }
+}
+
+/// A project's name from what was typed: the first line, without a
+/// leading `project:` / `new project`.
+#[must_use]
+pub fn project_title(text: &str) -> String {
+    let first = text.trim().lines().next().unwrap_or("").trim();
+    let lower = first.to_lowercase();
+    let rest = if lower.starts_with("project:") {
+        &first["project:".len()..]
+    } else if lower.starts_with("new project ") {
+        &first["new project ".len()..]
+    } else {
+        first
+    };
+    rest.trim().to_owned()
+}
+
 /// The repeats the ⋯ menu offers, as RRULE bodies.
 const REPEATS: &[(&str, &str)] = &[
     ("Every day", "FREQ=DAILY"),
@@ -134,6 +200,19 @@ pub struct ComposerProps {
     /// Make it: the issue, then its sub-issue titles.
     pub on_create: EventHandler<(TaskInfo, Vec<String>)>,
     pub on_close: EventHandler<()>,
+    /// What it opens as. With `on_note` and `on_project` set, a switch
+    /// at the top lets the capture be any of the three.
+    #[props(default = CaptureKind::Issue)]
+    pub kind: CaptureKind,
+    /// Write it down: the whole text, into the inbox.
+    #[props(default)]
+    pub on_note: Option<EventHandler<String>>,
+    /// Make a project: `(name, description)`.
+    #[props(default)]
+    pub on_project: Option<EventHandler<(String, String)>>,
+    /// On a note: start a timer with the text as what it is for.
+    #[props(default)]
+    pub on_timer: Option<EventHandler<String>>,
 }
 
 #[component]
@@ -155,6 +234,18 @@ pub fn Composer(props: ComposerProps) -> Element {
     let mut link_draft = use_signal(|| None::<String>);
     let mut create_more = use_signal(|| false);
     let mut cursor = use_signal(|| 0usize);
+    // What it becomes: picked by hand, else read from the text while it
+    // opened as a note (a plain thought stays a note).
+    let opened_as = props.kind;
+    let mut picked = use_signal(|| None::<CaptureKind>);
+    let switchable = props.on_note.is_some() && props.on_project.is_some();
+    let kind = picked().unwrap_or_else(|| {
+        if switchable && opened_as == CaptureKind::Note {
+            kind_from_text(&title.read())
+        } else {
+            opened_as
+        }
+    });
 
     // What the title reads as right now (for the parsed chips).
     let parsed = task_proto::capture(&title.read());
@@ -225,6 +316,28 @@ pub fn Composer(props: ComposerProps) -> Element {
             if t.is_empty() {
                 return;
             }
+            match kind {
+                CaptureKind::Note => {
+                    if let Some(on_note) = props.on_note {
+                        let d = description.peek().trim().to_owned();
+                        on_note.call(if d.is_empty() {
+                            t
+                        } else {
+                            format!("{t}\n\n{d}")
+                        });
+                    }
+                    props.on_close.call(());
+                    return;
+                }
+                CaptureKind::Project => {
+                    if let Some(on_project) = props.on_project {
+                        on_project.call((project_title(&t), description.peek().trim().to_owned()));
+                    }
+                    props.on_close.call(());
+                    return;
+                }
+                CaptureKind::Issue => {}
+            }
             let task = compose(
                 &t,
                 &description.peek(),
@@ -249,6 +362,16 @@ pub fn Composer(props: ComposerProps) -> Element {
     };
     let mut create_key = create.clone();
     let mut create_btn = create.clone();
+    let mut create_enter = create.clone();
+    let (title_hint, detail_hint, action_label) = match kind {
+        CaptureKind::Note => (
+            "Get it out of your head…",
+            "More, if there is more…",
+            "Capture",
+        ),
+        CaptureKind::Issue => ("Issue title", "Add description…", "Create issue"),
+        CaptureKind::Project => ("Project name", "What it's for…", "Create project"),
+    };
     let mut resolve_key = resolve.clone();
     let suggestions_key = suggestions.clone();
 
@@ -291,7 +414,27 @@ pub fn Composer(props: ComposerProps) -> Element {
                         span { class: "rounded-md bg-muted/60 px-1.5 py-0.5 font-medium text-foreground/80", "{props.place}" }
                         span { "›" }
                     }
-                    span { "New issue" }
+                    if switchable {
+                        // One capture, three outcomes: write it down,
+                        // make it an issue, or start a project.
+                        div { class: "flex items-center gap-0.5 rounded-full bg-foreground/[0.06] p-0.5",
+                            role: "radiogroup",
+                            aria_label: "What this is",
+                            for k in CaptureKind::ALL {
+                                button {
+                                    key: "{k.label()}",
+                                    r#type: "button",
+                                    role: "radio",
+                                    aria_checked: "{k == kind}",
+                                    class: if k == kind { "rounded-full bg-foreground/[0.12] px-3 py-1 text-[13px] font-semibold text-foreground" } else { "rounded-full px-3 py-1 text-[13px] text-muted-foreground active:text-foreground" },
+                                    onclick: move |_| picked.set(Some(k)),
+                                    "{k.label()}"
+                                }
+                            }
+                        }
+                    } else {
+                        span { "New issue" }
+                    }
                     button {
                         r#type: "button",
                         class: "ml-auto flex size-9 items-center justify-center rounded-md hover:bg-accent hover:text-foreground md:size-7",
@@ -304,10 +447,10 @@ pub fn Composer(props: ComposerProps) -> Element {
                     // ── title, read as you type ──
                     div { class: "relative",
                         textarea {
-                            aria_label: "Issue title",
+                            aria_label: "{title_hint}",
                             rows: "1",
                             class: "w-full resize-none bg-transparent pt-2 text-[20px] font-semibold leading-7 tracking-[-0.1px] text-foreground outline-none [field-sizing:content] placeholder:text-muted-foreground md:text-[18px]",
-                            placeholder: "Issue title",
+                            placeholder: "{title_hint}",
                             value: "{title}",
                             autofocus: true,
                             onmounted: move |e| async move { let _ = e.set_focus(true).await; },
@@ -318,8 +461,12 @@ pub fn Composer(props: ComposerProps) -> Element {
                             onkeydown: move |e: KeyboardEvent| {
                                 if suggestions_key.is_empty() {
                                     if e.key() == Key::Enter && !e.modifiers().meta() && !e.modifiers().ctrl() {
-                                        // The title is one line; Enter moves on.
+                                        // The title is one line. On a quick
+                                        // note, Enter is done — write it down.
                                         e.prevent_default();
+                                        if kind == CaptureKind::Note && !e.modifiers().shift() {
+                                            create_enter();
+                                        }
                                     }
                                     return;
                                 }
@@ -368,7 +515,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                     textarea {
                         aria_label: "Description",
                         class: "mt-1 min-h-20 w-full resize-none bg-transparent text-[15px] font-[450] leading-6 tracking-[-0.1px] text-foreground/90 outline-none [field-sizing:content] placeholder:text-muted-foreground",
-                        placeholder: "Add description…",
+                        placeholder: "{detail_hint}",
                         value: "{description}",
                         oninput: move |e| description.set(e.value()),
                     }
@@ -444,7 +591,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                 }
 
                 // ── the chips ──
-                div { class: "flex flex-wrap items-center gap-1.5 border-t border-border/60 px-4 py-2.5",
+                div { class: if kind == CaptureKind::Issue { "flex flex-wrap items-center gap-1.5 border-t border-border/60 px-4 py-2.5" } else { "hidden" },
                     StatusChip { status: status(), on_change: move |s: String| status.set(s) }
                     PriorityChip {
                         priority: priority().or(parsed_priority.clone()).unwrap_or_else(|| "none".to_owned()),
@@ -549,7 +696,21 @@ pub fn Composer(props: ComposerProps) -> Element {
 
                 // ── create ──
                 footer { class: "flex items-center gap-3 border-t border-border/60 px-4 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:pb-2.5",
-                    label { class: "ml-auto flex items-center gap-2 text-[13px] text-muted-foreground",
+                    if let (CaptureKind::Note, Some(on_timer)) = (kind, props.on_timer) {
+                        button {
+                            r#type: "button",
+                            class: "flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-muted-foreground hover:bg-accent hover:text-foreground md:min-h-8",
+                            title: "Start a timer with this as its description",
+                            onclick: move |_| {
+                                on_timer.call(title.peek().trim().to_owned());
+                                props.on_close.call(());
+                            },
+                            Clock { size: 14 }
+                            "Start timer"
+                        }
+                    }
+                    div { class: "flex-1" }
+                    label { class: if kind == CaptureKind::Issue { "ml-auto flex items-center gap-2 text-[13px] text-muted-foreground" } else { "hidden" },
                         input {
                             r#type: "checkbox",
                             checked: create_more(),
@@ -562,7 +723,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                         class: "flex min-h-10 items-center rounded-lg bg-primary px-4 text-[13px] font-semibold text-primary-foreground disabled:opacity-50 md:min-h-8",
                         disabled: title.read().trim().is_empty(),
                         onclick: move |_| create_btn(),
-                        "Create issue"
+                        "{action_label}"
                     }
                 }
             }
@@ -600,6 +761,40 @@ mod tests {
         );
         assert_eq!(drop_last_word("Bounce stems @co"), "Bounce stems ");
         assert_eq!(drop_last_word("@co"), "");
+    }
+
+    #[test]
+    // t[verify process.capture.as]
+    fn a_capture_reads_as_a_note_an_issue_or_a_project() {
+        assert_eq!(
+            kind_from_text("Idea: a stems-only bonus edition"),
+            CaptureKind::Note
+        );
+        assert_eq!(
+            kind_from_text("Pick up gaff tape @errands"),
+            CaptureKind::Issue
+        );
+        assert_eq!(
+            kind_from_text("Bounce stems [[Crescendum Album]]"),
+            CaptureKind::Issue
+        );
+        assert_eq!(
+            kind_from_text("Call the venue tomorrow"),
+            CaptureKind::Issue
+        );
+        assert_eq!(
+            kind_from_text("project: Live session EP"),
+            CaptureKind::Project
+        );
+        assert_eq!(
+            kind_from_text("New project Remix pack"),
+            CaptureKind::Project
+        );
+        assert_eq!(
+            project_title("project:  Live session EP\nfour songs"),
+            "Live session EP"
+        );
+        assert_eq!(project_title("Remix pack"), "Remix pack");
     }
 
     #[test]

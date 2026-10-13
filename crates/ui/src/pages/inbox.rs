@@ -76,6 +76,24 @@ pub fn InboxView() -> Element {
             queue.set(due);
             seeded.set(true);
         }
+    } else if let Some(rows) = result.value() {
+        // Captured since: appended at the end, so the order already on
+        // screen (and the deck's place in it) never moves. Written only
+        // when something is new, so it can't loop.
+        let today = Utc::now().date_naive().to_string();
+        let fresh: Vec<InboxItem> = {
+            let have = queue.peek();
+            let mut v: Vec<InboxItem> = rows
+                .iter()
+                .filter(|(_, it)| is_due(it, &today) && !have.iter().any(|q| q.id == it.id))
+                .map(|(_, it)| it.clone())
+                .collect();
+            v.sort_by(|a, b| a.created.cmp(&b.created));
+            v
+        };
+        if !fresh.is_empty() {
+            queue.write().extend(fresh);
+        }
     }
 
     if result.is_waiting() && result.value().is_none() {
@@ -215,7 +233,10 @@ pub fn InboxView() -> Element {
                 for (idx, it) in rows.into_iter() {
                     {
                         let (title, rest) = crate::process::split_title_body(&it.body);
-                        let age = it.created.get(..10).unwrap_or(&it.created).to_owned();
+                        // The day it was captured, where the person is.
+                        let age = chrono::DateTime::parse_from_rfc3339(&it.created)
+                            .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+                            .unwrap_or_else(|_| it.created.get(..10).unwrap_or(&it.created).to_owned());
                         let suggested = it.status == InboxItem::STATUS_SUGGESTED;
                         let via = (it.source != "ui" && it.source != "cli").then(|| it.source.clone());
                         rsx! {
