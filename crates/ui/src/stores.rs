@@ -1020,6 +1020,7 @@ impl DayPlanMutations {
         label: String,
         minutes: (u16, u16),
         assignment: Option<scheduling_proto::BlockAssignment>,
+        category: scheduling_proto::BlockCategory,
     ) {
         self.save_day(slug, date, move |plan| {
             if let Some(b) = plan.blocks.0.iter_mut().find(|b| b.id.0 == id) {
@@ -1027,7 +1028,11 @@ impl DayPlanMutations {
                 b.start = clamp_time(minutes.0);
                 b.end = clamp_time(minutes.1);
                 b.assignment = assignment;
+                b.category = category;
             }
+            plan.blocks
+                .0
+                .sort_by_key(|b| b.start.minutes_since_midnight);
         });
     }
 

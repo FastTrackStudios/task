@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use architect_ui::prelude::*;
 use chrono::{Datelike, NaiveDate, Utc};
 use dioxus::prelude::*;
 use scheduling_proto::{BlockAssignment, BlockCategory, CalEvent};
@@ -106,6 +105,7 @@ pub fn ScheduleView() -> Element {
     // opens on Day (seven columns don't fit) and a desk on Week.
     let stored_view = crate::local_store::get(VIEW_KEY).and_then(|v| view_from_key(&v));
     let mut cal_view = use_signal(|| stored_view.unwrap_or(ViewMode::Week));
+    let mut new_event = use_signal(|| 0u64);
     use_hook(move || {
         if stored_view.is_none() {
             spawn(async move {
@@ -205,8 +205,62 @@ pub fn ScheduleView() -> Element {
             b.start.minutes_since_midnight,
             b.end.minutes_since_midnight,
             assignment,
+            b.category,
         ))
     });
+    // The mode the open block can start: it is today's, running now, and
+    // its kind steers the hour.
+    let focus_mode = crate::now_block::use_focus_mode();
+    let timers = stores::use_timer_mutations();
+    let active_timer = crate::chrome::use_active_timer();
+    let sheet_mode = editor.as_ref().and_then(|(date, _, _, s, e, _, cat)| {
+        use chrono::Timelike;
+        let now = chrono::Local::now();
+        let minute = u16::try_from(now.hour() * 60 + now.minute()).ok()?;
+        let label = cat.focus_label()?;
+        if *date != now.date_naive() || minute < *s || minute >= *e {
+            return None;
+        }
+        let name = task_proto::suggest::mode_name(*cat).to_owned();
+        Some(
+            match focus_mode.read().as_ref().filter(|m| m.category == *cat) {
+                Some(m) => crate::pages::block_sheet::ModeAction::Running(
+                    name,
+                    crate::chrome::fmt_hms((chrono::Utc::now() - m.started).num_seconds().max(0)),
+                ),
+                None => {
+                    let _ = label;
+                    crate::pages::block_sheet::ModeAction::Start(name)
+                }
+            },
+        )
+    });
+    let sheet_mode_cat = editor.as_ref().map(|t| t.6);
+    let toggle_mode = move || {
+        if let Some(m) = focus_mode.peek().clone() {
+            timers.stop(m.slug, m.user_id, m.session_id);
+            return;
+        }
+        let Some(label) = sheet_mode_cat.and_then(|c| c.focus_label()) else {
+            return;
+        };
+        let Some((slug, org_id)) = crate::chrome::resolve_org(&selection.read(), &org_list.read())
+        else {
+            return;
+        };
+        let req = timer_proto::StartTimerRequest {
+            user_id: crate::chrome::owner_id(org_id),
+            org_id,
+            project_id: None,
+            project_path: String::new(),
+            task_note_path: String::new(),
+            description: label.to_owned(),
+        };
+        match active_timer.as_ref() {
+            Some(at) => timers.switch(slug, at.session.id, req),
+            None => timers.start(slug, req),
+        }
+    };
     let (tasks, projects) = pickers().unwrap_or_default();
 
     // The named store mutations behind each edit surface — optimistic
@@ -215,9 +269,23 @@ pub fn ScheduleView() -> Element {
                                label: String,
                                s: u16,
                                e: u16,
-                               assign: Option<Assign>| {
+                               assign: Option<Assign>,
+                               category: BlockCategory| {
         let Some(slug) = slug() else { return };
-        plan_muts.save_block(slug, date, id, label, (s, e), assign.map(to_assignment));
+        let label = if label.is_empty() {
+            "Block".to_owned()
+        } else {
+            label
+        };
+        plan_muts.save_block(
+            slug,
+            date,
+            id,
+            label,
+            (s, e),
+            assign.map(to_assignment),
+            category,
+        );
         editing.set(None);
     };
 
@@ -398,6 +466,11 @@ pub fn ScheduleView() -> Element {
                     }
                     task_ui_core::section_header::SectionMenuDivider {}
                     task_ui_core::section_header::SectionMenuItem {
+                        label: "New event",
+                        icon: rsx! { architect_ui::lucide_dioxus::CalendarPlus { size: 18 } },
+                        on_click: move |()| new_event += 1,
+                    }
+                    task_ui_core::section_header::SectionMenuItem {
                         label: "Reset day to template",
                         icon: rsx! { architect_ui::lucide_dioxus::RotateCcw { size: 18 } },
                         on_click: move |()| reset_day(cal_anchor()),
@@ -414,6 +487,7 @@ pub fn ScheduleView() -> Element {
                 anchor: Some(cal_anchor),
                 view: Some(cal_view),
                 phone_chrome: true,
+                new_event: Some(new_event),
                 summary,
                 slot_rows,
                 slot_items,
@@ -436,185 +510,31 @@ pub fn ScheduleView() -> Element {
             }
             }
         }
-        if let Some((date, id, label, start_min, end_min, assignment)) = editor {
-            BlockEditor {
+        if let Some((date, id, label, start_min, end_min, assignment, category)) = editor {
+            crate::pages::block_sheet::BlockSheet {
                 key: "{date}-{id}",
                 label,
                 start_min,
                 end_min,
+                category,
                 assignment,
                 tasks,
                 projects,
-                on_save: move |(l, s, e, a): (String, u16, u16, Option<Assign>)| {
-                    save_block((date, id.clone()), l, s, e, a);
+                mode: sheet_mode,
+                on_mode: move |()| toggle_mode(),
+                on_save: {
+                    let id = id.clone();
+                    move |(l, s, e, a, c): crate::pages::block_sheet::BlockSave| {
+                        save_block((date, id.clone()), l, s, e, a, c);
+                    }
                 },
-                on_reset: move |()| reset_day(date),
-                on_cancel: move |()| editing.set(None),
-            }
-        }
-    }
-}
-
-/// Modal to move / relabel / assign a plan block. Holds its own working
-/// values so typing doesn't churn the page; commits on Save.
-#[component]
-fn BlockEditor(
-    label: ReadSignal<String>,
-    start_min: u16,
-    end_min: u16,
-    assignment: ReadSignal<Option<Assign>>,
-    tasks: ReadSignal<PickList>,
-    projects: ReadSignal<PickList>,
-    on_save: EventHandler<(String, u16, u16, Option<Assign>)>,
-    on_reset: EventHandler<()>,
-    on_cancel: EventHandler<()>,
-) -> Element {
-    // Working copies seeded once per mount (the parent keys this
-    // modal per block) — peek, so upstream writes don't churn the
-    // user's draft mid-edit.
-    let mut lbl = use_signal(move || label.peek().clone());
-    let mut start = use_signal(|| start_min);
-    let mut end = use_signal(|| end_min);
-    let mut assign = use_signal(move || assignment.peek().clone());
-    // The task/project picker binds a String; on_change dispatches into `assign`.
-    let pick_sel = use_signal(String::new);
-
-    let assign_title = assign().map(|a| a.1).unwrap_or_default();
-    // Copy signal handles for the picker's change handler — no list
-    // clones; the `for` loops below read the same signals.
-    let pick_tasks = tasks;
-    let pick_projects = projects;
-    let tasks = tasks.read();
-    let projects = projects.read();
-
-    let input_cls = "rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/40";
-
-    rsx! {
-        // Centered modal on desktop; below `sm` it docks to the
-        // bottom edge (bottom-sheet convention), capped + scrollable,
-        // safe-area padded.
-        div {
-            // Centered dialog on desktop; bottom sheet on phones
-            // (matches the app's other mobile editors); capped +
-            // scrollable so long forms never overflow the viewport.
-            class: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4",
-            onclick: move |_| on_cancel.call(()),
-            div {
-                class: "flex max-h-[85dvh] w-full flex-col gap-3 overflow-y-auto rounded-t-2xl border border-border bg-card p-5 shadow-xl sm:max-w-sm sm:rounded-xl",
-                style: "padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));",
-                onclick: move |e| e.stop_propagation(),
-                Heading { level: HeadingLevel::H3, "Edit block" }
-                label { class: "flex flex-col gap-1 text-xs text-muted-foreground",
-                    "Label"
-                    input {
-                        class: "{input_cls}",
-                        value: "{lbl}",
-                        oninput: move |e| lbl.set(e.value()),
+                on_delete: move |()| {
+                    if let Some(slug) = slug() {
+                        plan_muts.remove_block(slug, date, id.clone());
                     }
-                }
-                div { class: "flex gap-3",
-                    label { class: "flex flex-1 flex-col gap-1 text-xs text-muted-foreground",
-                        "Start"
-                        input {
-                            class: "{input_cls}",
-                            r#type: "time",
-                            value: "{fmt_minute_of_day(start())}",
-                            oninput: move |e| {
-                                if let Some(m) = parse_time(&e.value()) {
-                                    start.set(m);
-                                }
-                            },
-                        }
-                    }
-                    label { class: "flex flex-1 flex-col gap-1 text-xs text-muted-foreground",
-                        "End"
-                        input {
-                            class: "{input_cls}",
-                            r#type: "time",
-                            value: "{fmt_minute_of_day(end())}",
-                            oninput: move |e| {
-                                if let Some(m) = parse_time(&e.value()) {
-                                    end.set(m);
-                                }
-                            },
-                        }
-                    }
-                }
-                // Assignment — a free label, or pick a task / project.
-                div { class: "flex flex-col gap-1 text-xs text-muted-foreground",
-                    "Assignment"
-                    input {
-                        class: "{input_cls}",
-                        placeholder: "Type a label, or pick below",
-                        value: "{assign_title}",
-                        oninput: move |e| {
-                            let v = e.value();
-                            assign.set(if v.trim().is_empty() {
-                                None
-                            } else {
-                                Some(("label".into(), v, None))
-                            });
-                        },
-                    }
-                    Select {
-                        value: pick_sel,
-                        placeholder: "— pick task / project —".to_string(),
-                        on_change: move |v: String| {
-                            if let Some(id) = v.strip_prefix("task:") {
-                                if let Some((_, t)) = pick_tasks.read().iter().find(|(i, _)| i == id) {
-                                    assign.set(Some(("task".into(), t.clone(), Some(id.to_string()))));
-                                }
-                            } else if let Some(id) = v.strip_prefix("project:") {
-                                if let Some((_, t)) = pick_projects.read().iter().find(|(i, _)| i == id) {
-                                    assign.set(Some(("project".into(), t.clone(), Some(id.to_string()))));
-                                }
-                            } else if v == "__clear" {
-                                assign.set(None);
-                            }
-                        },
-                        SelectContent {
-                            SelectItem { value: "__clear".to_string(), index: 0, "— clear —" }
-                            if !tasks.is_empty() {
-                                SelectGroup {
-                                    SelectLabel { "Tasks" }
-                                    for (i, (id, title)) in tasks.iter().enumerate() {
-                                        SelectItem { key: "t-{id}", value: "task:{id}", index: i + 1, "{title}" }
-                                    }
-                                }
-                            }
-                            if !projects.is_empty() {
-                                SelectGroup {
-                                    SelectLabel { "Projects" }
-                                    for (i, (id, title)) in projects.iter().enumerate() {
-                                        SelectItem { key: "p-{id}", value: "project:{id}", index: i + 1 + tasks.len(), "{title}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                div { class: "mt-1 flex flex-wrap items-center justify-between gap-2",
-                    Button {
-                        variant: ButtonVariant::Outline,
-                        size: ButtonSize::Small,
-                        on_click: move |_| on_reset.call(()),
-                        "Reset day to template"
-                    }
-                    div { class: "flex gap-2",
-                        Button {
-                            variant: ButtonVariant::Outline,
-                            size: ButtonSize::Small,
-                            on_click: move |_| on_cancel.call(()),
-                            "Cancel"
-                        }
-                        Button {
-                            variant: ButtonVariant::Primary,
-                            size: ButtonSize::Small,
-                            on_click: move |_| on_save.call((lbl(), start(), end(), assign())),
-                            "Save"
-                        }
-                    }
-                }
+                    editing.set(None);
+                },
+                on_close: move |()| editing.set(None),
             }
         }
     }
@@ -862,21 +782,5 @@ fn view_from_key(s: &str) -> Option<ViewMode> {
         "month" => Some(ViewMode::Month),
         "blocks" => Some(ViewMode::Blocks),
         _ => None,
-    }
-}
-
-fn fmt_minute_of_day(min: u16) -> String {
-    let m = min.min(1439);
-    format!("{:02}:{:02}", m / 60, m % 60)
-}
-
-fn parse_time(s: &str) -> Option<u16> {
-    let (h, m) = s.split_once(':')?;
-    let h: u16 = h.parse().ok()?;
-    let m: u16 = m.parse().ok()?;
-    if h < 24 && m < 60 {
-        Some(h * 60 + m)
-    } else {
-        None
     }
 }

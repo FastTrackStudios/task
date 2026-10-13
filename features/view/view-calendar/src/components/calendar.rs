@@ -78,6 +78,10 @@ pub struct CalendarProps {
     /// The page draws the phone's header: the toolbar is desk-only.
     #[props(default = false)]
     pub phone_chrome: bool,
+    /// Bumped by the page to make a new event on the day in view (the
+    /// phone header's "New event") and open it.
+    #[props(default)]
+    pub new_event: Option<Signal<u64>>,
 }
 
 #[component]
@@ -153,6 +157,28 @@ pub fn Calendar(props: CalendarProps) -> Element {
 
     let on_event = props.on_event;
     let events = props.events.clone();
+
+    // The page asked for a new event: from the next hour on the day in
+    // view (09:00 on another day), then open it to name it.
+    let mut seen_request = use_signal(|| props.new_event.map_or(0, |s| *s.peek()));
+    if let Some(req) = props.new_event {
+        let n = req();
+        if n != *seen_request.peek() {
+            seen_request.set(n);
+            let day = *anchor.peek();
+            let now = chrono::Local::now();
+            let hour = if day == now.date_naive() {
+                i64::from((chrono::Timelike::hour(&now) + 1).min(23))
+            } else {
+                9
+            };
+            let start = day_start_utc(day) + chrono::Duration::hours(hour);
+            let event = CalendarEvent::new("New event", start, start + chrono::Duration::hours(1));
+            let id = event.id;
+            on_event.call(CalendarMutation::Create { event });
+            editing.set(Some(id));
+        }
+    }
 
     // Expand any recurring masters to instances inside the visible
     // range so the views stay recurrence-agnostic. Buffered by one

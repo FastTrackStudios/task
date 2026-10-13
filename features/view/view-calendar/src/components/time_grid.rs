@@ -653,7 +653,9 @@ fn DayColumn(props: DayColumnProps) -> Element {
                 // branch and produces a 1-hour event at the
                 // clicked slot.
                 onmousedown: move |e: MouseEvent| {
-                    if props.readonly { return; }
+                    // A finger on the grid scrolls it; a stray tap must not
+                    // make an event (the header's + is how a phone adds one).
+                    if props.readonly || coarse { return; }
                     if e.data().trigger_button() != Some(MouseButton::Primary) { return; }
                     let y = e.data().element_coordinates().y as i64;
                     let anchor = snap_minutes(px_to_minutes(y, pph));
