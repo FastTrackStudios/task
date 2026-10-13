@@ -7,8 +7,8 @@
 //! association — which only showed up when an app outside the shell
 //! needed one and could not reach it.
 //!
-//! The look is Linear's iOS sheets: a panel floating a few points off
-//! the screen's edges with a large radius, a grab handle, and content in
+//! The look is Linear's iOS sheets: a full-width panel rising from the
+//! bottom edge with a large top radius, a grab handle, and content in
 //! **grouped inset rows** ([`SheetGroup`]) — a label on the left, the
 //! value on the right ([`SheetSelect`] opens a check-marked popover,
 //! [`SheetToggle`] is a switch), chips for multi-pick sets
@@ -40,8 +40,7 @@ pub fn BottomSheet(
             onclick: move |_| on_close.call(()),
         }
         div {
-            class: "fixed inset-x-2 z-50 flex max-h-[85vh] flex-col overflow-hidden rounded-[30px] bg-popover text-foreground shadow-[0_24px_60px_-12px_rgb(0_0_0/0.7),inset_0_0_0_1px_rgb(255_255_255/0.06)] outline-none md:hidden",
-            style: "bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));",
+            class: "fixed inset-x-0 bottom-0 z-50 flex max-h-[88vh] flex-col overflow-hidden rounded-t-[30px] bg-popover text-foreground shadow-[0_-12px_40px_-12px_rgb(0_0_0/0.6),inset_0_1px_0_rgb(255_255_255/0.07)] outline-none md:hidden",
             tabindex: "-1",
             // `autofocus` only fires on initial page load, not when the
             // sheet is inserted dynamically — focus on mount so Escape
@@ -67,7 +66,11 @@ pub fn BottomSheet(
                     SheetClose { on_close }
                 }
             }
-            div { class: "min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pb-3 pt-2",
+            // Flush with the bottom edge: the home indicator's room is
+            // padding inside the sheet, not a gap under it.
+            div {
+                class: "min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pt-2",
+                style: "padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));",
                 {children}
             }
         }

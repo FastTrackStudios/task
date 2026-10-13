@@ -213,7 +213,7 @@ pub fn PropertyPicker(
             onclick: move |_| on_close.call(()),
         }
         div {
-            class: "fixed inset-x-0 bottom-0 z-50 flex max-h-[70vh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-popover pb-[env(safe-area-inset-bottom)] text-popover-foreground shadow-2xl md:absolute md:inset-x-auto md:bottom-auto md:left-0 md:top-full md:mt-1 md:max-h-80 md:w-64 md:rounded-lg md:border md:pb-0",
+            class: "fixed inset-x-0 bottom-0 z-50 flex max-h-[70vh] flex-col overflow-hidden rounded-t-[30px] bg-popover pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-12px_40px_-12px_rgb(0_0_0/0.6),inset_0_1px_0_rgb(255_255_255/0.07)] text-popover-foreground md:absolute md:inset-x-auto md:bottom-auto md:left-0 md:top-full md:mt-1 md:max-h-80 md:w-64 md:rounded-lg md:border md:pb-0",
             role: "listbox",
             aria_label: "{title}",
             onclick: move |e| e.stop_propagation(),

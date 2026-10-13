@@ -20,7 +20,9 @@
 //! live clock, and a complete button — the checkbox-timer made
 //! spatial. Idle (nothing running) renders no bar at all.
 
-use architect_ui::lucide_dioxus::SlidersHorizontal;
+use architect_ui::lucide_dioxus::{
+    CircleCheck, FolderKanban, ListFilter, SlidersHorizontal, SquarePen,
+};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use task_ui::{QuickAdd, TaskInfo as UiTask, TaskMutation, TasksApp};
@@ -74,6 +76,76 @@ struct BoardData {
     /// Open tasks in the other scope (on Tasks: the project work it
     /// links to).
     other_scope: usize,
+    /// What the Filter sheet offers, from the tasks on the board before
+    /// its picks narrow them: `(section, [(key, label)])`.
+    facets: Vec<(&'static str, Vec<(String, String)>)>,
+}
+
+/// The Filter sheet's keys a task carries: `ctx:@errands`,
+/// `proj:<id>`, `pri:high`.
+fn facet_keys(t: &task_proto::TaskInfo, index: &crate::task_board::ProjectIndex) -> Vec<String> {
+    let mut keys: Vec<String> = t
+        .contexts
+        .iter()
+        .map(|c| format!("ctx:@{}", c.trim().trim_start_matches('@').to_lowercase()))
+        .collect();
+    if let Some(task_proto::Anchor::Project(id)) = index.anchor(t) {
+        keys.push(format!("proj:{id}"));
+    }
+    keys.push(format!("pri:{}", t.priority.trim().to_lowercase()));
+    keys
+}
+
+/// Whether a task passes the Filter sheet's picks: within a section any
+/// pick matches (OR), across sections all must (AND).
+fn passes_picks(keys: &[String], picked: &std::collections::BTreeSet<String>) -> bool {
+    ["ctx:", "proj:", "pri:"].iter().all(|kind| {
+        let mine: Vec<&String> = picked.iter().filter(|p| p.starts_with(kind)).collect();
+        mine.is_empty() || mine.iter().any(|p| keys.contains(p))
+    })
+}
+
+/// The Filter sheet's sections, from the tasks on the board.
+fn facets_of(
+    tasks: &[&task_proto::TaskInfo],
+    index: &crate::task_board::ProjectIndex,
+) -> Vec<(&'static str, Vec<(String, String)>)> {
+    use std::collections::BTreeMap;
+    let mut ctx: BTreeMap<String, String> = BTreeMap::new();
+    let mut proj: BTreeMap<String, String> = BTreeMap::new();
+    let mut pri: BTreeMap<String, String> = BTreeMap::new();
+    for t in tasks {
+        for k in facet_keys(t, index) {
+            if let Some(c) = k.strip_prefix("ctx:") {
+                ctx.insert(k.clone(), c.to_owned());
+            } else if let Some(id) = k.strip_prefix("proj:") {
+                let name = uuid::Uuid::parse_str(id)
+                    .ok()
+                    .and_then(|id| index.names.get(&id).cloned())
+                    .unwrap_or_else(|| "Project".to_owned());
+                proj.insert(k.clone(), name);
+            } else if let Some(p) = k.strip_prefix("pri:") {
+                let label = match p {
+                    "critical" | "urgent" => "Urgent",
+                    "high" => "High",
+                    "normal" | "medium" => "Medium",
+                    "low" => "Low",
+                    _ => "No priority",
+                };
+                pri.insert(k.clone(), label.to_owned());
+            }
+        }
+    }
+    let mut proj: Vec<(String, String)> = proj.into_iter().collect();
+    proj.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    [
+        ("Context", ctx.into_iter().collect()),
+        ("Project", proj),
+        ("Priority", pri.into_iter().collect()),
+    ]
+    .into_iter()
+    .filter(|(_, v): &(&str, Vec<(String, String)>)| !v.is_empty())
+    .collect()
 }
 
 /// The foot of the Tasks list: how much project work isn't shown here,
@@ -139,6 +211,12 @@ fn TaskBoard(scope: Scope) -> Element {
     // bottom action bar (thumb reach) below `md`.
     let mut filters_open = use_signal(|| false);
     let mut add_open = use_signal(|| false);
+    // The phone header's ⋯: Display options and the Filter sheet's
+    // picks (contexts, projects, priorities) and search.
+    let mut display_open = use_signal(|| false);
+    let mut picked = use_signal(std::collections::BTreeSet::<String>::new);
+    let mut filter_query = use_signal(String::new);
+    let mut view_pick = use_signal(|| stored_view().unwrap_or_default());
 
     // The list hooks drive the fetches; the derivation below reads the
     // backing stores directly (inside the memo) so it re-runs on data
@@ -226,6 +304,13 @@ fn TaskBoard(scope: Scope) -> Element {
                 .iter()
                 .map(|r| (r.project.id, r.project.title.clone())),
         );
+        // The Filter sheet: offered from what's on the board, then
+        // narrowed by what's picked.
+        let facets = facets_of(&domain, &index);
+        let picked_now = picked.read().clone();
+        if !picked_now.is_empty() {
+            domain.retain(|t| passes_picks(&facet_keys(t, &index), &picked_now));
+        }
         let project_names = &index.names;
         let resolve_anchor = |t: &task_proto::TaskInfo| index.anchor(t);
 
@@ -379,6 +464,7 @@ fn TaskBoard(scope: Scope) -> Element {
             now,
             for_hour,
             other_scope,
+            facets,
         })
     });
 
@@ -421,30 +507,14 @@ fn TaskBoard(scope: Scope) -> Element {
                 now,
                 for_hour,
                 other_scope,
+                facets,
             } = data;
             // Inline chips are desktop chrome; on phones the same
-            // controls live in the Filters bottom sheet below.
-            // How many filters are narrowing the board — badged on the
-            // mobile Filters button so a filtered board is never a
-            // mystery on a phone.
-            let filter_count = usize::from(active_only)
-                + usize::from(relevant_only)
-                + usize::from(!at_location.is_empty());
+            // controls are the header's ⋯ → Filter and Display options.
+            // How many picks narrow the board — badged on the ⋯ so a
+            // filtered board is never a mystery on a phone.
+            let filter_count = picked.read().len() + usize::from(!at_location.is_empty());
             let chips = rsx! {
-                // Phone: the filters as one round button, badged with how
-                // many are narrowing the list.
-                button {
-                    r#type: "button",
-                    class: "relative flex size-10 items-center justify-center rounded-full border border-border/70 bg-popover/80 text-foreground active:bg-accent md:hidden",
-                    aria_label: "Filters",
-                    onclick: move |_| filters_open.set(true),
-                    SlidersHorizontal { size: 17 }
-                    if filter_count > 0 {
-                        span { class: "absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground",
-                            "{filter_count}"
-                        }
-                    }
-                }
                 div { class: "hidden items-center gap-1.5 md:flex",
                     FilterChip {
                         label: "Active",
@@ -478,6 +548,53 @@ fn TaskBoard(scope: Scope) -> Element {
             let sheet_projects = project_choices.clone();
             rsx! {
                 div { class: "flex h-full w-full flex-col pb-14 md:pb-0",
+                    // Phone: the section's name, its main action (a new
+                    // issue) and ⋯ for the rest — Linear's top bar.
+                    div { class: "md:hidden",
+                        task_ui_core::section_header::SectionHeader {
+                            title: match scope {
+                                Scope::Actions => "Tasks".to_owned(),
+                                Scope::ProjectWork => "Project work".to_owned(),
+                            },
+                            action: rsx! { SquarePen { size: 20 } },
+                            action_label: "New issue".to_owned(),
+                            on_action: move |()| new_issue.open(String::new()),
+                            badge: filter_count,
+                            task_ui_core::section_header::SectionMenuItem {
+                                label: "Filter",
+                                icon: rsx! { ListFilter { size: 18 } },
+                                note: (filter_count > 0).then(|| format!("{filter_count} on")),
+                                on_click: move |()| filters_open.set(true),
+                            }
+                            task_ui_core::section_header::SectionMenuItem {
+                                label: "Display options",
+                                icon: rsx! { SlidersHorizontal { size: 18 } },
+                                on_click: move |()| display_open.set(true),
+                            }
+                            task_ui_core::section_header::SectionMenuDivider {}
+                            match scope {
+                                Scope::Actions => rsx! {
+                                    task_ui_core::section_header::SectionMenuItem {
+                                        label: "Project work",
+                                        icon: rsx! { FolderKanban { size: 18 } },
+                                        note: (other_scope > 0).then(|| other_scope.to_string()),
+                                        on_click: move |()| {
+                                            nav.push(crate::routes::Route::ProjectWorkRoute {});
+                                        },
+                                    }
+                                },
+                                Scope::ProjectWork => rsx! {
+                                    task_ui_core::section_header::SectionMenuItem {
+                                        label: "My tasks",
+                                        icon: rsx! { CircleCheck { size: 18 } },
+                                        on_click: move |()| {
+                                            nav.push(crate::routes::Route::TasksRoute {});
+                                        },
+                                    }
+                                },
+                            }
+                        }
+                    }
                     // A running mode is its own band (with End), so its
                     // session doesn't also show as a plain timer bar.
                     if let Some(n) = now.filter(|_| focus_mode.read().is_none()) {
@@ -540,7 +657,12 @@ fn TaskBoard(scope: Scope) -> Element {
                                 Scope::Actions => rsx! {},
                             },
                             initial_view: stored_view(),
-                            on_view_change: move |v| remember_view(v),
+                            view: Some(view_pick()),
+                            phone_header: true,
+                            on_view_change: move |v| {
+                                view_pick.set(v);
+                                remember_view(v);
+                            },
                             // The quick-add line opens the composer with it typed in:
                             // one way to make an issue, with every property in reach.
                             on_capture: move |line: String| new_issue.open(line),
@@ -550,47 +672,125 @@ fn TaskBoard(scope: Scope) -> Element {
                             },
                         }
                     }
-                    // ── Mobile: sheets ─────────────────────────────────
-                    // No action strip: on a phone, filters are the round
-                    // button in the header row and a new issue is the
-                    // tab bar's compose button (Linear's shell).
+                    // ── Mobile: the ⋯ menu's sheets (Linear's style) ───
+                    // Filter: search over what's on the board, as checkbox
+                    // groups. Display options: how the board is drawn.
                     BottomSheet {
                         open: filters_open(),
-                        title: "Filters".to_string(),
+                        title: String::new(),
                         on_close: move |()| filters_open.set(false),
-                        div { class: "flex flex-col gap-3 pb-2",
-                            SheetToggleRow {
-                                label: "Active",
-                                hint: "Hide done and cancelled tasks",
-                                on: active_only,
-                                on_toggle: move |on| prefs_ctx.update(|p| p.tasks_active = on),
-                            }
-                            SheetToggleRow {
-                                label: "Relevant",
-                                hint: "Only what matters right now",
-                                on: relevant_only,
-                                on_toggle: move |on| prefs_ctx.update(|p| p.tasks_relevant = on),
-                            }
-                            div { class: "flex flex-col gap-1.5",
-                                span { class: "px-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                                    "I'm at"
+                        task_ui_core::sheet::SheetSearch {
+                            value: filter_query(),
+                            placeholder: "Search all filters".to_owned(),
+                            on_input: move |q: String| filter_query.set(q),
+                            on_close: move |()| filters_open.set(false),
+                        }
+                        {
+                            let q = filter_query.read().trim().to_lowercase();
+                            let sections: Vec<(&'static str, Vec<(String, String)>)> = facets
+                                .iter()
+                                .map(|(name, opts)| {
+                                    let opts: Vec<(String, String)> = opts
+                                        .iter()
+                                        .filter(|(_, l)| q.is_empty() || l.to_lowercase().contains(&q))
+                                        .cloned()
+                                        .collect();
+                                    (*name, opts)
+                                })
+                                .filter(|(_, o)| !o.is_empty())
+                                .collect();
+                            rsx! {
+                                if sections.is_empty() {
+                                    p { class: "px-2 py-6 text-center text-[15px] text-muted-foreground", "No filters match" }
                                 }
-                                Select {
-                                    value: location_pick,
-                                    placeholder: "anywhere".to_string(),
-                                    class: "min-h-11 w-full".to_string(),
-                                    on_change: move |v: String| prefs_ctx.update(|p| p.location = v.clone()),
-                                    SelectContent {
-                                        for (i, loc) in LOCATIONS.iter().enumerate() {
-                                            SelectItem { key: "{loc}", value: "{loc}", index: i, "@{loc}" }
+                                for (name , opts) in sections {
+                                    task_ui_core::sheet::SheetSection {
+                                        key: "{name}",
+                                        label: name.to_owned(),
+                                    }
+                                    task_ui_core::sheet::SheetGroup {
+                                        for (k , l) in opts {
+                                            {
+                                                let on = picked.read().contains(&k);
+                                                rsx! {
+                                                    task_ui_core::sheet::SheetCheckRow {
+                                                        key: "{k}",
+                                                        label: l,
+                                                        on,
+                                                        on_toggle: move |want: bool| {
+                                                            let mut p = picked.write();
+                                                            if want {
+                                                                p.insert(k.clone());
+                                                            } else {
+                                                                p.remove(&k);
+                                                            }
+                                                        },
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            if hidden > 0 {
-                                span { class: "px-1 text-xs tabular-nums text-muted-foreground",
-                                    "{hidden} tasks hidden by these filters"
+                                if !picked.read().is_empty() {
+                                    button {
+                                        r#type: "button",
+                                        class: "mx-auto mt-1 block rounded-full px-4 py-2 text-[14px] text-muted-foreground active:text-foreground",
+                                        onclick: move |_| picked.write().clear(),
+                                        "Clear filters"
+                                    }
                                 }
+                            }
+                        }
+                    }
+                    BottomSheet {
+                        open: display_open(),
+                        title: String::new(),
+                        on_close: move |()| display_open.set(false),
+                        task_ui_core::sheet::SheetGroup {
+                            task_ui_core::sheet::SheetSelect {
+                                label: "Layout",
+                                value: view_pick().label().to_owned(),
+                                options: vec![
+                                    ("List".to_owned(), "List".to_owned()),
+                                    ("Kanban".to_owned(), "Board".to_owned()),
+                                ],
+                                on_change: move |v: String| {
+                                    let mode = if v == "Kanban" {
+                                        task_ui::ViewMode::Kanban
+                                    } else {
+                                        task_ui::ViewMode::List
+                                    };
+                                    view_pick.set(mode);
+                                    remember_view(mode);
+                                },
+                            }
+                        }
+                        task_ui_core::sheet::SheetGroup {
+                            task_ui_core::sheet::SheetToggle {
+                                label: "Show completed",
+                                on: !active_only,
+                                on_toggle: move |on: bool| prefs_ctx.update(|p| p.tasks_active = !on),
+                            }
+                            task_ui_core::sheet::SheetToggle {
+                                label: "Only what's relevant now",
+                                hint: "Routines in their windows, deadlines always",
+                                on: relevant_only,
+                                on_toggle: move |on| prefs_ctx.update(|p| p.tasks_relevant = on),
+                            }
+                        }
+                        task_ui_core::sheet::SheetGroup {
+                            task_ui_core::sheet::SheetSelect {
+                                label: "I'm at",
+                                value: at_location.clone(),
+                                options: std::iter::once((String::new(), "Anywhere".to_owned()))
+                                    .chain(LOCATIONS.iter().map(|l| ((*l).to_owned(), format!("@{l}"))))
+                                    .collect::<Vec<_>>(),
+                                on_change: move |v: String| prefs_ctx.update(|p| p.location = v.clone()),
+                            }
+                        }
+                        if hidden > 0 {
+                            p { class: "px-2 pb-1 text-[13px] tabular-nums text-muted-foreground",
+                                "{hidden} tasks hidden by these options"
                             }
                         }
                     }

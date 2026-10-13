@@ -57,6 +57,8 @@ pub fn InboxView() -> Element {
     let mut fleeting = crate::chrome::use_fleeting_open();
     // `Some(i)`: the deck is open, from row `i`.
     let mut deck = use_signal(|| None::<usize>);
+    // Fast or Clarify — set from the ⋯ menu, read by the deck.
+    let mut style = use_signal(Mode::stored);
     // Seeded on the first render that HAS rows. (An effect made once at
     // mount froze whatever the list held then — empty, now that the app
     // opens on this page before the inbox has loaded — and never ran
@@ -154,17 +156,53 @@ pub fn InboxView() -> Element {
         })
         .collect();
     let left = rows.len();
+    // With captures waiting the main action is processing them; with
+    // none, it is capturing one.
+    let header_icon = if left > 0 {
+        rsx! { architect_ui::lucide_dioxus::Play { size: 17 } }
+    } else {
+        rsx! { architect_ui::lucide_dioxus::SquarePen { size: 19 } }
+    };
+    let header_label = if left > 0 {
+        "Process the inbox"
+    } else {
+        "Capture"
+    }
+    .to_owned();
     rsx! {
         div { class: "mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 pb-6 sm:px-8",
-            div { class: "flex items-center gap-3 pb-3",
-                h1 { class: "flex-1 text-[28px] font-semibold tracking-tight text-foreground", "Inbox" }
-                if left > 0 {
-                    button {
-                        r#type: "button",
-                        class: "flex h-10 items-center gap-2 rounded-full border border-border/70 bg-popover/80 px-4 text-[14px] font-medium text-foreground active:bg-accent",
-                        onclick: move |_| deck.set(Some(0)),
-                        architect_ui::lucide_dioxus::Play { size: 15 }
-                        "Process {left}"
+            // The section's name, its main action said in words —
+            // "Process 5" — and ⋯ for the rest (Linear's top bar).
+            div { class: "-mx-4 -mt-2 pb-1 sm:-mx-8",
+                task_ui_core::section_header::SectionHeader {
+                    title: "Inbox".to_owned(),
+                    action: header_icon,
+                    action_label: header_label,
+                    action_text: (left > 0).then(|| format!("Process {left}")),
+                    on_action: move |()| {
+                        if left > 0 {
+                            deck.set(Some(0));
+                        } else {
+                            fleeting.set(true);
+                        }
+                    },
+                    task_ui_core::section_header::SectionMenuItem {
+                        label: "Capture",
+                        icon: rsx! { architect_ui::lucide_dioxus::SquarePen { size: 18 } },
+                        on_click: move |()| fleeting.set(true),
+                    }
+                    task_ui_core::section_header::SectionMenuItem {
+                        label: "Processing style",
+                        icon: rsx! { architect_ui::lucide_dioxus::SlidersHorizontal { size: 18 } },
+                        note: Some(if style() == Mode::Fast { "Fast" } else { "Clarify" }.to_owned()),
+                        on_click: move |()| {
+                            let next = match style() {
+                                Mode::Fast => Mode::Clarify,
+                                Mode::Clarify => Mode::Fast,
+                            };
+                            next.remember();
+                            style.set(next);
+                        },
                     }
                 }
             }
