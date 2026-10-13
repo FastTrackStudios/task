@@ -569,6 +569,94 @@ async fn demo_plants_an_inbox_to_process_and_a_maintenance_hour() -> eyre::Resul
     Ok(())
 }
 
+/// The planted world opens `/activity` on history, and Alice's vocal
+/// comp on a comment thread from Sam — asserted through the stores the
+/// server mounts, after the real `admin demo`, twice: a replant writes
+/// no second copy of anything.
+// t[verify activity.seed]
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_activity_history_and_a_comment_thread() -> eyre::Result<()> {
+    use notify_proto::{ActivityFeed as _, ActivityFilter, ActivityKind};
+    use sea_orm_migration::MigratorTrait as _;
+    use task::TaskService as _;
+    use threads::ThreadsService as _;
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(tmp.path(), slug)?;
+    plant(tmp.path(), slug)?;
+    let org = org_proto::DataRoot::new(tmp.path().to_path_buf()).org(slug);
+
+    let conn = sea_orm::Database::connect(format!(
+        "sqlite://{}?mode=ro",
+        org.path().join("notify.sqlite").display()
+    ))
+    .await?;
+    let feed = notify::ActivityStore::new(conn);
+    let all = feed
+        .list(ActivityFilter::default())
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    let declared = task_server::example_org::SEED_ACTIVITY
+        .iter()
+        .filter(|a| a.org == slug)
+        .count()
+        + task_server::example_org::SEED_COMMENTS
+            .iter()
+            .filter(|c| c.org == slug)
+            .count();
+    eyre::ensure!(
+        all.len() == declared,
+        "one entry per declared line, however often planted: {all:#?}"
+    );
+    eyre::ensure!(
+        all.iter().all(|a| a.actor_name != "Someone"),
+        "every seeded line has a byline"
+    );
+
+    let tasks = task::TaskBackend::new(org.vault_dir())
+        .list()
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    let vocals = tasks
+        .iter()
+        .find(|t| t.title == "Comp lead vocals — Track One")
+        .ok_or_else(|| eyre::eyre!("the vocal comp is planted"))?;
+    let its = feed
+        .list(ActivityFilter::entity("task", vocals.id))
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    eyre::ensure!(
+        its.iter()
+            .any(|a| a.kind == ActivityKind::Commented && a.actor_name == "Sam"),
+        "Sam's comment is on the vocal comp's history: {its:#?}"
+    );
+
+    let threads_conn =
+        sea_orm::Database::connect(format!("sqlite://{}?mode=rwc", org.threads_db().display()))
+            .await?;
+    threads::Migrator::up(&threads_conn, None).await?;
+    let store = threads::Store::new(threads_conn);
+    let thread = store
+        .list_threads("task".into(), vocals.id)
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    eyre::ensure!(
+        thread.len() == 1,
+        "one thread on the vocal comp: {thread:?}"
+    );
+    let messages = store
+        .list_messages(thread[0].id)
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    eyre::ensure!(
+        messages.len() == 2 && messages[0].author_label == "Sam",
+        "Sam's comment then Alice's reply, once each: {messages:?}"
+    );
+    Ok(())
+}
+
 /// The seeded booking the finance integration is written against.
 ///
 /// The repo's policy is that a feature lives in the suite *and* in the

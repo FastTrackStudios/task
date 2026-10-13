@@ -36,6 +36,7 @@ mod content_ref;
 mod cross_server_wiki;
 mod deliverables;
 mod device;
+mod documents;
 mod form;
 mod ingest;
 mod keyflow_library;

@@ -4,9 +4,9 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    BookOpen, BookUser, CalendarDays, ChartGantt, CircleCheck, Flag, FolderKanban, FolderOpen,
-    Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Star, Target, Timer, Users,
-    Waypoints,
+    Activity as ActivityIcon, BookOpen, BookUser, CalendarDays, ChartGantt, CircleCheck, Flag,
+    FolderKanban, FolderOpen, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon,
+    Star, Target, Timer, Users, Waypoints,
 };
 use dioxus::prelude::*;
 
@@ -26,6 +26,9 @@ pub struct NavTab {
 
 fn icon_inbox() -> Element {
     rsx! { InboxIcon { size: 16 } }
+}
+fn icon_activity() -> Element {
+    rsx! { ActivityIcon { size: 16 } }
 }
 fn icon_contacts() -> Element {
     rsx! { BookUser { size: 16 } }
@@ -98,6 +101,14 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "core",
             icon: icon_star,
             route: Route::FavoritesRoute {},
+        },
+        // Everything that happened — changes, comments, captures,
+        // timers — scrollable back (`crate::activity`).
+        NavTab {
+            label: "Activity",
+            plugin: "core",
+            icon: icon_activity,
+            route: Route::ActivityRoute {},
         },
         NavTab {
             label: "Projects",
@@ -325,6 +336,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::HomeRoute {} => "Home",
         Route::DashboardRoute {} => "Home",
         Route::InboxRoute {} => "Inbox",
+        Route::ActivityRoute {} => "Activity",
         Route::FavoritesRoute {} => "Favorites",
         Route::ContactsRoute {} => "Contacts",
         Route::ProjectsRoute {} => "Projects",
@@ -405,6 +417,20 @@ mod tests {
             "no Sync tab for a default org: {:?}",
             tabs.iter().map(|t| t.label).collect::<Vec<_>>()
         );
+    }
+
+    /// The activity feed is a core page every org reaches from the nav —
+    /// the bell's "View all activity" is not its only door.
+    // t[verify activity.ui.page]
+    #[test]
+    fn the_activity_tab_is_offered_to_every_org() {
+        let tabs = nav_tabs_for(&task_plugin::PluginSet::resolve(None));
+        let tab = tabs
+            .iter()
+            .find(|t| t.label == "Activity")
+            .expect("an Activity tab");
+        assert_eq!(tab.plugin, "core");
+        assert_eq!(route_title(&tab.route), "Activity");
     }
 
     /// And it is gated on the thing it syncs: an org with Files off has

@@ -109,7 +109,10 @@ pub(crate) fn NoteView(
     // most writing apps (at a line start or after a space, so URLs and
     // "and/or" never do). The editor's own default is `\`, for Keyflow,
     // where `/` is chord and rhythm syntax.
-    use_hook(|| editor::editor_view::palette::set_trigger('/'));
+    // The palette catalog and the Linear typography are the shared
+    // document editor's (`crate::doc_editor`), so a note and a task's
+    // description read and type alike.
+    use_hook(crate::doc_editor::install_palette);
     let is_focused = use_memo(move || *focused.read() == pane_index);
     let mode = use_memo(move || write_mode.map_or(WriteMode::Direct, |m| m()));
     // Saves, the live session and renames go to the file only in Direct.
@@ -138,7 +141,7 @@ pub(crate) fn NoteView(
     }
 
     // ── Editor extensions ─────────────────────────────────────
-    let keymap = use_signal(editor::standard_markdown_keymap);
+    let keymap = use_signal(crate::doc_editor::doc_keymap);
     // Frontmatter properties now live in the right sidebar (Properties
     // tab), so the editor's inline `.md-properties` widget stays
     // collapsed — the class below is always `props-collapsed`.
@@ -762,12 +765,25 @@ pub(crate) fn NoteView(
                                 renamable: may_write(),
                             }
                         }
+                        // Phone: the note's properties as a chip row under
+                        // the title — where a task's sit. (A desk shows them
+                        // in the sidebar's Properties tab.)
+                        div { class: "px-6 pt-3 md:hidden",
+                            crate::pages::note_properties::NotePropertyChips {
+                                doc: crate::pages::note_properties::FocusedDoc {
+                                    claim,
+                                    state: session.state,
+                                    on_transaction,
+                                    writable: mode() != WriteMode::ReadOnly,
+                                },
+                            }
+                        }
                         if use_context::<crate::chrome::NoteViewMode>().0() == crate::chrome::ViewMode::Raw {
                             pre { class: "whitespace-pre-wrap px-6 py-4 font-mono text-sm leading-6 text-foreground",
                                 {raw_body_text(&session.state.read().doc.to_string())}
                             }
                         } else {
-                            div { class: if props_open() { "editor-app" } else { "editor-app props-collapsed" },
+                            div { class: if props_open() { "doc-linear editor-app" } else { "doc-linear editor-app props-collapsed" },
                                 div { class: "editor-frame editor-frame--flush",
                                     Editor {
                                         state: session.state,
@@ -790,6 +806,7 @@ pub(crate) fn NoteView(
                 {footer}
             }
             document::Style { {READING_STYLE} }
+            document::Style { {crate::doc_editor::DOC_CSS} }
             // Keyed collab child: remount per doc id = fresh replica.
             if let Some(doc_id) = collab_doc() {
                 crate::collab::CollabSession { key: "{doc_id}", doc_id, handles }

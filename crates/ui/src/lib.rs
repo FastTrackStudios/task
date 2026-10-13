@@ -17,6 +17,7 @@
 //! See `ARCHITECTURE.md` for the recipe for extracting the next slice.
 
 pub mod actions;
+pub mod activity;
 pub mod app;
 pub mod app_views;
 pub mod appearance;
@@ -25,6 +26,7 @@ pub mod central_login;
 pub mod chrome;
 pub mod collab;
 pub mod device_pairing;
+pub mod doc_editor;
 pub mod document_session;
 pub mod favorites;
 pub mod feeds;

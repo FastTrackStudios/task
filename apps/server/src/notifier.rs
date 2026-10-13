@@ -23,6 +23,12 @@
 //! | [`booking_rule`] | scheduling | a booking id first appears (`BookingCreated`); a known booking flips to `Cancelled` (`BookingCancelled`) |
 //! | [`forge_rule`] | git issues + reviews | an issue opens/closes (`ForgeIssue`); a PR opens or is reviewed (`ForgePullRequest`) |
 //!
+//! The same pumps also write the org's **activity feed** (history, not
+//! news — `docs/spec/activity.md`): the task pump diffs each change
+//! into entries, and three more pumps read the inbox, timer and project
+//! hubs. Those rules are pure functions in `crate::activity`; the
+//! entries go through one `activity::Recorder` per org.
+//!
 //! Each rule is a few lines returning `Option<NewNotification>` —
 //! adding one is: pick the hub, add a `NotifyKind` variant, write the
 //! match arm. Transition-shaped rules (task status/assignee, booking
@@ -76,18 +82,38 @@ fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
         crate::org_layer_router(&org),
         scope,
     ));
+    let recorder = crate::activity::Recorder::spawn(org.activity.clone(), org.slug.clone());
+
+    // The feed's bylines: user id → name, from the org's auth store.
+    // Slow loop — accounts are created rarely, and a miss just names
+    // nobody until the next pass.
+    {
+        let people = org.people.clone();
+        let auth = org.auth.clone();
+        tokio::spawn(async move {
+            loop {
+                people.refresh(&auth).await;
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+    }
 
     // Task rule — always mounted (core plugin).
     {
         let cache: Arc<Mutex<HashMap<Uuid, TaskSnapshot>>> = Arc::default();
+        let feed: Arc<Mutex<TaskFeed>> = Arc::default();
         let subscribe = {
             let local = Arc::clone(&local);
             let tasks = org.tasks.clone();
             let cache = Arc::clone(&cache);
+            let feed = Arc::clone(&feed);
+            let people = org.people.clone();
             move || {
                 let local = Arc::clone(&local);
                 let tasks = tasks.clone();
                 let cache = Arc::clone(&cache);
+                let feed = Arc::clone(&feed);
+                let people = people.clone();
                 async move {
                     // Subscribe FIRST, then seed (the fetch-once-then-
                     // fold contract): events landing during the seed
@@ -108,6 +134,10 @@ fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
                         Ok(Ok(rows)) => {
                             *cache.lock().expect("task cache lock") =
                                 rows.iter().map(|t| (t.id, TaskSnapshot::of(t))).collect();
+                            feed.lock().expect("task feed lock").snaps = rows
+                                .iter()
+                                .map(|t| (t.id, crate::activity::TaskSnap::of(t, &people)))
+                                .collect();
                         }
                         Ok(Err(e)) => tracing::warn!(error = ?e, "notifier: task seed failed"),
                         Err(e) => tracing::warn!(error = %e, "notifier: task seed panicked"),
@@ -118,12 +148,28 @@ fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
             }
         };
         let deliver = Arc::clone(&deliver);
-        tokio::spawn(run_pump("task", subscribe, move |ev| {
+        let recorder = recorder.clone();
+        let ledger = org.actors.clone();
+        let people = org.people.clone();
+        tokio::spawn(run_pump("task", subscribe, move |ev: TaskEvent| {
+            // History first (it reads the before-state), then the queue.
+            let entries = feed
+                .lock()
+                .expect("task feed lock")
+                .observe(&ev, &ledger, &people);
+            recorder.record_all(entries);
             if let Some(n) = task_rule(&mut cache.lock().expect("task cache lock"), ev) {
                 deliver.deliver(n);
             }
         }));
     }
+
+    // Activity: captures and their processing.
+    spawn_inbox_feed(&org, &local, &recorder);
+    // Activity: timers and modes.
+    spawn_timer_feed(&org, &local, &recorder);
+    // Activity: projects.
+    spawn_project_feed(&org, &local, &recorder);
 
     // Email rule — new mail in any configured mailbox.
     #[cfg(feature = "plugin-email")]
@@ -232,6 +278,291 @@ fn spawn_org(org: OrgAppState, scope: Arc<architect::Scope>) {
             }));
         }
     }
+}
+
+// ── activity pumps ──────────────────────────────────────────────────
+//
+// The feed's half of the notifier: the same hubs, read for history
+// rather than for news. The rules are pure functions in
+// `crate::activity`; these pumps keep their before-state caches
+// (seeded at subscribe time, like the task rule's) and hand hits to
+// the org's one `Recorder`.
+
+/// The task pump's activity state: what each task last looked like,
+/// and when its description last made an "edited" entry.
+#[derive(Default)]
+struct TaskFeed {
+    snaps: HashMap<Uuid, crate::activity::TaskSnap>,
+    edits: HashMap<Uuid, std::time::Instant>,
+}
+
+impl TaskFeed {
+    fn observe(
+        &mut self,
+        ev: &TaskEvent,
+        ledger: &crate::activity::ActorLedger,
+        people: &crate::activity::People,
+    ) -> Vec<notify::NewActivity> {
+        use crate::activity::{TaskSnap, task_actor, task_changes, task_deleted};
+        match ev {
+            TaskEvent::Upserted(t) => {
+                let now = TaskSnap::of(t, people);
+                let actor = task_actor(ledger, people, t.id, Some(&now));
+                let out = task_changes(
+                    self.snaps.get(&t.id),
+                    t,
+                    &now,
+                    &actor,
+                    self.edits.get(&t.id).copied(),
+                );
+                if out
+                    .iter()
+                    .any(|n| n.kind == Some(notify_proto::ActivityKind::Edited))
+                {
+                    self.edits.insert(t.id, std::time::Instant::now());
+                }
+                self.snaps.insert(t.id, now);
+                out
+            }
+            TaskEvent::Deleted(id) => {
+                self.edits.remove(id);
+                let Some(before) = self.snaps.remove(id) else {
+                    return Vec::new();
+                };
+                let actor = task_actor(ledger, people, *id, Some(&before));
+                vec![task_deleted(*id, &before, &actor)]
+            }
+        }
+    }
+}
+
+/// Captured / processed, off the inbox hub.
+fn spawn_inbox_feed(
+    org: &OrgAppState,
+    local: &Arc<architect::LocalServer>,
+    recorder: &crate::activity::Recorder,
+) {
+    use crate::activity::{
+        Actor, InboxChange, InboxSnap, apply_processed, inbox_change, resolve_processed_into,
+    };
+    use inbox_proto::InboxEvent;
+
+    let cache: Arc<Mutex<HashMap<String, InboxSnap>>> = Arc::default();
+    let subscribe = {
+        let local = Arc::clone(local);
+        let inbox = org.inbox.clone();
+        let cache = Arc::clone(&cache);
+        move || {
+            let local = Arc::clone(&local);
+            let inbox = inbox.clone();
+            let cache = Arc::clone(&cache);
+            async move {
+                // Subscribe first, then seed — see the task pump.
+                let client: inbox_proto::InboxStreamClient = local.establish().await.ok()?;
+                let (tx, rx) = vox::channel::<InboxEvent>();
+                let call = tokio::spawn(async move { client.events(tx).await.is_ok() });
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let seeded =
+                    tokio::task::spawn_blocking(move || inbox_proto::Inbox::list_inbox(&inbox))
+                        .await;
+                if let Ok(Ok(rows)) = seeded {
+                    *cache.lock().expect("inbox feed lock") = rows
+                        .into_iter()
+                        .map(|i| (i.id, InboxSnap { status: i.status }))
+                        .collect();
+                }
+                let call: SubCall = Box::pin(async move { call.await.unwrap_or(false) });
+                Some((call, rx))
+            }
+        }
+    };
+    let recorder = recorder.clone();
+    let ledger = org.actors.clone();
+    let people = org.people.clone();
+    let tasks = org.tasks.clone();
+    let projects = org.projects.clone();
+    tokio::spawn(run_pump(
+        "inbox-activity",
+        subscribe,
+        move |ev: InboxEvent| {
+            let item = match ev {
+                InboxEvent::Upserted(item) => item,
+                InboxEvent::Deleted(id) => {
+                    cache.lock().expect("inbox feed lock").remove(&id);
+                    return;
+                }
+            };
+            let before = cache.lock().expect("inbox feed lock").insert(
+                item.id.clone(),
+                InboxSnap {
+                    status: item.status.clone(),
+                },
+            );
+            let actor = ledger
+                .who(&format!("inbox:{}", item.id))
+                .map_or_else(Actor::someone, |u| Actor::user(&u, &people));
+            match inbox_change(before.as_ref(), &item, &actor) {
+                Some(InboxChange::Captured(n)) => recorder.record(n),
+                Some(InboxChange::Processed(n, None)) => recorder.record(n),
+                Some(InboxChange::Processed(mut n, Some(into))) => {
+                    // Naming what it became walks the vault — off the pump.
+                    let (recorder, tasks, projects) =
+                        (recorder.clone(), tasks.clone(), projects.clone());
+                    tokio::spawn(async move {
+                        let resolved = tokio::task::spawn_blocking(move || {
+                            resolve_processed_into(&into, &tasks, &projects)
+                        })
+                        .await;
+                        if let Ok(r) = resolved {
+                            apply_processed(&mut n, &r);
+                        }
+                        recorder.record(n);
+                    });
+                }
+                None => {}
+            }
+        },
+    ));
+}
+
+/// Timer / mode started and stopped, off the timer hub.
+fn spawn_timer_feed(
+    org: &OrgAppState,
+    local: &Arc<architect::LocalServer>,
+    recorder: &crate::activity::Recorder,
+) {
+    use std::collections::HashSet;
+
+    use timer_proto::TimerEvent;
+
+    // The sessions running now — a start is an id arriving open that
+    // is not here; a stop, one here arriving closed.
+    let running: Arc<Mutex<HashSet<Uuid>>> = Arc::default();
+    let subscribe = {
+        let local = Arc::clone(local);
+        let timer = org.timer.clone();
+        let running = Arc::clone(&running);
+        move || {
+            let local = Arc::clone(&local);
+            let timer = timer.clone();
+            let running = Arc::clone(&running);
+            async move {
+                let client: timer_proto::TimerServiceStreamClient = local.establish().await.ok()?;
+                let (tx, rx) = vox::channel::<TimerEvent>();
+                let call = tokio::spawn(async move { client.events(tx).await.is_ok() });
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let open = timer_proto::TimerService::list_sessions(
+                    &timer,
+                    timer_proto::WorkSessionFilter {
+                        open: Some(true),
+                        ..Default::default()
+                    },
+                )
+                .await;
+                if let Ok(rows) = open {
+                    *running.lock().expect("timer feed lock") =
+                        rows.into_iter().map(|s| s.id).collect();
+                }
+                let call: SubCall = Box::pin(async move { call.await.unwrap_or(false) });
+                Some((call, rx))
+            }
+        }
+    };
+    let recorder = recorder.clone();
+    let ledger = org.actors.clone();
+    let people = org.people.clone();
+    tokio::spawn(run_pump(
+        "timer-activity",
+        subscribe,
+        move |ev: TimerEvent| {
+            let s = match ev {
+                TimerEvent::Upserted(s) => s,
+                TimerEvent::Deleted(id) => {
+                    running.lock().expect("timer feed lock").remove(&id);
+                    return;
+                }
+            };
+            let was = {
+                let mut r = running.lock().expect("timer feed lock");
+                let was = r.contains(&s.id);
+                if s.end_time.is_none() {
+                    r.insert(s.id);
+                } else {
+                    r.remove(&s.id);
+                }
+                was
+            };
+            let actor = crate::activity::timer_actor(&ledger, &people, &s);
+            if let Some(n) = crate::activity::timer_change(was, &s, &actor) {
+                recorder.record(n);
+            }
+        },
+    ));
+}
+
+/// Project created / renamed / status changed, off the project hub.
+fn spawn_project_feed(
+    org: &OrgAppState,
+    local: &Arc<architect::LocalServer>,
+    recorder: &crate::activity::Recorder,
+) {
+    use crate::activity::{Actor, ProjectSnap, project_change};
+    use project::ProjectEvent;
+
+    let cache: Arc<Mutex<HashMap<Uuid, ProjectSnap>>> = Arc::default();
+    let snap = |p: &project::ProjectInfo| ProjectSnap {
+        title: p.title.clone(),
+        status: p.status.clone(),
+    };
+    let subscribe = {
+        let local = Arc::clone(local);
+        let projects = org.projects.clone();
+        let cache = Arc::clone(&cache);
+        move || {
+            let local = Arc::clone(&local);
+            let projects = projects.clone();
+            let cache = Arc::clone(&cache);
+            async move {
+                let client: project::ProjectServiceStreamClient = local.establish().await.ok()?;
+                let (tx, rx) = vox::channel::<ProjectEvent>();
+                let call = tokio::spawn(async move { client.events(tx).await.is_ok() });
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let seeded =
+                    tokio::task::spawn_blocking(move || project::ProjectService::list(&projects))
+                        .await;
+                if let Ok(Ok(rows)) = seeded {
+                    *cache.lock().expect("project feed lock") =
+                        rows.iter().map(|p| (p.id, snap(p))).collect();
+                }
+                let call: SubCall = Box::pin(async move { call.await.unwrap_or(false) });
+                Some((call, rx))
+            }
+        }
+    };
+    let recorder = recorder.clone();
+    let ledger = org.actors.clone();
+    let people = org.people.clone();
+    tokio::spawn(run_pump(
+        "project-activity",
+        subscribe,
+        move |ev: ProjectEvent| {
+            let p = match ev {
+                ProjectEvent::Upserted(p) => p,
+                ProjectEvent::Deleted(id) => {
+                    cache.lock().expect("project feed lock").remove(&id);
+                    return;
+                }
+            };
+            let before = cache
+                .lock()
+                .expect("project feed lock")
+                .insert(p.id, snap(&p));
+            let actor = ledger
+                .who(&format!("project:{}", p.id))
+                .map_or_else(Actor::someone, |u| Actor::user(&u, &people));
+            recorder.record_all(project_change(before.as_ref(), &p, &actor));
+        },
+    ));
 }
 
 // ── delivery ────────────────────────────────────────────────────────

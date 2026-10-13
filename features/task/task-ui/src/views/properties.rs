@@ -162,6 +162,31 @@ pub fn PersonDot(name: String, #[props(default = 18)] size: u32) -> Element {
 
 // ── the chip ────────────────────────────────────────────────────────
 
+/// A property chip holding a value — the look every property shares, a
+/// task's or a note's (`crates/ui`'s note properties wear it too).
+// t[impl doc.properties.shared]
+pub const CHIP_CLASS: &str = "inline-flex h-8 max-w-[12rem] items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-foreground transition-colors hover:bg-accent md:h-7";
+
+/// A chip for an unset property: the same shape, read as an invitation.
+pub const CHIP_QUIET_CLASS: &str = "inline-flex h-8 max-w-[12rem] items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:h-7";
+
+/// One row of the desk properties column: the name muted on the left,
+/// the value (a chip) on the right. Tasks and notes both lay their
+/// properties out with it.
+#[component]
+pub fn PropertyRow(label: String, children: Element) -> Element {
+    rsx! {
+        div { class: "flex min-h-8 items-center gap-3",
+            span {
+                class: "w-20 shrink-0 truncate text-[13px] font-medium text-muted-foreground",
+                title: "{label}",
+                "{label}"
+            }
+            div { class: "min-w-0 flex-1", {children} }
+        }
+    }
+}
+
 /// The chip shape shared by every property: icon, label, a hover ring.
 /// `quiet` = the property is unset and the chip reads as an invitation.
 #[component]
@@ -175,11 +200,7 @@ fn Chip(
     rsx! {
         button {
             r#type: "button",
-            class: if quiet {
-                "inline-flex h-8 max-w-[12rem] items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:h-7"
-            } else {
-                "inline-flex h-8 max-w-[12rem] items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-foreground transition-colors hover:bg-accent md:h-7"
-            },
+            class: if quiet { CHIP_QUIET_CLASS } else { CHIP_CLASS },
             title: "{title}",
             onclick: move |_| on_click.call(()),
             {icon}

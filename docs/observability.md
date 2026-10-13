@@ -96,6 +96,7 @@ families here when you introduce them.
 | `telemetry.outcome` | `ok` \| `refused` \| `unconfigured` \| `bad_request` \| `upstream_error` | `mcp::telemetry_call` |
 | `watch.suggested` | the suggestion kind served or acted on: `planned` \| `mode` \| `continue` \| `overdue` \| `process` \| `today` \| `none` | `watch_bridge` |
 | `watch.act.outcome` | `acted` \| `stale` (key no longer applies, 409) \| `refused` (Process, 422) | `watch_bridge` |
+| `activity.kind` / `activity.error` | the feed entry a request recorded (`commented`), or why it could not be written — the comment's own write still succeeds | `activity::RecordingThreads` |
 | `debug.profile_seconds` / `debug.format` | the sampling window (1–60) and `flamegraph` \| `pprof` | `debug_profile` |
 | `wiki.subscribe.source` / `wiki.subscribe.outcome` | subscription materialisation | `wiki-live` |
 | `wiki.slug` | the wiki being served | `wiki-live` |

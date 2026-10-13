@@ -20,6 +20,9 @@ use crate::orgs::{OrgMeta, OrgSelection};
 use crate::routes::Route;
 use crate::stores;
 
+/// How long after the last keystroke a description edit commits.
+const BODY_DEBOUNCE_MS: u64 = 1500;
+
 #[component]
 pub fn TaskDetailPage(id: Uuid) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
@@ -33,6 +36,22 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
     let task_store = stores::use_task_store();
     let project_store = stores::use_project_store();
     let muts = stores::use_task_mutations();
+
+    // The description is the shared document editor; its edits commit
+    // through the task mutation path 1.5s after typing stops, on blur, and
+    // when the page goes — against the store's CURRENT row, so a status or
+    // title change made meanwhile is never written back over.
+    let body_commit =
+        crate::doc_editor::use_debounced_commit(BODY_DEBOUNCE_MS, move |key, text| {
+            let Ok(id) = key.parse::<Uuid>() else { return };
+            let Some(row) = muts.row(id) else { return };
+            if row.task.details == text {
+                return;
+            }
+            let mut next = row.task.clone();
+            next.details = text;
+            muts.apply(&row.slug, TaskMutation::Update { task: next });
+        });
 
     let target_org =
         use_memo(move || crate::orgs::create_target(&selection.read(), &org_list.read()));
@@ -124,6 +143,26 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
             muts.apply(&slug, TaskMutation::Create { task: sub });
         }
     };
+    // Keyed by the task, so stepping to a neighbour (↑ / ↓) starts a fresh
+    // buffer — and the debouncer commits the old task's words under its
+    // own id before it holds the new one's.
+    let body = {
+        let key = id.to_string();
+        let push_key = key.clone();
+        let on_change = body_commit.clone();
+        let on_blur = body_commit.clone();
+        rsx! {
+            div {
+                key: "{key}",
+                onfocusout: move |_| on_blur.flush(),
+                crate::doc_editor::DocBody {
+                    text: task.details.clone(),
+                    placeholder: "Add description…",
+                    on_change: move |text: String| on_change.push(&push_key, text),
+                }
+            }
+        }
+    };
     let created = task
         .date_created
         .map(|d| d.with_timezone(&chrono::Local).format("%b %-d").to_string());
@@ -179,13 +218,13 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
                 projects,
                 known_labels,
                 subtasks,
+                body,
                 activity: rsx! {
-                    ol { class: "flex flex-col gap-2 border-l border-border/60 pl-4 text-[13px] text-muted-foreground",
-                        if let Some(d) = created {
-                            li { "Created · {d}" }
-                        }
-                        li { class: "text-muted-foreground/70", "Comments and changes will show here." }
+                    if let Some(d) = created {
+                        p { class: "pb-1 text-[13px] text-muted-foreground/70", "Created · {d}" }
                     }
+                    // The task's history and comment thread (`crate::activity`).
+                    crate::activity::EntityActivity { slug: slug.clone(), entity_type: "task", entity_id: id }
                 },
                 on_event: apply,
                 on_open: move |sid: Uuid| { nav.push(Route::TaskDetailRoute { id: sid }); },

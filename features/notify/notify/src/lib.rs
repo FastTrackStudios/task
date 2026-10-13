@@ -7,11 +7,13 @@
 //! `apps/task/server/src/notifier.rs` — this crate only stores and
 //! delivers what the notifier hands it.
 
+pub mod activity;
 pub mod channel;
 pub mod entity;
 pub mod migrations;
 pub mod store;
 
+pub use activity::{ActivityStore, NewActivity};
 pub use channel::{DeliveryChannel, InApp, Webhook};
 pub use migrations::Migrator;
 pub use store::{NewNotification, Store};

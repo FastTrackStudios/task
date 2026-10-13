@@ -176,7 +176,7 @@ fn TitleField(
         rsx! {
             input {
                 id: "note-title-input",
-                class: "w-full bg-transparent text-3xl font-bold tracking-tight text-foreground outline-none",
+                class: "w-full bg-transparent text-[24px] font-semibold leading-8 tracking-[-0.16px] text-foreground outline-none",
                 value: "{draft}",
                 autofocus: true,
                 onmounted: move |el| async move {
@@ -216,7 +216,7 @@ fn TitleField(
         }
     } else if !renamable {
         rsx! {
-            h1 { class: "w-full truncate text-3xl font-bold tracking-tight text-foreground",
+            h1 { class: "w-full truncate text-[24px] font-semibold leading-8 tracking-[-0.16px] text-foreground",
                 "{title}"
             }
         }
@@ -224,7 +224,7 @@ fn TitleField(
         let display = title.clone();
         rsx! {
             button {
-                class: "-mx-1 w-full truncate rounded px-1 text-left text-3xl font-bold tracking-tight text-foreground hover:bg-accent/40",
+                class: "-mx-1 w-full truncate rounded px-1 text-left text-[24px] font-semibold leading-8 tracking-[-0.16px] text-foreground hover:bg-accent/40",
                 title: "Click to rename",
                 onclick: move |_| {
                     draft.set(display.clone());

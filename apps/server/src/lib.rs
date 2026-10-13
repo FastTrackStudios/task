@@ -17,6 +17,7 @@
 //! `project-crdt` crates. CRDT now lives only at the per-file
 //! editor layer (future); vault is the sole storage path.
 
+pub mod activity;
 pub mod admin_cli;
 #[cfg(feature = "plugin-agent")]
 pub mod agent_router;
@@ -340,6 +341,17 @@ pub struct OrgAppState {
     /// in-process notifier (`crate::notifier`), which materializes
     /// rows from the org's event hubs.
     pub notify: notify::Store,
+    /// The activity feed — history beside the queue, in the same
+    /// `notify.sqlite`. Mounted for `ActivityFeed` (+ its stream);
+    /// written by the notifier and the comment hook
+    /// (`crate::activity`), never by clients.
+    pub activity: notify::ActivityStore,
+    /// Who last wrote each entity over the router — how the notifier
+    /// names the author of a change the streams report without one
+    /// (`crate::activity::ActorLedger`).
+    pub actors: crate::activity::ActorLedger,
+    /// User id → display name for the feed's bylines.
+    pub people: crate::activity::People,
     /// Recall backend — spaced-repetition learning cards under
     /// `vault/Records/recall/`. Mounted for `Recall` so the deck UI +
     /// flashcard review round-trip FSRS-scheduled cards.
@@ -1278,6 +1290,7 @@ pub(crate) async fn build_org_state(
             Box::pin(async move { notify::Migrator::up(&db, None).await.map(|()| db) })
         })
         .await?;
+        let activity = notify::ActivityStore::new(notify_conn.clone());
         let notify_store = notify::Store::new(notify_conn);
 
         // Per-user preferences. SQLite at
@@ -2138,6 +2151,9 @@ pub(crate) async fn build_org_state(
             scheduling,
             inbox,
             notify: notify_store,
+            activity,
+            actors: crate::activity::ActorLedger::default(),
+            people: crate::activity::People::default(),
             #[cfg(feature = "plugin-recall")]
             recall,
             #[cfg(feature = "plugin-contacts")]
@@ -3806,7 +3822,12 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // Timer — billable time tracking.
         .with(
             timer_proto::service::timer_service_rpc_service_descriptor(),
-            timer_proto::service::serve(org.timer.clone()),
+            // Notes who starts and stops each user's timer, so the
+            // activity feed can name them (`crate::activity`).
+            timer_proto::service::serve(crate::activity::AttributedTimer {
+                inner: org.timer.clone(),
+                ledger: org.actors.clone(),
+            }),
         )
         // Live session changes — `TimerService`'s `#[subscribe]`
         // stream sibling, served from the hub on the timer `Store`
@@ -3814,7 +3835,15 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         .merge(timer_proto::timer_service_stream_layer(org.timer.clone()))
         .with(
             threads::service::threads_service_rpc_service_descriptor(),
-            threads::service::serve(org.threads.clone()),
+            // Every posted message also lands in the activity feed as
+            // a `commented` entry — threads have no change stream.
+            threads::service::serve(crate::activity::RecordingThreads {
+                inner: org.threads.clone(),
+                activity: org.activity.clone(),
+                tasks: org.tasks.clone(),
+                projects: org.projects.clone(),
+                people: org.people.clone(),
+            }),
         )
         // Per-user preferences — get-with-defaults / upsert set.
         .with(
@@ -3873,7 +3902,10 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
     router = router
         .with(
             inbox_proto::service::inbox::inbox_rpc_service_descriptor(),
-            inbox_proto::service::inbox::serve(org.inbox.clone()),
+            inbox_proto::service::inbox::serve(crate::activity::AttributedInbox {
+                inner: org.inbox.clone(),
+                ledger: org.actors.clone(),
+            }),
         )
         // Live inbox changes — `Inbox`'s `#[subscribe]` stream
         // sibling, served from the hub on the `VaultInbox` above.
@@ -3890,7 +3922,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
         // Live notification changes — `Notify`'s `#[subscribe]`
         // stream sibling, served from the hub on the notify `Store`
         // above. The bell folds these (fetch-once-then-fold).
-        .merge(notify_proto::notify_stream_layer(org.notify.clone()));
+        .merge(notify_proto::notify_stream_layer(org.notify.clone()))
+        // The activity feed — history, read-only to clients; written
+        // by the notifier and the comment hook (`crate::activity`).
+        .with(
+            notify_proto::activity_feed_rpc_service_descriptor(),
+            notify_proto::activity_serve(org.activity.clone()),
+        )
+        .merge(notify_proto::activity_stream_layer(org.activity.clone()));
 
     // ── Recall plugin ────────────────────────────────────────────
     #[cfg(feature = "plugin-recall")]
@@ -4134,7 +4173,14 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             // The raw backend serves directly. There used to be a
             // forge-sync decorator here mirroring task writes into
             // Forgejo issues; it went with `forge_sync` (2026-08-06).
-            task::serve_task_service(org.tasks.clone()),
+            //
+            // `AttributedTasks` notes the gate's caller per task before
+            // each write, so the activity feed can name who made the
+            // change the stream reports (`crate::activity`).
+            task::serve_task_service(crate::activity::AttributedTasks {
+                inner: org.tasks.clone(),
+                ledger: org.actors.clone(),
+            }),
         )
         // Live task changes — the `#[subscribe]` stream sibling of
         // `TaskService`. The hub lives on the raw `TaskBackend`, so

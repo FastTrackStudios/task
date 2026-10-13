@@ -20,9 +20,9 @@ mod picker;
 pub use picker::{PickOption, PropertyPicker, filtered as picker_filtered, match_rank};
 mod properties;
 pub use properties::{
-    AssigneeChip, Hotkey, LabelsChip, PRIORITIES, PersonDot, PriorityChip, PriorityIcon,
-    ProjectChip, STATUSES, StatusChip, StatusIcon, canonical_priority, canonical_status,
-    label_color,
+    AssigneeChip, CHIP_CLASS, CHIP_QUIET_CLASS, Hotkey, LabelsChip, PRIORITIES, PersonDot,
+    PriorityChip, PriorityIcon, ProjectChip, PropertyRow, STATUSES, StatusChip, StatusIcon,
+    canonical_priority, canonical_status, label_color,
 };
 mod quick_add;
 mod row;

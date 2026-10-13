@@ -19,7 +19,8 @@ use dioxus::prelude::*;
 use uuid::Uuid;
 
 use super::properties::{
-    AssigneeChip, Hotkey, LabelsChip, PersonDot, PriorityChip, ProjectChip, StatusChip, StatusIcon,
+    AssigneeChip, Hotkey, LabelsChip, PersonDot, PriorityChip, ProjectChip, PropertyRow,
+    StatusChip, StatusIcon,
 };
 use crate::{TaskInfo, TaskMutation};
 
@@ -107,6 +108,13 @@ pub struct IssueViewProps {
     /// The activity feed, rendered by the page (it owns the fetch).
     #[props(default)]
     pub activity: Option<Element>,
+    /// The description editor, rendered by the page — the shared
+    /// document editor (`crates/ui`'s `DocBody`), which this crate does
+    /// not depend on. The page commits its edits itself; when set it
+    /// replaces the plain description field, and the title commit leaves
+    /// `details` to it.
+    #[props(default)]
+    pub body: Option<Element>,
     pub on_event: EventHandler<TaskMutation>,
     /// A sub-issue was clicked.
     pub on_open: EventHandler<Uuid>,
@@ -135,11 +143,19 @@ pub fn IssueView(props: IssueViewProps) -> Element {
     }
 
     let on_event = props.on_event;
+    // With a page-supplied body the description is the page's to commit;
+    // the `details` signal here never sees its edits, so the title commit
+    // must carry the task's current details rather than a stale copy.
+    let has_body = props.body.is_some();
     let commit_text = {
         let task = task.clone();
         move || {
             let t = title.peek().trim().to_owned();
-            let d = details.peek().clone();
+            let d = if has_body {
+                task.details.clone()
+            } else {
+                details.peek().clone()
+            };
             if (!t.is_empty() && t != task.title) || d != task.details {
                 let mut next = task.clone();
                 if !t.is_empty() {
@@ -182,10 +198,7 @@ pub fn IssueView(props: IssueViewProps) -> Element {
             let row = |label: &'static str, chip: Element| {
                 if column {
                     rsx! {
-                        div { class: "flex min-h-8 items-center gap-3",
-                            span { class: "w-20 shrink-0 text-[13px] font-medium text-muted-foreground", "{label}" }
-                            div { class: "min-w-0 flex-1", {chip} }
-                        }
+                        PropertyRow { label, {chip} }
                     }
                 } else {
                     chip
@@ -298,31 +311,42 @@ pub fn IssueView(props: IssueViewProps) -> Element {
                 }
                 // Phone: the properties as a row of chips under the title.
                 div { class: "mt-3 flex flex-wrap items-center gap-1.5 md:hidden", {chips(false)} }
-                textarea {
-                    aria_label: "Description",
-                    class: "mt-4 min-h-24 w-full resize-none bg-transparent text-[15px] font-[450] leading-6 tracking-[-0.1px] text-foreground/90 outline-none [field-sizing:content] placeholder:text-muted-foreground",
-                    placeholder: "Add description…",
-                    value: "{details}",
-                    oninput: move |e| details.set(e.value()),
-                    onfocusin: move |_| editing.set(true),
-                    onfocusout: move |_| {
-                        editing.set(false);
-                        commit_details();
-                    },
+                if let Some(body) = props.body.clone() {
+                    // Keys typed into the editor are text, not property
+                    // hotkeys: the same focus guard as the fields.
+                    div {
+                        class: "mt-4 min-w-0",
+                        onfocusin: move |_| editing.set(true),
+                        onfocusout: move |_| editing.set(false),
+                        {body}
+                    }
+                } else {
+                    textarea {
+                        aria_label: "Description",
+                        class: "mt-4 min-h-24 w-full resize-none bg-transparent text-[15px] font-[450] leading-6 tracking-[-0.1px] text-foreground/90 outline-none [field-sizing:content] placeholder:text-muted-foreground",
+                        placeholder: "Add description…",
+                        value: "{details}",
+                        oninput: move |e| details.set(e.value()),
+                        onfocusin: move |_| editing.set(true),
+                        onfocusout: move |_| {
+                            editing.set(false);
+                            commit_details();
+                        },
+                    }
                 }
 
                 // ── sub-issues ──
                 section { class: "mt-8 flex flex-col",
                     div { class: "flex items-center gap-2 border-b border-border/60 pb-2",
-                        span { class: "text-[13px] font-medium text-muted-foreground", "Sub-issues" }
+                        span { class: "text-[13px] font-medium text-muted-foreground", "Subtasks" }
                         if !props.subtasks.is_empty() {
                             span { class: "font-mono text-[11px] tabular-nums text-muted-foreground", "{done}/{props.subtasks.len()}" }
                         }
                         button {
                             r#type: "button",
                             class: "ml-auto flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:size-7",
-                            title: "Add sub-issue",
-                            aria_label: "Add sub-issue",
+                            title: "Add subtask",
+                            aria_label: "Add subtask",
                             onclick: move |_| adding.set(true),
                             Plus { size: 15 }
                         }
@@ -386,7 +410,7 @@ pub fn IssueView(props: IssueViewProps) -> Element {
                             r#type: "button",
                             class: "mt-1 self-start rounded-md px-1.5 py-2 text-[13px] text-muted-foreground hover:text-foreground",
                             onclick: move |_| adding.set(true),
-                            "Break it into sub-issues…"
+                            "Break it into subtasks…"
                         }
                     }
                 }

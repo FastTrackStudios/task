@@ -34,10 +34,11 @@ pub use views::{
 };
 // The property system: one typeable picker, five chips, their icons.
 pub use views::{
-    AssigneeChip, Hotkey, IssueView, IssueViewProps, LabelsChip, PRIORITIES, PersonDot, PickOption,
-    PriorityChip, PriorityIcon, ProjectChip, PropertyPicker, STATUSES, StatusChip, StatusIcon,
-    assignee_of, canonical_priority, canonical_status, label_color, labels_of, match_rank,
-    picker_filtered, toggle_label, with_assignee,
+    AssigneeChip, CHIP_CLASS, CHIP_QUIET_CLASS, Hotkey, IssueView, IssueViewProps, LabelsChip,
+    PRIORITIES, PersonDot, PickOption, PriorityChip, PriorityIcon, ProjectChip, PropertyPicker,
+    PropertyRow, STATUSES, StatusChip, StatusIcon, assignee_of, canonical_priority,
+    canonical_status, label_color, labels_of, match_rank, picker_filtered, toggle_label,
+    with_assignee,
 };
 // Making an issue: Linear's composer with Task's natural-language title.
 pub use views::{CaptureKind, Composer, ComposerProps, compose, kind_from_text, project_title};

@@ -119,6 +119,18 @@ task_stores::stores! {
             first notify_proto::NotifyStreamClient => fold_notify_event,
     }
 
+    ActivityStore: notify_proto::Activity {
+        provide: provide_activity_store,
+        handle: use_activity_store,
+        list: use_activity_list -> Uuid = crate::feeds::fetch_activity,
+        stream:
+            /// Live history — every entry the server records folds in,
+            /// so `/activity`, a task's timeline and a project's update
+            /// as things happen. Filtered pages and scroll-back put
+            /// their rows into this same store (`crate::activity`).
+            first notify_proto::ActivityFeedStreamClient => fold_activity_event,
+    }
+
     ContactStore: contacts_proto::Contact {
         provide: provide_contact_store,
         handle: use_contact_store,
@@ -217,6 +229,13 @@ fn fold_notify_event(store: &NotificationStore, _slug: &str, ev: notify_proto::N
     match ev {
         notify_proto::NotifyEvent::Upserted(n) => store.put(n),
         notify_proto::NotifyEvent::Deleted(id) => store.remove_real(&id),
+    }
+}
+
+fn fold_activity_event(store: &ActivityStore, _slug: &str, ev: notify_proto::ActivityEvent) {
+    match ev {
+        notify_proto::ActivityEvent::Recorded(a) => store.put(a),
+        notify_proto::ActivityEvent::Removed(id) => store.remove_real(&id),
     }
 }
 

@@ -411,6 +411,18 @@ pub fn ProjectDetailView(id: String) -> Element {
                                         }
                                     }
                                 }
+                                // The project's history — its own lines and
+                                // its tasks' — with a project comment thread
+                                // (`crate::activity`).
+                                div { class: "flex flex-col gap-2",
+                                    Heading { level: HeadingLevel::H2, "Activity" }
+                                    crate::activity::EntityActivity {
+                                        slug: forge_slug.clone(),
+                                        entity_type: "project",
+                                        entity_id: p.id,
+                                        project: true,
+                                    }
+                                }
                             },
                             MainTab::Files => rsx! {
                                 // The project's actual files: its root's

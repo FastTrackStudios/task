@@ -151,6 +151,21 @@ feeds! {
         mark_all_notifications_read() -> u64
             = mark_all_read() as "mark all notifications read";
     }
+
+    notify_proto::ActivityFeedClient {
+        /// One page of the org's activity feed, newest first — the
+        /// `/activity` page's scroll-back, a task's or a project's
+        /// history (`ActivityFilter::entity` / `::project`).
+        fetch_activity_page(filter: notify_proto::ActivityFilter) -> Vec<notify_proto::Activity>
+            = list(filter) as "list activity";
+    }
+}
+
+/// The feed's newest page — the activity store's backing fetch; the
+/// live fold keeps it current, and pages fetched for filters or
+/// scroll-back are put into the same store.
+pub async fn fetch_activity(slug: &str) -> Result<Vec<notify_proto::Activity>, String> {
+    fetch_activity_page(slug, notify_proto::ActivityFilter::default()).await
 }
 
 // ── Contacts (vault-backed people directory) ─────────────────────────

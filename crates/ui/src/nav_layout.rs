@@ -77,11 +77,23 @@ impl NavLayout {
             .filter(|l| !self.hidden.contains(l))
             .filter_map(|l| tabs.iter().find(|t| t.label == l.as_str()).cloned())
             .collect();
-        for t in &tabs {
+        // A section the layout doesn't know yet (new in this build, or a
+        // plugin just switched on) goes in after the nearest section that
+        // comes before it in the shell's own order — where the app would
+        // put it — not after everything.
+        for (i, t) in tabs.iter().enumerate() {
             let l = label_of(t);
-            if !self.order.contains(&l) && !self.hidden.contains(&l) {
-                shown.push(t.clone());
+            if self.order.contains(&l) || self.hidden.contains(&l) {
+                continue;
             }
+            let after = tabs[..i]
+                .iter()
+                .rev()
+                .find_map(|prev| shown.iter().position(|s| s.label == prev.label));
+            // Never into the person's tab bar: those three are chosen.
+            let floor = PRIMARY.min(shown.len());
+            let at = after.map_or(0, |p| p + 1).max(floor);
+            shown.insert(at, t.clone());
         }
         let hidden = self
             .hidden
@@ -353,6 +365,17 @@ mod tests {
             labels(&shown).contains(&"Projects"),
             "a section the layout doesn't name still shows"
         );
+        // …where the shell puts it: after its nearest known predecessor.
+        let at = |l: &str| labels(&shown).iter().position(|x| *x == l).unwrap();
+        let shell = labels(&tabs);
+        let i = shell.iter().position(|x| *x == "Projects").unwrap();
+        let before = shell[..i]
+            .iter()
+            .rev()
+            .find(|l| labels(&shown).contains(l))
+            .copied()
+            .unwrap();
+        assert_eq!(at("Projects"), at(before) + 1, "not appended at the end");
         assert_eq!(
             shown.len() + hidden.len(),
             tabs.len(),

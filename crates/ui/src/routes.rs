@@ -62,6 +62,11 @@ pub enum Route {
         #[route("/inbox")]
         InboxRoute {},
 
+        // Everything that happened, newest first — the history the
+        // bell's queue links into (`crate::activity`).
+        #[route("/activity")]
+        ActivityRoute {},
+
         // What you starred — the third tab on a phone.
         #[route("/favorites")]
         FavoritesRoute {},
@@ -308,6 +313,11 @@ fn DashboardRoute() -> Element {
 #[component]
 fn InboxRoute() -> Element {
     rsx! { pages::inbox::InboxView {} }
+}
+
+#[component]
+fn ActivityRoute() -> Element {
+    rsx! { crate::activity::ActivityPage {} }
 }
 
 #[component]

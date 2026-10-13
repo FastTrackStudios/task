@@ -510,6 +510,281 @@ pub const TASK_CONTEXTS: &[(&str, &[&str])] = &[
 /// well as contexts).
 pub const TASK_TAGS: &[(&str, &[&str])] = &[("Take the studio recycling out", &["chore"])];
 
+/// One line of history the seed plants in an org's activity feed
+/// (`docs/spec/activity.md`), so `/activity` and a task's page are not
+/// empty on a fresh plant. Dated relative to the plant, like due dates.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredActivity {
+    pub org: &'static str,
+    /// Fixed, so a replant finds the entry it wrote and keeps it.
+    pub id: &'static str,
+    /// A declared task's title.
+    pub task: &'static str,
+    pub kind: notify_proto::ActivityKind,
+    /// A cast member's email — the byline.
+    pub actor: &'static str,
+    pub field: &'static str,
+    pub from: &'static str,
+    pub to: &'static str,
+    pub hours_ago: i64,
+}
+
+/// The board getting to where the declarations leave it: Alice took the
+/// vocal comp, started it, and wrapped the drums.
+pub const SEED_ACTIVITY: &[DeclaredActivity] = &[
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e01",
+        task: "Comp lead vocals — Track One",
+        kind: notify_proto::ActivityKind::Assigned,
+        actor: "alice@acme.test",
+        field: "assignee",
+        from: "",
+        to: "Alice",
+        hours_ago: 50,
+    },
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e02",
+        task: "Comp lead vocals — Track One",
+        kind: notify_proto::ActivityKind::StatusChanged,
+        actor: "alice@acme.test",
+        field: "status",
+        from: "open",
+        to: "in-progress",
+        hours_ago: 26,
+    },
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e03",
+        task: "Re-track drums — Track Three",
+        kind: notify_proto::ActivityKind::Completed,
+        actor: "alice@acme.test",
+        field: "status",
+        from: "in-progress",
+        to: "done",
+        hours_ago: 30,
+    },
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e04",
+        task: "Master review with the label",
+        kind: notify_proto::ActivityKind::PriorityChanged,
+        actor: "alice@acme.test",
+        field: "priority",
+        from: "normal",
+        to: "high",
+        hours_ago: 4,
+    },
+];
+
+/// A seeded comment on a declared task: the thread a task's page opens
+/// with, and a `commented` line in the feed.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredComment {
+    pub org: &'static str,
+    /// The feed entry's fixed id (the message's own id is the threads
+    /// store's to mint; a replant matches it by author and body).
+    pub id: &'static str,
+    pub task: &'static str,
+    /// A cast member's email.
+    pub author: &'static str,
+    pub body: &'static str,
+    pub hours_ago: i64,
+}
+
+pub const SEED_COMMENTS: &[DeclaredComment] = &[
+    DeclaredComment {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e11",
+        task: "Comp lead vocals — Track One",
+        author: "sam@acme.test",
+        body: "Take three has the best chorus — the verse on take one is tighter though. Worth a look before you commit the comp.",
+        hours_ago: 20,
+    },
+    DeclaredComment {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e12",
+        task: "Comp lead vocals — Track One",
+        author: "alice@acme.test",
+        body: "Agreed. Comping verse 1 from take one, everything else from three.",
+        hours_ago: 19,
+    },
+];
+
+/// Plant `slug`'s declared history: [`SEED_ACTIVITY`] into the org's
+/// activity feed (`notify.sqlite`), and [`SEED_COMMENTS`] into each
+/// task's comment thread (`threads.sqlite`) with their `commented`
+/// lines. Run after the cast and the tasks exist — bylines are cast
+/// accounts, entries name declared tasks.
+///
+/// Idempotent: feed entries carry fixed ids, and a comment already in
+/// its thread (same body) is not posted again.
+///
+/// # Errors
+///
+/// Opening or migrating either database.
+// t[impl activity.seed]
+pub async fn plant_activity(
+    org_root: &org_proto::OrgRoot,
+    slug: &str,
+    auth: &crate::AuthState,
+) -> eyre::Result<usize> {
+    use notify_proto::{Activity, ActivityKind};
+    use sea_orm_migration::MigratorTrait as _;
+    use task::TaskService as _;
+    use threads::ThreadsService as _;
+
+    let decls: Vec<&DeclaredActivity> = SEED_ACTIVITY.iter().filter(|a| a.org == slug).collect();
+    let comments: Vec<&DeclaredComment> = SEED_COMMENTS.iter().filter(|c| c.org == slug).collect();
+    if decls.is_empty() && comments.is_empty() {
+        return Ok(0);
+    }
+    let open = |path: std::path::PathBuf| async move {
+        sea_orm::Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+            .await
+            .map_err(|e| eyre::eyre!("open {}: {e}", path.display()))
+    };
+    let notify_conn = open(org_root.path().join("notify.sqlite")).await?;
+    notify::Migrator::up(&notify_conn, None)
+        .await
+        .map_err(|e| eyre::eyre!("migrate notify: {e}"))?;
+    let feed = notify::ActivityStore::new(notify_conn);
+    let tasks = task::TaskBackend::new(org_root.vault_dir())
+        .list()
+        .unwrap_or_default();
+    let task_of = |title: &str| tasks.iter().find(|t| t.title == title).cloned();
+    let now = chrono::Utc::now();
+    let mut written = 0;
+
+    let entry = |id: &str,
+                 kind: ActivityKind,
+                 t: &task::TaskInfo,
+                 (user_id, name): (uuid::Uuid, Option<String>),
+                 hours: i64| Activity {
+        id: id.parse().unwrap_or_else(|_| uuid::Uuid::new_v4()),
+        at: now - chrono::Duration::hours(hours),
+        actor_id: user_id.to_string(),
+        actor_name: name.unwrap_or_else(|| "Someone".to_owned()),
+        kind,
+        entity_type: "task".to_owned(),
+        entity_id: t.id.to_string(),
+        entity_title: t.title.clone(),
+        href: format!("/tasks/{}", t.id),
+        project_id: t.project_id,
+        field: String::new(),
+        from: String::new(),
+        to: String::new(),
+        body: String::new(),
+    };
+
+    for d in decls {
+        let (Some(t), Ok(Some(user))) =
+            (task_of(d.task), auth.auth.find_user_by_email(d.actor).await)
+        else {
+            continue;
+        };
+        let mut a = entry(d.id, d.kind, &t, (user.id, user.name), d.hours_ago);
+        d.field.clone_into(&mut a.field);
+        d.from.clone_into(&mut a.from);
+        d.to.clone_into(&mut a.to);
+        if feed
+            .insert_if_absent(a)
+            .await
+            .map_err(|e| eyre::eyre!("seed activity: {e}"))?
+        {
+            written += 1;
+        }
+    }
+
+    if !comments.is_empty() {
+        let threads_conn = open(org_root.threads_db()).await?;
+        threads::Migrator::up(&threads_conn, None)
+            .await
+            .map_err(|e| eyre::eyre!("migrate threads: {e}"))?;
+        let store = threads::Store::new(threads_conn);
+        for c in comments {
+            let (Some(t), Ok(Some(user))) = (
+                task_of(c.task),
+                auth.auth.find_user_by_email(c.author).await,
+            ) else {
+                continue;
+            };
+            let existing = store
+                .list_threads("task".to_owned(), t.id)
+                .await
+                .map_err(|e| eyre::eyre!("list threads: {e}"))?;
+            let thread = match existing.into_iter().last() {
+                Some(th) => th,
+                None => store
+                    .create_thread(threads::CreateThreadRequest {
+                        org_id: uuid::Uuid::nil(),
+                        entity_type: "task".to_owned(),
+                        entity_id: t.id,
+                        title: "Comments".to_owned(),
+                        kind: String::new(),
+                        created_by: user.id,
+                        source_kind: "native".to_owned(),
+                        source_ref: None,
+                        source_url: None,
+                    })
+                    .await
+                    .map_err(|e| eyre::eyre!("create thread: {e}"))?,
+            };
+            let at = now - chrono::Duration::hours(c.hours_ago);
+            let posted = store
+                .list_messages(thread.id)
+                .await
+                .map_err(|e| eyre::eyre!("list messages: {e}"))?;
+            if !posted.iter().any(|m| m.body == c.body) {
+                store
+                    .post_message(threads::PostMessageRequest {
+                        thread_id: thread.id,
+                        org_id: uuid::Uuid::nil(),
+                        author_id: Some(user.id),
+                        author_label: user.name.clone().unwrap_or_default(),
+                        body: c.body.to_owned(),
+                        reply_to: None,
+                        source_kind: "native".to_owned(),
+                        external_id: None,
+                        original_text: None,
+                        source_url: None,
+                        posted_at: Some(at),
+                    })
+                    .await
+                    .map_err(|e| eyre::eyre!("post comment: {e}"))?;
+            }
+            let mut a = entry(
+                c.id,
+                ActivityKind::Commented,
+                &t,
+                (user.id, user.name.clone()),
+                c.hours_ago,
+            );
+            c.body.clone_into(&mut a.body);
+            if feed
+                .insert_if_absent(a)
+                .await
+                .map_err(|e| eyre::eyre!("seed comment activity: {e}"))?
+            {
+                written += 1;
+            }
+        }
+    }
+    Ok(written)
+}
+
+/// A seeded task's description, as `(task title, markdown body)` — a body
+/// with the structures the document editor writes (headings, a
+/// checklist, a quote, a code block, a folded section), so opening the
+/// issue shows the editor on real content and `/` has something to sit
+/// beside. Planted only into an empty description, so a demo edit stays.
+// t[impl doc.editor.one]
+pub const TASK_DETAILS: &[(&str, &str)] = &[(
+    "Master review with the label",
+    "The label hears the masters on Thursday. Go in with every track signed off and the notes from the last pass answered.\n\n## Before the call\n\n- [x] Bounce the masters at -14 LUFS integrated\n- [ ] Print the loudness report for each track\n- [ ] Send the private link the evening before\n\n## What they asked for last time\n\n> The low end on Track Two still feels a little shy next to the singles.\n\n1. Revisit the Track Two bass with the mix engineer\n2. A/B against the reference playlist\n3. Note the change in the delivery sheet\n\n### Delivery\n\n```\nAlbum master/\n  01 Track One.wav\n  02 Track Two.wav\n  03 Track Three.wav\n```\n\n> [!note]- What happens after sign-off\n> Masters go to the distributor and the vinyl cut is booked.\n",
+)];
+
 /// One capture sitting in an org's inbox at plant time — the input to
 /// processing, which is the centre of the app
 /// (`docs/spec/capture-and-process.md`).
@@ -2273,11 +2548,28 @@ mod declared_tests {
         );
     }
 
+    /// Every seeded description belongs to a declared task.
+    #[test]
+    fn every_task_description_is_for_a_declared_task() {
+        for (title, details) in TASK_DETAILS {
+            let _ = org_of_task(title);
+            assert!(
+                !details.trim().is_empty(),
+                "`{title}`: an empty description"
+            );
+            assert!(
+                !details.starts_with("---"),
+                "`{title}`: a description is body only, never frontmatter"
+            );
+        }
+    }
+
     /// Every owned task is a declared task, owned by a cast member of
     /// the org the task lives in — an owner from another company would
     /// plant an assignee the board can't name.
     #[test]
     fn every_task_owner_is_a_member_of_the_tasks_org() {
+        // (The seeded history is held to the same rule below.)
         for (title, email) in TASK_OWNERS {
             let project = DECLARED
                 .iter()
@@ -2289,6 +2581,44 @@ mod declared_tests {
                 project.org
             );
         }
+    }
+
+    /// The seeded history names declared tasks in its own org, by cast
+    /// members of that org, under distinct fixed ids — a line about a
+    /// task the board doesn't have would link nowhere, and a byline
+    /// from another company would name a stranger.
+    // t[verify activity.seed]
+    #[test]
+    fn the_seeded_history_is_about_the_seed() {
+        let mut ids = std::collections::HashSet::new();
+        let lines = SEED_ACTIVITY
+            .iter()
+            .map(|a| (a.org, a.id, a.task, a.actor))
+            .chain(
+                SEED_COMMENTS
+                    .iter()
+                    .map(|c| (c.org, c.id, c.task, c.author)),
+            );
+        for (org, id, task, who) in lines {
+            assert!(id.parse::<uuid::Uuid>().is_ok(), "`{id}` is not a uuid");
+            assert!(ids.insert(id), "`{id}` is used twice");
+            assert!(
+                declared_of(org).any(|p| p.tasks.iter().any(|(t, _, _)| *t == task)),
+                "`{task}` is not a declared task of {org}"
+            );
+            assert!(
+                cast_of(org).iter().any(|m| m.email == who),
+                "`{who}` is not in {org}"
+            );
+        }
+        // Alice opens the app on something: her org has history and a
+        // comment thread from someone else.
+        assert!(SEED_ACTIVITY.iter().any(|a| a.org == "acme-audio"));
+        assert!(
+            SEED_COMMENTS
+                .iter()
+                .any(|c| c.org == "acme-audio" && c.author != "alice@acme.test")
+        );
     }
 
     /// Every committed mail account is one a maildir backend will open.

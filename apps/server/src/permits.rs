@@ -737,6 +737,11 @@ table!(NOTIFY, "notify", "notifications/**", [
     rd "list", wr "mark_read", wr "mark_all_read", wa "delete",
 ]);
 table!(NOTIFY_STREAM, "notify-stream", "notifications/**", [rd "events"]);
+// The activity feed: read-only to clients — every entry is written by
+// the server (notifier, comment hook, seed).
+// t[impl activity.feed.server-written]
+table!(ACTIVITY, "activity-feed", "notifications/activity/**", [rd "list"]);
+table!(ACTIVITY_STREAM, "activity-feed-stream", "notifications/activity/**", [rd "events"]);
 table!(INBOX, "inbox", "inbox/**", [
     rd "list_inbox", rd "review_queue", rd "get_inbox_item",
     wr "upsert_inbox_item", wa "delete_inbox_item",
@@ -1353,6 +1358,16 @@ pub fn mounts() -> Vec<Mount> {
             "core",
             notify_proto::notify_stream_descriptor(),
             NOTIFY_STREAM,
+        ),
+        m(
+            "core",
+            notify_proto::activity_feed_rpc_service_descriptor(),
+            ACTIVITY,
+        ),
+        m(
+            "core",
+            notify_proto::activity_feed_stream_service_descriptor(),
+            ACTIVITY_STREAM,
         ),
     ]);
     #[cfg(feature = "plugin-recall")]

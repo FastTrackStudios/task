@@ -1197,6 +1197,15 @@ pub fn NotificationBell() -> Element {
                             }
                         }
                     }
+                    // The queue is the news; the history is one tap on
+                    // (`crate::activity`).
+                    Link {
+                        to: crate::routes::Route::ActivityRoute {},
+                        class: "flex items-center justify-center gap-1.5 border-t border-border/60 px-3 py-2 text-[12px] text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                        onclick: move |_| open.set(false),
+                        architect_ui::lucide_dioxus::Activity { size: 13 }
+                        "View all activity"
+                    }
                 }
             }
         }
