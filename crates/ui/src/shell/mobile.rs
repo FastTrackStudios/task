@@ -379,7 +379,7 @@ pub fn BottomTabBar(current: Route) -> Element {
     let every = nav_tabs_for(&use_active_plugins());
     // The person's arrangement (Customize): the menu lists what they
     // show, in their order, and the first three are the tab bar.
-    let layout = use_signal(crate::nav_layout::NavLayout::load);
+    let layout = crate::nav_layout::use_nav_layout();
     let (all, _hidden) = layout.read().arrange(every.clone());
     let primary: Vec<NavTab> = all
         .iter()

@@ -101,6 +101,25 @@ impl NavLayout {
     }
 }
 
+/// The shared layout, so the tab bar, the section menu and Settings all
+/// follow one edit.
+#[derive(Clone, Copy)]
+struct LayoutCtx(Signal<NavLayout>);
+
+/// Provide the layout at the shell root.
+pub fn provide_nav_layout() {
+    let sig = use_signal(NavLayout::load);
+    use_context_provider(|| LayoutCtx(sig));
+}
+
+/// The shared layout (or this device's, outside the shell).
+pub fn use_nav_layout() -> Signal<NavLayout> {
+    match try_use_context::<LayoutCtx>() {
+        Some(c) => c.0,
+        None => use_signal(NavLayout::load),
+    }
+}
+
 /// Move `from` to `to` in a list.
 fn moved<T: Clone>(list: &[T], from: usize, to: usize) -> Vec<T> {
     let mut v = list.to_vec();

@@ -18,6 +18,7 @@ pub fn AppShell() -> Element {
     crate::process::provide_process_now();
     crate::new_issue::provide_new_issue();
     crate::favorites::provide_favorites();
+    crate::nav_layout::provide_nav_layout();
     // The docked player a citation's timestamp plays in.
     crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
