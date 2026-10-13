@@ -288,6 +288,59 @@ pub fn use_task_list() -> AtomResult<Vec<(Id<Uuid>, OrgTask)>, String> {
     })
 }
 
+/// A new task: `draft` (what the title's words say) with everything the
+/// caller set on top. Set means not the default — a quick-add line that
+/// only carries a title keeps the parse; the composer's priority, person,
+/// labels, dates, details and chosen id are kept as given.
+fn with_given(
+    mut draft: task_proto::TaskInfo,
+    given: &task_proto::TaskInfo,
+) -> task_proto::TaskInfo {
+    if !given.id.is_nil() {
+        draft.id = given.id;
+    }
+    if given.status != task_proto::model::Status::Open.as_str() && !given.status.is_empty() {
+        draft.status.clone_from(&given.status);
+    }
+    if given.priority != task_proto::model::Priority::Normal.as_str() && !given.priority.is_empty()
+    {
+        draft.priority.clone_from(&given.priority);
+    }
+    for (have, add) in [
+        (&mut draft.tags, &given.tags),
+        (&mut draft.contexts, &given.contexts),
+        (&mut draft.projects, &given.projects),
+    ] {
+        for v in add.iter() {
+            if !have.iter().any(|h| h.eq_ignore_ascii_case(v)) {
+                have.0.push(v.clone());
+            }
+        }
+    }
+    let keep = |d: &mut Option<String>, g: &Option<String>| {
+        if g.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+            d.clone_from(g);
+        }
+    };
+    keep(&mut draft.due, &given.due);
+    keep(&mut draft.scheduled, &given.scheduled);
+    keep(&mut draft.recurrence, &given.recurrence);
+    keep(&mut draft.recurrence_anchor, &given.recurrence_anchor);
+    if given.time_estimate.is_some() {
+        draft.time_estimate = given.time_estimate;
+    }
+    if given.milestone_id.is_some() {
+        draft.milestone_id = given.milestone_id;
+    }
+    if !given.details.trim().is_empty() {
+        draft.details.clone_from(&given.details);
+    }
+    if given.workflow.is_some() {
+        draft.workflow.clone_from(&given.workflow);
+    }
+    draft
+}
+
 /// Optimistic writes for the task board, keyed off the store's slug tag.
 #[derive(Clone, Copy)]
 pub struct TaskMutations {
@@ -343,7 +396,10 @@ impl TaskMutations {
     pub fn apply(&self, create_slug: &str, mu: TaskMutation) {
         match mu {
             TaskMutation::Create { task } => {
-                let mut draft = task_proto::capture(&task.title);
+                // The title's own words (a quick-add line), then whatever
+                // the caller set on top — the composer's priority, person,
+                // labels, dates, details and chosen id must survive.
+                let mut draft = with_given(task_proto::capture(&task.title), &task);
                 // Filing priority: explicit picker > page scope
                 // (project detail board) > [[wikilink]] inference.
                 let known: Vec<(Uuid, String)> = self
@@ -1347,5 +1403,35 @@ impl ThreadMutations {
         run_create(self.message_m, self.messages, draft, move |_| async move {
             crate::feeds::post_thread_message(&slug, req).await
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_created_task_keeps_what_it_was_given_and_its_title_still_parses() {
+        let mut given = task_proto::capture("Ask Sam about the engineer");
+        given.id = Uuid::new_v4();
+        given.priority = "high".into();
+        given.details = "Before the master".into();
+        given.tags.0.push("mixing".into());
+        let given = task_ui::with_assignee(&given, Some(("u1".into(), "Alice".into())));
+        let t = with_given(task_proto::capture(&given.title), &given);
+        assert_eq!(t.id, given.id, "subtasks name this id as their parent");
+        assert_eq!(t.priority, "high");
+        assert_eq!(t.details, "Before the master");
+        assert!(t.tags.iter().any(|g| g == "mixing"));
+        assert!(
+            task_proto::is_assigned_to(&t, "u1"),
+            "the composer's person"
+        );
+
+        // A quick-add line: only a title, so the parse decides.
+        let line = task_proto::TaskInfo::new("Post the parcel @errands tomorrow");
+        let t = with_given(task_proto::capture(&line.title), &line);
+        assert!(t.contexts.iter().any(|c| c.contains("errands")));
+        assert!(t.due.is_some());
     }
 }

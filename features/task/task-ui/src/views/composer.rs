@@ -108,33 +108,36 @@ pub fn compose(
     with_assignee(&t, assignee)
 }
 
-/// What a capture becomes: written down for later, an issue, a project.
+/// What a capture becomes. Nobody picks Note or Task: a capture is a
+/// note until it is given something a task has — a person, a date, a
+/// priority, a project, a label, a repeat, a subtask — and then it is a
+/// task. A project is the one deliberate choice, being more structured.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CaptureKind {
     /// A fleeting thought into the inbox, processed later.
     #[default]
     Note,
-    Issue,
+    /// Something to do — it has a who, a when, a where or a priority.
+    Task,
     Project,
 }
 
 impl CaptureKind {
-    const ALL: [Self; 3] = [Self::Note, Self::Issue, Self::Project];
-
+    /// What the switch at the top shows it as.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Note => "Note",
-            Self::Issue => "Issue",
+            Self::Note => "Capture",
+            Self::Task => "Task",
             Self::Project => "Project",
         }
     }
 }
 
-/// What the text says it is, for a capture whose kind nobody picked:
-/// `project: …` (or `new project …`) is a project; a line that files or
-/// schedules itself — `[[Project]]`, `@context`, a date, a repeat,
-/// `!priority` — is an issue; anything else is a note.
+/// What the text says it is: `project: …` (or `new project …`) is a
+/// project; a line that files or schedules itself — `[[Project]]`,
+/// `@context`, a date, a repeat, `!priority` — is a task; anything else
+/// is a note.
 #[must_use]
 // t[impl process.capture.as]
 pub fn kind_from_text(text: &str) -> CaptureKind {
@@ -152,7 +155,7 @@ pub fn kind_from_text(text: &str) -> CaptureKind {
         || set(&t.recurrence)
         || (t.priority != "normal" && t.priority != "none" && !t.priority.is_empty())
     {
-        CaptureKind::Issue
+        CaptureKind::Task
     } else {
         CaptureKind::Note
     }
@@ -202,7 +205,7 @@ pub struct ComposerProps {
     pub on_close: EventHandler<()>,
     /// What it opens as. With `on_note` and `on_project` set, a switch
     /// at the top lets the capture be any of the three.
-    #[props(default = CaptureKind::Issue)]
+    #[props(default = CaptureKind::Task)]
     pub kind: CaptureKind,
     /// Write it down: the whole text, into the inbox.
     #[props(default)]
@@ -221,7 +224,11 @@ pub fn Composer(props: ComposerProps) -> Element {
     let mut description = use_signal(String::new);
     let mut status = use_signal(|| "open".to_owned());
     let mut priority = use_signal(|| None::<String>);
-    let me = props.people.first().cloned();
+    // A new task starts as yours; a capture starts with nobody, so
+    // choosing someone is what makes it a task.
+    let me = (props.kind == CaptureKind::Task)
+        .then(|| props.people.first().cloned())
+        .flatten();
     let mut assignee = use_signal(move || me.clone());
     let mut project = use_signal(|| None::<(Uuid, String)>);
     let mut labels = use_signal(Vec::<String>::new);
@@ -237,15 +244,33 @@ pub fn Composer(props: ComposerProps) -> Element {
     // What it becomes: picked by hand, else read from the text while it
     // opened as a note (a plain thought stays a note).
     let opened_as = props.kind;
+    // Capture or Project — the one choice made by hand.
     let mut picked = use_signal(|| None::<CaptureKind>);
     let switchable = props.on_note.is_some() && props.on_project.is_some();
-    let kind = picked().unwrap_or_else(|| {
-        if switchable && opened_as == CaptureKind::Note {
-            kind_from_text(&title.read())
-        } else {
-            opened_as
+    // Given anything a task has, a capture is a task.
+    let given = status() != "open"
+        || priority().is_some()
+        || assignee().is_some()
+        || project().is_some()
+        || !labels().is_empty()
+        || due().is_some()
+        || recurrence().is_some()
+        || !subs().is_empty();
+    let text_kind = kind_from_text(&title.read());
+    let tasky = opened_as == CaptureKind::Task || given || text_kind == CaptureKind::Task;
+    let kind = if !switchable {
+        opened_as
+    } else {
+        match picked() {
+            Some(CaptureKind::Project) => CaptureKind::Project,
+            None if text_kind == CaptureKind::Project => CaptureKind::Project,
+            _ if tasky => CaptureKind::Task,
+            _ => CaptureKind::Note,
         }
-    });
+    };
+    // Yours unless you say otherwise — once it is a task.
+    let default_assignee = props.people.first().cloned();
+    let default_assignee_chip = default_assignee.clone();
 
     // What the title reads as right now (for the parsed chips).
     let parsed = task_proto::capture(&title.read());
@@ -336,14 +361,14 @@ pub fn Composer(props: ComposerProps) -> Element {
                     props.on_close.call(());
                     return;
                 }
-                CaptureKind::Issue => {}
+                CaptureKind::Task => {}
             }
             let task = compose(
                 &t,
                 &description.peek(),
                 &status.peek(),
                 priority.peek().as_deref(),
-                assignee.peek().clone(),
+                assignee.peek().clone().or_else(|| default_assignee.clone()),
                 project.peek().clone(),
                 &labels.peek(),
                 due.peek().as_deref(),
@@ -369,7 +394,7 @@ pub fn Composer(props: ComposerProps) -> Element {
             "More, if there is more…",
             "Capture",
         ),
-        CaptureKind::Issue => ("Issue title", "Add description…", "Create issue"),
+        CaptureKind::Task => ("Task title", "Add description…", "Create task"),
         CaptureKind::Project => ("Project name", "What it's for…", "Create project"),
     };
     let mut resolve_key = resolve.clone();
@@ -415,25 +440,32 @@ pub fn Composer(props: ComposerProps) -> Element {
                         span { "›" }
                     }
                     if switchable {
-                        // One capture, three outcomes: write it down,
-                        // make it an issue, or start a project.
+                        // Capture or Project: the capture turns itself into
+                        // a task when it is given a person, a date, a
+                        // priority… — a project is the deliberate choice.
                         div { class: "flex items-center gap-0.5 rounded-full bg-foreground/[0.06] p-0.5",
                             role: "radiogroup",
                             aria_label: "What this is",
-                            for k in CaptureKind::ALL {
-                                button {
-                                    key: "{k.label()}",
-                                    r#type: "button",
-                                    role: "radio",
-                                    aria_checked: "{k == kind}",
-                                    class: if k == kind { "rounded-full bg-foreground/[0.12] px-3 py-1 text-[13px] font-semibold text-foreground" } else { "rounded-full px-3 py-1 text-[13px] text-muted-foreground active:text-foreground" },
-                                    onclick: move |_| picked.set(Some(k)),
-                                    "{k.label()}"
-                                }
+                            button {
+                                r#type: "button",
+                                role: "radio",
+                                aria_checked: "{kind != CaptureKind::Project}",
+                                class: if kind != CaptureKind::Project { "rounded-full bg-foreground/[0.12] px-3 py-1 text-[13px] font-semibold text-foreground" } else { "rounded-full px-3 py-1 text-[13px] text-muted-foreground active:text-foreground" },
+                                onclick: move |_| picked.set(Some(CaptureKind::Note)),
+                                // Says what it has become: Capture, or Task.
+                                if kind == CaptureKind::Task { "Task" } else { "Capture" }
+                            }
+                            button {
+                                r#type: "button",
+                                role: "radio",
+                                aria_checked: "{kind == CaptureKind::Project}",
+                                class: if kind == CaptureKind::Project { "rounded-full bg-foreground/[0.12] px-3 py-1 text-[13px] font-semibold text-foreground" } else { "rounded-full px-3 py-1 text-[13px] text-muted-foreground active:text-foreground" },
+                                onclick: move |_| picked.set(Some(CaptureKind::Project)),
+                                "Project"
                             }
                         }
                     } else {
-                        span { "New issue" }
+                        span { "New task" }
                     }
                     button {
                         r#type: "button",
@@ -523,7 +555,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                     // ── sub-issues ──
                     if !subs.read().is_empty() || adding_sub() {
                         div { class: "mt-2 flex flex-col rounded-lg border border-border/70 p-2",
-                            span { class: "px-1 pb-1 text-[12px] font-medium text-muted-foreground", "Sub-issues {subs.read().len()}" }
+                            span { class: "px-1 pb-1 text-[12px] font-medium text-muted-foreground", "Subtasks {subs.read().len()}" }
                             for (i, s) in subs.read().iter().cloned().enumerate() {
                                 div { key: "{i}", class: "flex min-h-9 items-center gap-2 px-1 text-[14px]",
                                     super::properties::StatusIcon { status: "open".to_owned() }
@@ -531,7 +563,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                                     button {
                                         r#type: "button",
                                         class: "flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent",
-                                        aria_label: "Remove sub-issue",
+                                        aria_label: "Remove subtask",
                                         onclick: move |_| { let mut v = subs(); v.remove(i); subs.set(v); },
                                         X { size: 13 }
                                     }
@@ -541,7 +573,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                                 input {
                                     r#type: "text",
                                     class: "min-h-9 bg-transparent px-1 text-[14px] outline-none placeholder:text-muted-foreground",
-                                    placeholder: "Sub-issue title — Enter to add",
+                                    placeholder: "Subtask — Enter to add",
                                     value: "{sub_draft}",
                                     onmounted: move |e| async move { let _ = e.set_focus(true).await; },
                                     oninput: move |e| sub_draft.set(e.value()),
@@ -591,14 +623,18 @@ pub fn Composer(props: ComposerProps) -> Element {
                 }
 
                 // ── the chips ──
-                div { class: if kind == CaptureKind::Issue { "flex flex-wrap items-center gap-1.5 border-t border-border/60 px-4 py-2.5" } else { "hidden" },
+                div { class: if kind != CaptureKind::Project { "flex flex-wrap items-center gap-1.5 border-t border-border/60 px-4 py-2.5" } else { "hidden" },
                     StatusChip { status: status(), on_change: move |s: String| status.set(s) }
                     PriorityChip {
                         priority: priority().or(parsed_priority.clone()).unwrap_or_else(|| "none".to_owned()),
                         on_change: move |p: String| priority.set(Some(p)),
                     }
                     AssigneeChip {
-                        assignee: assignee().map(|(id, _)| id),
+                        // Once it is a task, it shows who it goes to: you,
+                        // unless someone else was chosen.
+                        assignee: assignee()
+                            .or_else(|| (kind == CaptureKind::Task).then(|| default_assignee_chip.clone()).flatten())
+                            .map(|(id, _)| id),
                         people: props.people.clone(),
                         on_change: {
                             let people = props.people.clone();
@@ -687,7 +723,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                                     class: "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left hover:bg-accent md:min-h-8",
                                     onclick: move |_| { adding_sub.set(true); menu.set(false); },
                                     ListTree { size: 14 }
-                                    span { class: "flex-1", "Add sub-issue" }
+                                    span { class: "flex-1", "Add subtask" }
                                 }
                             }
                         }
@@ -710,7 +746,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                         }
                     }
                     div { class: "flex-1" }
-                    label { class: if kind == CaptureKind::Issue { "ml-auto flex items-center gap-2 text-[13px] text-muted-foreground" } else { "hidden" },
+                    label { class: if kind == CaptureKind::Task { "ml-auto flex items-center gap-2 text-[13px] text-muted-foreground" } else { "hidden" },
                         input {
                             r#type: "checkbox",
                             checked: create_more(),
@@ -765,23 +801,20 @@ mod tests {
 
     #[test]
     // t[verify process.capture.as]
-    fn a_capture_reads_as_a_note_an_issue_or_a_project() {
+    fn a_capture_reads_as_a_note_a_task_or_a_project() {
         assert_eq!(
             kind_from_text("Idea: a stems-only bonus edition"),
             CaptureKind::Note
         );
         assert_eq!(
             kind_from_text("Pick up gaff tape @errands"),
-            CaptureKind::Issue
+            CaptureKind::Task
         );
         assert_eq!(
             kind_from_text("Bounce stems [[Crescendum Album]]"),
-            CaptureKind::Issue
+            CaptureKind::Task
         );
-        assert_eq!(
-            kind_from_text("Call the venue tomorrow"),
-            CaptureKind::Issue
-        );
+        assert_eq!(kind_from_text("Call the venue tomorrow"), CaptureKind::Task);
         assert_eq!(
             kind_from_text("project: Live session EP"),
             CaptureKind::Project

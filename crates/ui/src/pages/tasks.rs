@@ -557,7 +557,7 @@ fn TaskBoard(scope: Scope) -> Element {
                                 Scope::ProjectWork => "Project work".to_owned(),
                             },
                             action: rsx! { SquarePen { size: 20 } },
-                            action_label: "New issue".to_owned(),
+                            action_label: "New task".to_owned(),
                             on_action: move |()| new_issue.open(String::new()),
                             badge: filter_count,
                             task_ui_core::section_header::SectionMenuItem {

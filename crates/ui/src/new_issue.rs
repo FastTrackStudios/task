@@ -1,13 +1,16 @@
-//! "New issue" — the app's one way to make an issue, on
-//! [`task_ui::Composer`].
+//! Capture — the app's one way to write something down, on
+//! [`task_ui::Composer`]. A capture lands in the inbox unless it is given
+//! what a task has (a person, a date, a priority…), in which case it is
+//! a task; a project is the one deliberate choice.
 //!
-//! [`NewIssue`] is the context any surface opens it through (the Tasks
-//! page's Add task, the desktop quick-add, `c` on a desk); the
-//! [`NewIssueHost`] mounted once in the shell supplies what the composer
-//! needs from the stores — the people (signed-in person first, so new
-//! issues are yours unless you say otherwise), the org's projects, the
-//! labels in use — and writes what it makes through the shared optimistic
-//! task store, sub-issues included.
+//! [`NewIssue`] is the context any surface opens it through (the capture
+//! button, the Tasks header's New task, the desktop quick-add, `c` on a
+//! desk); the [`NewIssueHost`] mounted once in the shell supplies what
+//! the composer needs from the stores — the people (signed-in person
+//! first, so new tasks are yours unless you say otherwise), the org's
+//! projects, the labels in use — and writes what it makes: captures to
+//! the inbox, tasks (subtasks included) to the shared optimistic task
+//! store, projects through the inbox's process-into-project.
 
 use dioxus::prelude::*;
 use task_ui::{Composer, TaskMutation};
@@ -22,8 +25,7 @@ pub struct NewIssue(pub Signal<Option<(String, task_ui::CaptureKind)>>);
 impl NewIssue {
     /// A new issue, with every property in reach.
     pub fn open(mut self, title: impl Into<String>) {
-        self.0
-            .set(Some((title.into(), task_ui::CaptureKind::Issue)));
+        self.0.set(Some((title.into(), task_ui::CaptureKind::Task)));
     }
 
     /// A capture: written down for later unless the text (or the
