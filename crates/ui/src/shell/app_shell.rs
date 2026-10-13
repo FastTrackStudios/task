@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 
-use crate::chrome::{FleetingFab, FleetingModal, TopBar, provide_chrome_contexts};
+use crate::chrome::{FleetingModal, TopBar, provide_chrome_contexts};
 use crate::routes::Route;
 use crate::shell::mobile::{BottomTabBar, MobileTimerDock};
 
@@ -16,6 +16,8 @@ pub fn AppShell() -> Element {
     // Quick-capture + data-refresh signals for the persistent chrome.
     provide_chrome_contexts();
     crate::process::provide_process_now();
+    crate::new_issue::provide_new_issue();
+    crate::favorites::provide_favorites();
     // The docked player a citation's timestamp plays in.
     crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
@@ -134,7 +136,6 @@ pub fn AppShell() -> Element {
                         }
                         if !share {
                             BottomTabBar { current }
-                            FleetingFab {}
                             MobileTimerDock {}
                         }
                     }
@@ -218,6 +219,8 @@ pub fn AppShell() -> Element {
         FleetingModal {}
         // Quick-add's capture-then-process sheet (one capture path).
         crate::process::ProcessNowOverlay {}
+        // The one way to make an issue (Linear's composer).
+        crate::new_issue::NewIssueHost {}
         crate::source_dock::SourceDockView {}
         // Ctrl+P command palette — pages + vault notes, fuzzy-ranked.
         // Mounts its own document-level hotkey listener.
@@ -453,9 +456,9 @@ fn side_panel_for(route: &Route) -> SidePanel {
 }
 
 /// Where a phone opens when the person has not picked a start page:
-/// the task list, whose first section is Today. On a phone the app is
-/// for doing the next thing, and the dashboard is a tab away.
-const PHONE_START: &str = "/tasks";
+/// the Inbox, the first tab — capture → process is the core loop, and
+/// there is no Home (Linear's shell).
+const PHONE_START: &str = "/inbox";
 
 /// Redirect `/` to the user's preferred start page, once per session,
 /// when their prefs load (renders nothing). With no preference set, a

@@ -1,290 +1,195 @@
-//! `/tasks/:id` — the deep-linkable task detail page.
+//! `/tasks/:id` — one issue, on [`task_ui::IssueView`].
 //!
-//! Wires [`task_ui::TaskDetailFull`] (dumb component: data in via
-//! props, intents out via callbacks) to the org-tagged task set. The
-//! whole selected-org row set is fetched once and everything —
-//! subtasks, blocker/relates titles, the task itself — resolves from
-//! it client-side; the store-migration issue replaces this fetch with
-//! the shared task store + live events.
-
-use std::collections::HashMap;
+//! Reads the shared task / project stores (live, optimistic), so an
+//! edit here shows everywhere at once and a failed write rolls back
+//! with a notice. Every edit goes through
+//! [`crate::task_board::apply_with_undo`], so completing or deleting
+//! from here offers Undo like the list does.
+//!
+//! The top bar is Linear's: where you are (Tasks › short id), and on a
+//! desk ↑ / ↓ (or k / j) step to the neighbouring issue of the list you
+//! came from without going back to it.
 
 use dioxus::prelude::*;
+use dioxus_primitives::toast::use_toast;
 use task_proto::TaskInfo;
-use task_ui::views::resolve_links;
-use task_ui::{ClaimState, LinkedTaskRef, SubtaskRow, TaskDetailFull};
+use task_ui::{IssueView, TaskMutation};
 use uuid::Uuid;
 
-use crate::orgs::{OrgMeta, OrgSelection, selected_slugs};
+use crate::orgs::{OrgMeta, OrgSelection};
 use crate::routes::Route;
-
-/// Signed-out claim identity: a human ref distinguishable from agent
-/// claims in the board and the CLI. Only the fallback — signed-in
-/// claims carry the real account via [`claimant_json`].
-// Serde shape must match workflows_proto::AgentRef::Human exactly —
-// the backend from_str's it. (The old {"kind":"human","id":"web"}
-// shape silently failed to parse.)
-const WEB_CLAIMANT: &str = r#"{"kind":"human","user_id":"web","display_name":"Guest (web)"}"#;
-
-/// JSON-encoded `workflows_proto::AgentRef` for `try_claim` — the
-/// server `serde_json::from_str`s it (see `TaskBackend::try_claim`).
-/// Signed in ⇒ `Human { user_id, display_name }` serialized with
-/// workflows_proto's own serde (internally tagged, `kind`); signed
-/// out ⇒ the legacy [`WEB_CLAIMANT`] const.
-fn claimant_json(account: Option<&crate::auth::ActiveAccount>) -> String {
-    account.map_or_else(
-        || WEB_CLAIMANT.to_owned(),
-        |a| {
-            serde_json::to_string(&task_proto::workflows_proto::AgentRef::Human {
-                user_id: a.user_id.to_string(),
-                display_name: Some(a.name.clone()),
-            })
-            .unwrap_or_else(|_| WEB_CLAIMANT.to_owned())
-        },
-    )
-}
+use crate::stores;
 
 #[component]
 pub fn TaskDetailPage(id: Uuid) -> Element {
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
-    // Claim identity — the signed-in account (Guest by default).
-    // Hoisted: hooks can't live inside the match arms below.
-    let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
+    let account = use_context::<crate::auth::AuthCtx>().active;
     let nav = use_navigator();
+    let toast = use_toast();
 
-    let rows = use_resource(move || {
-        let slugs = selected_slugs(&selection.read(), &org_list.read());
-        async move { crate::feeds::fetch_tasks_tagged(&slugs).await }
-    });
-    let mut status_line = use_signal(String::new);
+    let result = stores::use_task_list();
+    let _projects = stores::use_project_list();
+    let task_store = stores::use_task_store();
+    let project_store = stores::use_project_store();
+    let muts = stores::use_task_mutations();
 
-    match &*rows.read_unchecked() {
-        None => rsx! {
-            div { class: "p-6 text-sm text-muted-foreground", "Loading task…" }
-        },
-        Some(Err(e)) => rsx! {
-            div { class: "p-6",
-                crate::states::ErrorState {
-                    title: "Couldn't load this task",
-                    message: e.clone(),
-                }
-            }
-        },
-        Some(Ok(tagged)) => {
-            let Some((slug, task)) = tagged
-                .iter()
-                .find(|(_, t)| t.id == id)
-                .map(|(s, t)| (s.clone(), t.clone()))
-            else {
-                return rsx! {
-                    div { class: "p-6 text-sm text-muted-foreground",
-                        "Task {id} isn't in the selected organizations."
-                    }
-                };
-            };
+    let target_org =
+        use_memo(move || crate::orgs::create_target(&selection.read(), &org_list.read()));
+    let member_names = crate::pages::wiki_access::use_member_names(target_org);
 
-            // Everything below resolves from the already-fetched set —
-            // no extra round-trips.
-            let titles: Vec<LinkedTaskRef> = tagged
-                .iter()
-                .map(|(_, t)| LinkedTaskRef {
-                    id: t.id,
-                    title: Some(t.title.clone()),
-                })
-                .collect();
-            let org_of: HashMap<Uuid, String> =
-                tagged.iter().map(|(s, t)| (t.id, s.clone())).collect();
-
-            let wf = task.workflow.clone().unwrap_or_default();
-            let subtasks: Vec<SubtaskRow> = tagged
-                .iter()
-                .filter(|(_, t)| t.workflow.as_ref().and_then(|w| w.parent) == Some(id))
-                .map(|(_, t)| SubtaskRow {
-                    task: t.clone(),
-                    claimant: t
-                        .workflow
-                        .as_ref()
-                        .and_then(|w| w.assignees.0.first().cloned()),
-                })
-                .collect();
-            let blockers = resolve_links(&wf.blockers.0, &titles);
-            let relates = resolve_links(&wf.relates_to.0, &titles);
-            let claim = if wf.assignees.0.is_empty() {
-                ClaimState::Unclaimed
-            } else {
-                ClaimState::Held {
-                    holder: agent_label(&wf.assignees.0[0]),
-                }
-            };
-
-            let claim_slug = slug.clone();
-            let on_claim = move |()| {
-                let slug = claim_slug.clone();
-                let claimant = claimant_json(account.peek().as_ref());
-                let mut rows = rows;
-                spawn(async move {
-                    match claim_task(&slug, id, &claimant).await {
-                        Ok(()) => {
-                            status_line.set(String::new());
-                            rows.restart();
-                        }
-                        Err(e) => status_line.set(format!("Claim failed: {e}")),
-                    }
-                });
-            };
-
-            let est_slug = slug.clone();
-            let est_task = task.clone();
-            let on_set_estimate = move |est| {
-                let slug = est_slug.clone();
-                let mut next = est_task.clone();
-                let mut rows = rows;
-                spawn(async move {
-                    let mut wf = next.workflow.take().unwrap_or_default();
-                    wf.estimate = est;
-                    next.workflow = Some(wf);
-                    match update_task(&slug, next).await {
-                        Ok(()) => {
-                            status_line.set(String::new());
-                            rows.restart();
-                        }
-                        Err(e) => status_line.set(format!("Estimate update failed: {e}")),
-                    }
-                });
-            };
-
-            let on_open = move |target: Uuid| {
-                // Navigate within the detail page; unknown ids (cross-org
-                // links outside the selection) fall back to the board.
-                if org_of.contains_key(&target) {
-                    nav.push(Route::TaskDetailRoute { id: target });
-                } else {
-                    nav.push(Route::TasksRoute {});
-                }
-            };
-
+    let entries = task_store.entries();
+    let unique = stores::unique_tasks(&entries);
+    let Some(row) = unique.iter().find(|r| r.task.id == id).cloned() else {
+        return if result.value().is_none() {
+            rsx! { crate::states::LoadingState {} }
+        } else {
             rsx! {
-                div { class: "mx-auto w-full max-w-4xl p-4 lg:p-6",
-                    if !status_line().is_empty() {
-                        div { class: "mb-3 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive",
-                            "{status_line}"
-                        }
+                div { class: "p-6 text-sm text-muted-foreground",
+                    "This task isn't in the selected organizations."
+                }
+            }
+        };
+    };
+    let slug = row.slug.clone();
+    let task = row.task.clone();
+
+    // The signed-in person first: assigning to yourself is the common
+    // case, and it is what puts an issue on your Tasks list.
+    let me = account
+        .read()
+        .as_ref()
+        .map(|a| (a.user_id.to_string(), a.name.clone()));
+    let mut people: Vec<(String, String)> = member_names
+        .read()
+        .iter()
+        .map(|(id, name)| (id.clone(), name.clone()))
+        .filter(|(pid, _)| me.as_ref().is_none_or(|(m, _)| m != pid))
+        .collect();
+    people.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    if let Some(me) = me {
+        people.insert(0, me);
+    }
+
+    let projects: Vec<(Uuid, String)> = project_store
+        .list()
+        .iter()
+        .filter(|r| r.slug == slug && !r.project.archived)
+        .map(|r| (r.project.id, r.project.title.clone()))
+        .collect();
+    let mut known_labels: Vec<String> = Vec::new();
+    for r in &unique {
+        for l in task_ui::labels_of(&r.task) {
+            if !known_labels.iter().any(|k| k.eq_ignore_ascii_case(&l)) {
+                known_labels.push(l);
+            }
+        }
+    }
+    let subtasks: Vec<TaskInfo> = unique
+        .iter()
+        .filter(|r| r.task.workflow.as_ref().and_then(|w| w.parent) == Some(id))
+        .map(|r| r.task.clone())
+        .collect();
+
+    // The issue's place in the list it was opened from (open tasks, in
+    // the store's order) — what ↑ / ↓ step through.
+    let siblings: Vec<Uuid> = unique
+        .iter()
+        .filter(|r| task_proto::status_is_open(&r.task.status) || r.task.id == id)
+        .map(|r| r.task.id)
+        .collect();
+    let pos = siblings.iter().position(|s| *s == id);
+    let prev = pos
+        .and_then(|p| p.checked_sub(1))
+        .and_then(|p| siblings.get(p))
+        .copied();
+    let next = pos.and_then(|p| siblings.get(p + 1)).copied();
+
+    let apply = {
+        let slug = slug.clone();
+        move |mu: TaskMutation| crate::task_board::apply_with_undo(muts, toast, &slug, mu)
+    };
+    let add_sub = {
+        let slug = slug.clone();
+        let parent = task.clone();
+        move |title: String| {
+            let mut sub = task_proto::capture(&title);
+            sub.tags.0.push("subtask".into());
+            sub.project_id = parent.project_id;
+            sub.projects = parent.projects.clone();
+            sub.workflow = Some(task_proto::model::WorkflowAttrs {
+                parent: Some(parent.id),
+                ..Default::default()
+            });
+            muts.apply(&slug, TaskMutation::Create { task: sub });
+        }
+    };
+    let created = task
+        .date_created
+        .map(|d| d.with_timezone(&chrono::Local).format("%b %-d").to_string());
+    let short = task_ui::views::short_id(&id);
+
+    rsx! {
+        div { class: "flex min-h-full flex-col",
+            // ── top bar ──
+            header { class: "flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-3 text-[13px] sm:px-5",
+                Link {
+                    to: Route::TasksRoute {},
+                    class: "rounded-md px-1.5 py-1 font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
+                    "Tasks"
+                }
+                span { class: "text-muted-foreground/60", "›" }
+                span { class: "truncate font-mono text-[12px] text-muted-foreground", "{short}" }
+                crate::favorites::StarButton { kind: "issue", id: id.to_string(), title: task.title.clone() }
+                div { class: "ml-auto flex items-center gap-0.5",
+                    if let Some(p) = pos {
+                        span { class: "hidden pr-1 font-mono text-[11px] tabular-nums text-muted-foreground sm:inline", "{p + 1} / {siblings.len()}" }
                     }
-                    TaskDetailFull {
-                        task,
-                        cycle_label: None,
-                        subtasks,
-                        resolved_blockers: blockers,
-                        resolved_relates_to: relates,
-                        transitions: Vec::new(),
-                        activities: Vec::new(),
-                        claim,
-                        on_set_estimate,
-                        on_claim,
-                        on_open,
+                    button {
+                        r#type: "button",
+                        class: "flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30",
+                        title: "Previous issue (k)",
+                        aria_label: "Previous issue",
+                        disabled: prev.is_none(),
+                        onclick: move |_| {
+                            if let Some(p) = prev {
+                                nav.push(Route::TaskDetailRoute { id: p });
+                            }
+                        },
+                        architect_ui::lucide_dioxus::ChevronUp { size: 16 }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30",
+                        title: "Next issue (j)",
+                        aria_label: "Next issue",
+                        disabled: next.is_none(),
+                        onclick: move |_| {
+                            if let Some(n) = next {
+                                nav.push(Route::TaskDetailRoute { id: n });
+                            }
+                        },
+                        architect_ui::lucide_dioxus::ChevronDown { size: 16 }
                     }
                 }
             }
-        }
-    }
-}
-
-/// Friendly one-line label for a claim holder.
-fn agent_label(a: &task_proto::workflows_proto::AgentRef) -> String {
-    match a {
-        task_proto::workflows_proto::AgentRef::Human {
-            user_id,
-            display_name,
-        } => display_name.clone().unwrap_or_else(|| user_id.clone()),
-        task_proto::workflows_proto::AgentRef::Agent { name, .. } => name.clone(),
-    }
-}
-
-async fn claim_task(slug: &str, id: Uuid, claimant: &str) -> Result<(), String> {
-    let client = crate::vox_clients::task_client(slug).await?;
-    client
-        .try_claim(id, claimant.to_owned(), false)
-        .await
-        .map_err(|e| format!("try_claim: {e:?}"))?;
-    Ok(())
-}
-
-async fn update_task(slug: &str, task: TaskInfo) -> Result<(), String> {
-    let client = crate::vox_clients::task_client(slug).await?;
-    client
-        .update(task)
-        .await
-        .map_err(|e| format!("update: {e:?}"))?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::auth::ActiveAccount;
-    use task_proto::workflows_proto::AgentRef;
-
-    fn cody() -> ActiveAccount {
-        ActiveAccount {
-            user_id: Uuid::parse_str("3f2c8a4e-1d5b-4c6f-9e7a-2b8d4f6c1a3e").unwrap(),
-            email: "cody@fasttrackstudios.com".into(),
-            name: "Cody Wright".into(),
-            token: "session-token".into(),
-        }
-    }
-
-    /// The signed-in claimant must byte-match workflows_proto's own
-    /// serde for `AgentRef::Human` — the server `from_str`s exactly
-    /// that shape in `TaskBackend::try_claim`.
-    #[test]
-    fn claimant_json_matches_workflows_proto_serde() {
-        let account = cody();
-        let expected = serde_json::to_string(&AgentRef::Human {
-            user_id: account.user_id.to_string(),
-            display_name: Some(account.name.clone()),
-        })
-        .expect("serialize AgentRef");
-        assert_eq!(claimant_json(Some(&account)), expected);
-    }
-
-    /// And it must parse back through workflows_proto's serde — the
-    /// real proof the server-side `serde_json::from_str` accepts it.
-    #[test]
-    fn claimant_json_round_trips_through_agent_ref() {
-        let account = cody();
-        let parsed: AgentRef =
-            serde_json::from_str(&claimant_json(Some(&account))).expect("server-side parse");
-        assert_eq!(
-            parsed,
-            AgentRef::Human {
-                user_id: account.user_id.to_string(),
-                display_name: Some("Cody Wright".into()),
-            }
-        );
-    }
-
-    /// Signed out falls back to the legacy const, unchanged.
-    #[test]
-    fn claimant_json_falls_back_to_web_claimant() {
-        assert_eq!(claimant_json(None), WEB_CLAIMANT);
-    }
-}
-
-#[cfg(test)]
-mod claimant_tests {
-    use super::WEB_CLAIMANT;
-
-    #[test]
-    fn legacy_fallback_parses_as_agent_ref() {
-        let parsed: task_proto::workflows_proto::AgentRef =
-            serde_json::from_str(WEB_CLAIMANT).expect("fallback claimant must parse");
-        match parsed {
-            task_proto::workflows_proto::AgentRef::Human { user_id, .. } => {
-                assert_eq!(user_id, "web")
-            }
-            other @ task_proto::workflows_proto::AgentRef::Agent { .. } => {
-                panic!("expected human ref, got {other:?}")
+            IssueView {
+                task,
+                people,
+                projects,
+                known_labels,
+                subtasks,
+                activity: rsx! {
+                    ol { class: "flex flex-col gap-2 border-l border-border/60 pl-4 text-[13px] text-muted-foreground",
+                        if let Some(d) = created {
+                            li { "Created · {d}" }
+                        }
+                        li { class: "text-muted-foreground/70", "Comments and changes will show here." }
+                    }
+                },
+                on_event: apply,
+                on_open: move |sid: Uuid| { nav.push(Route::TaskDetailRoute { id: sid }); },
+                on_add_subtask: add_sub,
             }
         }
     }

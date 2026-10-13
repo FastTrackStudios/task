@@ -57,8 +57,10 @@ pub fn WorkSidebar(current: Route) -> Element {
     let nav = use_navigator();
     // The same hour as the Tasks page, so its counts and these agree.
     let now_block = crate::now_block::use_now_block();
+    let account = use_context::<crate::auth::AuthCtx>().active;
 
     let counts = use_memo(move || {
+        let me = account.read().as_ref().map(|a| a.user_id.to_string());
         let today = chrono::Local::now().date_naive();
         let p = prefs.read();
         let (active_only, relevant_only, location) =
@@ -84,6 +86,7 @@ pub fn WorkSidebar(current: Route) -> Element {
         let board: Vec<&task_proto::TaskInfo> = crate::task_board::filter(
             &all,
             crate::task_board::Scope::Actions,
+            me.as_deref(),
             active_only,
             relevant_only,
             &ctx,

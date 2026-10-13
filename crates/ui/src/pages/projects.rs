@@ -24,7 +24,11 @@ use dioxus::prelude::*;
 use project_proto::ProjectInfo;
 
 use crate::routes::Route;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
+use crate::shell::mobile::BottomSheet;
+
+/// The projects page's "new project" sheet, reachable from its header.
+#[derive(Clone, Copy)]
+struct NewProjectOpen(Signal<bool>);
 use crate::task_sort::{priority_rank, status_rank};
 
 /// Page-scoped keyframes for the staggered card entrance. Injected once
@@ -81,6 +85,8 @@ pub fn ProjectsView() -> Element {
     // Mobile create sheet — the desktop header (and its quick-add) is
     // hidden below `md`, so the sticky action bar owns creation there.
     let mut new_open = use_signal(|| false);
+    // The header's round + (phone) opens the same sheet.
+    use_context_provider(|| NewProjectOpen(new_open));
 
     let derived = use_memo(move || {
         let rows: Vec<ProjectInfo> = store.list().into_iter().map(|r| r.project).collect();
@@ -139,16 +145,6 @@ pub fn ProjectsView() -> Element {
             }
             div { class: "mx-auto w-full max-w-6xl flex flex-col gap-8 p-4 pb-14 sm:p-6 md:pb-6 lg:p-10",
                 {view}
-            }
-        }
-        // ── Mobile: sticky create above the tab bar ─────────────────
-        MobileActionBar {
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85",
-                onclick: move |_| new_open.set(true),
-                Plus { size: 16 }
-                "New project"
             }
         }
         BottomSheet {
@@ -506,6 +502,15 @@ fn page_header(props: PageHeaderProps) -> Element {
             div { class: "flex flex-wrap items-end justify-between gap-3",
                 Heading { level: HeadingLevel::H1, class: "tracking-tight", "Projects" }
                 div { class: "flex items-center gap-2",
+                    if let Some(NewProjectOpen(mut open)) = try_use_context::<NewProjectOpen>() {
+                        button {
+                            r#type: "button",
+                            class: "order-last flex size-10 items-center justify-center rounded-full border border-border/70 bg-popover/80 text-foreground active:bg-accent md:hidden",
+                            aria_label: "New project",
+                            onclick: move |_| open.set(true),
+                            Plus { size: 18 }
+                        }
+                    }
                     if let Some(mut rel) = props.relevant {
                         button {
                             r#type: "button",

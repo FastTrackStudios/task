@@ -1,0 +1,634 @@
+//! The composer — making an issue, Linear's way, with Task's
+//! natural-language title.
+//!
+//! A title, a description, and the property chips under them (Status,
+//! Priority, Assignee, Project, Labels — the shared [`PropertyPicker`]),
+//! a ⋯ menu for the rest (due date, repeat, a link, sub-issues created
+//! right there), and Create with a "Create more" switch.
+//!
+//! What Linear doesn't do and this does: the title is read as you type.
+//!
+//! - `@na…` opens the people list under the title, filtered by what
+//!   follows the `@`; ↑ / ↓ / Enter (or Tab) pick, Esc dismisses. Picking
+//!   removes the `@…` from the title and sets the Assignee chip — the
+//!   assignment that puts an issue on someone's Tasks list.
+//! - `#la…` does the same for labels (and offers to create one).
+//! - `[[Project]]`, `tomorrow`, `fri`, `every week`, `!high` are read by
+//!   the quick-add parser (`task_proto::capture`) and shown as chips the
+//!   moment they're typed; a chip set by hand wins over the text.
+//!
+//! On a phone it is a full-screen sheet; on a desk, a card. ⌘↩ creates.
+
+use architect_ui::lucide_dioxus::{CalendarDays, Ellipsis, Link2, ListTree, Repeat, X};
+use dioxus::prelude::*;
+use uuid::Uuid;
+
+use super::issue_view::with_assignee;
+use super::picker::{PickOption, filtered};
+use super::properties::{
+    AssigneeChip, LabelsChip, PersonDot, PriorityChip, ProjectChip, StatusChip, label_color,
+};
+use crate::TaskInfo;
+
+/// The `@` / `#` word being typed at the end of the title, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    Person(String),
+    Label(String),
+}
+
+/// What the end of `title` is asking for: the last word, when it
+/// starts with `@` or `#` and the title doesn't end in a space.
+#[must_use]
+pub fn trigger_at_end(title: &str) -> Option<Trigger> {
+    if title.ends_with(char::is_whitespace) {
+        return None;
+    }
+    let word = title.rsplit(char::is_whitespace).next()?;
+    if let Some(q) = word.strip_prefix('@') {
+        Some(Trigger::Person(q.to_owned()))
+    } else if let Some(q) = word.strip_prefix('#') {
+        Some(Trigger::Label(q.to_owned()))
+    } else {
+        None
+    }
+}
+
+/// `title` without its last word (the trigger just resolved), trimmed
+/// of the space before it.
+#[must_use]
+pub fn drop_last_word(title: &str) -> String {
+    match title.rfind(char::is_whitespace) {
+        Some(i) => format!("{} ", title[..i].trim_end()),
+        None => String::new(),
+    }
+}
+
+/// The issue the composer's state describes: the title through the
+/// quick-add parser, then every chip set by hand on top of it.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn compose(
+    title: &str,
+    description: &str,
+    status: &str,
+    priority: Option<&str>,
+    assignee: Option<(String, String)>,
+    project: Option<(Uuid, String)>,
+    labels: &[String],
+    due: Option<&str>,
+    recurrence: Option<&str>,
+    projects: &[(Uuid, String)],
+) -> TaskInfo {
+    let mut t = task_proto::capture(title);
+    if t.title.trim().is_empty() {
+        t.title = title.trim().to_owned();
+    }
+    t.details = description.trim().to_owned();
+    t.status = status.to_owned();
+    if let Some(p) = priority {
+        t.priority = p.to_owned();
+    }
+    for l in labels {
+        if !t.tags.iter().any(|g| g.eq_ignore_ascii_case(l)) {
+            t.tags.0.push(l.clone());
+        }
+    }
+    match project {
+        Some((id, name)) => {
+            t.project_id = Some(id);
+            t.projects = task_proto::model::StringList(vec![format!("[[{name}]]")]);
+        }
+        None => t.project_id = task_proto::infer_project_id(&t.projects.0, projects),
+    }
+    if let Some(d) = due {
+        t.due = Some(d.to_owned());
+    }
+    if let Some(r) = recurrence {
+        t.recurrence = Some(r.to_owned());
+        t.recurrence_anchor = Some("scheduled".to_owned());
+    }
+    with_assignee(&t, assignee)
+}
+
+/// The repeats the ⋯ menu offers, as RRULE bodies.
+const REPEATS: &[(&str, &str)] = &[
+    ("Every day", "FREQ=DAILY"),
+    ("Every weekday", "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"),
+    ("Every week", "FREQ=WEEKLY"),
+    ("Every month", "FREQ=MONTHLY"),
+];
+
+#[derive(Props, Clone, PartialEq)]
+pub struct ComposerProps {
+    /// `(user id, name)` — the signed-in person first; they are the
+    /// default assignee, as in Linear's "My issues".
+    pub people: Vec<(String, String)>,
+    #[props(default)]
+    pub projects: Vec<(Uuid, String)>,
+    #[props(default)]
+    pub known_labels: Vec<String>,
+    /// Text to start from (a capture being processed, a quick-add line).
+    #[props(default)]
+    pub initial_title: String,
+    /// Where it lands, shown at the top ("ACME Audio").
+    #[props(default)]
+    pub place: String,
+    /// Make it: the issue, then its sub-issue titles.
+    pub on_create: EventHandler<(TaskInfo, Vec<String>)>,
+    pub on_close: EventHandler<()>,
+}
+
+#[component]
+pub fn Composer(props: ComposerProps) -> Element {
+    let mut title = use_signal(|| props.initial_title.clone());
+    let mut description = use_signal(String::new);
+    let mut status = use_signal(|| "open".to_owned());
+    let mut priority = use_signal(|| None::<String>);
+    let me = props.people.first().cloned();
+    let mut assignee = use_signal(move || me.clone());
+    let mut project = use_signal(|| None::<(Uuid, String)>);
+    let mut labels = use_signal(Vec::<String>::new);
+    let mut due = use_signal(|| None::<String>);
+    let mut recurrence = use_signal(|| None::<String>);
+    let mut subs = use_signal(Vec::<String>::new);
+    let mut sub_draft = use_signal(String::new);
+    let mut adding_sub = use_signal(|| false);
+    let mut menu = use_signal(|| false);
+    let mut link_draft = use_signal(|| None::<String>);
+    let mut create_more = use_signal(|| false);
+    let mut cursor = use_signal(|| 0usize);
+
+    // What the title reads as right now (for the parsed chips).
+    let parsed = task_proto::capture(&title.read());
+    let trigger = trigger_at_end(&title.read());
+    let people_opts: Vec<PickOption> = props
+        .people
+        .iter()
+        .map(|(id, n)| {
+            PickOption::new(id.clone(), n.clone())
+                .icon(rsx! { PersonDot { name: n.clone(), size: 16 } })
+        })
+        .collect();
+    let label_opts: Vec<PickOption> = props
+        .known_labels
+        .iter()
+        .map(|l| PickOption::new(l.clone(), l.clone()).dot(label_color(l)))
+        .collect();
+    let suggestions: Vec<PickOption> = match &trigger {
+        Some(Trigger::Person(q)) => filtered(&people_opts, q)
+            .into_iter()
+            .map(|(_, o)| o)
+            .take(6)
+            .collect(),
+        Some(Trigger::Label(q)) => {
+            let mut hits: Vec<PickOption> = filtered(&label_opts, q)
+                .into_iter()
+                .map(|(_, o)| o)
+                .take(6)
+                .collect();
+            if !q.is_empty() && !props.known_labels.iter().any(|l| l.eq_ignore_ascii_case(q)) {
+                hits.push(
+                    PickOption::new(format!("+{q}"), format!("Create “{q}”")).dot(label_color(q)),
+                );
+            }
+            hits
+        }
+        None => Vec::new(),
+    };
+    let at = (*cursor.read()).min(suggestions.len().saturating_sub(1));
+
+    let people_c = props.people.clone();
+    let mut resolve = move |opt: PickOption| {
+        match trigger_at_end(&title.peek()) {
+            Some(Trigger::Person(_)) => {
+                let who = people_c.iter().find(|(id, _)| *id == opt.id).cloned();
+                assignee.set(who);
+            }
+            Some(Trigger::Label(_)) => {
+                let name = opt.id.strip_prefix('+').unwrap_or(&opt.id).to_owned();
+                let mut l = labels();
+                if !l.iter().any(|x| x.eq_ignore_ascii_case(&name)) {
+                    l.push(name);
+                }
+                labels.set(l);
+            }
+            None => {}
+        }
+        let next = drop_last_word(&title.peek());
+        title.set(next);
+        cursor.set(0);
+    };
+
+    let projects = props.projects.clone();
+    let create = {
+        let projects = projects.clone();
+        move || {
+            let t = title.peek().trim().to_owned();
+            if t.is_empty() {
+                return;
+            }
+            let task = compose(
+                &t,
+                &description.peek(),
+                &status.peek(),
+                priority.peek().as_deref(),
+                assignee.peek().clone(),
+                project.peek().clone(),
+                &labels.peek(),
+                due.peek().as_deref(),
+                recurrence.peek().as_deref(),
+                &projects,
+            );
+            props.on_create.call((task, subs.peek().clone()));
+            if *create_more.peek() {
+                title.set(String::new());
+                description.set(String::new());
+                subs.set(Vec::new());
+            } else {
+                props.on_close.call(());
+            }
+        }
+    };
+    let mut create_key = create.clone();
+    let mut create_btn = create.clone();
+    let mut resolve_key = resolve.clone();
+    let suggestions_key = suggestions.clone();
+
+    // The chips the title's text produced, shown until a hand-set chip
+    // replaces them.
+    let parsed_due = due().is_none().then(|| parsed.due.clone()).flatten();
+    let parsed_project = project()
+        .is_none()
+        .then(|| parsed.projects.first().cloned())
+        .flatten()
+        .map(|p| p.trim_start_matches("[[").trim_end_matches("]]").to_owned());
+    let parsed_repeat = recurrence()
+        .is_none()
+        .then(|| parsed.recurrence.clone())
+        .flatten();
+    let parsed_priority = priority()
+        .is_none()
+        .then(|| Some(parsed.priority.clone()).filter(|p| p != "normal" && p != "none"))
+        .flatten();
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-50 flex justify-center bg-background md:items-start md:bg-black/50 md:p-6 md:pt-[10vh]",
+            onclick: move |_| props.on_close.call(()),
+            div {
+                class: "flex h-full w-full flex-col overflow-hidden bg-background md:h-auto md:max-h-[80vh] md:max-w-2xl md:rounded-xl md:border md:border-border md:bg-popover md:shadow-2xl",
+                onclick: move |e| e.stop_propagation(),
+                onkeydown: move |e: KeyboardEvent| {
+                    if e.key() == Key::Enter && (e.modifiers().meta() || e.modifiers().ctrl()) {
+                        e.prevent_default();
+                        create_key();
+                    } else if e.key() == Key::Escape {
+                        e.prevent_default();
+                        props.on_close.call(());
+                    }
+                },
+                // ── where ──
+                header { class: "flex items-center gap-2 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-1 text-[13px] text-muted-foreground md:pt-3",
+                    if !props.place.is_empty() {
+                        span { class: "rounded-md bg-muted/60 px-1.5 py-0.5 font-medium text-foreground/80", "{props.place}" }
+                        span { "›" }
+                    }
+                    span { "New issue" }
+                    button {
+                        r#type: "button",
+                        class: "ml-auto flex size-9 items-center justify-center rounded-md hover:bg-accent hover:text-foreground md:size-7",
+                        aria_label: "Close",
+                        onclick: move |_| props.on_close.call(()),
+                        X { size: 16 }
+                    }
+                }
+                div { class: "flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-2",
+                    // ── title, read as you type ──
+                    div { class: "relative",
+                        textarea {
+                            aria_label: "Issue title",
+                            rows: "1",
+                            class: "w-full resize-none bg-transparent pt-2 text-[20px] font-semibold leading-7 tracking-[-0.1px] text-foreground outline-none [field-sizing:content] placeholder:text-muted-foreground md:text-[18px]",
+                            placeholder: "Issue title",
+                            value: "{title}",
+                            autofocus: true,
+                            onmounted: move |e| async move { let _ = e.set_focus(true).await; },
+                            oninput: move |e| {
+                                title.set(e.value());
+                                cursor.set(0);
+                            },
+                            onkeydown: move |e: KeyboardEvent| {
+                                if suggestions_key.is_empty() {
+                                    if e.key() == Key::Enter && !e.modifiers().meta() && !e.modifiers().ctrl() {
+                                        // The title is one line; Enter moves on.
+                                        e.prevent_default();
+                                    }
+                                    return;
+                                }
+                                let n = suggestions_key.len();
+                                match e.key() {
+                                    Key::ArrowDown => { e.prevent_default(); cursor.set((at + 1) % n); }
+                                    Key::ArrowUp => { e.prevent_default(); cursor.set((at + n - 1) % n); }
+                                    Key::Enter | Key::Tab => {
+                                        e.prevent_default();
+                                        if let Some(o) = suggestions_key.get(at).cloned() {
+                                            resolve_key(o);
+                                        }
+                                    }
+                                    Key::Escape => {
+                                        e.prevent_default();
+                                        e.stop_propagation();
+                                        title.set(format!("{} ", title.peek()));
+                                    }
+                                    _ => {}
+                                }
+                            },
+                        }
+                        if !suggestions.is_empty() {
+                            div { class: "absolute inset-x-0 top-full z-20 mt-1 flex flex-col rounded-lg border border-border bg-popover p-1 shadow-xl md:max-w-xs",
+                                for (i, o) in suggestions.iter().cloned().enumerate() {
+                                    {
+                                        let mut resolve = resolve.clone();
+                                        let pick = o.clone();
+                                        rsx! {
+                                            button {
+                                                key: "{o.id}",
+                                                r#type: "button",
+                                                class: if i == at { "flex min-h-10 items-center gap-2.5 rounded-md bg-accent px-2.5 text-left text-[14px] md:min-h-8 md:text-[13px]" } else { "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left text-[14px] md:min-h-8 md:text-[13px]" },
+                                                onmouseenter: move |_| cursor.set(i),
+                                                onclick: move |_| resolve(pick.clone()),
+                                                if let Some(icon) = o.icon.clone() { {icon} }
+                                                if let Some(c) = o.dot.as_ref() { span { class: "size-2.5 rounded-full", style: "background: {c};" } }
+                                                span { class: "truncate", "{o.label}" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    textarea {
+                        aria_label: "Description",
+                        class: "mt-1 min-h-20 w-full resize-none bg-transparent text-[15px] font-[450] leading-6 tracking-[-0.1px] text-foreground/90 outline-none [field-sizing:content] placeholder:text-muted-foreground",
+                        placeholder: "Add description…",
+                        value: "{description}",
+                        oninput: move |e| description.set(e.value()),
+                    }
+
+                    // ── sub-issues ──
+                    if !subs.read().is_empty() || adding_sub() {
+                        div { class: "mt-2 flex flex-col rounded-lg border border-border/70 p-2",
+                            span { class: "px-1 pb-1 text-[12px] font-medium text-muted-foreground", "Sub-issues {subs.read().len()}" }
+                            for (i, s) in subs.read().iter().cloned().enumerate() {
+                                div { key: "{i}", class: "flex min-h-9 items-center gap-2 px-1 text-[14px]",
+                                    super::properties::StatusIcon { status: "open".to_owned() }
+                                    span { class: "min-w-0 flex-1 truncate", "{s}" }
+                                    button {
+                                        r#type: "button",
+                                        class: "flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent",
+                                        aria_label: "Remove sub-issue",
+                                        onclick: move |_| { let mut v = subs(); v.remove(i); subs.set(v); },
+                                        X { size: 13 }
+                                    }
+                                }
+                            }
+                            if adding_sub() {
+                                input {
+                                    r#type: "text",
+                                    class: "min-h-9 bg-transparent px-1 text-[14px] outline-none placeholder:text-muted-foreground",
+                                    placeholder: "Sub-issue title — Enter to add",
+                                    value: "{sub_draft}",
+                                    onmounted: move |e| async move { let _ = e.set_focus(true).await; },
+                                    oninput: move |e| sub_draft.set(e.value()),
+                                    onkeydown: move |e: KeyboardEvent| match e.key() {
+                                        Key::Enter if !e.modifiers().meta() => {
+                                            e.prevent_default();
+                                            let t = sub_draft.peek().trim().to_owned();
+                                            if !t.is_empty() {
+                                                let mut v = subs();
+                                                v.push(t);
+                                                subs.set(v);
+                                                sub_draft.set(String::new());
+                                            }
+                                        }
+                                        Key::Escape => { e.prevent_default(); e.stop_propagation(); adding_sub.set(false); }
+                                        _ => {}
+                                    },
+                                }
+                            }
+                        }
+                    }
+                    if let Some(l) = link_draft() {
+                        input {
+                            r#type: "url",
+                            class: "mt-2 min-h-9 rounded-md border border-border bg-transparent px-2 text-[14px] outline-none",
+                            placeholder: "Paste a link — Enter to add",
+                            value: "{l}",
+                            onmounted: move |e| async move { let _ = e.set_focus(true).await; },
+                            oninput: move |e| link_draft.set(Some(e.value())),
+                            onkeydown: move |e: KeyboardEvent| {
+                                if e.key() == Key::Enter {
+                                    e.prevent_default();
+                                    let url = link_draft.peek().clone().unwrap_or_default();
+                                    if !url.trim().is_empty() {
+                                        let d = description.peek().clone();
+                                        description.set(if d.trim().is_empty() { url.trim().to_owned() } else { format!("{}\n\n{}", d.trim_end(), url.trim()) });
+                                    }
+                                    link_draft.set(None);
+                                } else if e.key() == Key::Escape {
+                                    e.prevent_default();
+                                    e.stop_propagation();
+                                    link_draft.set(None);
+                                }
+                            },
+                        }
+                    }
+                }
+
+                // ── the chips ──
+                div { class: "flex flex-wrap items-center gap-1.5 border-t border-border/60 px-4 py-2.5",
+                    StatusChip { status: status(), on_change: move |s: String| status.set(s) }
+                    PriorityChip {
+                        priority: priority().or(parsed_priority.clone()).unwrap_or_else(|| "none".to_owned()),
+                        on_change: move |p: String| priority.set(Some(p)),
+                    }
+                    AssigneeChip {
+                        assignee: assignee().map(|(id, _)| id),
+                        people: props.people.clone(),
+                        on_change: {
+                            let people = props.people.clone();
+                            move |id: Option<String>| assignee.set(id.and_then(|id| people.iter().find(|(p, _)| *p == id).cloned()))
+                        },
+                    }
+                    ProjectChip {
+                        project: project().map(|(id, _)| id).or_else(|| {
+                            parsed_project.as_ref().and_then(|n| projects.iter().find(|(_, t)| t.eq_ignore_ascii_case(n)).map(|(id, _)| *id))
+                        }),
+                        projects: projects.clone(),
+                        on_change: {
+                            let projects = projects.clone();
+                            move |id: Option<Uuid>| project.set(id.and_then(|id| projects.iter().find(|(p, _)| *p == id).cloned()))
+                        },
+                    }
+                    LabelsChip {
+                        chosen: {
+                            let mut l = labels();
+                            for t in parsed.tags.iter().filter(|t| *t != "task") {
+                                if !l.iter().any(|x| x.eq_ignore_ascii_case(t)) { l.push(t.clone()); }
+                            }
+                            l
+                        },
+                        known: props.known_labels.clone(),
+                        on_toggle: move |name: String| {
+                            let mut l = labels();
+                            if let Some(i) = l.iter().position(|x| x.eq_ignore_ascii_case(&name)) { l.remove(i); } else { l.push(name); }
+                            labels.set(l);
+                        },
+                    }
+                    if let Some(d) = due().or(parsed_due.clone()) {
+                        span { class: "inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-foreground md:h-7",
+                            CalendarDays { size: 14 }
+                            {d.get(..10).and_then(|s| s.parse::<chrono::NaiveDate>().ok()).map_or(d.clone(), |x| x.format("%b %-d").to_string())}
+                        }
+                    }
+                    if let Some(r) = recurrence().or(parsed_repeat.clone()) {
+                        span { class: "inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-foreground md:h-7",
+                            Repeat { size: 14 }
+                            {super::time::recurrence_summary(&r)}
+                        }
+                    }
+                    // ⋯ — the rest.
+                    div { class: "relative",
+                        button {
+                            r#type: "button",
+                            class: "inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 text-muted-foreground hover:bg-accent md:h-7 md:w-7",
+                            aria_label: "More options",
+                            onclick: move |_| menu.toggle(),
+                            Ellipsis { size: 14 }
+                        }
+                        if menu() {
+                            div { class: "fixed inset-0 z-40", onclick: move |_| menu.set(false) }
+                            div { class: "absolute bottom-full right-0 z-50 mb-1 flex w-60 flex-col rounded-lg border border-border bg-popover p-1 text-[13px] shadow-xl md:bottom-auto md:left-0 md:right-auto md:top-full md:mb-0 md:mt-1",
+                                label { class: "relative flex min-h-10 cursor-pointer items-center gap-2.5 rounded-md px-2.5 hover:bg-accent md:min-h-8",
+                                    CalendarDays { size: 14 }
+                                    span { class: "flex-1", "Set due date" }
+                                    kbd { class: "font-mono text-[10px] text-muted-foreground", "⇧D" }
+                                    input {
+                                        r#type: "date",
+                                        class: "absolute inset-0 cursor-pointer opacity-0",
+                                        onchange: move |e| { due.set(Some(e.value()).filter(|v| !v.is_empty())); menu.set(false); },
+                                    }
+                                }
+                                for (label, rule) in REPEATS.iter().copied() {
+                                    button {
+                                        key: "{rule}",
+                                        r#type: "button",
+                                        class: "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left hover:bg-accent md:min-h-8",
+                                        onclick: move |_| { recurrence.set(Some(rule.to_owned())); menu.set(false); },
+                                        Repeat { size: 14 }
+                                        span { "{label}" }
+                                    }
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left hover:bg-accent md:min-h-8",
+                                    onclick: move |_| { link_draft.set(Some(String::new())); menu.set(false); },
+                                    Link2 { size: 14 }
+                                    span { class: "flex-1", "Add link…" }
+                                }
+                                div { class: "my-1 h-px bg-border" }
+                                button {
+                                    r#type: "button",
+                                    class: "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left hover:bg-accent md:min-h-8",
+                                    onclick: move |_| { adding_sub.set(true); menu.set(false); },
+                                    ListTree { size: 14 }
+                                    span { class: "flex-1", "Add sub-issue" }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── create ──
+                footer { class: "flex items-center gap-3 border-t border-border/60 px-4 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:pb-2.5",
+                    label { class: "ml-auto flex items-center gap-2 text-[13px] text-muted-foreground",
+                        input {
+                            r#type: "checkbox",
+                            checked: create_more(),
+                            onchange: move |e| create_more.set(e.checked()),
+                        }
+                        "Create more"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "flex min-h-10 items-center rounded-lg bg-primary px-4 text-[13px] font-semibold text-primary-foreground disabled:opacity-50 md:min-h-8",
+                        disabled: title.read().trim().is_empty(),
+                        onclick: move |_| create_btn(),
+                        "Create issue"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_last_word_says_what_it_wants() {
+        assert_eq!(
+            trigger_at_end("Bounce stems @co"),
+            Some(Trigger::Person("co".into()))
+        );
+        assert_eq!(
+            trigger_at_end("Bounce stems #mix"),
+            Some(Trigger::Label("mix".into()))
+        );
+        assert_eq!(
+            trigger_at_end("Bounce stems @"),
+            Some(Trigger::Person(String::new()))
+        );
+        assert_eq!(
+            trigger_at_end("Bounce stems @cody "),
+            None,
+            "a space closes it"
+        );
+        assert_eq!(
+            trigger_at_end("email@example.com"),
+            None,
+            "only at a word's start"
+        );
+        assert_eq!(drop_last_word("Bounce stems @co"), "Bounce stems ");
+        assert_eq!(drop_last_word("@co"), "");
+    }
+
+    #[test]
+    fn chips_set_by_hand_win_over_the_title_and_the_title_fills_the_rest() {
+        let pid = Uuid::new_v4();
+        let projects = vec![(pid, "Crescendum Album".to_owned())];
+        let t = compose(
+            "Bounce stems for the client [[Crescendum Album]] tomorrow !high",
+            "",
+            "open",
+            Some("critical"),
+            Some(("u1".into(), "Cody".into())),
+            None,
+            &["mixing".to_owned()],
+            None,
+            None,
+            &projects,
+        );
+        assert_eq!(t.title, "Bounce stems for the client");
+        assert_eq!(t.priority, "critical", "the hand-set chip");
+        assert_eq!(t.project_id, Some(pid), "from [[...]]");
+        assert!(t.due.is_some(), "from 'tomorrow'");
+        assert!(t.tags.iter().any(|g| g == "mixing"));
+        assert_eq!(
+            super::super::issue_view::assignee_of(&t).as_deref(),
+            Some("u1")
+        );
+    }
+}

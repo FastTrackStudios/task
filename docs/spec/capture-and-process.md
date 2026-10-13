@@ -106,6 +106,19 @@ what lets a maintenance hour find it.
 
 ---
 
+### Processed work is yours
+
+t[process.outcome.mine]
+Every task processing makes — "make a task", "waiting on someone", "do it
+now" — is assigned to the person who processed it (a human assignee in
+the task's `workflow`), and so is an issue made in the composer unless
+another assignee is chosen. The Tasks list is what is assigned to the
+signed-in person (`task_proto::is_mine`); unassigned or someone else's
+work is documented work, listed under Project work. A capture that became
+a task therefore always lands on its maker's list.
+
+---
+
 ### Waiting on someone
 
 t[process.outcome.waiting]

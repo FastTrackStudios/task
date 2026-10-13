@@ -16,10 +16,39 @@
 //! project don't, and stay with the project until someone gives one a
 //! context or a date.
 //!
+//! **Assignment decides it when there is someone to ask.** "Mine" —
+//! [`is_assigned_to`] the signed-in person — is what puts an issue on
+//! their Tasks list (Linear's "My issues"); unassigned or someone else's
+//! is documented work, under its project. The shape test above is the
+//! fallback for when nobody is signed in. Processing and the composer
+//! assign new work to whoever made it, so a capture that becomes a task
+//! lands on its maker's list.
+//!
 //! Pure functions on wire types, like the sibling modules: every
 //! surface that draws the list classifies identically.
 
 use crate::model::{Status, TaskInfo};
+
+/// Whether `user_id` is one of the task's human assignees.
+#[must_use]
+pub fn is_assigned_to(task: &TaskInfo, user_id: &str) -> bool {
+    task.workflow.as_ref().is_some_and(|w| {
+        w.assignees.iter().any(
+            |a| matches!(a, workflows_proto::AgentRef::Human { user_id: u, .. } if u == user_id),
+        )
+    })
+}
+
+/// Whether the task belongs on `me`'s Tasks list: assigned to them, or —
+/// with nobody signed in — shaped like a next action.
+#[must_use]
+// t[impl process.outcome.mine]
+pub fn is_mine(task: &TaskInfo, me: Option<&str>) -> bool {
+    match me {
+        Some(id) => is_assigned_to(task, id),
+        None => is_next_action(task),
+    }
+}
 
 /// Whether the task is a next action (see the module docs). Status
 /// does not decide it except to say "already moving" — a finished
@@ -86,6 +115,35 @@ mod tests {
         assert!(is_next_action(&t));
         t.status = "open".into();
         assert!(!is_next_action(&t));
+    }
+
+    #[test]
+    // t[verify process.outcome.mine]
+    fn assignment_decides_mine_and_shape_is_the_signed_out_fallback() {
+        use workflows_proto::AgentRef;
+        let mut t = crate::capture("Bounce stems @errands");
+        assert!(
+            !is_mine(&t, Some("u1")),
+            "a context alone doesn't make it mine"
+        );
+        assert!(is_mine(&t, None), "signed out, the shape decides");
+        let mut wf = crate::model::WorkflowAttrs::default();
+        wf.assignees.0.push(AgentRef::Agent {
+            name: "claude".into(),
+            model_version: None,
+        });
+        t.workflow = Some(wf.clone());
+        assert!(!is_assigned_to(&t, "u1"), "an agent isn't the person");
+        wf.assignees.0.push(AgentRef::Human {
+            user_id: "u1".into(),
+            display_name: None,
+        });
+        t.workflow = Some(wf);
+        assert!(is_mine(&t, Some("u1")));
+        assert!(
+            !is_mine(&t, Some("u2")),
+            "someone else's is documented work to u2"
+        );
     }
 
     #[test]

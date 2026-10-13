@@ -360,13 +360,19 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                                     }
                                 }
                             },
-                            on_open: move |id: Uuid| open_id.set(Some(id)),
+                            on_open: move |id: Uuid| match props.on_open_full {
+                                Some(full) => full.call(id),
+                                None => open_id.set(Some(id)),
+                            },
                         }
                     },
                     ViewMode::Kanban => rsx! {
                         KanbanBoard {
                             tasks: props.tasks.clone(),
-                            on_open: move |id: Uuid| open_id.set(Some(id)),
+                            on_open: move |id: Uuid| match props.on_open_full {
+                                Some(full) => full.call(id),
+                                None => open_id.set(Some(id)),
+                            },
                             on_set_status: move |(id, status): (Uuid, String)| {
                                 props
                                     .on_event
@@ -404,7 +410,10 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     tasks: props.triage.clone(),
                     projects: props.projects.clone(),
                     on_event: props.on_event,
-                    on_open: move |id: Uuid| open_id.set(Some(id)),
+                    on_open: move |id: Uuid| match props.on_open_full {
+                                Some(full) => full.call(id),
+                                None => open_id.set(Some(id)),
+                            },
                 }
             }
             if let Some(t) = selected {

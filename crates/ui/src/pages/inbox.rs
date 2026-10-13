@@ -55,12 +55,15 @@ pub fn InboxView() -> Element {
     let mut queue = use_signal(Vec::<InboxItem>::new);
     let mut seeded = use_signal(|| false);
     let mut fleeting = crate::chrome::use_fleeting_open();
-    let seed_result = result.clone();
-    use_effect(move || {
-        if *seeded.peek() {
-            return;
-        }
-        if let Some(rows) = seed_result.value() {
+    // `Some(i)`: the deck is open, from row `i`.
+    let mut deck = use_signal(|| None::<usize>);
+    // Seeded on the first render that HAS rows. (An effect made once at
+    // mount froze whatever the list held then — empty, now that the app
+    // opens on this page before the inbox has loaded — and never ran
+    // again, so the deck and the list stayed empty under a badge of 5.)
+    // Written once (guarded by `seeded`), so it can't loop.
+    if !*seeded.peek() {
+        if let Some(rows) = result.value() {
             let today = Utc::now().date_naive().to_string();
             let mut due: Vec<InboxItem> = rows
                 .iter()
@@ -71,7 +74,7 @@ pub fn InboxView() -> Element {
             queue.set(due);
             seeded.set(true);
         }
-    });
+    }
 
     if result.is_waiting() && result.value().is_none() {
         return rsx! { crate::states::LoadingState {} };
@@ -119,19 +122,89 @@ pub fn InboxView() -> Element {
         };
     }
 
+    // The deck, over the list, from the row you tapped (or the top).
+    if let Some(start) = deck() {
+        return rsx! {
+            task_widgets::FullscreenExperience {
+                title: "Process",
+                handle_esc: true,
+                on_exit: move |()| deck.set(None),
+                ProcessDeck {
+                    items: queue(),
+                    slug,
+                    start,
+                    on_exit: move |()| deck.set(None),
+                }
+            }
+        };
+    }
+
+    // The list — a page in the shell, like Linear's Inbox: what's
+    // waiting, oldest first; tap one to process it, or Process for all.
+    let store_rows = result.value().cloned().unwrap_or_default();
+    let today = Utc::now().date_naive().to_string();
+    let rows: Vec<(usize, InboxItem)> = queue()
+        .into_iter()
+        .enumerate()
+        // Still due as the store has it now (processed ones drop out).
+        .filter(|(_, q)| {
+            store_rows
+                .iter()
+                .any(|(_, it)| it.id == q.id && is_due(it, &today))
+        })
+        .collect();
+    let left = rows.len();
     rsx! {
-        task_widgets::FullscreenExperience {
-            title: "Process",
-            handle_esc: true,
-            on_exit: move |()| {
-                nav.push(crate::routes::Route::DashboardRoute {});
-            },
-            ProcessDeck {
-                items: queue(),
-                slug,
-                on_exit: move |()| {
-                    nav.push(crate::routes::Route::DashboardRoute {});
-                },
+        div { class: "mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 pb-6 sm:px-8",
+            div { class: "flex items-center gap-3 pb-3",
+                h1 { class: "flex-1 text-[28px] font-semibold tracking-tight text-foreground", "Inbox" }
+                if left > 0 {
+                    button {
+                        r#type: "button",
+                        class: "flex h-10 items-center gap-2 rounded-full border border-border/70 bg-popover/80 px-4 text-[14px] font-medium text-foreground active:bg-accent",
+                        onclick: move |_| deck.set(Some(0)),
+                        architect_ui::lucide_dioxus::Play { size: 15 }
+                        "Process {left}"
+                    }
+                }
+            }
+            if rows.is_empty() {
+                p { class: "py-24 text-center text-[15px] text-muted-foreground",
+                    "Inbox zero. Everything you captured has a place."
+                }
+            }
+            ul { class: "flex flex-col",
+                for (idx, it) in rows.into_iter() {
+                    {
+                        let (title, rest) = crate::process::split_title_body(&it.body);
+                        let age = it.created.get(..10).unwrap_or(&it.created).to_owned();
+                        let suggested = it.status == InboxItem::STATUS_SUGGESTED;
+                        let via = (it.source != "ui" && it.source != "cli").then(|| it.source.clone());
+                        rsx! {
+                            li { key: "{it.id}",
+                                button {
+                                    r#type: "button",
+                                    class: "flex w-full items-start gap-3 rounded-xl px-2 py-3 text-left active:bg-accent/60 hover:bg-accent/40",
+                                    onclick: move |_| deck.set(Some(idx)),
+                                    span { class: if suggested { "mt-1.5 size-2 shrink-0 rounded-full bg-primary" } else { "mt-1.5 size-2 shrink-0 rounded-full bg-muted-foreground/40" } }
+                                    span { class: "flex min-w-0 flex-1 flex-col gap-0.5",
+                                        span { class: "line-clamp-2 text-[15px] leading-6 text-foreground", "{title}" }
+                                        if !rest.is_empty() {
+                                            span { class: "truncate text-[13px] text-muted-foreground", "{rest}" }
+                                        }
+                                        span { class: "flex items-center gap-1.5 text-[12px] text-muted-foreground",
+                                            if suggested {
+                                                span { class: "rounded-full bg-primary/15 px-1.5 text-primary", "Suggested" }
+                                            }
+                                            if let Some(v) = via { span { "via {v}" } }
+                                            span { "{age}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -143,11 +216,14 @@ pub fn InboxView() -> Element {
 fn ProcessDeck(
     items: Vec<InboxItem>,
     slug: Memo<Option<String>>,
+    /// The row the deck opens on (the one tapped in the list).
+    #[props(default)]
+    start: usize,
     on_exit: EventHandler<()>,
 ) -> Element {
     let muts = stores::use_inbox_mutations();
     let toast = use_toast();
-    let mut cursor = use_signal(|| 0usize);
+    let mut cursor = use_signal(move || start);
     let mode = use_signal(Mode::stored);
     let total = items.len();
     let idx = cursor();

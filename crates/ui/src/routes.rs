@@ -62,6 +62,10 @@ pub enum Route {
         #[route("/inbox")]
         InboxRoute {},
 
+        // What you starred — the third tab on a phone.
+        #[route("/favorites")]
+        FavoritesRoute {},
+
         // Contacts — the vault-backed people directory (adjacent to
         // Inbox; keep this anchor stable for clean merges).
         #[route("/contacts")]
@@ -304,6 +308,11 @@ fn DashboardRoute() -> Element {
 #[component]
 fn InboxRoute() -> Element {
     rsx! { pages::inbox::InboxView {} }
+}
+
+#[component]
+fn FavoritesRoute() -> Element {
+    rsx! { crate::favorites::FavoritesView {} }
 }
 
 #[component]

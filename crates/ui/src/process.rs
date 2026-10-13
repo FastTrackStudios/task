@@ -290,6 +290,11 @@ pub fn ProcessCard(
     stored: bool,
 ) -> Element {
     let muts = stores::use_inbox_mutations();
+    let me = use_context::<crate::auth::AuthCtx>()
+        .active
+        .read()
+        .as_ref()
+        .map(|a| (a.user_id.to_string(), a.name.clone()));
     // Callers key the card by item id, so each item starts here.
     let mut step = use_signal(|| Step::Decide);
 
@@ -360,6 +365,7 @@ pub fn ProcessCard(
                             start_time: Utc::now(),
                             end_time: None,
                         }]);
+                    let task = task_ui::with_assignee(&task, me.clone());
                     let title = task.title.clone();
                     muts.process_into_task(slug, item, task);
                     on_done.call(Outcome::Filed(format!("Started: {title}")));
@@ -654,6 +660,12 @@ fn TaskShape(
 ) -> Element {
     let waiting = shape;
     let muts = stores::use_inbox_mutations();
+    // Whoever processes it: the task lands on their list.
+    let me = use_context::<crate::auth::AuthCtx>()
+        .active
+        .read()
+        .as_ref()
+        .map(|a| (a.user_id.to_string(), a.name.clone()));
     let task_store = stores::use_task_store();
     let project_store = stores::use_project_store();
 
@@ -747,6 +759,8 @@ fn TaskShape(
                     .map(|(_, name)| vec![format!("[[{name}]]")])
                     .unwrap_or_default(),
             );
+            // Yours: what you process lands on your Tasks list.
+            let task = task_ui::with_assignee(&task, me.clone());
             muts.process_into_task(slug.clone(), item.clone(), task);
             on_done.call(Outcome::Filed(if waiting {
                 format!("Waiting: {t}")

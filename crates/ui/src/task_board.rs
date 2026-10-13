@@ -66,19 +66,19 @@ impl Filtered<'_> {
 /// Which half of the work a board shows (see `task_proto::action`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
-    /// The Tasks list: next actions only — work with a context, a date,
-    /// a repeat, or already moving.
+    /// The Tasks list: what is yours to do — assigned to the signed-in
+    /// person (Linear's "My issues"; see `task_proto::is_mine`).
     Actions,
-    /// The Project work list: issues and pieces of projects with no
-    /// where or when yet.
+    /// The Project work list: everything else — unassigned or someone
+    /// else's, documented under its project.
     ProjectWork,
 }
 
 impl Scope {
-    fn keeps(self, t: &TaskInfo) -> bool {
+    fn keeps(self, t: &TaskInfo, me: Option<&str>) -> bool {
         match self {
-            Self::Actions => task_proto::is_next_action(t),
-            Self::ProjectWork => task_proto::is_project_work(t),
+            Self::Actions => task_proto::is_mine(t, me),
+            Self::ProjectWork => !task_proto::is_mine(t, me),
         }
     }
 }
@@ -89,6 +89,7 @@ impl Scope {
 pub fn filter<'a>(
     all: &[&'a TaskInfo],
     scope: Scope,
+    me: Option<&str>,
     active_only: bool,
     relevant_only: bool,
     ctx: &task_proto::RelevanceContext,
@@ -101,7 +102,7 @@ pub fn filter<'a>(
         .iter()
         .copied()
         .filter(|t| {
-            if !scope.keeps(t) {
+            if !scope.keeps(t, me) {
                 // Counted only while open: finished project work isn't
                 // something the Tasks list should point you to.
                 if task_proto::status_is_open(&t.status) {
@@ -260,11 +261,11 @@ mod tests {
         let done = action("b", "done");
         let all = [&open, &done];
         let ctx = relevance_ctx("computer", None, Vec::new());
-        let f = filter(&all, Scope::Actions, true, false, &ctx);
+        let f = filter(&all, Scope::Actions, None, true, false, &ctx);
         assert_eq!(f.visible.len(), 1);
         assert_eq!(f.hidden_note().as_deref(), Some("1 done hidden"));
         assert!(
-            filter(&all, Scope::Actions, false, false, &ctx)
+            filter(&all, Scope::Actions, None, false, false, &ctx)
                 .hidden_note()
                 .is_none()
         );
@@ -282,6 +283,7 @@ mod tests {
         let f = filter(
             &all,
             Scope::Actions,
+            None,
             true,
             true,
             &relevance_ctx("studio", None, Vec::new()),
@@ -298,13 +300,13 @@ mod tests {
         let shipped = task("old issue", "done");
         let all = [&errand, &epic, &shipped];
         let ctx = relevance_ctx("computer", None, Vec::new());
-        let tasks = filter(&all, Scope::Actions, true, false, &ctx);
+        let tasks = filter(&all, Scope::Actions, None, true, false, &ctx);
         assert_eq!(tasks.visible.len(), 1);
         assert_eq!(
             tasks.other_scope, 1,
             "finished project work isn't pointed to"
         );
-        let work = filter(&all, Scope::ProjectWork, true, false, &ctx);
+        let work = filter(&all, Scope::ProjectWork, None, true, false, &ctx);
         assert_eq!(work.visible.len(), 1);
         assert_eq!(work.visible[0].title, "EPIC: orchestral renderer");
     }

@@ -46,7 +46,7 @@ pub mod relevance;
 pub mod service;
 pub mod wayfinder;
 
-pub use action::{is_next_action, is_project_work};
+pub use action::{is_assigned_to, is_mine, is_next_action, is_project_work};
 pub use agent_lane::{TriageLabel, has_triage_label, is_untriaged, triage_label, triage_labels};
 pub use capture::{capture, infer_project_id};
 pub use filing::{Anchor, anchor, is_filed, is_unfiled};

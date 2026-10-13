@@ -20,7 +20,7 @@
 //! live clock, and a complete button — the checkbox-timer made
 //! spatial. Idle (nothing running) renders no bar at all.
 
-use architect_ui::lucide_dioxus::{Plus, SlidersHorizontal};
+use architect_ui::lucide_dioxus::SlidersHorizontal;
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use task_ui::{QuickAdd, TaskInfo as UiTask, TaskMutation, TasksApp};
@@ -30,7 +30,7 @@ use crate::chrome::{
 };
 use crate::orgs::{OrgMeta, OrgSelection};
 use crate::prefs::PrefsCtx;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
+use crate::shell::mobile::BottomSheet;
 use crate::stores;
 use crate::task_board::Scope;
 
@@ -166,6 +166,9 @@ fn TaskBoard(scope: Scope) -> Element {
     // from today's day plan — it steers relevance and heads the list.
     let now_block = crate::now_block::use_now_block();
     let process_now = use_context::<crate::process::ProcessNow>();
+    // Whose list this is: Tasks shows what is assigned to them.
+    let account = use_context::<crate::auth::AuthCtx>().active;
+    let new_issue = use_context::<crate::new_issue::NewIssue>();
     let board = use_memo(move || -> Option<BoardData> {
         let result = store.entries_result();
         let rows = result.value()?;
@@ -200,7 +203,9 @@ fn TaskBoard(scope: Scope) -> Element {
             .unwrap_or_default();
         // The board's filters — the same function the Work sidebar
         // counts with, so the two agree (`crate::task_board`).
-        let filtered = crate::task_board::filter(&all, scope, active_only, relevant_only, &ctx);
+        let me = account.read().as_ref().map(|a| a.user_id.to_string());
+        let filtered =
+            crate::task_board::filter(&all, scope, me.as_deref(), active_only, relevant_only, &ctx);
         let other_scope = filtered.other_scope;
         let hidden = filtered.hidden_done + filtered.hidden_elsewhere;
         let hidden_note = filtered.hidden_note();
@@ -410,7 +415,27 @@ fn TaskBoard(scope: Scope) -> Element {
             } = data;
             // Inline chips are desktop chrome; on phones the same
             // controls live in the Filters bottom sheet below.
+            // How many filters are narrowing the board — badged on the
+            // mobile Filters button so a filtered board is never a
+            // mystery on a phone.
+            let filter_count = usize::from(active_only)
+                + usize::from(relevant_only)
+                + usize::from(!at_location.is_empty());
             let chips = rsx! {
+                // Phone: the filters as one round button, badged with how
+                // many are narrowing the list.
+                button {
+                    r#type: "button",
+                    class: "relative flex size-10 items-center justify-center rounded-full border border-border/70 bg-popover/80 text-foreground active:bg-accent md:hidden",
+                    aria_label: "Filters",
+                    onclick: move |_| filters_open.set(true),
+                    SlidersHorizontal { size: 17 }
+                    if filter_count > 0 {
+                        span { class: "absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground",
+                            "{filter_count}"
+                        }
+                    }
+                }
                 div { class: "hidden items-center gap-1.5 md:flex",
                     FilterChip {
                         label: "Active",
@@ -441,12 +466,6 @@ fn TaskBoard(scope: Scope) -> Element {
                     }
                 }
             };
-            // How many filters are narrowing the board — badged on the
-            // mobile Filters trigger so a filtered board is never a
-            // mystery on a phone.
-            let filter_count = usize::from(active_only)
-                + usize::from(relevant_only)
-                + usize::from(!at_location.is_empty());
             let sheet_projects = project_choices.clone();
             rsx! {
                 div { class: "flex h-full w-full flex-col pb-14 md:pb-0",
@@ -498,34 +517,19 @@ fn TaskBoard(scope: Scope) -> Element {
                             },
                             initial_view: stored_view(),
                             on_view_change: move |v| remember_view(v),
-                            on_capture: move |line: String| {
-                                let create_slug =
-                                    crate::orgs::create_target(&selection.read(), &org_list.read());
-                                process_now.start(create_slug, &line);
-                            },
+                            // The quick-add line opens the composer with it typed in:
+                            // one way to make an issue, with every property in reach.
+                            on_capture: move |line: String| new_issue.open(line),
                             on_event: move |mu: TaskMutation| apply_with_undo(mu),
                             on_open_full: move |id| {
                                 nav.push(crate::routes::Route::TaskDetailRoute { id });
                             },
                         }
                     }
-                    // ── Mobile: sticky actions + sheets ────────────────
-                    MobileActionBar {
-                        button {
-                            r#type: "button",
-                            class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent",
-                            onclick: move |_| filters_open.set(true),
-                            SlidersHorizontal { size: 16 }
-                            if filter_count > 0 { "Filters · {filter_count}" } else { "Filters" }
-                        }
-                        button {
-                            r#type: "button",
-                            class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85",
-                            onclick: move |_| add_open.set(true),
-                            Plus { size: 16 }
-                            "Add task"
-                        }
-                    }
+                    // ── Mobile: sheets ─────────────────────────────────
+                    // No action strip: on a phone, filters are the round
+                    // button in the header row and a new issue is the
+                    // tab bar's compose button (Linear's shell).
                     BottomSheet {
                         open: filters_open(),
                         title: "Filters".to_string(),
