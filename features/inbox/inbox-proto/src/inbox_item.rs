@@ -147,6 +147,15 @@ impl InboxItem {
                 .as_deref()
                 .is_none_or(|d| day(d) <= day(today))
     }
+
+    /// Whether this item is due for processing on `today`: in the
+    /// review queue ([`Self::in_review_queue`]), or a suggestion
+    /// awaiting a yes or no. What the Inbox list shows and what the
+    /// Suggested slot (web and watch) counts as "captures to process".
+    #[must_use]
+    pub fn is_due(&self, today: &str) -> bool {
+        self.status == Self::STATUS_SUGGESTED || self.in_review_queue(today)
+    }
 }
 
 /// Client-side optimistic cache identity (`architect::Store`): keyed by

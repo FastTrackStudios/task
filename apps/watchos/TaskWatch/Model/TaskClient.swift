@@ -34,6 +34,39 @@ struct TimerDto: Codable, Equatable, Sendable {
     }()
 }
 
+/// The one thing worth doing now, mirroring the server's `SuggestionDto`
+/// (the same pick as the Tasks page's Suggested slot).
+struct SuggestionDto: Codable, Equatable, Sendable {
+    /// What "Not now" remembers and what `act` names.
+    let key: String
+    /// planned | mode | continue | overdue | process | today
+    let kind: String
+    /// Why now, small, above the title.
+    let eyebrow: String
+    let title: String
+    /// A quiet line under the title; may be empty.
+    let detail: String
+    /// Eyebrow and detail in one line.
+    let why: String
+    /// Start | Done | Process
+    let action: String
+    let taskId: String?
+    let modeTitle: String?
+
+    enum CodingKeys: String, CodingKey {
+        case key, kind, eyebrow, title, detail, why, action
+        case taskId = "task_id"
+        case modeTitle = "mode_title"
+    }
+}
+
+/// `POST suggested/act` → the timer the action opened (Start), if any,
+/// and the suggestion that shows now.
+struct SuggestedActDto: Codable, Sendable {
+    let timer: TimerDto?
+    let next: SuggestionDto?
+}
+
 enum TaskClientError: Error, LocalizedError {
     case notConfigured
     case badURL
@@ -85,11 +118,13 @@ struct TaskClient {
     /// Returns the closed session, or nil when nothing was running (204).
     @discardableResult
     func stopTimer() async throws -> TimerDto? {
-        try await send("timer/stop", method: "POST", body: nil, decode: TimerDto?.self)
+        try await send("timer/stop", method: "POST", body: nil as [String: String]?,
+                       decode: TimerDto?.self)
     }
 
     func activeTimer() async throws -> TimerDto? {
-        try await send("timer/active", method: "GET", body: nil, decode: TimerDto?.self)
+        try await send("timer/active", method: "GET", body: nil as [String: String]?,
+                       decode: TimerDto?.self)
     }
 
     // ── Inbox ──
@@ -99,10 +134,41 @@ struct TaskClient {
         _ = try await send("inbox", method: "POST", body: ["body": body], decode: Ack.self)
     }
 
+    // ── Suggested ──
+
+    /// The suggestion for the watch's own local `date` (YYYY-MM-DD) and
+    /// `minute` since midnight — the server doesn't know the wearer's
+    /// timezone. `declined` keys are skipped ("Not now"). nil = nothing.
+    func suggested(date: String, minute: Int, declined: [String]) async throws -> SuggestionDto? {
+        try await send("suggested", method: "GET", body: nil as [String: String]?,
+                       query: [
+                           URLQueryItem(name: "date", value: date),
+                           URLQueryItem(name: "minute", value: String(minute)),
+                           URLQueryItem(name: "declined", value: declined.joined(separator: ",")),
+                       ],
+                       decode: SuggestionDto?.self)
+    }
+
+    /// Do the suggestion's primary action (Start / Done) if `key` still
+    /// applies; HTTP 409 when it no longer does, 422 for Process.
+    func actOnSuggestion(key: String, date: String, minute: Int,
+                         declined: [String]) async throws -> SuggestedActDto {
+        struct Body: Encodable {
+            let key: String
+            let date: String
+            let minute: Int
+            let declined: [String]
+        }
+        return try await send("suggested/act", method: "POST",
+                              body: Body(key: key, date: date, minute: minute, declined: declined),
+                              decode: SuggestedActDto.self)
+    }
+
     // ── Transport ──
 
-    private func send<T: Decodable>(
-        _ path: String, method: String, body: [String: String]?, decode: T.Type
+    private func send<T: Decodable, B: Encodable>(
+        _ path: String, method: String, body: B?, query: [URLQueryItem] = [],
+        decode: T.Type
     ) async throws -> T {
         guard config.isComplete else { throw TaskClientError.notConfigured }
         let base = config.baseURL.trimmingCharacters(in: .whitespaces)
@@ -110,13 +176,14 @@ struct TaskClient {
         let slug = config.orgSlug.trimmingCharacters(in: .whitespaces)
         guard var url = URL(string: root) else { throw TaskClientError.badURL }
         url.append(path: "org/\(slug)/watch/v1/\(path)")
+        if !query.isEmpty { url.append(queryItems: query) }
 
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            req.httpBody = try JSONEncoder().encode(body)
         }
 
         let (data, resp): (Data, URLResponse)

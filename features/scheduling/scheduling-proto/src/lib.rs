@@ -50,10 +50,10 @@ pub use cal_event::CalEvent;
 pub use day_plan::{BlockAssignment, DayPlan, PlannedBlock};
 pub use error::SchedulingError;
 pub use event_type::{EventType, EventTypeId, EventTypeLocation};
-pub use focus::steering_block_at;
+pub use focus::{planned_task_at, steering_block_at};
 pub use resolve::{
     BlockRole, ChangeAction, ReconcileChange, ReconcileOutcome, ResolvedBlock, is_embedded,
-    meal_slot_for_block, merge_template, reconcile, role_for,
+    meal_slot_for_block, merge_template, reconcile, resolve_day, role_for, template_for,
 };
 pub use schedule::{
     AvailabilityRule, AvailabilitySchedule, ScheduleId, SlotQuery, TimeSlot, Weekday,

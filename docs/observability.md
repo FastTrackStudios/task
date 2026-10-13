@@ -94,6 +94,8 @@ families here when you introduce them.
 | `mcp.tool` | the MCP tool name (`create_task`, `telemetry_query_logs`, …) | `mcp` |
 | `telemetry.backend` | `tempo` \| `loki` | `mcp::telemetry_call` |
 | `telemetry.outcome` | `ok` \| `refused` \| `unconfigured` \| `bad_request` \| `upstream_error` | `mcp::telemetry_call` |
+| `watch.suggested` | the suggestion kind served or acted on: `planned` \| `mode` \| `continue` \| `overdue` \| `process` \| `today` \| `none` | `watch_bridge` |
+| `watch.act.outcome` | `acted` \| `stale` (key no longer applies, 409) \| `refused` (Process, 422) | `watch_bridge` |
 | `debug.profile_seconds` / `debug.format` | the sampling window (1–60) and `flamegraph` \| `pprof` | `debug_profile` |
 | `wiki.subscribe.source` / `wiki.subscribe.outcome` | subscription materialisation | `wiki-live` |
 | `wiki.slug` | the wiki being served | `wiki-live` |

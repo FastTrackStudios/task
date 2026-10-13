@@ -52,10 +52,32 @@ impl BlockCategory {
             Self::Meal => Some("Meal time"),
             Self::Exercise => Some("Exercise"),
             Self::Spiritual => Some("Quiet time"),
-            Self::Reset | Self::Hygiene => Some("Morning reset"),
+            Self::Reset => Some("Morning reset"),
+            Self::Hygiene => Some("Getting ready"),
             Self::WindDown => Some("Wind-down"),
             Self::Allocatable | Self::Sleep | Self::Other => None,
         }
+    }
+
+    /// The kind a [`focus_label`](Self::focus_label) names — how a
+    /// running "Maintenance hour" timer session is read back as the
+    /// mode it started.
+    #[must_use]
+    pub fn from_focus_label(label: &str) -> Option<Self> {
+        const STEERING: [BlockCategory; 7] = [
+            BlockCategory::Maintenance,
+            BlockCategory::Meal,
+            BlockCategory::Exercise,
+            BlockCategory::Spiritual,
+            BlockCategory::Reset,
+            BlockCategory::Hygiene,
+            BlockCategory::WindDown,
+        ];
+        let label = label.trim();
+        STEERING.into_iter().find(|c| {
+            c.focus_label()
+                .is_some_and(|l| l.eq_ignore_ascii_case(label))
+        })
     }
 }
 
@@ -74,6 +96,25 @@ pub fn steering_block_at(blocks: &[PlannedBlock], minute: u16) -> Option<&Planne
             minute >= s && minute < e
         })
         .max_by_key(|b| (b.fixed, b.start.minutes_since_midnight))
+}
+
+/// The task a block running at `minute` was planned for — the calendar's
+/// say on what to start now ("09:00 Studio block: Comp lead vocals").
+/// Returns the block and the assigned task's id; the same overlap rule as
+/// [`steering_block_at`].
+#[must_use]
+pub fn planned_task_at(blocks: &[PlannedBlock], minute: u16) -> Option<(&PlannedBlock, &str)> {
+    blocks
+        .iter()
+        .filter(|b| {
+            let (s, e) = day_span(b.start, b.end);
+            minute >= s && minute < e
+        })
+        .filter_map(|b| {
+            let a = b.assignment.as_ref().filter(|a| a.kind == "task")?;
+            Some((b, a.ref_id.as_deref()?))
+        })
+        .max_by_key(|(b, _)| (b.fixed, b.start.minutes_since_midnight))
 }
 
 #[cfg(test)]
@@ -125,5 +166,15 @@ mod tests {
         meal.fixed = true;
         let day = vec![meal.clone(), chores];
         assert_eq!(steering_block_at(&day, 12 * 60 + 45), Some(&meal));
+    }
+
+    #[test]
+    // t[verify process.focus.mode]
+    fn a_focus_label_reads_back_as_its_kind() {
+        assert_eq!(
+            BlockCategory::from_focus_label("maintenance hour "),
+            Some(BlockCategory::Maintenance)
+        );
+        assert_eq!(BlockCategory::from_focus_label("Mix track two"), None);
     }
 }

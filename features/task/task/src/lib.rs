@@ -71,6 +71,10 @@ pub mod scan;
 pub mod write;
 
 pub use capture::{capture, infer_project_id};
+pub use task_proto::is_mine;
+/// The Suggested slot's pick (see [`task_proto::suggest`]).
+pub use task_proto::suggest;
+
 pub use model::{
     Priority, Relation, RelationKind, Status, TaskInfo, TimeEntry, close_open_time_entries,
     is_due_on_or_before, status_is_open, status_is_terminal, track_status_transition,

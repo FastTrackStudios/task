@@ -18922,6 +18922,7 @@ dependencies = [
  "chrono",
  "facet",
  "fake",
+ "scheduling-proto",
  "sea-orm",
  "serde",
  "serde_json",

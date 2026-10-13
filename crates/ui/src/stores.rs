@@ -44,7 +44,7 @@ use std::collections::HashSet;
 use architect::{
     AtomResult, Id, Mutation, StoreEntity, use_mutation, use_store_entry, use_store_list,
 };
-use chrono::{Datelike, NaiveDate, Utc, Weekday};
+use chrono::{NaiveDate, Utc};
 use dioxus::prelude::*;
 use project_proto::ProjectInfo;
 use task_proto::TaskInfo as DbTask;
@@ -856,48 +856,24 @@ impl StoreEntity for DayPlanRow {
     }
 }
 
-/// The template a date defaults to: `weekend` for Sat/Sun, else
-/// `weekday`; falls back to the first template if those ids are absent.
-fn template_for(
-    date: NaiveDate,
-    templates: &[scheduling_proto::DayTemplate],
-) -> Option<&scheduling_proto::DayTemplate> {
-    let weekend = matches!(date.weekday(), Weekday::Sat | Weekday::Sun);
-    let want = if weekend { "weekend" } else { "weekday" };
-    templates
-        .iter()
-        .find(|t| t.id.0 == want)
-        .or_else(|| templates.first())
-}
-
 /// Resolve a date to the row the page renders: the saved plan's blocks
 /// verbatim (explicit) plus the matching template's blocks reflowed
-/// into the remaining free time as *soft* fallback (see
-/// `scheduling_proto::resolve::merge_template`). A date with no saved
-/// plan is the all-soft template; a *sparse* saved plan (e.g. only a
-/// scheduled meal block) still shows the rest of its day.
+/// into the remaining free time as *soft* fallback
+/// (`scheduling_proto::resolve_day`, shared with the watch bridge). A
+/// date with no saved plan is the all-soft template; a *sparse* saved
+/// plan (e.g. only a scheduled meal block) still shows the rest of its
+/// day.
 fn resolve_day(
     date: NaiveDate,
     saved: Option<scheduling_proto::DayPlan>,
     templates: &[scheduling_proto::DayTemplate],
 ) -> DayPlanRow {
-    let tpl = template_for(date, templates);
-    let saved_blocks: &[scheduling_proto::PlannedBlock] =
-        saved.as_ref().map_or(&[], |p| &p.blocks.0);
-    let tpl_blocks: &[scheduling_proto::TimeBlock] = tpl.map_or(&[], |t| &t.blocks.0);
-    let merged = scheduling_proto::resolve::merge_template(saved_blocks, tpl_blocks);
+    let (plan, merged) = scheduling_proto::resolve_day(date, saved, templates);
     let soft_ids: HashSet<String> = merged
         .iter()
         .filter(|rb| rb.soft)
         .map(|rb| rb.block.id.0.clone())
         .collect();
-    let plan = scheduling_proto::DayPlan {
-        date: date.to_string(),
-        from_template: saved
-            .and_then(|p| p.from_template)
-            .or_else(|| tpl.map(|t| t.id.clone())),
-        blocks: merged.into_iter().map(|rb| rb.block).collect(),
-    };
     DayPlanRow {
         date,
         plan,

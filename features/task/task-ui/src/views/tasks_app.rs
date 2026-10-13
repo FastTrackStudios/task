@@ -24,7 +24,7 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::List => "List",
             Self::Kanban => "Kanban",
@@ -104,11 +104,22 @@ pub struct TasksAppProps {
     /// page's.
     #[props(default = false)]
     pub embedded: bool,
+    /// The page drives List / Kanban (its Display options sheet) — when
+    /// set, this wins over the board's own switch.
+    #[props(default)]
+    pub view: Option<ViewMode>,
+    /// The page draws its own header on phones (title, main action, ⋯):
+    /// the board's header row is desktop-only.
+    #[props(default = false)]
+    pub phone_header: bool,
 }
 
 #[component]
 pub fn TasksApp(props: TasksAppProps) -> Element {
     let mut view = use_signal(|| props.initial_view.unwrap_or_default());
+    // A page-driven view (its Display options) wins over the switch.
+    let page_view = props.view;
+    let current_view = move || page_view.unwrap_or_else(|| view());
     let mut open_id: Signal<Option<Uuid>> = use_signal(|| None);
 
     // Triage rows open the same detail as list rows.
@@ -235,7 +246,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
             class: "{shell}",
             // The key listener stands down while the task sheet is open.
             "data-board-busy": "{open_id.read().is_some()}",
-            div { class: "flex flex-wrap items-center gap-x-3 gap-y-2",
+            div { class: if props.phone_header { "hidden flex-wrap items-center gap-x-3 gap-y-2 md:flex" } else { "flex flex-wrap items-center gap-x-3 gap-y-2" },
                 // Title and counts as one block: stacked on a phone, so a
                 // long count line ("57 open · 193 done hidden") wraps under
                 // the title instead of pushing the view switch onto a row
@@ -271,7 +282,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     div { class: "inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 text-xs",
                         for v in [ViewMode::List, ViewMode::Kanban] {
                             {
-                                let active = v == view();
+                                let active = v == current_view();
                                 // Touch-sized below `sm`, compact on desktop.
                                 let cls = if active {
                                     "bg-background text-foreground shadow-sm font-medium px-3 py-1.5 sm:px-2.5 sm:py-0.5 rounded-md transition-colors"
@@ -322,7 +333,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
             // Bottom room on phones: the capture button floats over the
             // list's end, and the last line must scroll clear of it.
             div { class: "flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto pb-20 md:pb-0",
-                match view() {
+                match current_view() {
                     ViewMode::List => rsx! {
                         TaskList {
                             tasks: props.tasks.clone(),

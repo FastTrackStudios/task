@@ -14,7 +14,7 @@ use uuid::Uuid;
 /// The relevance context for "now": the local clock and date, where
 /// the person says they are, the project their timer runs on, and what
 /// the current time block is for (`focus` — see
-/// [`crate::now_block::use_now_block`]; empty when no block steers).
+/// [`crate::now_block::use_focus`]; empty unless a mode is running).
 #[must_use]
 pub fn relevance_ctx(
     location: &str,

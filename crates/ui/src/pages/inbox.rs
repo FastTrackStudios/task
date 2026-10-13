@@ -25,12 +25,12 @@ use crate::process::{Mode, Outcome, ProcessCard};
 use crate::stores;
 
 /// Whether an item belongs in today's deck: open and due (no resurface
-/// date, or one that has come), or a suggestion awaiting a yes or no.
+/// date, or one that has come), or a suggestion awaiting a yes or no —
+/// `InboxItem::is_due`, shared with the watch bridge's Suggested pick.
 #[must_use]
 // t[impl process.due]
 pub fn is_due(item: &InboxItem, today: &str) -> bool {
-    item.status == InboxItem::STATUS_SUGGESTED
-        || (item.is_open() && item.resurface_on.as_deref().is_none_or(|d| d <= today))
+    item.is_due(today)
 }
 
 #[component]

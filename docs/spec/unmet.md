@@ -357,7 +357,10 @@ the due rule and processing into a task over the Inbox and Task lanes
 maintenance hour (`example_org::declared_tests`), and the four
 `process.focus.{steering,surfaces,opens,ranks}` rules in
 `task-proto::relevance` / `scheduling-proto::focus` unit tests and over
-`TaskService::query`.
+`TaskService::query`. `process.focus.mode` is unit-tested (the session
+read back as the mode in `crates/ui/src/now_block.rs`, the label round
+trip in `scheduling-proto::focus`); no e2e test drives Start → timer
+session → focused query yet.
 
 Not met:
 
@@ -387,9 +390,15 @@ task outcome. Two rules are verified without an implementation marker
 for the same reason — `process.capture.single-path` and `process.due`
 are implemented in the UI (`ProcessNow`, `pages::inbox::is_due`), and
 `process.outcome.task` in `stores::InboxMutations::process_into_task`.
-The due rule also has no home below the UI: `Inbox::review_queue` is the
-open half only, so a client other than the web app has to restate the
-`suggested` clause.
+The due rule now has a home below the UI (`InboxItem::is_due`, which
+`pages::inbox::is_due` and the watch bridge call), but
+`Inbox::review_queue` is still the open half only, so a caller of the
+lane has to restate the `suggested` clause.
+
+`process.suggested` is verified over the watch bridge and in unit tests,
+but neither client's card is: the web slot (`crates/ui/src/suggested.rs`)
+and the watch card (`apps/watchos/TaskWatch/UI/TimerView.swift`, its
+per-day "Not now" list in `TaskStore`) have no test that drives them.
 
 ## Built since this file was written
 

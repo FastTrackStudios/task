@@ -45,12 +45,9 @@ pub fn trigger_at_end(title: &str) -> Option<Trigger> {
         return None;
     }
     let word = title.rsplit(char::is_whitespace).next()?;
-    if let Some(q) = word.strip_prefix('@') {
-        Some(Trigger::Person(q.to_owned()))
-    } else if let Some(q) = word.strip_prefix('#') {
-        Some(Trigger::Label(q.to_owned()))
-    } else {
-        None
+    match word.strip_prefix('@') {
+        Some(q) => Some(Trigger::Person(q.to_owned())),
+        None => word.strip_prefix('#').map(|q| Trigger::Label(q.to_owned())),
     }
 }
 
@@ -199,7 +196,7 @@ pub fn Composer(props: ComposerProps) -> Element {
     let at = (*cursor.read()).min(suggestions.len().saturating_sub(1));
 
     let people_c = props.people.clone();
-    let mut resolve = move |opt: PickOption| {
+    let resolve = move |opt: PickOption| {
         match trigger_at_end(&title.peek()) {
             Some(Trigger::Person(_)) => {
                 let who = people_c.iter().find(|(id, _)| *id == opt.id).cloned();

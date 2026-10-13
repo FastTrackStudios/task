@@ -56,7 +56,7 @@ pub fn WorkSidebar(current: Route) -> Element {
     let prefs = use_context::<crate::prefs::PrefsCtx>().prefs;
     let nav = use_navigator();
     // The same hour as the Tasks page, so its counts and these agree.
-    let now_block = crate::now_block::use_now_block();
+    let focus = crate::now_block::use_focus();
     let account = use_context::<crate::auth::AuthCtx>().active;
 
     let counts = use_memo(move || {
@@ -71,11 +71,7 @@ pub fn WorkSidebar(current: Route) -> Element {
             .iter()
             .find(|r| r.session.end_time.is_none())
             .and_then(|r| r.session.project_id);
-        let focus = now_block
-            .read()
-            .as_ref()
-            .map(|b| b.focus.clone())
-            .unwrap_or_default();
+        let focus = focus();
         let ctx = crate::task_board::relevance_ctx(&location, active_project, focus);
         let entries = task_store.entries();
         let all: Vec<&task_proto::TaskInfo> = stores::unique_tasks(&entries)

@@ -63,8 +63,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::day_plan::PlannedBlock;
-use crate::time_block::{BlockCategory, TimeBlock, TimeOfDay};
+use crate::day_plan::{DayPlan, PlannedBlock};
+use crate::time_block::{BlockCategory, DayTemplate, TimeBlock, TimeOfDay};
 
 /// Reflowed fragments shorter than this are dropped instead.
 pub const MIN_KEEP_MIN: u16 = 15;
@@ -337,6 +337,47 @@ pub fn merge_template(saved: &[PlannedBlock], template: &[TimeBlock]) -> Vec<Res
 
     out.sort_by_key(|rb| day_span(rb.block.start, rb.block.end).0);
     out
+}
+
+/// The template a date defaults to: `weekend` for Sat/Sun, else
+/// `weekday`; falls back to the first template if those ids are absent.
+#[must_use]
+pub fn template_for(date: chrono::NaiveDate, templates: &[DayTemplate]) -> Option<&DayTemplate> {
+    use chrono::Datelike as _;
+    let weekend = matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
+    let want = if weekend { "weekend" } else { "weekday" };
+    templates
+        .iter()
+        .find(|t| t.id.0 == want)
+        .or_else(|| templates.first())
+}
+
+/// Resolve a date to the day it actually is: the saved plan's blocks
+/// verbatim plus the date's template ([`template_for`]) filling the
+/// rest ([`merge_template`]). The one resolution every reader of
+/// "today's plan" uses — the calendar, the Suggested slot, the watch
+/// bridge — so a date with no saved plan reads as its template
+/// everywhere. Blocks in the result carry `soft` as `merge_template`
+/// sets it; the returned plan's `from_template` is the saved one's, or
+/// the template used.
+#[must_use]
+pub fn resolve_day(
+    date: chrono::NaiveDate,
+    saved: Option<DayPlan>,
+    templates: &[DayTemplate],
+) -> (DayPlan, Vec<ResolvedBlock>) {
+    let tpl = template_for(date, templates);
+    let saved_blocks: &[PlannedBlock] = saved.as_ref().map_or(&[], |p| &p.blocks.0);
+    let tpl_blocks: &[TimeBlock] = tpl.map_or(&[], |t| &t.blocks.0);
+    let merged = merge_template(saved_blocks, tpl_blocks);
+    let plan = DayPlan {
+        date: date.to_string(),
+        from_template: saved
+            .and_then(|p| p.from_template)
+            .or_else(|| tpl.map(|t| t.id.clone())),
+        blocks: merged.iter().map(|rb| rb.block.clone()).collect(),
+    };
+    (plan, merged)
 }
 
 // ── reconcile ────────────────────────────────────────────────────

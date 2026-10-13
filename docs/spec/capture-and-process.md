@@ -249,6 +249,21 @@ singular and plural are listed because people write both.
 
 ---
 
+### The hour suggests; the person starts the mode
+
+t[process.focus.mode]
+A steering block does not change the list by itself. While it runs, the
+Tasks page offers to start its mode ("It's your maintenance hour ·
+Start"), with how much is waiting, and "Not now" quiets the offer for
+that block that day. Starting opens a timer session named for the kind
+(`BlockCategory::focus_label`, "Maintenance hour"), stopping whatever was
+running; **that open session is the mode**, and only while it runs does
+the focus below apply. Ending the mode stops the session, so the timer
+log records when maintenance actually began and how long it took. The
+focus rules below read "the hour" as "the running mode".
+
+---
+
 ### Focus opens its own gates
 
 t[process.focus.opens]
@@ -279,6 +294,42 @@ the browser and not in the terminal is two systems.
 
 ---
 
+## Suggested
+
+### One suggestion for now
+
+t[process.suggested]
+The top of the Tasks list holds one suggestion — never a list — the
+first of these that applies (`task_proto::suggest`):
+
+1. the task the calendar planned for now (a running block with a task
+   assigned) — **Start** opens a timer on it;
+2. the running steering block's mode (getting ready, a maintenance
+   hour, wind-down) — **Start** opens the mode's session
+   (`process.focus.mode`);
+3. work in progress;
+4. the oldest overdue task;
+5. captures waiting to be processed;
+6. something due today.
+
+What is already running is not suggested again. "Not now" sets a
+suggestion aside for the day and the next one shows. While a mode runs
+the slot is the mode's band. Every client — web, phone, the watch bridge
+— calls the same pick with the same plan, so they suggest the same thing
+at the same minute.
+
+The watch reads it from the bridge (`GET /org/{slug}/watch/v1/suggested`),
+sending its own local date and minute — the server does not know the
+wearer's timezone — and the keys it set aside. The server resolves that
+date's plan with its weekday/weekend template exactly as the calendar
+does (`scheduling_proto::resolve_day`), counts the inbox's due captures
+(`InboxItem::is_due`), and acts on a tap
+(`POST …/suggested/act`) only while the suggestion still applies:
+Start opens the timer session, Done completes the task, and processing
+captures is left to the phone.
+
+---
+
 ### What you are on is part of the context
 
 t[process.context.device]
@@ -294,6 +345,7 @@ without the person saying so.
 |---|---|
 | `process.capture.single-path`, `.verbatim`, `process.outcome.task` | `tests/integration/tests/it/process.rs` — capture on the Inbox lane, task on the Task lane, back-link read back |
 | `process.due` | `process.rs` (the planted inbox over the wire) and `example_org::declared_tests::the_planted_inbox_has_captures_to_process` |
+| `process.suggested` | `task-proto::suggest` unit tests (the order, "Not now", what is running); `apps/server/tests/it/watch_suggested_e2e.rs::the_watch_suggests_and_acts_on_the_same_pick` — planned task, a template's maintenance hour opening a "Maintenance hour" session, the fall-through to overdue and captures, over the watch bridge |
 | `process.focus.*` (but `.everywhere`) | unit tests in `task-proto::relevance` and `scheduling-proto::focus`; `process.rs` over `TaskService::query`; the seed's maintenance hour in `example_org::declared_tests` |
 
 The seeded world shows the whole loop to Alice: six captures in

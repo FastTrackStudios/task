@@ -164,7 +164,8 @@ fn TaskBoard(scope: Scope) -> Element {
     let prefs_signal = prefs_ctx.prefs;
     // What the hour is for (a maintenance hour → errands and chores),
     // from today's day plan — it steers relevance and heads the list.
-    let now_block = crate::now_block::use_now_block();
+    let now_hint = crate::now_block::use_now_hint();
+    let focus_mode = crate::now_block::use_focus_mode();
     let process_now = use_context::<crate::process::ProcessNow>();
     // Whose list this is: Tasks shows what is assigned to them.
     let account = use_context::<crate::auth::AuthCtx>().active;
@@ -188,22 +189,30 @@ fn TaskBoard(scope: Scope) -> Element {
             .find(|r| r.session.end_time.is_none())
             .and_then(|r| r.session.project_id);
 
-        let hour = now_block.read().clone();
-        let focus = hour.as_ref().map(|b| b.focus.clone()).unwrap_or_default();
+        // Only a mode the person started steers the list; the hour on
+        // its own just suggests one (`crate::now_block`).
+        let focus = focus_mode
+            .read()
+            .as_ref()
+            .map(|m| m.focus.clone())
+            .unwrap_or_default();
         let ctx = crate::task_board::relevance_ctx(&at_location, active_project, focus);
         // One row per task id — see `stores::unique_tasks`.
         let unique = stores::unique_tasks(&rows);
         let all: Vec<&task_proto::TaskInfo> = unique.iter().map(|r| &r.task).collect();
-        // The hour's band is a Tasks thing: project work has no where
-        // or when for a block to match.
-        let for_hour = hour
-            .as_ref()
-            .filter(|_| scope == Scope::Actions)
-            .map(|b| crate::now_block::tasks_for(b, &all))
-            .unwrap_or_default();
+        let me = account.read().as_ref().map(|a| a.user_id.to_string());
+        // The band is a Tasks thing (project work has no where or when
+        // for a mode to match): it draws from what is yours.
+        let for_hour: Vec<task_proto::TaskInfo> = if scope == Scope::Actions {
+            all.iter()
+                .filter(|t| task_proto::is_mine(t, me.as_deref()))
+                .map(|t| (*t).clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         // The board's filters — the same function the Work sidebar
         // counts with, so the two agree (`crate::task_board`).
-        let me = account.read().as_ref().map(|a| a.user_id.to_string());
         let filtered =
             crate::task_board::filter(&all, scope, me.as_deref(), active_only, relevant_only, &ctx);
         let other_scope = filtered.other_scope;
@@ -469,7 +478,9 @@ fn TaskBoard(scope: Scope) -> Element {
             let sheet_projects = project_choices.clone();
             rsx! {
                 div { class: "flex h-full w-full flex-col pb-14 md:pb-0",
-                    if let Some(n) = now {
+                    // A running mode is its own band (with End), so its
+                    // session doesn't also show as a plain timer bar.
+                    if let Some(n) = now.filter(|_| focus_mode.read().is_none()) {
                         NowBar {
                             now: n,
                             on_complete: move |id| {
@@ -477,14 +488,27 @@ fn TaskBoard(scope: Scope) -> Element {
                             },
                         }
                     }
-                    // The hour's own work, before the whole list.
-                    div { class: "px-3 pt-3 empty:hidden sm:px-5 lg:px-8",
-                        crate::now_block::NowBlockBand {
-                            block: now_block().filter(|_| scope == Scope::Actions),
-                            tasks: for_hour,
-                            on_status: move |(id, status): (uuid::Uuid, String)| {
-                                apply_with_undo(TaskMutation::SetStatus { id, status });
-                            },
+                    // The one thing to do next — or, while a mode runs,
+                    // the mode's own work — before the whole list.
+                    if scope == Scope::Actions {
+                        div { class: "px-3 pt-3 sm:px-5 lg:px-8 empty:hidden",
+                            if focus_mode.read().is_some() {
+                                crate::now_block::ModeBand {
+                                    mode: focus_mode(),
+                                    tasks: for_hour,
+                                    on_status: move |(id, status): (uuid::Uuid, String)| {
+                                        apply_with_undo(TaskMutation::SetStatus { id, status });
+                                    },
+                                }
+                            } else {
+                                crate::suggested::Suggested {
+                                    hint: now_hint(),
+                                    mine: for_hour,
+                                    on_status: move |(id, status): (uuid::Uuid, String)| {
+                                        apply_with_undo(TaskMutation::SetStatus { id, status });
+                                    },
+                                }
+                            }
                         }
                     }
                     div { class: "min-h-0 flex-1",

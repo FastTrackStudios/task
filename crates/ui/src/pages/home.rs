@@ -103,17 +103,13 @@ pub fn HomeView() -> Element {
     // Same as the Tasks page: completing offers Undo.
     let toast = use_toast();
     let to_process = crate::process::use_to_process_count();
-    let now_block = crate::now_block::use_now_block();
+
+    let focus_mode = crate::now_block::use_focus_mode();
     let for_hour_memo = use_memo(move || {
-        let Some(block) = now_block() else {
-            return Vec::new();
-        };
-        let entries = task_store.entries();
-        let all: Vec<&DbTask> = stores::unique_tasks(&entries)
+        stores::unique_tasks(&task_store.entries())
             .into_iter()
-            .map(|r| &r.task)
-            .collect();
-        crate::now_block::tasks_for(&block, &all)
+            .map(|r| r.task.clone())
+            .collect::<Vec<DbTask>>()
     });
     let on_status = move |(id, status): (uuid::Uuid, String)| {
         crate::task_board::apply_with_undo(
@@ -221,8 +217,8 @@ pub fn HomeView() -> Element {
                 }
 
                 // ── This hour ─────────────────────────────────────
-                crate::now_block::NowBlockBand {
-                    block: now_block(),
+                crate::now_block::ModeBand {
+                    mode: focus_mode(),
                     tasks: for_hour,
                     on_status,
                 }

@@ -44,6 +44,7 @@ pub mod model;
 pub mod relations;
 pub mod relevance;
 pub mod service;
+pub mod suggest;
 pub mod wayfinder;
 
 pub use action::{is_assigned_to, is_mine, is_next_action, is_project_work};

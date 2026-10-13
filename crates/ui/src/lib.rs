@@ -54,6 +54,7 @@ pub mod shell;
 pub mod shortcuts;
 pub mod source_dock;
 pub mod stores;
+pub mod suggested;
 pub mod tabs;
 pub mod tag_icon;
 pub mod task_board;

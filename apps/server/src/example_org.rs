@@ -476,6 +476,15 @@ pub const TASK_OWNERS: &[(&str, &str)] = &[
     ("Collect streaming metadata", "sam@acme.test"),
     ("Cut the visualiser to the album mix", "sam@acme.test"),
     ("Rough cut review", "victor@vnt.test"),
+    // Alice's own next actions — the Tasks list is what is assigned to
+    // you (`task_proto::is_mine`), so the where/when work and the
+    // maintenance mode's errands and chores are hers to see.
+    ("Restring the studio guitars", "alice@acme.test"),
+    ("Pick up the test pressings", "alice@acme.test"),
+    ("Listen back to the rough mixes", "alice@acme.test"),
+    ("Return the hired mic stands", "alice@acme.test"),
+    ("Vacuum the live room", "alice@acme.test"),
+    ("Take the studio recycling out", "alice@acme.test"),
 ];
 
 /// Where or when a seeded task can be done, as `(task title, contexts)`

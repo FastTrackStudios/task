@@ -330,10 +330,10 @@ pub fn IssueView(props: IssueViewProps) -> Element {
                     for s in props.subtasks.iter().cloned() {
                         {
                             let sid = s.id;
-                            let who = s.workflow.as_ref().and_then(|w| w.assignees.iter().find_map(|a| match a {
+                            let who = s.workflow.as_ref().and_then(|w| w.assignees.iter().next().map(|a| match a {
                                 task_proto::workflows_proto::AgentRef::Human { display_name, user_id } =>
-                                    Some(display_name.clone().unwrap_or_else(|| user_id.clone())),
-                                task_proto::workflows_proto::AgentRef::Agent { name, .. } => Some(name.clone()),
+                                    display_name.clone().unwrap_or_else(|| user_id.clone()),
+                                task_proto::workflows_proto::AgentRef::Agent { name, .. } => name.clone(),
                             }));
                             rsx! {
                                 button {

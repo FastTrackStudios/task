@@ -21,6 +21,8 @@ thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 # `AgentRef` (task assignees / claims) is workflows' wire type.
 workflows-proto = { workspace = true }
+# Day plans — what `suggest::now_hint` reads to say what now is for.
+scheduling-proto = { workspace = true }
 
 vox = { workspace = true, optional = true }
 vox-types = { workspace = true, optional = true }
