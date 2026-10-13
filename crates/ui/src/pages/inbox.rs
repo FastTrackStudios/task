@@ -173,7 +173,7 @@ pub fn InboxView() -> Element {
         div { class: "mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 pb-6 sm:px-8",
             // The section's name, its main action said in words —
             // "Process 5" — and ⋯ for the rest (Linear's top bar).
-            div { class: "-mx-4 -mt-2 pb-1 sm:-mx-8",
+            div { class: "-mx-4 -mt-5 pb-1 sm:-mx-8",
                 task_ui_core::section_header::SectionHeader {
                     title: "Inbox".to_owned(),
                     action: header_icon,

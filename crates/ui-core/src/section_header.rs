@@ -34,11 +34,11 @@ pub fn SectionHeader(
     let mut open = use_signal(|| false);
     use_context_provider(|| MenuOpen(open));
     rsx! {
-        header { class: "relative flex items-center justify-between gap-3 px-4 pb-2 pt-3",
-            h1 { class: "min-w-0 truncate text-[30px] font-bold leading-9 tracking-[-0.025em] text-foreground",
+        header { class: "relative flex items-center justify-between gap-3 px-5 pb-2 pt-0",
+            h1 { class: "min-w-0 truncate text-[28px] font-bold leading-[34px] tracking-[-0.02em] text-foreground",
                 "{title}"
             }
-            div { class: "flex h-12 shrink-0 items-center rounded-full bg-foreground/[0.06] px-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08),0_8px_24px_-12px_rgb(0_0_0/0.6)] supports-[backdrop-filter]:backdrop-blur-md",
+            div { class: "flex h-11 shrink-0 items-center rounded-full bg-foreground/[0.06] px-1 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08),0_8px_24px_-12px_rgb(0_0_0/0.6)] supports-[backdrop-filter]:backdrop-blur-md",
                 button {
                     r#type: "button",
                     class: if action_text.is_some() { "flex h-10 items-center gap-2 rounded-full pl-3 pr-3.5 text-[15px] font-semibold text-foreground transition-transform duration-150 active:scale-95 active:bg-foreground/10" } else { "flex size-10 items-center justify-center rounded-full text-foreground transition-transform duration-150 active:scale-90 active:bg-foreground/10" },
@@ -70,7 +70,7 @@ pub fn SectionHeader(
                     class: "fixed inset-0 z-40",
                     onclick: move |_| open.set(false),
                 }
-                div { class: "absolute right-4 top-[3.9rem] z-50 flex min-w-[15rem] origin-top-right flex-col rounded-[22px] bg-popover py-1.5 shadow-[0_20px_50px_-10px_rgb(0_0_0/0.75),inset_0_0_0_1px_rgb(255_255_255/0.08)] animate-in fade-in zoom-in-95 duration-150",
+                div { class: "absolute right-5 top-[3.25rem] z-50 flex min-w-[15rem] origin-top-right flex-col rounded-[22px] bg-popover py-1.5 shadow-[0_20px_50px_-10px_rgb(0_0_0/0.75),inset_0_0_0_1px_rgb(255_255_255/0.08)] animate-in fade-in zoom-in-95 duration-150",
                     {children}
                 }
             }

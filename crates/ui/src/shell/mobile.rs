@@ -19,14 +19,14 @@
 //! shell-lifetime component (see `crate::collab` docs for the keyed-
 //! child rule).
 
-use architect_ui::lucide_dioxus::{ChevronsUpDown, Search, SquarePen};
+use architect_ui::lucide_dioxus::{ChevronsUpDown, Search, SlidersHorizontal, SquarePen};
 use architect_ui::prelude::{Button, ButtonVariant, Text, TextVariant};
 use chrono::Utc;
 use dioxus::prelude::*;
 
 use crate::auth::{AccountSheetBody, AuthCtx, Avatar};
 use crate::chrome::{fmt_hms, owner_id, resolve_org, use_second_tick};
-use crate::nav::{NavTab, nav_tabs_for, primary_mobile_tabs, tabs_match, use_active_plugins};
+use crate::nav::{NavTab, nav_tabs_for, tabs_match, use_active_plugins};
 use crate::orgs::{OrgMeta, OrgSelection};
 use crate::routes::Route;
 use crate::shell::org_switcher::OrgSwitcher;
@@ -58,7 +58,7 @@ pub fn MobileActionBar(children: Element) -> Element {
         div {
             class: "fixed inset-x-0 z-30 flex items-center gap-2 border-t border-border bg-background/95 px-3 py-2 backdrop-blur md:hidden",
             // Above the floating tab bar (3.75rem pill + its margin).
-            style: "bottom: calc(4.75rem + max(0.75rem, env(safe-area-inset-bottom, 0px)));",
+            style: "bottom: calc(3.375rem + 0.75rem + max(0.75rem, calc(env(safe-area-inset-bottom, 0px) - 4px)));",
             {children}
         }
     }
@@ -373,10 +373,19 @@ const SECTION_KEY: &str = "task.nav.section";
 pub fn BottomTabBar(current: Route) -> Element {
     let mut menu_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
-    let primary = primary_mobile_tabs();
+    let mut customize_open = use_signal(|| false);
     let to_process = crate::process::use_to_process_count();
     let new_issue = use_context::<crate::new_issue::NewIssue>();
-    let all = nav_tabs_for(&use_active_plugins());
+    let every = nav_tabs_for(&use_active_plugins());
+    // The person's arrangement (Customize): the menu lists what they
+    // show, in their order, and the first three are the tab bar.
+    let layout = use_signal(crate::nav_layout::NavLayout::load);
+    let (all, _hidden) = layout.read().arrange(every.clone());
+    let primary: Vec<NavTab> = all
+        .iter()
+        .take(crate::nav_layout::PRIMARY)
+        .cloned()
+        .collect();
 
     // The section the switcher shows.
     let in_primary = primary.iter().any(|t| tabs_match(&current, t));
@@ -388,15 +397,22 @@ pub fn BottomTabBar(current: Route) -> Element {
         crate::local_store::set(SECTION_KEY, t.label);
     }
     let remembered = crate::local_store::get(SECTION_KEY).unwrap_or_else(|| "Schedule".to_owned());
-    let section = here
-        .clone()
-        .or_else(|| all.iter().find(|t| t.label == remembered).cloned());
+    // Never one of the three already on the bar: the remembered section
+    // if it isn't, else the first section after them.
+    let off_bar = |t: &&NavTab| !primary.iter().any(|p| p.label == t.label);
+    let section = here.clone().or_else(|| {
+        all.iter()
+            .filter(off_bar)
+            .find(|t| t.label == remembered)
+            .or_else(|| all.iter().find(off_bar))
+            .cloned()
+    });
 
     let slot = |active: bool| {
         if active {
-            "relative flex h-12 flex-1 items-center justify-center gap-1 rounded-full bg-accent text-foreground"
+            "relative flex h-[2.875rem] flex-1 items-center justify-center gap-1 rounded-full bg-accent text-foreground"
         } else {
-            "relative flex h-12 flex-1 items-center justify-center gap-1 rounded-full text-foreground/80 active:bg-accent/60"
+            "relative flex h-[2.875rem] flex-1 items-center justify-center gap-1 rounded-full text-foreground/80 active:bg-accent/60"
         }
     };
     let badge = if to_process > 99 {
@@ -407,10 +423,10 @@ pub fn BottomTabBar(current: Route) -> Element {
 
     rsx! {
         nav {
-            class: "fixed inset-x-0 bottom-0 z-30 flex items-end gap-3 px-4 md:hidden",
-            style: "padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));",
+            class: "fixed inset-x-0 bottom-0 z-30 flex items-end gap-2 px-7 md:hidden",
+            style: "padding-bottom: max(0.75rem, calc(env(safe-area-inset-bottom, 0px) - 4px));",
             // The pill.
-            div { class: "flex h-[3.75rem] flex-1 items-center gap-1 rounded-full border border-border/70 bg-popover/95 p-1.5 shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur",
+            div { class: "flex h-[3.375rem] flex-1 items-center gap-0.5 rounded-full border border-border/70 bg-popover/95 p-1 shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur",
                 for tab in primary.iter() {
                     Link {
                         key: "{tab.label}",
@@ -442,7 +458,7 @@ pub fn BottomTabBar(current: Route) -> Element {
             // Quick input — the composer, from anywhere.
             button {
                 r#type: "button",
-                class: "flex size-[3.75rem] shrink-0 items-center justify-center rounded-full border border-border/70 bg-popover/95 text-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur active:bg-accent",
+                class: "flex size-[3.375rem] shrink-0 items-center justify-center rounded-full border border-border/70 bg-popover/95 text-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur active:bg-accent",
                 aria_label: "New issue",
                 onclick: move |_| new_issue.open(String::new()),
                 SquarePen { size: 22 }
@@ -456,8 +472,18 @@ pub fn BottomTabBar(current: Route) -> Element {
                     menu_open.set(false);
                     account_open.set(true);
                 },
+                on_customize: move |()| {
+                    menu_open.set(false);
+                    customize_open.set(true);
+                },
                 on_close: move |()| menu_open.set(false),
             }
+        }
+        crate::nav_layout::CustomizeSheet {
+            open: customize_open(),
+            on_close: move |()| customize_open.set(false),
+            tabs: every,
+            layout,
         }
         BottomSheet {
             open: account_open(),
@@ -475,6 +501,7 @@ fn SectionMenu(
     tabs: Vec<NavTab>,
     current: Route,
     on_account: EventHandler<()>,
+    on_customize: EventHandler<()>,
     on_close: EventHandler<()>,
 ) -> Element {
     let mut search = use_context::<crate::chrome::SearchOpen>().0;
@@ -487,11 +514,18 @@ fn SectionMenu(
     rsx! {
         div { class: "fixed inset-0 z-40 md:hidden", onclick: move |_| on_close.call(()) }
         div {
-            class: "fixed inset-x-4 bottom-[calc(4.75rem+max(0.75rem,env(safe-area-inset-bottom)))] z-50 flex max-h-[65vh] flex-col overflow-hidden rounded-[1.75rem] border border-border/70 bg-popover shadow-2xl md:hidden",
+            class: "fixed inset-x-7 bottom-[calc(3.375rem+0.5rem+max(0.75rem,calc(env(safe-area-inset-bottom)-4px)))] z-50 flex max-h-[65vh] flex-col overflow-hidden rounded-[1.75rem] border border-border/70 bg-popover shadow-2xl md:hidden",
             role: "menu",
             onclick: move |e| e.stop_propagation(),
             div { class: "flex items-center gap-2 border-b border-border/60 px-4 py-2.5",
-                div { class: "min-w-0 flex-1", OrgSwitcher { compact: false } }
+                div { class: "min-w-0 flex-1", OrgSwitcher { compact: false, theme: false } }
+                button {
+                    r#type: "button",
+                    class: "flex size-10 shrink-0 items-center justify-center rounded-full text-foreground active:bg-accent",
+                    aria_label: "Customize",
+                    onclick: move |_| on_customize.call(()),
+                    SlidersHorizontal { size: 19 }
+                }
                 button {
                     r#type: "button",
                     class: "flex size-10 shrink-0 items-center justify-center rounded-full active:bg-accent",
