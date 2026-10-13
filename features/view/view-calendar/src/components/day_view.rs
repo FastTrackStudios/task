@@ -15,6 +15,8 @@ pub struct DayViewProps {
     #[props(default)]
     pub template_blocks: Vec<TemplateBlock>,
     #[props(default)]
+    pub actuals: Vec<crate::types::ActualSpan>,
+    #[props(default)]
     pub on_block_click: Option<EventHandler<(NaiveDate, String)>>,
     #[props(default)]
     pub on_block_edit: Option<EventHandler<crate::types::BlockEdit>>,
@@ -31,6 +33,7 @@ pub fn DayView(props: DayViewProps) -> Element {
             days: vec![props.anchor],
             events: props.events,
             template_blocks: props.template_blocks,
+            actuals: props.actuals,
             on_block_click: props.on_block_click,
             on_block_edit: props.on_block_edit,
             readonly: props.readonly,

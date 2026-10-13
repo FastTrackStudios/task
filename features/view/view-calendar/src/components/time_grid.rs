@@ -84,6 +84,9 @@ pub struct TimeGridViewProps {
     /// Faded day-plan blocks drawn behind real events.
     #[props(default)]
     pub template_blocks: Vec<TemplateBlock>,
+    /// Timer sessions, drawn as a strip beside the plan.
+    #[props(default)]
+    pub actuals: Vec<crate::types::ActualSpan>,
     /// Fired with `(date, block_id)` when a plan block is clicked.
     #[props(default)]
     pub on_block_click: Option<EventHandler<(NaiveDate, String)>>,
@@ -115,6 +118,10 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
     let single = props.days.len() == 1;
     // Measured as a phone (the fixed reading height is only used there).
     let phone = pph == PHONE_PX_PER_HOUR;
+    // Room past midnight so the last hours scroll clear of the phone's
+    // floating tab bar — part of the grid, so the columns run on into it
+    // instead of stopping above a band of page background.
+    let tail_px: i64 = if phone { 112 } else { 0 };
     let mount_days = props.days.clone();
     // Today in view: the minute the now bubble marks on the hour rail.
     let now_minute = props.days.contains(&today).then(|| {
@@ -214,7 +221,7 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
             // top-of-viewport hour anchored.
             // Phone: room at the end to scroll the last hours clear of the
             // floating tab bar.
-            div { class: "flex-1 min-h-0 overflow-y-auto pb-28 md:pb-0 [scrollbar-gutter:stable]",
+            div { class: "flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]",
                 id: "{scroll_id}",
                 onmounted: move |e: Event<MountedData>| {
                     scroller.set(Some(e.data()));
@@ -274,7 +281,7 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                 },
                 div {
                     class: "grid relative",
-                    style: "grid-template-columns: 56px repeat({props.days.len()}, 1fr); height: {col_height_px}px;",
+                    style: "grid-template-columns: 56px repeat({props.days.len()}, 1fr); height: {col_height_px + tail_px}px;",
                     HourAxis { px_per_hour: pph, now_minute }
                     for (idx, date) in props.days.iter().enumerate() {
                         DayColumn {
@@ -282,6 +289,7 @@ pub fn TimeGridView(props: TimeGridViewProps) -> Element {
                             date: *date,
                             placements: day_overlap_layout(*date, &timed_events),
                             template_blocks: props.template_blocks.clone(),
+                            actuals: props.actuals.iter().filter(|a| a.date == *date).cloned().collect::<Vec<_>>(),
                             on_block_click: props.on_block_click,
                             on_block_edit: props.on_block_edit,
                             is_last: idx == props.days.len() - 1,
@@ -336,6 +344,8 @@ struct DayColumnProps {
     placements: Vec<TimeBlockPlacement>,
     #[props(default)]
     template_blocks: Vec<TemplateBlock>,
+    #[props(default)]
+    actuals: Vec<crate::types::ActualSpan>,
     /// Fired with `(date, block_id)` when a plan block is clicked.
     #[props(default)]
     on_block_click: Option<EventHandler<(NaiveDate, String)>>,
@@ -425,6 +435,8 @@ fn DayColumn(props: DayColumnProps) -> Element {
         label: String,
         assignment: Option<String>,
         soft: bool,
+        into_next: bool,
+        from_prev: bool,
     }
     let template_placements: Vec<TplPlacement> = props
         .template_blocks
@@ -440,6 +452,8 @@ fn DayColumn(props: DayColumnProps) -> Element {
             label: tb.label.clone(),
             assignment: tb.assignment.clone(),
             soft: tb.soft,
+            into_next: tb.into_next,
+            from_prev: tb.from_prev,
         })
         .collect();
     let on_block_click = props.on_block_click;
@@ -861,11 +875,40 @@ fn DayColumn(props: DayColumnProps) -> Element {
                                     }
                                 }
                             }
+                            // Over midnight: say so, where the cut is.
+                            if tp.from_prev && tp.h >= 18 {
+                                span { class: "absolute inset-x-0 top-0 h-0.5 bg-[repeating-linear-gradient(90deg,currentColor_0_4px,transparent_4px_8px)] opacity-60" }
+                            }
+                            if tp.from_prev && tp.h >= 30 {
+                                span { class: "hidden px-2 pt-0.5 text-[10px] font-medium opacity-70 @[9rem]:block", "↑ from last night" }
+                            }
+                            if tp.into_next && tp.h >= 18 {
+                                span { class: "absolute inset-x-0 bottom-0 h-0.5 bg-[repeating-linear-gradient(90deg,currentColor_0_4px,transparent_4px_8px)] opacity-60" }
+                                span { class: "absolute bottom-1 right-1.5 hidden text-[10px] font-medium opacity-70 @[9rem]:block", "into tomorrow ↓" }
+                            }
                             if is_now {
                                 span { class: "absolute right-1.5 top-1 rounded-full bg-primary px-1.5 py-px text-[10px] font-semibold text-primary-foreground",
                                     "Now"
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            // What actually happened: timer sessions as a thin strip on
+            // the column's right edge, over the plan, so a glance reads
+            // planned against done. A running one pulses.
+            for a in props.actuals.iter() {
+                {
+                    let top = i64::from(a.start_min) * pph / 60;
+                    let h = (i64::from(a.end_min.saturating_sub(a.start_min)) * pph / 60).max(3);
+                    let live = if a.running { "animate-pulse" } else { "" };
+                    rsx! {
+                        div {
+                            key: "act-{a.start_min}-{a.end_min}",
+                            class: "pointer-events-none absolute right-0 z-[15] w-1 rounded-full bg-rose-400/90 shadow-[0_0_0_1px_rgb(0_0_0/0.4)] {live}",
+                            style: "top: {top}px; height: {h}px;",
+                            title: "{a.label}",
                         }
                     }
                 }

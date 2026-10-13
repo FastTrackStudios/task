@@ -37,4 +37,4 @@ pub use components::{
     Calendar, CalendarProps, SlotGrid, SlotGridProps, SlotItem, SlotRow, WeekStrip, day_title,
 };
 pub use store::{CalendarMutation, CalendarState, apply};
-pub use types::{BlockEdit, CalendarEvent, ColorTag, EventId, TemplateBlock, ViewMode};
+pub use types::{ActualSpan, BlockEdit, CalendarEvent, ColorTag, EventId, TemplateBlock, ViewMode};

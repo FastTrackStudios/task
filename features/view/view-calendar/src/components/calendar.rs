@@ -32,6 +32,9 @@ pub struct CalendarProps {
     /// month view.
     #[props(default)]
     pub template_blocks: Vec<TemplateBlock>,
+    /// Timer sessions in range, drawn beside the plan (week / day).
+    #[props(default)]
+    pub actuals: Vec<crate::types::ActualSpan>,
     /// Fired with `(date, block_id)` when a plan block is clicked, so
     /// the consumer can edit that date's plan.
     #[props(default)]
@@ -380,7 +383,7 @@ pub fn Calendar(props: CalendarProps) -> Element {
             }
             div {
                 class: "flex-1 min-h-0",
-                // Day view: swipe sideways for the next or previous day
+                // Swipe sideways for the next or previous day / week / month
                 // (a deliberate, mostly-horizontal stroke — scrolling
                 // and dragging a block both stay vertical).
                 onpointerdown: move |e: Event<PointerData>| {
@@ -389,7 +392,10 @@ pub fn Calendar(props: CalendarProps) -> Element {
                 },
                 onpointerup: move |e: Event<PointerData>| {
                     let Some((x0, y0)) = swipe_from.take() else { return };
-                    if *view.peek() != ViewMode::Day {
+                    // Day, Week and Month page by their own unit; the
+                    // block grid scrolls sideways itself.
+                    let unit = *view.peek();
+                    if unit == ViewMode::Blocks {
                         return;
                     }
                     let dragging = drag_ctx.state.peek().as_ref().is_some_and(|d| d.committed)
@@ -398,7 +404,7 @@ pub fn Calendar(props: CalendarProps) -> Element {
                     let (dx, dy) = (p.x - x0, p.y - y0);
                     if !dragging && dx.abs() > 70.0 && dy.abs() < 50.0 {
                         let dir = if dx < 0.0 { 1 } else { -1 };
-                        anchor.with_mut(|d| *d = step(*d, ViewMode::Day, dir));
+                        anchor.with_mut(|d| *d = step(*d, unit, dir));
                     }
                 },
                 match *view.read() {
@@ -420,6 +426,7 @@ pub fn Calendar(props: CalendarProps) -> Element {
                             anchor: *anchor.read(),
                             events: events_for_view,
                             template_blocks: props.template_blocks.clone(),
+                            actuals: props.actuals.clone(),
                             on_block_click: props.on_block_click,
                             on_block_edit: props.on_block_edit,
                             readonly: props.readonly,
@@ -450,6 +457,7 @@ pub fn Calendar(props: CalendarProps) -> Element {
                             anchor: *anchor.read(),
                             events: events_for_view,
                             template_blocks: props.template_blocks.clone(),
+                            actuals: props.actuals.clone(),
                             on_block_click: props.on_block_click,
                             on_block_edit: props.on_block_edit,
                             readonly: props.readonly,

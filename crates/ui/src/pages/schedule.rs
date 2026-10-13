@@ -94,8 +94,16 @@ pub fn ScheduleView() -> Element {
     // Every visible date's resolved plan (saved blocks + soft template
     // fallback) as one shared-store list; all writes go through
     // [`stores::DayPlanMutations`] (optimistic, rollback-on-failure).
-    let plans_result = stores::use_dayplan_list(range(), tpl_list());
+    // One day before the view too: its overnight blocks run into the
+    // first visible morning.
+    let plans_result = stores::use_dayplan_list(
+        range().map(|(s, e)| (s.pred_opt().unwrap_or(s), e)),
+        tpl_list(),
+    );
     let plan_muts = stores::use_dayplan_mutations();
+    // Timer sessions, for the actual-vs-plan strips.
+    let _sessions = stores::use_session_list();
+    let session_store = stores::use_session_store();
     // Which (date, block_id) is being edited, if any.
     let mut editing = use_signal(|| None::<(NaiveDate, String)>);
     // The day and view in sight — the page's, so the phone header and
@@ -172,6 +180,16 @@ pub fn ScheduleView() -> Element {
     };
 
     let events = state.read().events.values().cloned().collect::<Vec<_>>();
+    // What was actually tracked, beside the plan — this org's sessions.
+    let actuals = {
+        let rows = session_store.list();
+        let mine: Vec<timer_proto::WorkSession> = rows
+            .iter()
+            .filter(|r| slug().is_some_and(|s| r.slug == s))
+            .map(|r| r.session.clone())
+            .collect();
+        actual_spans(&mine, chrono::Local::now())
+    };
     let meal_lookup = build_meal_lookup(meals().as_deref().unwrap_or(&[]));
     // Stale-while-revalidate: navigating the range keeps the last rows
     // rendered while the refetch is in flight.
@@ -484,6 +502,7 @@ pub fn ScheduleView() -> Element {
             Calendar {
                 events,
                 template_blocks,
+                actuals,
                 anchor: Some(cal_anchor),
                 view: Some(cal_view),
                 phone_chrome: true,
@@ -660,25 +679,33 @@ fn build_blocks(
                     .get(&(date, slot.to_string()))
                     .map(|names| names.join(" · "))
             });
-            let mk = |start_min, end_min| TemplateBlock {
+            let mk = |on: NaiveDate, start_min, end_min, into_next, from_prev| TemplateBlock {
                 id: b.id.0.clone(),
-                date,
+                date: on,
                 label: b.label.clone(),
                 start_min,
                 end_min,
                 color,
                 assignment: assignment.clone(),
                 soft,
+                into_next,
+                from_prev,
             };
+            // Midnight is the cutoff. A block over it is drawn twice:
+            // its evening at the bottom of this day, its early hours at
+            // the top of the next — so each day shows the late night it
+            // ends with and the early morning it starts with.
             if end <= start {
                 if start < 1440 {
-                    out.push(mk(start, 1440));
+                    out.push(mk(date, start, 1440, end > 0, false));
                 }
                 if end > 0 {
-                    out.push(mk(0, end));
+                    if let Some(next) = date.succ_opt() {
+                        out.push(mk(next, 0, end, false, true));
+                    }
                 }
             } else {
-                out.push(mk(start, end));
+                out.push(mk(date, start, end, false, false));
             }
         }
     }
@@ -763,6 +790,53 @@ fn category_color(c: BlockCategory) -> ColorTag {
     }
 }
 
+/// Timer sessions as the grid's "actual" strips: each clipped to the
+/// local days it touches (a session over midnight is two strips), an
+/// open one running to `now`.
+fn actual_spans(
+    sessions: &[timer_proto::WorkSession],
+    now: chrono::DateTime<chrono::Local>,
+) -> Vec<view_calendar::ActualSpan> {
+    use chrono::Timelike;
+    let minute = |t: chrono::DateTime<chrono::Local>| -> u16 {
+        u16::try_from(t.hour() * 60 + t.minute()).unwrap_or(0)
+    };
+    let mut out = Vec::new();
+    for s in sessions {
+        let start = s.start_time.with_timezone(&chrono::Local);
+        let end = s.end_time.map_or(now, |e| e.with_timezone(&chrono::Local));
+        if end <= start {
+            continue;
+        }
+        let mut day = start.date_naive();
+        let last = end.date_naive();
+        while day <= last {
+            let from = if day == start.date_naive() {
+                minute(start)
+            } else {
+                0
+            };
+            let to = if day == last { minute(end) } else { 1440 };
+            if to > from {
+                out.push(view_calendar::ActualSpan {
+                    date: day,
+                    start_min: from,
+                    end_min: to,
+                    label: if s.description.trim().is_empty() {
+                        "Tracked time".to_owned()
+                    } else {
+                        s.description.clone()
+                    },
+                    running: s.end_time.is_none(),
+                });
+            }
+            let Some(next) = day.succ_opt() else { break };
+            day = next;
+        }
+    }
+    out
+}
+
 /// Where this device remembers the Schedule's view.
 const VIEW_KEY: &str = "task.schedule.view";
 
@@ -782,5 +856,104 @@ fn view_from_key(s: &str) -> Option<ViewMode> {
         "month" => Some(ViewMode::Month),
         "blocks" => Some(ViewMode::Blocks),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod actual_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn session(
+        start: chrono::DateTime<chrono::Local>,
+        end: Option<chrono::DateTime<chrono::Local>>,
+    ) -> timer_proto::WorkSession {
+        let now = chrono::Utc::now();
+        timer_proto::WorkSession {
+            id: uuid::Uuid::new_v4(),
+            org_id: uuid::Uuid::nil(),
+            user_id: uuid::Uuid::nil(),
+            project_id: None,
+            project_path: String::new(),
+            description: "Maintenance hour".into(),
+            start_time: start.with_timezone(&chrono::Utc),
+            end_time: end.map(|e| e.with_timezone(&chrono::Utc)),
+            billable: false,
+            rate_cents: 0,
+            currency: String::new(),
+            task_note_path: String::new(),
+            invoice_id: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn a_block_over_midnight_ends_this_day_and_starts_the_next() {
+        use scheduling_proto::day_plan::PlannedBlocks;
+        use scheduling_proto::{PlannedBlock, TimeBlockId, TimeOfDay};
+        let day = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap();
+        let row = DayPlanRow {
+            date: day,
+            plan: scheduling_proto::DayPlan {
+                date: day.to_string(),
+                from_template: None,
+                blocks: PlannedBlocks(vec![PlannedBlock {
+                    id: TimeBlockId("gig".into()),
+                    start: TimeOfDay::new(21, 0),
+                    end: TimeOfDay::new(2, 30),
+                    label: "Gig".into(),
+                    category: BlockCategory::Other,
+                    note: None,
+                    assignment: None,
+                    fixed: true,
+                }]),
+            },
+            soft_ids: std::collections::HashSet::new(),
+        };
+        let blocks = build_blocks(&[row], &HashMap::new());
+        assert_eq!(blocks.len(), 2);
+        let late = &blocks[0];
+        assert_eq!(
+            (late.date, late.start_min, late.end_min),
+            (day, 21 * 60, 1440)
+        );
+        assert!(
+            late.into_next && !late.from_prev,
+            "a late night, on its own day"
+        );
+        let early = &blocks[1];
+        assert_eq!(
+            early.date,
+            day.succ_opt().unwrap(),
+            "the small hours are tomorrow's"
+        );
+        assert_eq!((early.start_min, early.end_min), (0, 150));
+        assert!(early.from_prev && !early.into_next);
+    }
+
+    #[test]
+    fn tracked_time_is_drawn_per_day_and_open_sessions_run_to_now() {
+        let at = |d: u32, h: u32, m: u32| {
+            chrono::Local
+                .with_ymd_and_hms(2026, 10, d, h, m, 0)
+                .unwrap()
+        };
+        // Over midnight: two strips.
+        let spans = actual_spans(
+            &[session(at(12, 23, 30), Some(at(13, 0, 45)))],
+            at(13, 9, 0),
+        );
+        assert_eq!(spans.len(), 2);
+        assert_eq!((spans[0].start_min, spans[0].end_min), (23 * 60 + 30, 1440));
+        assert_eq!((spans[1].start_min, spans[1].end_min), (0, 45));
+        // Open: to now, and live.
+        let spans = actual_spans(&[session(at(12, 16, 5), None)], at(12, 16, 50));
+        assert_eq!(
+            (spans[0].start_min, spans[0].end_min),
+            (16 * 60 + 5, 16 * 60 + 50)
+        );
+        assert!(spans[0].running);
+        assert_eq!(spans[0].label, "Maintenance hour");
     }
 }
