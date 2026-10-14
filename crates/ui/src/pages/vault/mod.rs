@@ -67,6 +67,7 @@
 //! [`set_folder`]: vault_proto::VaultSync::set_folder
 //! [`PageMeta`]: vault_proto::PageMeta
 
+mod phone;
 mod rpc;
 mod tabs;
 mod tree;
@@ -74,14 +75,13 @@ mod tree;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use architect_ui::lucide_dioxus::Folder;
+use architect_ui::lucide_dioxus::{ChevronsDownUp, Search, SquarePen};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use vault_proto::TagCount;
 
 use crate::pages::note_inspector::{InspectorTab, NoteInspector};
 use crate::pages::note_view::NoteView;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
 
 use tabs::{MAX_PANES, OpenTab, Pane, render_tab_bar};
 // `build_tree` / `basename_of` / `TreeNode` were free items on this
@@ -145,6 +145,12 @@ pub fn VaultView(
     // Mobile-only: the file tree lives in a bottom sheet once a note
     // is open (inline full-width while nothing is selected).
     let mut files_open = use_signal(|| false);
+    // The phone's note drawer (swipe left): the focused note's
+    // properties, links, graph and share. Its own state — the desk's
+    // inspector sidebar follows the shell's right-panel toggle, which
+    // is open by default and must not throw a sheet over every note
+    // opened on a phone.
+    let mut note_open = use_signal(|| false);
 
     // ── Tabs + split state ────────────────────────────────────
     // `panes` is 1–2 panes, each an ordered tab set + active index;
@@ -275,6 +281,7 @@ pub fn VaultView(
     // wikilinks, graph nodes, `.base` rows, freshly-created notes).
     let on_open = use_callback(move |meta: FileMeta| {
         files_open.set(false);
+        note_open.set(false);
         let mut p = panes.write();
         let f = (*focused.peek()).min(p.len().saturating_sub(1));
         let Some(pane) = p.get_mut(f) else { return };
@@ -578,8 +585,63 @@ pub fn VaultView(
         info.set(None);
     });
 
+    // ── Phone drawer toolbar: Obsidian's one-tap new note ─────
+    let mut palette = crate::palette::use_palette_open();
+    let mut new_untitled = move || {
+        let taken: HashSet<String> = pages_memo
+            .peek()
+            .iter()
+            .map(|p| p.path.to_lowercase())
+            .collect();
+        let name = std::iter::once("Untitled.md".to_owned())
+            .chain((1..).map(|n| format!("Untitled {n}.md")))
+            .find(|n| !taken.contains(&n.to_lowercase()))
+            .unwrap_or_default();
+        new_name.set(name);
+        create_file();
+    };
+    let collapse_all = move || {
+        let Some(t) = tree.peek().clone() else { return };
+        let mut c = collapsed;
+        c.write().extend(
+            t.0.iter()
+                .filter(|n| n.is_folder)
+                .map(|n| n.meta.basename.to_lowercase()),
+        );
+    };
+    let drawer_toolbar = rsx! {
+        div { class: "flex items-center gap-1 border-b border-border px-2 py-2 md:hidden",
+            button {
+                r#type: "button",
+                class: "flex size-11 items-center justify-center rounded-lg text-muted-foreground active:bg-accent",
+                title: "New note",
+                "data-testid": "drawer-new-note",
+                onclick: move |_| new_untitled(),
+                SquarePen { size: 20 }
+            }
+            button {
+                r#type: "button",
+                class: "flex size-11 items-center justify-center rounded-lg text-muted-foreground active:bg-accent",
+                title: "Collapse all",
+                onclick: move |_| collapse_all(),
+                ChevronsDownUp { size: 20 }
+            }
+            button {
+                r#type: "button",
+                class: "flex size-11 items-center justify-center rounded-lg text-muted-foreground active:bg-accent",
+                title: "Search",
+                onclick: move |_| {
+                    files_open.set(false);
+                    palette.set(true);
+                },
+                Search { size: 20 }
+            }
+        }
+    };
+
     // ── Tree pane content ─────────────────────────────────
     let tree_content = rsx! {
+        {drawer_toolbar}
         div { class: "flex flex-col gap-2 px-3 py-3",
             if let Some(parent) = create_under.clone() {
                 Text { variant: TextVariant::Muted, class: "text-xs",
@@ -657,7 +719,24 @@ pub fn VaultView(
             // ── Document area: panes + backlinks ──────────
             div {
                 class: if has_file { "flex min-w-0 flex-1" } else { "hidden min-w-0 flex-1 md:flex" },
-                // Panes container (1–2 panes side by side).
+                // Panes container (1–2 panes side by side). On a phone it
+                // carries the gestures: swipe right for the file drawer,
+                // pull down for the palette.
+                phone::PhoneGestures {
+                    open: files_open,
+                    drawer: tree_content.clone(),
+                    note_open,
+                    note: has_file.then(|| rsx! {
+                        NoteInspector {
+                            org: active,
+                            vault_id: VAULT_ID.to_owned(),
+                            path: selected,
+                            refresh_key,
+                            pages: pages_memo,
+                            on_open,
+                            tab: right_tab,
+                        }
+                    }),
                 div { class: "flex min-h-0 min-w-0 flex-1",
                     for (pi, pane) in pane_list.iter().cloned().enumerate() {
                         div {
@@ -696,6 +775,7 @@ pub fn VaultView(
                         }
                     }
                 }
+                }
                 // ── Right sidebar (md+, focused note): the inspector ──
                 if has_file && panel_open {
                     aside {
@@ -727,50 +807,6 @@ pub fn VaultView(
                         }
                     }
                 }
-            }
-        }
-        // ── Mobile chrome ─────────────────────────────────
-        MobileActionBar {
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent",
-                onclick: move |_| files_open.set(true),
-                Folder { size: 16 }
-                "Files"
-            }
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent disabled:opacity-50",
-                disabled: !has_file,
-                onclick: move |_| {
-                    let mut o = shell_right;
-                    let cur = o.peek().0;
-                    o.set(crate::chrome::RightPanelOpen(!cur));
-                },
-                "Backlinks"
-            }
-        }
-        BottomSheet {
-            open: files_open(),
-            on_close: move |_| files_open.set(false),
-            title: "Vault",
-            {tree_content}
-        }
-        BottomSheet {
-            open: has_file && panel_open,
-            on_close: move |_| {
-                let mut o = shell_right;
-                o.set(crate::chrome::RightPanelOpen(false));
-            },
-            title: right_tab().label().to_string(),
-            NoteInspector {
-                org: active,
-                vault_id: VAULT_ID.to_owned(),
-                path: selected,
-                refresh_key,
-                pages: pages_memo,
-                on_open,
-                tab: right_tab,
             }
         }
         document::Link { rel: "stylesheet", href: editor::EDITOR_STYLE }

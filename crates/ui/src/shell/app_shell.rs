@@ -23,6 +23,8 @@ pub fn AppShell() -> Element {
     crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
     crate::palette::provide_palette_context();
+    // `--kb`: the on-screen keyboard's height, for bottom-pinned phone UI.
+    crate::shell::mobile::use_keyboard_inset();
     // Obsidian-style route tabs (the strip lives in the TopBar) —
     // restores the persisted strip and seeds it with the boot route.
     crate::tabs::provide_tabs(current.clone());

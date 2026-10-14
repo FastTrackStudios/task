@@ -36,6 +36,41 @@ use crate::stores;
 
 pub use task_ui_core::sheet::BottomSheet;
 
+// ── on-screen keyboard height ───────────────────────────────────────
+
+/// Keeps `--kb` on the root element at the on-screen keyboard's height
+/// (0 when none). On iOS the keyboard shrinks the *visual* viewport and
+/// leaves fixed layout where it was, so anything pinned to the bottom —
+/// the phone command palette's field, a composer's chips — sits under
+/// the keyboard unless it pads by this.
+const KEYBOARD_INSET_JS: &str = r#"
+(() => {
+  if (window.__taskKb || !window.visualViewport) return;
+  window.__taskKb = true;
+  const vv = window.visualViewport;
+  const set = () => {
+    const s = document.documentElement.style;
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    s.setProperty('--kb', kb + 'px');
+    // The visible rectangle itself: iOS scrolls the layout viewport to
+    // keep a focused field in view, which moves anything `fixed` with
+    // it. A sheet that must stay on screen pins to these instead.
+    s.setProperty('--vv-top', vv.offsetTop + 'px');
+    s.setProperty('--vv-h', vv.height + 'px');
+  };
+  vv.addEventListener('resize', set);
+  vv.addEventListener('scroll', set);
+  set();
+})();
+"#;
+
+/// Install [`KEYBOARD_INSET_JS`] once. Call from the app shell.
+pub fn use_keyboard_inset() {
+    use_hook(|| {
+        let _ = document::eval(KEYBOARD_INSET_JS);
+    });
+}
+
 // ── sticky page action bar ──────────────────────────────────────────
 
 /// Sticky mobile action bar — a page's primary actions, pinned just

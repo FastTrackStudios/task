@@ -409,7 +409,7 @@ fn apply_ops_clamped(text: &crdt::loro::LoroText, ops: &[editor_crdt::TextOp]) {
 /// The vault page's decoration source: the existing vault pass
 /// (live-preview with wikilink resolution + bracket match) plus
 /// remote presence cursors/selections layered on top, plus every
-/// registered widget's decoration pass (`widget_passes` — from
+/// decoration pass of the widgets claiming this note (`widget_passes`, from
 /// `WidgetRegistry::decoration_passes`, e.g. the section tabs). Create
 /// once (`use_hook`) — captures the signals, equality is `Rc` identity;
 /// the widget passes are self-gating plain fns, stable for the app's
@@ -417,7 +417,7 @@ fn apply_ops_clamped(text: &crdt::loro::LoroText, ops: &[editor_crdt::TextOp]) {
 pub fn collab_decoration_source(
     lookup: Signal<Option<Rc<ClientVaultIndex>>>,
     collab: Signal<Option<CollabHandles>>,
-    widget_passes: Vec<task_widgets::DecorationPass>,
+    widget_passes: Signal<Vec<task_widgets::DecorationPass>>,
 ) -> editor_view::DecorationSource {
     editor_view::DecorationSource::new(move |state| {
         let mut out = {
@@ -430,7 +430,7 @@ pub fn collab_decoration_source(
         if let Some(c) = &*collab.read() {
             out.extend(remote_cursor_decorations(state, c));
         }
-        for pass in &widget_passes {
+        for pass in widget_passes.read().iter() {
             out.extend(pass(state));
         }
         out
