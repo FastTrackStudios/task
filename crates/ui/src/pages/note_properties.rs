@@ -179,7 +179,220 @@ pub fn NoteProperties() -> Element {
         };
     };
     rsx! {
-        div { class: "px-3 py-3", PropertiesPanel { doc } }
+        div { class: "px-3 py-3 md:hidden", PhoneProperties { doc } }
+        div { class: "hidden px-3 py-3 md:block", PropertiesPanel { doc } }
+    }
+}
+
+// ── The phone panel ─────────────────────────────────────────────────
+
+/// A phone row's value field: 16px so iOS does not zoom into it, right
+/// aligned against its name (Settings' look), quiet until focused.
+const PHONE_VALUE: &str = "h-11 min-w-0 flex-1 bg-transparent text-right text-[16px] text-foreground outline-none placeholder:text-muted-foreground/70 disabled:opacity-60";
+
+/// The add row's fields.
+const PHONE_FIELD: &str = "h-11 min-w-0 flex-1 rounded-xl bg-foreground/[0.06] px-3 text-[16px] text-foreground outline-none placeholder:text-muted-foreground/70 focus:bg-foreground/[0.09]";
+
+/// A note's properties on a phone: one inset group of rows — the name
+/// on the left, an editor for its kind on the right (a switch, the
+/// date picker, a number pad, removable chips for a list, text) — and
+/// a second group to add one.
+// t[impl doc.properties.shared]
+#[component]
+pub fn PhoneProperties(doc: FocusedDoc) -> Element {
+    let mut new_key = use_signal(String::new);
+    let mut new_val = use_signal(String::new);
+    let text = doc.state.read().doc.to_string();
+    let props = parse_frontmatter(&text)
+        .map(|f| f.props)
+        .unwrap_or_default();
+    let mut add = move || {
+        add_prop(doc, &new_key.peek().clone(), &new_val.peek().clone());
+        new_key.set(String::new());
+        new_val.set(String::new());
+    };
+    let can_add = !new_key.read().trim().is_empty();
+
+    rsx! {
+        div { class: "flex flex-col gap-5",
+            div { class: "flex flex-col divide-y divide-foreground/[0.06] overflow-hidden rounded-[20px] bg-foreground/[0.05]",
+                if props.is_empty() {
+                    div { class: "flex min-h-[52px] items-center px-4 text-[15px] text-muted-foreground",
+                        "No properties yet."
+                    }
+                }
+                for prop in props.iter().cloned() {
+                    {
+                        let key = prop.key.clone();
+                        let del_key = key.clone();
+                        rsx! {
+                            div { key: "{prop.key}", class: "flex min-h-[52px] items-center gap-3 pl-4 pr-2",
+                                span { class: "w-[38%] shrink-0 truncate text-[15px] text-muted-foreground", "{key}" }
+                                div { class: "flex min-w-0 flex-1 items-center justify-end",
+                                    {phone_value(doc, &key, &prop.value)}
+                                }
+                                if doc.writable {
+                                    button {
+                                        r#type: "button",
+                                        class: "flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 active:bg-foreground/10",
+                                        aria_label: "Remove {del_key}",
+                                        onclick: move |_| delete_prop(doc, &del_key),
+                                        X { class: "size-4" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if doc.writable {
+                div { class: "flex flex-col gap-2",
+                    span { class: "px-1 text-[13px] font-medium text-muted-foreground", "Add a property" }
+                    div { class: "flex items-center gap-2",
+                        input {
+                            class: PHONE_FIELD,
+                            aria_label: "New property name",
+                            placeholder: "Name",
+                            autocapitalize: "off",
+                            value: "{new_key}",
+                            oninput: move |e| new_key.set(e.value()),
+                        }
+                        input {
+                            class: PHONE_FIELD,
+                            aria_label: "New property value",
+                            placeholder: "Value",
+                            value: "{new_val}",
+                            oninput: move |e| new_val.set(e.value()),
+                            onkeydown: move |e| {
+                                if e.key() == Key::Enter {
+                                    add();
+                                }
+                            },
+                        }
+                        button {
+                            r#type: "button",
+                            class: "flex size-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-opacity active:opacity-80 disabled:opacity-30",
+                            aria_label: "Add property",
+                            disabled: !can_add,
+                            onclick: move |_| add(),
+                            Plus { class: "size-5" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One property's editor on a phone, by kind.
+fn phone_value(doc: FocusedDoc, key: &str, value: &PropValue) -> Element {
+    let key = key.to_owned();
+    match value {
+        PropValue::Bool(b) => {
+            let on = *b;
+            rsx! {
+                if doc.writable {
+                    task_ui_core::sheet::Switch {
+                        on,
+                        label: key.clone(),
+                        on_toggle: move |v| set_prop(doc, &key, PropValue::Bool(v)),
+                    }
+                } else {
+                    span { class: "text-[16px]", if on { "Yes" } else { "No" } }
+                }
+            }
+        }
+        PropValue::List(items) => {
+            let items = items.clone();
+            rsx! { PhoneList { doc, name: key, items } }
+        }
+        other => {
+            let prev = other.clone();
+            let shown = scalar_text(other);
+            let (kind, mode) = match other {
+                PropValue::Date(_) => ("date", "none"),
+                PropValue::Number(_) => ("text", "decimal"),
+                _ => ("text", "text"),
+            };
+            rsx! {
+                input {
+                    r#type: kind,
+                    inputmode: mode,
+                    class: PHONE_VALUE,
+                    placeholder: "Empty",
+                    value: "{shown}",
+                    disabled: !doc.writable,
+                    onchange: move |e| set_prop(doc, &key, value_from_text(&prev, &e.value())),
+                }
+            }
+        }
+    }
+}
+
+/// A list property on a phone: its items as chips, each removable, and
+/// a field that adds one on Return.
+#[component]
+fn PhoneList(doc: FocusedDoc, name: String, items: Vec<String>) -> Element {
+    let key = name;
+    let mut draft = use_signal(String::new);
+    let set = move |next: Vec<String>, key: &str| set_prop(doc, key, PropValue::List(next));
+    let add_key = key.clone();
+    let add_items = items.clone();
+    let push = use_callback(move |()| {
+        let v = draft.peek().trim().to_owned();
+        if v.is_empty() {
+            return;
+        }
+        let mut next = add_items.clone();
+        if !next.contains(&v) {
+            next.push(v);
+        }
+        set(next, &add_key);
+        draft.set(String::new());
+    });
+    rsx! {
+        div { class: "flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5 py-2",
+            for (i, item) in items.iter().cloned().enumerate() {
+                {
+                    let key = key.clone();
+                    let items = items.clone();
+                    rsx! {
+                        span { key: "{item}", class: "inline-flex h-8 max-w-full items-center gap-1 rounded-full bg-foreground/[0.08] pl-3 pr-1 text-[14px] text-foreground",
+                            span { class: "truncate", "{item}" }
+                            if doc.writable {
+                                button {
+                                    r#type: "button",
+                                    class: "flex size-6 items-center justify-center rounded-full text-muted-foreground active:bg-foreground/10",
+                                    aria_label: "Remove {item}",
+                                    onclick: move |_| {
+                                        let mut next = items.clone();
+                                        next.remove(i);
+                                        set(next, &key);
+                                    },
+                                    X { class: "size-3.5" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if doc.writable {
+                input {
+                    class: "h-8 w-24 min-w-0 bg-transparent text-right text-[16px] text-foreground outline-none placeholder:text-muted-foreground/70",
+                    aria_label: "Add to {key}",
+                    placeholder: if items.is_empty() { "Add" } else { "Add…" },
+                    autocapitalize: "off",
+                    value: "{draft}",
+                    oninput: move |e| draft.set(e.value()),
+                    onkeydown: move |e| {
+                        if e.key() == Key::Enter {
+                            push.call(());
+                        }
+                    },
+                    onblur: move |_| push.call(()),
+                }
+            }
+        }
     }
 }
 
@@ -285,6 +498,15 @@ fn chip_text(key: &str, value: &PropValue) -> Option<String> {
 #[component]
 pub fn NotePropertyChips(doc: FocusedDoc) -> Element {
     let mut open = use_signal(|| false);
+    // The note's drawer holds the full panel; open it there, or in
+    // place where there is no drawer.
+    let panels = try_use_context::<crate::shell::phone_gestures::PhonePanels>();
+    let mut reveal = move || {
+        let shown = panels.is_some_and(|p| p.show(crate::shell::phone_gestures::Side::Right));
+        if !shown {
+            open.toggle();
+        }
+    };
     let text = doc.state.read().doc.to_string();
     let props = parse_frontmatter(&text)
         .map(|f| f.props)
@@ -305,7 +527,7 @@ pub fn NotePropertyChips(doc: FocusedDoc) -> Element {
                         r#type: "button",
                         class: task_ui::CHIP_CLASS,
                         title: "{key}",
-                        onclick: move |_| open.toggle(),
+                        onclick: move |_| reveal(),
                         span { class: "text-muted-foreground", "{key}" }
                         span { class: "truncate", "{value}" }
                     }
@@ -314,12 +536,12 @@ pub fn NotePropertyChips(doc: FocusedDoc) -> Element {
                     r#type: "button",
                     class: task_ui::CHIP_QUIET_CLASS,
                     aria_expanded: "{open}",
-                    onclick: move |_| open.toggle(),
+                    onclick: move |_| reveal(),
                     if open() { "Done" } else { "Properties" }
                 }
             }
             if open() {
-                div { class: "rounded-xl border border-border/60 px-3 py-2", PropertiesPanel { doc } }
+                div { class: "pt-1", PhoneProperties { doc } }
             }
         }
     }

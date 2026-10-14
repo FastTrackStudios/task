@@ -95,22 +95,24 @@ pub fn NoteInspector(
 ) -> Element {
     let showing = tab();
     rsx! {
-        div { class: "flex items-center gap-1 border-b border-border/60 px-2 py-1.5",
+        // Phone: a segmented control across the drawer's top. Desk: the
+        // sidebar's compact tab strip.
+        div { class: "mx-3 mt-3 flex items-center gap-0.5 rounded-full bg-foreground/[0.06] p-1 md:mx-0 md:mt-0 md:gap-1 md:rounded-none md:border-b md:border-border/60 md:bg-transparent md:px-2 md:py-1.5",
             for t in InspectorTab::ALL {
                 button {
                     key: "{t.label()}",
                     r#type: "button",
                     "data-testid": "inspector-tab-{t.label()}",
                     class: if showing == t {
-                        "rounded px-2 py-1 text-xs font-medium text-foreground bg-accent"
+                        "h-9 flex-1 rounded-full bg-foreground/[0.12] text-[14px] font-semibold text-foreground shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)] md:h-auto md:flex-none md:rounded md:bg-accent md:px-2 md:py-1 md:text-xs md:font-medium md:shadow-none"
                     } else {
-                        "rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                        "h-9 flex-1 rounded-full text-[14px] text-muted-foreground active:bg-foreground/10 md:h-auto md:flex-none md:rounded md:px-2 md:py-1 md:text-xs md:hover:text-foreground"
                     },
                     onclick: move |_| tab.set(t),
                     "{t.label()}"
                 }
             }
-            div { class: "ml-auto flex items-center gap-1.5",
+            div { class: "ml-auto hidden items-center gap-1.5 md:flex",
                 {extra}
                 if let Some(hide) = on_hide {
                     button {

@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use ui::App;
 
 mod ios_auth;
+mod keyboard_bar;
 mod watch_sync;
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -30,6 +31,8 @@ fn main() {
     // at the issuer covers every FastTrackStudio app on the device
     // (no-op off iOS — the login screen then offers the form only).
     ios_auth::init();
+    // The app draws its own bar over the keyboard; drop the web view's.
+    keyboard_bar::init();
 
     // Before launch — the nav is built on first render, and an app
     // registered after that has no tab until something else redraws.

@@ -741,7 +741,7 @@ impl VaultSync for Backend {
                 PageMeta {
                     path: p.rel_path.clone(),
                     basename: p.basename.clone(),
-                    title: get("title").unwrap_or_else(|| p.basename.clone()),
+                    title: page_title(&p.raw, &p.basename, get("title")),
                     page_type: get("type").unwrap_or_default(),
                     // `folder` or `up` — both wikilink-to-parent
                     // properties (the obsidian-virt-folder model).
@@ -1188,6 +1188,31 @@ fn fm_tags(fm: &FrontMatter) -> Vec<String> {
     out
 }
 
+/// A page's display title: its `title` property; else, for a record
+/// the app named by id (an inbox item's `<uuid>.md`), its first line of
+/// text — a name nobody chose reads as noise in a list; else the file
+/// name, which is a note's title.
+fn page_title(raw: &str, basename: &str, title: Option<String>) -> String {
+    if let Some(t) = title {
+        return t;
+    }
+    if Uuid::parse_str(basename).is_ok() {
+        let body = raw
+            .strip_prefix("---")
+            .and_then(|rest| rest.split_once("\n---"))
+            .map_or(raw, |(_, body)| body);
+        // The fence's closing line comes back as the first (empty) one.
+        let first = body.lines().map(str::trim).find(|l| !l.is_empty());
+        if let Some(line) = first {
+            let line = line.trim_start_matches('#').trim();
+            if !line.is_empty() {
+                return line.chars().take(80).collect();
+            }
+        }
+    }
+    basename.to_string()
+}
+
 /// Reduce a `folder` value to a bare parent basename. Handles the
 /// Obsidian wikilink form `[[Name|alias]]#heading` as well as a
 /// plain string.
@@ -1382,6 +1407,27 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A record named by id lists by what it says; a note by its name.
+    #[test]
+    fn a_record_named_by_id_is_titled_by_its_first_line() {
+        let id = "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a01";
+        let inbox = "---\ntype: inbox-item\n---\n\nCall the piano tuner about Thursday\n";
+        assert_eq!(
+            super::page_title(inbox, id, None),
+            "Call the piano tuner about Thursday"
+        );
+        assert_eq!(super::page_title("# Heading\nmore", id, None), "Heading");
+        assert_eq!(super::page_title("---\na: 1\n---\n", id, None), id);
+        assert_eq!(
+            super::page_title(inbox, id, Some("Chosen".into())),
+            "Chosen"
+        );
+        assert_eq!(
+            super::page_title("Setlist ideas", "Untitled 1", None),
+            "Untitled 1"
+        );
+    }
+
     /// A read is not a write: the same mtime and hash reported twice
     /// is one event, not two; a different hash (an edit) or a different
     /// mtime (a touch) is fresh; a delete forgets the path so a recreate

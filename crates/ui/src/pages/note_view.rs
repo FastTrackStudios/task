@@ -346,26 +346,16 @@ pub(crate) fn NoteView(
             );
         }
     });
-    // The editor places its caret as it mounts, and on iOS a caret in a
-    // contenteditable is focus: the keyboard rose over every note opened
-    // only to read it, and a swipe for a drawer typed into the note. Until
-    // the person touches the body, hand focus back — except in a fresh,
-    // empty note, which is opened to be written in.
-    let mut touched = use_signal(|| false);
-    let guard_path = path.clone();
-    use_hook(move || {
-        spawn(async move {
-            for _ in 0..6 {
-                architect::sleep(architect::Duration::from_millis(150)).await;
-                let loaded = session.current_path().as_deref() == Some(guard_path.as_str());
-                if *touched.peek() || (loaded && body_state.peek().doc.is_empty()) {
-                    return;
-                }
-                let _ = document::eval(
-                    "const a = document.activeElement; if (a && a.closest && a.closest('.note-body')) a.blur();",
-                );
-            }
-        });
+    // A fresh, empty note is opened to be written in: it may take the
+    // caret on its own. Any other note only on a touch — the shell's
+    // focus rule (`phone_gestures::FOCUS_RULE_JS`) reads this.
+    let fresh_path = path.clone();
+    // Whether the body has focus: the phone's keyboard toolbar shows
+    // while it does.
+    let mut body_focused = use_signal(|| false);
+    let autofocus = use_memo(move || {
+        session.current_path().as_deref() == Some(fresh_path.as_str())
+            && body_state.read().doc.is_empty()
     });
 
     // Publish this doc to the sidebar Properties panel while focused, so
@@ -885,8 +875,9 @@ pub(crate) fn NoteView(
                             }
                         } else {
                             div { class: if props_open() { "doc-linear editor-app note-body" } else { "doc-linear editor-app note-body props-collapsed" },
-                                onpointerdown: move |_| touched.set(true),
-                                onkeydown: move |_| touched.set(true),
+                                "data-autofocus": "{autofocus}",
+                                onfocusin: move |_| body_focused.set(true),
+                                onfocusout: move |_| body_focused.set(false),
                                 div { class: "editor-frame editor-frame--flush",
                                     Editor {
                                         state: body_state,
@@ -900,6 +891,11 @@ pub(crate) fn NoteView(
                                         editable: !reading(),
                                     }
                                     CommandPalette { state: body_state, palette, on_transaction: on_body_transaction }
+                                }
+                                crate::doc_editor::KeyboardToolbar {
+                                    state: body_state,
+                                    sink: Some(on_body_transaction),
+                                    focused: body_focused(),
                                 }
                             }
                         }

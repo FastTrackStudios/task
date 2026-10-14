@@ -502,7 +502,7 @@ pub fn VaultView(
 
     // Build the tree from the folder index.
     let tree = use_memo(move || match &*files.read_unchecked() {
-        Some(Ok(pages)) => Some(Rc::new(build_tree(pages))),
+        Some(Ok(pages)) => Some(Rc::new(tree::group_by_directory(build_tree(pages)))),
         _ => None,
     });
 
@@ -526,7 +526,7 @@ pub fn VaultView(
             let Some(t) = tree() else { unreachable!() };
             let (nodes, roots) = (Rc::new(t.0.clone()), t.1.clone());
             rsx! {
-                nav { class: "flex flex-col gap-0.5 px-2 pb-4",
+                nav { class: "flex flex-col gap-0.5 px-2 pb-4 md:px-2",
                     if roots.is_empty() {
                         div { class: "px-2 py-1 text-sm text-muted-foreground", "Empty vault. Create a note above." }
                     }
@@ -600,33 +600,43 @@ pub fn VaultView(
     let collapse_all = move || {
         let Some(t) = tree.peek().clone() else { return };
         let mut c = collapsed;
-        c.write().extend(
-            t.0.iter()
-                .filter(|n| n.is_folder)
-                .map(|n| n.meta.basename.to_lowercase()),
-        );
+        let mut set = c.write();
+        for n in t.0.iter().filter(|n| n.is_folder) {
+            if n.group {
+                set.remove(&tree::group_open_key(&n.meta.title));
+            } else {
+                set.insert(n.meta.basename.to_lowercase());
+            }
+        }
     };
+    // The drawer's head: the name, then New note, Collapse all and
+    // Search in thumb-sized buttons (Obsidian's drawer toolbar).
+    let icon_btn = "flex size-10 items-center justify-center rounded-full text-foreground/80 active:bg-foreground/10";
     let drawer_toolbar = rsx! {
-        div { class: "flex items-center gap-1 border-b border-border px-2 py-2 md:hidden",
+        div { class: "flex items-center gap-1 px-4 pb-2 pt-3 md:hidden",
+            h2 { class: "min-w-0 flex-1 truncate text-[20px] font-semibold tracking-[-0.01em]", "Notes" }
             button {
                 r#type: "button",
-                class: "flex size-11 items-center justify-center rounded-lg text-muted-foreground active:bg-accent",
+                class: icon_btn,
                 title: "New note",
+                "aria-label": "New note",
                 "data-testid": "drawer-new-note",
                 onclick: move |_| new_untitled(),
                 SquarePen { size: 20 }
             }
             button {
                 r#type: "button",
-                class: "flex size-11 items-center justify-center rounded-lg text-muted-foreground active:bg-accent",
+                class: icon_btn,
                 title: "Collapse all",
+                "aria-label": "Collapse all",
                 onclick: move |_| collapse_all(),
                 ChevronsDownUp { size: 20 }
             }
             button {
                 r#type: "button",
-                class: "flex size-11 items-center justify-center rounded-lg text-muted-foreground active:bg-accent",
+                class: icon_btn,
                 title: "Search",
+                "aria-label": "Search",
                 onclick: move |_| {
                     phone.close();
                     palette.set(true);
@@ -635,16 +645,40 @@ pub fn VaultView(
             }
         }
     };
+    // The list's head on a phone (no note open): the section header —
+    // "Notes", New note as the main action, the rest under ⋯.
+    let list_header = rsx! {
+        div { class: "pb-1 pt-1 md:hidden",
+            task_ui_core::section_header::SectionHeader {
+                title: "Notes".to_owned(),
+                action: rsx! { SquarePen { size: 20 } },
+                action_label: "New note".to_owned(),
+                on_action: move |()| new_untitled(),
+                task_ui_core::section_header::SectionMenuItem {
+                    label: "Search notes",
+                    icon: rsx! { Search { size: 18 } },
+                    on_click: move |()| palette.set(true),
+                }
+                task_ui_core::section_header::SectionMenuItem {
+                    label: "Collapse all",
+                    icon: rsx! { ChevronsDownUp { size: 18 } },
+                    on_click: move |()| collapse_all(),
+                }
+            }
+        }
+    };
 
     // ── Tree pane content ─────────────────────────────────
-    let tree_content = rsx! {
-        {drawer_toolbar}
-        div { class: "flex flex-col gap-2 px-3 py-3",
-            if let Some(parent) = create_under.clone() {
+    let tree_body = rsx! {
+        if let Some(parent) = create_under.clone() {
+            div { class: "px-4 pb-1 md:px-3",
                 Text { variant: TextVariant::Muted, class: "text-xs",
                     "New note will be filed under {parent}."
                 }
             }
+        }
+        // Desk: a name field. A phone has New note in its header.
+        div { class: "hidden flex-col gap-2 px-3 py-3 md:flex",
             div { class: "flex items-center gap-2",
                 Input {
                     value: new_name,
@@ -711,7 +745,8 @@ pub fn VaultView(
             // ── Virtual-folder tree (mobile-only) ─────────
             aside {
                 class: if has_file { "hidden" } else { "flex w-full flex-col overflow-y-auto pb-14 md:hidden" },
-                {tree_content.clone()}
+                {list_header}
+                {tree_body.clone()}
             }
             // ── Document area: panes + backlinks ──────────
             div {
@@ -792,7 +827,7 @@ pub fn VaultView(
         // Left: the files, with the new-note toolbar — the vault's own
         // tree rather than the shell's explorer. Right, while a note is
         // open: its properties, links, graph and share.
-        PhoneDrawer { side: Side::Left, testid: "vault-drawer".to_owned(), {tree_content} }
+        PhoneDrawer { side: Side::Left, testid: "vault-drawer".to_owned(), {drawer_toolbar} {tree_body} }
         if has_file {
             PhoneDrawer { side: Side::Right, testid: "note-drawer".to_owned(),
                 NoteInspector {

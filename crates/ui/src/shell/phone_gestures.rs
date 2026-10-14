@@ -98,6 +98,17 @@ impl PhonePanels {
         *self.claims(side).peek() > 0 || *fallback.peek()
     }
 
+    /// Open `side`'s drawer, if there is one; whether it opened.
+    pub fn show(self, side: Side) -> bool {
+        if !*self.phone.peek() || !self.has(side) {
+            return false;
+        }
+        self.close();
+        let mut open = self.open(side);
+        open.set(true);
+        true
+    }
+
     /// Close both drawers.
     pub fn close(mut self) {
         if *self.left_open.peek() {
@@ -207,6 +218,36 @@ document.addEventListener('touchcancel', end, { passive: true });
 await new Promise(() => {});
 "#;
 
+/// On a touch screen a note's body takes focus only from a touch inside
+/// it, or when it says it may (`data-autofocus="true"`, a fresh empty
+/// note). An editor places its caret as it mounts and again as content
+/// arrives, and on iOS a caret in a contenteditable is focus: the
+/// keyboard rose over every note opened only to read it, and its text
+/// gestures then swallowed the swipe meant for a drawer.
+const FOCUS_RULE_JS: &str = r#"
+if (!window.__taskFocusRule) {
+  window.__taskFocusRule = true;
+  let touchedAt = 0;
+  const coarse = () => window.matchMedia('(pointer: coarse)').matches;
+  document.addEventListener('touchstart', (e) => {
+    if (e.target.closest && e.target.closest('.note-body')) touchedAt = Date.now();
+  }, { passive: true, capture: true });
+  // A press on a keyboard toolbar keeps the editor's focus (and the
+  // keyboard): the mouse-down that would move focus is cancelled; the
+  // click still runs.
+  document.addEventListener('mousedown', (e) => {
+    if (e.target.closest && e.target.closest('[data-keep-focus]')) e.preventDefault();
+  }, true);
+  document.addEventListener('focusin', (e) => {
+    if (!coarse()) return;
+    const body = e.target.closest && e.target.closest('.note-body');
+    if (!body || body.dataset.autofocus === 'true') return;
+    if (Date.now() - touchedAt < 1500) return;
+    e.target.blur();
+  }, true);
+}
+"#;
+
 /// The recogniser, the scrim and the pull cue. Mount once, in the shell.
 /// `has_left` / `has_right`: whether the shell renders a fallback
 /// drawer for that side.
@@ -223,6 +264,9 @@ pub fn PhoneGestures(has_left: bool, has_right: bool) -> Element {
             r.set(has_right);
         }
     }
+    use_hook(|| {
+        let _ = document::eval(FOCUS_RULE_JS);
+    });
     use_hook(move || {
         let mut phone = panels.phone;
         spawn(async move {

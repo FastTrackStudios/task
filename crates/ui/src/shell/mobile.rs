@@ -52,6 +52,9 @@ const KEYBOARD_INSET_JS: &str = r#"
     const s = document.documentElement.style;
     const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
     s.setProperty('--kb', kb + 'px');
+    // `kb-open` while the on-screen keyboard is up — what keyboard
+    // toolbars show on.
+    document.documentElement.classList.toggle('kb-open', kb > 80);
     // The visible rectangle itself: iOS scrolls the layout viewport to
     // keep a focused field in view, which moves anything `fixed` with
     // it. A sheet that must stay on screen pins to these instead.

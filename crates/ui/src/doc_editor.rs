@@ -424,6 +424,141 @@ pub fn use_debounced_commit(
     handle
 }
 
+// ── The keyboard toolbar (phone) ────────────────────────────────────
+
+/// `#` → `##` → `###` → none, on the caret's line.
+fn cycle_heading(s: &EditorState) -> Option<TransactionSpec> {
+    let doc = s.doc.to_string();
+    let at = caret_of(s).min(doc.len());
+    let start = doc[..at].rfind('\n').map_or(0, |n| n + 1);
+    let level = doc[start..].bytes().take_while(|b| *b == b'#').count();
+    let next = if level >= 3 { 0 } else { level as u8 + 1 };
+    editor::commands::set_heading(s, next)
+}
+fn wikilink(s: &EditorState) -> Option<TransactionSpec> {
+    run_here(s, CommandKind::InsertSnippet("[[]]", 2))
+}
+fn tag(s: &EditorState) -> Option<TransactionSpec> {
+    run_here(s, CommandKind::InsertSnippet("#", 0))
+}
+fn inline_code(s: &EditorState) -> Option<TransactionSpec> {
+    run_here(s, CommandKind::InsertSnippet("``", 1))
+}
+fn indent(s: &EditorState) -> Option<TransactionSpec> {
+    editor::commands::tab_list_indent(s, false).or_else(|| editor::commands::indent_more(s))
+}
+fn outdent(s: &EditorState) -> Option<TransactionSpec> {
+    editor::commands::tab_list_indent(s, true).or_else(|| editor::commands::indent_less(s))
+}
+
+/// The toolbar's actions, in Obsidian's order: links first, then the
+/// marks, the blocks, and the structure.
+fn toolbar_actions() -> Vec<(&'static str, fn() -> Element, editor::Command)> {
+    use architect_ui::lucide_dioxus as i;
+    vec![
+        (
+            "Link to a note",
+            || rsx! { i::Brackets { size: 20 } },
+            wikilink,
+        ),
+        (
+            "Link",
+            || rsx! { i::Link { size: 20 } },
+            |s: &_| editor::commands::toggle_link(s),
+        ),
+        (
+            "Bold",
+            || rsx! { i::Bold { size: 20 } },
+            |s: &_| editor::commands::toggle_bold(s),
+        ),
+        (
+            "Italic",
+            || rsx! { i::Italic { size: 20 } },
+            |s: &_| editor::commands::toggle_italic(s),
+        ),
+        (
+            "Heading",
+            || rsx! { i::Heading { size: 20 } },
+            cycle_heading,
+        ),
+        ("Bulleted list", || rsx! { i::List { size: 20 } }, bullets),
+        (
+            "Numbered list",
+            || rsx! { i::ListOrdered { size: 20 } },
+            numbers,
+        ),
+        ("Checklist", || rsx! { i::ListTodo { size: 20 } }, checklist),
+        ("Indent", || rsx! { i::IndentIncrease { size: 20 } }, indent),
+        (
+            "Outdent",
+            || rsx! { i::IndentDecrease { size: 20 } },
+            outdent,
+        ),
+        ("Quote", || rsx! { i::TextQuote { size: 20 } }, blockquote),
+        ("Code", || rsx! { i::Code { size: 20 } }, inline_code),
+        ("Tag", || rsx! { i::Hash { size: 20 } }, tag),
+    ]
+}
+
+/// Obsidian's bar above the phone keyboard: a scrolling pill of markdown
+/// actions on the focused body, and apart from it a button that puts the
+/// keyboard away. Shown while `state`'s editor (inside `scope`, a CSS
+/// selector) has focus on a phone; rides the keyboard (`--kb`). Its
+/// buttons never take focus (`data-keep-focus`, honoured by the shell's
+/// focus rule), so the caret and the keyboard stay where they are.
+#[component]
+pub fn KeyboardToolbar(
+    state: Signal<EditorState>,
+    /// The editor's transaction sink, so a toolbar edit persists like a
+    /// typed one.
+    #[props(default)]
+    sink: Option<Callback<editor::TransactionEvent>>,
+    /// Whether the editor has focus.
+    focused: bool,
+) -> Element {
+    let panels = try_use_context::<crate::shell::phone_gestures::PhonePanels>();
+    let phone = panels.is_some_and(|p| (p.phone)());
+    if !focused || !phone {
+        return rsx! {};
+    }
+    rsx! {
+        div {
+            class: "fixed inset-x-0 z-50 hidden items-center gap-2 px-2 pb-2 [.kb-open_&]:flex md:hidden",
+            style: "bottom: var(--kb, 0px)",
+            "data-keep-focus": "true",
+            "data-no-swipe": "true",
+            div { class: "flex h-12 min-w-0 flex-1 items-center overflow-x-auto rounded-full bg-popover/95 px-1 shadow-[0_8px_30px_rgb(0_0_0/0.25),inset_0_0_0_1px_rgb(255_255_255/0.06)] backdrop-blur [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                for (label, icon, run) in toolbar_actions() {
+                    button {
+                        key: "{label}",
+                        r#type: "button",
+                        class: "flex size-11 shrink-0 items-center justify-center rounded-full text-foreground/85 active:bg-foreground/10",
+                        aria_label: "{label}",
+                        title: "{label}",
+                        onclick: move |_| {
+                            let cur = state.peek().clone();
+                            if let Some(spec) = run(&cur) {
+                                editor::dispatch_spec(state, spec, sink);
+                            }
+                        },
+                        {icon()}
+                    }
+                }
+            }
+            button {
+                r#type: "button",
+                class: "flex size-12 shrink-0 items-center justify-center rounded-full bg-popover/95 text-foreground/85 shadow-[0_8px_30px_rgb(0_0_0/0.25),inset_0_0_0_1px_rgb(255_255_255/0.06)] backdrop-blur active:bg-foreground/10",
+                aria_label: "Hide keyboard",
+                title: "Hide keyboard",
+                onclick: move |_| {
+                    let _ = document::eval("document.activeElement && document.activeElement.blur();");
+                },
+                architect_ui::lucide_dioxus::KeyboardOff { size: 20 }
+            }
+        }
+    }
+}
+
 // ── The component ───────────────────────────────────────────────────
 
 /// A markdown body, edited with the document editor. Body only — never
@@ -553,6 +688,7 @@ pub fn DocBody(
     // contenteditable is focus — the keyboard rose over a page opened only
     // to read it. Until the person touches the body, hand focus back.
     let mut touched = use_signal(|| false);
+    let mut focused = use_signal(|| false);
     use_hook(move || {
         spawn(async move {
             for _ in 0..4 {
@@ -574,6 +710,8 @@ pub fn DocBody(
             class: "{DOC_CLASS} doc-body editor-app props-collapsed relative",
             onpointerdown: move |_| touched.set(true),
             onkeydown: move |_| touched.set(true),
+            onfocusin: move |_| focused.set(true),
+            onfocusout: move |_| focused.set(false),
             if empty() && !placeholder.is_empty() {
                 div { class: "doc-placeholder", aria_hidden: "true", "{placeholder}" }
             }
@@ -593,6 +731,7 @@ pub fn DocBody(
                 }
                 CommandPalette { state, palette }
             }
+            KeyboardToolbar { state, focused: focused() }
         }
     }
 }
