@@ -220,6 +220,44 @@ async fn a_fresh_device_is_fully_functional_with_no_server() {
     );
 }
 
+// t[verify offline.local] — a first run cut short (the app killed while
+// it planted) is started again, not a device that never boots; a data
+// root with orgs nobody provisioned here is still refused
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interrupted_first_run_provisions_again() {
+    let _env = crate::support::env_lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    // What a killed first run leaves: the marker, an org, no owner.
+    let data_root = org_proto::DataRoot::new(tmp.path().to_path_buf());
+    data_root.ensure().unwrap();
+    data_root.init_org("half-made", "Half made", true).unwrap();
+    std::fs::write(
+        tmp.path().join(task_server::local_node::PROVISIONING_FILE),
+        b"",
+    )
+    .unwrap();
+
+    let node = LocalNode::open(opts(tmp.path(), false))
+        .await
+        .expect("the interrupted first run is redone");
+    assert_eq!(node.org_slugs(), vec![PERSONAL_SLUG.to_owned()]);
+    assert!(
+        !tmp.path()
+            .join(task_server::local_node::PROVISIONING_FILE)
+            .exists(),
+        "the first run finished"
+    );
+    drop(node);
+
+    // Orgs without the marker are somebody else's: refused, untouched.
+    let other = tempfile::tempdir().unwrap();
+    let theirs = org_proto::DataRoot::new(other.path().to_path_buf());
+    theirs.ensure().unwrap();
+    theirs.init_org("theirs", "Theirs", true).unwrap();
+    assert!(LocalNode::open(opts(other.path(), false)).await.is_err());
+    assert!(theirs.org("theirs").path().is_dir());
+}
+
 // t[verify offline.peers]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_second_device_joins_the_org_as_a_node() {

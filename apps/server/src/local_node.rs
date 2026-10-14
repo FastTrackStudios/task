@@ -69,6 +69,10 @@ pub const PERSONAL_SLUG: &str = "personal";
 /// The file the local owner's credentials live in, beside `orgs/`.
 pub const OWNER_FILE: &str = "local-owner.json";
 
+/// Present while a first run provisions, removed once [`OWNER_FILE`] is
+/// written: found on a later boot, it says the first run was cut short.
+pub const PROVISIONING_FILE: &str = ".provisioning";
+
 /// The account a device's node signs its own person in as.
 ///
 /// Credentials, not a session: the app signs in with these through the
@@ -440,6 +444,18 @@ async fn provision(
     {
         return Ok(owner);
     }
+    // A first run that never finished — the app killed while it planted
+    // (a force-quit, a relaunch) — left orgs and no owner. They are this
+    // node's own half-made provision, so they go and it starts again; a
+    // first run is not something a person should be able to brick.
+    let marker = data_root.path().join(PROVISIONING_FILE);
+    if marker.exists() {
+        let orgs = data_root.path().join("orgs");
+        if orgs.exists() {
+            std::fs::remove_dir_all(&orgs).wrap_err("clear an interrupted first run")?;
+        }
+        tracing::warn!("node: the first run was interrupted; provisioning again");
+    }
     let empty = data_root
         .scan_orgs()
         .map_err(|e| eyre::eyre!("scan orgs: {e}"))?
@@ -452,6 +468,7 @@ async fn provision(
         );
     }
 
+    std::fs::write(&marker, b"").wrap_err("mark the first run")?;
     let owner = if opts.plant_example && cfg!(debug_assertions) {
         plant_example(data_root).await?
     } else {
@@ -461,6 +478,7 @@ async fn provision(
         &owner_path,
         &serde_json::to_vec_pretty(&owner).wrap_err("encode owner")?,
     )?;
+    std::fs::remove_file(&marker).wrap_err("finish the first run")?;
     Ok(owner)
 }
 
