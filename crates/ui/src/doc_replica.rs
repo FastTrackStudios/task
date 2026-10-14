@@ -83,6 +83,18 @@ impl ReplicaHandle {
     pub fn ready(&self) -> bool {
         (self.ready)()
     }
+    /// The document carries a tombstone: its file was deleted, here or on
+    /// any other node (`meta.deleted`). Reactive — through
+    /// [`Self::revision`], so a delete arriving while the note is open
+    /// shows at once.
+    #[must_use]
+    pub fn deleted(&self) -> bool {
+        let _ = self.revision();
+        self.doc
+            .read()
+            .as_ref()
+            .is_some_and(|d| vault_doc::is_deleted(d.loro()))
+    }
     /// The server's refusal, when there is one. Reactive.
     #[must_use]
     pub fn refused(&self) -> Option<String> {

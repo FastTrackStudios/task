@@ -118,7 +118,9 @@ impl CollabHandles {
 
     /// The status-line word for this session.
     pub fn label(&self) -> &'static str {
-        if self.doc.refused().is_some() {
+        if self.doc.deleted() {
+            "deleted elsewhere"
+        } else if self.doc.refused().is_some() {
             "not shared — kept on this device"
         } else if !self.is_live() {
             "connecting…"
