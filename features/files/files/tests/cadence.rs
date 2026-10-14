@@ -849,7 +849,10 @@ async fn a_replica_adopted_after_watching_starts_is_watched() {
         )
         .expect("adopt replica");
 
-    // No explicit `watch_root`: the flag is what has to carry it.
+    // No explicit `watch_root`: the flag is what has to carry it. The
+    // watch is registered in the background (an adopt does not wait on
+    // the OS), so an edit meant to be noticed waits for it first.
+    harness.backend.watches_settled().await;
     std::fs::write(replica_dir.join("overdub.wav"), b"work done offline").unwrap();
     let opened = tokio::time::timeout(Duration::from_secs(10), async {
         while !harness.backend.cadence().session_open(root_id) {

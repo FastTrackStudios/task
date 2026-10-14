@@ -139,31 +139,36 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     let repos = repos_dir(org_root);
     let mail = mail_dir(org_root);
 
+    // Each step a span (`plant.*`): every test world and every demo boot
+    // pays for planting, so a slow step should show itself.
+    let _install = tracing::info_span!("plant.install", %slug).entered();
     // `Dir::files` is one level deep, so walk the whole subtree.
     let mut planted = Planted::default();
-    plant(
-        dir,
-        slug,
-        &vault,
-        &wiki,
-        &wikis,
-        &files,
-        &resources,
-        &assets,
-        &projects,
-        &repos,
-        &mail,
-        &mut planted,
-    )?;
+    tracing::info_span!("plant.tree").in_scope(|| {
+        plant(
+            dir,
+            slug,
+            &vault,
+            &wiki,
+            &wikis,
+            &files,
+            &resources,
+            &assets,
+            &projects,
+            &repos,
+            &mail,
+            &mut planted,
+        )
+    })?;
     complete_mail_accounts(&mail)?;
-    plant_inbox(&vault, slug, &mut planted)?;
+    tracing::info_span!("plant.inbox").in_scope(|| plant_inbox(&vault, slug, &mut planted))?;
     // Before the declared collections: a setlist declared over a library
     // names songs this import creates.
-    plant_chordsheet_library(org_root, slug);
+    tracing::info_span!("plant.chordsheets").in_scope(|| plant_chordsheet_library(org_root, slug));
     #[cfg(feature = "plugin-fasttrackstudio")]
-    plant_collections(org_root, slug);
+    tracing::info_span!("plant.collections").in_scope(|| plant_collections(org_root, slug));
     #[cfg(feature = "plugin-wiki")]
-    plant_repo_wikis(org_root, slug);
+    tracing::info_span!("plant.repo_wikis").in_scope(|| plant_repo_wikis(org_root, slug));
     #[cfg(feature = "plugin-wiki")]
     declare_wiki_configs(org_root, slug)?;
     Ok(planted)

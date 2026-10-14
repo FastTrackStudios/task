@@ -45,6 +45,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use org_proto::{Shelf, Tier};
+use tracing::Instrument;
 use vault_proto::VaultEvent;
 use wiki_proto::WikiEvent;
 
@@ -79,6 +80,8 @@ pub struct ShelfRegistry {
     collab: vault_collab::VaultCollab,
     wiki: Option<wiki_live::WikiBackend>,
     watchers: Arc<Mutex<Vec<vault::sync::WatcherHandle>>>,
+    /// Watchers still starting (see [`Self::attach`]).
+    starting: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl ShelfRegistry {
@@ -96,6 +99,18 @@ impl ShelfRegistry {
             collab,
             wiki: None,
             watchers: Arc::new(Mutex::new(Vec::new())),
+            starting: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Wait until every shelf attached so far is watched on disk — for
+    /// a caller that is about to edit files outside the backend and
+    /// needs the edit seen (a test, an import). Boot never waits on it.
+    pub async fn watching(&self) {
+        let pending: Vec<_> =
+            std::mem::take(&mut *self.starting.lock().expect("shelf watchers poisoned"));
+        for started in pending {
+            let _ = started.await;
         }
     }
 
@@ -125,30 +140,49 @@ impl ShelfRegistry {
     /// asset groups, and refusing to register one would make the first
     /// write to it a `NotFound` rather than a file.
     pub async fn attach(&self, shelf: &dyn Shelf) {
+        if let Some(id) = self.register(shelf).await {
+            self.watch(vec![id]);
+        }
+    }
+
+    /// [`Self::attach`] for every shelf an org boots with, watched on
+    /// disk by **one** OS watch (`vault::Backend::start_watchers`) — one
+    /// registration with the file event service for the org instead of
+    /// one per shelf.
+    pub async fn attach_all(&self, shelves: &[Box<dyn Shelf>]) {
+        let mut ids = Vec::with_capacity(shelves.len());
+        for shelf in shelves {
+            if let Some(id) = self.register(shelf.as_ref()).await {
+                ids.push(id);
+            }
+        }
+        if !ids.is_empty() {
+            self.watch(ids);
+        }
+    }
+
+    /// Everything [`Self::attach`] does except the disk watcher. `None`
+    /// when the shelf's root could not be made.
+    async fn register(&self, shelf: &dyn Shelf) -> Option<String> {
         let id = shelf.vault_id();
         let root = shelf.root();
-        if let Err(e) = self.sync.add_root(id.clone(), root.to_path_buf()) {
+        // Boot is made of these; each step is a span so a slow one shows
+        // its own duration (`boot.shelf.*`).
+        let added = tracing::info_span!("boot.shelf.sync_root")
+            .in_scope(|| self.sync.add_root(id.clone(), root.to_path_buf()));
+        if let Err(e) = added {
             tracing::warn!(
                 org = %self.org,
                 shelf = %id,
                 "shelf root not created: {e}"
             );
-            return;
+            return None;
         }
-        self.graph.add_root(id.clone(), root.to_path_buf());
+        tracing::info_span!("boot.shelf.graph_root")
+            .in_scope(|| self.graph.add_root(id.clone(), root.to_path_buf()));
         // External writes — a service, the CLI, an ingest, a person
         // with vim — merge into whichever documents are open.
         self.collab.watch_vault(&id);
-        match self.sync.start_watcher(&id).await {
-            Ok(handle) => self
-                .watchers
-                .lock()
-                .expect("shelf watchers poisoned")
-                .push(handle),
-            Err(e) => {
-                tracing::warn!(org = %self.org, shelf = %id, "shelf watcher not attached: {e}");
-            }
-        }
         if shelf.tier() == Tier::Wiki {
             self.spawn_wiki_bridge(shelf.name(), &id).await;
         }
@@ -160,6 +194,36 @@ impl ShelfRegistry {
             root = %root.display(),
             "shelf registered for sync, graph and CRDT"
         );
+        Some(id)
+    }
+
+    /// Start the disk watcher for `ids`, in the background. It registers
+    /// with the OS's file event service (FSEvents on macOS), which takes
+    /// seconds on a busy machine or from a slow volume — a boot that
+    /// waited for it was a boot measured in watchers. Until it is up,
+    /// writes made through the backend broadcast as always; only edits
+    /// made outside it (an editor, an agent) wait for it.
+    /// [`Self::watching`] is how a caller that needs it waits.
+    fn watch(&self, ids: Vec<String>) {
+        let (sync, watchers, org) = (self.sync.clone(), self.watchers.clone(), self.org.clone());
+        let started = tokio::spawn(
+            async move {
+                match sync.start_watchers(&ids).await {
+                    Ok(handle) => watchers
+                        .lock()
+                        .expect("shelf watchers poisoned")
+                        .push(handle),
+                    Err(e) => {
+                        tracing::warn!(%org, shelves = ?ids, "shelf watcher not attached: {e}");
+                    }
+                }
+            }
+            .instrument(tracing::info_span!("boot.shelf.watcher")),
+        );
+        self.starting
+            .lock()
+            .expect("shelf watchers poisoned")
+            .push(started);
     }
 
     /// Vault-sync events on a wiki id → wiki events, so subscribers of

@@ -33,6 +33,7 @@ pub mod debug_profile;
 #[cfg(debug_assertions)]
 pub mod demo_cli;
 pub mod device_sync;
+pub mod doc_peer;
 pub mod example_org;
 // Subscribing across a server boundary: the peer table plus the dialler
 // that reads a source through it. Wiki-shaped, so it lives and dies with
@@ -43,9 +44,11 @@ pub mod files_docs;
 pub mod identity_mgmt;
 pub mod iroh_host;
 pub mod link_sync;
+pub mod local_node;
 pub mod mcp;
 pub mod media;
 pub mod memberships;
+pub mod task_sync;
 // Cross-org node resolution rides subscriptions, which are the wiki
 // feature's. Without it there is nothing to federate against and the
 // link store keeps its `NoFederation` default, which is the honest
@@ -93,6 +96,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use sea_orm::Database;
 use sea_orm_migration::MigratorTrait;
+use tracing::Instrument as _;
 
 use crate::capability::ServerKeypair;
 
@@ -582,6 +586,20 @@ impl AppState {
         slugs
     }
 
+    /// Wait until every hosted org's disk watchers are up — its shelves'
+    /// (vault, wikis, asset groups) and its File Roots'. Boot starts them
+    /// in the background, because each is an OS registration that can
+    /// take seconds; a caller about to edit files outside the server and
+    /// expect the edit noticed (a test, an import) waits here instead.
+    pub async fn watching(&self) {
+        for slug in self.org_slugs() {
+            if let Some(org) = self.org(&slug) {
+                org.shelf_registry.watching().await;
+                org.files.watches_settled().await;
+            }
+        }
+    }
+
     /// True when the server has no hosted orgs. Used by the
     /// server-management RPC to decide whether to accept an
     /// unauthenticated bootstrap `create_org`.
@@ -638,6 +656,24 @@ impl AppState {
     pub async fn new(slug_filter: Option<&str>) -> eyre::Result<Self> {
         let data_root =
             org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
+        Self::open_at(data_root, slug_filter).await
+    }
+
+    /// [`Self::new`] over an explicit data root instead of
+    /// `$TASK_DATA_ROOT`.
+    ///
+    /// This is what an app hosting the backend itself boots
+    /// (`offline.local`): its data root is a directory in the app's own
+    /// data dir, chosen at runtime, and setting a process-wide env var
+    /// from inside a running GUI process to reach it would be both
+    /// unsound (other threads read the environment) and leaky (the sync
+    /// agent the app spawns would inherit it). Every path the boot
+    /// derives — keypair, storage registry, org roots, blobs — comes
+    /// from `data_root`.
+    pub async fn open_at(
+        data_root: org_proto::DataRoot,
+        slug_filter: Option<&str>,
+    ) -> eyre::Result<Self> {
         data_root
             .ensure()
             .map_err(|e| eyre::eyre!("ensure data root: {e}"))?;
@@ -667,6 +703,7 @@ impl AppState {
             );
         }
 
+        let blob_root = blob_root_of(&data_root)?;
         let mut orgs = std::collections::HashMap::new();
         for org_root in org_roots {
             let slug = org_root.slug().to_owned();
@@ -679,6 +716,7 @@ impl AppState {
                 &scope,
                 &storage,
                 home_identity.as_ref(),
+                &blob_root,
             )
             .await?;
             orgs.insert(slug, org_state);
@@ -719,7 +757,9 @@ impl AppState {
             .pop()
             .ok_or_else(|| eyre::eyre!("no org to host"))?;
         let slug = org_root.slug().to_owned();
-        let org_state = build_org_state(auth, &keypair, org_root, &scope, &storage, None).await?;
+        let blob_root = blob_root_of(&data_root)?;
+        let org_state =
+            build_org_state(auth, &keypair, org_root, &scope, &storage, None, &blob_root).await?;
         let mut orgs = std::collections::HashMap::new();
         orgs.insert(slug, org_state);
         Ok(Self {
@@ -749,7 +789,9 @@ impl AppState {
         let scope = architect::Scope::new();
         let storage = crate::storage::open(data_root.path())?;
         let slug = org_root.slug().to_owned();
-        let org_state = build_org_state(auth, &keypair, org_root, &scope, &storage, None).await?;
+        let blob_root = blob_root_of(&data_root)?;
+        let org_state =
+            build_org_state(auth, &keypair, org_root, &scope, &storage, None, &blob_root).await?;
         let mut orgs = std::collections::HashMap::new();
         orgs.insert(slug, org_state);
         Ok(Self {
@@ -875,6 +917,17 @@ async fn build_home_identity(org_roots: &[org_proto::OrgRoot]) -> Option<HomeIde
     })
 }
 
+/// `<data_root>/blobs`, created on first use — the attachment store
+/// every hosted org shares. The explicit-root form of
+/// [`attachments::default_blob_root`], which resolves the same path from
+/// `$TASK_DATA_ROOT`; [`AppState::open_at`] must not read the env.
+pub(crate) fn blob_root_of(data_root: &org_proto::DataRoot) -> eyre::Result<PathBuf> {
+    let dir = data_root.path().join("blobs");
+    std::fs::create_dir_all(&dir).map_err(|e| eyre::eyre!("create {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+#[tracing::instrument(name = "boot.org", skip_all, fields(org = %org_root.slug()))]
 pub(crate) async fn build_org_state(
     auth: AuthState,
     keypair: &ServerKeypair,
@@ -882,6 +935,7 @@ pub(crate) async fn build_org_state(
     scope: &std::sync::Arc<architect::Scope>,
     storage: &Arc<files_storage::StorageCore>,
     home_identity: Option<&HomeIdentity>,
+    blob_root: &std::path::Path,
 ) -> eyre::Result<OrgAppState> {
     {
         // The org's effective plugin set, resolved once from the
@@ -899,10 +953,8 @@ pub(crate) async fn build_org_state(
 
         // Attachments — local blob store under the standard XDG
         // path; the keypair signs upload/download URLs.
-        let blob_root =
-            attachments::default_blob_root().map_err(|e| eyre::eyre!("blob root: {e}"))?;
         let object_store: Arc<dyn attachments::ObjectStore> =
-            Arc::new(attachments::LocalFsStore::new(blob_root));
+            Arc::new(attachments::LocalFsStore::new(blob_root.to_path_buf()));
         let public_base_url = std::env::var("TASK_SERVER_PUBLIC_URL").unwrap_or_default();
         let attachment_service = Arc::new(attachments::AttachmentServiceImpl::new(
             keypair.clone(),
@@ -1131,9 +1183,7 @@ pub(crate) async fn build_org_state(
         // calls for the vault, and `WikiVaults::attach` for each wiki.
         // A third tier would have been a third, and the failure mode of
         // a forgotten step is silent — see `crate::shelves`.
-        for shelf in &shelves {
-            shelf_registry.attach(shelf.as_ref()).await;
-        }
+        shelf_registry.attach_all(&shelves).await;
 
         // The subscription service, over the same store the boot sweep
         // just topped up. `LocalOrgs` resolves a source published by
@@ -1692,30 +1742,29 @@ pub(crate) async fn build_org_state(
         // activity hints. The interval only bounds how promptly a due
         // capture happens — the cadence itself (10-minute auto-
         // snapshots, 30-minute quiescence) is the engine's.
-        files.enable_watching().await;
+        // Not awaited: a watch is a registration with the OS's file
+        // event service, seconds each on a busy Mac, and a watcher is a
+        // hint (`FilesBackend::start_watching`) — boot does not wait on it.
+        files.start_watching();
         files.spawn_cadence_driver(std::time::Duration::from_secs(30));
         // Derived media (issue #269): wire the real ffmpeg driver when
         // the toolchain is on PATH. Without it the rendition RPC (and
         // the Review page's player, issue #270) reports "no transcoder
         // configured" — everything else works, so absence is a warn,
         // not an error.
-        match tokio::process::Command::new("ffprobe")
-            .arg("-version")
-            .output()
+        if ffprobe_on_path()
+            .instrument(tracing::info_span!("boot.files.ffprobe"))
             .await
         {
-            Ok(out) if out.status.success() => {
-                files.set_transcoder(std::sync::Arc::new(
-                    files_transcode::transcoder::ffmpeg::FfmpegTranscoder,
-                ));
-                tracing::info!(org = org_root.slug(), "files: ffmpeg transcoder wired");
-            }
-            _ => {
-                tracing::warn!(
-                    org = org_root.slug(),
-                    "files: ffmpeg/ffprobe not on PATH — media renditions disabled"
-                );
-            }
+            files.set_transcoder(std::sync::Arc::new(
+                files_transcode::transcoder::ffmpeg::FfmpegTranscoder,
+            ));
+            tracing::info!(org = org_root.slug(), "files: ffmpeg transcoder wired");
+        } else {
+            tracing::warn!(
+                org = org_root.slug(),
+                "files: ffmpeg/ffprobe not on PATH — media renditions disabled"
+            );
         }
         let tasks = task::TaskBackend::new(vault_root.clone());
         // The Edit lane, over the wikis above and the tasks just built:
@@ -1882,6 +1931,16 @@ pub(crate) async fn build_org_state(
             links.clone(),
             vault_root.clone(),
             vault_graph.clone(),
+            vault_sync_state.channel("default").await.subscribe(),
+        );
+        // Task files changed by anything but the task service — a
+        // document merged from a peer and written by the collab layer, the
+        // desktop folder, an agent writing markdown — are announced on the
+        // task stream like a write made here, so lists, the activity feed,
+        // the notifier and the suggestion all follow (`offline.peers`).
+        crate::task_sync::spawn(
+            tasks.clone(),
+            vault_root.clone(),
             vault_sync_state.channel("default").await.subscribe(),
         );
         // Resource Library: transcript sidecars under resources/ for the
@@ -3168,6 +3227,16 @@ async fn well_known_handler(
     // 6). Enforcement of actual data access is the permission gate's job
     // on the org lane, not this endpoint's.
     let bearer = crate::watch_bridge::bearer(&headers);
+    axum::Json(discovery_document(&state, bearer).await)
+}
+
+/// The body of `/.well-known/task-server.json`, for `bearer`.
+///
+/// Split from the HTTP handler so a node with no HTTP listener — an app
+/// hosting the backend in-process (`offline.local`) — answers its own
+/// org discovery with exactly the document a host would serve, and the
+/// client's one parser reads both.
+pub async fn discovery_document(state: &AppState, bearer: Option<String>) -> serde_json::Value {
     // Who the bearer is, learned once while tagging membership. Handed
     // back as `principal` so a client holding a cached token can restore
     // its session from this one response instead of validating the token
@@ -3260,7 +3329,7 @@ async fn well_known_handler(
         .into_iter()
         .map(|(name, stamp)| (name.to_owned(), serde_json::Value::String(stamp)))
         .collect();
-    axum::Json(serde_json::json!({
+    serde_json::json!({
         "version": 1,
         // Git rev this binary was built from (baked into the container
         // image env by the flake; "unknown" outside that path). CI's
@@ -3284,7 +3353,7 @@ async fn well_known_handler(
         // before one exists. Public: an issuer URL is not a secret, and
         // a client that cannot learn it cannot sign in at all.
         "central_auth": crate::central_auth::configured().map(|c| c.issuer().to_owned()),
-    }))
+    })
 }
 
 /// `/org/<slug>/health` — per-org liveness probe. `200 ok`
@@ -4368,6 +4437,13 @@ pub fn org_layer_router(org: &OrgAppState) -> architect::LayerRouter {
             crdt::sync::doc_sync_service_descriptor(),
             crdt::sync::DocSyncDispatcher::new(org_doc_sync(org)),
         )
+        // The same documents for the org's other nodes (`offline.peers`):
+        // listed and exchanged by path, gated on `docs/replica` — the
+        // only part of the vault an admitted peer reaches.
+        .with(
+            vault_doc::peer::doc_peer_service_descriptor(),
+            vault_doc::peer::DocPeerDispatcher::new(doc_peer::DocPeerHost::of(org)),
+        )
         // Presence — ONE mounted `DocPresence` service, routed by doc
         // id: the fixed `presence::PRESENCE_DOC_ID` reaches the
         // org-wide "who's online" host; any other id reaches the
@@ -4492,6 +4568,23 @@ fn org_doc_sync(org: &OrgAppState) -> live::DocSyncRouter {
 #[cfg(not(feature = "plugin-fasttrackstudio"))]
 fn org_doc_sync(org: &OrgAppState) -> doc_guard::GuardedVaultDocs {
     vault_docs(org)
+}
+
+/// Whether `ffprobe` runs here — asked once per process, not once per org.
+/// The answer is the machine's (what is on `PATH`), and spawning a
+/// process per org at boot is boot time a device pays for every org it
+/// holds.
+async fn ffprobe_on_path() -> bool {
+    static PROBED: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+    *PROBED
+        .get_or_init(|| async {
+            tokio::process::Command::new("ffprobe")
+                .arg("-version")
+                .output()
+                .await
+                .is_ok_and(|out| out.status.success())
+        })
+        .await
 }
 
 /// The vault's docs over the collab lane, under the same write guard a

@@ -17,6 +17,9 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# The servers' tracing, printed for a failing chapter (`init_tracing`).
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
 files-sync = { workspace = true }

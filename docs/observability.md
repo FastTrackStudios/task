@@ -90,6 +90,7 @@ families here when you introduce them.
 | `perm.principal` / `perm.resource` / `perm.action` / `perm.reason` / `perm.default_role` | | `permits::GateAudit` |
 | `media.authorized` / `media.auth_via` / `media.mode` / `media.token_error` | signed-URL media route | `lib.rs` (media route) |
 | `dav.auth_via` | WebDAV bridge auth path | `webdav.rs` |
+| `collab.sync` | a document sync attach: `attached` \| `refused` (write guard) \| `foreign_lineage` (the device's copy is not a version of the server's document) | `doc_guard::GuardedVaultDocs` |
 | `share.outcome` / `share.label` / `share.guest` | share-link resolution | `share.rs`, `share_guest.rs` |
 | `mcp.tool` | the MCP tool name (`create_task`, `telemetry_query_logs`, …) | `mcp` |
 | `telemetry.backend` | `tempo` \| `loki` | `mcp::telemetry_call` |
@@ -97,6 +98,8 @@ families here when you introduce them.
 | `watch.suggested` | the suggestion kind served or acted on: `planned` \| `mode` \| `continue` \| `overdue` \| `process` \| `today` \| `none` | `watch_bridge` |
 | `watch.act.outcome` | `acted` \| `stale` (key no longer applies, 409) \| `refused` (Process, 422) | `watch_bridge` |
 | `activity.kind` / `activity.error` | the feed entry a request recorded (`commented`), or why it could not be written — the comment's own write still succeeds | `activity::RecordingThreads` |
+| `doc_peer.outcome` / `doc_peer.listed` / `doc_peer.exchanged` / `doc_peer.pulled` / `doc_peer.foreign` / `doc_peer.failed` | one sweep's pull of one peer's documents (`ok` \| `unreachable`) and its counts — documents the peer holds, those whose file differed, those that brought history, those made separately on both nodes (left unmerged; also one `warn!`), those refused or dropped — one `doc_peer/pull` span per peer per sweep | `doc_peer` |
+| `task_sync.change` / `task_sync.outcome` | a vault `.md` change seen outside `TaskService` (`put` \| `delete`), and what it announced on the task stream: `upserted` \| `deleted` \| `not_a_task` \| `unreadable` — one `task_sync/notice` span per change | `task_sync` |
 | `debug.profile_seconds` / `debug.format` | the sampling window (1–60) and `flamegraph` \| `pprof` | `debug_profile` |
 | `wiki.subscribe.source` / `wiki.subscribe.outcome` | subscription materialisation | `wiki-live` |
 | `wiki.slug` | the wiki being served | `wiki-live` |

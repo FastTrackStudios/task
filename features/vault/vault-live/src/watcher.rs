@@ -3,14 +3,40 @@
 //!
 //! `notify-debouncer-mini` coalesces rapid bursts (e.g. an
 //! editor's swap-file dance) into a single event per path.
+//!
+//! # Native or polling
+//!
+//! The OS's watcher by default (FSEvents on macOS). With
+//! [`POLL_ENV`] set, a polling watcher instead: no OS registration
+//! at all, a stat walk of the roots every [`POLL_EVERY`]. That is
+//! for the test suites. Every native watch is a round trip to
+//! `fseventsd`, served one at a time per process, and seconds apiece
+//! when the test binary lives on a busy external volume — a suite of
+//! servers that each wait for their watchers measured `fseventsd`, not
+//! the code. A test's trees are a handful of files, so polling them is
+//! free.
 
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use notify::EventKind;
-use notify_debouncer_mini::{DebounceEventResult, DebouncedEventKind, new_debouncer};
+use notify_debouncer_mini::{
+    Config, DebounceEventHandler, DebounceEventResult, DebouncedEventKind, new_debouncer_opt,
+};
 use thiserror::Error;
+
+/// Set (to anything) to watch by polling rather than with the OS's
+/// watcher — see the module docs.
+pub const POLL_ENV: &str = "TASK_WATCH_POLL";
+
+/// How often a polling watcher walks its roots.
+pub const POLL_EVERY: Duration = Duration::from_millis(100);
+
+/// Whether watchers poll ([`POLL_ENV`]).
+#[must_use]
+pub fn polling() -> bool {
+    std::env::var_os(POLL_ENV).is_some()
+}
 
 #[derive(Debug, Error)]
 pub enum WatchError {
@@ -36,40 +62,71 @@ pub fn watch(
     root: PathBuf,
     delay: Duration,
 ) -> Result<(mpsc::Receiver<VaultEvent>, WatcherGuard), WatchError> {
-    let (tx, rx) = mpsc::channel::<VaultEvent>();
-    let mut debouncer = new_debouncer(delay, move |res: DebounceEventResult| match res {
+    let (mut receivers, guard) = watch_many(vec![root], delay)?;
+    let (_, rx) = receivers
+        .pop()
+        .ok_or_else(|| WatchError::Notify("vault root not watched".into()))?;
+    Ok((rx, guard))
+}
+
+/// [`watch`] over several roots with **one** OS watch: every root is
+/// added to a single stream and committed at once, so on macOS the
+/// whole set costs one `fseventsd` registration rather than one each — a
+/// registration that takes seconds when the process lives on a slow
+/// volume, and that an org with a vault, wikis and asset groups used to
+/// pay four or five times over. Each root gets its own receiver, fed
+/// every markdown event under it (as given or as the filesystem names
+/// it), exactly as a watcher of its own would be. A root that cannot be
+/// watched is left out of the stream and reported, the rest still are.
+///
+/// # Errors
+///
+/// The watcher cannot be created, or no root could be added.
+pub fn watch_many(
+    roots: Vec<PathBuf>,
+    delay: Duration,
+) -> Result<(Vec<(PathBuf, mpsc::Receiver<VaultEvent>)>, WatcherGuard), WatchError> {
+    let mut routes: Vec<(Vec<PathBuf>, mpsc::Sender<VaultEvent>)> = Vec::new();
+    let mut receivers = Vec::new();
+    for root in &roots {
+        let (tx, rx) = mpsc::channel::<VaultEvent>();
+        let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        routes.push((vec![root.clone(), canonical], tx));
+        receivers.push((root.clone(), rx));
+    }
+    let handler = move |res: DebounceEventResult| match res {
         Ok(events) => {
             for event in events {
-                let abs = event.path.clone();
-                if !is_markdown(&abs) {
+                if !is_markdown(&event.path) {
                     continue;
                 }
-                let evt = match event.kind {
-                    DebouncedEventKind::Any => VaultEvent::Changed { abs_path: abs },
-                    DebouncedEventKind::AnyContinuous => VaultEvent::Changed { abs_path: abs },
-                    _ => continue,
-                };
-                let _ = tx.send(evt);
+                if !matches!(
+                    event.kind,
+                    DebouncedEventKind::Any | DebouncedEventKind::AnyContinuous
+                ) {
+                    continue;
+                }
+                for (prefixes, tx) in &routes {
+                    if prefixes.iter().any(|p| event.path.starts_with(p)) {
+                        let _ = tx.send(VaultEvent::Changed {
+                            abs_path: event.path.clone(),
+                        });
+                    }
+                }
             }
         }
         Err(e) => tracing::warn!(?e, "watcher error"),
-    })
-    .map_err(|e| WatchError::Notify(e.to_string()))?;
-    debouncer
-        .watcher()
-        .watch(&root, notify::RecursiveMode::Recursive)
-        .map_err(|e| WatchError::Notify(e.to_string()))?;
-    Ok((
-        rx,
-        WatcherGuard {
-            _debouncer: debouncer,
-        },
-    ))
+    };
+    let (added, guard) = debounced(delay, handler, &roots)?;
+    if added == 0 {
+        return Err(WatchError::Notify("no vault root could be watched".into()));
+    }
+    Ok((receivers, guard))
 }
 
 /// Holds the watcher alive; drop it to stop receiving events.
 pub struct WatcherGuard {
-    _debouncer: notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>,
+    _debouncer: Box<dyn Send>,
 }
 
 /// Generic file event — not filtered by extension. Used by
@@ -92,29 +149,73 @@ pub fn watch_any(
     delay: Duration,
 ) -> Result<(mpsc::Receiver<FsEvent>, WatcherGuard), WatchError> {
     let (tx, rx) = mpsc::channel::<FsEvent>();
-    let mut debouncer = new_debouncer(delay, move |res: DebounceEventResult| match res {
+    let handler = move |res: DebounceEventResult| match res {
         Ok(events) => {
             for event in events {
                 let abs = event.path.clone();
                 let evt = match event.kind {
-                    DebouncedEventKind::Any => FsEvent::Changed { abs_path: abs },
-                    DebouncedEventKind::AnyContinuous => FsEvent::Changed { abs_path: abs },
+                    DebouncedEventKind::Any | DebouncedEventKind::AnyContinuous => {
+                        FsEvent::Changed { abs_path: abs }
+                    }
                     _ => continue,
                 };
                 let _ = tx.send(evt);
             }
         }
         Err(e) => tracing::warn!(?e, "watcher error"),
-    })
-    .map_err(|e| WatchError::Notify(e.to_string()))?;
-    debouncer
-        .watcher()
-        .watch(&root, notify::RecursiveMode::Recursive)
+    };
+    let (added, guard) = debounced(delay, handler, std::slice::from_ref(&root))?;
+    if added == 0 {
+        return Err(WatchError::Notify(format!(
+            "{} not watched",
+            root.display()
+        )));
+    }
+    Ok((rx, guard))
+}
+
+/// A debouncer over `roots` — the OS's watcher, or a polling one
+/// ([`polling`]) — with every root added and committed at once.
+/// Returns how many roots it watches.
+fn debounced<F: DebounceEventHandler>(
+    delay: Duration,
+    handler: F,
+    roots: &[PathBuf],
+) -> Result<(usize, WatcherGuard), WatchError> {
+    if polling() {
+        attach::<notify::PollWatcher, F>(delay, handler, roots)
+    } else {
+        attach::<notify::RecommendedWatcher, F>(delay, handler, roots)
+    }
+}
+
+fn attach<T: notify::Watcher + Send + 'static, F: DebounceEventHandler>(
+    delay: Duration,
+    handler: F,
+    roots: &[PathBuf],
+) -> Result<(usize, WatcherGuard), WatchError> {
+    let config = Config::default()
+        .with_timeout(delay)
+        .with_notify_config(notify::Config::default().with_poll_interval(POLL_EVERY));
+    let mut debouncer = new_debouncer_opt::<F, T>(config, handler)
         .map_err(|e| WatchError::Notify(e.to_string()))?;
+    let mut added = 0usize;
+    {
+        let mut paths = debouncer.watcher().paths_mut();
+        for root in roots {
+            match paths.add(root, notify::RecursiveMode::Recursive) {
+                Ok(()) => added += 1,
+                Err(e) => tracing::warn!(root = %root.display(), "vault root not watched: {e}"),
+            }
+        }
+        paths
+            .commit()
+            .map_err(|e| WatchError::Notify(e.to_string()))?;
+    }
     Ok((
-        rx,
+        added,
         WatcherGuard {
-            _debouncer: debouncer,
+            _debouncer: Box::new(debouncer),
         },
     ))
 }
@@ -128,8 +229,3 @@ fn is_markdown(path: &std::path::Path) -> bool {
         Some("md" | "markdown")
     )
 }
-
-// Quiet the unused-import warning until the watcher needs
-// granular kinds.
-#[allow(dead_code)]
-fn _force_link_to_notify_eventkind(_k: EventKind) {}

@@ -46,7 +46,7 @@ editor-state = { workspace = true }
 # Used by the migrated `property_schema` module (preserves
 # frontmatter key order across round-trips) and YAML serialization
 # in the `bases` query DSL parser.
-indexmap = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
 serde_yaml = { workspace = true }
 # `bases.rs` uses `regex` for its filter-expression tokenizer.
 regex = { workspace = true }

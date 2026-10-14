@@ -360,6 +360,10 @@ pub struct FilesBackend {
     /// Set by [`FilesBackend::enable_watching`]: newly created roots
     /// start watched too, rather than only on the next restart.
     watch_new_roots: Arc<std::sync::atomic::AtomicBool>,
+    /// Roots whose watch is being registered in the background
+    /// ([`FilesBackend::watch_when_on`]) — what [`FilesBackend::settled`]
+    /// also waits out.
+    watching: Arc<Mutex<std::collections::HashSet<Uuid>>>,
     /// The cadence driver task, kept so it can be stopped — see
     /// [`FilesBackend::spawn_cadence_driver`].
     driver: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -561,6 +565,7 @@ impl FilesBackend {
             ignores: Arc::new(Mutex::new(HashMap::new())),
             watchers: Arc::new(Mutex::new(HashMap::new())),
             watch_new_roots: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            watching: Arc::new(Mutex::new(std::collections::HashSet::new())),
             driver: Arc::new(Mutex::new(None)),
             hook: Arc::new(Mutex::new(None)),
             capture_progress: Arc::new(Mutex::new(None)),
@@ -1124,14 +1129,7 @@ impl FilesBackend {
         self.registry.insert(root.clone())?;
         self.set_heads(root.id, repo, head, None);
         self.ignore_of(&root)?;
-        if self
-            .watch_new_roots
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            if let Err(err) = self.watch_root(root.id) {
-                tracing::warn!(root_id = %root.id, ?err, "files: adopted root not watched");
-            }
-        }
+        self.watch_when_on(root.id, "adopted root");
         tracing::info!(root = %root.id, path = ?root.path, "files: adopted a marked root");
         self.publish(ev::root_created(root.clone()));
         Ok(root)
@@ -1538,14 +1536,7 @@ impl FilesBackend {
         // capture already excludes the flavor's junk (glossary: "seeded
         // by root flavor, edited per root").
         self.ignore_of(&root)?;
-        if self
-            .watch_new_roots
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            if let Err(err) = self.watch_root(id) {
-                tracing::warn!(root_id = %id, ?err, "files: new root not watched");
-            }
-        }
+        self.watch_when_on(id, "new root");
         self.publish(ev::root_created(root.clone()));
         Ok(root)
     }
@@ -3042,17 +3033,153 @@ impl FilesBackend {
     /// a NAS full of media roots cannot stall an async worker during org
     /// startup (PR #283 review).
     pub async fn enable_watching(&self) {
+        let _ = self.begin_watching().await;
+    }
+
+    /// Watch a root that has just arrived, if watching is on — from a
+    /// thread of its own, not the caller's. A root is made inside a
+    /// request (create, adopt, a pull from a peer), and a watch is an OS
+    /// registration: on macOS one `fseventsd` round trip each, served one
+    /// at a time per process and seconds apiece when the binary lives on
+    /// a slow volume. A request that waited for it waited behind every
+    /// other registration the process had queued.
+    fn watch_when_on(&self, root_id: Uuid, what: &'static str) {
+        if !self
+            .watch_new_roots
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        self.watching
+            .lock()
+            .expect("watching set poisoned")
+            .insert(root_id);
         let this = self.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            this.watch_new_roots
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            for root in this.registry.list() {
-                if let Err(err) = this.watch_root(root.id) {
-                    tracing::warn!(root_id = %root.id, path = ?root.path, %err, "files: root not watched");
+        let spawned = std::thread::Builder::new()
+            .name("files-watch-root".into())
+            .spawn(move || {
+                if let Err(err) = this.watch_root(root_id) {
+                    tracing::warn!(%root_id, ?err, "files: {what} not watched");
+                }
+                this.watching
+                    .lock()
+                    .expect("watching set poisoned")
+                    .remove(&root_id);
+            });
+        if let Err(e) = spawned {
+            self.watching
+                .lock()
+                .expect("watching set poisoned")
+                .remove(&root_id);
+            tracing::warn!(%root_id, error = %e, "files: {what} not watched");
+        }
+    }
+
+    /// Whether `root_id`'s watch is still being registered (see
+    /// [`Self::watch_when_on`]).
+    #[must_use]
+    pub fn watch_pending(&self, root_id: Uuid) -> bool {
+        self.watching
+            .lock()
+            .expect("watching set poisoned")
+            .contains(&root_id)
+    }
+
+    // The sweep runs on a detached thread rather than the blocking pool:
+    // each watch is an OS registration that cannot be cancelled, and a
+    // runtime shutting down waits for its blocking tasks — one stuck in
+    // `fseventsd` would hold the process open. `enable_watching` waits on
+    // the returned receiver; `start_watching` drops it.
+
+    /// [`Self::enable_watching`] without waiting for the sweep: roots
+    /// created from now on are watched as they are made, and the ones
+    /// already known are watched in the background. What an org boot
+    /// calls — establishing a watch is a registration with the OS's file
+    /// event service (FSEvents on macOS), which on a busy machine answers
+    /// in seconds, and a watcher is a hint the boot does not need.
+    pub fn start_watching(&self) {
+        drop(self.begin_watching());
+    }
+
+    fn begin_watching(&self) -> tokio::sync::oneshot::Receiver<()> {
+        // Set before the sweep, so a root made while it runs is watched
+        // by its own creation rather than missed by both.
+        self.watch_new_roots
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let roots = self.registry.list();
+        // Pending until each is watched, so `watches_settled` waits for
+        // the sweep as it does for a root made later.
+        self.watching
+            .lock()
+            .expect("watching set poisoned")
+            .extend(roots.iter().map(|r| r.id));
+        let this = self.clone();
+        let (done, swept) = tokio::sync::oneshot::channel();
+        let spawned = std::thread::Builder::new()
+            .name("files-watch-roots".into())
+            .spawn(move || {
+                let _sweep = tracing::info_span!("files.watch_roots").entered();
+                this.watch_together(&roots);
+                let mut watching = this.watching.lock().expect("watching set poisoned");
+                for root in &roots {
+                    watching.remove(&root.id);
+                }
+                drop(watching);
+                let _ = done.send(());
+            });
+        if let Err(e) = spawned {
+            self.watching.lock().expect("watching set poisoned").clear();
+            tracing::warn!(error = %e, "files: could not start watching roots");
+        }
+        swept
+    }
+
+    /// Watch every root in `roots` not already watched, with one OS watch
+    /// for the lot (`RootWatcher::spawn_many`) — one `fseventsd`
+    /// registration for an org's roots instead of one per root. Blocking.
+    fn watch_together(&self, roots: &[FileRootInfo]) {
+        let pending: Vec<(Uuid, PathBuf)> = {
+            let watchers = self.watchers.lock().expect("watcher map poisoned");
+            roots
+                .iter()
+                .filter(|r| !watchers.contains_key(&r.id))
+                .filter_map(|r| match tree_of(r) {
+                    Ok(tree) => Some((r.id, tree.to_path_buf())),
+                    Err(err) => {
+                        tracing::warn!(root_id = %r.id, %err, "files: root not watched");
+                        None
+                    }
+                })
+                .collect()
+        };
+        if pending.is_empty() {
+            return;
+        }
+        match RootWatcher::spawn_many(pending, self.hints()) {
+            Ok(started) => {
+                let mut watchers = self.watchers.lock().expect("watcher map poisoned");
+                for w in started {
+                    // A root watched on its own meanwhile keeps that watch.
+                    watchers.entry(w.root_id()).or_insert(w);
                 }
             }
-        })
-        .await;
+            Err(err) => tracing::warn!(%err, "files: roots not watched"),
+        }
+    }
+
+    /// Wait until no root's watch is still being registered — the boot
+    /// sweep's and every root made since. For a caller about to edit a
+    /// root's tree and expect the edit noticed as activity (a test, an
+    /// import); nothing on a request path waits on this.
+    pub async fn watches_settled(&self) {
+        while !self
+            .watching
+            .lock()
+            .expect("watching set poisoned")
+            .is_empty()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     /// Stop watching `root_id`.
@@ -4294,14 +4421,7 @@ impl FilesBackend {
         // half worked, the push half had nothing to send, and a restart
         // hid the whole thing by making the replica old enough to be
         // caught by `enable_watching`'s opening walk.
-        if self
-            .watch_new_roots
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            if let Err(err) = self.watch_root(root.id) {
-                tracing::warn!(root_id = %root.id, ?err, "files: replica not watched");
-            }
-        }
+        self.watch_when_on(root.id, "replica");
         self.publish(ev::root_created(root.clone()));
         Ok(root)
     }
