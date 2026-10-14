@@ -176,6 +176,29 @@ pub fn adopt_text(doc: &LoroDoc, new: &str) -> Merged {
     merge_text(doc, &base, new)
 }
 
+/// The document was deleted — its tombstone is set
+/// (`vault_proto::COLLAB_META_DELETED`).
+#[must_use]
+pub fn is_deleted(doc: &LoroDoc) -> bool {
+    matches!(
+        doc.get_map(vault_proto::COLLAB_META_CONTAINER)
+            .get(vault_proto::COLLAB_META_DELETED),
+        Some(ValueOrContainer::Value(LoroValue::Bool(true)))
+    )
+}
+
+/// Set or clear the tombstone. A no-op when it already says so, so a
+/// delete seen twice (a watcher's duplicate, a peer's echo) commits
+/// nothing. Not committed.
+pub fn set_deleted(doc: &LoroDoc, deleted: bool) {
+    if is_deleted(doc) == deleted {
+        return;
+    }
+    let _ = doc
+        .get_map(vault_proto::COLLAB_META_CONTAINER)
+        .insert(vault_proto::COLLAB_META_DELETED, deleted);
+}
+
 /// The commit message of a document made from a file ([`seed_from_file`]).
 pub const SEED_ORIGIN: &str = "made from the vault file";
 

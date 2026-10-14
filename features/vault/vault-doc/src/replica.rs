@@ -397,13 +397,17 @@ mod tests {
         SharedStore(Arc::new(crdt::FilePersistence::new(dir)))
     }
 
+    /// Wait until the store holds `want` updates for `id` — the write is
+    /// asynchronous. By the clock, not by yields: a busy machine can run
+    /// two hundred yields before the writer is scheduled once.
     async fn settle(store: &SharedStore, id: Uuid, want: usize) {
-        for _ in 0..200 {
+        for _ in 0..500 {
             if store.load_updates(id).await.unwrap().len() >= want {
                 return;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        panic!("the store never held {want} updates for {id}");
     }
 
     #[test]

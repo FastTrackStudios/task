@@ -676,8 +676,8 @@ seeded or copied file exchanges rather than being refused as foreign.
 Verified by `peer_docs_e2e` (two nodes, no host: a note, a task, a note
 edited on both). Not yet: two nodes that each **edited** a file into a
 document before ever exchanging hold two lineages and are left as they are
-(counted as `doc_peer.foreign`, one `warn!` per sweep); deletes do not
-travel (see "Deleted notes come back"); a peer is trusted with all of the
+(counted as `doc_peer.foreign`, one `warn!` per sweep); deletes travel as
+tombstones (see "Deletes"); a peer is trusted with all of the
 org's documents rather than per person. (`peer_docs_e2e` runs with
 permissions enforced: the creator of an org is its admin — `create_org`
 records the membership — and a joined org's person is a member.)
@@ -761,11 +761,19 @@ moving before the sweep's next pass — a pull runs on the sweep's cadence
 (60s, `TASK_DEVICE_SYNC_SECS`), not live; a standing session per open
 document between nodes would make it live.
 
-### Deleted notes come back
+### Deletes — met for nodes, not yet for device editors
 
-A device holding a stale document of a note deleted elsewhere recreates
-the file on reconnect (`open_collab` accepts a missing path; the doc wins).
-Deletion needs a document-level tombstone.
+A deleted file sets its document's tombstone (`meta.deleted`,
+`vault_doc::set_deleted`): the node's write-behind removes the mirror
+instead of rewriting it, the tombstone travels with the document to every
+node (`peer_docs_e2e`: deleted on A, gone on B, not brought back), and
+writing the file again revives it (`vault-collab`'s
+`a_delete_is_a_tombstone_that_travels_and_a_rewrite_revives`). Left: the
+shell's open editor and the device's note list don't yet react to a
+tombstone arriving (the replica takes it; the note stays on screen until
+reopened), and a node that never held a document of a file does not learn
+of that file's deletion from a peer's list — only from a pull of a peer
+that still has the file.
 
 ## Bugs found on the way
 

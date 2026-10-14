@@ -207,4 +207,20 @@ async fn documents_move_between_two_nodes_with_no_host() {
         note_on(&b).as_deref() == Some(want)
     })
     .await;
+
+    // ── A deletes it: gone on B too, not brought back by B's copy ──
+    a_vault
+        .delete_file("default".into(), NOTE.into(), IfMatch::Force)
+        .await
+        .expect("A deletes the setlist");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    sweep(&a).await;
+    sweep(&b).await;
+    eventually("the setlist gone from B", || note_on(&b).is_none()).await;
+    sweep(&a).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        note_on(&a).is_none(),
+        "B's copy brought the setlist back to A"
+    );
 }

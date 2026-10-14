@@ -79,6 +79,13 @@ pub const COLLAB_META_CONTAINER: &str = "meta";
 /// I was evicted" from "my last flush is still current".
 pub const COLLAB_META_FLUSHED_SHA: &str = "flushed_sha";
 
+/// Key in [`COLLAB_META_CONTAINER`]: `true` once the file was deleted —
+/// the document's tombstone. It merges like any other key (the later
+/// write wins), so a delete travels to every node and device that holds
+/// the document, where the mirror file is removed rather than rewritten;
+/// writing the file again sets it back to `false`.
+pub const COLLAB_META_DELETED: &str = "deleted";
+
 /// The doc id for `(vault_id, path)` — UUID v5 under
 /// [`VAULT_DOC_NAMESPACE`]. `vault_id` and `path` are joined with an
 /// ASCII unit separator (`0x1f`, which is not legal in either) so

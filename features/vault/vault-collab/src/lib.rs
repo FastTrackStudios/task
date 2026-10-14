@@ -123,6 +123,9 @@ struct Shared {
     locks: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
     /// Vault ids that already have an inbound listener.
     watched: Mutex<HashSet<String>>,
+    /// Where documents persist (one dir per doc id) — how a delete finds
+    /// out a file had a document even when nobody opened it since boot.
+    crdt_root: PathBuf,
 }
 
 /// The org-level reconciler: a [`DocRegistry`] whose factory seeds
@@ -157,6 +160,7 @@ impl VaultCollab {
             flushed: Mutex::new(HashMap::new()),
             locks: Mutex::new(HashMap::new()),
             watched: Mutex::new(HashSet::new()),
+            crdt_root: crdt_root.clone(),
         });
 
         let factory_shared = shared.clone();
@@ -212,11 +216,14 @@ impl VaultCollab {
                     Ok(VaultEvent::Put { path, sha256, .. }) => {
                         apply_inbound(&shared, &registry, &vault_id, &path, &sha256).await;
                     }
-                    // Deletes don't tear collab down in v1: the doc
-                    // stays authoritative while open and the next
-                    // flush recreates the file. Documented in the
-                    // conflict-policy note.
-                    Ok(VaultEvent::Delete { .. } | VaultEvent::Resync) => {}
+                    // A file deleted outside the document (the app, an
+                    // editor, `rm`) marks the document deleted — the
+                    // tombstone that carries the delete to every other
+                    // holder instead of being undone by the next flush.
+                    Ok(VaultEvent::Delete { path }) => {
+                        apply_delete(&shared, &registry, &vault_id, &path).await;
+                    }
+                    Ok(VaultEvent::Resync) => {}
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         // We re-read file content per event rather
                         // than trusting event payloads, so a lag only
@@ -292,6 +299,15 @@ async fn open_doc(
     match file {
         Some(file_text) => {
             let file_sha = sha256_hex(file_text.as_bytes());
+            if vault_doc::is_deleted(doc.loro()) {
+                // A file at a deleted document's path: somebody made it
+                // again (a restore, `git checkout`, a new note of the same
+                // name). That revives the document, and the file's text
+                // merges in below like any outside edit. A tombstone from
+                // a peer never lands here: it arrives through an open
+                // session, and the write-behind removes the file then.
+                vault_doc::set_deleted(doc.loro(), false);
+            }
             if recorded.as_deref() == Some(file_sha.as_str()) {
                 // The mirror is what this doc last flushed. Newer
                 // (persisted, unflushed) edits — a crash inside the
@@ -324,7 +340,11 @@ async fn open_doc(
             }
             doc.loro().commit();
         }
-        None => dirty = !vault_doc::doc::is_blank(doc.loro()),
+        // No file: a document first made elsewhere writes it — unless it
+        // is a deleted one, whose file is meant to be gone.
+        None => {
+            dirty = !vault_doc::doc::is_blank(doc.loro()) && !vault_doc::is_deleted(doc.loro());
+        }
     }
 
     spawn_write_behind(shared, doc_id, &doc, vault_id, path, dirty);
@@ -411,6 +431,11 @@ async fn flush(shared: &Arc<Shared>, doc_id: Uuid, weak: &WeakCrdtDoc, vault_id:
     let lock = doc_lock(shared, doc_id);
     let _g = lock.lock().await;
 
+    if vault_doc::is_deleted(doc.loro()) {
+        remove_mirror(shared, doc_id, vault_id, path).await;
+        return;
+    }
+
     // The mirror is rendered from the doc (`offline.doc.materialise`),
     // keeping the last-written file's unchanged frontmatter lines.
     let previous = {
@@ -476,6 +501,74 @@ async fn flush(shared: &Arc<Shared>, doc_id: Uuid, weak: &WeakCrdtDoc, vault_id:
     }
 }
 
+/// A deleted document's flush: remove the mirror — only the file this
+/// document last wrote (sha-guarded), never one somebody wrote since,
+/// which is a revival and arrives as an inbound `Put`. The removal's own
+/// `Delete` event finds the document already deleted and does nothing.
+async fn remove_mirror(shared: &Arc<Shared>, doc_id: Uuid, vault_id: &str, path: &str) {
+    let ours = shared
+        .flushed
+        .lock()
+        .expect("flushed lock poisoned")
+        .get(&doc_id)
+        .map(|f| f.sha.clone());
+    let backend = shared.backend.clone();
+    let (v, p) = (vault_id.to_string(), path.to_string());
+    let removed = tokio::task::spawn_blocking(move || match ours {
+        Some(sha) => backend.delete_file(&v, &p, IfMatch::Sha(sha)),
+        // Nothing recorded: the file is not one this document is known
+        // to have written, so it is left alone.
+        None => Ok(()),
+    })
+    .await;
+    match removed {
+        Ok(Ok(())) => {
+            shared
+                .flushed
+                .lock()
+                .expect("flushed lock poisoned")
+                .remove(&doc_id);
+        }
+        Ok(Err(e)) => tracing::warn!(?doc_id, "vault-collab: deleted document's file kept: {e}"),
+        Err(e) => tracing::warn!(?doc_id, "vault-collab: delete task failed: {e}"),
+    }
+}
+
+/// A file was deleted outside its document: set the tombstone, so the
+/// delete travels with the document. Only for a file that has a document
+/// — registered this run, or persisted from an earlier one (a document
+/// nobody has opened since boot still has to learn its file is gone).
+/// Our own removal and a file that is back by now change nothing.
+async fn apply_delete(shared: &Arc<Shared>, registry: &DocRegistry, vault_id: &str, path: &str) {
+    let doc_id = collab_doc_id(vault_id, path);
+    if shared.backend.collab_route(doc_id).is_none() {
+        if !shared.crdt_root.join(doc_id.to_string()).is_dir() {
+            return; // never a document here
+        }
+        if shared.backend.register_collab(vault_id, path).is_err() {
+            return;
+        }
+    }
+    let lock = doc_lock(shared, doc_id);
+    let _g = lock.lock().await;
+    if shared.backend.get_file(vault_id, path).is_ok() {
+        return; // written again since the event
+    }
+    let Ok(doc) = registry.doc(doc_id).await else {
+        return;
+    };
+    if vault_doc::is_deleted(doc.loro()) {
+        return;
+    }
+    vault_doc::set_deleted(doc.loro(), true);
+    vault_doc::commit_as(doc.loro(), "deleted: vault file");
+    shared
+        .flushed
+        .lock()
+        .expect("flushed lock poisoned")
+        .remove(&doc_id);
+}
+
 /// Roll the echo guard back to `prev` after a failed flush — but only
 /// if it still holds the value we wrote (a concurrent reconcile may
 /// have moved it on).
@@ -537,6 +630,10 @@ async fn apply_inbound(
         let flushed = shared.flushed.lock().expect("flushed lock poisoned");
         flushed.get(&doc_id).map(|f| f.text.clone())
     };
+
+    // A file written at a deleted document's path is the document made
+    // again: the tombstone comes off, and the text merges in as usual.
+    vault_doc::set_deleted(doc.loro(), false);
 
     // Text coming in is a change, never "the file wins": what differs
     // between the last reconciled file (base) and the new one — each
@@ -732,6 +829,53 @@ mod tests {
         let (_tmp, _backend, collab) = setup();
         let stranger = collab_doc_id("v1", "never-registered.md");
         assert!(collab.registry().doc(stranger).await.is_err());
+    }
+
+    async fn remove(backend: &Backend, path: &str) {
+        let (b, p) = (backend.clone(), path.to_string());
+        tokio::task::spawn_blocking(move || b.delete_file("v1", &p, IfMatch::Force).unwrap())
+            .await
+            .unwrap();
+    }
+
+    fn exists(backend: &Backend, path: &str) -> bool {
+        backend.get_file("v1", path).is_ok()
+    }
+
+    // t[verify offline.peers] — a delete travels with the document:
+    // deleting the file marks it, a tombstone from elsewhere removes the
+    // file instead of being undone, and writing the file again revives it
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_delete_is_a_tombstone_that_travels_and_a_rewrite_revives() {
+        let (_tmp, backend, collab) = setup();
+        collab.watch_vault("v1");
+        put(&backend, "n.md", "keep me").await;
+        let ack = backend.open_collab("v1", "n.md").unwrap();
+        let doc = collab.registry().doc(ack.doc_id).await.unwrap();
+
+        // Deleted outside the document → the document says so, and its
+        // next flush does not bring the file back.
+        remove(&backend, "n.md").await;
+        let d = doc.clone();
+        eventually("the tombstone", async || vault_doc::is_deleted(d.loro())).await;
+        tokio::time::sleep(DEBOUNCE * 4).await;
+        assert!(
+            !exists(&backend, "n.md"),
+            "a flush recreated a deleted file"
+        );
+
+        // Written again → revived, with the new text.
+        put(&backend, "n.md", "back again").await;
+        let d = doc.clone();
+        eventually("the revival", async || !vault_doc::is_deleted(d.loro())).await;
+        assert_eq!(read(&backend, "n.md"), "back again");
+
+        // A tombstone that arrives from elsewhere (a peer, a device) on
+        // the open document removes the file it had written.
+        vault_doc::set_deleted(doc.loro(), true);
+        vault_doc::commit_as(doc.loro(), "deleted elsewhere");
+        let b = backend.clone();
+        eventually("the mirror removed", async || !exists(&b, "n.md")).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
