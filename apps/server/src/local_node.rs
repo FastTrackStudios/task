@@ -69,6 +69,9 @@ pub const PERSONAL_SLUG: &str = "personal";
 /// The file the local owner's credentials live in, beside `orgs/`.
 pub const OWNER_FILE: &str = "local-owner.json";
 
+/// The node's own session-signing secret, beside `orgs/` (0600).
+pub const SECRET_FILE: &str = "auth-secret";
+
 /// Present while a first run provisions, removed once [`OWNER_FILE`] is
 /// written: found on a later boot, it says the first run was cut short.
 pub const PROVISIONING_FILE: &str = ".provisioning";
@@ -176,6 +179,10 @@ impl LocalNode {
         data_root
             .ensure()
             .map_err(|e| eyre::eyre!("ensure node data root: {e}"))?;
+        // Before anything opens an auth store: this node signs its
+        // sessions with a secret of its own, not the shared dev default
+        // a server without TASK_AUTH_SECRET falls back to.
+        crate::install_auth_secret(node_secret(&data_root)?);
         let owner = provision(&data_root, &opts).await?;
 
         let state = AppState::open_at(data_root, None).await?;
@@ -659,6 +666,28 @@ fn generated_password() -> String {
     use rand::Rng as _;
     let bytes: [u8; 24] = rand::thread_rng().r#gen();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// This node's session-signing secret, beside its data (`auth-secret`,
+/// 0600): generated on first run, read on every run after. Losing it
+/// signs every device session out — the owner signs straight back in
+/// from `local-owner.json` — and loses nothing else.
+fn node_secret(data_root: &org_proto::DataRoot) -> eyre::Result<String> {
+    let path = data_root.path().join(SECRET_FILE);
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim();
+        if existing.len() >= 32 {
+            return Ok(existing.to_owned());
+        }
+    }
+    let secret = {
+        use rand::RngCore as _;
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        hex::encode(bytes)
+    };
+    write_private(&path, secret.as_bytes())?;
+    Ok(secret)
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> eyre::Result<()> {

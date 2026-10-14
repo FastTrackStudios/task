@@ -2379,14 +2379,31 @@ fn discover_mail_accounts(
 /// at build time so this fails loudly if shortened.
 const DEFAULT_AUTH_SECRET: &str = "task-server-auth-dev-secret-32+!";
 
-/// The secret that signs every org's session tokens. A real deployment
-/// MUST set `TASK_AUTH_SECRET` (a high-entropy 32+ char value) — the
-/// hardcoded [`DEFAULT_AUTH_SECRET`] is a dev convenience and makes
-/// tokens forgeable. Falls back to it (with a warning) when unset.
+/// A secret installed by the process hosting this backend — a device's
+/// node, which has no environment to be configured through
+/// (`local_node`, its `auth-secret` file). See [`auth_secret`].
+static INSTALLED_AUTH_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Install the secret every org's session tokens are signed with, for a
+/// process that has no `TASK_AUTH_SECRET` to set: a device's node keeps
+/// its own, generated on first run. Once per process; returns whether
+/// this call installed it.
+pub fn install_auth_secret(secret: String) -> bool {
+    INSTALLED_AUTH_SECRET.set(secret).is_ok()
+}
+
+/// The secret that signs every org's session tokens: `TASK_AUTH_SECRET`
+/// (an operator's choice wins), else the one the hosting process
+/// installed ([`install_auth_secret`] — a device node's own), else the
+/// hardcoded [`DEFAULT_AUTH_SECRET`], a dev convenience that makes tokens
+/// forgeable (with a warning). A real deployment MUST set one.
 pub(crate) fn auth_secret() -> String {
     match std::env::var("TASK_AUTH_SECRET") {
         Ok(s) if !s.is_empty() => s,
         _ => {
+            if let Some(installed) = INSTALLED_AUTH_SECRET.get() {
+                return installed.clone();
+            }
             tracing::warn!(
                 "TASK_AUTH_SECRET unset — using the dev auth secret (tokens are forgeable)"
             );

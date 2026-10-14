@@ -94,7 +94,15 @@ async fn a_fresh_device_is_fully_functional_with_no_server() {
         let creds = tmp.path().join(task_server::local_node::OWNER_FILE);
         let mode = std::fs::metadata(&creds).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "the owner's credentials are private");
+        // Sessions are signed with a secret of this node's own, private
+        // too — not the shared dev default.
+        let secret = tmp.path().join(task_server::local_node::SECRET_FILE);
+        let mode = std::fs::metadata(&secret).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "the signing secret is private");
     }
+    let secret_before =
+        std::fs::read_to_string(tmp.path().join(task_server::local_node::SECRET_FILE)).unwrap();
+    assert!(secret_before.len() >= 64, "32 random bytes, hex");
 
     // Discovery, with no HTTP: anonymous lists the org; with the session
     // it names the principal — the shape the app's parser reads.
@@ -207,6 +215,11 @@ async fn a_fresh_device_is_fully_functional_with_no_server() {
         .await
         .expect("reboot");
     assert_eq!(again.owner(), &owner);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(task_server::local_node::SECRET_FILE)).unwrap(),
+        secret_before,
+        "the node keeps its secret across a reboot"
+    );
     let token = sign_in(&again).await;
     let lane = again.caller(PERSONAL_SLUG, Some(token)).await.unwrap();
     let tasks: task::TaskServiceClient = client(&lane);
