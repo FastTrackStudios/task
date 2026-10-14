@@ -468,23 +468,23 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
 # The primitives architect-ui is built on — the same git source and
 # branch, so cargo unifies them. Task renders its own toasts from these
 # (`crates/ui/src/toasts.rs`) to show toast action buttons.
 dioxus-primitives = { git = "https://github.com/FastTrackStudios/dioxus-components", package = "dioxus-primitives", branch = "main", default-features = false }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.5" }
 # The device database engine (offline.md) — Turso's LOCAL engine only;
 # its sync is never used. Default features off: `mimalloc` would install
 # a global allocator from inside a library.
@@ -716,27 +716,6 @@ keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v
 [patch."https://github.com/FastTrackStudios/daw"]
 keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
 keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
-
-# DEVELOPMENT OVERRIDE — the offline work (docs/spec/offline.md) adds
-# device persistence to architect itself: crdt's `turso` feature
-# (`TursoPersistence`) and architect-atom's `persist`/`turso` features
-# (`LocalRows`, `use_persisted_store_list`, `CallQueue`,
-# `Mutation::run_queued`, `TursoRows`). Until that lands in an architect
-# tag, every architect crate Task names resolves to the sibling checkout.
-# Remove this block and bump the tags above (`just fleet-bump` in
-# architect) once it is released.
-[patch."https://github.com/FastTrackStudios/architect"]
-architect = { path = "../architect/crates/architect" }
-architect-atom = { path = "../architect/features/atom" }
-architect-auth = { path = "../architect/features/auth/architect-auth" }
-architect-permissions = { path = "../architect/features/permissions" }
-architect-permissions-proto = { path = "../architect/features/permissions/proto" }
-architect-telemetry = { path = "../architect/features/telemetry" }
-architect-ui = { path = "../architect/features/ui/architect-ui" }
-auth = { path = "../architect/features/auth/auth" }
-auth-proto = { path = "../architect/features/auth/auth-proto" }
-auth-client = { path = "../architect/features/auth/auth-client" }
-crdt = { path = "../architect/features/crdt/crdt" }
 
 # dioxus-core with DioxusLabs/dioxus#5668's suspense fixes. With the
 # web bundle split into lazily loaded chunks every route sits behind a
