@@ -256,7 +256,10 @@ async fn fetch_orgs_live() -> Result<Discovered, String> {
         let bearer = crate::vox_session::bearer();
         let body = node.discovery(bearer.clone()).await?;
         let found = parse_orgs(&body, bearer.as_deref())?;
-        tracing::info!(count = found.orgs.len(), "org discovery ok (this device's node)");
+        tracing::info!(
+            count = found.orgs.len(),
+            "org discovery ok (this device's node)"
+        );
         return Ok(found);
     }
     let base = http_base();

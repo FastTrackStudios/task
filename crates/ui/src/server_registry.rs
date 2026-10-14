@@ -434,12 +434,16 @@ mod this_device {
             return "This build holds no node.".into();
         };
         let Some(id) = org.id else {
-            return format!("{} did not say its org id — cannot hold a node of it.", org.name);
+            return format!(
+                "{} did not say its org id — cannot hold a node of it.",
+                org.name
+            );
         };
-        let host: SyncServiceClient = match task_ui_core::vox_clients::establish_for(&org.slug).await {
-            Ok(c) => c,
-            Err(e) => return format!("Could not reach {}'s host: {e}", org.name),
-        };
+        let host: SyncServiceClient =
+            match task_ui_core::vox_clients::establish_for(&org.slug).await {
+                Ok(c) => c,
+                Err(e) => return format!("Could not reach {}'s host: {e}", org.name),
+            };
         let peer = host.coordinator().await.ok();
         let mine = match node
             .join(task_ui_core::node::JoinRequest {
@@ -460,7 +464,10 @@ mod this_device {
             }
             Err(e) => return format!("Could not take a node of {}: {e}", org.name),
         };
-        match host.enroll_device(mine.clone(), "Task app node".to_owned()).await {
+        match host
+            .enroll_device(mine.clone(), "Task app node".to_owned())
+            .await
+        {
             Ok(_) => format!(
                 "{} is held on this device too (node {}). Its host admits this node.",
                 org.name,

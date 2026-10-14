@@ -216,7 +216,10 @@ mod tests {
         // which then fails loud on the meaningless address.
         assert_eq!(route(LOCAL_VOX_URL, false), Route::Remote);
         // A host is a host, whatever the device can do.
-        assert_eq!(route("wss://task.starcommand.live/vox", true), Route::Remote);
+        assert_eq!(
+            route("wss://task.starcommand.live/vox", true),
+            Route::Remote
+        );
         assert_eq!(route("ws://127.0.0.1:18080/vox", true), Route::Remote);
         assert_eq!(route("", true), Route::Remote);
     }
@@ -238,7 +241,9 @@ mod tests {
         ));
         assert!(dial_unreachable("iroh dial abc: timed out"));
         assert!(!dial_unreachable("sign in: invalid credentials"));
-        assert!(!dial_unreachable("permission denied: anonymous is not a member"));
+        assert!(!dial_unreachable(
+            "permission denied: anonymous is not a member"
+        ));
     }
 
     #[test]

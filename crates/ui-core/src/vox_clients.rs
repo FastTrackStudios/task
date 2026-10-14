@@ -444,10 +444,7 @@ pub async fn caller_for(slug: &str) -> Result<vox_core::Caller, String> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Err(err) = &remote
         && let Some(node) = crate::node::host()
-        && crate::node::fall_back_to_node(
-            crate::node::dial_unreachable(err),
-            node.holds(slug),
-        )
+        && crate::node::fall_back_to_node(crate::node::dial_unreachable(err), node.holds(slug))
     {
         tracing::info!(%slug, %err, "host unreachable; serving this org from the device's node");
         return shared_caller_node(slug, bearer).await;
@@ -460,7 +457,10 @@ pub async fn caller_for(slug: &str) -> Result<vox_core::Caller, String> {
 /// URL plus the identity, since the bearer is baked into the in-process
 /// lane exactly as a socket upgrade bakes it.
 #[cfg(not(target_arch = "wasm32"))]
-async fn shared_caller_node(slug: &str, bearer: Option<String>) -> Result<vox_core::Caller, String> {
+async fn shared_caller_node(
+    slug: &str,
+    bearer: Option<String>,
+) -> Result<vox_core::Caller, String> {
     let key = (
         format!("{}/org/{slug}", crate::node::LOCAL_VOX_URL),
         bearer.clone(),

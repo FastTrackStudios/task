@@ -44,7 +44,9 @@ pub fn default_data_root() -> Option<PathBuf> {
     }
     let home = PathBuf::from(std::env::var_os("HOME")?);
     let base = if cfg!(target_vendor = "apple") {
-        home.join("Library").join("Application Support").join("task")
+        home.join("Library")
+            .join("Application Support")
+            .join("task")
     } else {
         home.join(".local").join("share").join("task")
     };
@@ -125,13 +127,17 @@ impl Host {
     }
 
     /// The node, booting it on first call. Runs on the node runtime.
-    fn node(&self) -> impl std::future::Future<Output = Result<Arc<LocalNode>, String>> + Send + 'static {
+    fn node(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Arc<LocalNode>, String>> + Send + 'static {
         let cell = Arc::clone(&self.node);
         let opts = self.opts.clone();
         async move {
             cell.get_or_try_init(|| async move {
                 let started = std::time::Instant::now();
-                let node = LocalNode::open(opts).await.map_err(|e| format!("node boot: {e:#}"))?;
+                let node = LocalNode::open(opts)
+                    .await
+                    .map_err(|e| format!("node boot: {e:#}"))?;
                 tracing::info!(
                     orgs = ?node.org_slugs(),
                     ms = started.elapsed().as_millis() as u64,
