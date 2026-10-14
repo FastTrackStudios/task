@@ -67,7 +67,6 @@
 //! [`set_folder`]: vault_proto::VaultSync::set_folder
 //! [`PageMeta`]: vault_proto::PageMeta
 
-mod phone;
 mod rpc;
 mod tabs;
 mod tree;
@@ -75,6 +74,7 @@ mod tree;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::shell::phone_gestures::{PhoneDrawer, Side};
 use architect_ui::lucide_dioxus::{ChevronsDownUp, Search, SquarePen};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
@@ -142,15 +142,13 @@ pub fn VaultView(
     let collapsed = use_signal(HashSet::<String>::new);
     let mut move_target = use_signal(|| None::<String>);
     let mut create_parent = use_signal(|| None::<String>);
-    // Mobile-only: the file tree lives in a bottom sheet once a note
-    // is open (inline full-width while nothing is selected).
-    let mut files_open = use_signal(|| false);
-    // The phone's note drawer (swipe left): the focused note's
-    // properties, links, graph and share. Its own state — the desk's
-    // inspector sidebar follows the shell's right-panel toggle, which
-    // is open by default and must not throw a sheet over every note
+    // Phone: the file tree is the left drawer once a note is open
+    // (inline full-width while nothing is selected), the note's
+    // inspector the right one. The shell owns their open state — the
+    // desk's inspector follows its own right-panel toggle, which is
+    // open by default and must not throw a sheet over every note
     // opened on a phone.
-    let mut note_open = use_signal(|| false);
+    let phone = crate::shell::phone_gestures::use_phone_panels();
 
     // ── Tabs + split state ────────────────────────────────────
     // `panes` is 1–2 panes, each an ordered tab set + active index;
@@ -280,8 +278,7 @@ pub fn VaultView(
     // Open-or-focus a note in the focused pane (tree rows, backlinks,
     // wikilinks, graph nodes, `.base` rows, freshly-created notes).
     let on_open = use_callback(move |meta: FileMeta| {
-        files_open.set(false);
-        note_open.set(false);
+        phone.close();
         let mut p = panes.write();
         let f = (*focused.peek()).min(p.len().saturating_sub(1));
         let Some(pane) = p.get_mut(f) else { return };
@@ -631,7 +628,7 @@ pub fn VaultView(
                 class: "flex size-11 items-center justify-center rounded-lg text-muted-foreground active:bg-accent",
                 title: "Search",
                 onclick: move |_| {
-                    files_open.set(false);
+                    phone.close();
                     palette.set(true);
                 },
                 Search { size: 20 }
@@ -719,24 +716,7 @@ pub fn VaultView(
             // ── Document area: panes + backlinks ──────────
             div {
                 class: if has_file { "flex min-w-0 flex-1" } else { "hidden min-w-0 flex-1 md:flex" },
-                // Panes container (1–2 panes side by side). On a phone it
-                // carries the gestures: swipe right for the file drawer,
-                // pull down for the palette.
-                phone::PhoneGestures {
-                    open: files_open,
-                    drawer: tree_content.clone(),
-                    note_open,
-                    note: has_file.then(|| rsx! {
-                        NoteInspector {
-                            org: active,
-                            vault_id: VAULT_ID.to_owned(),
-                            path: selected,
-                            refresh_key,
-                            pages: pages_memo,
-                            on_open,
-                            tab: right_tab,
-                        }
-                    }),
+                // Panes container (1–2 panes side by side).
                 div { class: "flex min-h-0 min-w-0 flex-1",
                     for (pi, pane) in pane_list.iter().cloned().enumerate() {
                         div {
@@ -775,7 +755,6 @@ pub fn VaultView(
                         }
                     }
                 }
-                }
                 // ── Right sidebar (md+, focused note): the inspector ──
                 if has_file && panel_open {
                     aside {
@@ -806,6 +785,24 @@ pub fn VaultView(
                             },
                         }
                     }
+                }
+            }
+        }
+        // ── Phone drawers (the shell swipes them in) ──
+        // Left: the files, with the new-note toolbar — the vault's own
+        // tree rather than the shell's explorer. Right, while a note is
+        // open: its properties, links, graph and share.
+        PhoneDrawer { side: Side::Left, testid: "vault-drawer".to_owned(), {tree_content} }
+        if has_file {
+            PhoneDrawer { side: Side::Right, testid: "note-drawer".to_owned(),
+                NoteInspector {
+                    org: active,
+                    vault_id: VAULT_ID.to_owned(),
+                    path: selected,
+                    refresh_key,
+                    pages: pages_memo,
+                    on_open,
+                    tab: right_tab,
                 }
             }
         }

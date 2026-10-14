@@ -25,6 +25,17 @@ pub fn AppShell() -> Element {
     crate::palette::provide_palette_context();
     // `--kb`: the on-screen keyboard's height, for bottom-pinned phone UI.
     crate::shell::mobile::use_keyboard_inset();
+    // The phone's drawers (swipe right / left) and pull-for-palette.
+    let phone = crate::shell::phone_gestures::provide_phone_panels();
+    {
+        // Moving to another screen closes them.
+        let at = current.to_string();
+        let mut seen = use_signal(|| at.clone());
+        if *seen.peek() != at {
+            seen.set(at);
+            phone.close();
+        }
+    }
     // Obsidian-style route tabs (the strip lives in the TopBar) —
     // restores the persisted strip and seeds it with the boot route.
     crate::tabs::provide_tabs(current.clone());
@@ -138,7 +149,7 @@ pub fn AppShell() -> Element {
                             }
                         }
                         if !share {
-                            BottomTabBar { current }
+                            BottomTabBar { current: current.clone() }
                             MobileTimerDock {}
                         }
                     }
@@ -216,6 +227,39 @@ pub fn AppShell() -> Element {
         if !share {
             div { class: "md:hidden fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px))] right-2 z-40",
                 task_player_ui::NowPlayingTab {}
+            }
+        }
+        // Phone: the drawers and the pull. The left falls back to the
+        // screen's companion column (the work sidebar where there is
+        // none); the right to the docked app panels. A page that fills a
+        // side renders its own drawer and these give way.
+        if !share {
+            crate::shell::phone_gestures::PhoneGestures { has_left: true, has_right: !docked.is_empty() }
+            crate::shell::phone_gestures::PhoneDrawer {
+                side: crate::shell::phone_gestures::Side::Left,
+                fallback: true,
+                match side_panel_for(&current) {
+                    SidePanel::Files => rsx! { files_ui::FilesSidebar {} },
+                    SidePanel::Project(id) => rsx! {
+                        crate::shell::project_sidebar::ProjectSidebar { id }
+                    },
+                    SidePanel::Wiki { org, wiki } => rsx! {
+                        crate::shell::explorer::VaultExplorer { org, wiki }
+                    },
+                    SidePanel::Vault => rsx! { crate::shell::explorer::VaultExplorer {} },
+                    SidePanel::Work | SidePanel::None => rsx! {
+                        crate::shell::work_sidebar::WorkSidebar { current: current.clone() }
+                    },
+                }
+            }
+            if !docked.is_empty() {
+                crate::shell::phone_gestures::PhoneDrawer {
+                    side: crate::shell::phone_gestures::Side::Right,
+                    fallback: true,
+                    for render in docked.clone() {
+                        {render()}
+                    }
+                }
             }
         }
         // Single global capture modal, toggled from any fleeting button.

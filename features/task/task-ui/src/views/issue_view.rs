@@ -115,6 +115,11 @@ pub struct IssueViewProps {
     /// `details` to it.
     #[props(default)]
     pub body: Option<Element>,
+    /// A frame for the properties on a phone — the page's drawer
+    /// (`crates/ui`'s `PhoneDrawer`), which this crate does not depend
+    /// on. Handed the same property list the desk's sidebar shows.
+    #[props(default)]
+    pub phone_properties: Option<Callback<Element, Element>>,
     pub on_event: EventHandler<TaskMutation>,
     /// A sub-issue was clicked.
     pub on_open: EventHandler<Uuid>,
@@ -429,6 +434,15 @@ pub fn IssueView(props: IssueViewProps) -> Element {
                 span { class: "pb-1 text-[13px] font-medium text-muted-foreground", "Properties" }
                 {chips(true)}
             }
+        }
+        // ── properties (phone: the page's right drawer) ──
+        if let Some(frame) = props.phone_properties {
+            {frame.call(rsx! {
+                div { class: "flex flex-col gap-1.5 px-4 py-4",
+                    span { class: "pb-1 text-[13px] font-medium text-muted-foreground", "Properties" }
+                    {chips(true)}
+                }
+            })}
         }
     }
 }

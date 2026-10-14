@@ -226,6 +226,14 @@ pub fn TaskDetailPage(id: Uuid) -> Element {
                     // The task's history and comment thread (`crate::activity`).
                     crate::activity::EntityActivity { slug: slug.clone(), entity_type: "task", entity_id: id }
                 },
+                // Phone: swipe left for the properties.
+                phone_properties: Callback::new(|props: Element| rsx! {
+                    crate::shell::phone_gestures::PhoneDrawer {
+                        side: crate::shell::phone_gestures::Side::Right,
+                        testid: "issue-drawer".to_owned(),
+                        {props}
+                    }
+                }),
                 on_event: apply,
                 on_open: move |sid: Uuid| { nav.push(Route::TaskDetailRoute { id: sid }); },
                 on_add_subtask: add_sub,

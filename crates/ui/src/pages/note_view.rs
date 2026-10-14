@@ -346,6 +346,27 @@ pub(crate) fn NoteView(
             );
         }
     });
+    // The editor places its caret as it mounts, and on iOS a caret in a
+    // contenteditable is focus: the keyboard rose over every note opened
+    // only to read it, and a swipe for a drawer typed into the note. Until
+    // the person touches the body, hand focus back — except in a fresh,
+    // empty note, which is opened to be written in.
+    let mut touched = use_signal(|| false);
+    let guard_path = path.clone();
+    use_hook(move || {
+        spawn(async move {
+            for _ in 0..6 {
+                architect::sleep(architect::Duration::from_millis(150)).await;
+                let loaded = session.current_path().as_deref() == Some(guard_path.as_str());
+                if *touched.peek() || (loaded && body_state.peek().doc.is_empty()) {
+                    return;
+                }
+                let _ = document::eval(
+                    "const a = document.activeElement; if (a && a.closest && a.closest('.note-body')) a.blur();",
+                );
+            }
+        });
+    });
 
     // Publish this doc to the sidebar Properties panel while focused, so
     // it edits the SAME live buffer through this note's transaction sink.
@@ -863,7 +884,9 @@ pub(crate) fn NoteView(
                                 {raw_body_text(&session.state.read().doc.to_string())}
                             }
                         } else {
-                            div { class: if props_open() { "doc-linear editor-app" } else { "doc-linear editor-app props-collapsed" },
+                            div { class: if props_open() { "doc-linear editor-app note-body" } else { "doc-linear editor-app note-body props-collapsed" },
+                                onpointerdown: move |_| touched.set(true),
+                                onkeydown: move |_| touched.set(true),
                                 div { class: "editor-frame editor-frame--flush",
                                     Editor {
                                         state: body_state,
