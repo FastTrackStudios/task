@@ -32,6 +32,13 @@ use crate::central_login::TokenSet;
 use crate::orgs::{OrgMeta, home_slug};
 use crate::presence::{ManualStatus, PresenceLocal, PresenceStatus};
 use crate::vox_clients::establish_for;
+use task_ui_core::node::NodeOwner;
+
+/// The device's person, when the app is pointed at this device's own
+/// node (`offline.local`) — see [`task_ui_core::node::local_owner`].
+async fn node_owner() -> Option<NodeOwner> {
+    task_ui_core::node::local_owner().await
+}
 
 // ── dev accounts (DEBUG BUILDS ONLY) ────────────────────────────────
 //
@@ -520,7 +527,15 @@ async fn push_link(st: AuthState, account: &ActiveAccount) {
 /// account is NOT signed out — its token stays cached so switching
 /// back is instant.
 async fn run_switch(mut st: AuthState, email: &str) {
-    let slug = home_slug(&st.orgs.peek());
+    // On this device's node, its own person signs in where their account
+    // lives — the node's org list may hold several home orgs (the example
+    // studio beside a personal org), and the first one is not necessarily
+    // theirs.
+    let owner = node_owner().await;
+    let slug = match &owner {
+        Some(o) if o.email == email => o.org.clone(),
+        _ => home_slug(&st.orgs.peek()),
+    };
     if slug.is_empty() {
         st.error
             .set(Some("org discovery hasn't resolved yet".to_owned()));
@@ -535,9 +550,10 @@ async fn run_switch(mut st: AuthState, email: &str) {
     }
     st.busy.set(true);
     st.error.set(None);
-    match resolve_session(&slug, email).await {
+    match resolve_session(&slug, email, owner.as_ref()).await {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             // Before any further RPC: the locker/link calls below should
             // already ride the new identity.
@@ -625,6 +641,7 @@ async fn run_credential_sign_in(
     match result {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             publish_session_token(st, Some(&account));
             // Same multi-server sync as run_switch (borrow before move).
@@ -676,6 +693,7 @@ async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: 
     match result {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             publish_session_token(st, Some(&account));
             pull_locker(st, &account).await;
@@ -685,6 +703,20 @@ async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: 
         Err(e) => st.error.set(Some(e)),
     }
     st.busy.set(false);
+}
+
+/// Remember who signed in on this device, so the next cold start can
+/// open the workspace without the server (`offline.boot`). The principal
+/// only — the token stays in the token store, where it already was.
+fn remember_for_offline(account: &ActiveAccount) {
+    crate::offline::remember_account(
+        &crate::orgs::http_base(),
+        &crate::offline::RememberedAccount {
+            user_id: account.user_id,
+            email: account.email.clone(),
+            name: account.name.clone(),
+        },
+    );
 }
 
 /// Explicit sign-out: revoke the session server-side, drop the cached
@@ -729,6 +761,7 @@ async fn run_sign_out(mut st: AuthState) {
     clear_cached_token(&account.email);
     clear_refresh(&account.email);
     clear_active_email();
+    crate::offline::forget_account(&crate::orgs::http_base(), &account.email);
     sync_active_server_entry(st.registry, None);
     // Drop the authenticated sockets NOW, before the revoke round trip —
     // `sign_out` passes the token as an argument, so it doesn't need the
@@ -748,7 +781,9 @@ async fn run_sign_out(mut st: AuthState) {
     // takes over — which is what signing out should mean. The demo cast
     // takes the release path on purpose: its login form offers the cast
     // one click each, and "log out, come back as Casey" is the demo.
-    if cfg!(debug_assertions) && !demo_cast_active() {
+    // Not on this device's own node: Guest is a dev-seed account a node
+    // never has, and the signed-out screen offers the device's person.
+    if cfg!(debug_assertions) && !demo_cast_active() && node_owner().await.is_none() {
         run_switch(st, GUEST_EMAIL).await;
     }
 }
@@ -864,6 +899,25 @@ pub fn provide_auth() -> AuthCtx {
         // which `SignInGate` would read as "signed out" and flash the
         // login screen over a session that is about to restore.
         let mut busy = busy;
+        // On this device's own node the person is known without asking:
+        // the node provisioned them (`offline.local`). Land on them in any
+        // build — unless the stored account is one of the debug cast,
+        // which a demo session switches between on purpose.
+        #[cfg(not(target_arch = "wasm32"))]
+        if task_ui_core::node::local_active() {
+            let stored = load_active_email().filter(|e| {
+                demo_cast_active() && dev_accounts().iter().any(|a| a.email == e.as_str())
+            });
+            busy.set(true);
+            spawn(async move {
+                match (stored, node_owner().await) {
+                    (Some(email), _) => ctx.switch_account(email),
+                    (None, Some(owner)) => ctx.switch_account(owner.email),
+                    (None, None) => busy.set(false),
+                }
+            });
+            return;
+        }
         match load_active_email() {
             Some(email) => {
                 busy.set(true);
@@ -911,6 +965,30 @@ fn GateChrome() -> Element {
         div { class: "fixed inset-x-0 top-0 z-40 flex h-10 items-center px-2",
             crate::chrome::DragRegion {}
             crate::chrome::WindowControls {}
+        }
+    }
+}
+
+/// "Continue as <you> on this device" — the signed-out screen's way back
+/// in when the app is pointed at its own node. The device's person has
+/// no password they typed (the node generated it), so the login form
+/// alone would be a dead end after a sign-out. Renders nothing when the
+/// app is pointed at a host.
+#[component]
+fn DeviceOwnerSignIn() -> Element {
+    let ctx = use_context::<AuthCtx>();
+    let owner = use_resource(node_owner);
+    let Some(Some(owner)) = owner.read().clone() else {
+        return rsx! {};
+    };
+    let email = owner.email.clone();
+    rsx! {
+        Button {
+            variant: ButtonVariant::Primary,
+            size: ButtonSize::Medium,
+            class: "w-full",
+            on_click: move |_| ctx.switch_account(email.clone()),
+            "Continue as {owner.name} on this device"
         }
     }
 }
@@ -991,6 +1069,7 @@ pub fn SignInGate(children: Element) -> Element {
                         }
                     }
                 }
+                DeviceOwnerSignIn {}
                 LoginForm {}
                 // Without this a user pointed at the wrong server is
                 // stuck: they cannot sign in, and the switcher that would
@@ -1078,7 +1157,11 @@ pub fn boot_session_token() -> Option<String> {
 }
 
 /// Token-cache-first session resolution against the home org.
-async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, String> {
+async fn resolve_session(
+    slug: &str,
+    email: &str,
+    node_owner: Option<&NodeOwner>,
+) -> Result<ActiveAccount, String> {
     // 0. Discovery already validated the cached token and told us who it
     //    is (`orgs::discovered_principal_for`). That is the whole answer:
     //    no lane dial, no `whoami`, no issuer round trip.
@@ -1102,7 +1185,31 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
         });
     }
 
-    let client = establish_for::<AuthServiceClient>(slug).await?;
+    let client = match establish_for::<AuthServiceClient>(slug).await {
+        Ok(client) => client,
+        Err(e) => {
+            // t[impl offline.boot] — the server cannot be reached, and
+            // this device was signed in as `email` before: open the
+            // workspace as that account, from what the device kept (the
+            // cached token, the remembered principal, the cached orgs and
+            // every list's device copy). Nothing is validated, because
+            // nothing can be; every request the app makes still carries
+            // the token, and the server checks it when it is back.
+            if architect::classify(&e).is_unreachable()
+                && let Some(token) = load_cached_token(email)
+                && let Some(who) =
+                    crate::offline::remembered_account(&crate::orgs::http_base(), email)
+            {
+                return Ok(ActiveAccount {
+                    user_id: who.user_id,
+                    email: who.email,
+                    name: who.name,
+                    token,
+                });
+            }
+            return Err(e);
+        }
+    };
 
     // 1. Cached token → whoami validates it without a fresh sign-in.
     if let Some(token) = load_cached_token(email) {
@@ -1140,6 +1247,28 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
     //    release the roster is empty, there is nothing to sign in with,
     //    and the user goes through `LoginForm` — which is already on
     //    screen — hence the message rather than a failed sign-in.
+    // t[impl offline.local] — this device's own person, on its own node:
+    // the node provisioned the account and keeps its credentials, so the
+    // sign-in is an ordinary one against the org's own `AuthService`, in
+    // any build, with no issuer and no network.
+    if let Some(owner) = node_owner.filter(|o| o.email == email) {
+        let bundle = establish_for::<AuthServiceClient>(slug)
+            .await?
+            .sign_in_email_password(SignInEmailPassword {
+                email: owner.email.clone(),
+                password: owner.password.clone(),
+                ip_address: None,
+                user_agent: Some("task-device".to_owned()),
+            })
+            .await
+            .map_err(|e| format!("sign in on this device: {e}"))?;
+        save_session_token(email, &bundle.token);
+        let mut account = account_from(bundle.user, email, bundle.token);
+        if account.name.trim().is_empty() || account.name == account.email {
+            account.name = owner.name.clone();
+        }
+        return Ok(account);
+    }
     let Some(dev) = dev_accounts().iter().find(|a| a.email == email) else {
         return Err(format!("sign in as {email} to continue"));
     };

@@ -359,20 +359,41 @@ fn ConnectionBanner() -> Element {
         }
     });
 
+    // t[impl offline.visible] — what has not reached the server yet.
+    // Counted from the device's call queue; the pill says it while
+    // anything waits and clears when the queue empties. It never says
+    // "synced" — only how many are still waiting.
+    let waiting = architect::try_use_call_queue().map_or(0, |q| q.waiting());
+    let waiting_label = match waiting {
+        0 => String::new(),
+        1 => " · 1 change waiting to sync".to_owned(),
+        n => format!(" · {n} changes waiting to sync"),
+    };
+
     let generation = conn.generation();
     match conn.state() {
+        architect::ConnectionState::Ready(_) if waiting > 0 => {
+            return rsx! {
+                div { class: "pointer-events-none fixed left-1/2 top-2 z-50 -translate-x-1/2",
+                    div {
+                        class: "pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-lg backdrop-blur",
+                        "data-sync-waiting": "{waiting}",
+                        span { class: "size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" }
+                        "Syncing{waiting_label}"
+                    }
+                }
+            };
+        }
         architect::ConnectionState::Ready(_) => return rsx! {},
         architect::ConnectionState::Connecting if generation == 0 => return rsx! {},
         _ => {}
     }
     let (cls, label, title) = match last_failure.read().clone() {
+        // offline.boot: a quiet state, not an alarm — the workspace is
+        // open from the device's copy and writes are kept.
         Some(e) => (
-            "border-destructive/40 bg-destructive/15 text-destructive",
-            if generation == 0 {
-                "Can't reach the server — retrying"
-            } else {
-                "Connection lost — retrying"
-            },
+            "border-border bg-background/90 text-muted-foreground",
+            "Offline — changes will sync",
             e,
         ),
         None => (
@@ -386,8 +407,9 @@ fn ConnectionBanner() -> Element {
             div {
                 class: "pointer-events-auto flex items-center gap-2 rounded-full border {cls} px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur",
                 title: "{title}",
+                "data-sync-waiting": "{waiting}",
                 span { class: "size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" }
-                "{label}"
+                "{label}{waiting_label}"
             }
         }
     }

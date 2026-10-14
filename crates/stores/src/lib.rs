@@ -341,6 +341,92 @@ where
     })
 }
 
+// ── the device copy (docs/spec/offline.md, offline.replica) ─────────
+
+/// Whose rows a persisted list holds: the signed-in account and the orgs
+/// the fetch covers. `None` while either is unknown — nothing is read or
+/// written then, so a list never shows another account's (or another
+/// org's) device copy.
+fn replica_scope(
+    who: Option<task_ui_core::identity::CurrentIdentity>,
+    slugs: &[String],
+) -> Option<String> {
+    // Reading the signal subscribes the caller, so a sign-in re-scopes.
+    let user = who?.0.read().as_ref()?.user_id;
+    (!slugs.is_empty()).then(|| format!("{user}/{}", slugs.join("+")))
+}
+
+/// [`use_first_org_list`] with the device copy in front of it
+/// (`architect::use_persisted_store_list`): the rows last seen for this
+/// account and org show at once — marked stale — before (and without)
+/// the fetch, a failed fetch leaves them in place, and every change is
+/// written back. `kind` names the list on the device (`"inbox"`).
+// t[impl offline.replica]
+pub fn use_persisted_first_org_list<T, F, Fut>(
+    store: Store<T, String>,
+    kind: &'static str,
+    fetch: F,
+) -> AtomResult<Vec<(Id<T::Key>, T)>, String>
+where
+    T: StoreEntity + serde::Serialize + serde::de::DeserializeOwned,
+    T::Key: serde::Serialize,
+    F: Fn(String) -> Fut + 'static,
+    Fut: std::future::Future<Output = Result<Vec<T>, String>> + 'static,
+{
+    let (selection, orgs) = use_org_scope();
+    let identity = try_use_context::<task_ui_core::identity::CurrentIdentity>();
+    architect::use_persisted_store_list(
+        store,
+        kind,
+        move || {
+            let mut slugs = task_ui_core::orgs::selected_slugs(&selection.read(), &orgs.read());
+            slugs.truncate(1);
+            replica_scope(identity.clone(), &slugs)
+        },
+        move || {
+            let slug = task_ui_core::orgs::selected_slugs(&selection.read(), &orgs.read())
+                .into_iter()
+                .next();
+            let pending = slug.map(&fetch);
+            async move { Some(pending?.await) }
+        },
+    )
+}
+
+/// [`use_multi_org_list`] with the device copy in front of it — see
+/// [`use_persisted_first_org_list`].
+// t[impl offline.replica]
+#[allow(clippy::type_complexity)]
+pub fn use_persisted_multi_org_list<T, F, Fut>(
+    store: Store<T, String>,
+    kind: &'static str,
+    fetch: F,
+) -> AtomResult<Vec<(Id<T::Key>, T)>, String>
+where
+    T: StoreEntity + serde::Serialize + serde::de::DeserializeOwned,
+    T::Key: serde::Serialize,
+    F: Fn(Vec<String>) -> Fut + 'static,
+    Fut: std::future::Future<Output = Result<Vec<T>, String>> + 'static,
+{
+    let (selection, orgs) = use_org_scope();
+    let identity = try_use_context::<task_ui_core::identity::CurrentIdentity>();
+    architect::use_persisted_store_list(
+        store,
+        kind,
+        move || {
+            replica_scope(
+                identity.clone(),
+                &task_ui_core::orgs::selected_slugs(&selection.read(), &orgs.read()),
+            )
+        },
+        move || {
+            let slugs = task_ui_core::orgs::selected_slugs(&selection.read(), &orgs.read());
+            let pending = (!slugs.is_empty()).then(|| fetch(slugs));
+            async move { Some(pending?.await) }
+        },
+    )
+}
+
 /// The optimistic-create lifecycle every feature shares: insert the
 /// draft now, swap it for the server's row on success, roll back (and
 /// notify) on failure.

@@ -12,7 +12,10 @@ repository.workspace = true
 # Deliberately short, and worth keeping that way: this crate names no
 # proto crate and no entity. If a domain type appears in this list, the
 # split that made the crate has started to come undone.
-architect = { workspace = true, features = ["atom", "vox", "client", "platform"] }
+# `atom-persist`: the device copy behind every list (`LocalRows`,
+# `use_persisted_store_list`) and the durable call queue — offline.md.
+architect = { workspace = true, features = ["atom", "atom-persist", "vox", "client", "platform"] }
+serde = { workspace = true }
 dioxus = { workspace = true }
 task-ui-core = { workspace = true }
 vox = { workspace = true }
