@@ -166,6 +166,8 @@ impl OrgManagementImpl {
         // the ones scanned at boot — otherwise it would be the one org a
         // home principal could never reach without a restart.
         let home_identity = self.state.home_identity.clone();
+        let blob_root = crate::blob_root_of(&self.state.data_root)
+            .map_err(|e| OrgManagementError::Internal(format!("blob root: {e}")))?;
         let built = tokio::runtime::Handle::current().block_on(async move {
             let auth = AuthState::open(&auth_db_url, &crate::auth_secret())
                 .await
@@ -177,6 +179,7 @@ impl OrgManagementImpl {
                 &scope,
                 &storage,
                 home_identity.as_ref(),
+                &blob_root,
             )
             .await
             .map_err(|e| OrgManagementError::Internal(format!("build org: {e}")))

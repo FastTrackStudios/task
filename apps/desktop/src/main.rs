@@ -36,6 +36,18 @@ fn main() {
     //
     // Before launch, because the nav is built on first render.
     task_plugins::register_all();
+
+    // This install is a node of its own (`offline.local`): the backend,
+    // in-process, over `<data dir>/task/node`. Installing is free — it
+    // boots when the app first talks to it, which is at once when no
+    // server is configured (the device is then its own server) and
+    // never in a session that only ever talks to a host.
+    // `TASK_NODE_DISABLE=1` leaves this build a pure client.
+    if std::env::var("TASK_NODE_DISABLE").is_ok_and(|v| v != "0") {
+        tracing::info!("node: disabled by TASK_NODE_DISABLE — remote only");
+    } else if let Some(opts) = task_node_host::options_from_env() {
+        task_node_host::install(opts);
+    }
     tracing::info!(
         contract = task_plugin_ui::CONTRACT,
         apps = ?task_plugins::stamps(),

@@ -60,6 +60,15 @@
    See the block below. */
 @source "../features/view/view-*/src/**/*.rs";
 
+/* Sibling checkouts. The workspace `[patch]`es architect to `../architect`
+ * (Cargo.toml) while the local-first work lands, so architect-ui's classes
+ * finally have a path again; the editor's live in `../editor` when it is
+ * checked out beside us. From this file (apps/) a sibling repo is two
+ * levels up. Where a checkout is absent these match nothing — silently —
+ * and the gap described below comes back. */
+@source "../../architect/features/ui/architect-ui/src/**/*.rs";
+@source "../../editor/features/ui/src/**/*.rs";
+
 /* GONE WITH THE AUGUST 2026 SPLIT, and a real (if cosmetic) regression.
  *
  * These used to scan crates that now live in other repos:

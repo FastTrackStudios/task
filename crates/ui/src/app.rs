@@ -321,6 +321,10 @@ pub fn App() -> Element {
     // route page's `use_<entity>_list` / `use_<entity>_mutations` hooks
     // read. Provided after `use_app_supervised` so mutations find the
     // notifications + reactivity registries it installed above.
+    // Offline (docs/spec/offline.md): the device copy every list reads
+    // first, and the durable queue for timer calls made with no
+    // connection, replayed when the connection comes back.
+    crate::offline::provide_offline(conn);
     crate::stores::provide_stores();
 
     // Web auth: the active-account context + boot restore (validate

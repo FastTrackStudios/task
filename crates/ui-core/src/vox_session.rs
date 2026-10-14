@@ -177,7 +177,14 @@ pub fn vox_url() -> String {
         {
             return url;
         }
-        native_default_vox_url().to_string()
+        let baked = native_default_vox_url();
+        // Nothing configured and this build hosts a node: the device is
+        // its own server (`offline.local`). A baked default (TestFlight's
+        // host) still wins — a shipped build that names a host means it.
+        if baked.is_empty() && crate::node::installed() {
+            return crate::node::LOCAL_VOX_URL.to_owned();
+        }
+        baked.to_string()
     }
 }
 
@@ -194,7 +201,10 @@ fn native_default_vox_url() -> &'static str {
     if let Some(baked) = option_env!("TASK_VOX_URL_NATIVE") {
         return baked;
     }
-    if cfg!(all(target_os = "ios", debug_assertions)) {
+    // A build that hosts its own node needs no dev server to open: the
+    // node is the default (`vox_url`), and `just mobile-sim` names the
+    // demo server explicitly through TASK_VOX_URL when it wants one.
+    if cfg!(all(target_os = "ios", debug_assertions)) && !crate::node::installed() {
         return DEFAULT_VOX_URL;
     }
     ""

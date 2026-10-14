@@ -54,6 +54,23 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
     }
 
     let slug = crate::admin_cli::flag(args, "--org").unwrap_or_else(|| "acme-audio".to_owned());
+    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
+    plant(&data_root, &slug).await
+}
+
+/// Plant the example org `slug` into `data_root` — the body of
+/// `admin demo`, callable with an explicit root.
+///
+/// The app's "Load example studio" (`offline.local`) plants into its
+/// own on-device data root with this, so the demo world a person can
+/// reach from a local node is the one the servers serve, by the same
+/// code. Idempotent, like the command.
+///
+/// # Errors
+///
+/// An unknown slug, or any failure planting the tree or the accounts.
+pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<()> {
+    let slug = slug.to_owned();
     let Some((_, display)) = example_org::ORGS.iter().find(|(s, _)| *s == slug) else {
         bail!(
             "`{slug}` is not in the example. It has: {}",
@@ -65,7 +82,6 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         );
     };
 
-    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
     data_root
         .ensure()
         .map_err(|e| eyre::eyre!("ensure data root: {e}"))?;

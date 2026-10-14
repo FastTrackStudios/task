@@ -98,11 +98,21 @@ css:
 # Back-compat aliases — all three sheets come from the same input now.
 desktop-css: css
 
-# Native desktop window (package `task-app-desktop`). Regenerates
-# tailwind first so any new utility classes in touched sources
-# actually exist in the bundled stylesheet, then hot-reloads on
-# subsequent source changes.
+# Regenerates tailwind first so any new utility classes in touched
+# sources exist in the bundled stylesheet. On macOS it runs as a real
+# "Task" bundle — name, bundle id and icon — via
+# apps/desktop/macos/dev-app.sh, without hot reload (`desktop-hot` keeps
+# hot reload and runs the bare `task-app-desktop` binary); elsewhere
+# it is `dx serve`.
+#
+# The native desktop app, as "Task" with its icon.
 desktop: desktop-css
+    #!/usr/bin/env bash
+    if [ "$(uname)" = "Darwin" ]; then exec bash apps/desktop/macos/dev-app.sh; fi
+    cd apps/desktop && exec dx serve --platform desktop
+
+# The desktop app under `dx serve`, hot reloading, as a bare binary.
+desktop-hot: desktop-css
     cd apps/desktop && dx serve --platform desktop
 
 # Same as `desktop` but in release mode — slower compile, snappier

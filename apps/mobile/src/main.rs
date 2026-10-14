@@ -35,6 +35,17 @@ fn main() {
     // registered after that has no tab until something else redraws.
     task_plugins::register_all();
 
+    // The phone is a node of its own (`offline.local`, `offline.peers`):
+    // the backend in-process over the app container's data dir, booted
+    // on first use. With no host configured the app runs on it; a host
+    // URL (TASK_VOX_URL, a baked TASK_VOX_URL_NATIVE, or one chosen in
+    // Settings) still wins. `TASK_NODE_DISABLE=1` keeps a pure client.
+    if std::env::var("TASK_NODE_DISABLE").is_ok_and(|v| v != "0") {
+        tracing::info!("node: disabled by TASK_NODE_DISABLE — remote only");
+    } else if let Some(opts) = task_node_host::options_from_env() {
+        task_node_host::install(opts);
+    }
+
     // The webview's own colour, set before any HTML renders. Without it
     // a light-mode phone flashed white between the launch screen and the
     // first paint — the app is dark by default, and so is the launch

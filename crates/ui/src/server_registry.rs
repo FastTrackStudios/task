@@ -224,19 +224,23 @@ pub fn ServersPanel() -> Element {
 
     rsx! {
         div { class: "flex flex-col gap-3",
+            ThisDevice {}
+            div { class: "px-1 pt-1 text-xs font-medium text-muted-foreground",
+                "Connect to a host / another device"
+            }
             if let Some(err) = discovery_err.read().as_ref() {
                 div { class: "rounded-lg border border-destructive/40 bg-destructive/10 px-2 py-2 text-xs text-destructive",
                     div { class: "font-medium", "Couldn't reach this server" }
                     div { class: "mt-0.5 break-words opacity-90", "{err}" }
                 }
             }
-            if servers.is_empty() {
+            if servers.iter().all(|s| task_ui_core::node::is_local(&s.server_url)) {
                 div { class: "px-1 text-xs text-muted-foreground",
-                    "No servers yet. Add one below (e.g. task.starcommand.live)."
+                    "No hosts yet. Add one below (e.g. task.starcommand.live) — a host is just another node of your org that is always on."
                 }
             } else {
                 div { class: "flex flex-col gap-1",
-                    for s in servers {
+                    for s in servers.into_iter().filter(|s| !task_ui_core::node::is_local(&s.server_url)) {
                         div {
                             key: "{s.id}",
                             class: "flex items-center gap-2 rounded-lg border border-border px-2 py-2",
@@ -272,16 +276,197 @@ pub fn ServersPanel() -> Element {
                 Input {
                     value: url,
                     input_type: "url".to_string(),
-                    placeholder: "Server URL (task.starcommand.live)",
+                    placeholder: "Host URL (task.starcommand.live)",
                 }
                 Button {
                     variant: ButtonVariant::Secondary,
                     size: ButtonSize::Medium,
                     on_click: add,
                     class: "w-full",
-                    "Add server"
+                    "Add host"
                 }
             }
+        }
+    }
+}
+
+/// The registry entry that means "this device's own node", created on
+/// first use. One per registry, found by its address.
+fn this_device_entry(registry: &mut ServerRegistry) -> Uuid {
+    if let Some(found) = registry
+        .list()
+        .into_iter()
+        .find(|e| task_ui_core::node::is_local(&e.server_url))
+    {
+        return found.id;
+    }
+    let entry = ServerEntry::new("This device", task_ui_core::node::LOCAL_VOX_URL);
+    let id = entry.id;
+    registry.upsert(entry);
+    id
+}
+
+/// "This device" — the node this install runs (`offline.local`,
+/// `offline.peers`). Run on it, see its address, and keep a node of a
+/// host's org here. Renders nothing on the browser, which holds no node.
+#[component]
+fn ThisDevice() -> Element {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        rsx! { this_device::Panel {} }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        rsx! {}
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod this_device {
+    use architect_ui::prelude::*;
+    use dioxus::prelude::*;
+    use files_proto::service::sync::SyncServiceClient;
+    use task_ui_core::orgs::OrgMeta;
+
+    use super::{ServerRegistry, this_device_entry};
+
+    #[component]
+    pub fn Panel() -> Element {
+        let Some(node) = task_ui_core::node::host() else {
+            return rsx! {};
+        };
+        let mut registry = use_context::<ServerRegistry>();
+        let auth = use_context::<crate::auth::AuthCtx>();
+        let orgs = use_context::<Signal<Vec<OrgMeta>>>();
+        let mut note = use_signal(|| None::<String>);
+        let local = task_ui_core::node::local_active();
+        let root = node.data_root().display().to_string();
+
+        let run_here = move |_| {
+            let id = this_device_entry(&mut registry);
+            registry.set_active(Some(id));
+            spawn(async move {
+                // Straight in as the device's person: the node knows them.
+                if let Some(owner) = task_ui_core::node::local_owner().await {
+                    auth.switch_account(owner.email);
+                }
+            });
+        };
+
+        // Orgs a host serves that this node does not hold yet — what
+        // "keep a node here" applies to.
+        let joinable: Vec<OrgMeta> = if local {
+            Vec::new()
+        } else {
+            orgs.read()
+                .iter()
+                .filter(|o| o.member != Some(false) && o.id.is_some() && !node.holds(&o.slug))
+                .cloned()
+                .collect()
+        };
+        let held: Vec<(String, Option<String>)> = orgs
+            .read()
+            .iter()
+            .filter(|o| node.holds(&o.slug))
+            .map(|o| (o.name.clone(), node.endpoint_id(&o.slug)))
+            .collect();
+
+        rsx! {
+            div { class: "flex flex-col gap-2 rounded-lg border border-border px-2 py-2",
+                div { class: "flex items-center gap-2",
+                    div { class: "flex min-w-0 flex-1 flex-col",
+                        span { class: "text-sm font-medium text-foreground", "This device" }
+                        span { class: "truncate text-xs text-muted-foreground",
+                            "Runs Task itself, with no server — {root}"
+                        }
+                    }
+                    if local {
+                        span { class: "text-xs text-primary", "● running here" }
+                    } else {
+                        Button {
+                            variant: ButtonVariant::Secondary,
+                            size: ButtonSize::Small,
+                            on_click: run_here,
+                            "Run on this device"
+                        }
+                    }
+                }
+                for (name, id) in held {
+                    div { class: "truncate px-1 text-xs text-muted-foreground",
+                        "{name} — node "
+                        span { class: "font-mono", {id.unwrap_or_else(|| "not bound yet".to_owned())} }
+                    }
+                }
+                for org in joinable {
+                    div { class: "flex items-center gap-2 px-1",
+                        span { class: "min-w-0 flex-1 truncate text-xs text-foreground", "{org.name}" }
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Small,
+                            on_click: {
+                                let org = org.clone();
+                                move |_| {
+                                    let org = org.clone();
+                                    spawn(async move {
+                                        note.set(Some(format!("Joining {}…", org.name)));
+                                        let said = join(&org).await;
+                                        note.set(Some(said));
+                                    });
+                                }
+                            },
+                            "Keep on this device"
+                        }
+                    }
+                }
+                if let Some(n) = note.read().as_ref() {
+                    div { class: "px-1 text-xs text-muted-foreground break-words", "{n}" }
+                }
+            }
+        }
+    }
+
+    /// The join handshake, both halves, with the session already held
+    /// on the host: the host's endpoint id for the org → this node takes
+    /// the org and admits it → the host enrolls this node's endpoint id.
+    /// From then each admits the other (`offline.peers`).
+    pub(super) async fn join(org: &OrgMeta) -> String {
+        let Some(node) = task_ui_core::node::host() else {
+            return "This build holds no node.".into();
+        };
+        let Some(id) = org.id else {
+            return format!("{} did not say its org id — cannot hold a node of it.", org.name);
+        };
+        let host: SyncServiceClient = match task_ui_core::vox_clients::establish_for(&org.slug).await {
+            Ok(c) => c,
+            Err(e) => return format!("Could not reach {}'s host: {e}", org.name),
+        };
+        let peer = host.coordinator().await.ok();
+        let mine = match node
+            .join(task_ui_core::node::JoinRequest {
+                slug: org.slug.clone(),
+                id,
+                display_name: org.name.clone(),
+                peer,
+                role: None,
+            })
+            .await
+        {
+            Ok(Some(mine)) => mine,
+            Ok(None) => {
+                return format!(
+                    "{} is now held here, but this node has no endpoint to enroll (peers off?).",
+                    org.name
+                );
+            }
+            Err(e) => return format!("Could not take a node of {}: {e}", org.name),
+        };
+        match host.enroll_device(mine.clone(), "Task app node".to_owned()).await {
+            Ok(_) => format!(
+                "{} is held on this device too (node {}). Its host admits this node.",
+                org.name,
+                &mine[..mine.len().min(8)]
+            ),
+            Err(e) => format!("Held here, but the host refused to enroll this node: {e}"),
         }
     }
 }

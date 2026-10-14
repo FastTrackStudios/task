@@ -19,6 +19,7 @@
 #   ./demo.sh serve    # run both servers (foreground, Ctrl-C stops both)
 #   ./demo.sh web      # run the web app against ACME
 #   ./demo.sh desktop  # run the desktop app against ACME
+#   ./demo.sh local    # the desktop app with NO server — its own node
 #   ./demo.sh daemon   # a laptop: the sync agent, replicating ACME's projects
 #   ./demo.sh federate # the two servers subscribe to each other's sources
 #   ./demo.sh ids      # print each org's endpoint id
@@ -374,6 +375,16 @@ daemon() {
     ./target/debug/fts-files-daemon 2>&1 | sed 's/^/[device] /'
 }
 
+# Run the desktop app with the caller's env. On macOS it runs as a real
+# "Task" bundle (name, bundle id, icon — apps/desktop/macos/dev-app.sh);
+# elsewhere `dx serve` as before. Must be called from apps/desktop.
+desktop_launch() {
+  if [ "$(uname)" = "Darwin" ]; then
+    exec bash "$REPO_ROOT/apps/desktop/macos/dev-app.sh"
+  fi
+  exec dx serve --platform desktop --hot-patch false
+}
+
 desktop() {
   require_planted
   telemetry_env
@@ -400,10 +411,32 @@ desktop() {
   # same directory the two servers exchange addresses through. The
   # TASK_VOX_URL stays as the discovery base and the fallback transport.
   mkdir -p "$PEERS"
-  exec env TASK_VOX_URL="ws://127.0.0.1:$ACME_PORT/vox" \
-    TASK_DEMO_CAST="$DEMO_CAST" \
-    TASK_IROH_PEER_DIR="$PEERS" \
-    dx serve --platform desktop --hot-patch false
+  export TASK_VOX_URL="ws://127.0.0.1:$ACME_PORT/vox"
+  export TASK_DEMO_CAST="$DEMO_CAST"
+  export TASK_IROH_PEER_DIR="$PEERS"
+  desktop_launch
+}
+
+# The desktop app with NO server (`offline.local`): it hosts the backend
+# itself, on its own data root, and plants the example studio there on
+# first boot. Needs nothing from `serve` — run it with the servers down
+# to see the claim. The app's data dir is redirected under $DEMO_ROOT so
+# a host chosen in a real registry cannot win over "nothing configured";
+# `rm -rf $DEMO_ROOT/device` starts the device over.
+local_node() {
+  telemetry_env
+  if command -v tailwindcss >/dev/null 2>&1; then
+    ( cd "$REPO_ROOT" && tailwindcss -i apps/tailwind.css -o apps/desktop/assets/tailwind.css )
+  fi
+  mkdir -p "$DEMO_ROOT/device"
+  echo ">> desktop app, no server: its own node at $DEMO_ROOT/device/task/node"
+  echo ">> boots signed in as the node's owner (Alice, with the example planted)"
+  cd "$REPO_ROOT/apps/desktop"
+  unset TASK_VOX_URL
+  export XDG_DATA_HOME="$DEMO_ROOT/device"
+  export TASK_NODE_EXAMPLE=1
+  export TASK_DEMO_CAST="$DEMO_CAST"
+  desktop_launch
 }
 
 web() {
@@ -420,7 +453,7 @@ web() {
     dx serve --web --addr 127.0.0.1 --port "$WEB_PORT" --hot-patch false
 }
 
-[ $# -eq 0 ] && { echo "usage: $0 plant|fresh|serve|web|desktop|daemon|ids|telemetry|telemetry-stop"; exit 1; }
+[ $# -eq 0 ] && { echo "usage: $0 plant|fresh|serve|web|desktop|local|daemon|ids|telemetry|telemetry-stop"; exit 1; }
 for cmd in "$@"; do
   case "$cmd" in
     plant) plant ;;
@@ -428,11 +461,12 @@ for cmd in "$@"; do
     serve) serve ;;
     web)   web ;;
     desktop) desktop ;;
+    local) local_node ;;
     daemon) daemon ;;
     ids)   ids ;;
     federate) federate ;;
     telemetry) telemetry ;;
     telemetry-stop) telemetry_stop ;;
-    *) echo "unknown: $cmd (want plant|fresh|serve|web|desktop|daemon|federate|ids|telemetry|telemetry-stop)" >&2; exit 1 ;;
+    *) echo "unknown: $cmd (want plant|fresh|serve|web|desktop|local|daemon|federate|ids|telemetry|telemetry-stop)" >&2; exit 1 ;;
   esac
 done

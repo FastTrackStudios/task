@@ -31,6 +31,10 @@ files-daemon-proto = { workspace = true }
 # into shipping different ones.
 task-plugins = { workspace = true }
 vox = { workspace = true, features = ["transport-websocket"] }
+# The device's own node (offline.local / offline.peers): this install
+# hosts the backend itself, so the app works with no server and is a
+# peer of the org's other nodes.
+task-node-host = { workspace = true }
 
 [features]
 default = ["desktop"]

@@ -15,6 +15,10 @@ task-plugins = { workspace = true }
 # server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
 architect-telemetry = { workspace = true, features = ["otel"] }
 tracing = { workspace = true }
+# The device's own node (offline.local): the phone hosts the backend
+# itself and works with no server. task-server checks clean for
+# aarch64-apple-ios-sim.
+task-node-host = { workspace = true }
 
 # Apple Watch config bridge (`src/watch_sync.rs`) — pure-Rust WCSession
 # host over the objc2 ecosystem, iOS builds only.

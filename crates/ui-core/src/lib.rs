@@ -41,6 +41,7 @@ pub mod identity;
 pub mod iroh_transport;
 pub mod media_grant;
 pub mod nav;
+pub mod node;
 pub mod orgs;
 pub mod section_header;
 pub mod sheet;
