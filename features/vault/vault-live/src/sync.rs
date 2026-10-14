@@ -43,8 +43,8 @@ use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 use vault_proto::{
     BaseGroup, BaseRowView, BaseView, CollabAck, FileBytes, FolderIndex, IfMatch, Manifest,
-    ManifestEntry, MoveAck, PageMeta, PutAck, VaultChange, VaultEvent, VaultSync, VaultSyncError,
-    VaultSyncStreamSource, collab_doc_id,
+    ManifestEntry, MoveAck, PageMeta, PutAck, TextHit, VaultChange, VaultEvent, VaultSync,
+    VaultSyncError, VaultSyncStreamSource, collab_doc_id,
 };
 
 use crate::vault::Vault;
@@ -885,6 +885,41 @@ impl VaultSync for Backend {
         Ok(views)
     }
 
+    fn search_text(
+        &self,
+        vault_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<TextHit>, VaultSyncError> {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let dir = self.root(vault_id)?;
+        if words.is_empty() || !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let vault = Vault::open(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
+        let mut hits: Vec<(bool, TextHit)> = vault
+            .pages
+            .iter()
+            .filter_map(|p| {
+                let fm = parse_frontmatter(&p.raw);
+                let title = page_title(
+                    &p.raw,
+                    &p.basename,
+                    fm.as_ref().and_then(|f| fm_text(f, "title")),
+                );
+                search_page(&p.raw, &p.rel_path, title, &words)
+            })
+            .collect();
+        // Title matches first, then the most matching lines, then by name.
+        hits.sort_by(|(at, a), (bt, b)| {
+            bt.cmp(at)
+                .then(b.matches.cmp(&a.matches))
+                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+        });
+        hits.truncate(limit.clamp(1, 200) as usize);
+        Ok(hits.into_iter().map(|(_, h)| h).collect())
+    }
+
     fn set_folder(
         &self,
         vault_id: &str,
@@ -1188,6 +1223,54 @@ fn fm_tags(fm: &FrontMatter) -> Vec<String> {
     out
 }
 
+/// Whether one page matches every word of a search (lowercased), in its
+/// title or its body (properties are not text), and the hit if so —
+/// with whether the title alone matched, which ranks first.
+fn search_page(raw: &str, path: &str, title: String, words: &[String]) -> Option<(bool, TextHit)> {
+    // The body, and the line it starts on (for the excerpt's line).
+    let (body, first_line) = match raw
+        .strip_prefix("---")
+        .and_then(|rest| rest.split_once("\n---"))
+    {
+        Some((front, body)) => (body, front.lines().count() + 2),
+        None => (raw, 1),
+    };
+    let title_lc = title.to_lowercase();
+    let body_lc = body.to_lowercase();
+    if !words
+        .iter()
+        .all(|w| title_lc.contains(w.as_str()) || body_lc.contains(w.as_str()))
+    {
+        return None;
+    }
+    let title_hit = words.iter().all(|w| title_lc.contains(w.as_str()));
+    let mut excerpt = None;
+    let mut matches = 0u32;
+    // `skip(1)`: the rest of the closing fence's line.
+    let skip = usize::from(first_line > 1);
+    for (i, line) in body.lines().enumerate().skip(skip) {
+        let lc = line.to_lowercase();
+        if words.iter().any(|w| lc.contains(w.as_str())) {
+            matches += 1;
+            if excerpt.is_none() {
+                let text: String = line.trim().chars().take(160).collect();
+                excerpt = Some((text, (first_line + i - skip) as u32));
+            }
+        }
+    }
+    let (excerpt, line) = excerpt.unwrap_or_else(|| (title.clone(), 0));
+    Some((
+        title_hit,
+        TextHit {
+            path: path.to_owned(),
+            title,
+            excerpt,
+            line,
+            matches,
+        },
+    ))
+}
+
 /// A page's display title: its `title` property; else, for a record
 /// the app named by id (an inbox item's `<uuid>.md`), its first line of
 /// text — a name nobody chose reads as noise in a list; else the file
@@ -1407,6 +1490,37 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A page matches when every word is in its title or its body — never
+    /// its properties — and the hit carries the first matching line.
+    #[test]
+    fn a_search_reads_the_body_and_the_title_but_not_the_properties() {
+        let raw =
+            "---\nstatus: mixing\n---\n\nTrack list\nThe opener is loud\nThe closer is quiet\n";
+        let words = |q: &str| {
+            q.split_whitespace()
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>()
+        };
+        let hit = |q: &str| super::search_page(raw, "Set.md", "Setlist".into(), &words(q));
+
+        let (title_hit, h) = hit("the LOUD").expect("both words are in the body");
+        assert!(!title_hit);
+        assert_eq!(
+            (h.excerpt.as_str(), h.line, h.matches),
+            ("The opener is loud", 6, 2)
+        );
+        assert!(
+            hit("setlist").expect("the title").0,
+            "a title match ranks first"
+        );
+        assert!(
+            hit("setlist quiet").is_some(),
+            "words may split across title and body"
+        );
+        assert!(hit("mixing").is_none(), "a property is not text");
+        assert!(hit("opener absent").is_none(), "every word must match");
+    }
+
     /// A record named by id lists by what it says; a note by its name.
     #[test]
     fn a_record_named_by_id_is_titled_by_its_first_line() {

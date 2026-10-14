@@ -238,6 +238,16 @@ if (!window.__taskFocusRule) {
   document.addEventListener('mousedown', (e) => {
     if (e.target.closest && e.target.closest('[data-keep-focus]')) e.preventDefault();
   }, true);
+  // `editing-doc` on <html> while a document body (a note's, a task's)
+  // holds focus — what its keyboard toolbar shows on. Read from the
+  // focused element itself, so a blur nobody reported cannot leave it on.
+  const mark = () => {
+    const a = document.activeElement;
+    const on = !!(a && a.closest && a.closest('.note-body, .doc-body'));
+    document.documentElement.classList.toggle('editing-doc', on);
+  };
+  document.addEventListener('focusin', () => setTimeout(mark, 0), true);
+  document.addEventListener('focusout', () => setTimeout(mark, 0), true);
   document.addEventListener('focusin', (e) => {
     if (!coarse()) return;
     const body = e.target.closest && e.target.closest('.note-body');

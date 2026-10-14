@@ -53,7 +53,7 @@ pub use graph::prelude::*;
 pub use graph::{GraphLink, GraphUnresolved, TagCount};
 pub use manifest::{Manifest, ManifestEntry};
 pub use page::VaultPage;
-pub use page_meta::{FolderIndex, PageMeta};
+pub use page_meta::{FolderIndex, PageMeta, TextHit};
 pub use service::{VaultSync, VaultSyncRpc};
 
 // architect-emitted vox bits from the auto-generated mirror

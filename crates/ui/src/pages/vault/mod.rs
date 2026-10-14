@@ -583,7 +583,7 @@ pub fn VaultView(
     });
 
     // ── Phone drawer toolbar: Obsidian's one-tap new note ─────
-    let mut palette = crate::palette::use_palette_open();
+    let mut notes_search = crate::notes_search::use_notes_search();
     let mut new_untitled = move || {
         let taken: HashSet<String> = pages_memo
             .peek()
@@ -632,16 +632,20 @@ pub fn VaultView(
                 onclick: move |_| collapse_all(),
                 ChevronsDownUp { size: 20 }
             }
+        }
+        // The search bar: every vault and wiki's text. (Commands and
+        // pages are the palette's — pull down.)
+        div { class: "px-3 pb-2 md:hidden",
             button {
                 r#type: "button",
-                class: icon_btn,
-                title: "Search",
-                "aria-label": "Search",
+                class: "flex h-11 w-full items-center gap-2 rounded-full bg-foreground/[0.06] px-4 text-left text-[16px] text-muted-foreground active:bg-foreground/10",
+                "data-testid": "drawer-search",
                 onclick: move |_| {
                     phone.close();
-                    palette.set(true);
+                    notes_search.set(true);
                 },
-                Search { size: 20 }
+                Search { size: 16 }
+                "Search notes and wikis"
             }
         }
     };
@@ -657,7 +661,7 @@ pub fn VaultView(
                 task_ui_core::section_header::SectionMenuItem {
                     label: "Search notes",
                     icon: rsx! { Search { size: 18 } },
-                    on_click: move |()| palette.set(true),
+                    on_click: move |()| notes_search.set(true),
                 }
                 task_ui_core::section_header::SectionMenuItem {
                     label: "Collapse all",

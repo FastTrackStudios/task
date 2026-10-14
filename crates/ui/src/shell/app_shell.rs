@@ -23,6 +23,8 @@ pub fn AppShell() -> Element {
     crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
     crate::palette::provide_palette_context();
+    // The left drawer's Search: the text of every vault and wiki.
+    crate::notes_search::provide_notes_search();
     // `--kb`: the on-screen keyboard's height, for bottom-pinned phone UI.
     crate::shell::mobile::use_keyboard_inset();
     // The phone's drawers (swipe right / left) and pull-for-palette.
@@ -272,6 +274,7 @@ pub fn AppShell() -> Element {
         // Ctrl+P command palette — pages + vault notes, fuzzy-ranked.
         // Mounts its own document-level hotkey listener.
         crate::palette::CommandPalette {}
+        crate::notes_search::NotesSearch {}
         // App-wide notice queue (architect::Notifications, provided by
         // `use_app_reactive` at the app root). Mutations + the vault
         // DocumentSession report failures here so they outlive the

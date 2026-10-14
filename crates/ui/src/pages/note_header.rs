@@ -37,6 +37,10 @@ pub fn NoteHeader(
     /// reader of a wiki governed by its Editors may not make one.
     #[props(default = true)]
     renamable: bool,
+    /// The phone's form: the name in the note's top strip, at the strip's
+    /// size, instead of a heading over the body.
+    #[props(default)]
+    compact: bool,
 ) -> Element {
     let session = use_context::<DocumentSession>();
     let notify = architect::try_use_notifications();
@@ -130,8 +134,8 @@ pub fn NoteHeader(
     // for the caller's `props-collapsed` class (always collapsed).
     let _ = props_open;
     rsx! {
-        div { class: "flex flex-col gap-1 px-6 pt-5 pb-0",
-            TitleField { title, focus_req, on_commit: do_rename, renamable }
+        div { class: if compact { "flex min-w-0 flex-1" } else { "flex flex-col gap-1 px-6 pt-5 pb-0" },
+            TitleField { title, focus_req, on_commit: do_rename, renamable, compact }
         }
     }
 }
@@ -154,7 +158,13 @@ fn TitleField(
     focus_req: Signal<u32>,
     on_commit: EventHandler<String>,
     renamable: bool,
+    compact: bool,
 ) -> Element {
+    let size = if compact {
+        "text-[17px] font-semibold leading-6 tracking-[-0.01em]"
+    } else {
+        "text-[24px] font-semibold leading-8 tracking-[-0.16px]"
+    };
     let mut editing = use_signal(|| false);
     let mut draft = use_signal(String::new);
     // Whether the next mount of the input should select-all (keyboard
@@ -176,7 +186,7 @@ fn TitleField(
         rsx! {
             input {
                 id: "note-title-input",
-                class: "w-full bg-transparent text-[24px] font-semibold leading-8 tracking-[-0.16px] text-foreground outline-none",
+                class: "w-full min-w-0 bg-transparent {size} text-foreground outline-none",
                 value: "{draft}",
                 autofocus: true,
                 onmounted: move |el| async move {
@@ -216,7 +226,7 @@ fn TitleField(
         }
     } else if !renamable {
         rsx! {
-            h1 { class: "w-full truncate text-[24px] font-semibold leading-8 tracking-[-0.16px] text-foreground",
+            h1 { class: "w-full min-w-0 truncate {size} text-foreground",
                 "{title}"
             }
         }
@@ -224,7 +234,7 @@ fn TitleField(
         let display = title.clone();
         rsx! {
             button {
-                class: "-mx-1 w-full truncate rounded px-1 text-left text-[24px] font-semibold leading-8 tracking-[-0.16px] text-foreground hover:bg-accent/40",
+                class: "-mx-1 w-full min-w-0 truncate rounded px-1 text-left {size} text-foreground hover:bg-accent/40",
                 title: "Click to rename",
                 onclick: move |_| {
                     draft.set(display.clone());

@@ -16,8 +16,8 @@
 //! for tests / in-process callers.
 
 use crate::{
-    BaseView, CollabAck, FileBytes, FolderIndex, IfMatch, Manifest, MoveAck, PutAck, VaultChange,
-    VaultSyncError,
+    BaseView, CollabAck, FileBytes, FolderIndex, IfMatch, Manifest, MoveAck, PutAck, TextHit,
+    VaultChange, VaultSyncError,
 };
 
 /// File-replication operations on a single server. Sync methods
@@ -106,6 +106,17 @@ pub trait VaultSync {
     /// engine is native, so this is server-only;
     /// [`VaultSyncError::NotFound`] if the base doesn't exist.
     fn base_views(&self, vault_id: &str, base_path: &str) -> Result<Vec<BaseView>, VaultSyncError>;
+
+    /// Pages of `vault_id` whose title or text contains every word of
+    /// `query` (case-insensitive), best first, at most `limit`. The text
+    /// is the body: a page's properties are not searched. Empty query =
+    /// no hits.
+    fn search_text(
+        &self,
+        vault_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<TextHit>, VaultSyncError>;
 
     /// Every vault change, as it happens — fires on each
     /// successful PUT / DELETE / folder re-file, and on external

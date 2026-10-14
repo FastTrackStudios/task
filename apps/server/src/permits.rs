@@ -219,6 +219,7 @@ const VAULT: ServicePermits = ServicePermits {
         MethodPermit::new("set_folder", Action::WRITE, "vault/{path}"),
         MethodPermit::new("open_collab", Action::READ, "vault/{path}"),
         MethodPermit::new("base_views", Action::READ, "vault/{path}"),
+        MethodPermit::new("search_text", Action::READ, "vault/**"),
     ],
 };
 

@@ -523,7 +523,7 @@ pub fn KeyboardToolbar(
     }
     rsx! {
         div {
-            class: "fixed inset-x-0 z-50 hidden items-center gap-2 px-2 pb-2 [.kb-open_&]:flex md:hidden",
+            class: "fixed inset-x-0 z-50 hidden items-center gap-2 px-2 pb-2 [.kb-open.editing-doc_&]:flex md:hidden",
             style: "bottom: var(--kb, 0px)",
             "data-keep-focus": "true",
             "data-no-swipe": "true",

@@ -65,6 +65,7 @@ mod mcp_telemetry_e2e;
 mod mcp_wiki_e2e;
 mod media_auth;
 mod media_stream_e2e;
+mod notes_search_e2e;
 mod notify_e2e;
 mod offline_doc_e2e;
 mod offline_queue_e2e;

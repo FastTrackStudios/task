@@ -353,6 +353,10 @@ pub(crate) fn NoteView(
     // Whether the body has focus: the phone's keyboard toolbar shows
     // while it does.
     let mut body_focused = use_signal(|| false);
+    // A phone shows the name in the top strip and no heading over the
+    // body; a desk the other way round.
+    let on_phone =
+        try_use_context::<crate::shell::phone_gestures::PhonePanels>().is_some_and(|p| (p.phone)());
     let autofocus = use_memo(move || {
         session.current_path().as_deref() == Some(fresh_path.as_str())
             && body_state.read().doc.is_empty()
@@ -750,12 +754,25 @@ pub(crate) fn NoteView(
                 }
             },
             // Mobile-only name + save-state strip.
-            div { class: "note-mobile-status flex items-center justify-between gap-3 border-b border-border/60 px-4 py-1.5 md:hidden",
-                div { class: "flex min-w-0 items-center gap-2",
+            div { class: "note-mobile-status flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2 md:hidden",
+                div { class: "flex min-w-0 flex-1 items-center gap-2",
                     if is_dirty {
                         span { class: "size-2 shrink-0 rounded-full bg-primary", title: "Unsaved changes" }
                     }
-                    div { class: "min-w-0 truncate text-sm font-medium", "{current}" }
+                    // The note's name, renamed in place (tap). The body has no
+                    // second copy of it on a phone.
+                    if on_phone {
+                        crate::pages::note_header::NoteHeader {
+                            home,
+                            props_open,
+                            focus_req: focus_title,
+                            on_renamed: move |_| on_renamed.call(()),
+                            renamable: may_write(),
+                            compact: true,
+                        }
+                    } else {
+                        div { class: "min-w-0 truncate text-sm font-medium", "{current}" }
+                    }
                 }
                 if !status_msg.is_empty() {
                     Text { variant: TextVariant::Muted, class: "shrink-0 text-xs", "{status_msg}" }
@@ -847,7 +864,7 @@ pub(crate) fn NoteView(
                         // the same left edge.
                         // A note whose body opens with its own `# Title` has
                         // its title already; the header would say it twice.
-                        if !hide_note_header && !opens_with_title(&session.state.read().doc.to_string()) {
+                        if !on_phone && !hide_note_header && !opens_with_title(&session.state.read().doc.to_string()) {
                             crate::pages::note_header::NoteHeader {
                                 home,
                                 props_open,
@@ -856,25 +873,12 @@ pub(crate) fn NoteView(
                                 renamable: may_write(),
                             }
                         }
-                        // Phone: the note's properties as a chip row under
-                        // the title — where a task's sit. (A desk shows them
-                        // in the sidebar's Properties tab.)
-                        div { class: "px-6 pt-3 md:hidden",
-                            crate::pages::note_properties::NotePropertyChips {
-                                doc: crate::pages::note_properties::FocusedDoc {
-                                    claim,
-                                    state: session.state,
-                                    on_transaction,
-                                    writable: mode() != WriteMode::ReadOnly,
-                                },
-                            }
-                        }
                         if use_context::<crate::chrome::NoteViewMode>().0() == crate::chrome::ViewMode::Raw {
                             pre { class: "whitespace-pre-wrap px-6 py-4 font-mono text-sm leading-6 text-foreground",
                                 {raw_body_text(&session.state.read().doc.to_string())}
                             }
                         } else {
-                            div { class: if props_open() { "doc-linear editor-app note-body" } else { "doc-linear editor-app note-body props-collapsed" },
+                            div { class: if props_open() { "doc-linear editor-app note-body pt-3 md:pt-0" } else { "doc-linear editor-app note-body props-collapsed pt-3 md:pt-0" },
                                 "data-autofocus": "{autofocus}",
                                 onfocusin: move |_| body_focused.set(true),
                                 onfocusout: move |_| body_focused.set(false),

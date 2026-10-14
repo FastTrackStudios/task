@@ -42,6 +42,7 @@ pub mod media_session;
 pub mod nav;
 pub mod nav_layout;
 pub mod new_issue;
+pub mod notes_search;
 pub mod now_block;
 pub mod offline;
 pub mod orgs;
