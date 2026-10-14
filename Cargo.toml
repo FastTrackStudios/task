@@ -679,6 +679,9 @@ facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0
 # with "schema decode consumed N of M bytes" (it compares phon-schema's
 # allocation count against the slice length).
 vox-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.3.0" }
+# iOS release builds crashed on every launch: tao returned its scene
+# configuration already released (vendor README, `tao`).
+tao = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.2" }
 # The editor's vendored mermaid-rs-renderer fork now lives in the editor
 # repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
 # and needs no patch entry here.

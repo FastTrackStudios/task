@@ -23,6 +23,7 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 SIM="booted"
 BUILD=1
 LOCAL=0
+PROFILE=debug
 while [ $# -gt 0 ]; do
     case "$1" in
         --sim) SIM="$2"; shift 2 ;;
@@ -31,6 +32,8 @@ while [ $# -gt 0 ]; do
         # signed in as the device's person, the example studio planted
         # on first run (a debug build's `TASK_NODE_EXAMPLE` default).
         --local) LOCAL=1; shift ;;
+        # The profile TestFlight ships, for a crash only release shows.
+        --release) PROFILE=release; shift ;;
         *) echo "usage: $0 [--sim <udid|booted>] [--no-build] [--local]" >&2; exit 2 ;;
     esac
 done
@@ -47,12 +50,12 @@ if [ "$BUILD" = 1 ]; then
         unset DEVELOPER_DIR SDKROOT RUSTC_WRAPPER
         export PATH='$BIN_IOS':\$PATH
         cd '$ROOT/apps' && tailwindcss -i tailwind.css -o mobile/assets/tailwind.css
-        cd '$ROOT/apps/mobile' && dx build --platform ios"
+        cd '$ROOT/apps/mobile' && dx build --platform ios $( [ "$PROFILE" = release ] && echo --release )"
 fi
 
 # dx names the bundle from the package (TaskAppMobile.app today; it has
 # changed between dx versions), so take the newest one it wrote.
-APP="$(ls -dt "$ROOT"/target/dx/task-app-mobile/debug/ios/*.app 2>/dev/null | head -1)"
+APP="$(ls -dt "$ROOT"/target/dx/task-app-mobile/$PROFILE/ios/*.app 2>/dev/null | head -1)"
 [ -n "$APP" ] && [ -f "$APP/Info.plist" ] || { echo "ERROR: dx produced no app" >&2; exit 1; }
 
 # Info.plist — the same keys the TestFlight build writes.
