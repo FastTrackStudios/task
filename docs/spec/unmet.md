@@ -678,10 +678,9 @@ edited on both). Not yet: two nodes that each **edited** a file into a
 document before ever exchanging hold two lineages and are left as they are
 (counted as `doc_peer.foreign`, one `warn!` per sweep); deletes do not
 travel (see "Deleted notes come back"); a peer is trusted with all of the
-org's documents rather than per person; the creator of an org made on a
-device (`create_org` over the node's `/server` lane) and a node's person in
-an org it joined both resolve as "no membership row" at that org's gate —
-harmless in observe-only mode, refused once enforcement is on.
+org's documents rather than per person. (`peer_docs_e2e` runs with
+permissions enforced: the creator of an org is its admin — `create_org`
+records the membership — and a joined org's person is a member.)
 
 ### Not started: step 3 (tasks and captures as documents)
 

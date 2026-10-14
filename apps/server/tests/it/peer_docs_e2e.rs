@@ -84,6 +84,10 @@ async fn documents_move_between_two_nodes_with_no_host() {
         std::env::set_var("TASK_IROH_PEER_DIR", peer_dir.path());
         // Sweeps run when this test says, not on a timer.
         std::env::set_var("TASK_DEVICE_SYNC_SECS", "0");
+        // Enforced, not observed: each person has to be a member of the
+        // band's org on their own node (A made it, B joined it) and each
+        // node a peer the other admits, or the calls below are refused.
+        std::env::set_var("TASK_ENFORCE_PERMISSIONS", "1");
     }
     let (a_root, b_root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let a = LocalNode::open(opts(a_root.path()))

@@ -86,9 +86,18 @@ impl OrgManagementService for OrgManagementImpl {
             let _ = home;
             let state = self.state.clone();
             let token = req.session_token.clone();
-            tokio::runtime::Handle::current()
+            let creator = tokio::runtime::Handle::current()
                 .block_on(async move { crate::central_auth::home_principal(&state, &token).await })
                 .ok_or_else(|| OrgManagementError::Unauthorized("invalid session token".into()))?;
+            let manifest = self.scaffold(&req.slug, &req.display_name, req.is_home)?;
+            // Whoever made the org runs it. Without this row the creator
+            // was nobody in their own org: a home principal reaches
+            // another org through its membership (`permits`'s
+            // `HomeFallbackResolver`), so every call they made there
+            // resolved as anonymous — let through while the gate only
+            // observes, refused the moment it enforces.
+            self.grant_creator(&home_slug, creator, &req.slug)?;
+            return Ok(manifest);
         }
 
         self.scaffold(&req.slug, &req.display_name, req.is_home)
@@ -116,6 +125,24 @@ impl OrgManagementService for OrgManagementImpl {
 }
 
 impl OrgManagementImpl {
+    /// Record `user` as `slug`'s admin in the home org's membership
+    /// store — what `create_org` does for the person who asked.
+    fn grant_creator(
+        &self,
+        home_slug: &str,
+        user: uuid::Uuid,
+        slug: &str,
+    ) -> Result<(), OrgManagementError> {
+        let db = self.state.data_root.org(home_slug).memberships_db();
+        let slug = slug.to_owned();
+        tokio::runtime::Handle::current()
+            .block_on(async move {
+                let store = crate::memberships::Memberships::open(&db).await?;
+                store.upsert(user, &slug, Some("admin")).await
+            })
+            .map_err(|e| OrgManagementError::Internal(format!("record the creator: {e}")))
+    }
+
     /// Create the org on disk, open its stores and hot-add it to the
     /// live dispatcher. Authorization is the caller's business: this is
     /// reached both from `create_org`, which fences on the home org,
