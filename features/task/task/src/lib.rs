@@ -61,6 +61,9 @@ pub use task_proto::agent_lane;
 pub use task_proto::agent_lane::{
     TriageLabel, has_triage_label, is_untriaged, triage_label, triage_labels,
 };
+/// A task as a markdown document — parse, serialize, paths (see
+/// [`task_proto::doc`]).
+pub use task_proto::doc;
 /// Wayfinder map bodies (see [`task_proto::wayfinder`]).
 pub use task_proto::wayfinder;
 pub use task_proto::wayfinder::{MapBody, Section, map_body};
