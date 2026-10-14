@@ -2214,6 +2214,7 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
             tracing::warn!(org.slug = %slug, repo = w.repo, "declared repository was not planted");
             continue;
         }
+        let _git = tracing::info_span!("plant.repo_wiki.git").entered();
         let commit = if repo.join(".git").exists() {
             // A top-up may have added files; commit them so the wiki
             // sees them. An unchanged tree commits nothing.
@@ -2240,6 +2241,8 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
         let roots: std::collections::HashMap<String, std::path::PathBuf> =
             org_root.named_wikis().into_iter().collect();
         let backend = wiki_live::WikiBackend::with_roots_under(roots, wikis_dir);
+        drop(_git);
+        let _sync = tracing::info_span!("plant.repo_wiki.first_sync").entered();
         let outcome = if org_root.named_wiki_dir(&wiki_slug).is_dir() {
             backend.refresh_source(&wiki_slug).map(|s| s.commit)
         } else {
