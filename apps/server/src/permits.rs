@@ -550,6 +550,11 @@ pub use files::peer::REPLICA_RESOURCE;
 /// at a time.
 const FILES_REPLICA: ServicePermits = files::peer::REPLICA_PERMITS;
 
+/// The document lane's rows (`offline.peers`), defined with the peer
+/// model for the same reason the replica lane's are: a device's node
+/// serves it too, and one definition cannot drift.
+const DOC_PEER: ServicePermits = files::peer::DOC_PEER_PERMITS;
+
 // Who may see and change what (`files.access.*`).
 //
 // Every mutation here is audited without exception: granting, revoking
@@ -1144,6 +1149,11 @@ pub fn mounts() -> Vec<Mount> {
             SHARE,
         ),
         m("core", crdt::sync::doc_sync_service_descriptor(), DOC_SYNC),
+        m(
+            "core",
+            vault_doc::peer::doc_peer_service_descriptor(),
+            DOC_PEER,
+        ),
         m(
             "core",
             crdt::sync::doc_presence_service_descriptor(),

@@ -586,6 +586,188 @@ regress; there is no test that asserts the absence of a write.
   there. A per-person "seen up to here" marker on the history is not
   built.
 
+## Offline — the records side ([`offline.md`](offline.md))
+
+Device storage is architect's now (path-patched to `../architect` until
+it is tagged): crdt `turso` (`TursoPersistence`), architect-atom
+`persist`/`turso` (`LocalRows`, `use_persisted_store_list`, `CallQueue`,
+`Mutation::run_queued`, `TursoRows`). Task opens one `<data dir>/device.db`
+for both (`crates/ui/src/device_store.rs`).
+
+### `offline.outbox` — met
+
+Timer start/stop/switch/log/edit/delete queue when the server is
+unreachable (`TimerMutations` → `run_queued`), replay in order on
+reconnect, refusals dropped and named. Verified by architect's queue unit
+tests and `apps/server/tests/it/offline_queue_e2e.rs` (real Turso file,
+"restart", real server). Modes have no service call yet, so nothing of
+theirs queues. Gap: an offline-started timer's placeholder row is not in
+the device copy (temp rows are not written back), so after a relaunch
+it is invisible until the queued start lands.
+
+### `offline.replica` — met in part
+
+Every shared list (tasks, projects, goals, milestones, inbox,
+notifications, activity, contacts, timer sessions, day plans) reads the
+device copy first, stale-marked, and keeps it on a failed fetch. Not yet:
+day **templates** (a date never viewed cannot be materialised offline),
+members, and the feature-app stores (bookings, finance, …), which still
+use the unpersisted hooks. The web backend is `localStorage`, guarded at
+1.5 MB per list — IndexedDB is the target. Verified by unit tests over
+memory and Turso backends; the hook itself (Dioxus) has no headless test.
+
+### `offline.boot` — met, not checked by a test
+
+A remembered principal (per server and email, `local_store`) plus the
+token already in the token store opens the workspace when the auth dial
+is unreachable (`auth::resolve_session`); orgs come from the discovery
+cache. Checked by hand: stop `just demo serve`, relaunch, the shell opens
+with "Offline — changes will sync". No UI harness drives it.
+
+### `offline.visible` — met in part
+
+The shell pill counts queued calls ("N changes waiting to sync") offline
+and while syncing, and disappears when the queue drains. Not yet: unsynced
+**documents** (the TEXT side's pending set) are not counted, and rows do
+not carry a pending mark — tasks and captures become documents in step 3,
+where the mark belongs.
+
+### `offline.local` — met on desktop; iOS see below
+
+The app hosts the backend in-process (`task_server::local_node::LocalNode`,
+installed by `apps/desktop` through `crates/node-host`); `task_ui_core::node`
+routes every org lane, `/server/vox` and discovery to it when the active
+address is `local://this-device` (the native default with nothing
+configured). Verified by `apps/server/tests/it/local_node_e2e.rs` and the
+`task_ui_core::node` routing tests. Gaps:
+
+- **HTTP-only surfaces.** A node has no HTTP listener, so what the UI
+  reaches over plain HTTP rather than vox does not work locally: song media
+  at `/media/…`, `/blobs/*` signed URLs, rendition URLs in the review
+  player, and the deliverable download link (`pages/project_detail/
+  deliverable.rs`). Vox media (`MediaService` chunks) works. Either a
+  loopback listener for those routes or a webview custom protocol would
+  close it.
+- **The auth secret** is the dev default unless `TASK_AUTH_SECRET` is set
+  — a node should mint its own per data root.
+- **An org created after boot** over the node's `/server` lane is hosted
+  at once but not bound on iroh until `LocalNode::bind` (the join path
+  calls it) or the next launch.
+- **iOS**: see the iOS note under `offline.peers`.
+
+### `offline.peers` — met in part
+
+Every native node binds each org's iroh endpoint (`iroh_host::start`, key
+at `orgs/<slug>/iroh-key.ed25519`) and runs the device pull, so it is
+dialable and dials. A device joins an org held elsewhere with
+`LocalNode::join` (same slug + id, the peer admitted, this node bound) and
+the peer's `enroll_device` (Settings → "Keep on this device", which runs
+both halves over the session held on the host). Verified (two nodes, no
+host) by `local_node_e2e`. **Documents move between nodes**: every node
+serves the `DocPeer` lane (`vault_doc::peer`, gated on `docs/replica`,
+which `HostEngine` grants an admitted host and the lane narrows to hosts
+that keep content), and every sweep (`device_sync::sweep`, now started for
+orgs joined after boot too) pulls each admitted peer's documents through
+`doc_peer::pull_peer` — list, then a three-session pipe per document whose
+file differs, through each node's own registry, so persistence, relay to
+open editors and the write-behind all apply. A document made from the same
+file on two nodes is one document (`vault_doc::seed_from_file`), so a
+seeded or copied file exchanges rather than being refused as foreign.
+Verified by `peer_docs_e2e` (two nodes, no host: a note, a task, a note
+edited on both). Not yet: two nodes that each **edited** a file into a
+document before ever exchanging hold two lineages and are left as they are
+(counted as `doc_peer.foreign`, one `warn!` per sweep); deletes do not
+travel (see "Deleted notes come back"); a peer is trusted with all of the
+org's documents rather than per person; the creator of an org made on a
+device (`create_org` over the node's `/server` lane) and a node's person in
+an org it joined both resolve as "no membership row" at that org's gate —
+harmless in observe-only mode, refused once enforcement is on.
+
+### Not started: step 3 (tasks and captures as documents)
+
+The doc⇄markdown codec is in `features/vault/vault-doc` (TEXT side,
+below) — `parse`/`render`/`merge_text` and `Replica`; `DocBody` takes a
+`doc:` replica handle and edits its `body` (task-file separator
+convention: `vault_doc::body::shown`). `offline.doc.create`/`materialise` for tasks and inbox items, and
+`TaskService` writing through documents, are unbuilt.
+
+## Offline — the text side ([`offline.md`](offline.md))
+
+The codec and the device replica are `features/vault/vault-doc`
+(wasm-clean, no Dioxus); the server half is `vault-collab` +
+`apps/server/src/doc_guard.rs`; the shell's driver is
+`crates/ui/src/doc_replica.rs`, used by the note editor
+(`collab.rs`, `pages/note_view.rs`) and available to `DocBody`.
+
+### `offline.doc.shape` — met for notes
+
+Every vault-file doc is `body` + `props`; existing whole-file docs convert
+on open. Tasks and captures get documents in step 3. Nested frontmatter
+values are plain Loro values (a property merges as one unit, by key), not
+nested containers. **Mixed versions:** a client older than this change
+edits the legacy `content` text, which nothing renders any more.
+
+### `offline.doc.replica` — met for notes
+
+Persisted per device (the device database's `TursoPersistence`, org-scoped
+keys; a `FilePersistence` directory if it cannot open; IndexedDB per org on
+the web), never torn down offline, re-attached by the driver, durable
+imports, acknowledgement-tracked. Verified by `offline_doc_e2e` and
+`vault_doc::replica` unit tests. Gaps: two panes on the same note open two
+replicas over one store (convergent, but double writes); the driver's
+Dioxus hook has no headless test.
+
+### `offline.doc.create` — met for notes, in part
+
+`<space> n` with no server makes the note's document at once under a
+device-chosen path (`Untitled 3f9a.md`) with an `id` prop, remembers it
+locally, and it opens and edits offline; `open_collab` now accepts a path
+with no file, and the first sync writes it. Not yet: the vault explorer
+does not list device-created notes while offline (the folder index is the
+server's; the device index is step 3's), and a note's deep link only opens
+offline when it was created on this device. Opening an existing note
+offline works when this device holds its document.
+
+### `offline.doc.materialise` — met for notes
+
+The server's mirror is rendered from the document, byte-stable for
+unchanged docs (the previous file's untouched frontmatter lines are kept
+verbatim); folder/watcher edits merge in as changes committed under an
+`"outside edit"` message, three-way against `meta.flushed_at` for a doc
+that was closed. `TaskService` still writes whole task files (step 3).
+Commit messages are the only attribution — the person behind an outside
+edit is not recorded.
+
+### `offline.doc.access` — met in part
+
+Every attach runs the file's write guard for the caller and the lineage
+check; a refused document stays on the device unchanged and the editor
+says "not shared — kept on this device". Not yet: read-only replicas (an
+attach needs write), and the per-person refusal is not driven through
+`DocSync` by a test (only `open_collab`'s, in `wiki_edits`).
+
+### `offline.visible` — per document, in part
+
+The note status line and the phone strip say "Not synced" while the
+replica holds what the server has not acknowledged; `DocBody` shows the
+same marker when bound. Not yet: the shell's global count does not include
+unsynced documents.
+
+### `offline.peers` — documents between nodes: what is left
+
+Met for the common case (see `offline.peers` — met in part, above): a task
+or note arriving from a peer shows up live (`task_sync`). Left: separately
+edited lineages of one file, deletes, per-person access, and documents
+moving before the sweep's next pass — a pull runs on the sweep's cadence
+(60s, `TASK_DEVICE_SYNC_SECS`), not live; a standing session per open
+document between nodes would make it live.
+
+### Deleted notes come back
+
+A device holding a stale document of a note deleted elsewhere recreates
+the file on reconnect (`open_collab` accepts a missing path; the doc wins).
+Deletion needs a document-level tombstone.
+
 ## Bugs found on the way
 
 **Fixed — `FilesBackend::sync_ingest_path` stalled on repeated calls.**
