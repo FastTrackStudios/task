@@ -379,7 +379,17 @@ pub fn VaultView(
                     path: p.path.clone(),
                     sha256: p.sha256.clone(),
                 });
+                return;
             }
+        }
+        // Not in the index (or no index — offline): a note created on this
+        // device opens from its document (`offline.doc.create`).
+        if crate::doc_replica::is_local_doc(&active.peek(), VAULT_ID, &want) {
+            last_link.set(want.clone());
+            on_open.call(FileMeta {
+                path: want,
+                sha256: String::new(),
+            });
         }
     });
 

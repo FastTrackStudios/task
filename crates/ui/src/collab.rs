@@ -1,61 +1,65 @@
 //! Per-file collaborative editing — the client half of the vault ⇄
 //! CRDT reconciliation (`features/vault/vault-collab` is the server
 //! half; `docs/architecture/vault-crdt-reconciliation.md` is the
-//! policy note).
+//! policy note; `docs/spec/offline.md` the rules).
 //!
-//! When the vault page opens a file it calls
-//! [`VaultSync::open_collab`](vault_proto::VaultSync::open_collab),
-//! which validates the path and returns the file's deterministic doc
-//! id ([`vault_proto::collab_doc_id`]). [`CollabSession`] — mounted
-//! keyed by that id — then drives the collaborative lifecycle:
+//! When the vault page opens a file it mounts a [`CollabSession`] keyed
+//! by the file's doc id ([`vault_proto::collab_doc_id`], derived on the
+//! device — no round trip needed to know it). The session drives:
 //!
-//! - `crdt::use_synced_doc_into(handles.doc, doc_id)` — an ephemeral
-//!   local replica plus one sync session against the org's shared vox
-//!   connection (delta reconnects by version vector);
-//! - `crdt::use_presence_channel_into(handles.presence, doc_id,
-//!   30_000)` — the per-file cursor channel;
-//! - a **takeover** step: once the server's seeded history merges in
-//!   (first doc revision), the session reconciles the editor buffer
-//!   with the replica and flips [`CollabHandles::live`]. From then
-//!   on the *server write-behind* owns persistence and the page
-//!   pauses the sha autosave.
+//! - [`crate::doc_replica::use_replica_into`] — the file's document as a
+//!   **replica persisted on the device**, synced with the server's
+//!   document whenever there is a connection, and kept (not torn down)
+//!   when there isn't: edits go into the replica and up when the next
+//!   session attaches (`offline.doc.replica`);
+//! - `crdt::use_presence_channel_into(handles.presence, doc_id, 30_000)`
+//!   — the per-file cursor channel;
+//! - a **takeover** step: once the replica holds a version worth
+//!   editing (stored on this device before, or the server's merged in),
+//!   the session reconciles the editor buffer with it and flips
+//!   [`CollabHandles::live`]. From then on the replica owns persistence:
+//!   the page's sha autosave and explicit saves stay off for as long as
+//!   the session is mounted — online or not — so a buffer the replica
+//!   already carries can never also be written as a whole file (the
+//!   double-apply the old Live→Offline teardown existed to prevent).
+//!
+//! **The document is `body` + `props`** (`offline.doc.shape`), but the
+//! note editor's buffer is the whole file — frontmatter included — so
+//! the Properties panel, the header and every widget keep reading one
+//! text. The bridges translate through the shared codec (`vault-doc`):
+//!
+//! ```text
+//! editor on_transaction ──(skip is_remote / mid-edit)──▶
+//!     vault_doc::merge_text(doc, pushed, buffer)   // props by key, body by char
+//! doc revision bump ──▶ vault_doc::render(doc, Some(buffer)) ─▶
+//!     state.update(spec.changes(c).user_event("remote"))   // echo-guarded
+//! ```
+//!
+//! `pushed` is the buffer as the document last reflected it; a buffer
+//! whose frontmatter is half typed ([`vault_doc::is_mid_edit`]) is held
+//! back until it parses, so a key being typed is never read as "every
+//! property deleted".
 //!
 //! **Signal ownership (the part that bit us):** every signal inside
 //! [`CollabHandles`] is created at the *page* scope by
 //! [`use_collab_handles`] and merely **driven** by the keyed
-//! [`CollabSession`] child (the crdt slot/driver split —
-//! `crdt::use_doc_slot` + `crdt::use_synced_doc_into`). The editor's
-//! decoration source, `on_transaction` sink, and the page's
-//! status/teardown effects all capture these handles; if they were
-//! created inside the keyed child (as they once were), every remount
-//! — file switch, reconnect-generation re-key, Live→Offline teardown
-//! — dropped them while the still-mounted `Editor` kept reading them
-//! from its keydown path, killing all input ("Copy value used in a
-//! scope that is not a descendant of the owner"). Hoisting ownership
-//! to the page scope is the fix dioxus prescribes for exactly this.
-//!
-//! Steady state is two one-way bridges meeting at the Loro doc:
-//!
-//! ```text
-//! editor on_transaction ──(skip is_remote)──▶ changes_to_text_ops ─▶ LoroText
-//! doc revision bump ──▶ read_text ─▶ remote_text_to_changes ─▶
-//!     state.update(spec.changes(c).user_event("remote"))   // echo-guarded
-//! ```
-//!
-//! If the sync session drops to `Offline` after going live, the page
-//! tears the session down (unmount) and falls back to sha saves —
-//! a *fresh* replica is opened on the next file open, so offline sha
-//! writes can never double-apply against a buffered CRDT outbox.
+//! [`CollabSession`] child. The editor's decoration source,
+//! `on_transaction` sink, and the page's status effects all capture these
+//! handles; if they were created inside the keyed child, every remount
+//! dropped them while the still-mounted `Editor` kept reading them from
+//! its keydown path ("Copy value used in a scope that is not a
+//! descendant of the owner"). Hoisting ownership to the page scope is the
+//! fix dioxus prescribes for exactly this.
 
 use std::rc::Rc;
 
 use dioxus::prelude::*;
 use editor::editor_view;
 use editor::markdown::VaultLookup;
-use editor::{Doc, EditorState, TransactionEvent, TransactionSpec};
+use editor::{EditorState, TransactionEvent, TransactionSpec};
 use uuid::Uuid;
-use vault_proto::COLLAB_TEXT_CONTAINER;
 
+use crate::doc_replica::ReplicaHandle;
 use crate::document_session::DocumentSession;
 use crate::vault_lookup::ClientVaultIndex;
 
@@ -67,19 +71,20 @@ const CURSOR_TIMEOUT_MS: i64 = 30_000;
 /// motion is per-keystroke; remote peers only need the settled spot.
 const CURSOR_DEBOUNCE_MS: u64 = 200;
 
-/// `Copy` bundle the vault page reads: the synced doc, the cursor
-/// channel, and the takeover flag. **Every signal in here is owned by
-/// the page scope** ([`use_collab_handles`]) — the keyed
-/// [`CollabSession`] child only drives them — so the editor's
-/// long-lived closures can capture the bundle safely across session
-/// remounts (see the module docs).
+/// `Copy` bundle the vault page reads: the replica, the cursor channel,
+/// and the takeover flag. **Every signal in here is owned by the page
+/// scope** ([`use_collab_handles`]) — the keyed [`CollabSession`] child
+/// only drives them.
 #[derive(Clone, Copy, PartialEq)]
 pub struct CollabHandles {
-    pub doc: crdt::DocHandle,
+    pub doc: ReplicaHandle,
     pub presence: crdt::Presence,
-    /// `true` once the replica merged the server's seeded state and
-    /// collab took over persistence from the sha autosave.
+    /// `true` once the buffer was reconciled with the replica and the
+    /// replica took over persistence from the sha autosave.
     pub live: Signal<bool>,
+    /// The buffer as the document last reflected it — the base the next
+    /// local edit merges against.
+    pushed: Signal<String>,
     /// This client's presence key (skipped when rendering peers).
     key: Signal<String>,
     /// Debounce generation for cursor publishes.
@@ -87,18 +92,21 @@ pub struct CollabHandles {
 }
 
 impl CollabHandles {
-    /// Collab is live right now: taken over AND the sync session is
-    /// up. Reactive (subscribes to both signals).
+    /// The replica owns this buffer's persistence (taken over). Stays
+    /// true offline — that is the point. Reactive.
     pub fn is_live(&self) -> bool {
-        (self.live)() && self.doc.status() == crdt::SyncStatus::Live
+        (self.live)()
     }
 
-    /// Reset the per-file state (doc slot, presence slot, takeover
-    /// flag) — the page calls this whenever it disarms a session
-    /// (file switch, reconnect re-key, Live→Offline teardown), so a
-    /// stale read through a captured handle only ever sees inert
-    /// defaults. The client cursor key and debounce counter are
-    /// deliberately page-lived.
+    /// Connected to the server's document right now. Reactive.
+    pub fn is_connected(&self) -> bool {
+        self.doc.status() == crdt::SyncStatus::Live
+    }
+
+    /// Reset the per-file state (replica slot, presence slot, takeover
+    /// flag) — the page calls this whenever it disarms a session (file
+    /// switch, write mode change), so a stale read through a captured
+    /// handle only ever sees inert defaults.
     pub fn reset(&self) {
         self.doc.reset();
         self.presence.reset();
@@ -107,49 +115,74 @@ impl CollabHandles {
             live.set(false);
         }
     }
+
+    /// The status-line word for this session.
+    pub fn label(&self) -> &'static str {
+        if self.doc.refused().is_some() {
+            "not shared — kept on this device"
+        } else if !self.is_live() {
+            "connecting…"
+        } else if self.doc.unsynced() {
+            "Not synced"
+        } else if self.is_connected() {
+            "live"
+        } else {
+            "offline — saved on this device"
+        }
+    }
 }
 
-/// Create the page-owned [`CollabHandles`]: empty crdt slots + the
-/// takeover flag + this client's stable cursor identity. Call once in
-/// the vault page (a scope that outlives the `Editor`); mount a keyed
-/// [`CollabSession`] to drive the slots per file.
+/// Create the page-owned [`CollabHandles`]. Call once in the vault page
+/// (a scope that outlives the `Editor`); mount a keyed [`CollabSession`]
+/// to drive the slots per file.
 pub fn use_collab_handles() -> CollabHandles {
     CollabHandles {
-        doc: crdt::use_doc_slot(),
+        doc: crate::doc_replica::use_replica_slot(),
         presence: crdt::use_presence_slot(),
         live: use_signal(|| false),
+        pushed: use_signal(String::new),
         key: use_signal(|| format!("cursor-{}", Uuid::new_v4())),
         cursor_seq: use_signal(|| 0u64),
     }
 }
 
 /// Headless component driving one file's collab session **into** the
-/// page-owned [`CollabHandles`]. Mount keyed by `doc_id` (remount =
-/// fresh replica; the drivers reset the slots on mount); reads the
-/// page's [`DocumentSession`] from context. Owns no signals that
-/// outlive it — only the session futures and the takeover effect die
-/// with this scope.
+/// page-owned [`CollabHandles`]. Mount keyed by the doc id; reads the
+/// page's [`DocumentSession`] from context.
 #[component]
-pub fn CollabSession(doc_id: Uuid, handles: CollabHandles) -> Element {
+pub fn CollabSession(
+    slug: String,
+    vault_id: String,
+    path: String,
+    handles: CollabHandles,
+) -> Element {
     let session = use_context::<DocumentSession>();
-    crdt::use_synced_doc_into(handles.doc, doc_id);
+    let doc_id = vault_proto::collab_doc_id(&vault_id, &path);
+    crate::doc_replica::use_replica_into(handles.doc, slug, vault_id, path);
     crdt::use_presence_channel_into(handles.presence, doc_id, CURSOR_TIMEOUT_MS);
-    let handle = handles.doc;
+    let replica = handles.doc;
     let live = handles.live;
+    let pushed = handles.pushed;
 
-    // Takeover + remote-apply. Runs on every doc revision (local
-    // commits and remote imports both bump it).
+    // Takeover + remote-apply. Runs on every doc revision (local commits
+    // and remote imports both bump it) and when the replica turns ready.
     use_effect(move || {
-        let rev = handle.revision(); // subscribe — the only reactive read
-        let Some(doc) = handle.doc() else { return };
-        if rev == 0 {
-            // Nothing merged yet. The server factory always commits a
-            // baseline (meta.flushed_sha), so the seeded backlog is
-            // never empty — rev 0 strictly means "before first sync".
+        let _rev = replica.revision(); // subscribe
+        let ready = replica.ready();
+        let Some(doc) = replica.doc() else { return };
+        let mut live = live;
+        let mut pushed = pushed;
+
+        // A replica discarded for foreign lineage: the person's buffer is
+        // still here; take over again from the server's document (the
+        // fold below keeps what they typed).
+        if replica.take_discarded().is_some() && *live.peek() {
+            live.set(false);
+        }
+        if !ready {
             return;
         }
-        let remote = doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string();
-        let mut live = live;
+        let buffer = session.state.peek().doc.to_string();
 
         if !*live.peek() {
             // ── Takeover ───────────────────────────────────────────
@@ -157,43 +190,49 @@ pub fn CollabSession(doc_id: Uuid, handles: CollabHandles) -> Element {
             // way against the session's last committed text:
             //  - buffer == replica → nothing to do;
             //  - user hasn't typed since open → the replica (which
-            //    includes peers' newer edits) wins, editor adopts it;
-            //  - user typed during the handshake → fold the local
-            //    delta (committed → buffer) into the replica; the
-            //    commit re-runs this effect in live mode, which then
-            //    settles the editor on the merged text.
-            let buffer = session.state.peek().doc.to_string();
+            //    includes peers' newer edits, and this device's offline
+            //    ones) wins, the editor adopts it;
+            //  - user typed during the handshake → fold the local edit
+            //    (committed → buffer) into the replica as a change; the
+            //    commit re-runs this effect in live mode, which settles
+            //    the editor on the merged text.
+            let remote = vault_doc::render(doc.loro(), Some(&buffer));
             if buffer != remote {
                 let committed = session.committed_text();
                 if buffer == committed {
                     apply_remote_to_editor(session.state, &remote);
-                } else {
-                    let base = Doc::new(&committed);
-                    let changes = editor_crdt::remote_text_to_changes(base.rope(), &buffer);
-                    let ops = editor_crdt::changes_to_text_ops(base.rope(), &changes);
-                    let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
-                    apply_ops_clamped(&text, &ops);
-                    doc.loro().commit();
+                } else if !vault_doc::is_mid_edit(&buffer) {
+                    vault_doc::merge_text(doc.loro(), &committed, &buffer);
+                    vault_doc::commit_as(doc.loro(), "edited before the session attached");
                 }
             }
+            pushed.set(session.state.peek().doc.to_string());
             live.set(true);
             return;
         }
 
         // ── Steady state ───────────────────────────────────────────
-        // After a local keystroke the replica already equals the
-        // buffer (the on_transaction bridge ran first) → empty diff,
-        // no-op. After a remote import the diff is the peers' edit.
+        // After a local keystroke the document already renders as the
+        // buffer (byte-stable render) → empty diff, no-op. After a remote
+        // import the diff is the peers' edit. A half-typed frontmatter
+        // waits: it would render back over the person's keystrokes.
+        if vault_doc::is_mid_edit(&buffer) {
+            return;
+        }
+        let remote = vault_doc::render(doc.loro(), Some(&buffer));
         apply_remote_to_editor(session.state, &remote);
+        if *pushed.peek() != remote {
+            pushed.set(remote);
+        }
     });
 
     rsx! {}
 }
 
-/// Diff the editor buffer against the replica text and apply the
-/// delta as a `"remote"`-tagged transaction. Host-driven `state.set`
-/// never re-enters the `on_transaction` sink, and the tag is the
-/// second-line echo guard (`event.is_remote()`).
+/// Diff the editor buffer against `remote` and apply the delta as a
+/// `"remote"`-tagged transaction. Host-driven `state.set` never re-enters
+/// the `on_transaction` sink, and the tag is the second-line echo guard
+/// (`event.is_remote()`).
 fn apply_remote_to_editor(state: Signal<EditorState>, remote: &str) {
     let cur = state.peek().clone();
     let changes = editor_crdt::remote_text_to_changes(cur.doc.rope(), remote);
@@ -204,31 +243,28 @@ fn apply_remote_to_editor(state: Signal<EditorState>, remote: &str) {
     state.set(cur.update(TransactionSpec::new().changes(changes).user_event("remote")));
 }
 
-/// Push a **full-document replacement** into the live replica: diff
-/// the current replica text against `new_text`, apply the delta as
-/// scalar ops, and commit. The [`CollabSession`] revision effect then
-/// echoes the merged text back into the editor buffer
-/// ([`apply_remote_to_editor`]) — so a host-side rewrite (the note
-/// header's frontmatter splice) reaches BOTH the shared doc and the
-/// editor without a host-driven `state.set` (which would never reach
-/// peers, since it doesn't re-enter `on_transaction`). No-op when the
-/// replica isn't attached yet.
+/// Merge `new_text` (the whole buffer as it should now read) into the
+/// live document as a change. Used for a host-side rewrite (the note
+/// header's frontmatter splice) that must reach BOTH the shared doc and
+/// the editor without a host-driven `state.set` (which would never reach
+/// peers). The revision effect then echoes the merged text into the
+/// editor. No-op before takeover.
 pub fn push_full_text(c: &CollabHandles, new_text: &str) {
-    let Some(doc) = c.doc.doc() else { return };
-    let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
-    let base = Doc::new(&text.to_string());
-    let changes = editor_crdt::remote_text_to_changes(base.rope(), new_text);
-    if changes.is_empty() {
+    if !*c.live.peek() {
         return;
     }
-    let ops = editor_crdt::changes_to_text_ops(base.rope(), &changes);
-    apply_ops_clamped(&text, &ops);
-    doc.loro().commit();
+    let Some(doc) = c.doc.doc() else { return };
+    let base = c.pushed.peek().clone();
+    if vault_doc::merge_text(doc.loro(), &base, new_text).any() {
+        vault_doc::commit_as(doc.loro(), "edited in the app");
+    }
+    let mut pushed = c.pushed;
+    pushed.set(new_text.to_owned());
 }
 
-/// The vault page's `on_transaction` sink body: forward local edits
-/// into the replica (echo-guarded) and publish the caret to the
-/// file's presence channel (debounced).
+/// The vault page's `on_transaction` sink body: forward local edits into
+/// the replica (echo-guarded) and publish the caret to the file's
+/// presence channel (debounced).
 pub fn on_editor_transaction(
     c: &CollabHandles,
     session: &DocumentSession,
@@ -246,44 +282,45 @@ pub fn on_editor_transaction(
     let Some(doc) = c.doc.doc() else { return };
 
     if event.is_edit() {
-        let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
-        let replica = text.to_string();
-        if replica == event.doc_before.to_string() {
-            // Fast path: replica is exactly the pre-change doc — the
-            // event's ops apply verbatim (scalar positions).
-            let ops = editor_crdt::changes_to_text_ops(event.doc_before.rope(), &event.changes);
-            apply_ops_clamped(&text, &ops);
-        } else {
-            // Streams interleaved mid-frame (remote import between
-            // the keystroke and this sink) — fall back to a plain
-            // diff onto the post-change text. Not minimal, always
-            // convergent.
-            let after = event.doc_after.to_string();
-            let base = Doc::new(&replica);
-            let changes = editor_crdt::remote_text_to_changes(base.rope(), &after);
-            let ops = editor_crdt::changes_to_text_ops(base.rope(), &changes);
-            apply_ops_clamped(&text, &ops);
+        let after = event.doc_after.to_string();
+        // A half-typed frontmatter is held back; the next edit that
+        // parses carries it (the base stays the last pushed buffer).
+        if !vault_doc::is_mid_edit(&after) {
+            let base = c.pushed.peek().clone();
+            if vault_doc::merge_text(doc.loro(), &base, &after).any() {
+                vault_doc::commit_as(doc.loro(), "edited in the app");
+            }
+            let mut pushed = c.pushed;
+            pushed.set(after);
         }
-        doc.loro().commit();
     }
 
     publish_cursor(c, session, event, who);
 }
 
+/// Scalar offset of the body inside a whole-file buffer — where the
+/// document's `body` text starts. Zero when the buffer has no (valid)
+/// frontmatter, matching how the codec reads it.
+fn body_offset(buffer: &str) -> usize {
+    match vault_doc::markdown::fences(buffer) {
+        Some(f) if matches!(vault_doc::parse(buffer).front, vault_doc::Front::Props(_)) => {
+            buffer[..f.body_start].chars().count()
+        }
+        _ => 0,
+    }
+}
+
 /// Debounced presence publish: `{name, anchor_c, head_c}` where the
 /// `_c` values are **encoded Loro stable cursors** minted against the
-/// shared replica, plus legacy `{anchor, head}` scalar ints for
-/// mixed-version peers. Fires for selection-only transactions too —
-/// that's the point.
+/// replica's `body` text, plus legacy `{anchor, head}` buffer scalars for
+/// mixed-version peers. Fires for selection-only transactions too.
 ///
-/// Stable cursors are the fix for "their caret walks backwards
-/// through my word": a raw scalar published at time T stays fixed
-/// while MY local inserts shift the text under it, so between the
-/// peer's debounced republishes their caret visually drifts. A Loro
-/// cursor is anchored to the character identity instead; every
-/// viewer resolves it against their *own* current doc state
-/// (`get_cursor_pos`), so local edits move remote carets correctly
-/// in real time.
+/// Stable cursors are the fix for "their caret walks backwards through
+/// my word": a raw scalar published at time T stays fixed while MY local
+/// inserts shift the text under it. A Loro cursor is anchored to the
+/// character identity instead; every viewer resolves it against their
+/// *own* current doc state (`get_cursor_pos`). A caret in the
+/// frontmatter (not body text) is published as the body's start.
 fn publish_cursor(
     c: &CollabHandles,
     session: &DocumentSession,
@@ -294,6 +331,7 @@ fn publish_cursor(
     let rope = event.doc_after.rope();
     let clamp = |byte: usize| rope.byte_to_char(byte.min(rope.len_bytes()));
     let (anchor, head) = (clamp(primary.anchor), clamp(primary.head));
+    let offset = body_offset(&event.doc_after.to_string());
 
     let seq = c.cursor_seq.peek().wrapping_add(1);
     {
@@ -321,10 +359,11 @@ fn publish_cursor(
         // Side::Left binds the caret to the char it follows, so a
         // collision-insert exactly at a peer's caret lands AFTER it.
         if let Some(doc) = c.doc.doc() {
-            let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
+            let text = vault_doc::doc::body_text(doc.loro());
             let len = text.len_unicode();
             let mut mint = |label: &str, pos: usize| {
-                if let Some(cur) = text.get_cursor(pos.min(len), crdt::loro::cursor::Side::Left) {
+                let at = pos.saturating_sub(offset).min(len);
+                if let Some(cur) = text.get_cursor(at, crdt::loro::cursor::Side::Left) {
                     entries.push((
                         label.to_string(),
                         crdt::loro::LoroValue::Binary(cur.encode().into()),
@@ -339,9 +378,8 @@ fn publish_cursor(
     });
 }
 
-/// Apply scalar text ops to the replica's root text, clamping to the
-/// current length — positions can drift when streams interleave; the
-/// conflict policy's "may interleave, never loses whole edits".
+/// Apply scalar text ops to a text, clamping to the current length.
+#[cfg(test)]
 fn apply_ops_clamped(text: &crdt::loro::LoroText, ops: &[editor_crdt::TextOp]) {
     for op in ops {
         let len = text.len_unicode();
@@ -418,6 +456,9 @@ fn remote_cursor_decorations(
     let doc = c.doc.doc();
     let rope = state.doc.rope();
     let max_char = rope.len_chars();
+    // Stable cursors resolve to positions in the document's `body`;
+    // our buffer has the frontmatter before it.
+    let offset = body_offset(&state.doc.to_string());
     let mut out = Vec::new();
 
     for (key, value) in states {
@@ -439,7 +480,7 @@ fn remote_cursor_decorations(
             {
                 if let Ok(cur) = crdt::loro::cursor::Cursor::decode(bytes) {
                     if let Ok(q) = doc.loro().get_cursor_pos(&cur) {
-                        return Some(q.current.pos);
+                        return Some(q.current.pos + offset);
                     }
                 }
             }
@@ -532,25 +573,13 @@ pub const COLLAB_STYLE: &str = "
 
 // ── RPC ───────────────────────────────────────────────────────────
 
-/// Register the open file for collaboration and get its doc id (+
-/// the server's current sha). An `Err` simply means "no collab" —
-/// the page stays in plain sha mode.
-pub(crate) async fn open_collab(
-    slug: String,
-    vault_id: String,
-    path: String,
-) -> Result<vault_proto::CollabAck, String> {
-    let client = crate::vox_clients::vault_client(&slug).await?;
-    client
-        .open_collab(vault_id, path)
-        .await
-        .map_err(|e| format!("open_collab: {e:?}"))
-}
+// (Registration — `VaultSync::open_collab` — is the replica driver's
+// own per-session step now: `crate::doc_replica`.)
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use editor::Changes;
+    use editor::{Changes, Doc};
 
     /// Adapter round-trip through a REAL LoroDoc: editor `Changes`
     /// (byte offsets) → `editor_crdt::changes_to_text_ops` (scalar)
@@ -571,7 +600,7 @@ mod tests {
             let expected = changes.apply(&doc_before).to_string();
 
             let loro = crdt::loro::LoroDoc::new();
-            let t = loro.get_text(COLLAB_TEXT_CONTAINER);
+            let t = loro.get_text("t");
             t.insert(0, text).unwrap();
             let ops = editor_crdt::changes_to_text_ops(doc_before.rope(), &changes);
             apply_ops_clamped(&t, &ops);
@@ -585,7 +614,7 @@ mod tests {
     #[test]
     fn remote_apply_round_trips_through_loro() {
         let loro = crdt::loro::LoroDoc::new();
-        let t = loro.get_text(COLLAB_TEXT_CONTAINER);
+        let t = loro.get_text("t");
         t.insert(0, "shared 🦀 document").unwrap();
 
         let editor_state = EditorState::new("shared 🦀 doc");
@@ -599,7 +628,7 @@ mod tests {
     #[test]
     fn clamped_ops_tolerate_out_of_range() {
         let loro = crdt::loro::LoroDoc::new();
-        let t = loro.get_text(COLLAB_TEXT_CONTAINER);
+        let t = loro.get_text("t");
         t.insert(0, "ab").unwrap();
         apply_ops_clamped(
             &t,
@@ -612,6 +641,44 @@ mod tests {
             ],
         );
         assert_eq!(t.to_string(), "ab!");
+    }
+
+    #[test]
+    fn body_offset_counts_the_frontmatter_in_scalars() {
+        assert_eq!(body_offset("plain"), 0);
+        let note = "---\ntitle: 🎸\n---\nbody";
+        assert_eq!(body_offset(note), note.chars().count() - 4);
+        // A frontmatter that does not parse is body, as the codec reads it.
+        assert_eq!(body_offset("---\ntitle: [x\n---\nbody"), 0);
+    }
+
+    /// The editor bridge's round trip: each keystroke merges the buffer
+    /// into the document against the last pushed buffer, and the
+    /// document renders back to exactly the buffer — so the revision
+    /// effect that follows a local edit is a no-op, keystroke after
+    /// keystroke, frontmatter edits included.
+    #[test]
+    fn keystrokes_round_trip_through_the_document() {
+        let doc = crdt::loro::LoroDoc::new();
+        let mut pushed = "---\ntitle: \"Mix\"\ntags: [a, b]\n---\n# Mix\n".to_owned();
+        vault_doc::adopt_text(&doc, &pushed);
+        doc.commit();
+        for next in [
+            "---\ntitle: \"Mix\"\ntags: [a, b]\n---\n# Mix\nT",
+            "---\ntitle: \"Mix\"\ntags: [a, b]\n---\n# Mix\nTake",
+            "---\ntitle: \"Mix 2\"\ntags: [a, b]\n---\n# Mix\nTake",
+            "---\ntitle: \"Mix 2\"\ntags: [a, b]\nstatus: open\n---\n# Mix\nTake",
+        ] {
+            assert!(!vault_doc::is_mid_edit(next));
+            vault_doc::merge_text(&doc, &pushed, next);
+            doc.commit();
+            assert_eq!(vault_doc::render(&doc, Some(next)), next);
+            pushed = next.to_owned();
+        }
+        // Half-typed: held back, not merged.
+        assert!(vault_doc::is_mid_edit(
+            "---\ntitle: \"Mix 2\n---\n# Mix\nTake"
+        ));
     }
 
     #[test]

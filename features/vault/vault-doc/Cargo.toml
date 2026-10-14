@@ -1,0 +1,35 @@
+[package]
+name = "vault-doc"
+description = "Vault documents — the codec between a vault file and its Loro document (body text + props map, markdown render byte-stable for unchanged docs, text merged in as a change), and the device-side replica that syncs it (persistence seam, acknowledgement tracking, lineage check). Wasm-clean, no Dioxus: the server's mirror, the shell's editors and a desktop folder writer all use the same code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# `CrdtDoc`, `Persistence`, the `DocSync` client + `SyncDown` frames.
+crdt = { workspace = true, features = ["vox"] }
+vault-proto = { workspace = true, features = ["vox"] }
+vox = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+# Frontmatter ⇄ props.
+serde_yaml = { workspace = true }
+# The record book's index rows (`book`).
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `DocEntry`, the peer lane's wire type.
+facet = { workspace = true }
+tracing = { workspace = true }
+# Declared apart from the workspace dep (which is `full`) so the wasm
+# build stays clean: channels + `select!` only.
+tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"
+
+[lints]
+workspace = true

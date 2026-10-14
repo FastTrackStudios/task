@@ -21,7 +21,7 @@ use architect::{LayerRouter, LocalServer, Scope};
 use crdt::CrdtDoc;
 use crdt::sync::{DocSyncClient, SyncedDoc};
 use uuid::Uuid;
-use vault_proto::{COLLAB_TEXT_CONTAINER, IfMatch, VaultSyncClient};
+use vault_proto::{COLLAB_BODY_CONTAINER, IfMatch, VaultSyncClient};
 
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -48,7 +48,7 @@ async fn join(local: &LocalServer, doc_id: Uuid) -> CrdtDoc {
 }
 
 fn text_of(doc: &CrdtDoc) -> String {
-    doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string()
+    doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string()
 }
 
 // t[verify storage.crdt.layer] — two clients and a file writer
@@ -110,7 +110,7 @@ async fn two_synced_clients_plus_put_file_writer_converge() {
     // A types; B and the file on disk must observe it (relay + flush).
     doc_a
         .loro()
-        .get_text(COLLAB_TEXT_CONTAINER)
+        .get_text(COLLAB_BODY_CONTAINER)
         .insert(0, "alpha ")
         .unwrap();
     doc_a.loro().commit();
@@ -127,7 +127,7 @@ async fn two_synced_clients_plus_put_file_writer_converge() {
     // on disk with a coherent sha for sha-clients.
     doc_b
         .loro()
-        .get_text(COLLAB_TEXT_CONTAINER)
+        .get_text(COLLAB_BODY_CONTAINER)
         .insert(11, "beta\n")
         .unwrap();
     doc_b.loro().commit();
@@ -251,7 +251,7 @@ async fn live_smoke_two_clients_plus_put_file() {
     // A types, B observes; write-behind commits to the real vault.
     doc_a
         .loro()
-        .get_text(COLLAB_TEXT_CONTAINER)
+        .get_text(COLLAB_BODY_CONTAINER)
         .insert(0, "hello ")
         .unwrap();
     doc_a.loro().commit();

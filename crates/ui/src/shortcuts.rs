@@ -664,13 +664,36 @@ pub fn spawn_new_note(
     mut pending_title: Signal<Option<String>>,
 ) {
     spawn(async move {
-        let taken: std::collections::HashSet<String> = crate::pages::vault::fetch_folder_index(
+        let index = crate::pages::vault::fetch_folder_index(
             slug.clone(),
             crate::document_session::VAULT_ID.to_owned(),
         )
-        .await
-        .map(|pages| pages.into_iter().map(|p| p.path.to_lowercase()).collect())
-        .unwrap_or_default();
+        .await;
+        let Ok(pages) = index else {
+            // No server: the note is made on this device, under a path no
+            // other device will pick, and syncs (and gets its file) when
+            // the connection is back — `offline.doc.create`.
+            let name = crate::doc_replica::device_note_path("Untitled");
+            match crate::doc_replica::create_local_note(
+                &slug,
+                crate::document_session::VAULT_ID,
+                &name,
+            )
+            .await
+            {
+                Ok(()) => {
+                    pending_title.set(Some(name.clone()));
+                    nav.push(crate::routes::Route::VaultRoute {
+                        path: name,
+                        org: String::new(),
+                    });
+                }
+                Err(e) => tracing::warn!(%e, "new note (offline) failed"),
+            }
+            return;
+        };
+        let taken: std::collections::HashSet<String> =
+            pages.into_iter().map(|p| p.path.to_lowercase()).collect();
         let name = (1..)
             .map(|i| {
                 if i == 1 {

@@ -445,6 +445,15 @@ pub fn DocBody(
     /// A link in the body was clicked (external links open on their own).
     #[props(default)]
     on_link_click: Option<Callback<String>>,
+    /// Bind the editor to a document's `body` instead of `text`
+    /// (`offline.doc.shape`): once the replica is ready its body is the
+    /// buffer, edits go into it as text ops (merged character by
+    /// character, offline included), and peers' edits come back in. Until
+    /// it is ready the editor works from `text` and `on_change` as
+    /// without one. The body is shown without its one leading separator
+    /// line (`vault_doc::body::shown` — a task file's convention).
+    #[props(default)]
+    doc: Option<crate::doc_replica::ReplicaHandle>,
 ) -> Element {
     use_hook(install_palette);
     let mut state = use_signal(|| EditorState::new(text.clone()));
@@ -457,16 +466,63 @@ pub fn DocBody(
     // only our echo does nothing.
     let mut agreed = use_signal(|| text.clone());
     let mut told = use_signal(|| text.clone());
+    // The document owns the buffer (bound and ready).
+    let bound = use_memo(move || doc.is_some_and(|h| h.ready() && h.doc().is_some()));
 
     use_effect(move || {
-        let doc = state.read().doc.to_string();
-        if doc != *told.peek() {
-            told.set(doc.clone());
-            on_change.call(doc);
+        let buffer = state.read().doc.to_string();
+        if buffer == *told.peek() {
+            return;
         }
+        told.set(buffer.clone());
+        if *bound.peek() {
+            // t[impl offline.doc.replica] — a keystroke is a text op on
+            // the document's body; the replica persists and syncs it.
+            if let Some(d) = doc.and_then(|h| h.doc()) {
+                let body = vault_doc::doc::body_text(d.loro());
+                let ops = vault_doc::body::shown_edit_ops(&body.to_string(), &buffer);
+                if !ops.is_empty() {
+                    vault_doc::body::apply_ops_clamped(&body, &ops);
+                    vault_doc::commit_as(d.loro(), "edited in the app");
+                }
+            }
+            return;
+        }
+        on_change.call(buffer);
     });
 
+    // The document's body → the buffer: on takeover, and on every remote
+    // change. Our own edits render back identical (no-op).
+    use_effect(move || {
+        let Some(h) = doc else { return };
+        let _rev = h.revision();
+        if !bound() {
+            return;
+        }
+        let Some(d) = h.doc() else { return };
+        let body = vault_doc::body::shown(&vault_doc::doc::body(d.loro())).to_owned();
+        let buffer = state.peek().doc.to_string();
+        if body == buffer {
+            return;
+        }
+        told.set(body.clone());
+        agreed.set(body.clone());
+        if let Some((range, insert)) = minimal_replace(&buffer, &body) {
+            editor::dispatch_spec(
+                state,
+                TransactionSpec::new()
+                    .changes(Changes::replace(range, insert))
+                    .annotate("origin", "remote"),
+                None,
+            );
+        }
+    });
+    let unsynced = use_memo(move || doc.is_some_and(|h| h.unsynced()));
+
     use_effect(use_reactive!(|text| {
+        if *bound.peek() {
+            return; // the document is the source now, not the host's copy
+        }
         let buffer = state.peek().doc.to_string();
         let verdict = reconcile(&buffer, &agreed.peek(), &text);
         match verdict {
@@ -520,6 +576,11 @@ pub fn DocBody(
             onkeydown: move |_| touched.set(true),
             if empty() && !placeholder.is_empty() {
                 div { class: "doc-placeholder", aria_hidden: "true", "{placeholder}" }
+            }
+            // t[impl offline.visible] — per document: edits the server has
+            // not acknowledged yet.
+            if unsynced() {
+                div { class: "doc-unsynced", title: "Saved on this device; syncs when the connection is back", "Not synced" }
             }
             div { class: "editor-frame editor-frame--flush",
                 Editor {
@@ -667,6 +728,16 @@ pub const DOC_CSS: &str = r#"
     user-select: none;
 }
 @media (pointer: coarse) { .doc-linear .doc-placeholder { font-size: 16px; } }
+.doc-linear .doc-unsynced {
+    position: absolute;
+    top: -20px;
+    right: 0;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--doc-muted);
+    opacity: 0.8;
+    user-select: none;
+}
 
 /* ── The slash menu: Linear's popover ── */
 .doc-linear .ed-menu {

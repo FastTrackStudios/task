@@ -173,55 +173,62 @@ pub(crate) fn NoteView(
     // ── Autocomplete candidates ───────────────────────────────
     let link_candidates = use_memo(move || vault_lookup::wikilink_candidates(&pages.read()));
 
-    // ── Per-file CRDT collaboration (focused pane only) ───────
+    // ── Per-file document replica ─────────────────────────────
     // Same page-owned-handles + keyed-`CollabSession` split as the
-    // original vault page (see collab.rs module docs). Armed only while
-    // this pane is focused: a 2-way split never runs two live CRDT
-    // sessions — the unfocused pane's edits persist through the sha
-    // autosave instead, and collab re-arms the instant it regains focus.
+    // original vault page (see collab.rs module docs). Armed the first
+    // time this pane is focused on an open file, and then **kept**: once
+    // the replica has taken the buffer over it owns persistence — through
+    // focus changes, through going offline, through reconnecting (the
+    // driver re-attaches by itself) — so the sha autosave can never write
+    // a buffer the replica is also carrying (`offline.doc.replica`).
+    // Only a change of write permission disarms it. A replica that has
+    // not taken over yet is let go when the pane loses focus.
     let handles = crate::collab::use_collab_handles();
     let mut collab = use_signal(|| None::<crate::collab::CollabHandles>);
     let mut collab_doc = use_signal(|| None::<uuid::Uuid>);
     let account = try_use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
-    let conn = architect::use_connection::<vox_core::Caller>();
     let collab_path = path.clone();
     let collab_vault = vault_id.clone();
     use_effect(move || {
-        // Reactive reads: re-open collab on reconnect (generation bump)
-        // and whenever this pane gains/loses focus.
-        let _generation = conn.generation();
         let focused_now = is_focused();
         let writing = may_write();
-        collab_doc.set(None);
-        collab.set(None);
-        handles.reset();
-        if !focused_now {
-            return; // unfocused pane stays in plain sha mode
-        }
+        let opened = session.current_path().as_deref() == Some(collab_path.as_str());
+        let armed = collab_doc.peek().is_some();
+        let taken_over = *handles.live.read();
         if !writing {
+            if armed {
+                collab_doc.set(None);
+                collab.set(None);
+                handles.reset();
+            }
             return; // a reader does not join the live session
         }
-        let slug = home.peek().clone();
-        let path = collab_path.clone();
-        let vault = collab_vault.clone();
-        spawn(async move {
-            match crate::collab::open_collab(slug, vault, path.clone()).await {
-                Ok(ack) => {
-                    if session.current_path().as_deref() == Some(path.as_str()) {
-                        collab_doc.set(Some(ack.doc_id));
-                        collab.set(Some(handles));
-                    }
-                }
-                Err(e) => tracing::debug!("vault collab unavailable for {path}: {e}"),
+        if armed {
+            if !focused_now && !taken_over {
+                collab_doc.set(None);
+                collab.set(None);
+                handles.reset();
             }
-        });
+            return;
+        }
+        if focused_now && opened {
+            collab_doc.set(Some(vault_proto::collab_doc_id(
+                &collab_vault,
+                &collab_path,
+            )));
+            collab.set(Some(handles));
+        }
     });
-    // Autosave pauses exactly while collab is live — and for good when
-    // this person may not write.
+    // Autosave pauses exactly while the replica owns the buffer — and
+    // for good when this person may not write.
     use_effect(move || {
         let live = collab.read().as_ref().is_some_and(|c| c.is_live());
         session.set_autosave_paused(live || !may_write());
     });
+    // Whether an explicit save may write the file: never while the
+    // replica owns the buffer (it would write edits the replica also
+    // carries — the double-apply).
+    let replica_owns = use_memo(move || collab.read().as_ref().is_some_and(|c| c.is_live()));
     // The editor's reading view follows Read mode and write permission.
     use_effect(move || {
         let on = reading();
@@ -231,18 +238,6 @@ pub(crate) fn NoteView(
                 editor::TransactionSpec::new().reading_mode(on),
                 None,
             );
-        }
-    });
-    // Live → Offline teardown: fall back to sha saves.
-    use_effect(move || {
-        let went_offline = collab
-            .read()
-            .as_ref()
-            .is_some_and(|c| (c.live)() && c.doc.status() == crdt::SyncStatus::Offline);
-        if went_offline {
-            collab_doc.set(None);
-            collab.set(None);
-            handles.reset();
         }
     });
 
@@ -262,11 +257,7 @@ pub(crate) fn NoteView(
                     c.doc.revision(),
                     c.doc
                         .doc()
-                        .map(|d| {
-                            d.loro()
-                                .get_text(vault_proto::COLLAB_TEXT_CONTAINER)
-                                .to_string()
-                        })
+                        .map(|d| vault_doc::render(d.loro(), Some(&text)))
                         .unwrap_or_default(),
                 ),
                 None => (false, "none".to_owned(), 0, String::new()),
@@ -545,12 +536,19 @@ pub(crate) fn NoteView(
     });
 
     // ── Save / conflict state ─────────────────────────────────
-    let is_dirty = session.dirty();
-    let status_msg = match session.status() {
-        SaveStatus::Idle => String::new(),
-        SaveStatus::Saving => "Saving…".to_owned(),
-        SaveStatus::Saved => "Saved".to_owned(),
-        SaveStatus::Failed(msg) => msg,
+    // While the replica owns the buffer, "dirty" means "not synced" and
+    // the strip says what the replica says (`offline.visible`, per doc).
+    let owned_by = (*collab.read()).filter(|c| c.is_live());
+    let is_dirty = match owned_by {
+        Some(c) => c.doc.unsynced(),
+        None => session.dirty(),
+    };
+    let status_msg = match (owned_by, session.status()) {
+        (Some(c), _) => c.label().to_owned(),
+        (None, SaveStatus::Idle) => String::new(),
+        (None, SaveStatus::Saving) => "Saving…".to_owned(),
+        (None, SaveStatus::Saved) => "Saved".to_owned(),
+        (None, SaveStatus::Failed(msg)) => msg,
     };
     let conflict_open = session.conflict().is_some();
     let mut edit_base_source = use_signal(|| false);
@@ -598,10 +596,13 @@ pub(crate) fn NoteView(
         let collab_label = collab
             .read()
             .as_ref()
-            .map(|c| if c.is_live() { "live" } else { "connecting…" });
+            .map(crate::collab::CollabHandles::label);
         // A draft or a read-only note has nothing to save: say what it is
         // instead of offering a Save that would be refused.
         let (save, dirty, on_save) = match mode() {
+            // While the replica owns the buffer there is no file save to
+            // offer: the document is what persists (and syncs).
+            WriteMode::Direct if replica_owns() => (String::new(), false, None),
             WriteMode::Direct => (save, session.dirty(), Some(on_save_cb)),
             WriteMode::Draft => ("Draft — not saved".to_owned(), false, None),
             WriteMode::ReadOnly => ("Read only".to_owned(), false, None),
@@ -643,7 +644,7 @@ pub(crate) fn NoteView(
                 let key = evt.key().to_string();
                 if (m.ctrl() || m.meta()) && key == "s" {
                     evt.prevent_default();
-                    if may_write() {
+                    if may_write() && !replica_owns() {
                         session.save();
                     }
                     return;
@@ -807,9 +808,16 @@ pub(crate) fn NoteView(
             }
             document::Style { {READING_STYLE} }
             document::Style { {crate::doc_editor::DOC_CSS} }
-            // Keyed collab child: remount per doc id = fresh replica.
+            // Keyed collab child: one per doc id (its replica persists on
+            // the device, so a remount reopens the same document).
             if let Some(doc_id) = collab_doc() {
-                crate::collab::CollabSession { key: "{doc_id}", doc_id, handles }
+                crate::collab::CollabSession {
+                    key: "{doc_id}",
+                    slug: home.peek().clone(),
+                    vault_id: vault_id.clone(),
+                    path: path.clone(),
+                    handles,
+                }
             }
         }
     }

@@ -8,11 +8,13 @@
 //! 1. **Open/seed** — the registry factory opens each doc over
 //!    [`crdt::FilePersistence`] (one dir per doc under the org's
 //!    `crdt/` root) and reconciles it with the vault file on disk:
-//!    a fresh doc is seeded from the file's bytes; a re-opened doc
-//!    whose file changed while it was evicted adopts the file via a
-//!    character-level diff.
+//!    a fresh doc is made from the file (`body` + `props`, via
+//!    `vault-doc`); a re-opened doc whose file changed while it was
+//!    evicted merges the edit as a change, three-way against the
+//!    version the mirror was rendered from (`meta.flushed_at`).
 //! 2. **Write-behind** — a per-doc worker (woken by the doc's root
-//!    subscription, debounced ~1 s) projects the doc's text into
+//!    subscription, debounced ~1 s) renders the doc as markdown
+//!    (`vault_doc::render`) into
 //!    [`vault_live::Backend::put_file`] with [`IfMatch::Force`],
 //!    under the backend's existing write lock. The committed sha is
 //!    recorded in the doc's `meta` map and in the in-memory
@@ -22,25 +24,23 @@
 //!    an ordinary `Put` with a coherent sha.
 //! 3. **Inbound** — a per-vault listener on the backend's broadcast
 //!    channel (fed by both `put_file` from non-CRDT clients and the
-//!    FS watcher) merges external file writes into *open* docs. The
-//!    merge is three-way at character level: ops are computed from
-//!    `last-flushed text → new file text` and applied to the doc
-//!    (clamped), so edits typed concurrently with an external write
-//!    interleave instead of being reverted. Docs that aren't open
-//!    are skipped — the next open re-seeds from disk.
+//!    FS watcher) merges external file writes into *open* docs as a
+//!    change (`vault_doc::merge_text` against the last flushed text:
+//!    props by key, the body by character), so edits typed
+//!    concurrently interleave instead of being reverted. Docs that
+//!    aren't open are skipped — the next open merges the edit.
 //!
 //! ## Conflict policy (canonical statement)
 //!
 //! - **CRDT wins between collaborating clients**: concurrent edits
 //!   from synced replicas merge by Loro semantics; there is no
 //!   conflict banner on the collab path.
-//! - **Non-CRDT writes merge via text diff**: an external `put_file`
-//!   / disk write into an *open* doc is folded in character-by-
-//!   character (three-way against the last flushed content). The
-//!   result may interleave with concurrent typing but never drops a
-//!   whole edit. While a doc is **closed/evicted**, the file is the
-//!   source of truth — the next open adopts it (two-way diff, i.e.
-//!   re-seed semantics).
+//! - **The document is the truth; text coming in is a change**
+//!   (`offline.md`, 2026-10-13): an external `put_file` / disk write
+//!   is merged three-way against the version it was made from — open
+//!   or closed doc alike — and the file is then rewritten from the
+//!   doc. The result may interleave with concurrent typing but never
+//!   drops a whole edit.
 //! - **The sha-conflict banner remains for non-collab clients only**:
 //!   they keep conditional writes (`IfMatch::Sha`) against whatever
 //!   sha the write-behind last committed.
@@ -71,12 +71,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 // t[impl storage.crdt.layer] — concurrent structured state merges
-// through `architect-crdt` over Loro, and the doc is a means of
-// converging on what the file will say rather than a competing record of
-// what it already says: it flushes to the file, and the file is the
-// authored fact
+// through `architect-crdt` over Loro. Since `offline.md`'s decision
+// (2026-10-13) the doc is the authored record and the file its mirror:
+// it is written from the doc, and text arriving in it merges back as a
+// change
 use crdt::codec::TextOp;
-use crdt::loro::LoroText;
 use crdt::registry::DocRegistry;
 use crdt::{CrdtDoc, FilePersistence, PersistError, WeakCrdtDoc};
 use sha2::{Digest, Sha256};
@@ -84,7 +83,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 use vault_live::Backend;
 use vault_proto::{
-    COLLAB_META_CONTAINER, COLLAB_META_FLUSHED_SHA, COLLAB_TEXT_CONTAINER, IfMatch, VaultEvent,
+    COLLAB_META_CONTAINER, COLLAB_META_FLUSHED_AT, COLLAB_META_FLUSHED_SHA, IfMatch, VaultEvent,
     VaultSync, collab_doc_id,
 };
 
@@ -275,46 +274,73 @@ async fn open_doc(
     let lock = doc_lock(shared, doc_id);
     let _g = lock.lock().await;
 
-    let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
-    let doc_text = text.to_string();
+    // A doc made before the body + props split converts once.
+    // t[impl offline.doc.shape]
+    if vault_doc::migrate_whole_file(doc.loro()) {
+        vault_doc::commit_as(doc.loro(), "migrate: whole-file text → body + props");
+    }
+
     let recorded = read_meta_flushed(&doc);
     let file = match shared.backend.get_file(&vault_id, &path) {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes.0).into_owned()),
-        // File vanished between registration and open: the doc wins;
-        // the first flush recreates the file.
+        // No file (vanished, or a document first created offline on a
+        // device): the doc is the truth; its first flush writes it.
         Err(_) => None,
     };
 
     let mut dirty = false;
-    if let Some(file_text) = file {
-        let file_sha = sha256_hex(file_text.as_bytes());
-        if recorded.as_deref() == Some(file_sha.as_str()) {
-            // The file is exactly what this doc last flushed. If the
-            // doc has newer (persisted but unflushed) edits — a crash
-            // inside the debounce window — flush them now.
-            dirty = doc_text != file_text;
-        } else if doc_text == file_text {
-            // Contents already agree (e.g. a fresh doc over an empty
-            // file) — just record the baseline. Writing the meta also
-            // guarantees the doc has at least one commit, so a fresh
-            // client's first sync always observes a revision.
-        } else {
-            // First open (empty doc → pure seed) or the file changed
-            // while the doc was closed/evicted: the file is the
-            // source of truth, adopt it via character diff. NOTE: in
-            // the double-crash window (unflushed doc edits AND an
-            // external write while down) this reverts the unflushed
-            // tail — documented v1 tradeoff in the policy note.
-            let ops = diff_text_ops(&doc_text, &file_text);
-            apply_ops_clamped(&text, &ops);
+    match file {
+        Some(file_text) => {
+            let file_sha = sha256_hex(file_text.as_bytes());
+            if recorded.as_deref() == Some(file_sha.as_str()) {
+                // The mirror is what this doc last flushed. Newer
+                // (persisted, unflushed) edits — a crash inside the
+                // debounce window — flush now.
+                dirty = vault_doc::render(doc.loro(), Some(&file_text)) != file_text;
+            } else if vault_doc::doc::is_blank(doc.loro()) {
+                // First open: the document is made from the file — as
+                // the same change every node makes from the same bytes,
+                // so two nodes holding one file hold one document.
+                vault_doc::seed_from_file(doc.loro(), doc_id, &file_text);
+            } else {
+                // The file was edited while the doc was closed. The doc
+                // is the truth; the edit is text coming in, merged as a
+                // change against the version the mirror was rendered
+                // from — so neither the doc's unflushed edits nor the
+                // file's edit is lost — and the mirror is then written
+                // from the merged doc.
+                // t[impl offline.doc.materialise]
+                let base = flushed_render(&doc, &file_text);
+                vault_doc::merge_text(doc.loro(), &base, &file_text);
+                dirty = true;
+            }
+            vault_doc::commit_as(doc.loro(), "outside edit: vault file");
+            set_flushed(shared, doc_id, &file_sha, &file_text);
+            write_meta_flushed(&doc, &file_sha);
+            if !dirty {
+                // The doc renders as the mirror right now: this is the
+                // version the mirror stands for.
+                write_meta_flushed_at(&doc, &doc.loro().oplog_frontiers());
+            }
+            doc.loro().commit();
         }
-        set_flushed(shared, doc_id, &file_sha, &file_text);
-        write_meta_flushed(&doc, &file_sha);
-        doc.loro().commit();
+        None => dirty = !vault_doc::doc::is_blank(doc.loro()),
     }
 
     spawn_write_behind(shared, doc_id, &doc, vault_id, path, dirty);
     Ok(doc)
+}
+
+/// What the doc rendered at its last flush — the base an outside edit of
+/// the mirror was made from. Falls back to the doc as it is (a two-way
+/// merge) when the doc never recorded a flushed version.
+fn flushed_render(doc: &CrdtDoc, file_text: &str) -> String {
+    let at = read_meta_flushed_at(doc);
+    let forked = at.and_then(|f| doc.loro().fork_at(&f).ok());
+    match forked {
+        Some(old) => vault_doc::render(&old, Some(file_text)),
+        None => vault_doc::render(doc.loro(), Some(file_text)),
+    }
 }
 
 // ── Write-behind ────────────────────────────────────────────────────────
@@ -385,7 +411,14 @@ async fn flush(shared: &Arc<Shared>, doc_id: Uuid, weak: &WeakCrdtDoc, vault_id:
     let lock = doc_lock(shared, doc_id);
     let _g = lock.lock().await;
 
-    let doc_text = doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string();
+    // The mirror is rendered from the doc (`offline.doc.materialise`),
+    // keeping the last-written file's unchanged frontmatter lines.
+    let previous = {
+        let flushed = shared.flushed.lock().expect("flushed lock poisoned");
+        flushed.get(&doc_id).map(|f| f.text.clone())
+    };
+    let rendered_at = doc.loro().oplog_frontiers();
+    let doc_text = vault_doc::render(doc.loro(), previous.as_deref());
     let sha = sha256_hex(doc_text.as_bytes());
     let prev = {
         let mut flushed = shared.flushed.lock().expect("flushed lock poisoned");
@@ -425,6 +458,7 @@ async fn flush(shared: &Arc<Shared>, doc_id: Uuid, weak: &WeakCrdtDoc, vault_id:
         Ok(Ok(ack)) => {
             debug_assert_eq!(ack.sha256, sha, "backend sha must match ours");
             write_meta_flushed(&doc, &sha);
+            write_meta_flushed_at(&doc, &rendered_at);
             doc.loro().commit();
         }
         Ok(Err(e)) => {
@@ -499,31 +533,32 @@ async fn apply_inbound(
         return;
     };
 
-    let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
-    let doc_text = text.to_string();
     let base = {
         let flushed = shared.flushed.lock().expect("flushed lock poisoned");
         flushed.get(&doc_id).map(|f| f.text.clone())
     };
 
-    // Three-way at character level: ops are computed from the last
-    // reconciled file content (base) to the new file content, then
-    // applied to the doc — so doc edits typed concurrently with the
-    // external write interleave instead of being reverted. When the
-    // doc is at base (the common case), this lands the doc exactly on
-    // the file's content. No base (first event before any flush
-    // record) falls back to a two-way doc→file diff.
-    let old = base.unwrap_or_else(|| doc_text.clone());
-    let ops = diff_text_ops(&old, &file_text);
-    apply_ops_clamped(&text, &ops);
+    // Text coming in is a change, never "the file wins": what differs
+    // between the last reconciled file (base) and the new one — each
+    // property by key, the body's edit character by character — is
+    // merged into the doc, so doc edits typed concurrently with the
+    // external write stay. No base (first event before any flush
+    // record) falls back to a two-way merge against the doc's render.
+    // t[impl offline.doc.materialise]
+    let old = base.unwrap_or_else(|| vault_doc::render(doc.loro(), Some(&file_text)));
+    vault_doc::merge_text(doc.loro(), &old, &file_text);
+    vault_doc::commit_as(doc.loro(), "outside edit: vault file");
 
     // The file content is now incorporated: record it as the new
     // reconcile baseline (echo for watcher duplicates of this very
     // event included). If concurrent doc edits made the doc differ
     // from the file, the commit below wakes the write-behind, which
-    // flushes the merged text back out.
+    // writes the mirror from the merged doc.
     set_flushed(shared, doc_id, &file_sha, &file_text);
     write_meta_flushed(&doc, &file_sha);
+    if vault_doc::render(doc.loro(), Some(&file_text)) == file_text {
+        write_meta_flushed_at(&doc, &doc.loro().oplog_frontiers());
+    }
     doc.loro().commit();
 }
 
@@ -586,77 +621,38 @@ fn write_meta_flushed(doc: &CrdtDoc, sha: &str) {
     }
 }
 
-/// Minimal insert/delete pair from `old → new`: common-prefix +
-/// common-suffix stripping over unicode scalars. Same algorithm as
-/// `crdt::codec::apply_text_diff`, surfaced as ops so they can be
-/// applied (clamped) to a *root* `LoroText` container.
-#[must_use]
-pub fn diff_text_ops(old: &str, new: &str) -> Vec<TextOp> {
-    if old == new {
-        return Vec::new();
-    }
-    let old_chars: Vec<char> = old.chars().collect();
-    let new_chars: Vec<char> = new.chars().collect();
-
-    let mut prefix = 0usize;
-    while prefix < old_chars.len()
-        && prefix < new_chars.len()
-        && old_chars[prefix] == new_chars[prefix]
+/// `meta.flushed_at` — the doc version the mirror file was rendered
+/// from: the base an outside edit of the mirror merges against.
+fn read_meta_flushed_at(doc: &CrdtDoc) -> Option<crdt::loro::Frontiers> {
+    use crdt::loro::{LoroValue, ValueOrContainer};
+    match doc
+        .loro()
+        .get_map(COLLAB_META_CONTAINER)
+        .get(COLLAB_META_FLUSHED_AT)
     {
-        prefix += 1;
+        Some(ValueOrContainer::Value(LoroValue::Binary(b))) => {
+            crdt::loro::Frontiers::decode(&b).ok()
+        }
+        _ => None,
     }
-    let mut suffix = 0usize;
-    while suffix < old_chars.len() - prefix
-        && suffix < new_chars.len() - prefix
-        && old_chars[old_chars.len() - 1 - suffix] == new_chars[new_chars.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
-
-    let del_len = old_chars.len() - prefix - suffix;
-    let ins: String = new_chars[prefix..new_chars.len() - suffix].iter().collect();
-
-    let mut ops = Vec::with_capacity(2);
-    if del_len > 0 {
-        ops.push(TextOp::Delete {
-            pos: prefix as u32,
-            len: del_len as u32,
-        });
-    }
-    if !ins.is_empty() {
-        ops.push(TextOp::Insert {
-            pos: prefix as u32,
-            text: ins,
-        });
-    }
-    ops
 }
 
-/// Apply ops to a root `LoroText`, clamping positions to the current
-/// length. Clamping matters only on the three-way inbound path, where
-/// concurrent doc edits may have shifted the base positions — the
-/// interleaving caveat of the conflict policy.
-fn apply_ops_clamped(text: &LoroText, ops: &[TextOp]) {
-    for op in ops {
-        let len = text.len_unicode();
-        let result = match op {
-            TextOp::Insert { pos, text: t } => {
-                let at = (*pos as usize).min(len);
-                text.insert(at, t)
-            }
-            TextOp::Delete { pos, len: n } => {
-                let from = (*pos as usize).min(len);
-                let n = (*n as usize).min(len - from);
-                if n == 0 {
-                    continue;
-                }
-                text.delete(from, n)
-            }
-        };
-        if let Err(e) = result {
-            tracing::warn!("vault-collab: text op failed: {e}");
-        }
+fn write_meta_flushed_at(doc: &CrdtDoc, at: &crdt::loro::Frontiers) {
+    let bytes: Vec<u8> = at.encode();
+    if let Err(e) = doc
+        .loro()
+        .get_map(COLLAB_META_CONTAINER)
+        .insert(COLLAB_META_FLUSHED_AT, bytes)
+    {
+        tracing::warn!("vault-collab: failed to record flushed version: {e}");
     }
+}
+
+/// Minimal insert/delete pair from `old → new` (Unicode scalars) — the
+/// codec's own, re-exported for callers that diffed through this crate.
+#[must_use]
+pub fn diff_text_ops(old: &str, new: &str) -> Vec<TextOp> {
+    vault_doc::body::diff_ops(old, new)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -674,6 +670,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vault_proto::COLLAB_BODY_CONTAINER;
 
     const DEBOUNCE: Duration = Duration::from_millis(60);
 
@@ -718,7 +715,7 @@ mod tests {
         let ack = backend.open_collab("v1", "n.md").unwrap();
 
         let doc = collab.registry().doc(ack.doc_id).await.unwrap();
-        let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string();
+        let text = doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string();
         assert_eq!(text, "hello vault");
         assert_eq!(
             collab.flushed_sha(ack.doc_id).as_deref(),
@@ -748,7 +745,7 @@ mod tests {
         let chan = backend.channel("v1").await;
         let mut rx = chan.subscribe();
 
-        let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
+        let text = doc.loro().get_text(COLLAB_BODY_CONTAINER);
         text.insert(5, " world").unwrap();
         doc.loro().commit();
 
@@ -788,17 +785,21 @@ mod tests {
         let ack = backend.open_collab("v1", "n.md").unwrap();
         let doc = collab.registry().doc(ack.doc_id).await.unwrap();
         collab.watch_vault("v1");
-        // Give the listener a beat to subscribe before the write.
-        tokio::time::sleep(Duration::from_millis(50)).await;
 
-        // A non-CRDT client (sha-guarded UI, Obsidian, CLI) writes.
-        put(&backend, "n.md", "alpha\nbeta\n").await;
-
+        // A non-CRDT client (sha-guarded UI, Obsidian, CLI) writes. The
+        // listener subscribes asynchronously, so on a loaded machine a
+        // single write can land before it is listening: write again until
+        // the merge shows (the same bytes again are a no-op once merged).
         let d = doc.clone();
-        eventually("inbound merge applies", async || {
-            d.loro().get_text(COLLAB_TEXT_CONTAINER).to_string() == "alpha\nbeta\n"
-        })
-        .await;
+        let merged = || d.loro().get_text(COLLAB_BODY_CONTAINER).to_string() == "alpha\nbeta\n";
+        for _ in 0..50 {
+            put(&backend, "n.md", "alpha\nbeta\n").await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if merged() {
+                break;
+            }
+        }
+        eventually("inbound merge applies", async || merged()).await;
         assert_eq!(
             collab.flushed_sha(ack.doc_id).as_deref(),
             Some(sha256_hex(b"alpha\nbeta\n").as_str())
@@ -819,7 +820,7 @@ mod tests {
 
         // End-to-end: a flush's own broadcast must not be re-applied —
         // the doc text stays exactly what the clients converged on.
-        let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
+        let text = doc.loro().get_text(COLLAB_BODY_CONTAINER);
         text.insert(3, " two").unwrap();
         doc.loro().commit();
         let backend2 = backend.clone();
@@ -828,7 +829,7 @@ mod tests {
         // doc didn't change again (no echo re-merge, no duplication).
         tokio::time::sleep(DEBOUNCE * 4).await;
         assert_eq!(
-            doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string(),
+            doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string(),
             "one two"
         );
         assert_eq!(read(&backend, "n.md"), "one two");
@@ -845,7 +846,7 @@ mod tests {
 
         // A collab client appends (not yet flushed — debounce) while a
         // non-CRDT writer appends to the *old* content.
-        let text = doc.loro().get_text(COLLAB_TEXT_CONTAINER);
+        let text = doc.loro().get_text(COLLAB_BODY_CONTAINER);
         text.insert(5, "crdt-line\n").unwrap();
         doc.loro().commit();
         put(&backend, "n.md", "base\nfile-line\n").await;
@@ -853,7 +854,7 @@ mod tests {
         // Both edits must survive in the converged doc AND on disk.
         let d = doc.clone();
         eventually("both edits present in doc", async || {
-            let t = d.loro().get_text(COLLAB_TEXT_CONTAINER).to_string();
+            let t = d.loro().get_text(COLLAB_BODY_CONTAINER).to_string();
             t.contains("crdt-line") && t.contains("file-line") && t.contains("base")
         })
         .await;
@@ -865,8 +866,177 @@ mod tests {
         .await;
     }
 
+    fn prop_of(doc: &CrdtDoc, key: &str) -> Option<String> {
+        vault_doc::doc::prop(doc.loro(), key).and_then(|v| match v {
+            crdt::loro::LoroValue::String(s) => Some(s.to_string()),
+            _ => None,
+        })
+    }
+
+    // t[verify offline.doc.shape] — a vault file's doc is body + props;
+    // t[verify offline.doc.materialise] — the mirror is rendered from the
+    // doc, and an outside edit merges in as a change (props by key, body
+    // by character) without reverting concurrent doc edits
     #[tokio::test(flavor = "multi_thread")]
-    async fn reopen_after_external_change_adopts_file() {
+    async fn frontmatter_lives_in_props_and_outside_edits_merge_by_key() {
+        let (_tmp, backend, collab) = setup();
+        let original = "---\ntitle: Mix\nstatus: open\n---\nTake one.\n";
+        put(&backend, "n.md", original).await;
+        let ack = backend.open_collab("v1", "n.md").unwrap();
+        let doc = collab.registry().doc(ack.doc_id).await.unwrap();
+        collab.watch_vault("v1");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(prop_of(&doc, "title").as_deref(), Some("Mix"));
+        assert_eq!(
+            doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string(),
+            "Take one.\n"
+        );
+
+        // In the app: the status changes and a line is typed (not yet
+        // flushed)…
+        vault_doc::doc::set_prop(doc.loro(), "status", crdt::loro::LoroValue::from("done"));
+        doc.loro()
+            .get_text(COLLAB_BODY_CONTAINER)
+            .push_str("Take two.\n")
+            .unwrap();
+        doc.loro().commit();
+        // …while an editor on disk renames it, from the original file.
+        put(
+            &backend,
+            "n.md",
+            "---\ntitle: Final mix\nstatus: open\n---\nTake one.\n",
+        )
+        .await;
+
+        let want = "---\ntitle: Final mix\nstatus: done\n---\nTake one.\nTake two.\n";
+        let b = backend.clone();
+        eventually("the mirror holds every change", async || {
+            read(&b, "n.md") == want
+        })
+        .await;
+        assert_eq!(prop_of(&doc, "title").as_deref(), Some("Final mix"));
+    }
+
+    // t[verify offline.doc.shape] — a doc made before the split (whole
+    // file in `content`) converts once, and the mirror does not change
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_whole_file_doc_converts_on_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Backend::single("v1", tmp.path().join("vault")).unwrap();
+        let crdt_root = tmp.path().join("crdt");
+        let text = "---\ntitle: Old\n---\nOld body\n";
+        let sha = put(&backend, "n.md", text).await;
+        let ack = backend.open_collab("v1", "n.md").unwrap();
+        {
+            // What the previous server persisted.
+            let legacy = CrdtDoc::open(ack.doc_id, FilePersistence::new(&crdt_root))
+                .await
+                .unwrap();
+            legacy
+                .loro()
+                .get_text(vault_proto::COLLAB_TEXT_CONTAINER)
+                .insert(0, text)
+                .unwrap();
+            write_meta_flushed(&legacy, &sha);
+            legacy.loro().commit();
+            let p = FilePersistence::new(&crdt_root);
+            eventually("legacy persisted", async || {
+                !crdt::Persistence::load_updates(&p, ack.doc_id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            })
+            .await;
+        }
+        let collab = VaultCollab::with_debounce(backend.clone(), crdt_root, DEBOUNCE);
+        let doc = collab.registry().doc(ack.doc_id).await.unwrap();
+        assert_eq!(prop_of(&doc, "title").as_deref(), Some("Old"));
+        assert_eq!(
+            doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string(),
+            "Old body\n"
+        );
+        tokio::time::sleep(DEBOUNCE * 4).await;
+        assert_eq!(read(&backend, "n.md"), text, "conversion rewrote the file");
+    }
+
+    // t[verify offline.doc.materialise] — the doc is the truth: a file
+    // edited while the doc was closed merges into it, and the doc's own
+    // unflushed edits survive
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reopen_merges_a_closed_edit_with_unflushed_doc_edits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Backend::single("v1", tmp.path().join("vault")).unwrap();
+        let crdt_root = tmp.path().join("crdt");
+        put(&backend, "n.md", "one\n").await;
+        let ack = backend.open_collab("v1", "n.md").unwrap();
+        {
+            // A long debounce: the doc edit is persisted, never flushed.
+            let collab = VaultCollab::with_debounce(
+                backend.clone(),
+                crdt_root.clone(),
+                Duration::from_secs(60),
+            );
+            let doc = collab.registry().doc(ack.doc_id).await.unwrap();
+            doc.loro()
+                .get_text(COLLAB_BODY_CONTAINER)
+                .push_str("two (in the app)\n")
+                .unwrap();
+            doc.loro().commit();
+            let p = FilePersistence::new(&crdt_root);
+            eventually("edit persisted", async || {
+                crdt::Persistence::load_updates(&p, ack.doc_id)
+                    .await
+                    .unwrap()
+                    .len()
+                    >= 2
+            })
+            .await;
+        }
+        put(&backend, "n.md", "zero (on disk)\none\n").await;
+        let collab = VaultCollab::with_debounce(backend.clone(), crdt_root, DEBOUNCE);
+        let doc = collab.registry().doc(ack.doc_id).await.unwrap();
+        assert_eq!(
+            doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string(),
+            "zero (on disk)\none\ntwo (in the app)\n"
+        );
+        let b = backend.clone();
+        eventually("the mirror is rewritten from the doc", async || {
+            read(&b, "n.md") == "zero (on disk)\none\ntwo (in the app)\n"
+        })
+        .await;
+    }
+
+    // t[verify offline.doc.create] — a document for a path with no file
+    // opens blank, writes nothing until it has content, and its first
+    // content creates the file
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_path_without_a_file_opens_and_its_first_content_creates_it() {
+        let (_tmp, backend, collab) = setup();
+        let ack = backend.open_collab("v1", "new.md").unwrap();
+        let doc = tokio::time::timeout(Duration::from_secs(5), collab.registry().doc(ack.doc_id))
+            .await
+            .expect("open did not hang")
+            .unwrap();
+        tokio::time::sleep(DEBOUNCE * 3).await;
+        assert!(
+            backend.get_file("v1", "new.md").is_err(),
+            "a blank doc writes no file"
+        );
+        doc.loro()
+            .get_text(COLLAB_BODY_CONTAINER)
+            .insert(0, "made offline\n")
+            .unwrap();
+        doc.loro().commit();
+        let b = backend.clone();
+        eventually("the first content creates the file", async || {
+            b.get_file("v1", "new.md")
+                .is_ok_and(|f| f.0 == b"made offline\n")
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reopen_after_external_change_merges_it() {
         let tmp = tempfile::tempdir().unwrap();
         let backend = Backend::single("v1", tmp.path().join("vault")).unwrap();
         let crdt_root = tmp.path().join("crdt");
@@ -878,7 +1048,7 @@ mod tests {
             let collab = VaultCollab::with_debounce(backend.clone(), crdt_root.clone(), DEBOUNCE);
             let doc = collab.registry().doc(ack.doc_id).await.unwrap();
             assert_eq!(
-                doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string(),
+                doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string(),
                 "v1 text"
             );
             // Wait for the persistence writer to land the seed commit.
@@ -892,11 +1062,11 @@ mod tests {
         put(&backend, "n.md", "v2 text from disk").await;
 
         // Second lifetime (fresh registry, same persistence): the
-        // factory sees meta.flushed_sha != file sha and adopts disk.
+        // factory sees meta.flushed_sha != file sha and merges the edit.
         let collab = VaultCollab::with_debounce(backend.clone(), crdt_root, DEBOUNCE);
         let doc = collab.registry().doc(ack.doc_id).await.unwrap();
         assert_eq!(
-            doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string(),
+            doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string(),
             "v2 text from disk"
         );
     }

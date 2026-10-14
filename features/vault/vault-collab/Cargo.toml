@@ -11,6 +11,8 @@ repository.workspace = true
 [dependencies]
 # The doc-id scheme + container-name constants + `CollabAck`.
 vault-proto = { workspace = true, features = ["vox"] }
+# The doc ⇄ markdown codec: render the mirror, merge text coming in.
+vault-doc = { workspace = true }
 # `Backend` (put_file / get_file / collab_route / broadcast channel).
 vault-live = { workspace = true }
 # `CrdtDoc` + `DocRegistry` + `FilePersistence`. `vox` because the

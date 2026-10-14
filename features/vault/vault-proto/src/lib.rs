@@ -37,8 +37,8 @@ mod service;
 // the doc's container names, and the `open_collab` ack payload.
 pub use base_view::{BaseGroup, BaseRowView, BaseView};
 pub use collab::{
-    COLLAB_META_CONTAINER, COLLAB_META_FLUSHED_SHA, COLLAB_TEXT_CONTAINER, CollabAck,
-    VAULT_DOC_NAMESPACE, collab_doc_id,
+    COLLAB_BODY_CONTAINER, COLLAB_META_CONTAINER, COLLAB_META_FLUSHED_AT, COLLAB_META_FLUSHED_SHA,
+    COLLAB_PROPS_CONTAINER, COLLAB_TEXT_CONTAINER, CollabAck, VAULT_DOC_NAMESPACE, collab_doc_id,
 };
 pub use error::VaultSyncError;
 // Link-graph read surface (separate service from `VaultSync`).

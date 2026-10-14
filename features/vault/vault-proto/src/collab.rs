@@ -31,11 +31,18 @@
 //!
 //! ## Doc layout
 //!
-//! The doc is a *raw text doc*: the file's full UTF-8 content lives
-//! in the root `LoroText` container [`COLLAB_TEXT_CONTAINER`].
-//! Server-side bookkeeping (the write-behind's last-flushed sha)
-//! lives in the root `LoroMap` [`COLLAB_META_CONTAINER`] — clients
-//! ignore it.
+//! The doc is the file's **document shape** (`offline.doc.shape`):
+//! the markdown body in the root `LoroText` [`COLLAB_BODY_CONTAINER`]
+//! and the frontmatter's top-level fields in the root `LoroMap`
+//! [`COLLAB_PROPS_CONTAINER`] (each value a plain Loro value, so a
+//! property merges by key). The codec between this shape and markdown
+//! is `vault-doc`. Server-side bookkeeping (the write-behind's
+//! last-flushed sha and version) lives in the root `LoroMap`
+//! [`COLLAB_META_CONTAINER`] — clients ignore it.
+//!
+//! Docs made before the split held the whole file in one `LoroText`,
+//! [`COLLAB_TEXT_CONTAINER`]; the server converts them once on open
+//! (`vault_doc::migrate_whole_file`) and nothing reads it after.
 
 use facet::Facet;
 use uuid::Uuid;
@@ -45,10 +52,23 @@ use uuid::Uuid;
 /// every file to a fresh (empty) doc.
 pub const VAULT_DOC_NAMESPACE: Uuid = Uuid::from_bytes(*b"task-vault-docid");
 
-/// Root `LoroText` container holding the file's full text. Both the
-/// client editor bridge and the server write-behind address this
-/// container by name.
+/// **Legacy** root `LoroText` that held a file's full text before the
+/// `body` + `props` split. Read only by the one-time conversion; a
+/// client still typing into it changes nothing that is rendered.
 pub const COLLAB_TEXT_CONTAINER: &str = "content";
+
+/// Root `LoroText`: the file's markdown body (everything after the
+/// frontmatter's close fence, exactly).
+pub const COLLAB_BODY_CONTAINER: &str = "body";
+
+/// Root `LoroMap`: the file's frontmatter fields, key → value.
+pub const COLLAB_PROPS_CONTAINER: &str = "props";
+
+/// Key in [`COLLAB_META_CONTAINER`]: the doc's encoded Loro frontiers
+/// at the last write-behind flush — the version the mirror file was
+/// rendered from, and so the base an outside edit of that file merges
+/// against.
+pub const COLLAB_META_FLUSHED_AT: &str = "flushed_at";
 
 /// Root `LoroMap` for server-side bookkeeping (not user content).
 pub const COLLAB_META_CONTAINER: &str = "meta";

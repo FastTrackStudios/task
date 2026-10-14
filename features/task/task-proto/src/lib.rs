@@ -39,6 +39,7 @@
 pub mod action;
 pub mod agent_lane;
 pub mod capture;
+pub mod doc;
 pub mod filing;
 pub mod model;
 pub mod relations;

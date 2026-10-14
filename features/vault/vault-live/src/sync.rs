@@ -344,6 +344,28 @@ impl Backend {
             .cloned()
     }
 
+    /// Register `path` in `vault_id` for collaboration and return its doc
+    /// id — [`VaultSync::open_collab`] without the caller's write guard,
+    /// for a lane that is gated on its own: the peer document lane
+    /// (`offline.peers`), where the caller is an admitted node rather than
+    /// a person and the rule is "a peer exchanges documents". The path is
+    /// validated as for every other call; a path with no file registers
+    /// too (the session that follows makes the document, and the
+    /// write-behind the file).
+    ///
+    /// # Errors
+    ///
+    /// The vault is unknown, or the path could leave it.
+    pub fn register_collab(&self, vault_id: &str, path: &str) -> Result<Uuid, VaultSyncError> {
+        self.file_path(vault_id, path)?;
+        let doc_id = collab_doc_id(vault_id, path);
+        self.collab
+            .write()
+            .expect("vault::sync collab map poisoned")
+            .insert(doc_id, (vault_id.to_string(), path.to_string()));
+        Ok(doc_id)
+    }
+
     /// Resolve `vault_id` to an absolute root path. Returns
     /// [`VaultSyncError::NotFound`] only in `Explicit` mode
     /// when the id is unregistered; `UnderParent` always
@@ -430,7 +452,25 @@ impl Backend {
             .root(vault_id)
             .map_err(|_| WatchError::Notify(format!("unknown vault id `{vault_id}`")))?;
         let tx = self.channel(vault_id).await;
-        let (rx, guard) = watcher::watch(root.clone(), WATCHER_DEBOUNCE)?;
+        // On a thread of its own: the watch registers with the OS's file
+        // event service (FSEvents on macOS), which can take seconds to
+        // answer on a busy machine — seconds an async worker would spend
+        // blocked, stalling every task scheduled on it. Not the blocking
+        // pool either: a registration cannot be cancelled, and a runtime
+        // shutting down waits for every blocking task, so one stuck in
+        // `fseventsd` would hold the process open. A detached thread is
+        // simply abandoned at exit.
+        let watched = root.clone();
+        let (done, started) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name(format!("vault-watch-start:{vault_id}"))
+            .spawn(move || {
+                let _ = done.send(watcher::watch(watched, WATCHER_DEBOUNCE));
+            })
+            .map_err(|e| WatchError::Notify(format!("spawn watch thread: {e}")))?;
+        let (rx, guard) = started
+            .await
+            .map_err(|e| WatchError::Notify(format!("watch thread: {e}")))??;
 
         let thread_name = format!("vault-sync-watcher:{vault_id}");
         let hub = self.changes.clone();
@@ -440,6 +480,49 @@ impl Backend {
             .spawn(move || forward_watcher_events(root, rx, tx, hub, id))
             .map_err(|e| WatchError::Notify(format!("spawn watcher thread: {e}")))?;
 
+        Ok(WatcherHandle { _guard: guard })
+    }
+
+    /// [`Self::start_watcher`] for several vaults at once, over **one**
+    /// OS watch ([`watcher::watch_many`]): one `fseventsd` registration
+    /// for the set instead of one per vault. Events reach each vault's
+    /// channel exactly as with a watcher of its own.
+    ///
+    /// # Errors
+    ///
+    /// An id is unknown, or no root could be watched.
+    pub async fn start_watchers(&self, vault_ids: &[String]) -> Result<WatcherHandle, WatchError> {
+        let mut roots = Vec::with_capacity(vault_ids.len());
+        let mut channels = HashMap::with_capacity(vault_ids.len());
+        for id in vault_ids {
+            let root = self
+                .root(id)
+                .map_err(|_| WatchError::Notify(format!("unknown vault id `{id}`")))?;
+            channels.insert(root.clone(), (id.clone(), self.channel(id).await));
+            roots.push(root);
+        }
+        // A detached thread, for the reasons `start_watcher` gives.
+        let (done, started) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("vault-watch-start".into())
+            .spawn(move || {
+                let _ = done.send(watcher::watch_many(roots, WATCHER_DEBOUNCE));
+            })
+            .map_err(|e| WatchError::Notify(format!("spawn watch thread: {e}")))?;
+        let (receivers, guard) = started
+            .await
+            .map_err(|e| WatchError::Notify(format!("watch thread: {e}")))??;
+
+        for (root, rx) in receivers {
+            let Some((id, tx)) = channels.remove(&root) else {
+                continue;
+            };
+            let hub = self.changes.clone();
+            std::thread::Builder::new()
+                .name(format!("vault-sync-watcher:{id}"))
+                .spawn(move || forward_watcher_events(root, rx, tx, hub, id))
+                .map_err(|e| WatchError::Notify(format!("spawn watcher thread: {e}")))?;
+        }
         Ok(WatcherHandle { _guard: guard })
     }
 
@@ -876,18 +959,25 @@ impl VaultSync for Backend {
         // Joining a file's live session is how the collaborative editor
         // writes, so it takes the same permission a save does.
         self.guard_write(vault_id, path)?;
-        if !abs.exists() {
-            return Err(VaultSyncError::NotFound);
-        }
-        let bytes = std::fs::read(&abs).map_err(io_err)?;
-        let doc_id = collab_doc_id(vault_id, path);
-        self.collab
-            .write()
-            .expect("vault::sync collab map poisoned")
-            .insert(doc_id, (vault_id.to_string(), path.to_string()));
+        // A path with no file yet still opens: a document created on a
+        // device (offline, `offline.doc.create`) reaches the server this
+        // way, and its first write-behind flush creates the file. The
+        // ack's sha is then empty — there are no bytes to hash.
+        // t[impl offline.doc.create]
+        let exists = abs.exists();
+        let bytes = if exists {
+            std::fs::read(&abs).map_err(io_err)?
+        } else {
+            Vec::new()
+        };
+        let doc_id = self.register_collab(vault_id, path)?;
         Ok(CollabAck {
             doc_id,
-            sha256: sha256_hex(&bytes),
+            sha256: if exists {
+                sha256_hex(&bytes)
+            } else {
+                String::new()
+            },
         })
     }
 }
@@ -1583,11 +1673,17 @@ mod tests {
         assert_eq!(again.sha256, sha256_hex(b"body2"));
         // Unregistered ids resolve to nothing — the admission gate.
         assert_eq!(b.collab_route(collab_doc_id("v1", "other.md")), None);
-        // Missing path refuses registration.
-        assert!(matches!(
-            b.open_collab("v1", "missing.md"),
-            Err(VaultSyncError::NotFound)
-        ));
+        // A path with no file yet registers too (a document created
+        // offline arrives this way); there is no sha to report.
+        // t[verify offline.doc.create]
+        let fresh = b.open_collab("v1", "missing.md").unwrap();
+        assert_eq!(fresh.sha256, "");
+        assert_eq!(
+            b.collab_route(fresh.doc_id),
+            Some(("v1".to_string(), "missing.md".to_string()))
+        );
+        // A path outside the vault still refuses.
+        assert!(b.open_collab("v1", "../escape.md").is_err());
     }
 
     fn meta<'a>(idx: &'a vault_proto::FolderIndex, base: &str) -> &'a PageMeta {

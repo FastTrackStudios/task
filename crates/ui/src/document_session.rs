@@ -363,6 +363,19 @@ impl DocumentSession {
                     if *s.epoch.peek() != ep {
                         return;
                     }
+                    // The server can't serve it (offline, or a note
+                    // created on this device that has not synced yet):
+                    // open what the device's document holds. No sha — the
+                    // replica, not a file save, carries its edits.
+                    // t[impl offline.doc.create]
+                    let local =
+                        crate::doc_replica::local_text(&s.home.peek(), &s.vault_id(), &path).await;
+                    if let Some(text) = local {
+                        if *s.epoch.peek() == ep {
+                            s.seed_inner(path, None, text);
+                        }
+                        return;
+                    }
                     if let Some(n) = s.notify {
                         n.error(format!("Couldn't open {path}: {e}"));
                     }
