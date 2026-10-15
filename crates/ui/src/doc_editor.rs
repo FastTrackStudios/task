@@ -972,7 +972,11 @@ pub const DOC_CSS: &str = r#"
         width: 22px;
         height: 22px;
         margin-right: 12px;
-        vertical-align: -5px;
+        /* Centred on the text: `middle` puts the box's middle on the
+           baseline plus half the x-height, the middle of a lowercase line;
+           2px up lifts it to the middle of the capitals too. */
+        vertical-align: middle;
+        top: -2px;
         border-radius: 7px;
         border-width: 2px;
     }
