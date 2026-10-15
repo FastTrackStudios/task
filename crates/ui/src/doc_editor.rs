@@ -948,6 +948,45 @@ pub const DOC_CSS: &str = r#"
 @media (pointer: coarse) {
     .doc-linear .ed-menu-row { min-height: 44px; }
 }
+/* A phone reads at arm's length and is driven by a thumb: iOS Notes's
+   17pt body, headings in step, and controls a finger can hit — a task's
+   checkbox is drawn at 22px and takes taps across 44px (Apple's minimum
+   target width), so it toggles without a careful aim. */
+@media (max-width: 767px) {
+    .doc-linear .editor-root { font-size: 17px; line-height: 26px; letter-spacing: -0.2px; }
+    .doc-linear .editor-root .cm-line:not([class*="md-"]):has(> br:only-child),
+    .doc-linear .editor-root .cm-line:not([class*="md-"]):empty {
+        min-height: 18px; height: 18px; line-height: 18px;
+    }
+    .doc-linear .editor-root .cm-line.md-h1 { font-size: 28px; line-height: 34px; letter-spacing: -0.4px; }
+    .doc-linear .editor-root .cm-line.md-h2 { font-size: 22px; line-height: 28px; letter-spacing: -0.3px; }
+    .doc-linear .editor-root .cm-line.md-h3 { font-size: 19px; line-height: 26px; }
+    .doc-linear .editor-root .cm-line.md-h4,
+    .doc-linear .editor-root .cm-line.md-h5,
+    .doc-linear .editor-root .cm-line.md-h6 { font-size: 17px; line-height: 26px; }
+    .doc-linear .editor-root .cm-line.md-list-item,
+    .doc-linear .editor-root .cm-line.md-task { padding-left: 4px; }
+    .doc-linear .editor-root .md-list-marker { min-width: 24px; }
+    .doc-linear .editor-root .md-task-checkbox {
+        position: relative;
+        width: 22px;
+        height: 22px;
+        margin-right: 12px;
+        vertical-align: -5px;
+        border-radius: 7px;
+        border-width: 2px;
+    }
+    /* The finger's target, invisible: 44px wide; 34px tall, so it
+       stops short of the next task's box (lines are 26px apart). */
+    .doc-linear .editor-root .md-task-checkbox::before {
+        content: "";
+        position: absolute;
+        inset: -6px -11px;
+    }
+    .doc-linear .editor-root .cm-line.md-code-block { font-size: 15px; line-height: 22px; }
+    .doc-linear .doc-placeholder { font-size: 17px; line-height: 26px; }
+}
+
 "#;
 
 #[cfg(test)]
