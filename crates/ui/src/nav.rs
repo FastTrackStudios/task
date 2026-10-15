@@ -4,9 +4,9 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    Activity as ActivityIcon, BookOpen, BookUser, CalendarDays, ChartGantt, CircleCheck, Flag,
-    FolderKanban, FolderOpen, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon,
-    Star, Target, Timer, Users, Waypoints,
+    Activity as ActivityIcon, BookOpen, BookUser, CalendarDays, CircleCheck, FolderKanban,
+    FolderOpen, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Star, Timer,
+    Users, Waypoints,
 };
 use dioxus::prelude::*;
 
@@ -42,14 +42,8 @@ fn icon_tasks() -> Element {
 fn icon_vault() -> Element {
     rsx! { Notebook { size: 16 } }
 }
-fn icon_milestones() -> Element {
-    rsx! { Flag { size: 16 } }
-}
 fn icon_schedule() -> Element {
     rsx! { CalendarDays { size: 16 } }
-}
-fn icon_gantt() -> Element {
-    rsx! { ChartGantt { size: 16 } }
 }
 fn icon_timer() -> Element {
     rsx! { Timer { size: 16 } }
@@ -65,9 +59,6 @@ fn icon_wiki() -> Element {
 }
 fn icon_connections() -> Element {
     rsx! { Waypoints { size: 16 } }
-}
-fn icon_goals() -> Element {
-    rsx! { Target { size: 18 } }
 }
 fn icon_settings() -> Element {
     rsx! { SettingsIcon { size: 16 } }
@@ -139,30 +130,12 @@ pub fn nav_tabs() -> Vec<NavTab> {
             icon: icon_schedule,
             route: Route::ScheduleRoute {},
         },
-        NavTab {
-            label: "Milestones",
-            plugin: "core",
-            icon: icon_milestones,
-            route: Route::MilestonesRoute {},
-        },
-        NavTab {
-            label: "Goals",
-            plugin: "core",
-            icon: icon_goals,
-            route: Route::GoalsRoute {},
-        },
         // Contacts — the people directory.
         NavTab {
             label: "Contacts",
             plugin: "contacts",
             icon: icon_contacts,
             route: Route::ContactsRoute {},
-        },
-        NavTab {
-            label: "Gantt",
-            plugin: "core",
-            icon: icon_gantt,
-            route: Route::GanttRoute {},
         },
         NavTab {
             label: "Timer",

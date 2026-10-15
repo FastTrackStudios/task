@@ -1,18 +1,18 @@
 //! The work sidebar — what the explorer column shows wherever the
 //! person is planning or doing work (Home, Tasks, Projects, Schedule,
-//! Inbox, Timer, Goals, Milestones, Gantt).
+//! Inbox, Timer).
 //!
 //! The vault tree is the right companion inside notes and wikis, and
 //! the wrong one here: beside a task list it is a column of folders
 //! that answers nothing being asked. This column answers "what is on
-//! my plate": the task list's own sections with live counts, and every
-//! active project with how much is open in it.
+//! my plate": the inbox and tasks with live counts (their filters live
+//! on those pages, not here), every active project with how much is open
+//! in it, and every other section of the workspace.
 //!
 //! Its counts come from the same rules as the list itself — the
-//! person's filters ([`crate::task_board::filter`]), the same section
-//! rule ([`task_ui::task_section`]) and the same "unfiled" test
-//! ([`crate::task_board::ProjectIndex::is_unfiled`]) — so a sidebar
-//! number and the list beneath it can't disagree.
+//! person's filters ([`crate::task_board::filter`]) and the same section
+//! rule ([`task_ui::task_section`]) — so a sidebar number and the list
+//! beneath it can't disagree.
 
 use dioxus::prelude::*;
 use task_ui::TaskSection;
@@ -21,25 +21,11 @@ use crate::routes::Route;
 use crate::stores;
 use crate::task_sort::is_active;
 
-/// Scroll the Tasks page to an element, waiting for the list to render
-/// when the click also navigated there. `open` also expands it when it
-/// is a collapsed disclosure (the unfiled strip).
-fn scroll_to(anchor: &'static str, open: bool) {
-    let _ = dioxus::document::eval(&format!(
-        "(function go(n){{const e=document.getElementById('{anchor}');\
-         if(e){{e.scrollIntoView({{behavior:'smooth',block:'start'}});\
-         if({open}){{const b=e.querySelector('button[aria-expanded=false]');if(b)b.click();}}}}\
-         else if(n>0){{setTimeout(()=>go(n-1),100);}}}})(30);"
-    ));
-}
-
 #[derive(Clone, PartialEq)]
 struct Counts {
+    /// Open work due today or before — the Tasks row's number.
     today: usize,
     overdue: usize,
-    upcoming: usize,
-    anytime: usize,
-    unfiled: usize,
     /// `(project id, title, open tasks)`, active projects by title.
     projects: Vec<(String, String, usize)>,
 }
@@ -54,7 +40,6 @@ pub fn WorkSidebar(current: Route) -> Element {
     let project_store = stores::use_project_store();
     let session_store = stores::use_session_store();
     let prefs = use_context::<crate::prefs::PrefsCtx>().prefs;
-    let nav = use_navigator();
     // The same hour as the Tasks page, so its counts and these agree.
     let focus = crate::now_block::use_focus();
     let account = use_context::<crate::auth::AuthCtx>().active;
@@ -100,27 +85,14 @@ pub fn WorkSidebar(current: Route) -> Element {
         let mut c = Counts {
             today: 0,
             overdue: 0,
-            upcoming: 0,
-            anytime: 0,
-            unfiled: 0,
             projects: Vec::new(),
         };
         for t in &board {
-            // Unfiled work is counted in its section like everything
-            // else, and once more here — the number to drive to zero.
-            if index.is_unfiled(t) {
-                c.unfiled += 1;
-            }
-            match task_ui::task_section(t, today) {
-                TaskSection::Today => {
-                    c.today += 1;
-                    if task_ui::display::TaskDisplay::due_date(*t).is_some_and(|d| d < today) {
-                        c.overdue += 1;
-                    }
+            if task_ui::task_section(t, today) == TaskSection::Today {
+                c.today += 1;
+                if task_ui::display::TaskDisplay::due_date(*t).is_some_and(|d| d < today) {
+                    c.overdue += 1;
                 }
-                TaskSection::Upcoming => c.upcoming += 1,
-                TaskSection::Anytime => c.anytime += 1,
-                TaskSection::Done => {}
             }
         }
         let mut rows: Vec<(String, String, usize)> = project_store
@@ -143,30 +115,6 @@ pub fn WorkSidebar(current: Route) -> Element {
     let c = counts();
 
     let on_tasks = matches!(current, Route::TasksRoute {});
-    // Which list section is on screen — the sidebar marks it, so the
-    // column says where you are, not just where you could go.
-    let mut in_view = use_signal(|| None::<String>);
-    use_effect(move || {
-        if !on_tasks {
-            return;
-        }
-        spawn(async move {
-            let mut watch = dioxus::document::eval(
-                "const ids=['tasks-today','tasks-upcoming','tasks-anytime'];\
-                 let last='';\
-                 const pick=()=>{let cur='';for(const id of ids){const e=document.getElementById(id);\
-                   if(e&&e.getBoundingClientRect().top<180)cur=id;}\
-                   if(!cur){for(const id of ids){if(document.getElementById(id)){cur=id;break;}}}\
-                   if(cur!==last){last=cur;dioxus.send(cur);}};\
-                 document.addEventListener('scroll',pick,{capture:true,passive:true});\
-                 setInterval(pick,800);pick();\
-                 await new Promise(()=>{});",
-            );
-            while let Ok(id) = watch.recv::<String>().await {
-                in_view.set((!id.is_empty()).then_some(id));
-            }
-        });
-    });
 
     use architect_ui::lucide_dioxus as i;
     let to_process = crate::process::use_to_process_count();
@@ -218,16 +166,6 @@ pub fn WorkSidebar(current: Route) -> Element {
     let count = "ml-auto shrink-0 text-[13px] tabular-nums text-muted-foreground md:text-xs";
     let heading = "flex w-full items-center gap-1 px-2.5 pb-1 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/80";
 
-    let smart = [
-        (TaskSection::Today, c.today, rsx! { i::CalendarCheck {} }),
-        (
-            TaskSection::Upcoming,
-            c.upcoming,
-            rsx! { i::CalendarDays {} },
-        ),
-        (TaskSection::Anytime, c.anytime, rsx! { i::Layers {} }),
-    ];
-
     rsx! {
         div { class: "flex min-h-0 flex-1 flex-col",
             // ── The workspace ──
@@ -236,6 +174,9 @@ pub fn WorkSidebar(current: Route) -> Element {
             }
             nav { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-2 pb-4 pt-1", aria_label: "Work",
                 // ── Your work ──
+                // Two rows, not a row per filter: Today, Upcoming,
+                // Anytime and unfiled work are the Tasks page's own
+                // sections and filters, one tap further in.
                 div { class: "flex flex-col gap-0.5",
                     Link {
                         to: Route::InboxRoute {},
@@ -248,48 +189,18 @@ pub fn WorkSidebar(current: Route) -> Element {
                             }
                         }
                     }
-                    for (section, n, glyph) in smart {
-                        {
-                            let here = on_tasks && in_view.read().as_deref() == Some(section.anchor());
-                            rsx! {
-                                button {
-                                    key: "{section.label()}",
-                                    r#type: "button",
-                                    aria_current: if here { "true" } else { "false" },
-                                    class: row(here),
-                                    onclick: move |_| {
-                                        if !on_tasks {
-                                            nav.push(Route::TasksRoute {});
-                                        }
-                                        scroll_to(section.anchor(), false);
-                                    },
-                                    span { class: icon, {glyph} }
-                                    span { "{section.label()}" }
-                                    span { class: count,
-                                        if section == TaskSection::Today && c.overdue > 0 {
-                                            span { class: "mr-1.5 rounded-full bg-rose-500/20 px-1.5 py-0.5 text-[11px] font-medium text-rose-300",
-                                                "{c.overdue} late"
-                                            }
-                                        }
-                                        if n > 0 { "{n}" }
-                                    }
+                    Link {
+                        to: Route::TasksRoute {},
+                        class: row(on_tasks),
+                        span { class: icon, i::CircleCheck {} }
+                        span { "Tasks" }
+                        span { class: count,
+                            if c.overdue > 0 {
+                                span { class: "mr-1.5 rounded-full bg-rose-500/20 px-1.5 py-0.5 text-[11px] font-medium text-rose-300",
+                                    "{c.overdue} late"
                                 }
                             }
-                        }
-                    }
-                    if c.unfiled > 0 {
-                        button {
-                            r#type: "button",
-                            class: row(false),
-                            onclick: move |_| {
-                                if !on_tasks {
-                                    nav.push(Route::TasksRoute {});
-                                }
-                                scroll_to("tasks-unfiled", true);
-                            },
-                            span { class: icon, i::CircleDashed {} }
-                            span { "No project" }
-                            span { class: count, "{c.unfiled}" }
+                            if c.today > 0 { "{c.today}" }
                         }
                     }
                 }

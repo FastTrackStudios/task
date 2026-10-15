@@ -15,7 +15,7 @@
 //! read the same data the same way.
 
 use finance_ui::{FinancesView, InvoicesView, LedgerView, offer_integrations, provide_stores};
-use task_plugin_ui::architect_ui::lucide_dioxus::{ReceiptText, Scale, Wallet};
+use task_plugin_ui::architect_ui::lucide_dioxus::Wallet;
 use task_plugin_ui::dioxus::prelude::*;
 use task_plugin_ui::{PluginApp, PluginNav};
 
@@ -23,28 +23,15 @@ use task_plugin_ui::{PluginApp, PluginNav};
 pub const APP: PluginApp = PluginApp {
     id: "finance",
     version: env!("CARGO_PKG_VERSION"),
-    nav: &[
-        PluginNav {
-            label: "Finances",
-            icon: icon_finances,
-            path: "",
-            rail: false,
-        },
-        PluginNav {
-            label: "Invoices",
-            icon: icon_invoices,
-            path: "invoices",
-            // The one screen with a recurring errand attached — money
-            // that has gone out and not come back is checked often.
-            rail: true,
-        },
-        PluginNav {
-            label: "Ledger",
-            icon: icon_ledger,
-            path: "ledger",
-            rail: false,
-        },
-    ],
+    // One tab: the overview, invoices and ledger are a strip inside it
+    // (`FinanceTabs`), not three entries in the sidebar.
+    nav: &[PluginNav {
+        label: "Finance",
+        icon: icon_finances,
+        path: "",
+        // Money that has gone out and not come back is checked often.
+        rail: true,
+    }],
     view,
     panel: None,
     claim_file: None,
@@ -60,14 +47,6 @@ fn icon_finances() -> Element {
     rsx! { Wallet { size: 16 } }
 }
 
-fn icon_invoices() -> Element {
-    rsx! { ReceiptText { size: 16 } }
-}
-
-fn icon_ledger() -> Element {
-    rsx! { Scale { size: 16 } }
-}
-
 fn view(path: &str, query: &str) -> Option<Element> {
     // The screens are their own wasm chunk on the web, downloaded the
     // first time somebody opens this app; everything else the app
@@ -76,14 +55,47 @@ fn view(path: &str, query: &str) -> Option<Element> {
 }
 
 fn finance_screen(path: &str, query: &str) -> Option<Element> {
-    match path {
-        "" => Some(rsx! { FinancesView {} }),
+    let screen = match path {
+        "" => rsx! { FinancesView {} },
         // Work another app sent here to be billed arrives as ordinary
         // query parameters — the integration is a link, so the deep
         // link is all there is to receive.
-        "invoices" => Some(rsx! { InvoicesView { sent: sent_work(query) } }),
-        "ledger" => Some(rsx! { LedgerView {} }),
-        _ => None,
+        "invoices" => rsx! { InvoicesView { sent: sent_work(query) } },
+        "ledger" => rsx! { LedgerView {} },
+        _ => return None,
+    };
+    let here = path.to_owned();
+    Some(rsx! {
+        FinanceTabs { here }
+        {screen}
+    })
+}
+
+/// The app's three screens as one strip — the sidebar holds a single
+/// Finance entry, and this is how you move within it.
+#[component]
+fn FinanceTabs(here: String) -> Element {
+    const TABS: [(&str, &str); 3] = [
+        ("", "Overview"),
+        ("invoices", "Invoices"),
+        ("ledger", "Ledger"),
+    ];
+    rsx! {
+        nav { class: "mx-auto flex w-full max-w-5xl gap-1 px-4 pt-4 sm:px-8",
+            "aria-label": "Finance",
+            for (path, label) in TABS {
+                Link {
+                    key: "{label}",
+                    to: task_plugin_ui::href("finance", path, ""),
+                    class: if here == path {
+                        "rounded-full bg-accent px-3.5 py-1.5 text-[14px] font-medium text-foreground"
+                    } else {
+                        "rounded-full px-3.5 py-1.5 text-[14px] text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                    },
+                    "{label}"
+                }
+            }
+        }
     }
 }
 

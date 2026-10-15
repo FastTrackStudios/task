@@ -202,6 +202,7 @@ pub fn ScheduleView() -> Element {
     let nav = use_navigator();
     // Which apps may claim a file the overlay links to.
     let plugins = crate::nav::use_active_plugins();
+    let bookings_on = plugins.contains("bookings");
 
     // The same meals, on the block axis. The time grid can only show a
     // meal where a day-plan block happens to sit; this shows every
@@ -492,6 +493,17 @@ pub fn ScheduleView() -> Element {
                         label: "Reset day to template",
                         icon: rsx! { architect_ui::lucide_dioxus::RotateCcw { size: 18 } },
                         on_click: move |()| reset_day(cal_anchor()),
+                    }
+                    // Bookings live with the schedule, not as a section of
+                    // their own.
+                    if bookings_on {
+                        task_ui_core::section_header::SectionMenuItem {
+                            label: "Bookings",
+                            icon: rsx! { architect_ui::lucide_dioxus::CalendarClock { size: 18 } },
+                            on_click: move |()| {
+                                nav.push(task_plugin_ui::href("bookings", "", ""));
+                            },
+                        }
                     }
                 }
             }
