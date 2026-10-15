@@ -352,6 +352,16 @@ pub(crate) fn NoteView(
     let fresh_path = path.clone();
     // Whether the body has focus: the phone's keyboard toolbar shows
     // while it does.
+    // The typing test reads the body and caret the editor holds.
+    let publish_path = path.clone();
+    use_effect(move || {
+        let s = body_state.read();
+        crate::typing_test::publish_note(
+            &publish_path,
+            &s.doc.to_string(),
+            s.selection.primary().head,
+        );
+    });
     let mut body_focused = use_signal(|| false);
     // A phone shows the name in the top strip and no heading over the
     // body; a desk the other way round.

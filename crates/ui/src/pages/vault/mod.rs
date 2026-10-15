@@ -67,7 +67,7 @@
 //! [`set_folder`]: vault_proto::VaultSync::set_folder
 //! [`PageMeta`]: vault_proto::PageMeta
 
-mod rpc;
+pub(crate) mod rpc;
 mod tabs;
 mod tree;
 

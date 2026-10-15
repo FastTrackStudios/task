@@ -518,7 +518,9 @@ pub fn KeyboardToolbar(
 ) -> Element {
     let panels = try_use_context::<crate::shell::phone_gestures::PhonePanels>();
     let phone = panels.is_some_and(|p| (p.phone)());
-    if !focused || !phone {
+    // A drawer over the note takes the screen; the bar steps aside.
+    let drawer_open = panels.is_some_and(|p| (p.left_open)() || (p.right_open)());
+    if !focused || !phone || drawer_open {
         return rsx! {};
     }
     rsx! {

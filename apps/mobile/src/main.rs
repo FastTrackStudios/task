@@ -3,6 +3,7 @@ use ui::App;
 
 mod ios_auth;
 mod keyboard_bar;
+mod typing_keys;
 mod watch_sync;
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -33,6 +34,8 @@ fn main() {
     ios_auth::init();
     // The app draws its own bar over the keyboard; drop the web view's.
     keyboard_bar::init();
+    // A typing-test launch types through the web view's own keyboard input.
+    typing_keys::init();
 
     // Before launch — the nav is built on first render, and an app
     // registered after that has no tab until something else redraws.

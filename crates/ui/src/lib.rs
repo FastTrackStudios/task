@@ -68,6 +68,7 @@ pub mod task_board;
 pub mod task_sort;
 pub mod theming;
 pub mod toasts;
+pub mod typing_test;
 pub mod vault_lookup;
 pub mod vox_clients;
 pub mod watch_sync;

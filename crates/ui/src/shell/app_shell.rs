@@ -275,6 +275,14 @@ pub fn AppShell() -> Element {
         // Mounts its own document-level hotkey listener.
         crate::palette::CommandPalette {}
         crate::notes_search::NotesSearch {}
+        // A typing-test launch (`TASK_TYPING_TEST=1`) types every case
+        // into notes and reports; nothing otherwise.
+        if crate::typing_test::enabled() {
+            crate::typing_test::TypingTestRunner {}
+        }
+        if crate::typing_test::trace_requested() {
+            crate::typing_test::TypingTraceRecorder {}
+        }
         // App-wide notice queue (architect::Notifications, provided by
         // `use_app_reactive` at the app root). Mutations + the vault
         // DocumentSession report failures here so they outlive the

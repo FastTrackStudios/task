@@ -145,6 +145,12 @@ mobile-css: css
 mobile-sim *ARGS:
     bash apps/mobile/ios/build-ios.sh {{ARGS}}
 
+# The typing test: every markdown construct typed into the app's note
+# view on the booted simulator through the iOS keyboard's input calls;
+# text, caret and rendering checked, a screenshot per case.
+ios-typing *ARGS:
+    bash apps/mobile/ios/typing-test.sh {{ARGS}}
+
 # Canonical server. Default bind is 0.0.0.0:9090; override with
 # TASK_SERVER_BIND. See `.env.example` for the full env surface.
 server:
