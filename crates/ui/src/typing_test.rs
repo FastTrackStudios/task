@@ -256,6 +256,110 @@ pub const CASES: &[Case] = &[
         )
     },
     Case {
+        render: &[".md-blockquote"],
+        ..case(
+            "a quote continues on return",
+            &[Text("> first line"), Return, Text("second line")],
+            "> first line\n> second line",
+        )
+    },
+    Case {
+        render: &[".md-blockquote"],
+        ..case(
+            "return on an empty quote line leaves the quote",
+            &[Text("> quoted"), Return, Return, Text("after")],
+            "> quoted\nafter",
+        )
+    },
+    Case {
+        render: &[".md-blockquote"],
+        ..case(
+            "a nested quote continues at its depth",
+            &[Text("> > deep"), Return, Text("deeper still")],
+            "> > deep\n> > deeper still",
+        )
+    },
+    Case {
+        render: &[".md-blockquote"],
+        ..case(
+            "a list inside a quote continues",
+            &[Text("> - one"), Return, Text("two")],
+            "> - one\n> - two",
+        )
+    },
+    Case {
+        render: &[".md-callout-warning"],
+        ..case(
+            "a warning callout",
+            &[
+                Text("> [!warning] Careful"),
+                Return,
+                Text("mind the levels"),
+            ],
+            "> [!warning] Careful\n> mind the levels",
+        )
+    },
+    Case {
+        render: &[".md-callout-tip"],
+        ..case(
+            "a tip callout",
+            &[Text("> [!tip] Try this"), Return, Text("double the take")],
+            "> [!tip] Try this\n> double the take",
+        )
+    },
+    Case {
+        render: &[".md-callout-collapsible"],
+        ..case(
+            "a collapsible callout",
+            &[Text("> [!example]+ Folded"), Return, Text("hidden body")],
+            "> [!example]+ Folded\n> hidden body",
+        )
+    },
+    Case {
+        render: &[".md-callout-nested-2"],
+        ..case(
+            "a callout nested in a callout",
+            &[
+                Text("> [!example] Outer"),
+                Return,
+                Text("> [!warning] Inner"),
+                Return,
+                Text("inner body"),
+            ],
+            "> [!example] Outer\n> > [!warning] Inner\n> > inner body",
+        )
+    },
+    Case {
+        render: &[".md-math-block, .md-math-widget-block"],
+        ..case(
+            "display math",
+            &[Text("$$ x^2 + y^2 $$"), Return, Return, Text("after")],
+            "$$ x^2 + y^2 $$\n\nafter",
+        )
+    },
+    Case {
+        render: &[".md-footnote"],
+        ..case(
+            "a footnote reference",
+            &[Text("a claim[^1] stands")],
+            "a claim[^1] stands",
+        )
+    },
+    Case {
+        render: &[".md-h1"],
+        ..case(
+            "a setext heading",
+            &[
+                Text("Big title"),
+                Return,
+                Text("========="),
+                Return,
+                Text("body"),
+            ],
+            "Big title\n=========\nbody",
+        )
+    },
+    Case {
         render: &[".md-wikilink"],
         ..case(
             "wikilink",
