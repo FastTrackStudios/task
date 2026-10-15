@@ -97,6 +97,21 @@ pub fn nav_tabs() -> Vec<NavTab> {
             route: Route::TasksRoute {},
         },
         NavTab {
+            label: "Projects",
+            plugin: "core",
+            icon: icon_projects,
+            route: Route::ProjectsRoute {},
+        },
+        NavTab {
+            label: "Vault",
+            plugin: "core",
+            icon: icon_vault,
+            route: Route::VaultRoute {
+                path: String::new(),
+                org: String::new(),
+            },
+        },
+        NavTab {
             label: "Favorites",
             plugin: "core",
             icon: icon_star,
@@ -109,12 +124,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "core",
             icon: icon_activity,
             route: Route::ActivityRoute {},
-        },
-        NavTab {
-            label: "Projects",
-            plugin: "core",
-            icon: icon_projects,
-            route: Route::ProjectsRoute {},
         },
         // Issues and pieces of projects with no where or when — kept
         // off Tasks (next actions), one tap from here.
@@ -141,15 +150,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "core",
             icon: icon_goals,
             route: Route::GoalsRoute {},
-        },
-        NavTab {
-            label: "Vault",
-            plugin: "core",
-            icon: icon_vault,
-            route: Route::VaultRoute {
-                path: String::new(),
-                org: String::new(),
-            },
         },
         // Contacts — the people directory.
         NavTab {
@@ -339,6 +339,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::ActivityRoute {} => "Activity",
         Route::FavoritesRoute {} => "Favorites",
         Route::ContactsRoute {} => "Contacts",
+        Route::PersonRoute { .. } => "Person",
         Route::ProjectsRoute {} => "Projects",
         Route::ProjectDetailRoute { .. } => "Project",
         Route::GoalsRoute {} => "Goals",

@@ -21,6 +21,11 @@ pub fn OrgSwitcher(
     /// buttons there — the phone's section menu).
     #[props(default = true)]
     theme: bool,
+    /// Open the menu upward — for a switcher at the foot of a column.
+    /// At the top of one (the sidebar header) it drops down, so the
+    /// menu stays on screen on a phone.
+    #[props(default = false)]
+    up: bool,
 ) -> Element {
     // Data selection + discovered org list.
     let mut selection = use_context::<Signal<OrgSelection>>();
@@ -69,8 +74,8 @@ pub fn OrgSwitcher(
                     }
                 }
                 DropdownContent {
-                    side: if compact { "bottom" } else { "top" },
-                    align: "end",
+                    side: if up { "top" } else { "bottom" },
+                    align: if compact { "end" } else { "start" },
                     width: "w-64",
                     DropdownLabel { "View organization" }
                     // All — the default aggregate view.

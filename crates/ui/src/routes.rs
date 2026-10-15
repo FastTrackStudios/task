@@ -76,6 +76,10 @@ pub enum Route {
         #[route("/contacts")]
         ContactsRoute {},
 
+        // One person's profile — where a mention in a capture opens.
+        #[route("/people/:id")]
+        PersonRoute { id: String },
+
         #[route("/projects")]
         ProjectsRoute {},
 
@@ -330,6 +334,11 @@ fn ContactsRoute() -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "contacts", pages::contacts::ContactsView {} }
     }
+}
+
+#[component]
+fn PersonRoute(id: String) -> Element {
+    rsx! { crate::people::PersonProfile { id } }
 }
 
 #[component]

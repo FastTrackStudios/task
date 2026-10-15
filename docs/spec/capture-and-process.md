@@ -238,10 +238,22 @@ first can step back to it.
 t[process.capture.marks]
 A capture's row reads its words for marks without changing them: a
 `#tag` shows as a badge (its colour fixed by the tag), an `@context`
-as a chip, and a person — an org member or contact named by `@handle`
-(their first name) or by their capitalised first name — as an avatar.
-Tags and contexts lift out of the row's text; an `@handle` reads as the
-name. Bare numbers (`#12`) and email addresses are not marks.
+as a chip. Tags and contexts lift out of the row's text. Bare numbers
+(`#12`) and email addresses are not marks.
+
+---
+
+### People are named in place
+
+t[process.capture.people]
+A person — a contact, or an org member — named by `@handle` or by their
+capitalised name is drawn **where they are named**: a small avatar and
+their first name, or their full name when the words wrote it out
+(`@casey-lane`, "Casey Lane"). Tapping them opens their profile
+(`/people/<contact id>`) whether or not they are in the org. Every
+person is in exactly one context (`Contact::context`: their first group,
+or `people` until sorted), and naming them brings that context onto the
+capture's row. Parsing lives in `crates/ui/src/people.rs` (`marks`).
 
 ---
 
@@ -381,14 +393,15 @@ without the person saying so.
 |---|---|
 | `process.capture.single-path`, `.verbatim`, `process.outcome.task` | `tests/integration/tests/it/process.rs` — capture on the Inbox lane, task on the Task lane, back-link read back |
 | `process.due` | `process.rs` (the planted inbox over the wire) and `example_org::declared_tests::the_planted_inbox_has_captures_to_process` |
-| `process.capture.marks` | `pages::inbox` unit tests (what is a mark, people by handle or name); `example_org::declared_tests::the_seeded_inbox_shows_people_tags_and_contexts`; `process.rs` serves the planted captures verbatim |
+| `process.capture.marks`, `.people` | `people` unit tests (what is a mark; people by handle or name, first or full); `example_org::declared_tests::every_person_a_capture_names_has_a_profile`; `example_org::declared_tests::the_seeded_inbox_shows_people_tags_and_contexts`; `process.rs` serves the planted captures verbatim |
 | `process.suggested` | `task-proto::suggest` unit tests (the order, "Not now", what is running); `apps/server/tests/it/watch_suggested_e2e.rs::the_watch_suggests_and_acts_on_the_same_pick` — planned task, a template's maintenance hour opening a "Maintenance hour" session, the fall-through to overdue and captures, over the watch bridge |
 | `process.focus.*` (but `.everywhere`) | unit tests in `task-proto::relevance` and `scheduling-proto::focus`; `process.rs` over `TaskService::query`; the seed's maintenance hour in `example_org::declared_tests` |
 
-The seeded world shows the whole loop to Alice: eight captures in
+The seeded world shows the whole loop to Alice: nine captures in
 acme-audio's inbox (one suggested from mail, one snoozed two weeks out,
 two carrying `@errands` / `#chore`, and two marked up with a person, a
-`#tag` and an `@context` — Sam's avatar, Casey by name), weekday and weekend templates with
+`#tag` and an `@context` — Sam by handle, Casey by name — and one naming
+Jordan, a mastering engineer who is a contact but not a member), weekday and weekend templates with
 an "Errands & chores" maintenance block (16:00–17:00 on weekdays), and
 three open album tasks tagged `@errands`, `@chores` and `#chore` for that
 hour to bring forward. What is not met is in [unmet](unmet.md).

@@ -21,6 +21,7 @@ use dioxus_primitives::toast::ToastOptions;
 use inbox_proto::InboxItem;
 
 use crate::orgs::{OrgMeta, OrgSelection};
+use crate::people::{MarkedLine, Marks, marks, use_known_people};
 use crate::process::{Mode, Outcome, ProcessCard};
 use crate::stores;
 
@@ -219,18 +220,15 @@ pub fn InboxView() -> Element {
                 for (idx, it) in rows.into_iter() {
                     {
                         // t[impl process.capture.marks]
+                        // t[impl process.capture.people]
                         let (title, rest) = crate::process::split_title_body(&it.body);
-                        let people = known();
+                        let people = known.clone();
                         let mut m = marks(&title, &people);
                         let rest_m = marks(rest.lines().next().unwrap_or_default(), &people);
-                        let rest = rest_m.text.clone();
-                        let title = std::mem::take(&mut m.text);
+                        let title_segs = std::mem::take(&mut m.segs);
+                        let rest_segs = rest_m.segs.clone();
                         m.merge(rest_m);
-                        let Marks { tags, contexts, people, .. } = m;
-                        let with = format!(
-                            "With {}",
-                            people.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
-                        );
+                        let Marks { tags, contexts, .. } = m;
                         let kind = CaptureKind::of(&it);
                         let age = ago(&it.created, Utc::now());
                         // A suggestion also says who proposed it.
@@ -238,6 +236,7 @@ pub fn InboxView() -> Element {
                             && it.source != "ui"
                             && it.source != "cli")
                             .then(|| format!("from {}", it.source));
+                        let has_meta = from.is_some() || !tags.is_empty() || !contexts.is_empty();
                         rsx! {
                             li { key: "{it.id}",
                                 button {
@@ -247,16 +246,21 @@ pub fn InboxView() -> Element {
                                     {kind.tile()}
                                     span { class: "flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5",
                                         span { class: "flex items-baseline gap-2",
-                                            span { class: "line-clamp-2 min-w-0 flex-1 text-[16px] leading-[22px] text-foreground", "{title}" }
+                                            span { class: "line-clamp-2 min-w-0 flex-1 text-[16px] leading-[22px] text-foreground",
+                                                MarkedLine { segs: title_segs }
+                                            }
                                             span { class: "shrink-0 text-[13px] tabular-nums text-muted-foreground", "{age}" }
                                         }
-                                        if !rest.is_empty() {
-                                            span { class: "line-clamp-1 text-[14px] leading-5 text-muted-foreground", "{rest}" }
+                                        if !rest_segs.is_empty() {
+                                            span { class: "line-clamp-1 text-[14px] leading-5 text-muted-foreground",
+                                                MarkedLine { segs: rest_segs }
+                                            }
                                         }
+                                        // No kind word: the tile already says what it is.
+                                        if has_meta {
                                         span { class: "mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] text-muted-foreground",
                                             span { class: "flex min-w-0 flex-1 flex-wrap items-center gap-1.5",
-                                                span { class: if kind == CaptureKind::Suggested { "font-medium text-primary" } else { "" }, "{kind.label()}" }
-                                                if let Some(f) = from { span { "· {f}" } }
+                                                if let Some(f) = from { span { "{f}" } }
                                                 for t in tags {
                                                     span {
                                                         key: "t-{t}",
@@ -270,23 +274,12 @@ pub fn InboxView() -> Element {
                                                         key: "c-{c}",
                                                         "data-testid": "inbox-context",
                                                         class: "inline-flex items-center gap-1 rounded-full border border-border px-2 py-px text-[12px] leading-[18px] text-foreground/80",
-                                                        architect_ui::lucide_dioxus::AtSign { size: 11 }
+                                                        architect_ui::lucide_dioxus::DoorOpen { size: 11 }
                                                         "{c}"
                                                     }
                                                 }
                                             }
-                                            if !people.is_empty() {
-                                                span {
-                                                    "data-testid": "inbox-people",
-                                                    class: "flex shrink-0 -space-x-1.5",
-                                                    "aria-label": "{with}",
-                                                    for p in people.into_iter().take(3) {
-                                                        span { key: "{p.name}", class: "rounded-full ring-2 ring-background",
-                                                            task_ui_core::avatar::Avatar { name: p.name, email: p.email, size: 20 }
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                        }
                                         }
                                     }
                                 }
@@ -508,155 +501,6 @@ impl CaptureKind {
     }
 }
 
-/// Someone a capture can be about: an org member or a contact.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Person {
-    pub name: String,
-    pub email: String,
-}
-
-impl Person {
-    /// The `@handle` that names them: their first name, lowercased.
-    fn handle(&self) -> String {
-        self.name
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_lowercase()
-    }
-}
-
-/// A line of a capture, read for what it is marked with: `#tags`,
-/// `@contexts`, and the people it mentions — by `@handle` or by first
-/// name. `text` is the line as the row shows it: tags and contexts
-/// lifted out into badges, an `@handle` said as the person's name.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Marks {
-    pub text: String,
-    pub tags: Vec<String>,
-    pub contexts: Vec<String>,
-    pub people: Vec<Person>,
-}
-
-impl Marks {
-    fn merge(&mut self, other: Marks) {
-        for t in other.tags {
-            push_unique(&mut self.tags, t);
-        }
-        for c in other.contexts {
-            push_unique(&mut self.contexts, c);
-        }
-        for p in other.people {
-            push_unique(&mut self.people, p);
-        }
-    }
-}
-
-fn push_unique<T: PartialEq>(v: &mut Vec<T>, x: T) {
-    if !v.contains(&x) {
-        v.push(x);
-    }
-}
-
-/// Read a line for its marks (see [`Marks`]).
-#[must_use]
-pub fn marks(line: &str, known: &[Person]) -> Marks {
-    let mut out = Marks::default();
-    let mut words: Vec<String> = Vec::new();
-    let by_handle = |h: &str| known.iter().find(|p| p.handle() == h).cloned();
-    for word in line.split_whitespace() {
-        // Matched without trailing punctuation, which stays in the text.
-        let core = word.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
-        let tail = &word[core.len()..];
-        let name_of = |s: &str| {
-            s.chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/')
-                && s.chars().any(char::is_alphabetic)
-        };
-        if let Some(tag) = core.strip_prefix('#').filter(|t| name_of(t)) {
-            push_unique(&mut out.tags, tag.to_owned());
-            continue;
-        }
-        if let Some(at) = core.strip_prefix('@').filter(|t| name_of(t)) {
-            if let Some(p) = by_handle(&at.to_lowercase()) {
-                words.push(format!("{}{tail}", p.handle_display()));
-                push_unique(&mut out.people, p);
-            } else {
-                push_unique(&mut out.contexts, at.to_owned());
-            }
-            continue;
-        }
-        // A first name said plainly ("Reply to Casey") — capitalised,
-        // as names are written, so "sam" the word never matches.
-        let bare = core.strip_suffix("'s").unwrap_or(core);
-        if bare.len() >= 3 && bare.starts_with(char::is_uppercase) {
-            if let Some(p) = by_handle(&bare.to_lowercase()) {
-                push_unique(&mut out.people, p);
-            }
-        }
-        words.push(word.to_owned());
-    }
-    out.text = words.join(" ");
-    out
-}
-
-impl Person {
-    /// The name as a sentence says it: the first name, as written.
-    fn handle_display(&self) -> String {
-        self.name
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_owned()
-    }
-}
-
-/// Everyone a capture in this org might mention: its members and its
-/// contacts, less the person signed in. Empty until they load.
-fn use_known_people(slug: Memo<Option<String>>) -> Memo<Vec<Person>> {
-    let account = use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
-    let contacts = stores::use_contact_list();
-    let members = use_resource(move || {
-        let slug = slug();
-        let token = account.read().as_ref().map(|a| a.token.clone());
-        async move {
-            match slug {
-                Some(s) => crate::feeds::fetch_org_members(&s, token.unwrap_or_default())
-                    .await
-                    .unwrap_or_default(),
-                None => Vec::new(),
-            }
-        }
-    });
-    use_memo(move || {
-        let me = account.read().as_ref().map(|a| a.email.to_lowercase());
-        let mut people: Vec<Person> = Vec::new();
-        let mut add = |name: &str, email: &str| {
-            let name = name.trim();
-            if name.is_empty() || me.as_deref() == Some(&email.to_lowercase()) {
-                return;
-            }
-            if !people.iter().any(|p| p.name.eq_ignore_ascii_case(name)) {
-                people.push(Person {
-                    name: name.to_owned(),
-                    email: email.to_owned(),
-                });
-            }
-        };
-        if let Some(list) = &*members.read() {
-            for m in list {
-                add(&m.name, &m.email);
-            }
-        }
-        if let Some(rows) = contacts.value() {
-            for (_, c) in rows {
-                add(&c.full_name, c.primary_email().unwrap_or_default());
-            }
-        }
-        people
-    })
-}
-
 /// A `#tag`'s badge colours, the same for the same tag everywhere.
 fn tag_tint(tag: &str) -> &'static str {
     const TINTS: [&str; 6] = [
@@ -715,47 +559,6 @@ mod tests {
             CaptureKind::Suggested,
             "a suggestion says so first"
         );
-    }
-
-    fn cast() -> Vec<Person> {
-        ["Sam Reed", "Casey"]
-            .iter()
-            .map(|n| Person {
-                name: (*n).to_owned(),
-                email: String::new(),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn tags_and_contexts_become_badges_and_leave_the_text() {
-        let m = marks("Descale the espresso machine #chore @home.", &cast());
-        assert_eq!(m.text, "Descale the espresso machine");
-        assert_eq!(m.tags, vec!["chore"]);
-        assert_eq!(m.contexts, vec!["home"]);
-        assert!(m.people.is_empty());
-        // Not marks: a number, an email address, a lone sign.
-        let m = marks("Fix #12 for a@b.test # now", &cast());
-        assert!(m.tags.is_empty() && m.contexts.is_empty());
-        assert_eq!(m.text, "Fix #12 for a@b.test # now");
-    }
-
-    #[test]
-    fn people_are_found_by_handle_or_by_name() {
-        let m = marks("Ask @sam to check the patchbay @office", &cast());
-        assert_eq!(m.text, "Ask Sam to check the patchbay");
-        assert_eq!(m.people.len(), 1);
-        assert_eq!(m.people[0].name, "Sam Reed");
-        assert_eq!(
-            m.contexts,
-            vec!["office"],
-            "a handle nobody owns is a context"
-        );
-
-        let m = marks("Fold in Casey's notes, and sam the word", &cast());
-        assert_eq!(m.people.len(), 1, "a name is capitalised: {m:?}");
-        assert_eq!(m.people[0].name, "Casey");
-        assert_eq!(m.text, "Fold in Casey's notes, and sam the word");
     }
 
     #[test]

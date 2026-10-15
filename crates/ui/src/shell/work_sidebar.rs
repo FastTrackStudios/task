@@ -174,6 +174,37 @@ pub fn WorkSidebar(current: Route) -> Element {
     let favorites = use_context::<crate::favorites::Favorites>().0;
     let mut projects_open = use_signal(|| true);
     let mut favorites_open = use_signal(|| true);
+    let on_projects = matches!(current, Route::ProjectsRoute {});
+    let mut workspace_open = use_signal(|| true);
+    let mut customize_open = use_signal(|| false);
+    // Every section the rows above don't already hold, in the person's
+    // arrangement (Customize) — the phone's bar keeps only four.
+    let every_section = crate::nav::nav_tabs_for(&crate::nav::use_active_plugins());
+    let layout = crate::nav_layout::use_nav_layout();
+    let sections: Vec<crate::nav::NavTab> = layout
+        .read()
+        .arrange(every_section.clone())
+        .0
+        .into_iter()
+        .filter(|t| {
+            !matches!(
+                t.route,
+                Route::InboxRoute {} | Route::TasksRoute {} | Route::ProjectsRoute {}
+            )
+        })
+        .collect();
+    // Starred projects lead, then the rest of the active ones.
+    let project_rows: Vec<(String, String, usize, bool)> = {
+        let favs = favorites.read();
+        let starred = |pid: &str| favs.iter().any(|f| f.kind == "project" && f.id == pid);
+        let mut rows: Vec<_> = c
+            .projects
+            .iter()
+            .map(|(pid, t, n)| (pid.clone(), t.clone(), *n, starred(pid)))
+            .collect();
+        rows.sort_by_key(|r| !r.3);
+        rows
+    };
 
     // A row: icon, label, count, the current one in the tab bar's pill.
     let row = |here: bool| {
@@ -299,42 +330,56 @@ pub fn WorkSidebar(current: Route) -> Element {
                 }
 
                 // ── Projects ──
+                // The row opens the Projects page; the chevron folds
+                // the starred-then-active list under it.
                 div { class: "flex flex-col gap-0.5",
-                    div { class: "flex items-center",
-                        button {
-                            r#type: "button",
-                            class: heading,
-                            aria_expanded: "{projects_open}",
-                            onclick: move |_| projects_open.toggle(),
-                            "Projects"
-                            span { class: if projects_open() { "transition-transform rotate-90" } else { "transition-transform" },
-                                i::ChevronRight { size: 12 }
-                            }
-                        }
+                    div { class: "flex items-center gap-0.5",
                         Link {
                             to: Route::ProjectsRoute {},
-                            class: "shrink-0 px-2.5 pb-1 text-[12px] text-muted-foreground hover:text-foreground",
-                            "All"
+                            class: "{row(on_projects)} min-w-0 flex-1",
+                            span { class: icon, i::FolderKanban {} }
+                            span { "Projects" }
+                            span { class: count, "{c.projects.len()}" }
+                        }
+                        button {
+                            r#type: "button",
+                            "data-testid": "sidebar-projects-toggle",
+                            class: "flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground hover:bg-foreground/[0.05] active:bg-foreground/[0.08] md:size-8",
+                            aria_expanded: "{projects_open}",
+                            aria_label: if projects_open() { "Hide projects" } else { "Show projects" },
+                            onclick: move |_| projects_open.toggle(),
+                            span { class: if projects_open() { "transition-transform rotate-90" } else { "transition-transform" },
+                                i::ChevronRight { size: 15 }
+                            }
                         }
                     }
                     if projects_open() {
                         if c.projects.is_empty() {
                             p { class: "px-2.5 text-[13px] text-muted-foreground", "No active projects." }
                         }
-                        for (pid, title, n) in c.projects.iter().cloned() {
+                        for (pid, title, n, starred) in project_rows.iter().cloned() {
                             {
                                 let here = matches!(&current, Route::ProjectDetailRoute { id } if *id == pid);
                                 rsx! {
                                     Link {
                                         key: "{pid}",
                                         to: Route::ProjectDetailRoute { id: pid.clone() },
-                                        class: row(here),
+                                        class: if here {
+                                            "flex min-h-12 w-full items-center gap-3 rounded-[12px] bg-foreground/[0.08] px-2 text-[15px] font-medium text-foreground md:min-h-10 md:text-sm"
+                                        } else {
+                                            "flex min-h-12 w-full items-center gap-3 rounded-[12px] px-2 text-[15px] text-foreground/85 hover:bg-foreground/[0.05] active:bg-foreground/[0.08] md:min-h-10 md:text-sm"
+                                        },
+                                        // A cover, not an icon: big enough to
+                                        // tell the projects apart at a glance.
                                         img {
-                                            class: "size-5 shrink-0 rounded-[5px] object-cover",
+                                            class: "size-9 shrink-0 rounded-[8px] object-cover md:size-7 md:rounded-[6px]",
                                             src: "{task_ui_core::abstract_art::data_url(&pid)}",
                                             alt: "",
                                         }
                                         span { class: "min-w-0 truncate", "{title}" }
+                                        if starred {
+                                            span { class: "shrink-0 text-amber-400", aria_label: "Starred", i::Star { size: 12 } }
+                                        }
                                         if n > 0 { span { class: count, "{n}" } }
                                     }
                                 }
@@ -342,8 +387,49 @@ pub fn WorkSidebar(current: Route) -> Element {
                         }
                     }
                 }
+
+                // ── Every other section ──
+                // The phone's bar holds four; the rest live here (the
+                // old switcher menu's job), in the person's order.
+                div { class: "flex flex-col gap-0.5",
+                    button {
+                        r#type: "button",
+                        class: heading,
+                        aria_expanded: "{workspace_open}",
+                        onclick: move |_| workspace_open.toggle(),
+                        "Workspace"
+                        span { class: if workspace_open() { "transition-transform rotate-90" } else { "transition-transform" },
+                            i::ChevronRight { size: 12 }
+                        }
+                    }
+                    if workspace_open() {
+                        for tab in sections.iter().cloned() {
+                            Link {
+                                key: "{tab.label}",
+                                to: tab.route.clone(),
+                                class: row(crate::nav::tabs_match(&current, &tab)),
+                                span { class: icon, {(tab.icon)()} }
+                                span { class: "min-w-0 truncate", "{tab.label}" }
+                            }
+                        }
+                        button {
+                            r#type: "button",
+                            "data-testid": "customize-tab-bar",
+                            class: "{row(false)} md:hidden",
+                            onclick: move |_| customize_open.set(true),
+                            span { class: icon, i::SlidersHorizontal {} }
+                            span { "Customize tab bar" }
+                        }
+                    }
+                }
             }
             AccountFooter {}
+        }
+        crate::nav_layout::CustomizeSheet {
+            open: customize_open(),
+            on_close: move |()| customize_open.set(false),
+            tabs: every_section,
+            layout,
         }
     }
 }
@@ -366,7 +452,9 @@ fn AccountFooter() -> Element {
     let mut sheet = use_signal(|| false);
     let nav = use_navigator();
     rsx! {
-        div { class: "border-t border-border/60 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] md:pb-2",
+        // No safe-area inset here: the phone drawer already keeps clear of
+        // the home indicator, and both together doubled the gap.
+        div { class: "border-t border-border/60 p-2 pb-1 md:pb-2",
             button {
                 r#type: "button",
                 class: "flex w-full items-center gap-3 rounded-[10px] px-2 py-2 text-left hover:bg-foreground/[0.05] active:bg-foreground/[0.08]",

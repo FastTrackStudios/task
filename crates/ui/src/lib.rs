@@ -48,6 +48,7 @@ pub mod offline;
 pub mod orgs;
 pub mod pages;
 pub mod palette;
+pub mod people;
 pub mod plugin_gate;
 pub mod prefs;
 pub mod presence;

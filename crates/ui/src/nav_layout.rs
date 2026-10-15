@@ -1,8 +1,8 @@
 //! The person's own arrangement of the sections — Linear's Customize.
 //!
 //! The section menu lists every section in an order the person chooses,
-//! and leaves out the ones they hide. **The first three are the tab
-//! bar**: put Schedule third and it is one tap away from anywhere. The
+//! and leaves out the ones they hide. **The first four are the tab
+//! bar**: put Schedule fourth and it is one tap away from anywhere. The
 //! arrangement is kept per device (`crate::local_store`), by label, so
 //! a section added later (a plugin switched on) simply appears at the
 //! end of the list until it is moved.
@@ -15,10 +15,12 @@ use dioxus::prelude::*;
 
 use crate::nav::NavTab;
 
-const KEY: &str = "task.nav.layout";
+// v2: the bar became four sections (Inbox, Tasks, Projects, Vault) with
+// no switcher — a layout saved for three would pin Favorites there.
+const KEY: &str = "task.nav.layout.v2";
 
 /// How many sections the tab bar holds.
-pub const PRIMARY: usize = 3;
+pub const PRIMARY: usize = 4;
 
 /// The order (by label) and what is hidden.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -90,7 +92,7 @@ impl NavLayout {
                 .iter()
                 .rev()
                 .find_map(|prev| shown.iter().position(|s| s.label == prev.label));
-            // Never into the person's tab bar: those three are chosen.
+            // Never into the person's tab bar: those four are chosen.
             let floor = PRIMARY.min(shown.len());
             let at = after.map_or(0, |p| p + 1).max(floor);
             shown.insert(at, t.clone());
@@ -193,7 +195,7 @@ pub fn CustomizeSheet(
             title: "Customize".to_owned(),
             on_close,
             p { class: "px-2 pb-3 text-[13px] text-muted-foreground",
-                "Drag to reorder. The first three are your tab bar."
+                "Drag to reorder. The first four are your tab bar."
             }
             div {
                 class: "relative mb-4 flex flex-col overflow-hidden rounded-[20px] bg-foreground/[0.05]",

@@ -895,6 +895,17 @@ pub const INBOX: &[DeclaredCapture] = &[
         captured_days_ago: 1,
         resurface_in_days: None,
     },
+    // Someone outside the org: Jordan is a contact, not a member, and
+    // the mention still opens their profile.
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a09",
+        body: "Send the final mixes to @jordan for mastering #album",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 0,
+        resurface_in_days: None,
+    },
 ];
 
 /// The declared captures of one org.
@@ -2498,6 +2509,56 @@ mod declared_tests {
         assert!(
             has_tag && has_context,
             "the seed needs a #tag and an @context"
+        );
+    }
+
+    // t[verify process.capture.people]
+    /// Everyone a seeded capture names by `@handle` who is a member has
+    /// a profile — a committed contact in that org's vault — and every
+    /// contact is in one context at least. One contact is outside the
+    /// org, and a capture names them too.
+    #[test]
+    fn every_person_a_capture_names_has_a_profile() {
+        let mut contacts: Vec<(&str, String)> = Vec::new();
+        for (org, _) in ORGS {
+            let Some(dir) = STUDIO.get_dir(format!("{org}/Vault/Records/contacts")) else {
+                continue;
+            };
+            for f in dir.files() {
+                let src = f.contents_utf8().expect("utf-8 contact");
+                let (fm, _) = src
+                    .strip_prefix("---\n")
+                    .and_then(|s| s.split_once("\n---"))
+                    .expect("frontmatter");
+                let v: serde_yaml::Value = serde_yaml::from_str(fm).expect("yaml");
+                let first = v["given_name"].as_str().expect("given_name").to_lowercase();
+                let groups = v["groups"].as_sequence().map_or(0, Vec::len);
+                assert!(groups >= 1, "{first}: a person is in one context at least");
+                contacts.push((org, first));
+            }
+        }
+        let member = |org: &str, h: &str| {
+            CAST.iter()
+                .any(|m| m.org == org && m.name.to_lowercase() == h)
+        };
+        let contact = |org: &str, h: &str| contacts.iter().any(|(o, f)| *o == org && f == h);
+        let mut outsider_named = false;
+        for c in INBOX {
+            for w in c.body.split_whitespace() {
+                let w = w.trim_end_matches(|ch: char| !ch.is_alphanumeric());
+                let Some(h) = w.strip_prefix('@') else {
+                    continue;
+                };
+                assert!(
+                    !member(c.org, h) || contact(c.org, h),
+                    "@{h} is a member with no profile"
+                );
+                outsider_named |= contact(c.org, h) && !member(c.org, h);
+            }
+        }
+        assert!(
+            outsider_named,
+            "a capture should name someone outside the org"
         );
     }
 

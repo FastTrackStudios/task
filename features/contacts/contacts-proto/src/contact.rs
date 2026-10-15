@@ -185,6 +185,20 @@ impl Contact {
         Self::split_lines(&self.groups)
     }
 
+    /// The context a person is not yet sorted into.
+    pub const UNSORTED_CONTEXT: &'static str = "people";
+
+    /// The one context this person is in — their first group — so a
+    /// mention of them says where the work belongs. Never empty: someone
+    /// not yet sorted is in [`Self::UNSORTED_CONTEXT`].
+    #[must_use]
+    pub fn context(&self) -> &str {
+        self.group_list()
+            .first()
+            .copied()
+            .unwrap_or(Self::UNSORTED_CONTEXT)
+    }
+
     /// Whether this contact came from a CardDAV sync (vs hand-authored)
     /// — synced contacts are refreshed by a pull, manual ones aren't.
     #[must_use]

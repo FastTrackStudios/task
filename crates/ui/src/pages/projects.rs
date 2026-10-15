@@ -984,9 +984,9 @@ fn ProjectRow(props: ProjectRowProps) -> Element {
             // and a readable fallback.
             ProjectTile {
                 p: props.p.clone(),
-                class: "size-10".to_string(),
-                text_class: "text-xs".to_string(),
-                rounded: "rounded-lg".to_string(),
+                class: "size-16 md:size-14".to_string(),
+                text_class: "text-base".to_string(),
+                rounded: "rounded-xl".to_string(),
             }
             // title + inline meta
             div { class: "flex min-w-0 flex-1 flex-col gap-0.5",

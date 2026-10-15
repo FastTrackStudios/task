@@ -19,12 +19,11 @@
 //! shell-lifetime component (see `crate::collab` docs for the keyed-
 //! child rule).
 
-use architect_ui::lucide_dioxus::{ChevronsUpDown, Feather, Search, SlidersHorizontal};
+use architect_ui::lucide_dioxus::Feather;
 use architect_ui::prelude::{Button, ButtonVariant, Text, TextVariant};
 use chrono::Utc;
 use dioxus::prelude::*;
 
-use crate::auth::{AccountSheetBody, AuthCtx, Avatar};
 use crate::chrome::{fmt_hms, owner_id, resolve_org, use_second_tick};
 use crate::nav::{NavTab, nav_tabs_for, tabs_match, use_active_plugins};
 use crate::orgs::{OrgMeta, OrgSelection};
@@ -396,55 +395,22 @@ fn MobileTimerSheet(mut open: Signal<bool>) -> Element {
 
 // ── the phone's tab bar (Linear's) ──────────────────────────────────
 
-/// Where the switcher slot last pointed, so it keeps showing it.
-const SECTION_KEY: &str = "task.nav.section";
-
-/// The phone shell's bottom: a floating pill of four — Inbox, Tasks,
-/// Favorites, and a section switcher — and, apart from it on the right,
-/// the capture button: a fleeting thought, into the inbox.
+/// The phone shell's bottom: a floating pill of four sections — Inbox,
+/// Tasks, Projects and Vault by default (the person's own first four,
+/// from Customize) — and, apart from it on the right, the capture
+/// button: a fleeting thought, into the inbox.
 ///
-/// The switcher shows the icon of the section you're in when that is
-/// none of the three (Projects, Schedule, Vault…), else the last one you
-/// visited (Schedule to start), with ⌃⌄ to say it opens a menu: the org
-/// at the top, every section below, your current one highlighted.
+/// Every other section is in the left drawer (swipe right), under the
+/// work it sits beside; there is no switcher slot, so the bar spends all
+/// four places on sections a thumb reaches all day.
 #[component]
 pub fn BottomTabBar(current: Route) -> Element {
-    let mut menu_open = use_signal(|| false);
-    let mut account_open = use_signal(|| false);
-    let mut customize_open = use_signal(|| false);
     let to_process = crate::process::use_to_process_count();
     let new_issue = use_context::<crate::new_issue::NewIssue>();
     let every = nav_tabs_for(&use_active_plugins());
-    // The person's arrangement (Customize): the menu lists what they
-    // show, in their order, and the first three are the tab bar.
     let layout = crate::nav_layout::use_nav_layout();
-    let (all, _hidden) = layout.read().arrange(every.clone());
-    let primary: Vec<NavTab> = all
-        .iter()
-        .take(crate::nav_layout::PRIMARY)
-        .cloned()
-        .collect();
-
-    // The section the switcher shows.
-    let in_primary = primary.iter().any(|t| tabs_match(&current, t));
-    let here = all
-        .iter()
-        .find(|t| !in_primary && tabs_match(&current, t))
-        .cloned();
-    if let Some(t) = here.as_ref() {
-        crate::local_store::set(SECTION_KEY, t.label);
-    }
-    let remembered = crate::local_store::get(SECTION_KEY).unwrap_or_else(|| "Schedule".to_owned());
-    // Never one of the three already on the bar: the remembered section
-    // if it isn't, else the first section after them.
-    let off_bar = |t: &&NavTab| !primary.iter().any(|p| p.label == t.label);
-    let section = here.clone().or_else(|| {
-        all.iter()
-            .filter(off_bar)
-            .find(|t| t.label == remembered)
-            .or_else(|| all.iter().find(off_bar))
-            .cloned()
-    });
+    let (all, _hidden) = layout.read().arrange(every);
+    let primary: Vec<NavTab> = all.into_iter().take(crate::nav_layout::PRIMARY).collect();
 
     let slot = |active: bool| {
         if active {
@@ -479,19 +445,6 @@ pub fn BottomTabBar(current: Route) -> Element {
                         }
                     }
                 }
-                // The section switcher.
-                button {
-                    r#type: "button",
-                    class: slot(here.is_some()),
-                    aria_label: "Sections",
-                    aria_haspopup: "menu",
-                    aria_expanded: menu_open().to_string(),
-                    onclick: move |_| menu_open.toggle(),
-                    if let Some(t) = section.clone() {
-                        span { class: "flex size-6 items-center justify-center [&_svg]:size-[22px]", {(t.icon)()} }
-                    }
-                    span { class: "text-muted-foreground", ChevronsUpDown { size: 12 } }
-                }
             }
             // Quick capture — a fleeting thought, from anywhere; it waits in
             // the inbox to be processed. (New issues are each section's
@@ -502,111 +455,6 @@ pub fn BottomTabBar(current: Route) -> Element {
                 aria_label: "Capture a fleeting thought",
                 onclick: move |_| new_issue.capture(String::new()),
                 Feather { size: 22 }
-            }
-        }
-        if menu_open() {
-            SectionMenu {
-                tabs: all,
-                current: current.clone(),
-                on_account: move |()| {
-                    menu_open.set(false);
-                    account_open.set(true);
-                },
-                on_customize: move |()| {
-                    menu_open.set(false);
-                    customize_open.set(true);
-                },
-                on_close: move |()| menu_open.set(false),
-            }
-        }
-        crate::nav_layout::CustomizeSheet {
-            open: customize_open(),
-            on_close: move |()| customize_open.set(false),
-            tabs: every,
-            layout,
-        }
-        BottomSheet {
-            open: account_open(),
-            title: "Account & status".to_string(),
-            on_close: move |()| account_open.set(false),
-            AccountSheetBody { on_done: move |()| account_open.set(false) }
-        }
-    }
-}
-
-/// The card the switcher opens, above the bar: the org (switch it from
-/// here), your account, and every section — the current one marked.
-#[component]
-fn SectionMenu(
-    tabs: Vec<NavTab>,
-    current: Route,
-    on_account: EventHandler<()>,
-    on_customize: EventHandler<()>,
-    on_close: EventHandler<()>,
-) -> Element {
-    let mut search = use_context::<crate::chrome::SearchOpen>().0;
-    let ctx = use_context::<AuthCtx>();
-    let account = ctx.active.read().clone();
-    let (name, email) = account.as_ref().map_or_else(
-        || (String::new(), String::new()),
-        |a| (a.name.clone(), a.email.clone()),
-    );
-    rsx! {
-        div { class: "fixed inset-0 z-40 md:hidden", onclick: move |_| on_close.call(()) }
-        div {
-            class: "fixed inset-x-7 bottom-[calc(3.375rem+0.5rem+max(0.75rem,calc(env(safe-area-inset-bottom)-4px)))] z-50 flex max-h-[65vh] flex-col overflow-hidden rounded-[1.75rem] border border-border/70 bg-popover shadow-2xl md:hidden",
-            role: "menu",
-            onclick: move |e| e.stop_propagation(),
-            div { class: "flex items-center gap-2 border-b border-border/60 px-4 py-2.5",
-                div { class: "min-w-0 flex-1", OrgSwitcher { compact: false, theme: false } }
-                button {
-                    r#type: "button",
-                    class: "flex size-10 shrink-0 items-center justify-center rounded-full text-foreground active:bg-accent",
-                    aria_label: "Customize",
-                    onclick: move |_| on_customize.call(()),
-                    SlidersHorizontal { size: 19 }
-                }
-                button {
-                    r#type: "button",
-                    class: "flex size-10 shrink-0 items-center justify-center rounded-full active:bg-accent",
-                    aria_label: "Account & status",
-                    onclick: move |_| on_account.call(()),
-                    Avatar { name: name.clone(), email: email.clone(), size: 26 }
-                }
-            }
-            ul { class: "min-h-0 flex-1 overflow-y-auto p-2",
-                for tab in tabs.into_iter() {
-                    {
-                        let on = tabs_match(&current, &tab);
-                        rsx! {
-                            li { key: "{tab.label}",
-                                Link {
-                                    to: tab.route.clone(),
-                                    class: if on {
-                                        "flex min-h-12 items-center gap-3.5 rounded-full bg-accent px-4 text-[17px] text-foreground"
-                                    } else {
-                                        "flex min-h-12 items-center gap-3.5 rounded-full px-4 text-[17px] text-foreground active:bg-accent/60"
-                                    },
-                                    onclick: move |_| on_close.call(()),
-                                    span { class: "flex size-6 shrink-0 items-center justify-center [&_svg]:size-5", {(tab.icon)()} }
-                                    span { class: "truncate", "{tab.label}" }
-                                }
-                            }
-                        }
-                    }
-                }
-                li {
-                    button {
-                        r#type: "button",
-                        class: "flex min-h-12 w-full items-center gap-3.5 rounded-full px-4 text-left text-[17px] text-foreground active:bg-accent/60",
-                        onclick: move |_| {
-                            on_close.call(());
-                            search.set(true);
-                        },
-                        span { class: "flex size-6 shrink-0 items-center justify-center", Search { size: 20 } }
-                        "Search"
-                    }
-                }
             }
         }
     }
@@ -637,7 +485,7 @@ fn MoreSheetBody(on_navigate: EventHandler<()>) -> Element {
                 h3 { class: "px-1 pb-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
                     "Organization"
                 }
-                OrgSwitcher { compact: false }
+                OrgSwitcher { compact: false, up: true }
             }
             // Who's online — the same roster the desktop sidebar shows.
             crate::presence::PresenceRoster {}

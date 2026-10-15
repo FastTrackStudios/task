@@ -59,7 +59,7 @@ pub fn DesktopSidebar(current: Route) -> Element {
                 div { class: "px-1 pb-1 pt-1",
                     SectionHeader { label: "Organization", size: SectionHeaderSize::Small }
                 }
-                OrgSwitcher { compact: false }
+                OrgSwitcher { compact: false, up: true }
             }
         }
     }
