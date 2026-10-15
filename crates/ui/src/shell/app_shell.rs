@@ -118,7 +118,7 @@ pub fn AppShell() -> Element {
             div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
                 div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:flex-row",
                     if explorer.read().0 && !chromeless() && side_panel_for(&current) != SidePanel::None {
-                        div { class: "hidden w-[17rem] shrink-0 border-r border-border/60 md:flex md:min-h-0 md:flex-col md:overflow-hidden",
+                        div { class: "hidden w-[17rem] shrink-0 border-r border-border/60 bg-popover md:flex md:min-h-0 md:flex-col md:overflow-hidden",
                             // The column shows the best companion for
                             // where the person is ([`side_panel_for`]).
                             match side_panel_for(&current) {

@@ -233,30 +233,31 @@ pub fn InboxView() -> Element {
                 for (idx, it) in rows.into_iter() {
                     {
                         let (title, rest) = crate::process::split_title_body(&it.body);
-                        // The day it was captured, where the person is.
-                        let age = chrono::DateTime::parse_from_rfc3339(&it.created)
-                            .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
-                            .unwrap_or_else(|_| it.created.get(..10).unwrap_or(&it.created).to_owned());
-                        let suggested = it.status == InboxItem::STATUS_SUGGESTED;
-                        let via = (it.source != "ui" && it.source != "cli").then(|| it.source.clone());
+                        let kind = CaptureKind::of(&it);
+                        let age = ago(&it.created, Utc::now());
+                        // A suggestion also says who proposed it.
+                        let from = (kind == CaptureKind::Suggested
+                            && it.source != "ui"
+                            && it.source != "cli")
+                            .then(|| format!("from {}", it.source));
                         rsx! {
                             li { key: "{it.id}",
                                 button {
                                     r#type: "button",
-                                    class: "flex w-full items-start gap-3 rounded-xl px-2 py-3 text-left active:bg-accent/60 hover:bg-accent/40",
+                                    class: "flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left active:bg-accent/60 hover:bg-accent/40",
                                     onclick: move |_| deck.set(Some(idx)),
-                                    span { class: if suggested { "mt-1.5 size-2 shrink-0 rounded-full bg-primary" } else { "mt-1.5 size-2 shrink-0 rounded-full bg-muted-foreground/40" } }
-                                    span { class: "flex min-w-0 flex-1 flex-col gap-0.5",
-                                        span { class: "line-clamp-2 text-[15px] leading-6 text-foreground", "{title}" }
-                                        if !rest.is_empty() {
-                                            span { class: "truncate text-[13px] text-muted-foreground", "{rest}" }
+                                    {kind.tile()}
+                                    span { class: "flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5",
+                                        span { class: "flex items-baseline gap-2",
+                                            span { class: "line-clamp-2 min-w-0 flex-1 text-[16px] leading-[22px] text-foreground", "{title}" }
+                                            span { class: "shrink-0 text-[13px] tabular-nums text-muted-foreground", "{age}" }
                                         }
-                                        span { class: "flex items-center gap-1.5 text-[12px] text-muted-foreground",
-                                            if suggested {
-                                                span { class: "rounded-full bg-primary/15 px-1.5 text-primary", "Suggested" }
-                                            }
-                                            if let Some(v) = via { span { "via {v}" } }
-                                            span { "{age}" }
+                                        if !rest.is_empty() {
+                                            span { class: "line-clamp-1 text-[14px] leading-5 text-muted-foreground", "{rest}" }
+                                        }
+                                        span { class: "flex items-center gap-1.5 text-[13px] text-muted-foreground",
+                                            span { class: if kind == CaptureKind::Suggested { "font-medium text-primary" } else { "" }, "{kind.label()}" }
+                                            if let Some(f) = from { span { "· {f}" } }
                                         }
                                     }
                                 }
@@ -426,9 +427,147 @@ pub fn ModeSwitch(mode: Signal<Mode>) -> Element {
     }
 }
 
+/// What a capture is, at a glance: where it came from or what kind of
+/// note it is, as an icon and a word. The icon leads the row where a bare
+/// dot used to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureKind {
+    /// Proposed by something else (mail ingestion, an agent) — a yes or no.
+    Suggested,
+    Email,
+    Watch,
+    Agent,
+    /// A highlight from something read or watched.
+    Literature,
+    /// Notes taken live.
+    Lecture,
+    /// Your own passing thought — the default.
+    Thought,
+}
+
+impl CaptureKind {
+    #[must_use]
+    pub fn of(item: &InboxItem) -> Self {
+        if item.status == InboxItem::STATUS_SUGGESTED {
+            return Self::Suggested;
+        }
+        match item.source.as_str() {
+            "email" | "mail" => return Self::Email,
+            "watch" => return Self::Watch,
+            "agent" | "mcp" | "llm" => return Self::Agent,
+            "readwise" | "kindle" => return Self::Literature,
+            _ => {}
+        }
+        match item.kind.as_str() {
+            "literature" => Self::Literature,
+            "lecture" => Self::Lecture,
+            _ => Self::Thought,
+        }
+    }
+
+    /// The word for it in the row's meta line.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Suggested => "Suggested",
+            Self::Email => "Email",
+            Self::Watch => "Watch",
+            Self::Agent => "Agent",
+            Self::Literature => "Reading",
+            Self::Lecture => "Lecture",
+            Self::Thought => "Thought",
+        }
+    }
+
+    /// The icon tile's colours: a soft wash and its ink.
+    fn tint(self) -> &'static str {
+        match self {
+            Self::Suggested => "bg-primary/15 text-primary",
+            Self::Email => "bg-sky-500/15 text-sky-400",
+            Self::Watch => "bg-emerald-500/15 text-emerald-400",
+            Self::Agent => "bg-violet-500/15 text-violet-400",
+            Self::Literature => "bg-amber-500/15 text-amber-400",
+            Self::Lecture => "bg-rose-500/15 text-rose-400",
+            Self::Thought => "bg-foreground/[0.07] text-muted-foreground",
+        }
+    }
+
+    /// The icon tile for this kind.
+    pub fn tile(self) -> Element {
+        use architect_ui::lucide_dioxus as i;
+        let icon = match self {
+            Self::Suggested => rsx! { i::Sparkles { size: 16 } },
+            Self::Email => rsx! { i::Mail { size: 16 } },
+            Self::Watch => rsx! { i::Watch { size: 16 } },
+            Self::Agent => rsx! { i::Bot { size: 16 } },
+            Self::Literature => rsx! { i::BookOpen { size: 16 } },
+            Self::Lecture => rsx! { i::Presentation { size: 16 } },
+            Self::Thought => rsx! { i::Lightbulb { size: 16 } },
+        };
+        rsx! {
+            span {
+                class: "flex size-8 shrink-0 items-center justify-center rounded-[10px] {self.tint()}",
+                "aria-label": "{self.label()}",
+                {icon}
+            }
+        }
+    }
+}
+
+/// How long ago, the way a list says it: "now", "5m", "3h", "Yesterday",
+/// "4d", then the date.
+#[must_use]
+pub fn ago(created: &str, now: chrono::DateTime<Utc>) -> String {
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(created) else {
+        return created.get(..10).unwrap_or(created).to_owned();
+    };
+    let at = at.with_timezone(&Utc);
+    let mins = (now - at).num_minutes().max(0);
+    match mins {
+        0 => "now".to_owned(),
+        1..=59 => format!("{mins}m"),
+        60..=1439 => format!("{}h", mins / 60),
+        1440..=2879 => "Yesterday".to_owned(),
+        2880..=10079 => format!("{}d", mins / 1440),
+        _ => at
+            .with_timezone(&chrono::Local)
+            .format("%b %-d")
+            .to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capture_shows_where_it_came_from() {
+        let mut i = InboxItem::capture("x", "body", "email", "2026-10-01T00:00:00Z");
+        assert_eq!(CaptureKind::of(&i), CaptureKind::Email);
+        i.source = "watch".into();
+        assert_eq!(CaptureKind::of(&i), CaptureKind::Watch);
+        i.source = "ui".into();
+        assert_eq!(CaptureKind::of(&i), CaptureKind::Thought);
+        i.kind = "literature".into();
+        assert_eq!(CaptureKind::of(&i), CaptureKind::Literature);
+        i.status = InboxItem::STATUS_SUGGESTED.into();
+        assert_eq!(
+            CaptureKind::of(&i),
+            CaptureKind::Suggested,
+            "a suggestion says so first"
+        );
+    }
+
+    #[test]
+    fn ages_read_like_a_list() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(ago("2026-10-15T11:55:00Z", now), "5m");
+        assert_eq!(ago("2026-10-15T09:00:00Z", now), "3h");
+        assert_eq!(ago("2026-10-14T10:00:00Z", now), "Yesterday");
+        assert_eq!(ago("2026-10-11T12:00:00Z", now), "4d");
+    }
 
     fn item(status: &str, resurface: Option<&str>) -> InboxItem {
         let mut i = InboxItem::capture("x", "body", "ui", "2026-10-01");

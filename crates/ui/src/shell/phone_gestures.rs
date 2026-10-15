@@ -363,7 +363,7 @@ pub fn PhoneGestures(has_left: bool, has_right: bool) -> Element {
     }
 }
 
-const DRAWER: &str = "fixed inset-y-0 z-50 flex w-[85vw] max-w-sm flex-col overflow-y-auto bg-background pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] shadow-xl md:hidden";
+const DRAWER: &str = "fixed inset-y-0 z-50 flex w-[85vw] max-w-sm flex-col overflow-y-auto bg-popover pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] shadow-xl md:hidden";
 
 /// One drawer, following the finger while a stroke drives it. A page
 /// renders it inside its own tree to fill `side` while mounted; the
