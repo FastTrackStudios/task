@@ -8,6 +8,11 @@ license.workspace = true
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
+# Math in notes: the editor's Typst renderer. Native apps only — the web
+# build leaves it off (it is the largest thing the editor adds to wasm;
+# see the root Cargo.toml). Cargo unifies features per build, so this
+# reaches the editor `ui` uses without touching the web bundle.
+editor = { workspace = true, features = ["typst"] }
 # The shipped app set — same list as desktop and web, by construction
 # rather than by remembering.
 task-plugins = { workspace = true }

@@ -64,6 +64,13 @@ let take = 1;
 | Opener    | E   | 128   |
 | Ballad    | Bb  | 72    |
 
+A wider table scrolls sideways:
+
+| Song | Key | Tempo | Time | Length | Capo | Tuning | Lead | Notes |
+|------|-----|-------|------|--------|------|--------|------|-------|
+| Opener | E | 128 | 4/4 | 3:42 | none | standard | Sam | count in on the hi-hat |
+| Ballad | Bb | 72 | 6/8 | 5:10 | 1 | drop D | Alex | piano carries the intro |
+
 ## Math
 
 Inline, like $E = m c^2$, or on its own line:

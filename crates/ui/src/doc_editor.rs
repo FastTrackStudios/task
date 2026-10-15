@@ -830,7 +830,7 @@ pub const DOC_CSS: &str = r#"
 .doc-linear .editor-root .cm-line.md-blockquote::before {
     width: 2px;
     border-radius: 1px;
-    background: var(--doc-line);
+    background: color-mix(in oklab, var(--foreground, #e3e4e6) 32%, transparent);
 }
 .doc-linear .editor-root .cm-line.md-code-block {
     font-size: 13px;
@@ -855,7 +855,24 @@ pub const DOC_CSS: &str = r#"
     border-radius: 4px;
     background: var(--doc-faint);
 }
-.doc-linear .editor-root .cm-line.md-hr::before { border-top-color: var(--doc-line); }
+/* A rule is a divider you can see: 10% of the text colour vanished on a
+   dark phone. */
+.doc-linear .editor-root .cm-line.md-hr::before {
+    border-top: 1px solid color-mix(in oklab, var(--foreground, #e3e4e6) 28%, transparent);
+}
+/* A table wider than the column scrolls sideways instead of crushing its
+   columns; a narrow one still fits as before. (The phone's gestures leave
+   a sideways-scrolling element its own swipes.) */
+.doc-linear .editor-root .md-table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+}
+.doc-linear .editor-root .md-table th,
+.doc-linear .editor-root .md-table td { white-space: nowrap; }
 
 .doc-linear .doc-placeholder {
     position: absolute;
@@ -986,6 +1003,13 @@ pub const DOC_CSS: &str = r#"
         content: "";
         position: absolute;
         inset: -6px -11px;
+    }
+    /* The box drawn while a task is being typed, the same size. */
+    .doc-linear .editor-root .md-task-marker-typing::before {
+        width: 22px;
+        height: 22px;
+        border-width: 2px;
+        border-radius: 7px;
     }
     .doc-linear .editor-root .cm-line.md-code-block { font-size: 15px; line-height: 22px; }
     .doc-linear .doc-placeholder { font-size: 17px; line-height: 26px; }

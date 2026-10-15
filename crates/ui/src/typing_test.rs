@@ -207,6 +207,20 @@ pub const CASES: &[Case] = &[
         ..case("inline code", &[Text("use `code` here")], "use `code` here")
     },
     Case {
+        // The bullet renders the moment `- ` is typed, caret still on
+        // the line.
+        render: &[".md-list-marker-typing"],
+        ..case("a bullet formats as it is typed", &[Text("- one")], "- one")
+    },
+    Case {
+        render: &[".md-list-marker-typing"],
+        ..case(
+            "a number formats as it is typed",
+            &[Text("1. one")],
+            "1. one",
+        )
+    },
+    Case {
         render: &[".md-list-item"],
         ..case(
             "bullet list continues and ends on an empty item",
@@ -244,8 +258,14 @@ pub const CASES: &[Case] = &[
         )
     },
     Case {
-        render: &[".md-blockquote"],
-        ..case("blockquote", &[Text("> quoted words")], "> quoted words")
+        // Formatted while the caret is still on the line: the `>` is
+        // hidden behind the quote bar as soon as it is typed.
+        render: &[".md-blockquote", ".md-quote-marker"],
+        ..case(
+            "a quote formats as it is typed",
+            &[Text("> quoted words")],
+            "> quoted words",
+        )
     },
     Case {
         render: &[".md-callout"],
@@ -330,7 +350,8 @@ pub const CASES: &[Case] = &[
         )
     },
     Case {
-        render: &[".md-math-block, .md-math-widget-block"],
+        // Rendered, not merely recognised: the widget, not the source.
+        render: &[".md-math-widget-block"],
         ..case(
             "display math",
             &[Text("$$ x^2 + y^2 $$"), Return, Return, Text("after")],
@@ -384,7 +405,7 @@ pub const CASES: &[Case] = &[
         )
     },
     Case {
-        render: &[".md-math-inline, .md-math-widget-inline"],
+        render: &[".md-math-widget-inline"],
         ..case(
             "inline math",
             &[Text("energy $E = m c^2$ ok")],
