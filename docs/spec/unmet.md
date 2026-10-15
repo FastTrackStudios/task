@@ -420,7 +420,7 @@ Not met:
 
 Built in the app, verified by nothing: `process.outcome.{waiting,now,
 project,note,later,done,delete}`, `process.suggestion`,
-`process.mode.{fast,clarify}` and `process.undo`. All live in
+`process.outcome.reference`, `process.card` and `process.undo`. All live in
 `crates/ui/src/process.rs` and `crates/ui/src/pages/inbox.rs`, which carry
 no markers yet and have no test that drives them; each outcome is a pair
 of ordinary lane calls, so each can be pinned the way

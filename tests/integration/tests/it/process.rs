@@ -58,6 +58,10 @@ async fn the_planted_inbox_is_served_with_its_snooze_and_its_suggestion() {
             .iter()
             .find(|i| i.id == c.id)
             .unwrap_or_else(|| panic!("`{}` was planted but is not served", c.body));
+        // t[verify process.capture.marks]
+        // Marks are the capture's own words: served as written, for
+        // the row to read `#tags`, `@contexts` and people out of.
+        assert_eq!(item.body, c.body, "a capture is served verbatim");
         let queued = queue.iter().any(|i| i.id == c.id);
         match (c.status, c.resurface_in_days) {
             ("suggested", _) => {

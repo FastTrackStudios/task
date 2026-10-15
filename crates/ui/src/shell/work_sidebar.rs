@@ -168,94 +168,231 @@ pub fn WorkSidebar(current: Route) -> Element {
         });
     });
 
+    use architect_ui::lucide_dioxus as i;
+    let to_process = crate::process::use_to_process_count();
+    let on_inbox = matches!(current, Route::InboxRoute {});
+    let favorites = use_context::<crate::favorites::Favorites>().0;
+    let mut projects_open = use_signal(|| true);
+    let mut favorites_open = use_signal(|| true);
+
+    // A row: icon, label, count, the current one in the tab bar's pill.
+    let row = |here: bool| {
+        if here {
+            "flex min-h-10 w-full items-center gap-3 rounded-[10px] bg-foreground/[0.08] px-2.5 text-[15px] font-medium text-foreground md:min-h-8 md:text-sm"
+        } else {
+            "flex min-h-10 w-full items-center gap-3 rounded-[10px] px-2.5 text-[15px] text-foreground/85 hover:bg-foreground/[0.05] active:bg-foreground/[0.08] md:min-h-8 md:text-sm"
+        }
+    };
+    let icon = "flex size-5 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-[18px] md:[&_svg]:size-4";
+    let count = "ml-auto shrink-0 text-[13px] tabular-nums text-muted-foreground md:text-xs";
+    let heading = "flex w-full items-center gap-1 px-2.5 pb-1 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/80";
+
     let smart = [
-        (TaskSection::Today, c.today),
-        (TaskSection::Upcoming, c.upcoming),
-        (TaskSection::Anytime, c.anytime),
+        (TaskSection::Today, c.today, rsx! { i::CalendarCheck {} }),
+        (
+            TaskSection::Upcoming,
+            c.upcoming,
+            rsx! { i::CalendarDays {} },
+        ),
+        (TaskSection::Anytime, c.anytime, rsx! { i::Layers {} }),
     ];
-    let item = "flex items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
     rsx! {
-        nav { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-3", aria_label: "Work",
-            div { class: "flex flex-col gap-0.5",
-                for (section, n) in smart {
-                    {
-                        let here = on_tasks && in_view.read().as_deref() == Some(section.anchor());
-                        let empty = n == 0;
-                        rsx! {
-                            button {
-                                key: "{section.label()}",
-                                r#type: "button",
-                                disabled: empty,
-                                aria_current: if here { "true" } else { "false" },
-                                class: if here {
-                                    "{item} bg-accent font-medium text-foreground"
-                                } else if empty {
-                                    "{item} cursor-default text-muted-foreground"
-                                } else {
-                                    "{item} text-foreground/90 hover:bg-accent/40"
-                                },
-                                onclick: move |_| {
-                                    if !on_tasks {
-                                        nav.push(Route::TasksRoute {});
-                                    }
-                                    scroll_to(section.anchor(), false);
-                                },
-                                span { "{section.label()}" }
-                                span { class: "flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground",
-                                    if section == TaskSection::Today && c.overdue > 0 {
-                                        span { class: "rounded-full bg-rose-500/20 px-1.5 py-0.5 font-medium text-foreground",
-                                            "{c.overdue} late"
+        div { class: "flex min-h-0 flex-1 flex-col",
+            // ── The workspace ──
+            div { class: "px-3 pb-2 pt-3",
+                crate::shell::org_switcher::OrgSwitcher { compact: false, theme: false }
+            }
+            nav { class: "flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-2 pb-4 pt-1", aria_label: "Work",
+                // ── Your work ──
+                div { class: "flex flex-col gap-0.5",
+                    Link {
+                        to: Route::InboxRoute {},
+                        class: row(on_inbox),
+                        span { class: icon, i::Inbox {} }
+                        span { "Inbox" }
+                        if to_process > 0 {
+                            span { class: "ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold tabular-nums text-primary-foreground",
+                                "{to_process}"
+                            }
+                        }
+                    }
+                    for (section, n, glyph) in smart {
+                        {
+                            let here = on_tasks && in_view.read().as_deref() == Some(section.anchor());
+                            rsx! {
+                                button {
+                                    key: "{section.label()}",
+                                    r#type: "button",
+                                    aria_current: if here { "true" } else { "false" },
+                                    class: row(here),
+                                    onclick: move |_| {
+                                        if !on_tasks {
+                                            nav.push(Route::TasksRoute {});
                                         }
+                                        scroll_to(section.anchor(), false);
+                                    },
+                                    span { class: icon, {glyph} }
+                                    span { "{section.label()}" }
+                                    span { class: count,
+                                        if section == TaskSection::Today && c.overdue > 0 {
+                                            span { class: "mr-1.5 rounded-full bg-rose-500/20 px-1.5 py-0.5 text-[11px] font-medium text-rose-300",
+                                                "{c.overdue} late"
+                                            }
+                                        }
+                                        if n > 0 { "{n}" }
                                     }
-                                    "{n}"
+                                }
+                            }
+                        }
+                    }
+                    if c.unfiled > 0 {
+                        button {
+                            r#type: "button",
+                            class: row(false),
+                            onclick: move |_| {
+                                if !on_tasks {
+                                    nav.push(Route::TasksRoute {});
+                                }
+                                scroll_to("tasks-unfiled", true);
+                            },
+                            span { class: icon, i::CircleDashed {} }
+                            span { "No project" }
+                            span { class: count, "{c.unfiled}" }
+                        }
+                    }
+                }
+
+                // ── Favorites ──
+                if !favorites.read().is_empty() {
+                    div { class: "flex flex-col gap-0.5",
+                        button {
+                            r#type: "button",
+                            class: heading,
+                            aria_expanded: "{favorites_open}",
+                            onclick: move |_| favorites_open.toggle(),
+                            "Favorites"
+                            span { class: if favorites_open() { "transition-transform rotate-90" } else { "transition-transform" },
+                                i::ChevronRight { size: 12 }
+                            }
+                        }
+                        if favorites_open() {
+                            for fav in favorites.read().iter().cloned() {
+                                if let Some(route) = fav.route() {
+                                    Link {
+                                        key: "{fav.kind}:{fav.id}",
+                                        to: route,
+                                        class: row(false),
+                                        span { class: icon,
+                                            match fav.kind.as_str() {
+                                                "project" => rsx! { i::Box {} },
+                                                "page" => rsx! { i::FileText {} },
+                                                _ => rsx! { i::CircleCheck {} },
+                                            }
+                                        }
+                                        span { class: "min-w-0 truncate", "{fav.title}" }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                if c.unfiled > 0 {
-                    button {
-                        r#type: "button",
-                        class: "{item} text-foreground/90 hover:bg-accent/40",
-                        onclick: move |_| {
-                            if !on_tasks {
-                                nav.push(Route::TasksRoute {});
-                            }
-                            scroll_to("tasks-unfiled", true);
-                        },
-                        span { "No project" }
-                        span { class: "text-xs tabular-nums text-muted-foreground", "{c.unfiled}" }
-                    }
-                }
-            }
 
-            div { class: "flex flex-col gap-1",
-                div { class: "flex items-center justify-between px-2",
-                    span { class: "text-xs font-medium text-muted-foreground", "Projects" }
-                    Link {
-                        to: Route::ProjectsRoute {},
-                        class: "rounded-sm text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        "All projects"
-                    }
-                }
-                if c.projects.is_empty() {
-                    p { class: "px-2 text-xs text-muted-foreground", "No active projects." }
-                }
-                div { class: "flex flex-col",
-                    for (pid, title, n) in c.projects.iter().cloned() {
+                // ── Projects ──
+                div { class: "flex flex-col gap-0.5",
+                    div { class: "flex items-center",
+                        button {
+                            r#type: "button",
+                            class: heading,
+                            aria_expanded: "{projects_open}",
+                            onclick: move |_| projects_open.toggle(),
+                            "Projects"
+                            span { class: if projects_open() { "transition-transform rotate-90" } else { "transition-transform" },
+                                i::ChevronRight { size: 12 }
+                            }
+                        }
                         Link {
-                            key: "{pid}",
-                            to: Route::ProjectDetailRoute { id: pid.clone() },
-                            class: "flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                            span { class: "min-w-0 truncate", "{title}" }
-                            if n > 0 {
-                                span { class: "shrink-0 text-xs tabular-nums", "{n}" }
+                            to: Route::ProjectsRoute {},
+                            class: "shrink-0 px-2.5 pb-1 text-[12px] text-muted-foreground hover:text-foreground",
+                            "All"
+                        }
+                    }
+                    if projects_open() {
+                        if c.projects.is_empty() {
+                            p { class: "px-2.5 text-[13px] text-muted-foreground", "No active projects." }
+                        }
+                        for (pid, title, n) in c.projects.iter().cloned() {
+                            {
+                                let here = matches!(&current, Route::ProjectDetailRoute { id } if *id == pid);
+                                rsx! {
+                                    Link {
+                                        key: "{pid}",
+                                        to: Route::ProjectDetailRoute { id: pid.clone() },
+                                        class: row(here),
+                                        img {
+                                            class: "size-5 shrink-0 rounded-[5px] object-cover",
+                                            src: "{task_ui_core::abstract_art::data_url(&pid)}",
+                                            alt: "",
+                                        }
+                                        span { class: "min-w-0 truncate", "{title}" }
+                                        if n > 0 { span { class: count, "{n}" } }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+            AccountFooter {}
+        }
+    }
+}
+
+/// The sidebar's foot: who is signed in, their status, and where this
+/// device's data lives. Opens the account sheet on a phone and Settings
+/// on a desk.
+#[component]
+fn AccountFooter() -> Element {
+    let ctx = use_context::<crate::auth::AuthCtx>();
+    let local = use_context::<crate::presence::PresenceLocal>();
+    let account = ctx.active.read().clone();
+    let (name, email) = account.as_ref().map_or_else(
+        || ("Not signed in".to_owned(), String::new()),
+        |a| (a.name.clone(), a.email.clone()),
+    );
+    let status = local.effective_status();
+    let phone =
+        try_use_context::<crate::shell::phone_gestures::PhonePanels>().is_some_and(|p| (p.phone)());
+    let mut sheet = use_signal(|| false);
+    let nav = use_navigator();
+    rsx! {
+        div { class: "border-t border-border/60 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] md:pb-2",
+            button {
+                r#type: "button",
+                class: "flex w-full items-center gap-3 rounded-[10px] px-2 py-2 text-left hover:bg-foreground/[0.05] active:bg-foreground/[0.08]",
+                onclick: move |_| {
+                    if phone {
+                        sheet.set(true);
+                    } else {
+                        nav.push(Route::SettingsRoute {});
+                    }
+                },
+                span { class: "relative shrink-0",
+                    task_ui_core::avatar::Avatar { name: name.clone(), email: email.clone(), size: 32 }
+                    span { class: "absolute -bottom-0.5 -right-0.5 size-3 rounded-full ring-2 ring-popover {status.dot_class()}" }
+                }
+                span { class: "flex min-w-0 flex-1 flex-col",
+                    span { class: "truncate text-[15px] font-medium text-foreground md:text-sm", "{name}" }
+                    span { class: "truncate text-[12px] text-muted-foreground", "{status.label()}" }
+                }
+                span { class: "text-muted-foreground", architect_ui::lucide_dioxus::ChevronsUpDown { size: 16 } }
+            }
+        }
+        task_ui_core::sheet::BottomSheet {
+            open: sheet(),
+            title: "Account & status".to_string(),
+            on_close: move |()| sheet.set(false),
+            crate::auth::AccountSheetBody { on_done: move |()| sheet.set(false) }
         }
     }
 }

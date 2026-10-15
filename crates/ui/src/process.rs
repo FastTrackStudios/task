@@ -24,7 +24,7 @@
 //! maintenance hour can find it.
 
 use architect_ui::lucide_dioxus::{
-    Archive, ArrowRight, Check, Clock, FileText, FolderKanban, Hourglass, ListTodo, Play, Trash2, X,
+    Archive, ArrowRight, Check, Clock, FileText, FolderKanban, Hourglass, Play, Trash2, X,
 };
 use chrono::{Datelike, Duration, Local, Utc};
 use dioxus::prelude::*;
@@ -37,8 +37,6 @@ use crate::stores;
 
 /// How much the card asks before it acts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// t[impl process.mode.fast]
-// t[impl process.mode.clarify]
 pub enum Mode {
     /// Every outcome on the card at once.
     Fast,
@@ -224,7 +222,6 @@ pub fn ProcessNowOverlay() -> Element {
                         X { size: 18 }
                     }
                     span { class: "flex-1 text-sm font-semibold text-foreground", "Process" }
-                    crate::pages::inbox::ModeSwitch { mode }
                 }
                 div { class: "min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] md:pb-6",
                     ProcessCard {
@@ -254,16 +251,16 @@ pub fn ProcessNowOverlay() -> Element {
 /// Where the card is in its questions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
-    /// Fast: all outcomes. Clarify: "is it actionable?".
+    /// What it is: every outcome, one tap each.
     Decide,
-    /// Clarify, actionable: what kind of next step.
-    Actionable,
-    /// Clarify, not actionable: note, someday, or gone.
-    NotActionable,
     /// Choosing when it comes back.
     Later,
-    /// Shaping the task.
+    /// Shaping the task and filing it in a project.
     Shape(Shape),
+    /// Rewriting it as a note in your own words, under a parent.
+    Rewrite,
+    /// Doing it now: the task exists and its clock is running.
+    Doing,
 }
 
 /// What kind of task the shaping form makes.
@@ -275,6 +272,7 @@ enum Shape {
 
 /// One inbox item, processed. `on_done` fires once with what happened;
 /// the card does every write itself, through the shared stores.
+// t[impl process.card]
 #[component]
 pub fn ProcessCard(
     item: InboxItem,
@@ -297,6 +295,40 @@ pub fn ProcessCard(
         .map(|a| (a.user_id.to_string(), a.name.clone()));
     // Callers key the card by item id, so each item starts here.
     let mut step = use_signal(|| Step::Decide);
+    // The task "do it now" made, while its clock runs on this card.
+    let mut doing = use_signal(|| None::<task_proto::TaskInfo>);
+    let task_muts = stores::use_task_mutations();
+    let _ = mode;
+    // "Do it now", finished or paused: the clock stops, the task records
+    // how it ended, and the card moves on.
+    let finish = {
+        let slug = slug.clone();
+        use_callback(move |status: &'static str| {
+            let Some(mut t) = doing.peek().clone() else {
+                return;
+            };
+            let now = Utc::now();
+            for e in &mut t.time_entries.0 {
+                if e.end_time.is_none() {
+                    e.end_time = Some(now);
+                }
+            }
+            t.status = status.to_owned();
+            task_muts.apply(&slug, task_ui::TaskMutation::Update { task: t.clone() });
+            let what = if status == "done" { "Done" } else { "Paused" };
+            on_done.call(Outcome::Filed(format!("{what}: {}", t.title)));
+        })
+    };
+    // t[impl process.outcome.note]
+    // Writing the note the rewrite step produced.
+    let save_note = {
+        let slug = slug.clone();
+        let item = item.clone();
+        use_callback(move |(path, md): (String, String)| {
+            muts.promote_to_note(slug.clone(), item.clone(), path, md);
+            on_done.call(Outcome::Noted);
+        })
+    };
 
     let suggested = item.status == InboxItem::STATUS_SUGGESTED;
     let kind = item.kind.clone();
@@ -312,7 +344,7 @@ pub fn ProcessCard(
             let item = item.clone();
             let slug = slug.clone();
             match outcome {
-                // t[impl process.outcome.note]
+                // t[impl process.outcome.reference]
                 Decision::Note => {
                     let (title, _) = split_title_body(&item.body);
                     let path = format!(
@@ -366,9 +398,11 @@ pub fn ProcessCard(
                             end_time: None,
                         }]);
                     let task = task_ui::with_assignee(&task, me.clone());
-                    let title = task.title.clone();
-                    muts.process_into_task(slug, item, task);
-                    on_done.call(Outcome::Filed(format!("Started: {title}")));
+                    muts.process_into_task(slug, item, task.clone());
+                    // The card stays on it, clock running, until it is
+                    // done or paused (`Step::Doing`).
+                    doing.set(Some(task));
+                    step.set(Step::Doing);
                 }
                 // t[impl process.outcome.project]
                 Decision::Project => {
@@ -398,24 +432,14 @@ pub fn ProcessCard(
     // Clarify — y yes, n no; then the same letters as their tiles.
     let on_key = move |e: KeyboardEvent| {
         let Key::Character(c) = e.key() else { return };
-        let picked = match (step(), mode(), c.as_str()) {
-            (Step::Decide, Mode::Fast, "t") => Some(Pick::Step(Step::Shape(Shape::Task))),
-            (Step::Decide, Mode::Fast, "l") => Some(Pick::Step(Step::Later)),
-            (Step::Decide, Mode::Fast, "n") => Some(Pick::Decide(Decision::Note)),
-            (Step::Decide, Mode::Fast, "c" | "d") => Some(Pick::Decide(Decision::Done)),
-            (Step::Decide, Mode::Fast, "x") => Some(Pick::Decide(Decision::Delete)),
-            (Step::Decide, _, " ") if skippable => Some(Pick::Skip),
-            (Step::Decide, Mode::Clarify, "y") => Some(Pick::Step(Step::Actionable)),
-            (Step::Decide, Mode::Clarify, "n") => Some(Pick::Step(Step::NotActionable)),
-            (Step::Actionable, _, "d") => Some(Pick::Decide(Decision::DoNow)),
-            (Step::Actionable, _, "t") => Some(Pick::Step(Step::Shape(Shape::Task))),
-            (Step::Actionable, _, "w") => Some(Pick::Step(Step::Shape(Shape::Waiting))),
-            (Step::Actionable, _, "p") => Some(Pick::Decide(Decision::Project)),
-            (Step::NotActionable, _, "n") => Some(Pick::Decide(Decision::Note)),
-            (Step::NotActionable, _, "s") => {
-                Some(Pick::Decide(Decision::Later(ReviewResponse::Easy)))
-            }
-            (Step::NotActionable, _, "x") => Some(Pick::Decide(Decision::Delete)),
+        let picked = match (step(), c.as_str()) {
+            (Step::Decide, "d") => Some(Pick::Decide(Decision::DoNow)),
+            (Step::Decide, "p" | "t") => Some(Pick::Step(Step::Shape(Shape::Task))),
+            (Step::Decide, "s" | "l") => Some(Pick::Step(Step::Later)),
+            (Step::Decide, "n") => Some(Pick::Step(Step::Rewrite)),
+            (Step::Decide, "r") => Some(Pick::Decide(Decision::Note)),
+            (Step::Decide, "x") => Some(Pick::Decide(Decision::Delete)),
+            (Step::Decide, " ") if skippable => Some(Pick::Skip),
             _ => None,
         };
         if let Some(p) = picked {
@@ -474,60 +498,105 @@ pub fn ProcessCard(
 
             // ── the decision ──
             match step() {
-                Step::Decide => match mode() {
-                    Mode::Fast => rsx! {
-                        div { class: "grid grid-cols-2 gap-2 sm:grid-cols-3",
-                            Choice { icon: rsx! { ListTodo { size: 18 } }, label: "Make a task", hint: "File it with a project, context and date", primary: true,
-                                on_pick: move |()| step.set(Step::Shape(Shape::Task)) }
-                            Choice { icon: rsx! { Clock { size: 18 } }, label: "Later", hint: "Bring it back when it matters",
-                                on_pick: move |()| step.set(Step::Later) }
-                            Choice { icon: rsx! { FileText { size: 18 } }, label: "Note", hint: "Keep it as a note",
-                                on_pick: move |()| decide.call(Decision::Note) }
-                            Choice { icon: rsx! { Check { size: 18 } }, label: "Done", hint: "Already handled",
-                                on_pick: move |()| decide.call(Decision::Done) }
-                            Choice { icon: rsx! { Trash2 { size: 18 } }, label: "Delete", hint: "Not worth keeping", danger: true,
-                                on_pick: move |()| decide.call(Decision::Delete) }
-                            if skippable {
-                                Choice { icon: rsx! { ArrowRight { size: 18 } }, label: "Skip", hint: "Decide on another pass",
-                                    on_pick: move |()| on_done.call(Outcome::Skipped) }
-                            }
+                // The temporal contract: read it, then decide in one tap.
+                // Do it now (two minutes, the clock starts), file it as the
+                // next step of a project, snooze it, or make it knowledge —
+                // an idea rewritten in your own words under a parent note,
+                // or a fact kept verbatim. Or let it go.
+                Step::Decide => rsx! {
+                    div { class: "grid grid-cols-2 gap-2",
+                        Choice { icon: rsx! { Play { size: 18 } }, label: "Do it now", hint: "Two minutes — the clock starts", primary: true,
+                            on_pick: move |()| decide.call(Decision::DoNow) }
+                        Choice { icon: rsx! { FolderKanban { size: 18 } }, label: "Add to a project", hint: "Its next step, with a date",
+                            on_pick: move |()| step.set(Step::Shape(Shape::Task)) }
+                        Choice { icon: rsx! { FileText { size: 18 } }, label: "Write a note", hint: "In your own words, under a parent",
+                            on_pick: move |()| step.set(Step::Rewrite) }
+                        Choice { icon: rsx! { Clock { size: 18 } }, label: "Snooze", hint: "Read it again later",
+                            on_pick: move |()| step.set(Step::Later) }
+                    }
+                    div { class: "flex flex-wrap items-center gap-1",
+                        button {
+                            r#type: "button",
+                            class: "flex h-10 items-center gap-1.5 rounded-full px-3 text-[14px] text-muted-foreground active:bg-accent hover:bg-accent/50",
+                            onclick: move |_| decide.call(Decision::Note),
+                            Archive { size: 15 }
+                            "Keep as reference"
                         }
-                    },
-                    Mode::Clarify => rsx! {
-                        Question { text: "Is this actionable?" }
-                        div { class: "grid grid-cols-2 gap-2",
-                            Choice { icon: rsx! { Check { size: 18 } }, label: "Yes", hint: "There's something to do", primary: true,
-                                on_pick: move |()| step.set(Step::Actionable) }
-                            Choice { icon: rsx! { X { size: 18 } }, label: "No", hint: "Reference, an idea, or nothing",
-                                on_pick: move |()| step.set(Step::NotActionable) }
+                        button {
+                            r#type: "button",
+                            class: "flex h-10 items-center gap-1.5 rounded-full px-3 text-[14px] text-muted-foreground active:bg-accent hover:bg-accent/50",
+                            onclick: move |_| decide.call(Decision::Project),
+                            FolderKanban { size: 15 }
+                            "It's a project"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "flex h-10 items-center gap-1.5 rounded-full px-3 text-[14px] text-muted-foreground active:bg-accent hover:bg-accent/50",
+                            onclick: move |_| decide.call(Decision::Done),
+                            Check { size: 15 }
+                            "Already done"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "flex h-10 items-center gap-1.5 rounded-full px-3 text-[14px] text-rose-400 active:bg-rose-500/10 hover:bg-rose-500/10",
+                            onclick: move |_| decide.call(Decision::Delete),
+                            Trash2 { size: 15 }
+                            "Delete"
                         }
                         if skippable {
-                            SkipLink { on_skip: move |()| on_done.call(Outcome::Skipped) }
+                            button {
+                                r#type: "button",
+                                class: "ml-auto flex h-10 items-center gap-1.5 rounded-full px-3 text-[14px] text-muted-foreground active:bg-accent hover:bg-accent/50",
+                                onclick: move |_| on_done.call(Outcome::Skipped),
+                                "Skip"
+                                ArrowRight { size: 15 }
+                            }
                         }
-                    },
-                },
-                Step::Actionable => rsx! {
-                    Question { text: "What's the next step?", on_back: move |()| step.set(Step::Decide) }
-                    div { class: "grid grid-cols-2 gap-2",
-                        Choice { icon: rsx! { Play { size: 18 } }, label: "Do it now", hint: "Two minutes or less — the clock starts", primary: true,
-                            on_pick: move |()| decide.call(Decision::DoNow) }
-                        Choice { icon: rsx! { ListTodo { size: 18 } }, label: "Make it a task", hint: "Give it a context and a date",
-                            on_pick: move |()| step.set(Step::Shape(Shape::Task)) }
-                        Choice { icon: rsx! { Hourglass { size: 18 } }, label: "Waiting on someone", hint: "Track it until they come back",
-                            on_pick: move |()| step.set(Step::Shape(Shape::Waiting)) }
-                        Choice { icon: rsx! { FolderKanban { size: 18 } }, label: "It's a project", hint: "More than one step",
-                            on_pick: move |()| decide.call(Decision::Project) }
                     }
                 },
-                Step::NotActionable => rsx! {
-                    Question { text: "Keep it?", on_back: move |()| step.set(Step::Decide) }
-                    div { class: "grid grid-cols-3 gap-2",
-                        Choice { icon: rsx! { FileText { size: 18 } }, label: "Note", hint: "Reference", primary: true,
-                            on_pick: move |()| decide.call(Decision::Note) }
-                        Choice { icon: rsx! { Archive { size: 18 } }, label: "Someday", hint: "Maybe, later",
-                            on_pick: move |()| decide.call(Decision::Later(ReviewResponse::Easy)) }
-                        Choice { icon: rsx! { Trash2 { size: 18 } }, label: "Delete", hint: "Let it go", danger: true,
-                            on_pick: move |()| decide.call(Decision::Delete) }
+                // t[impl process.outcome.now]
+                Step::Doing => {
+                    let task = doing.read().clone();
+                    let title = task.as_ref().map(|t| t.title.clone()).unwrap_or_default();
+                    rsx! {
+                        div { class: "flex flex-col gap-3 rounded-2xl border border-primary/30 bg-primary/10 p-4",
+                            div { class: "flex items-center gap-3",
+                                span { class: "relative flex size-3",
+                                    span { class: "absolute inline-flex size-full animate-ping rounded-full bg-primary/60" }
+                                    span { class: "relative inline-flex size-3 rounded-full bg-primary" }
+                                }
+                                span { class: "min-w-0 flex-1 truncate text-[16px] font-medium text-foreground", "Doing: {title}" }
+                                crate::process::ElapsedClock { since: task.as_ref().and_then(|t| t.time_entries.0.last().map(|e| e.start_time)) }
+                            }
+                            p { class: "text-[13px] text-muted-foreground",
+                                "It's a task now, and the clock is running. Finish it, or pause and it stays on your list."
+                            }
+                            div { class: "grid grid-cols-2 gap-2",
+                                button {
+                                    r#type: "button",
+                                    class: "flex h-12 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-semibold text-primary-foreground active:opacity-90",
+                                    onclick: move |_| finish.call("done"),
+                                    Check { size: 18 }
+                                    "Done"
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "flex h-12 items-center justify-center gap-2 rounded-xl bg-foreground/[0.08] text-[15px] font-medium text-foreground active:bg-foreground/[0.12]",
+                                    onclick: move |_| finish.call("todo"),
+                                    Hourglass { size: 18 }
+                                    "Pause"
+                                }
+                            }
+                        }
+                    }
+                }
+                Step::Rewrite => rsx! {
+                    NoteRewrite {
+                        key: "{item.id}",
+                        item: item.clone(),
+                        slug: slug.clone(),
+                        on_back: move |()| step.set(Step::Decide),
+                        on_save: move |v| save_note.call(v),
                     }
                 },
                 Step::Later => {
@@ -579,6 +648,216 @@ enum Decision {
     Delete,
     DoNow,
     Project,
+}
+
+/// Time since `since`, ticking each second — the clock "do it now"
+/// started.
+#[component]
+pub fn ElapsedClock(since: Option<chrono::DateTime<Utc>>) -> Element {
+    let mut now = use_signal(Utc::now);
+    use_future(move || async move {
+        loop {
+            architect::sleep(architect::Duration::from_secs(1)).await;
+            now.set(Utc::now());
+        }
+    });
+    let secs = since.map_or(0, |s| (now() - s).num_seconds().max(0));
+    let text = if secs >= 3600 {
+        format!("{}:{:02}:{:02}", secs / 3600, (secs / 60) % 60, secs % 60)
+    } else {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    };
+    rsx! { span { class: "shrink-0 font-mono text-[15px] tabular-nums text-primary", "{text}" } }
+}
+
+/// A capture rewritten as a note in your own words — the step that turns
+/// a fleeting thought into knowledge. The title is the note's name (a
+/// sentence that says what it means, not an id); the body is yours; the
+/// original words are kept beneath as a quote, the paper trail back to
+/// the thought; and the note is placed under one parent note (its
+/// `folder`), so related thinking sits together in the tree.
+#[component]
+fn NoteRewrite(
+    item: InboxItem,
+    slug: String,
+    on_back: EventHandler<()>,
+    on_save: EventHandler<(String, String)>,
+) -> Element {
+    let (first, rest) = split_title_body(&item.body);
+    let mut title = use_signal(|| first.clone());
+    let mut body = use_signal(|| rest.clone());
+    let mut parent = use_signal(|| None::<(String, String)>);
+    let mut query = use_signal(String::new);
+    let pages_slug = slug.clone();
+    let pages = use_resource(move || {
+        let slug = pages_slug.clone();
+        async move {
+            crate::pages::vault::rpc::fetch_folder_index(slug, "default".to_owned())
+                .await
+                .unwrap_or_default()
+        }
+    });
+    let q = query().to_lowercase();
+    let matches: Vec<(String, String)> = pages
+        .read()
+        .as_ref()
+        .map(|ps| {
+            ps.iter()
+                .filter(|p| p.path.ends_with(".md") && !p.path.starts_with("Records/"))
+                .filter(|p| q.is_empty() || p.title.to_lowercase().contains(&q))
+                .take(6)
+                .map(|p| (p.basename.clone(), p.title.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let original = item.body.clone();
+    let can_save = !title.read().trim().is_empty();
+    let field = "w-full rounded-xl bg-foreground/[0.06] px-3.5 text-[16px] text-foreground outline-none placeholder:text-muted-foreground/70 focus:bg-foreground/[0.09]";
+
+    rsx! {
+        div { class: "flex flex-col gap-3",
+            div { class: "flex items-center gap-2",
+                button {
+                    r#type: "button",
+                    class: "flex size-9 items-center justify-center rounded-full text-muted-foreground active:bg-accent",
+                    aria_label: "Back",
+                    onclick: move |_| on_back.call(()),
+                    ArrowRight { size: 16, class: "rotate-180" }
+                }
+                span { class: "text-[15px] font-semibold text-foreground", "Write it in your own words" }
+            }
+            input {
+                class: "{field} h-12 font-medium",
+                placeholder: "What it means, as a sentence",
+                aria_label: "Note title",
+                value: "{title}",
+                oninput: move |e| title.set(e.value()),
+            }
+            textarea {
+                class: "{field} min-h-32 py-3 leading-6",
+                placeholder: "Explain it so you'd understand it in a year.",
+                aria_label: "Note body",
+                value: "{body}",
+                oninput: move |e| body.set(e.value()),
+            }
+            // ── the parent ──
+            div { class: "flex flex-col gap-2 rounded-2xl bg-foreground/[0.04] p-3",
+                span { class: "text-[13px] font-medium text-muted-foreground", "Place it under" }
+                if let Some((_, ptitle)) = parent() {
+                    div { class: "flex items-center gap-2",
+                        span { class: "flex h-9 min-w-0 items-center gap-1.5 rounded-full bg-primary/15 px-3 text-[14px] font-medium text-primary",
+                            FileText { size: 14 }
+                            span { class: "truncate", "{ptitle}" }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "text-[13px] text-muted-foreground",
+                            onclick: move |_| parent.set(None),
+                            "Change"
+                        }
+                    }
+                } else {
+                    input {
+                        class: "{field} h-10 text-[15px]",
+                        placeholder: "Find a related note…",
+                        aria_label: "Parent note",
+                        value: "{query}",
+                        oninput: move |e| query.set(e.value()),
+                    }
+                    div { class: "flex flex-col",
+                        for (base, ptitle) in matches {
+                            button {
+                                key: "{base}",
+                                r#type: "button",
+                                class: "flex min-h-10 items-center gap-2 rounded-lg px-2 text-left text-[15px] text-foreground active:bg-accent",
+                                onclick: move |_| parent.set(Some((base.clone(), ptitle.clone()))),
+                                FileText { size: 14, class: "shrink-0 text-muted-foreground" }
+                                span { class: "truncate", "{ptitle}" }
+                            }
+                        }
+                    }
+                }
+            }
+            // ── the original, kept ──
+            div { class: "rounded-xl border-l-2 border-border px-3 py-1 text-[14px] leading-5 text-muted-foreground",
+                span { class: "block pb-1 text-[11px] font-semibold uppercase tracking-[0.12em]", "Original capture" }
+                span { class: "whitespace-pre-wrap", "{original}" }
+            }
+            button {
+                r#type: "button",
+                class: "flex h-12 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-semibold text-primary-foreground active:opacity-90 disabled:opacity-40",
+                disabled: !can_save,
+                onclick: move |_| {
+                    let t = title.peek().trim().to_owned();
+                    let p = parent.peek().clone().map(|(b, _)| b);
+                    let path = format!("{}.md", note_file_name(&t));
+                    let md = rewritten_note(&t, &body.peek(), &original, p.as_deref(), &Utc::now().to_rfc3339());
+                    on_save.call((path, md));
+                },
+                Check { size: 18 }
+                "Save note"
+            }
+        }
+    }
+}
+
+/// A note's file name from its title: the title itself, minus what a
+/// file name can't hold. A note is found by what it says, so the name is
+/// the sentence, not an id.
+#[must_use]
+pub fn note_file_name(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| {
+            if matches!(
+                c,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' | '^' | '[' | ']'
+            ) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let squashed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut name: String = squashed.chars().take(120).collect();
+    if name.is_empty() {
+        name = "Untitled note".to_owned();
+    }
+    name
+}
+
+/// The markdown for a rewritten note: tagged `atomic`, placed under its
+/// parent (`folder`), the person's words, and the original capture kept
+/// beneath as a quote.
+#[must_use]
+pub fn rewritten_note(
+    title: &str,
+    body: &str,
+    original: &str,
+    parent: Option<&str>,
+    created: &str,
+) -> String {
+    let mut fm = format!(
+        "---\ntags: [atomic]\ncreated: {}\n",
+        created.get(..10).unwrap_or(created)
+    );
+    if let Some(p) = parent {
+        fm.push_str(&format!("folder: \"[[{p}]]\"\n"));
+    }
+    fm.push_str("---\n");
+    let quoted: String = original.lines().map(|l| format!("> {l}\n")).collect();
+    let body = body.trim();
+    let mut out = fm;
+    out.push('\n');
+    if !body.is_empty() {
+        out.push_str(body);
+        out.push_str("\n\n");
+    }
+    let _ = title;
+    out.push_str("> [!quote] Original capture\n");
+    out.push_str(&quoted);
+    out
 }
 
 /// The question a clarify step asks, with a way back to the last one.
@@ -983,6 +1262,32 @@ pub fn atomic_markdown(title: &str, body: &str, created: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rewritten_note_keeps_the_original_and_names_its_parent() {
+        let md = rewritten_note(
+            "Writer's block is reader's block",
+            "You can't write what you haven't read.",
+            "writer's block = reader's block?",
+            Some("Writing"),
+            "2026-10-15T09:00:00Z",
+        );
+        assert!(md.contains("tags: [atomic]"));
+        assert!(md.contains("folder: \"[[Writing]]\""), "{md}");
+        assert!(md.contains("You can't write what you haven't read."));
+        assert!(md.contains("> [!quote] Original capture\n> writer's block = reader's block?"));
+        assert!(!rewritten_note("t", "", "o", None, "2026-10-15").contains("folder:"));
+    }
+
+    #[test]
+    fn a_note_is_named_by_what_it_says() {
+        assert_eq!(
+            note_file_name("Writer's block is reader's block"),
+            "Writer's block is reader's block"
+        );
+        assert_eq!(note_file_name("a/b: c?"), "a b c");
+        assert_eq!(note_file_name("   "), "Untitled note");
+    }
 
     #[test]
     fn a_capture_drafts_the_task_quick_add_would_make() {

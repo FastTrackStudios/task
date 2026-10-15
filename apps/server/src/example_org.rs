@@ -875,6 +875,26 @@ pub const INBOX: &[DeclaredCapture] = &[
         captured_days_ago: 10,
         resurface_in_days: Some(14),
     },
+    // Marked up the way people capture: a person by @handle, a #tag
+    // and an @context — the inbox shows Sam's avatar, a badge, a chip.
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a07",
+        body: "Ask @sam to check the B-room patchbay before Friday's session #studio @office",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 0,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a08",
+        body: "Casey sent notes on the second verse — fold them into the mix #client @chamber",
+        source: "email",
+        status: "open",
+        captured_days_ago: 1,
+        resurface_in_days: None,
+    },
 ];
 
 /// The declared captures of one org.
@@ -2440,6 +2460,44 @@ mod declared_tests {
             ),
             (16 * 60, 17 * 60),
             "the weekday maintenance hour is 16:00–17:00"
+        );
+    }
+
+    // t[verify process.capture.marks]
+    /// The seed shows the inbox's marks: some capture names a person of
+    /// its own org by `@handle` (an avatar), and some carry a `#tag`
+    /// and an `@context` that is nobody (a badge and a chip).
+    #[test]
+    fn the_seeded_inbox_shows_people_tags_and_contexts() {
+        let handle = |m: &Member| m.name.to_lowercase();
+        let words = |c: &DeclaredCapture| {
+            c.body
+                .split_whitespace()
+                .map(|w| {
+                    w.trim_end_matches(|ch: char| !ch.is_alphanumeric())
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mentions_member = INBOX.iter().any(|c| {
+            words(c).iter().any(|w| {
+                w.strip_prefix('@')
+                    .is_some_and(|h| CAST.iter().any(|m| m.org == c.org && handle(m) == h))
+            })
+        });
+        assert!(mentions_member, "no capture @-mentions someone in its org");
+        let has_tag = INBOX
+            .iter()
+            .any(|c| words(c).iter().any(|w| w.starts_with('#')));
+        let has_context = INBOX.iter().any(|c| {
+            words(c).iter().any(|w| {
+                w.strip_prefix('@')
+                    .is_some_and(|h| !CAST.iter().any(|m| handle(m) == h))
+            })
+        });
+        assert!(
+            has_tag && has_context,
+            "the seed needs a #tag and an @context"
         );
     }
 

@@ -150,7 +150,10 @@ t[process.outcome.waiting]
 t[process.outcome.now]
 "Do it now" — the two-minute rule — creates the task `in-progress` with
 one open time entry starting now, and processes the item into it. The
-clock is already running when the card closes.
+card stays on it while the clock runs ("Doing: …", the elapsed time):
+**Done** closes the entry and sets the task `done`; **Pause** closes the
+entry and sets the task back to `todo`, on the list to come back to.
+Either way the time spent is recorded on the task.
 
 ---
 
@@ -162,19 +165,35 @@ and writes the item `processed` with `processed_into = project:<id>`.
 
 ---
 
-### A note
+### A note, in your own words
 
 t[process.outcome.note]
-"Note" writes an atomic wiki note at `Wiki/Atomic/<slug>-<id6>.md`
-carrying the whole capture, and writes the item `processed` with
-`processed_into` set to the note's path.
+"Write a note" is the rewrite: the person titles the idea, says it in
+their own words, and picks the one parent it belongs under (a note of
+the vault). It writes `<Title>.md` with `tags: [atomic]`, `created`, and
+`folder: "[[Parent]]"` when a parent was picked; the body is what they
+wrote, followed by the capture verbatim in a `> [!quote] Original
+capture` callout, so the source is never lost. The write is create-only
+— a title already taken fails the save and the capture stays in the
+inbox. The item is written `processed` with `processed_into` set to the
+note's path.
+
+---
+
+### Keep as reference
+
+t[process.outcome.reference]
+"Keep as reference" files the capture as it stands — no rewrite — at
+`Wiki/Atomic/<slug>-<id6>.md`, carrying the whole capture, and writes the
+item `processed` into it. It is for what is worth keeping but not yet
+worth thinking through.
 
 ---
 
 ### Later
 
 t[process.outcome.later]
-"Later" (and Clarify's "Someday") puts the item off by spaced repetition
+"Snooze" puts the item off by spaced repetition
 (`inbox_proto::review`): Soon, Maybe and Someday are the Hard, Good and
 Easy responses, each showing how far off it lands. The item stays `open`
 with a new `resurface_on`, interval, ease and review count, and is not
@@ -199,31 +218,30 @@ stored writes nothing at all.
 
 ---
 
-## Modes
+## The card
 
-### Fast puts every outcome on the card
+### One card, every outcome
 
-t[process.mode.fast]
-In **Fast** mode the card shows the outcomes side by side — make a task,
-later, note, done, delete (and skip, in the deck) — each one key away
-(`t`, `l`, `n`, `d`, `x`, space). The mode is the person's choice,
-remembered per device, and Fast is the default.
+t[process.card]
+There is one way to process — no modes to choose between. The card leads
+with the four outcomes a capture usually wants: **Do it now** (`d`),
+**Add to a project** (`p`, the task shape — project, contexts, date),
+**Write a note** (`n`, the rewrite) and **Snooze** (`s`). Beneath them,
+smaller: **Keep as reference** (`r`), **It's a project**, **Already done**,
+**Delete** (`x`), and **Skip** (space) in the deck. Each step past the
+first can step back to it.
 
 ---
 
-### Clarify asks the questions in order
+### A capture's marks
 
-t[process.mode.clarify]
-In **Clarify** mode the card asks, one at a time:
-
-1. *Is this actionable?*
-2. If yes — *What's the next step?* — **Do it now**, **Make it a task**,
-   **Waiting on someone**, or **It's a project**.
-3. If no — *Keep it?* — **Note**, **Someday** (later, Easy), or
-   **Delete**.
-
-Each question can step back to the one before. The outcomes it reaches
-are the same outcomes Fast reaches, written the same way.
+t[process.capture.marks]
+A capture's row reads its words for marks without changing them: a
+`#tag` shows as a badge (its colour fixed by the tag), an `@context`
+as a chip, and a person — an org member or contact named by `@handle`
+(their first name) or by their capitalised first name — as an avatar.
+Tags and contexts lift out of the row's text; an `@handle` reads as the
+name. Bare numbers (`#12`) and email addresses are not marks.
 
 ---
 
@@ -363,12 +381,14 @@ without the person saying so.
 |---|---|
 | `process.capture.single-path`, `.verbatim`, `process.outcome.task` | `tests/integration/tests/it/process.rs` — capture on the Inbox lane, task on the Task lane, back-link read back |
 | `process.due` | `process.rs` (the planted inbox over the wire) and `example_org::declared_tests::the_planted_inbox_has_captures_to_process` |
+| `process.capture.marks` | `pages::inbox` unit tests (what is a mark, people by handle or name); `example_org::declared_tests::the_seeded_inbox_shows_people_tags_and_contexts`; `process.rs` serves the planted captures verbatim |
 | `process.suggested` | `task-proto::suggest` unit tests (the order, "Not now", what is running); `apps/server/tests/it/watch_suggested_e2e.rs::the_watch_suggests_and_acts_on_the_same_pick` — planned task, a template's maintenance hour opening a "Maintenance hour" session, the fall-through to overdue and captures, over the watch bridge |
 | `process.focus.*` (but `.everywhere`) | unit tests in `task-proto::relevance` and `scheduling-proto::focus`; `process.rs` over `TaskService::query`; the seed's maintenance hour in `example_org::declared_tests` |
 
-The seeded world shows the whole loop to Alice: six captures in
+The seeded world shows the whole loop to Alice: eight captures in
 acme-audio's inbox (one suggested from mail, one snoozed two weeks out,
-two carrying `@errands` / `#chore`), weekday and weekend templates with
+two carrying `@errands` / `#chore`, and two marked up with a person, a
+`#tag` and an `@context` — Sam's avatar, Casey by name), weekday and weekend templates with
 an "Errands & chores" maintenance block (16:00–17:00 on weekdays), and
 three open album tasks tagged `@errands`, `@chores` and `#chore` for that
 hour to bring forward. What is not met is in [unmet](unmet.md).

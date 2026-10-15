@@ -38,6 +38,8 @@ const PAGE_CSS: &str = "@keyframes ftsFadeUp{from{opacity:0;transform:translateY
 /// How the project list is laid out. Persisted for the page's lifetime.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum ViewMode {
+    /// Square covers, album-style: each project's picture first.
+    Grid,
     Cards,
     #[default]
     List,
@@ -358,6 +360,13 @@ fn render_loaded(
         }
 
         match view_mode() {
+            ViewMode::Grid => rsx! {
+                div { class: "grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5",
+                    for (parent, kids) in groups.iter() {
+                        ProjectCover { key: "{parent.id}", p: parent.clone(), sub_count: kids.len() }
+                    }
+                }
+            },
             ViewMode::Cards => rsx! {
                 // Equal-height cards: the grid stretches each cell to the
                 // row's tallest, and the card fills it (`h-full`).
@@ -563,10 +572,12 @@ fn page_header(props: PageHeaderProps) -> Element {
 fn MobileViewToggle(props: ViewToggleProps) -> Element {
     let mut view = props.view;
     let next = match view() {
+        ViewMode::List => ViewMode::Grid,
+        ViewMode::Grid => ViewMode::Cards,
         ViewMode::Cards => ViewMode::List,
-        ViewMode::List => ViewMode::Cards,
     };
     let label = match next {
+        ViewMode::Grid => "Switch to grid",
         ViewMode::Cards => "Switch to cards",
         ViewMode::List => "Switch to list",
     };
@@ -578,7 +589,8 @@ fn MobileViewToggle(props: ViewToggleProps) -> Element {
             aria_label: "{label}",
             onclick: move |_| view.set(next),
             match next {
-                ViewMode::Cards => rsx! { LayoutGrid { size: 15 } },
+                ViewMode::Grid => rsx! { LayoutGrid { size: 15 } },
+                ViewMode::Cards => rsx! { Layers { size: 15 } },
                 ViewMode::List => rsx! { LayoutList { size: 15 } },
             }
         }
@@ -595,7 +607,7 @@ fn ViewToggle(props: ViewToggleProps) -> Element {
     let mut view = props.view;
     rsx! {
         div { class: "inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 text-xs",
-            for (mode, label) in [(ViewMode::Cards, "Cards"), (ViewMode::List, "List")] {
+            for (mode, label) in [(ViewMode::Grid, "Grid"), (ViewMode::Cards, "Cards"), (ViewMode::List, "List")] {
                 {
                     let active = view() == mode;
                     let cls = if active {
@@ -808,8 +820,6 @@ struct ProjectTileProps {
 #[component]
 fn ProjectTile(props: ProjectTileProps) -> Element {
     let p = &props.p;
-    let accent = accent(p);
-    let initials = initials(&p.title);
     let cls = format!(
         "{} {} relative shrink-0 overflow-hidden",
         props.class, props.rounded
@@ -839,16 +849,12 @@ fn ProjectTile(props: ProjectTileProps) -> Element {
                     class: "h-full w-full object-cover",
                 }
             } else {
-                // Two stops of the same accent: enough shape to read as
-                // a deliberate tile, quiet enough not to shout in a
-                // list of twenty.
-                div {
-                    class: "flex h-full w-full items-center justify-center",
-                    style: "background: linear-gradient(140deg, color-mix(in oklch, {accent} 82%, transparent) 0%, color-mix(in oklch, {accent} 28%, var(--card)) 100%);",
-                    span {
-                        class: "{props.text_class} font-semibold tracking-tight text-background mix-blend-luminosity",
-                        "{initials}"
-                    }
+                // No cover of its own: the project's abstract, painted
+                // from its id — the same picture everywhere it appears.
+                img {
+                    src: "{task_ui_core::abstract_art::data_url(&p.id.to_string())}",
+                    alt: "",
+                    class: "h-full w-full object-cover",
                 }
             }
         }
@@ -904,29 +910,46 @@ async fn cover_src(image: &str, slug: Option<&str>) -> Option<String> {
     Some(format!("/org/{slug}/media/{path}{suffix}"))
 }
 
-/// Up to two initials from a title. `PNG Worship Collective Album` →
-/// `PW`; `Task` → `T`. Leading numbers are skipped — a studio archive
-/// is full of `01 Michael Kaplan Sessions`, and `0M` identifies
-/// nothing.
-fn initials(title: &str) -> String {
-    let words: Vec<&str> = title
-        .split_whitespace()
-        .filter(|w| w.chars().next().is_some_and(char::is_alphabetic))
-        .collect();
-    let mut out = String::new();
-    for w in words.iter().take(2) {
-        if let Some(c) = w.chars().next() {
-            out.extend(c.to_uppercase());
+// ── project cover (grid view) ───────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct ProjectCoverProps {
+    p: ProjectInfo,
+    sub_count: usize,
+}
+
+/// One project as an album: its square cover (its own image, or its
+/// abstract), and under it the title and where it stands.
+#[component]
+fn ProjectCover(props: ProjectCoverProps) -> Element {
+    let p = &props.p;
+    let pid = p.id.to_string();
+    let progress = (p.progress_percent >= 0).then(|| p.progress_percent.clamp(0, 100));
+    rsx! {
+        Link {
+            to: Route::ProjectDetailRoute { id: pid },
+            class: "group flex min-w-0 flex-col gap-2",
+            div { class: "aspect-square w-full overflow-hidden rounded-xl bg-muted shadow-[0_8px_24px_-12px_rgb(0_0_0/0.6)] ring-1 ring-inset ring-white/5 transition-transform duration-300 group-hover:-translate-y-0.5 group-active:scale-[0.98]",
+                ProjectTile {
+                    p: props.p.clone(),
+                    class: "h-full w-full".to_string(),
+                    text_class: "text-3xl".to_string(),
+                    rounded: String::new(),
+                }
+            }
+            div { class: "flex min-w-0 flex-col gap-0.5 px-0.5",
+                span { class: "truncate text-[15px] font-medium text-foreground md:text-sm", "{p.title}" }
+                span { class: "flex items-center gap-1.5 truncate text-[13px] text-muted-foreground md:text-xs",
+                    span { class: "capitalize", "{p.status}" }
+                    if let Some(pct) = progress {
+                        span { "· {pct}%" }
+                    }
+                    if props.sub_count > 0 {
+                        span { "· {props.sub_count} sub" }
+                    }
+                }
+            }
         }
-    }
-    if out.is_empty() {
-        title
-            .chars()
-            .find(|c| c.is_alphanumeric())
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_else(|| "·".into())
-    } else {
-        out
     }
 }
 
