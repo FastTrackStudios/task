@@ -13,31 +13,23 @@ pub async fn move_page(
     to: String,
     buffer: Option<Vec<u8>>,
 ) -> Result<Vec<String>, String> {
+    use vault_proto::IfMatch;
     let client = crate::vox_clients::vault_client(&slug).await?;
-    #[cfg(target_arch = "wasm32")]
-    {
-        use vault_proto::IfMatch;
-        let guard = match buffer {
-            Some(bytes) => IfMatch::Sha(
-                client
-                    .put_file(vault_id.clone(), from.clone(), bytes, IfMatch::Force)
-                    .await
-                    .map_err(|e| sentence(&e, &from))?
-                    .sha256,
-            ),
-            None => IfMatch::Force,
-        };
-        client
-            .move_file(vault_id, from, to.clone(), guard)
-            .await
-            .map(|ack| ack.relinked)
-            .map_err(|e| sentence(&e, &to))
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (client, vault_id, from, to, buffer);
-        Err("native client not wired yet".to_owned())
-    }
+    let guard = match buffer {
+        Some(bytes) => IfMatch::Sha(
+            client
+                .put_file(vault_id.clone(), from.clone(), bytes, IfMatch::Force)
+                .await
+                .map_err(|e| sentence(&e, &from))?
+                .sha256,
+        ),
+        None => IfMatch::Force,
+    };
+    client
+        .move_file(vault_id, from, to.clone(), guard)
+        .await
+        .map(|ack| ack.relinked)
+        .map_err(|e| sentence(&e, &to))
 }
 
 /// Delete `path`, but only if it is still the version the person was
@@ -49,25 +41,16 @@ pub async fn delete_page(
     path: String,
     sha: Option<String>,
 ) -> Result<(), String> {
+    use vault_proto::IfMatch;
     let client = crate::vox_clients::vault_client(&slug).await?;
-    #[cfg(target_arch = "wasm32")]
-    {
-        use vault_proto::IfMatch;
-        let guard = sha.map_or(IfMatch::Force, IfMatch::Sha);
-        client
-            .delete_file(vault_id, path.clone(), guard)
-            .await
-            .map_err(|e| sentence(&e, &path))
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (client, vault_id, path, sha);
-        Err("native client not wired yet".to_owned())
-    }
+    let guard = sha.map_or(IfMatch::Force, IfMatch::Sha);
+    client
+        .delete_file(vault_id, path.clone(), guard)
+        .await
+        .map_err(|e| sentence(&e, &path))
 }
 
 /// A vault error as something to tell the person who asked.
-#[cfg(target_arch = "wasm32")]
 fn sentence(e: &vox::VoxError<vault_proto::VaultSyncError>, path: &str) -> String {
     use vault_proto::VaultSyncError as E;
     match e {

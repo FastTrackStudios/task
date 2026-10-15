@@ -12,9 +12,15 @@ use task_proto::TaskInfo;
 use uuid::Uuid;
 
 /// The relevance context for "now": the local clock and date, where
-/// the person says they are, and the project their timer runs on.
+/// the person says they are, the project their timer runs on, and what
+/// the current time block is for (`focus` — see
+/// [`crate::now_block::use_focus`]; empty unless a mode is running).
 #[must_use]
-pub fn relevance_ctx(location: &str, active_project: Option<Uuid>) -> task_proto::RelevanceContext {
+pub fn relevance_ctx(
+    location: &str,
+    active_project: Option<Uuid>,
+    focus: Vec<String>,
+) -> task_proto::RelevanceContext {
     let now = chrono::Local::now();
     task_proto::RelevanceContext {
         local_hhmm: Some(now.format("%H:%M").to_string()),
@@ -23,6 +29,7 @@ pub fn relevance_ctx(location: &str, active_project: Option<Uuid>) -> task_proto
         location: (!location.is_empty()).then(|| location.to_owned()),
         device: None,
         active_project,
+        focus,
     }
 }
 
@@ -38,6 +45,9 @@ pub struct Filtered<'a> {
     /// and distinct — what the list names when it says what Relevant
     /// is holding back.
     pub held_by: Vec<String>,
+    /// Open tasks in the other [`Scope`] — on the Tasks list, the
+    /// project work it points to rather than shows.
+    pub other_scope: usize,
 }
 
 impl Filtered<'_> {
@@ -53,22 +63,53 @@ impl Filtered<'_> {
     }
 }
 
-/// Apply the Active (open only) and Relevant (`task_proto::is_relevant`)
-/// filters.
+/// Which half of the work a board shows (see `task_proto::action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// The Tasks list: what is yours to do — assigned to the signed-in
+    /// person (Linear's "My issues"; see `task_proto::is_mine`).
+    Actions,
+    /// The Project work list: everything else — unassigned or someone
+    /// else's, documented under its project.
+    ProjectWork,
+}
+
+impl Scope {
+    fn keeps(self, t: &TaskInfo, me: Option<&str>) -> bool {
+        match self {
+            Self::Actions => task_proto::is_mine(t, me),
+            Self::ProjectWork => !task_proto::is_mine(t, me),
+        }
+    }
+}
+
+/// Apply the scope (next actions or project work), then the Active
+/// (open only) and Relevant (`task_proto::is_relevant`) filters.
 #[must_use]
 pub fn filter<'a>(
     all: &[&'a TaskInfo],
+    scope: Scope,
+    me: Option<&str>,
     active_only: bool,
     relevant_only: bool,
     ctx: &task_proto::RelevanceContext,
 ) -> Filtered<'a> {
     let mut hidden_done = 0;
     let mut hidden_elsewhere = 0;
+    let mut other_scope = 0;
     let mut held_by = std::collections::BTreeSet::new();
     let visible = all
         .iter()
         .copied()
         .filter(|t| {
+            if !scope.keeps(t, me) {
+                // Counted only while open: finished project work isn't
+                // something the Tasks list should point you to.
+                if task_proto::status_is_open(&t.status) {
+                    other_scope += 1;
+                }
+                return false;
+            }
             if active_only && !task_proto::status_is_open(&t.status) {
                 hidden_done += 1;
                 return false;
@@ -90,6 +131,7 @@ pub fn filter<'a>(
         hidden_done,
         hidden_elsewhere,
         held_by: held_by.into_iter().collect(),
+        other_scope,
     }
 }
 
@@ -206,16 +248,27 @@ mod tests {
         t
     }
 
+    /// A next action: something with a where (an `@context`).
+    fn action(title: &str, status: &str) -> TaskInfo {
+        let mut t = task(title, status);
+        t.contexts.push("@computer".to_owned());
+        t
+    }
+
     #[test]
     fn the_hidden_note_names_what_and_why() {
-        let open = task("a", "open");
-        let done = task("b", "done");
+        let open = action("a", "open");
+        let done = action("b", "done");
         let all = [&open, &done];
-        let ctx = relevance_ctx("", None);
-        let f = filter(&all, true, false, &ctx);
+        let ctx = relevance_ctx("computer", None, Vec::new());
+        let f = filter(&all, Scope::Actions, None, true, false, &ctx);
         assert_eq!(f.visible.len(), 1);
         assert_eq!(f.hidden_note().as_deref(), Some("1 done hidden"));
-        assert!(filter(&all, false, false, &ctx).hidden_note().is_none());
+        assert!(
+            filter(&all, Scope::Actions, None, false, false, &ctx)
+                .hidden_note()
+                .is_none()
+        );
     }
 
     #[test]
@@ -224,12 +277,38 @@ mod tests {
         home.contexts.push("@home".to_owned());
         let mut errand = task("buy strings", "open");
         errand.contexts.push("errands".to_owned());
-        let plain = task("mix", "open");
-        let all = [&home, &errand, &plain];
-        let f = filter(&all, true, true, &relevance_ctx("studio", None));
+        let mut today = task("mix", "open");
+        today.due = Some(chrono::Local::now().format("%Y-%m-%d").to_string());
+        let all = [&home, &errand, &today];
+        let f = filter(
+            &all,
+            Scope::Actions,
+            None,
+            true,
+            true,
+            &relevance_ctx("studio", None, Vec::new()),
+        );
         assert_eq!(f.visible.len(), 1);
         assert_eq!(f.held_by, ["@errands", "@home"]);
         assert_eq!(f.hidden_note().as_deref(), Some("2 for later or elsewhere"));
+    }
+
+    #[test]
+    fn tasks_shows_next_actions_and_points_to_project_work() {
+        let errand = action("post the parcel", "open");
+        let epic = task("EPIC: orchestral renderer", "open");
+        let shipped = task("old issue", "done");
+        let all = [&errand, &epic, &shipped];
+        let ctx = relevance_ctx("computer", None, Vec::new());
+        let tasks = filter(&all, Scope::Actions, None, true, false, &ctx);
+        assert_eq!(tasks.visible.len(), 1);
+        assert_eq!(
+            tasks.other_scope, 1,
+            "finished project work isn't pointed to"
+        );
+        let work = filter(&all, Scope::ProjectWork, None, true, false, &ctx);
+        assert_eq!(work.visible.len(), 1);
+        assert_eq!(work.visible[0].title, "EPIC: orchestral renderer");
     }
 
     #[test]

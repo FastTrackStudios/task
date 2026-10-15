@@ -906,18 +906,10 @@ pub fn wikilink_candidates(pages: &[PageMeta]) -> Vec<LinkCandidate> {
 /// count, via the `VaultGraph` RPC.
 pub async fn tag_candidates(org: String, vault_id: String) -> Result<Vec<TagCount>, String> {
     let client = crate::vox_clients::vault_graph_client(&org).await?;
-    #[cfg(target_arch = "wasm32")]
-    {
-        client
-            .tags(vault_id)
-            .await
-            .map_err(|e| format!("tags: {e:?}"))
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (client, vault_id);
-        Err("native client not wired yet".to_owned())
-    }
+    client
+        .tags(vault_id)
+        .await
+        .map_err(|e| format!("tags: {e:?}"))
 }
 
 // ── Content helpers (ported from `vault_live::lookup`, which is

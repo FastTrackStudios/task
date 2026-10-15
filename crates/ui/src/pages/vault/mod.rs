@@ -67,21 +67,21 @@
 //! [`set_folder`]: vault_proto::VaultSync::set_folder
 //! [`PageMeta`]: vault_proto::PageMeta
 
-mod rpc;
+pub(crate) mod rpc;
 mod tabs;
 mod tree;
 
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use architect_ui::lucide_dioxus::Folder;
+use crate::shell::phone_gestures::{PhoneDrawer, Side};
+use architect_ui::lucide_dioxus::{ChevronsDownUp, Search, SquarePen};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use vault_proto::TagCount;
 
 use crate::pages::note_inspector::{InspectorTab, NoteInspector};
 use crate::pages::note_view::NoteView;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
 
 use tabs::{MAX_PANES, OpenTab, Pane, render_tab_bar};
 // `build_tree` / `basename_of` / `TreeNode` were free items on this
@@ -142,9 +142,13 @@ pub fn VaultView(
     let collapsed = use_signal(HashSet::<String>::new);
     let mut move_target = use_signal(|| None::<String>);
     let mut create_parent = use_signal(|| None::<String>);
-    // Mobile-only: the file tree lives in a bottom sheet once a note
-    // is open (inline full-width while nothing is selected).
-    let mut files_open = use_signal(|| false);
+    // Phone: the file tree is the left drawer once a note is open
+    // (inline full-width while nothing is selected), the note's
+    // inspector the right one. The shell owns their open state — the
+    // desk's inspector follows its own right-panel toggle, which is
+    // open by default and must not throw a sheet over every note
+    // opened on a phone.
+    let phone = crate::shell::phone_gestures::use_phone_panels();
 
     // ── Tabs + split state ────────────────────────────────────
     // `panes` is 1–2 panes, each an ordered tab set + active index;
@@ -274,7 +278,7 @@ pub fn VaultView(
     // Open-or-focus a note in the focused pane (tree rows, backlinks,
     // wikilinks, graph nodes, `.base` rows, freshly-created notes).
     let on_open = use_callback(move |meta: FileMeta| {
-        files_open.set(false);
+        phone.close();
         let mut p = panes.write();
         let f = (*focused.peek()).min(p.len().saturating_sub(1));
         let Some(pane) = p.get_mut(f) else { return };
@@ -379,7 +383,17 @@ pub fn VaultView(
                     path: p.path.clone(),
                     sha256: p.sha256.clone(),
                 });
+                return;
             }
+        }
+        // Not in the index (or no index — offline): a note created on this
+        // device opens from its document (`offline.doc.create`).
+        if crate::doc_replica::is_local_doc(&active.peek(), VAULT_ID, &want) {
+            last_link.set(want.clone());
+            on_open.call(FileMeta {
+                path: want,
+                sha256: String::new(),
+            });
         }
     });
 
@@ -488,7 +502,7 @@ pub fn VaultView(
 
     // Build the tree from the folder index.
     let tree = use_memo(move || match &*files.read_unchecked() {
-        Some(Ok(pages)) => Some(Rc::new(build_tree(pages))),
+        Some(Ok(pages)) => Some(Rc::new(tree::group_by_directory(build_tree(pages)))),
         _ => None,
     });
 
@@ -512,7 +526,7 @@ pub fn VaultView(
             let Some(t) = tree() else { unreachable!() };
             let (nodes, roots) = (Rc::new(t.0.clone()), t.1.clone());
             rsx! {
-                nav { class: "flex flex-col gap-0.5 px-2 pb-4",
+                nav { class: "flex flex-col gap-0.5 px-2 pb-4 md:px-2",
                     if roots.is_empty() {
                         div { class: "px-2 py-1 text-sm text-muted-foreground", "Empty vault. Create a note above." }
                     }
@@ -568,14 +582,107 @@ pub fn VaultView(
         info.set(None);
     });
 
+    // ── Phone drawer toolbar: Obsidian's one-tap new note ─────
+    let mut notes_search = crate::notes_search::use_notes_search();
+    let mut new_untitled = move || {
+        let taken: HashSet<String> = pages_memo
+            .peek()
+            .iter()
+            .map(|p| p.path.to_lowercase())
+            .collect();
+        let name = std::iter::once("Untitled.md".to_owned())
+            .chain((1..).map(|n| format!("Untitled {n}.md")))
+            .find(|n| !taken.contains(&n.to_lowercase()))
+            .unwrap_or_default();
+        new_name.set(name);
+        create_file();
+    };
+    let collapse_all = move || {
+        let Some(t) = tree.peek().clone() else { return };
+        let mut c = collapsed;
+        let mut set = c.write();
+        for n in t.0.iter().filter(|n| n.is_folder) {
+            if n.group {
+                set.remove(&tree::group_open_key(&n.meta.title));
+            } else {
+                set.insert(n.meta.basename.to_lowercase());
+            }
+        }
+    };
+    // The drawer's head: the name, then New note, Collapse all and
+    // Search in thumb-sized buttons (Obsidian's drawer toolbar).
+    let icon_btn = "flex size-10 items-center justify-center rounded-full text-foreground/80 active:bg-foreground/10";
+    let drawer_toolbar = rsx! {
+        div { class: "flex items-center gap-1 px-4 pb-2 pt-3 md:hidden",
+            h2 { class: "min-w-0 flex-1 truncate text-[20px] font-semibold tracking-[-0.01em]", "Notes" }
+            button {
+                r#type: "button",
+                class: icon_btn,
+                title: "New note",
+                "aria-label": "New note",
+                "data-testid": "drawer-new-note",
+                onclick: move |_| new_untitled(),
+                SquarePen { size: 20 }
+            }
+            button {
+                r#type: "button",
+                class: icon_btn,
+                title: "Collapse all",
+                "aria-label": "Collapse all",
+                onclick: move |_| collapse_all(),
+                ChevronsDownUp { size: 20 }
+            }
+        }
+        // The search bar: every vault and wiki's text. (Commands and
+        // pages are the palette's — pull down.)
+        div { class: "px-3 pb-2 md:hidden",
+            button {
+                r#type: "button",
+                class: "flex h-11 w-full items-center gap-2 rounded-full bg-foreground/[0.06] px-4 text-left text-[16px] text-muted-foreground active:bg-foreground/10",
+                "data-testid": "drawer-search",
+                onclick: move |_| {
+                    phone.close();
+                    notes_search.set(true);
+                },
+                Search { size: 16 }
+                "Search notes and wikis"
+            }
+        }
+    };
+    // The list's head on a phone (no note open): the section header —
+    // "Notes", New note as the main action, the rest under ⋯.
+    let list_header = rsx! {
+        div { class: "pb-1 pt-1 md:hidden",
+            task_ui_core::section_header::SectionHeader {
+                title: "Notes".to_owned(),
+                action: rsx! { SquarePen { size: 20 } },
+                action_label: "New note".to_owned(),
+                on_action: move |()| new_untitled(),
+                task_ui_core::section_header::SectionMenuItem {
+                    label: "Search notes",
+                    icon: rsx! { Search { size: 18 } },
+                    on_click: move |()| notes_search.set(true),
+                }
+                task_ui_core::section_header::SectionMenuItem {
+                    label: "Collapse all",
+                    icon: rsx! { ChevronsDownUp { size: 18 } },
+                    on_click: move |()| collapse_all(),
+                }
+            }
+        }
+    };
+
     // ── Tree pane content ─────────────────────────────────
-    let tree_content = rsx! {
-        div { class: "flex flex-col gap-2 px-3 py-3",
-            if let Some(parent) = create_under.clone() {
+    let tree_body = rsx! {
+        if let Some(parent) = create_under.clone() {
+            div { class: "px-4 pb-1 md:px-3",
                 Text { variant: TextVariant::Muted, class: "text-xs",
                     "New note will be filed under {parent}."
                 }
             }
+        }
+        // Desk: a name field. A phone has New note in its header.
+        div { class: "hidden flex-col gap-2 px-3 py-3 md:flex",
             div { class: "flex items-center gap-2",
                 Input {
                     value: new_name,
@@ -642,7 +749,8 @@ pub fn VaultView(
             // ── Virtual-folder tree (mobile-only) ─────────
             aside {
                 class: if has_file { "hidden" } else { "flex w-full flex-col overflow-y-auto pb-14 md:hidden" },
-                {tree_content.clone()}
+                {list_header}
+                {tree_body.clone()}
             }
             // ── Document area: panes + backlinks ──────────
             div {
@@ -719,48 +827,22 @@ pub fn VaultView(
                 }
             }
         }
-        // ── Mobile chrome ─────────────────────────────────
-        MobileActionBar {
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent",
-                onclick: move |_| files_open.set(true),
-                Folder { size: 16 }
-                "Files"
-            }
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent disabled:opacity-50",
-                disabled: !has_file,
-                onclick: move |_| {
-                    let mut o = shell_right;
-                    let cur = o.peek().0;
-                    o.set(crate::chrome::RightPanelOpen(!cur));
-                },
-                "Backlinks"
-            }
-        }
-        BottomSheet {
-            open: files_open(),
-            on_close: move |_| files_open.set(false),
-            title: "Vault",
-            {tree_content}
-        }
-        BottomSheet {
-            open: has_file && panel_open,
-            on_close: move |_| {
-                let mut o = shell_right;
-                o.set(crate::chrome::RightPanelOpen(false));
-            },
-            title: right_tab().label().to_string(),
-            NoteInspector {
-                org: active,
-                vault_id: VAULT_ID.to_owned(),
-                path: selected,
-                refresh_key,
-                pages: pages_memo,
-                on_open,
-                tab: right_tab,
+        // ── Phone drawers (the shell swipes them in) ──
+        // Left: the files, with the new-note toolbar — the vault's own
+        // tree rather than the shell's explorer. Right, while a note is
+        // open: its properties, links, graph and share.
+        PhoneDrawer { side: Side::Left, testid: "vault-drawer".to_owned(), {drawer_toolbar} {tree_body} }
+        if has_file {
+            PhoneDrawer { side: Side::Right, testid: "note-drawer".to_owned(),
+                NoteInspector {
+                    org: active,
+                    vault_id: VAULT_ID.to_owned(),
+                    path: selected,
+                    refresh_key,
+                    pages: pages_memo,
+                    on_open,
+                    tab: right_tab,
+                }
             }
         }
         document::Link { rel: "stylesheet", href: editor::EDITOR_STYLE }

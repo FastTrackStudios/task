@@ -1,6 +1,27 @@
 # cargo-nextest config — runs ahead of `cargo test` on every recipe
 # that touches tests. Mirrors architect's profile shape.
 
+# Every test watches the filesystem by polling (`TASK_WATCH_POLL`, read
+# by `vault-live`'s and `files`' watchers) rather than through the OS.
+# A native watch on macOS is a registration with `fseventsd`, served one
+# at a time per process; from a binary on the external build volume each
+# took ~7s, so a suite of servers waiting on their watchers measured
+# `fseventsd` and timed out on it. Test trees are a handful of files, so
+# a stat walk every 100ms costs nothing — and no test depends on a
+# daemon's mood. The app itself keeps the native watcher.
+experimental = ["setup-scripts"]
+
+[scripts.setup.watch-by-polling]
+command = ["sh", "-c", "echo TASK_WATCH_POLL=1 >> \"$NEXTEST_ENV\""]
+
+[[profile.default.scripts]]
+filter = 'all()'
+setup = 'watch-by-polling'
+
+[[profile.ci.scripts]]
+filter = 'all()'
+setup = 'watch-by-polling'
+
 [profile.default]
 fail-fast = true
 status-level = "pass"
@@ -79,6 +100,16 @@ slow-timeout = { period = "15s", terminate-after = 3 }
 # the data root, which on a developer machine is the real `~/.task` —
 # before the first assertion. Three to four seconds of boot against a 4s
 # budget is a test that passes or times out on machine load.
+# Two device nodes on real iroh endpoints, each booting its personal org
+# and then the org they share: four org boots (~4s each, most of it file
+# watchers) before the first sync, against a test whose own work — the
+# sweeps and every document exchange — is about a second. Under 10s×3 it
+# passed at 22s and timed out at 30s one run in three, which measures the
+# boot, not the sync. Before the package-wide override: first match wins.
+[[profile.default.overrides]]
+filter = 'package(task-server) and test(/^(peer_docs_e2e|local_node_e2e)::/)'
+slow-timeout = { period = "20s", terminate-after = 3 }
+
 [[profile.default.overrides]]
 filter = 'package(task-server)'
 slow-timeout = { period = "10s", terminate-after = 3 }
@@ -185,6 +216,10 @@ slow-timeout = { period = "15s", terminate-after = 3 }
 # a 32-core box with 2,900 other tests. Passing or failing on how loaded
 # the runner happened to be is the definition of a flaky gate, and the
 # cure is the budget the default profile already agreed on.
+[[profile.ci.overrides]]
+filter = 'package(task-server) and test(/^(peer_docs_e2e|local_node_e2e)::/)'
+slow-timeout = { period = "20s", terminate-after = 3 }
+
 [[profile.ci.overrides]]
 filter = 'package(task-server) or (package(task-cli) and binary(vox_embedded))'
 slow-timeout = { period = "10s", terminate-after = 3 }

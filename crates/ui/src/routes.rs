@@ -62,6 +62,15 @@ pub enum Route {
         #[route("/inbox")]
         InboxRoute {},
 
+        // Everything that happened, newest first — the history the
+        // bell's queue links into (`crate::activity`).
+        #[route("/activity")]
+        ActivityRoute {},
+
+        // What you starred — the third tab on a phone.
+        #[route("/favorites")]
+        FavoritesRoute {},
+
         // Contacts — the vault-backed people directory (adjacent to
         // Inbox; keep this anchor stable for clean merges).
         #[route("/contacts")]
@@ -81,6 +90,11 @@ pub enum Route {
 
         #[route("/tasks/:id")]
         TaskDetailRoute { id: uuid::Uuid },
+
+        // Issues and pieces of projects with no where or when — what
+        // the Tasks list (next actions) points to rather than shows.
+        #[route("/project-work")]
+        ProjectWorkRoute {},
 
         // `path` deep-links straight to a note (vault-relative path,
         // e.g. from a knowledge-graph node click); empty opens the
@@ -302,6 +316,16 @@ fn InboxRoute() -> Element {
 }
 
 #[component]
+fn ActivityRoute() -> Element {
+    rsx! { crate::activity::ActivityPage {} }
+}
+
+#[component]
+fn FavoritesRoute() -> Element {
+    rsx! { crate::favorites::FavoritesView {} }
+}
+
+#[component]
 fn ContactsRoute() -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "contacts", pages::contacts::ContactsView {} }
@@ -335,6 +359,11 @@ fn GoalsRoute() -> Element {
 #[component]
 fn TasksRoute() -> Element {
     rsx! { pages::tasks::TasksView {} }
+}
+
+#[component]
+fn ProjectWorkRoute() -> Element {
+    rsx! { pages::tasks::ProjectWorkView {} }
 }
 
 #[component]

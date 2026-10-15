@@ -184,6 +184,14 @@ pub async fn establish_server<C>(base_override: Option<&str>) -> Result<C, Strin
 where
     C: vox_core::FromVoxLane + Clone + 'static,
 {
+    // This device's node answers its own `/server/vox` in-process. Only
+    // when nothing names another base: an override is a host the caller
+    // means.
+    #[cfg(not(target_arch = "wasm32"))]
+    if base_override.is_none_or(crate::node::is_local) && crate::node::local_active() {
+        let node = crate::node::host().ok_or("this build hosts no node")?;
+        return Ok(C::from_vox_lane(node.server_caller().await?, None));
+    }
     let caller = shared_caller_at(&server_ws_url(base_override)?).await?;
     Ok(C::from_vox_lane(caller, None))
 }
@@ -395,6 +403,18 @@ pub async fn caller_for(slug: &str) -> Result<vox_core::Caller, String> {
     // to the ambient one when the locker has no link for this slug.
     let bearer = crate::vox_session::bearer_for(slug);
 
+    // The device's own node (`offline.local`): the org is served
+    // in-process, no socket — checked FIRST, because discovery from the
+    // node also names its own iroh ids, and dialling ourselves over UDP
+    // would be a slow way to reach a function call.
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::node::local_active() {
+        if slug.is_empty() {
+            return Err("awaiting org discovery (no org slug yet)".to_owned());
+        }
+        return shared_caller_node(slug, bearer).await;
+    }
+
     // Native prefers iroh whenever discovery has produced the org's
     // endpoint id (`iroh_transport`): dial by bare id, identity as
     // per-call bearer metadata — the registration model, not the dev
@@ -418,7 +438,64 @@ pub async fn caller_for(slug: &str) -> Result<vox_core::Caller, String> {
         }
     }
 
-    shared_caller_with(&org_ws_url(slug)?, bearer).await
+    let remote = shared_caller_with(&org_ws_url(slug)?, bearer.clone()).await;
+    // t[impl offline.peers] — a host that cannot be reached is not the end
+    // of an org this device also holds a node for: serve it from here.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Err(err) = &remote
+        && let Some(node) = crate::node::host()
+        && crate::node::fall_back_to_node(crate::node::dial_unreachable(err), node.holds(slug))
+    {
+        tracing::info!(%slug, %err, "host unreachable; serving this org from the device's node");
+        return shared_caller_node(slug, bearer).await;
+    }
+    remote
+}
+
+/// The shared root for `slug` on this device's node — the same cache
+/// and single-flight as a dial, keyed by a `local://…/org/<slug>` pseudo
+/// URL plus the identity, since the bearer is baked into the in-process
+/// lane exactly as a socket upgrade bakes it.
+#[cfg(not(target_arch = "wasm32"))]
+async fn shared_caller_node(
+    slug: &str,
+    bearer: Option<String>,
+) -> Result<vox_core::Caller, String> {
+    let key = (
+        format!("{}/org/{slug}", crate::node::LOCAL_VOX_URL),
+        bearer.clone(),
+    );
+    if let Some(caller) = cached_live_caller(&key) {
+        return Ok(caller);
+    }
+    let dial = with_inflight(|inflight| {
+        if let Some(dial) = inflight.get(&key) {
+            return dial.clone();
+        }
+        let owned = key.clone();
+        let slug = slug.to_owned();
+        let fut = async move {
+            let made = match crate::node::host() {
+                Some(node) => node.caller(slug, owned.1.clone()).await,
+                None => Err("this build hosts no node".to_owned()),
+            };
+            // Cleared on failure too: a node that failed to boot once
+            // (a locked data root, say) must be retried, not remembered.
+            with_inflight(|inflight| inflight.remove(&owned));
+            let caller = made?;
+            Ok(insert_root(
+                &owned,
+                RootLane {
+                    caller,
+                    _connection: None,
+                },
+            ))
+        };
+        let dial: SharedDial = futures_util::FutureExt::shared(Box::pin(fut) as DialFuture);
+        inflight.insert(key.clone(), dial.clone());
+        dial
+    });
+    dial.await
 }
 
 /// The shared root over iroh — [`shared_caller_with`]'s twin, riding

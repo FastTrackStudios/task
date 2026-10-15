@@ -20,7 +20,9 @@
 //! live clock, and a complete button — the checkbox-timer made
 //! spatial. Idle (nothing running) renders no bar at all.
 
-use architect_ui::lucide_dioxus::{Plus, SlidersHorizontal};
+use architect_ui::lucide_dioxus::{
+    CircleCheck, FolderKanban, ListFilter, SlidersHorizontal, SquarePen,
+};
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
 use task_ui::{QuickAdd, TaskInfo as UiTask, TaskMutation, TasksApp};
@@ -30,8 +32,9 @@ use crate::chrome::{
 };
 use crate::orgs::{OrgMeta, OrgSelection};
 use crate::prefs::PrefsCtx;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
+use crate::shell::mobile::BottomSheet;
 use crate::stores;
+use crate::task_board::Scope;
 
 /// The "I'm at:" choices — matched against `@<location>` gate
 /// contexts by the relevance rules. FUTURE: personal named
@@ -67,6 +70,103 @@ struct BoardData {
     /// The running work session (the unified timer source), if any —
     /// what the Now bar reflects. `None` when nothing is tracking.
     now: Option<NowInfo>,
+    /// Open tasks the current time block is for (a maintenance hour's
+    /// errands and chores), for the band above the list.
+    for_hour: Vec<task_proto::TaskInfo>,
+    /// Open tasks in the other scope (on Tasks: the project work it
+    /// links to).
+    other_scope: usize,
+    /// What the Filter sheet offers, from the tasks on the board before
+    /// its picks narrow them: `(section, [(key, label)])`.
+    facets: Vec<(&'static str, Vec<(String, String)>)>,
+}
+
+/// The Filter sheet's keys a task carries: `ctx:@errands`,
+/// `proj:<id>`, `pri:high`.
+fn facet_keys(t: &task_proto::TaskInfo, index: &crate::task_board::ProjectIndex) -> Vec<String> {
+    let mut keys: Vec<String> = t
+        .contexts
+        .iter()
+        .map(|c| format!("ctx:@{}", c.trim().trim_start_matches('@').to_lowercase()))
+        .collect();
+    if let Some(task_proto::Anchor::Project(id)) = index.anchor(t) {
+        keys.push(format!("proj:{id}"));
+    }
+    keys.push(format!("pri:{}", t.priority.trim().to_lowercase()));
+    keys
+}
+
+/// Whether a task passes the Filter sheet's picks: within a section any
+/// pick matches (OR), across sections all must (AND).
+fn passes_picks(keys: &[String], picked: &std::collections::BTreeSet<String>) -> bool {
+    ["ctx:", "proj:", "pri:"].iter().all(|kind| {
+        let mine: Vec<&String> = picked.iter().filter(|p| p.starts_with(kind)).collect();
+        mine.is_empty() || mine.iter().any(|p| keys.contains(p))
+    })
+}
+
+/// The Filter sheet's sections, from the tasks on the board.
+fn facets_of(
+    tasks: &[&task_proto::TaskInfo],
+    index: &crate::task_board::ProjectIndex,
+) -> Vec<(&'static str, Vec<(String, String)>)> {
+    use std::collections::BTreeMap;
+    let mut ctx: BTreeMap<String, String> = BTreeMap::new();
+    let mut proj: BTreeMap<String, String> = BTreeMap::new();
+    let mut pri: BTreeMap<String, String> = BTreeMap::new();
+    for t in tasks {
+        for k in facet_keys(t, index) {
+            if let Some(c) = k.strip_prefix("ctx:") {
+                ctx.insert(k.clone(), c.to_owned());
+            } else if let Some(id) = k.strip_prefix("proj:") {
+                let name = uuid::Uuid::parse_str(id)
+                    .ok()
+                    .and_then(|id| index.names.get(&id).cloned())
+                    .unwrap_or_else(|| "Project".to_owned());
+                proj.insert(k.clone(), name);
+            } else if let Some(p) = k.strip_prefix("pri:") {
+                let label = match p {
+                    "critical" | "urgent" => "Urgent",
+                    "high" => "High",
+                    "normal" | "medium" => "Medium",
+                    "low" => "Low",
+                    _ => "No priority",
+                };
+                pri.insert(k.clone(), label.to_owned());
+            }
+        }
+    }
+    let mut proj: Vec<(String, String)> = proj.into_iter().collect();
+    proj.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    [
+        ("Context", ctx.into_iter().collect()),
+        ("Project", proj),
+        ("Priority", pri.into_iter().collect()),
+    ]
+    .into_iter()
+    .filter(|(_, v): &(&str, Vec<(String, String)>)| !v.is_empty())
+    .collect()
+}
+
+/// The foot of the Tasks list: how much project work isn't shown here,
+/// and the way to it.
+#[component]
+fn ProjectWorkLink(count: usize) -> Element {
+    let what = if count == 1 {
+        "1 project item has".to_owned()
+    } else {
+        format!("{count} project items have")
+    };
+    rsx! {
+        div { class: "flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 px-2 pt-3 text-sm text-muted-foreground",
+            span { "{what} no context or date yet." }
+            Link {
+                to: crate::routes::Route::ProjectWorkRoute {},
+                class: "rounded-md px-2 py-1 text-sm font-medium text-primary transition-colors hover:bg-primary/10",
+                "Project work →"
+            }
+        }
+    }
 }
 
 /// The Now bar's data, derived from the open [`WorkSession`] rather
@@ -86,8 +186,22 @@ struct NowInfo {
     req: timer_proto::StartTimerRequest,
 }
 
+/// `/tasks` — next actions: what has a where or a when, or is already
+/// moving. Project work is one link away at the foot of the list.
 #[component]
 pub fn TasksView() -> Element {
+    rsx! { TaskBoard { scope: Scope::Actions } }
+}
+
+/// `/project-work` — issues and pieces of projects that have no where
+/// or when yet. Give one a context or a date and it joins Tasks.
+#[component]
+pub fn ProjectWorkView() -> Element {
+    rsx! { TaskBoard { scope: Scope::ProjectWork } }
+}
+
+#[component]
+fn TaskBoard(scope: Scope) -> Element {
     let nav = use_navigator();
     let selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
@@ -97,6 +211,12 @@ pub fn TasksView() -> Element {
     // bottom action bar (thumb reach) below `md`.
     let mut filters_open = use_signal(|| false);
     let mut add_open = use_signal(|| false);
+    // The phone header's ⋯: Display options and the Filter sheet's
+    // picks (contexts, projects, priorities) and search.
+    let mut display_open = use_signal(|| false);
+    let mut picked = use_signal(std::collections::BTreeSet::<String>::new);
+    let mut filter_query = use_signal(String::new);
+    let mut view_pick = use_signal(|| stored_view().unwrap_or_default());
 
     // The list hooks drive the fetches; the derivation below reads the
     // backing stores directly (inside the memo) so it re-runs on data
@@ -120,6 +240,14 @@ pub fn TasksView() -> Element {
     let location_pick = use_signal(|| user_prefs.location.clone());
 
     let prefs_signal = prefs_ctx.prefs;
+    // What the hour is for (a maintenance hour → errands and chores),
+    // from today's day plan — it steers relevance and heads the list.
+    let now_hint = crate::now_block::use_now_hint();
+    let focus_mode = crate::now_block::use_focus_mode();
+    let process_now = use_context::<crate::process::ProcessNow>();
+    // Whose list this is: Tasks shows what is assigned to them.
+    let account = use_context::<crate::auth::AuthCtx>().active;
+    let new_issue = use_context::<crate::new_issue::NewIssue>();
     let board = use_memo(move || -> Option<BoardData> {
         let result = store.entries_result();
         let rows = result.value()?;
@@ -139,13 +267,33 @@ pub fn TasksView() -> Element {
             .find(|r| r.session.end_time.is_none())
             .and_then(|r| r.session.project_id);
 
-        let ctx = crate::task_board::relevance_ctx(&at_location, active_project);
+        // Only a mode the person started steers the list; the hour on
+        // its own just suggests one (`crate::now_block`).
+        let focus = focus_mode
+            .read()
+            .as_ref()
+            .map(|m| m.focus.clone())
+            .unwrap_or_default();
+        let ctx = crate::task_board::relevance_ctx(&at_location, active_project, focus);
         // One row per task id — see `stores::unique_tasks`.
         let unique = stores::unique_tasks(&rows);
         let all: Vec<&task_proto::TaskInfo> = unique.iter().map(|r| &r.task).collect();
+        let me = account.read().as_ref().map(|a| a.user_id.to_string());
+        // The band is a Tasks thing (project work has no where or when
+        // for a mode to match): it draws from what is yours.
+        let for_hour: Vec<task_proto::TaskInfo> = if scope == Scope::Actions {
+            all.iter()
+                .filter(|t| task_proto::is_mine(t, me.as_deref()))
+                .map(|t| (*t).clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         // The board's filters — the same function the Work sidebar
         // counts with, so the two agree (`crate::task_board`).
-        let filtered = crate::task_board::filter(&all, active_only, relevant_only, &ctx);
+        let filtered =
+            crate::task_board::filter(&all, scope, me.as_deref(), active_only, relevant_only, &ctx);
+        let other_scope = filtered.other_scope;
         let hidden = filtered.hidden_done + filtered.hidden_elsewhere;
         let hidden_note = filtered.hidden_note();
         let held = (filtered.hidden_elsewhere, filtered.held_by.clone());
@@ -156,6 +304,13 @@ pub fn TasksView() -> Element {
                 .iter()
                 .map(|r| (r.project.id, r.project.title.clone())),
         );
+        // The Filter sheet: offered from what's on the board, then
+        // narrowed by what's picked.
+        let facets = facets_of(&domain, &index);
+        let picked_now = picked.read().clone();
+        if !picked_now.is_empty() {
+            domain.retain(|t| passes_picks(&facet_keys(t, &index), &picked_now));
+        }
         let project_names = &index.names;
         let resolve_anchor = |t: &task_proto::TaskInfo| index.anchor(t);
 
@@ -307,6 +462,9 @@ pub fn TasksView() -> Element {
             held,
             org_of,
             now,
+            for_hour,
+            other_scope,
+            facets,
         })
     });
 
@@ -347,9 +505,15 @@ pub fn TasksView() -> Element {
                 held: (held_count, held_by),
                 org_of,
                 now,
+                for_hour,
+                other_scope,
+                facets,
             } = data;
             // Inline chips are desktop chrome; on phones the same
-            // controls live in the Filters bottom sheet below.
+            // controls are the header's ⋯ → Filter and Display options.
+            // How many picks narrow the board — badged on the ⋯ so a
+            // filtered board is never a mystery on a phone.
+            let filter_count = picked.read().len() + usize::from(!at_location.is_empty());
             let chips = rsx! {
                 div { class: "hidden items-center gap-1.5 md:flex",
                     FilterChip {
@@ -381,21 +545,87 @@ pub fn TasksView() -> Element {
                     }
                 }
             };
-            // How many filters are narrowing the board — badged on the
-            // mobile Filters trigger so a filtered board is never a
-            // mystery on a phone.
-            let filter_count = usize::from(active_only)
-                + usize::from(relevant_only)
-                + usize::from(!at_location.is_empty());
             let sheet_projects = project_choices.clone();
             rsx! {
                 div { class: "flex h-full w-full flex-col pb-14 md:pb-0",
-                    if let Some(n) = now {
+                    // Phone: the section's name, its main action (a new
+                    // issue) and ⋯ for the rest — Linear's top bar.
+                    div { class: "md:hidden",
+                        task_ui_core::section_header::SectionHeader {
+                            title: match scope {
+                                Scope::Actions => "Tasks".to_owned(),
+                                Scope::ProjectWork => "Project work".to_owned(),
+                            },
+                            action: rsx! { SquarePen { size: 20 } },
+                            action_label: "New task".to_owned(),
+                            on_action: move |()| new_issue.open(String::new()),
+                            badge: filter_count,
+                            task_ui_core::section_header::SectionMenuItem {
+                                label: "Filter",
+                                icon: rsx! { ListFilter { size: 18 } },
+                                note: (filter_count > 0).then(|| format!("{filter_count} on")),
+                                on_click: move |()| filters_open.set(true),
+                            }
+                            task_ui_core::section_header::SectionMenuItem {
+                                label: "Display options",
+                                icon: rsx! { SlidersHorizontal { size: 18 } },
+                                on_click: move |()| display_open.set(true),
+                            }
+                            task_ui_core::section_header::SectionMenuDivider {}
+                            match scope {
+                                Scope::Actions => rsx! {
+                                    task_ui_core::section_header::SectionMenuItem {
+                                        label: "Project work",
+                                        icon: rsx! { FolderKanban { size: 18 } },
+                                        note: (other_scope > 0).then(|| other_scope.to_string()),
+                                        on_click: move |()| {
+                                            nav.push(crate::routes::Route::ProjectWorkRoute {});
+                                        },
+                                    }
+                                },
+                                Scope::ProjectWork => rsx! {
+                                    task_ui_core::section_header::SectionMenuItem {
+                                        label: "My tasks",
+                                        icon: rsx! { CircleCheck { size: 18 } },
+                                        on_click: move |()| {
+                                            nav.push(crate::routes::Route::TasksRoute {});
+                                        },
+                                    }
+                                },
+                            }
+                        }
+                    }
+                    // A running mode is its own band (with End), so its
+                    // session doesn't also show as a plain timer bar.
+                    if let Some(n) = now.filter(|_| focus_mode.read().is_none()) {
                         NowBar {
                             now: n,
                             on_complete: move |id| {
                                 apply_with_undo(TaskMutation::SetStatus { id, status: "done".into() });
                             },
+                        }
+                    }
+                    // The one thing to do next — or, while a mode runs,
+                    // the mode's own work — before the whole list.
+                    if scope == Scope::Actions {
+                        div { class: "px-3 pt-3 sm:px-5 lg:px-8 empty:hidden",
+                            if focus_mode.read().is_some() {
+                                crate::now_block::ModeBand {
+                                    mode: focus_mode(),
+                                    tasks: for_hour,
+                                    on_status: move |(id, status): (uuid::Uuid, String)| {
+                                        apply_with_undo(TaskMutation::SetStatus { id, status });
+                                    },
+                                }
+                            } else {
+                                crate::suggested::Suggested {
+                                    hint: now_hint(),
+                                    mine: for_hour,
+                                    on_status: move |(id, status): (uuid::Uuid, String)| {
+                                        apply_with_undo(TaskMutation::SetStatus { id, status });
+                                    },
+                                }
+                            }
                         }
                     }
                     div { class: "min-h-0 flex-1",
@@ -411,68 +641,156 @@ pub fn TasksView() -> Element {
                             held_by,
                             on_show_held: move |()| prefs_ctx.update(|p| p.tasks_relevant = false),
                             people: people(),
+                            title: match scope {
+                                Scope::Actions => String::new(),
+                                Scope::ProjectWork => "Project work".to_owned(),
+                            },
+                            footer: match scope {
+                                Scope::Actions if other_scope > 0 => rsx! {
+                                    ProjectWorkLink { count: other_scope }
+                                },
+                                Scope::ProjectWork => rsx! {
+                                    p { class: "px-2 pt-3 text-sm text-muted-foreground",
+                                        "Give one of these a context or a date and it moves to Tasks."
+                                    }
+                                },
+                                Scope::Actions => rsx! {},
+                            },
                             initial_view: stored_view(),
-                            on_view_change: move |v| remember_view(v),
+                            view: Some(view_pick()),
+                            phone_header: true,
+                            on_view_change: move |v| {
+                                view_pick.set(v);
+                                remember_view(v);
+                            },
+                            // The quick-add line opens the composer with it typed in:
+                            // one way to make an issue, with every property in reach.
+                            on_capture: move |line: String| new_issue.open(line),
                             on_event: move |mu: TaskMutation| apply_with_undo(mu),
                             on_open_full: move |id| {
                                 nav.push(crate::routes::Route::TaskDetailRoute { id });
                             },
                         }
                     }
-                    // ── Mobile: sticky actions + sheets ────────────────
-                    MobileActionBar {
-                        button {
-                            r#type: "button",
-                            class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground active:bg-accent",
-                            onclick: move |_| filters_open.set(true),
-                            SlidersHorizontal { size: 16 }
-                            if filter_count > 0 { "Filters · {filter_count}" } else { "Filters" }
-                        }
-                        button {
-                            r#type: "button",
-                            class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85",
-                            onclick: move |_| add_open.set(true),
-                            Plus { size: 16 }
-                            "Add task"
-                        }
-                    }
+                    // ── Mobile: the ⋯ menu's sheets (Linear's style) ───
+                    // Filter: search over what's on the board, as checkbox
+                    // groups. Display options: how the board is drawn.
                     BottomSheet {
                         open: filters_open(),
-                        title: "Filters".to_string(),
+                        title: String::new(),
                         on_close: move |()| filters_open.set(false),
-                        div { class: "flex flex-col gap-3 pb-2",
-                            SheetToggleRow {
-                                label: "Active",
-                                hint: "Hide done and cancelled tasks",
-                                on: active_only,
-                                on_toggle: move |on| prefs_ctx.update(|p| p.tasks_active = on),
-                            }
-                            SheetToggleRow {
-                                label: "Relevant",
-                                hint: "Only what matters right now",
-                                on: relevant_only,
-                                on_toggle: move |on| prefs_ctx.update(|p| p.tasks_relevant = on),
-                            }
-                            div { class: "flex flex-col gap-1.5",
-                                span { class: "px-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                                    "I'm at"
+                        task_ui_core::sheet::SheetSearch {
+                            value: filter_query(),
+                            placeholder: "Search all filters".to_owned(),
+                            on_input: move |q: String| filter_query.set(q),
+                            on_close: move |()| filters_open.set(false),
+                        }
+                        {
+                            let q = filter_query.read().trim().to_lowercase();
+                            let sections: Vec<(&'static str, Vec<(String, String)>)> = facets
+                                .iter()
+                                .map(|(name, opts)| {
+                                    let opts: Vec<(String, String)> = opts
+                                        .iter()
+                                        .filter(|(_, l)| q.is_empty() || l.to_lowercase().contains(&q))
+                                        .cloned()
+                                        .collect();
+                                    (*name, opts)
+                                })
+                                .filter(|(_, o)| !o.is_empty())
+                                .collect();
+                            rsx! {
+                                if sections.is_empty() {
+                                    p { class: "px-2 py-6 text-center text-[15px] text-muted-foreground", "No filters match" }
                                 }
-                                Select {
-                                    value: location_pick,
-                                    placeholder: "anywhere".to_string(),
-                                    class: "min-h-11 w-full".to_string(),
-                                    on_change: move |v: String| prefs_ctx.update(|p| p.location = v.clone()),
-                                    SelectContent {
-                                        for (i, loc) in LOCATIONS.iter().enumerate() {
-                                            SelectItem { key: "{loc}", value: "{loc}", index: i, "@{loc}" }
+                                for (name , opts) in sections {
+                                    task_ui_core::sheet::SheetSection {
+                                        key: "{name}",
+                                        label: name.to_owned(),
+                                    }
+                                    task_ui_core::sheet::SheetGroup {
+                                        for (k , l) in opts {
+                                            {
+                                                let on = picked.read().contains(&k);
+                                                rsx! {
+                                                    task_ui_core::sheet::SheetCheckRow {
+                                                        key: "{k}",
+                                                        label: l,
+                                                        on,
+                                                        on_toggle: move |want: bool| {
+                                                            let mut p = picked.write();
+                                                            if want {
+                                                                p.insert(k.clone());
+                                                            } else {
+                                                                p.remove(&k);
+                                                            }
+                                                        },
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            if hidden > 0 {
-                                span { class: "px-1 text-xs tabular-nums text-muted-foreground",
-                                    "{hidden} tasks hidden by these filters"
+                                if !picked.read().is_empty() {
+                                    button {
+                                        r#type: "button",
+                                        class: "mx-auto mt-1 block rounded-full px-4 py-2 text-[14px] text-muted-foreground active:text-foreground",
+                                        onclick: move |_| picked.write().clear(),
+                                        "Clear filters"
+                                    }
                                 }
+                            }
+                        }
+                    }
+                    BottomSheet {
+                        open: display_open(),
+                        title: String::new(),
+                        on_close: move |()| display_open.set(false),
+                        task_ui_core::sheet::SheetGroup {
+                            task_ui_core::sheet::SheetSelect {
+                                label: "Layout",
+                                value: view_pick().label().to_owned(),
+                                options: vec![
+                                    ("List".to_owned(), "List".to_owned()),
+                                    ("Kanban".to_owned(), "Board".to_owned()),
+                                ],
+                                on_change: move |v: String| {
+                                    let mode = if v == "Kanban" {
+                                        task_ui::ViewMode::Kanban
+                                    } else {
+                                        task_ui::ViewMode::List
+                                    };
+                                    view_pick.set(mode);
+                                    remember_view(mode);
+                                },
+                            }
+                        }
+                        task_ui_core::sheet::SheetGroup {
+                            task_ui_core::sheet::SheetToggle {
+                                label: "Show completed",
+                                on: !active_only,
+                                on_toggle: move |on: bool| prefs_ctx.update(|p| p.tasks_active = !on),
+                            }
+                            task_ui_core::sheet::SheetToggle {
+                                label: "Only what's relevant now",
+                                hint: "Routines in their windows, deadlines always",
+                                on: relevant_only,
+                                on_toggle: move |on| prefs_ctx.update(|p| p.tasks_relevant = on),
+                            }
+                        }
+                        task_ui_core::sheet::SheetGroup {
+                            task_ui_core::sheet::SheetSelect {
+                                label: "I'm at",
+                                value: at_location.clone(),
+                                options: std::iter::once((String::new(), "Anywhere".to_owned()))
+                                    .chain(LOCATIONS.iter().map(|l| ((*l).to_owned(), format!("@{l}"))))
+                                    .collect::<Vec<_>>(),
+                                on_change: move |v: String| prefs_ctx.update(|p| p.location = v.clone()),
+                            }
+                        }
+                        if hidden > 0 {
+                            p { class: "px-2 pb-1 text-[13px] tabular-nums text-muted-foreground",
+                                "{hidden} tasks hidden by these options"
                             }
                         }
                     }
@@ -486,11 +804,14 @@ pub fn TasksView() -> Element {
                                 // The sheet opened to type: the keyboard
                                 // comes up with it.
                                 autofocus: true,
+                                // One capture: the line goes to the inbox
+                                // and straight into processing, so it
+                                // leaves with a context and a date.
                                 on_create: move |task: task_ui::TaskInfo| {
                                     let create_slug =
                                         crate::orgs::create_target(&selection.read(), &org_list.read());
-                                    muts.apply(&create_slug, TaskMutation::Create { task });
                                     add_open.set(false);
+                                    process_now.start(create_slug, &task.title);
                                 },
                             }
                         }
@@ -653,42 +974,22 @@ fn FilterChip(label: String, title: String, on: bool, on_toggle: EventHandler<bo
 }
 
 /// Where the List / Kanban choice is kept on this device.
-#[cfg(target_arch = "wasm32")]
 const VIEW_KEY: &str = "task.tasks.view";
 
 /// The List / Kanban choice this device last made. Read synchronously:
 /// the board takes its initial view once, at mount.
-#[cfg(target_arch = "wasm32")]
 fn stored_view() -> Option<task_ui::ViewMode> {
-    let stored = web_sys::window()?
-        .local_storage()
-        .ok()??
-        .get_item(VIEW_KEY)
-        .ok()??;
-    match stored.as_str() {
+    match crate::local_store::get(VIEW_KEY)?.as_str() {
         "kanban" => Some(task_ui::ViewMode::Kanban),
         "list" => Some(task_ui::ViewMode::List),
         _ => None,
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 fn remember_view(view: task_ui::ViewMode) {
     let value = match view {
         task_ui::ViewMode::Kanban => "kanban",
         task_ui::ViewMode::List => "list",
     };
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item(VIEW_KEY, value);
-    }
+    crate::local_store::set(VIEW_KEY, value);
 }
-
-/// Native shells start on the list (the webview's storage is not
-/// reachable synchronously from here).
-#[cfg(not(target_arch = "wasm32"))]
-fn stored_view() -> Option<task_ui::ViewMode> {
-    None
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn remember_view(_view: task_ui::ViewMode) {}

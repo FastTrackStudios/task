@@ -65,10 +65,30 @@ pub struct FolderIndex {
     pub pages: Vec<PageMeta>,
 }
 
+/// One page whose text matches a search: where it is, what it is
+/// called, and the line that matched — [`crate::VaultSync::search_text`].
+#[derive(Debug, Clone, PartialEq, Eq, Facet, Serialize, Deserialize)]
+pub struct TextHit {
+    /// Vault-relative path.
+    pub path: String,
+    /// The page's title, as the folder index has it.
+    pub title: String,
+    /// The first matching line, trimmed (properties excluded), or the
+    /// title when only the title matched.
+    pub excerpt: String,
+    /// 1-based line of `excerpt` in the file; 0 for a title match.
+    pub line: u32,
+    /// How many lines matched.
+    pub matches: u32,
+}
+
 #[cfg(feature = "vox")]
 #[allow(unsafe_code)]
 mod reborrow_impls {
-    use super::{FolderIndex, PageMeta};
+    use super::{FolderIndex, PageMeta, TextHit};
+    unsafe impl vox_types::Reborrow for TextHit {
+        type Ref<'a> = TextHit;
+    }
     unsafe impl vox_types::Reborrow for PageMeta {
         type Ref<'a> = PageMeta;
     }

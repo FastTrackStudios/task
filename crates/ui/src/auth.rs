@@ -32,6 +32,13 @@ use crate::central_login::TokenSet;
 use crate::orgs::{OrgMeta, home_slug};
 use crate::presence::{ManualStatus, PresenceLocal, PresenceStatus};
 use crate::vox_clients::establish_for;
+use task_ui_core::node::NodeOwner;
+
+/// The device's person, when the app is pointed at this device's own
+/// node (`offline.local`) — see [`task_ui_core::node::local_owner`].
+async fn node_owner() -> Option<NodeOwner> {
+    task_ui_core::node::local_owner().await
+}
 
 // ── dev accounts (DEBUG BUILDS ONLY) ────────────────────────────────
 //
@@ -520,7 +527,15 @@ async fn push_link(st: AuthState, account: &ActiveAccount) {
 /// account is NOT signed out — its token stays cached so switching
 /// back is instant.
 async fn run_switch(mut st: AuthState, email: &str) {
-    let slug = home_slug(&st.orgs.peek());
+    // On this device's node, its own person signs in where their account
+    // lives — the node's org list may hold several home orgs (the example
+    // studio beside a personal org), and the first one is not necessarily
+    // theirs.
+    let owner = node_owner().await;
+    let slug = match &owner {
+        Some(o) if o.email == email => o.org.clone(),
+        _ => home_slug(&st.orgs.peek()),
+    };
     if slug.is_empty() {
         st.error
             .set(Some("org discovery hasn't resolved yet".to_owned()));
@@ -535,9 +550,10 @@ async fn run_switch(mut st: AuthState, email: &str) {
     }
     st.busy.set(true);
     st.error.set(None);
-    match resolve_session(&slug, email).await {
+    match resolve_session(&slug, email, owner.as_ref()).await {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             // Before any further RPC: the locker/link calls below should
             // already ride the new identity.
@@ -625,6 +641,7 @@ async fn run_credential_sign_in(
     match result {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             publish_session_token(st, Some(&account));
             // Same multi-server sync as run_switch (borrow before move).
@@ -676,6 +693,7 @@ async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: 
     match result {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             publish_session_token(st, Some(&account));
             pull_locker(st, &account).await;
@@ -685,6 +703,20 @@ async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: 
         Err(e) => st.error.set(Some(e)),
     }
     st.busy.set(false);
+}
+
+/// Remember who signed in on this device, so the next cold start can
+/// open the workspace without the server (`offline.boot`). The principal
+/// only — the token stays in the token store, where it already was.
+fn remember_for_offline(account: &ActiveAccount) {
+    crate::offline::remember_account(
+        &crate::orgs::http_base(),
+        &crate::offline::RememberedAccount {
+            user_id: account.user_id,
+            email: account.email.clone(),
+            name: account.name.clone(),
+        },
+    );
 }
 
 /// Explicit sign-out: revoke the session server-side, drop the cached
@@ -729,6 +761,7 @@ async fn run_sign_out(mut st: AuthState) {
     clear_cached_token(&account.email);
     clear_refresh(&account.email);
     clear_active_email();
+    crate::offline::forget_account(&crate::orgs::http_base(), &account.email);
     sync_active_server_entry(st.registry, None);
     // Drop the authenticated sockets NOW, before the revoke round trip —
     // `sign_out` passes the token as an argument, so it doesn't need the
@@ -748,7 +781,9 @@ async fn run_sign_out(mut st: AuthState) {
     // takes over — which is what signing out should mean. The demo cast
     // takes the release path on purpose: its login form offers the cast
     // one click each, and "log out, come back as Casey" is the demo.
-    if cfg!(debug_assertions) && !demo_cast_active() {
+    // Not on this device's own node: Guest is a dev-seed account a node
+    // never has, and the signed-out screen offers the device's person.
+    if cfg!(debug_assertions) && !demo_cast_active() && node_owner().await.is_none() {
         run_switch(st, GUEST_EMAIL).await;
     }
 }
@@ -864,6 +899,25 @@ pub fn provide_auth() -> AuthCtx {
         // which `SignInGate` would read as "signed out" and flash the
         // login screen over a session that is about to restore.
         let mut busy = busy;
+        // On this device's own node the person is known without asking:
+        // the node provisioned them (`offline.local`). Land on them in any
+        // build — unless the stored account is one of the debug cast,
+        // which a demo session switches between on purpose.
+        #[cfg(not(target_arch = "wasm32"))]
+        if task_ui_core::node::local_active() {
+            let stored = load_active_email().filter(|e| {
+                demo_cast_active() && dev_accounts().iter().any(|a| a.email == e.as_str())
+            });
+            busy.set(true);
+            spawn(async move {
+                match (stored, node_owner().await) {
+                    (Some(email), _) => ctx.switch_account(email),
+                    (None, Some(owner)) => ctx.switch_account(owner.email),
+                    (None, None) => busy.set(false),
+                }
+            });
+            return;
+        }
         match load_active_email() {
             Some(email) => {
                 busy.set(true);
@@ -915,6 +969,30 @@ fn GateChrome() -> Element {
     }
 }
 
+/// "Continue as <you> on this device" — the signed-out screen's way back
+/// in when the app is pointed at its own node. The device's person has
+/// no password they typed (the node generated it), so the login form
+/// alone would be a dead end after a sign-out. Renders nothing when the
+/// app is pointed at a host.
+#[component]
+fn DeviceOwnerSignIn() -> Element {
+    let ctx = use_context::<AuthCtx>();
+    let owner = use_resource(node_owner);
+    let Some(Some(owner)) = owner.read().clone() else {
+        return rsx! {};
+    };
+    let email = owner.email.clone();
+    rsx! {
+        Button {
+            variant: ButtonVariant::Primary,
+            size: ButtonSize::Medium,
+            class: "w-full",
+            on_click: move |_| ctx.switch_account(email.clone()),
+            "Continue as {owner.name} on this device"
+        }
+    }
+}
+
 #[component]
 pub fn SignInGate(children: Element) -> Element {
     let ctx = use_context::<AuthCtx>();
@@ -954,27 +1032,25 @@ pub fn SignInGate(children: Element) -> Element {
         // surfaces WHY discovery hasn't resolved when it knows.
         let discovery = use_context::<crate::orgs::DiscoveryError>();
         let err = discovery.0.read().clone();
+        // Not booted = discovery (the server) has not answered yet;
+        // booted and busy = the session is being restored or made.
+        let status = if booted() {
+            "Signing you in…"
+        } else {
+            "Connecting…"
+        };
         return rsx! {
             // The gate sits ABOVE the router, so the frameless desktop
             // window has no top bar here — without this strip a signed-out
             // window could not be moved or closed.
             GateChrome {}
-            div { class: "flex min-h-screen items-center justify-center p-6",
-                div { class: "flex w-full max-w-sm flex-col items-center gap-3",
-                    p { class: "text-sm text-muted-foreground", "Restoring your session…" }
-                    if let Some(msg) = err {
-                        p { class: "text-center text-xs text-destructive", "{msg}" }
-                    }
-                    details { class: "w-full text-sm",
-                        summary { class: "cursor-pointer text-center text-muted-foreground",
-                            "Taking too long?"
-                        }
-                        div { class: "flex flex-col gap-4 pt-3",
-                            LoginForm {}
-                            crate::server_registry::ServersPanel {}
-                        }
-                    }
-                }
+            crate::loading_screen::LoadingScreen {
+                status: status.to_owned(),
+                error: err,
+                help: rsx! {
+                    LoginForm {}
+                    crate::server_registry::ServersPanel {}
+                },
             }
         };
     }
@@ -983,11 +1059,17 @@ pub fn SignInGate(children: Element) -> Element {
         div { class: "flex min-h-screen items-center justify-center p-6",
             div { class: "flex w-full max-w-sm flex-col gap-4",
                 div { class: "flex flex-col gap-1",
+                    div { class: "pb-3", crate::loading_screen::TaskMark {} }
                     h1 { class: "text-lg font-semibold", "Sign in to Task" }
                     p { class: "text-sm text-muted-foreground",
-                        "This server's data is private to its members."
+                        if task_ui_core::central_auth::issuer().is_some() {
+                            "Your FastTrackStudio account opens your work in every app."
+                        } else {
+                            "This server's data is private to its members."
+                        }
                     }
                 }
+                DeviceOwnerSignIn {}
                 LoginForm {}
                 // Without this a user pointed at the wrong server is
                 // stuck: they cannot sign in, and the switcher that would
@@ -1075,7 +1157,11 @@ pub fn boot_session_token() -> Option<String> {
 }
 
 /// Token-cache-first session resolution against the home org.
-async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, String> {
+async fn resolve_session(
+    slug: &str,
+    email: &str,
+    node_owner: Option<&NodeOwner>,
+) -> Result<ActiveAccount, String> {
     // 0. Discovery already validated the cached token and told us who it
     //    is (`orgs::discovered_principal_for`). That is the whole answer:
     //    no lane dial, no `whoami`, no issuer round trip.
@@ -1099,7 +1185,31 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
         });
     }
 
-    let client = establish_for::<AuthServiceClient>(slug).await?;
+    let client = match establish_for::<AuthServiceClient>(slug).await {
+        Ok(client) => client,
+        Err(e) => {
+            // t[impl offline.boot] — the server cannot be reached, and
+            // this device was signed in as `email` before: open the
+            // workspace as that account, from what the device kept (the
+            // cached token, the remembered principal, the cached orgs and
+            // every list's device copy). Nothing is validated, because
+            // nothing can be; every request the app makes still carries
+            // the token, and the server checks it when it is back.
+            if architect::classify(&e).is_unreachable()
+                && let Some(token) = load_cached_token(email)
+                && let Some(who) =
+                    crate::offline::remembered_account(&crate::orgs::http_base(), email)
+            {
+                return Ok(ActiveAccount {
+                    user_id: who.user_id,
+                    email: who.email,
+                    name: who.name,
+                    token,
+                });
+            }
+            return Err(e);
+        }
+    };
 
     // 1. Cached token → whoami validates it without a fresh sign-in.
     if let Some(token) = load_cached_token(email) {
@@ -1137,6 +1247,28 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
     //    release the roster is empty, there is nothing to sign in with,
     //    and the user goes through `LoginForm` — which is already on
     //    screen — hence the message rather than a failed sign-in.
+    // t[impl offline.local] — this device's own person, on its own node:
+    // the node provisioned the account and keeps its credentials, so the
+    // sign-in is an ordinary one against the org's own `AuthService`, in
+    // any build, with no issuer and no network.
+    if let Some(owner) = node_owner.filter(|o| o.email == email) {
+        let bundle = establish_for::<AuthServiceClient>(slug)
+            .await?
+            .sign_in_email_password(SignInEmailPassword {
+                email: owner.email.clone(),
+                password: owner.password.clone(),
+                ip_address: None,
+                user_agent: Some("task-device".to_owned()),
+            })
+            .await
+            .map_err(|e| format!("sign in on this device: {e}"))?;
+        save_session_token(email, &bundle.token);
+        let mut account = account_from(bundle.user, email, bundle.token);
+        if account.name.trim().is_empty() || account.name == account.email {
+            account.name = owner.name.clone();
+        }
+        return Ok(account);
+    }
     let Some(dev) = dev_accounts().iter().find(|a| a.email == email) else {
         return Err(format!("sign in as {email} to continue"));
     };
@@ -1555,7 +1687,14 @@ pub fn LoginForm() -> Element {
                 on_change: move |_| error.set(None),
             }
             Button {
-                variant: ButtonVariant::Primary,
+                // One primary action per screen: with a central account
+                // on offer, that is "Continue with FastTrackStudio", and
+                // this server-only form is the alternative.
+                variant: if central_issuer.is_some() {
+                    ButtonVariant::Outline
+                } else {
+                    ButtonVariant::Primary
+                },
                 size: ButtonSize::Medium,
                 loading: busy(),
                 on_click: submit,
@@ -2283,15 +2422,14 @@ fn tokens_dir() -> Option<std::path::PathBuf> {
 /// A per-email token file. Emails are filename-safe on the targets we
 /// ship, but sanitize defensively (only `/` is illegal on unix).
 #[cfg(not(target_arch = "wasm32"))]
-fn token_store(email: &str) -> Option<architect_auth::client::FileTokenStore> {
+fn token_store(email: &str) -> Option<auth_client::FileTokenStore> {
     let safe = email.replace(['/', '\\'], "_");
-    tokens_dir()
-        .map(|d| architect_auth::client::FileTokenStore::new(d.join(format!("{safe}.json"))))
+    tokens_dir().map(|d| auth_client::FileTokenStore::new(d.join(format!("{safe}.json"))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_cached_token(email: &str) -> Option<String> {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     token_store(email)?
         .load()
         .ok()
@@ -2302,7 +2440,7 @@ fn load_cached_token(email: &str) -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn save_cached_token(email: &str, token: &str) {
-    use architect_auth::client::{StoredSession, TokenStore as _};
+    use auth_client::{StoredSession, TokenStore as _};
     if let Some(store) = token_store(email) {
         let _ = store.save(&StoredSession::new(token).with_email(email));
     }
@@ -2310,7 +2448,7 @@ fn save_cached_token(email: &str, token: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_cached_token(email: &str) {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     if let Some(store) = token_store(email) {
         let _ = store.clear();
     }
@@ -2321,16 +2459,14 @@ fn clear_cached_token(email: &str) {
 /// `StoredSession` whose `token` is the refresh token; the access
 /// token's expiry rides on the main file's `expires_at_unix`.
 #[cfg(not(target_arch = "wasm32"))]
-fn refresh_store(email: &str) -> Option<architect_auth::client::FileTokenStore> {
+fn refresh_store(email: &str) -> Option<auth_client::FileTokenStore> {
     let safe = email.replace(['/', '\\'], "_");
-    tokens_dir().map(|d| {
-        architect_auth::client::FileTokenStore::new(d.join(format!("{safe}.refresh.json")))
-    })
+    tokens_dir().map(|d| auth_client::FileTokenStore::new(d.join(format!("{safe}.refresh.json"))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_refresh(email: &str) -> Option<RefreshGrant> {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     let refresh_token = refresh_store(email)?
         .load()
         .ok()
@@ -2352,7 +2488,7 @@ fn load_refresh(email: &str) -> Option<RefreshGrant> {
 /// token's entry, which has to exist to carry it.
 #[cfg(not(target_arch = "wasm32"))]
 fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
-    use architect_auth::client::{StoredSession, TokenStore as _};
+    use auth_client::{StoredSession, TokenStore as _};
     if let Some(store) = refresh_store(email) {
         let _ = store.save(&StoredSession::new(refresh_token).with_email(email));
     }
@@ -2365,7 +2501,7 @@ fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_refresh(email: &str) {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     if let Some(store) = refresh_store(email) {
         let _ = store.clear();
     }

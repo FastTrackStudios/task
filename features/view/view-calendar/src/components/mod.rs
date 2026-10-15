@@ -16,7 +16,9 @@ mod slot_grid;
 mod style;
 mod time_grid;
 mod toolbar;
+mod week_strip;
 mod week_view;
 
 pub use calendar::{Calendar, CalendarProps};
 pub use slot_grid::{SlotGrid, SlotGridProps, SlotItem, SlotRow};
+pub use week_strip::{WeekStrip, day_title};

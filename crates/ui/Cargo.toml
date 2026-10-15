@@ -243,22 +243,42 @@ vox-core.workspace = true
 # module's idle/poll tickers use (crdt's `dioxus` feature pulls it in
 # anyway; declared explicitly so our direct uses don't lean on feature
 # unification).
-architect = { workspace = true, features = ["client", "platform", "local"] }
+architect = { workspace = true, features = ["client", "platform", "local", "atom-persist"] }
+# `LocalRows` / `CallTransport` impls (`device_store`, `offline`).
+async-trait = { workspace = true }
 
 # Org-wide presence (`src/presence.rs`): `use_presence_channel` +
 # `Presence` over the fixed org doc id, riding the shared per-org
-# connection. `dioxus` implies the `vox` sync transport; presence is
-# ephemeral, so the `indexeddb` persistence feature is NOT needed.
+# connection. `dioxus` implies the `vox` sync transport. Vault-file
+# documents persist on the device (`src/doc_replica.rs`): a
+# `FilePersistence` directory on native, IndexedDB on the web (below).
 crdt = { workspace = true, features = ["dioxus"] }
+# The doc ⇄ markdown codec and the device replica's sync session
+# (`offline.doc.*`) — the same code the server's mirror runs.
+vault-doc = { workspace = true }
+# The replica driver's change bridge + `select!` (wasm-clean subset).
+tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
 
 # Browser-only timers for the live elapsed-time tick on the timer
 # page. Wasm-only — used inside `cfg(target_arch = "wasm32")` blocks.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { workspace = true, features = ["futures"] }
+# Document replicas survive a browser restart offline.
+crdt = { workspace = true, features = ["dioxus", "indexeddb"] }
 
-# Native session-token persistence (desktop/mobile) — architect-auth's
-# FileTokenStore, used in `cfg(not(target_arch = "wasm32"))` blocks in auth.rs.
+# Native session-token persistence (desktop/mobile) is `auth_client`'s
+# FileTokenStore, from the target-independent `auth-client` dep above —
+# NOT the `architect-auth` umbrella, whose `auth` crate carries the
+# server's webauthn-rs and so OpenSSL. On iOS that linked Nix's macOS
+# libssl into the phone binary and failed every TestFlight build.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The device database (`src/device_store.rs`, offline.md): one local
+# Turso file holding every list's device copy and the call queue
+# (architect `atom-turso` → `TursoRows`) and the documents' snapshots and
+# update logs (crdt `turso` → `TursoPersistence`). Local engine only.
+architect = { workspace = true, features = ["atom-turso"] }
+crdt = { workspace = true, features = ["turso"] }
+turso = { workspace = true }
 # The WebSocket transport, so `connect_lane("ws://…")` can reach the
 # sync agent's control socket on this machine. Without it that call
 # fails at runtime with "unknown transport scheme" on a URL that looks
@@ -266,7 +286,6 @@ gloo-timers = { workspace = true, features = ["futures"] }
 # instead of telling the running agent. The browser has no agent to talk
 # to and its own transport.
 vox = { workspace = true, features = ["transport-websocket"] }
-architect-auth = { workspace = true, features = ["client"] }
 # Native org discovery (desktop/mobile/iOS) — `window.fetch` is wasm-only,
 # so `orgs::fetch_orgs` uses reqwest (rustls) for the `.well-known` GET.
 reqwest.workspace = true

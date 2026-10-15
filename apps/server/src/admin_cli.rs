@@ -1453,7 +1453,10 @@ async fn seed_owner(
 }
 
 /// Create one auth account if it doesn't exist yet (idempotent seed).
-#[cfg(debug_assertions)]
+///
+/// In every build, not only debug: a device's node creates its owner's
+/// account with it on first run (`local_node::provision_personal`), and a
+/// release app that could not do that could not start.
 pub(crate) async fn seed_account(
     auth: &crate::AuthState,
     email: &str,

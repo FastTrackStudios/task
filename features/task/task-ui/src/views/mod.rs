@@ -1,12 +1,29 @@
 //! Top-level view tree.
 
+mod composer;
 mod detail;
 mod detail_full;
+pub use composer::{
+    CaptureKind, Composer, ComposerProps, Trigger, compose, drop_last_word, kind_from_text,
+    project_title, trigger_at_end,
+};
+mod issue_view;
+pub use issue_view::{
+    IssueView, IssueViewProps, assignee_of, labels_of, toggle_label, with_assignee,
+};
 mod kanban;
 mod links;
 mod list;
 pub use list::{TaskSection, classify as task_section};
 mod palette;
+mod picker;
+pub use picker::{PickOption, PropertyPicker, filtered as picker_filtered, match_rank};
+mod properties;
+pub use properties::{
+    AssigneeChip, CHIP_CLASS, CHIP_QUIET_CLASS, Hotkey, LabelsChip, PRIORITIES, PersonDot,
+    PriorityChip, PriorityIcon, ProjectChip, PropertyRow, STATUSES, StatusChip, StatusIcon,
+    canonical_priority, canonical_status, label_color,
+};
 mod quick_add;
 mod row;
 pub use row::{AnchorChip, CheckboxButton, clock_running, days_late, late_label, owner_name};

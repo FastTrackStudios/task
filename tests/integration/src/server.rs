@@ -127,6 +127,7 @@ impl Server {
     /// world that had only the first could not test transfer, and one
     /// with only the second is not a world anybody could be shown.
     pub async fn start(name: &'static str, slug: &str, fixture: impl Fn(&Path)) -> Self {
+        crate::init_tracing();
         let data = std::sync::Arc::new(tempfile::tempdir().expect("data dir"));
         Self::start_on(data, name, slug, fixture).await
     }
@@ -198,10 +199,14 @@ impl Server {
         let mut org = state.org(slug).expect("the org we just scaffolded");
         let tree = data.path().join("orgs").join(slug).join("files");
         std::fs::create_dir_all(&tree).expect("files dir");
-        fixture(&tree);
+        tracing::info_span!("integration.fixture").in_scope(|| fixture(&tree));
 
         let key = iroh::SecretKey::generate();
-        let endpoint = crate::net::bind(key.clone()).await;
+        let endpoint = tracing::Instrument::instrument(
+            crate::net::bind(key.clone()),
+            tracing::info_span!("integration.bind"),
+        )
+        .await;
 
         // The backend reaches other servers through the port, and knows
         // its own id so the offers it mints say where to come back to.
@@ -327,7 +332,11 @@ impl Server {
         // a deployed endpoint republishes its pkarr record on boot. A
         // device registered against this id notices nothing, which is
         // the entire point of registering against an id.
-        let endpoint = crate::net::bind(key.clone()).await;
+        let endpoint = tracing::Instrument::instrument(
+            crate::net::bind(key.clone()),
+            tracing::info_span!("integration.bind"),
+        )
+        .await;
 
         task_server::attach_peering(
             &mut org,

@@ -1,0 +1,29 @@
+[package]
+name = "task-node-host"
+description = "Hosts task-server inside a native app as the device's own node (offline.local / offline.peers) and installs it behind task-ui-core's NodeHost seam, so every page works with no server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The node itself — the whole backend, in-process.
+task-server = { workspace = true }
+# The seam it is installed behind.
+task-ui-core = { workspace = true }
+vox-core = { workspace = true }
+# The node runs on its own runtime (the server's background tasks must
+# not share the UI's), and hands futures back across it.
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros"] }
+futures-util = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -169,16 +169,10 @@ fn ago_label(now: DateTime<Utc>, t: DateTime<Utc>) -> String {
     }
 }
 
-/// 30-second poll cadence for the active-now / budget refresh. Native
-/// parks (no poll) — same pattern as the chrome's second tick.
-#[cfg(target_arch = "wasm32")]
+/// 30-second poll cadence for the active-now / budget refresh, on
+/// every target.
 pub(super) async fn sleep_30s() {
-    gloo_timers::future::TimeoutFuture::new(30_000).await;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(super) async fn sleep_30s() {
-    futures_util::future::pending::<()>().await;
+    architect::sleep(architect::Duration::from_secs(30)).await;
 }
 
 /// Comma-joined holder labels from `workflow.assignees`.

@@ -20,7 +20,7 @@
 //! The omni-picker ([`OmniPicker`], Ctrl+O) is the Notes section on its
 //! own: uncapped, fuzzy over the whole vault.
 
-use architect_ui::lucide_dioxus::{FileText, Search};
+use architect_ui::lucide_dioxus::{FileText, Search, X};
 use dioxus::prelude::*;
 use nucleo_matcher::{
     Matcher, Utf32Str,
@@ -265,17 +265,20 @@ fn PaletteModal() -> Element {
     };
     let mut go_key = go.clone();
 
+    // Phone: a full-screen sheet with the field at the bottom, in thumb
+    // reach and riding the keyboard (`--kb`), results above it — the
+    // pull-down palette. `md:` and up: the centered modal.
     rsx! {
         div {
-            class: "fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[12vh]",
+            class: "fixed inset-x-0 top-[var(--vv-top,0px)] z-50 flex h-[var(--vv-h,100dvh)] items-stretch justify-center bg-background pt-[env(safe-area-inset-top,0px)] md:inset-0 md:h-auto md:items-start md:bg-black/40 md:p-4 md:pt-[12vh]",
             onclick: move |_| close(),
             div {
-                class: "flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl",
+                class: "flex h-full w-full flex-col-reverse overflow-hidden bg-background md:h-auto md:max-w-xl md:flex-col md:rounded-xl md:border md:border-border md:shadow-xl",
                 onclick: move |e| e.stop_propagation(),
-                div { class: "flex items-center gap-2 border-b border-border px-3",
+                div { class: "m-3 flex items-center gap-2 rounded-full bg-muted px-4 md:m-0 md:rounded-none md:border-b md:border-border md:bg-transparent md:px-3",
                     span { class: "text-muted-foreground", Search { size: 15 } }
                     input {
-                        class: "h-11 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground",
+                        class: "h-12 w-full bg-transparent text-base outline-none placeholder:text-muted-foreground md:h-11 md:text-sm",
                         placeholder: "Run a command, jump to a page or note…",
                         onmounted: move |e: Event<MountedData>| {
                             spawn(async move {
@@ -308,9 +311,17 @@ fn PaletteModal() -> Element {
                             _ => {}
                         },
                     }
-                    span { class: "shrink-0 text-xs text-muted-foreground", "↵ to run · esc to close" }
+                    span { class: "hidden shrink-0 text-xs text-muted-foreground md:inline", "↵ to run · esc to close" }
+                    // Phone: no Escape key, so a close button in the field.
+                    button {
+                        r#type: "button",
+                        class: "flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-accent md:hidden",
+                        "aria-label": "Close",
+                        onclick: move |_| close(),
+                        X { size: 18 }
+                    }
                 }
-                div { class: "max-h-[50vh] overflow-y-auto py-1",
+                div { class: "min-h-0 flex-1 overflow-y-auto py-1 md:max-h-[50vh] md:flex-none",
                     if count == 0 {
                         div { class: "px-3 py-4 text-center text-sm text-muted-foreground", "No matches." }
                     }
@@ -553,10 +564,11 @@ fn PaletteRow(
     rsx! {
         button {
             r#type: "button",
+            // Phone: thumb-sized rows in full colour; `md:` the dense list.
             class: if selected {
-                "flex w-full items-center gap-2.5 bg-accent/60 px-3 py-2 text-left text-sm text-foreground"
+                "flex min-h-12 w-full items-center gap-2.5 bg-accent/60 px-4 py-2 text-left text-base text-foreground md:min-h-0 md:px-3 md:text-sm"
             } else {
-                "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-muted-foreground hover:text-foreground"
+                "flex min-h-12 w-full items-center gap-2.5 px-4 py-2 text-left text-base text-foreground hover:text-foreground md:min-h-0 md:px-3 md:text-sm md:text-muted-foreground"
             },
             onmouseenter: move |_| on_hover.call(()),
             onclick: move |_| on_pick.call(()),

@@ -112,39 +112,23 @@ pub fn provide_prefs() -> PrefsCtx {
     ctx
 }
 
-// ── localStorage boot cache (web only) ──────────────────────────────
+// ── per-device boot cache (`crate::local_store`) ────────────────────
 
-#[cfg(any(target_arch = "wasm32", test))]
 fn cache_key(user_id: Uuid) -> String {
     format!("task.prefs.{user_id}")
 }
 
-#[cfg(target_arch = "wasm32")]
-fn storage() -> Option<web_sys::Storage> {
-    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
-}
-
 fn load_cache(user_id: Uuid) -> UserPrefs {
-    #[cfg(target_arch = "wasm32")]
-    {
-        if let Some(json) = storage().and_then(|s| s.get_item(&cache_key(user_id)).ok().flatten()) {
-            if let Ok(p) = serde_json::from_str::<UserPrefs>(&json) {
-                if p.user_id == user_id {
-                    return p;
-                }
-            }
-        }
-    }
-    UserPrefs::defaults_for(user_id)
+    crate::local_store::get(&cache_key(user_id))
+        .and_then(|json| serde_json::from_str::<UserPrefs>(&json).ok())
+        .filter(|p| p.user_id == user_id)
+        .unwrap_or_else(|| UserPrefs::defaults_for(user_id))
 }
 
 fn save_cache(prefs: &UserPrefs) {
-    #[cfg(target_arch = "wasm32")]
-    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(prefs)) {
-        let _ = s.set_item(&cache_key(prefs.user_id), &json);
+    if let Ok(json) = serde_json::to_string(prefs) {
+        crate::local_store::set(&cache_key(prefs.user_id), &json);
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = prefs;
 }
 
 #[cfg(test)]

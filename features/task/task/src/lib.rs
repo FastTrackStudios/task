@@ -61,6 +61,9 @@ pub use task_proto::agent_lane;
 pub use task_proto::agent_lane::{
     TriageLabel, has_triage_label, is_untriaged, triage_label, triage_labels,
 };
+/// A task as a markdown document — parse, serialize, paths (see
+/// [`task_proto::doc`]).
+pub use task_proto::doc;
 /// Wayfinder map bodies (see [`task_proto::wayfinder`]).
 pub use task_proto::wayfinder;
 pub use task_proto::wayfinder::{MapBody, Section, map_body};
@@ -71,6 +74,10 @@ pub mod scan;
 pub mod write;
 
 pub use capture::{capture, infer_project_id};
+pub use task_proto::is_mine;
+/// The Suggested slot's pick (see [`task_proto::suggest`]).
+pub use task_proto::suggest;
+
 pub use model::{
     Priority, Relation, RelationKind, Status, TaskInfo, TimeEntry, close_open_time_entries,
     is_due_on_or_before, status_is_open, status_is_terminal, track_status_transition,

@@ -43,8 +43,8 @@ use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 use vault_proto::{
     BaseGroup, BaseRowView, BaseView, CollabAck, FileBytes, FolderIndex, IfMatch, Manifest,
-    ManifestEntry, MoveAck, PageMeta, PutAck, VaultChange, VaultEvent, VaultSync, VaultSyncError,
-    VaultSyncStreamSource, collab_doc_id,
+    ManifestEntry, MoveAck, PageMeta, PutAck, TextHit, VaultChange, VaultEvent, VaultSync,
+    VaultSyncError, VaultSyncStreamSource, collab_doc_id,
 };
 
 use crate::vault::Vault;
@@ -344,6 +344,28 @@ impl Backend {
             .cloned()
     }
 
+    /// Register `path` in `vault_id` for collaboration and return its doc
+    /// id — [`VaultSync::open_collab`] without the caller's write guard,
+    /// for a lane that is gated on its own: the peer document lane
+    /// (`offline.peers`), where the caller is an admitted node rather than
+    /// a person and the rule is "a peer exchanges documents". The path is
+    /// validated as for every other call; a path with no file registers
+    /// too (the session that follows makes the document, and the
+    /// write-behind the file).
+    ///
+    /// # Errors
+    ///
+    /// The vault is unknown, or the path could leave it.
+    pub fn register_collab(&self, vault_id: &str, path: &str) -> Result<Uuid, VaultSyncError> {
+        self.file_path(vault_id, path)?;
+        let doc_id = collab_doc_id(vault_id, path);
+        self.collab
+            .write()
+            .expect("vault::sync collab map poisoned")
+            .insert(doc_id, (vault_id.to_string(), path.to_string()));
+        Ok(doc_id)
+    }
+
     /// Resolve `vault_id` to an absolute root path. Returns
     /// [`VaultSyncError::NotFound`] only in `Explicit` mode
     /// when the id is unregistered; `UnderParent` always
@@ -430,7 +452,25 @@ impl Backend {
             .root(vault_id)
             .map_err(|_| WatchError::Notify(format!("unknown vault id `{vault_id}`")))?;
         let tx = self.channel(vault_id).await;
-        let (rx, guard) = watcher::watch(root.clone(), WATCHER_DEBOUNCE)?;
+        // On a thread of its own: the watch registers with the OS's file
+        // event service (FSEvents on macOS), which can take seconds to
+        // answer on a busy machine — seconds an async worker would spend
+        // blocked, stalling every task scheduled on it. Not the blocking
+        // pool either: a registration cannot be cancelled, and a runtime
+        // shutting down waits for every blocking task, so one stuck in
+        // `fseventsd` would hold the process open. A detached thread is
+        // simply abandoned at exit.
+        let watched = root.clone();
+        let (done, started) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name(format!("vault-watch-start:{vault_id}"))
+            .spawn(move || {
+                let _ = done.send(watcher::watch(watched, WATCHER_DEBOUNCE));
+            })
+            .map_err(|e| WatchError::Notify(format!("spawn watch thread: {e}")))?;
+        let (rx, guard) = started
+            .await
+            .map_err(|e| WatchError::Notify(format!("watch thread: {e}")))??;
 
         let thread_name = format!("vault-sync-watcher:{vault_id}");
         let hub = self.changes.clone();
@@ -440,6 +480,49 @@ impl Backend {
             .spawn(move || forward_watcher_events(root, rx, tx, hub, id))
             .map_err(|e| WatchError::Notify(format!("spawn watcher thread: {e}")))?;
 
+        Ok(WatcherHandle { _guard: guard })
+    }
+
+    /// [`Self::start_watcher`] for several vaults at once, over **one**
+    /// OS watch ([`watcher::watch_many`]): one `fseventsd` registration
+    /// for the set instead of one per vault. Events reach each vault's
+    /// channel exactly as with a watcher of its own.
+    ///
+    /// # Errors
+    ///
+    /// An id is unknown, or no root could be watched.
+    pub async fn start_watchers(&self, vault_ids: &[String]) -> Result<WatcherHandle, WatchError> {
+        let mut roots = Vec::with_capacity(vault_ids.len());
+        let mut channels = HashMap::with_capacity(vault_ids.len());
+        for id in vault_ids {
+            let root = self
+                .root(id)
+                .map_err(|_| WatchError::Notify(format!("unknown vault id `{id}`")))?;
+            channels.insert(root.clone(), (id.clone(), self.channel(id).await));
+            roots.push(root);
+        }
+        // A detached thread, for the reasons `start_watcher` gives.
+        let (done, started) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("vault-watch-start".into())
+            .spawn(move || {
+                let _ = done.send(watcher::watch_many(roots, WATCHER_DEBOUNCE));
+            })
+            .map_err(|e| WatchError::Notify(format!("spawn watch thread: {e}")))?;
+        let (receivers, guard) = started
+            .await
+            .map_err(|e| WatchError::Notify(format!("watch thread: {e}")))??;
+
+        for (root, rx) in receivers {
+            let Some((id, tx)) = channels.remove(&root) else {
+                continue;
+            };
+            let hub = self.changes.clone();
+            std::thread::Builder::new()
+                .name(format!("vault-sync-watcher:{id}"))
+                .spawn(move || forward_watcher_events(root, rx, tx, hub, id))
+                .map_err(|e| WatchError::Notify(format!("spawn watcher thread: {e}")))?;
+        }
         Ok(WatcherHandle { _guard: guard })
     }
 
@@ -658,7 +741,7 @@ impl VaultSync for Backend {
                 PageMeta {
                     path: p.rel_path.clone(),
                     basename: p.basename.clone(),
-                    title: get("title").unwrap_or_else(|| p.basename.clone()),
+                    title: page_title(&p.raw, &p.basename, get("title")),
                     page_type: get("type").unwrap_or_default(),
                     // `folder` or `up` — both wikilink-to-parent
                     // properties (the obsidian-virt-folder model).
@@ -802,6 +885,41 @@ impl VaultSync for Backend {
         Ok(views)
     }
 
+    fn search_text(
+        &self,
+        vault_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<TextHit>, VaultSyncError> {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let dir = self.root(vault_id)?;
+        if words.is_empty() || !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let vault = Vault::open(&dir).map_err(|e| VaultSyncError::Internal(e.to_string()))?;
+        let mut hits: Vec<(bool, TextHit)> = vault
+            .pages
+            .iter()
+            .filter_map(|p| {
+                let fm = parse_frontmatter(&p.raw);
+                let title = page_title(
+                    &p.raw,
+                    &p.basename,
+                    fm.as_ref().and_then(|f| fm_text(f, "title")),
+                );
+                search_page(&p.raw, &p.rel_path, title, &words)
+            })
+            .collect();
+        // Title matches first, then the most matching lines, then by name.
+        hits.sort_by(|(at, a), (bt, b)| {
+            bt.cmp(at)
+                .then(b.matches.cmp(&a.matches))
+                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+        });
+        hits.truncate(limit.clamp(1, 200) as usize);
+        Ok(hits.into_iter().map(|(_, h)| h).collect())
+    }
+
     fn set_folder(
         &self,
         vault_id: &str,
@@ -876,18 +994,25 @@ impl VaultSync for Backend {
         // Joining a file's live session is how the collaborative editor
         // writes, so it takes the same permission a save does.
         self.guard_write(vault_id, path)?;
-        if !abs.exists() {
-            return Err(VaultSyncError::NotFound);
-        }
-        let bytes = std::fs::read(&abs).map_err(io_err)?;
-        let doc_id = collab_doc_id(vault_id, path);
-        self.collab
-            .write()
-            .expect("vault::sync collab map poisoned")
-            .insert(doc_id, (vault_id.to_string(), path.to_string()));
+        // A path with no file yet still opens: a document created on a
+        // device (offline, `offline.doc.create`) reaches the server this
+        // way, and its first write-behind flush creates the file. The
+        // ack's sha is then empty — there are no bytes to hash.
+        // t[impl offline.doc.create]
+        let exists = abs.exists();
+        let bytes = if exists {
+            std::fs::read(&abs).map_err(io_err)?
+        } else {
+            Vec::new()
+        };
+        let doc_id = self.register_collab(vault_id, path)?;
         Ok(CollabAck {
             doc_id,
-            sha256: sha256_hex(&bytes),
+            sha256: if exists {
+                sha256_hex(&bytes)
+            } else {
+                String::new()
+            },
         })
     }
 }
@@ -1098,6 +1223,79 @@ fn fm_tags(fm: &FrontMatter) -> Vec<String> {
     out
 }
 
+/// Whether one page matches every word of a search (lowercased), in its
+/// title or its body (properties are not text), and the hit if so —
+/// with whether the title alone matched, which ranks first.
+fn search_page(raw: &str, path: &str, title: String, words: &[String]) -> Option<(bool, TextHit)> {
+    // The body, and the line it starts on (for the excerpt's line).
+    let (body, first_line) = match raw
+        .strip_prefix("---")
+        .and_then(|rest| rest.split_once("\n---"))
+    {
+        Some((front, body)) => (body, front.lines().count() + 2),
+        None => (raw, 1),
+    };
+    let title_lc = title.to_lowercase();
+    let body_lc = body.to_lowercase();
+    if !words
+        .iter()
+        .all(|w| title_lc.contains(w.as_str()) || body_lc.contains(w.as_str()))
+    {
+        return None;
+    }
+    let title_hit = words.iter().all(|w| title_lc.contains(w.as_str()));
+    let mut excerpt = None;
+    let mut matches = 0u32;
+    // `skip(1)`: the rest of the closing fence's line.
+    let skip = usize::from(first_line > 1);
+    for (i, line) in body.lines().enumerate().skip(skip) {
+        let lc = line.to_lowercase();
+        if words.iter().any(|w| lc.contains(w.as_str())) {
+            matches += 1;
+            if excerpt.is_none() {
+                let text: String = line.trim().chars().take(160).collect();
+                excerpt = Some((text, (first_line + i - skip) as u32));
+            }
+        }
+    }
+    let (excerpt, line) = excerpt.unwrap_or_else(|| (title.clone(), 0));
+    Some((
+        title_hit,
+        TextHit {
+            path: path.to_owned(),
+            title,
+            excerpt,
+            line,
+            matches,
+        },
+    ))
+}
+
+/// A page's display title: its `title` property; else, for a record
+/// the app named by id (an inbox item's `<uuid>.md`), its first line of
+/// text — a name nobody chose reads as noise in a list; else the file
+/// name, which is a note's title.
+fn page_title(raw: &str, basename: &str, title: Option<String>) -> String {
+    if let Some(t) = title {
+        return t;
+    }
+    if Uuid::parse_str(basename).is_ok() {
+        let body = raw
+            .strip_prefix("---")
+            .and_then(|rest| rest.split_once("\n---"))
+            .map_or(raw, |(_, body)| body);
+        // The fence's closing line comes back as the first (empty) one.
+        let first = body.lines().map(str::trim).find(|l| !l.is_empty());
+        if let Some(line) = first {
+            let line = line.trim_start_matches('#').trim();
+            if !line.is_empty() {
+                return line.chars().take(80).collect();
+            }
+        }
+    }
+    basename.to_string()
+}
+
 /// Reduce a `folder` value to a bare parent basename. Handles the
 /// Obsidian wikilink form `[[Name|alias]]#heading` as well as a
 /// plain string.
@@ -1292,6 +1490,58 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A page matches when every word is in its title or its body — never
+    /// its properties — and the hit carries the first matching line.
+    #[test]
+    fn a_search_reads_the_body_and_the_title_but_not_the_properties() {
+        let raw =
+            "---\nstatus: mixing\n---\n\nTrack list\nThe opener is loud\nThe closer is quiet\n";
+        let words = |q: &str| {
+            q.split_whitespace()
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>()
+        };
+        let hit = |q: &str| super::search_page(raw, "Set.md", "Setlist".into(), &words(q));
+
+        let (title_hit, h) = hit("the LOUD").expect("both words are in the body");
+        assert!(!title_hit);
+        assert_eq!(
+            (h.excerpt.as_str(), h.line, h.matches),
+            ("The opener is loud", 6, 2)
+        );
+        assert!(
+            hit("setlist").expect("the title").0,
+            "a title match ranks first"
+        );
+        assert!(
+            hit("setlist quiet").is_some(),
+            "words may split across title and body"
+        );
+        assert!(hit("mixing").is_none(), "a property is not text");
+        assert!(hit("opener absent").is_none(), "every word must match");
+    }
+
+    /// A record named by id lists by what it says; a note by its name.
+    #[test]
+    fn a_record_named_by_id_is_titled_by_its_first_line() {
+        let id = "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a01";
+        let inbox = "---\ntype: inbox-item\n---\n\nCall the piano tuner about Thursday\n";
+        assert_eq!(
+            super::page_title(inbox, id, None),
+            "Call the piano tuner about Thursday"
+        );
+        assert_eq!(super::page_title("# Heading\nmore", id, None), "Heading");
+        assert_eq!(super::page_title("---\na: 1\n---\n", id, None), id);
+        assert_eq!(
+            super::page_title(inbox, id, Some("Chosen".into())),
+            "Chosen"
+        );
+        assert_eq!(
+            super::page_title("Setlist ideas", "Untitled 1", None),
+            "Untitled 1"
+        );
+    }
+
     /// A read is not a write: the same mtime and hash reported twice
     /// is one event, not two; a different hash (an edit) or a different
     /// mtime (a touch) is fresh; a delete forgets the path so a recreate
@@ -1583,11 +1833,17 @@ mod tests {
         assert_eq!(again.sha256, sha256_hex(b"body2"));
         // Unregistered ids resolve to nothing — the admission gate.
         assert_eq!(b.collab_route(collab_doc_id("v1", "other.md")), None);
-        // Missing path refuses registration.
-        assert!(matches!(
-            b.open_collab("v1", "missing.md"),
-            Err(VaultSyncError::NotFound)
-        ));
+        // A path with no file yet registers too (a document created
+        // offline arrives this way); there is no sha to report.
+        // t[verify offline.doc.create]
+        let fresh = b.open_collab("v1", "missing.md").unwrap();
+        assert_eq!(fresh.sha256, "");
+        assert_eq!(
+            b.collab_route(fresh.doc_id),
+            Some(("v1".to_string(), "missing.md".to_string()))
+        );
+        // A path outside the vault still refuses.
+        assert!(b.open_collab("v1", "../escape.md").is_err());
     }
 
     fn meta<'a>(idx: &'a vault_proto::FolderIndex, base: &str) -> &'a PageMeta {

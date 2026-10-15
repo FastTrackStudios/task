@@ -13,7 +13,7 @@ use std::time::Duration;
 use crdt::CrdtDoc;
 use crdt::sync::{DocSyncClient, SyncedDoc};
 use vault_proto::{
-    COLLAB_TEXT_CONTAINER, IfMatch, VaultChange, VaultGraphClient, VaultSyncClient, VaultSyncError,
+    COLLAB_BODY_CONTAINER, IfMatch, VaultChange, VaultGraphClient, VaultSyncClient, VaultSyncError,
 };
 use vox::VoxError;
 use wiki_proto::service::events::EventsStreamClient;
@@ -54,7 +54,7 @@ async fn eventually(what: &str, mut cond: impl AsyncFnMut() -> bool) {
 }
 
 fn text_of(doc: &CrdtDoc) -> String {
-    doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string()
+    doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string()
 }
 
 /// A wiki root answers as a vault: the seeded page is in the manifest,
@@ -267,7 +267,8 @@ async fn a_wiki_created_at_runtime_is_editable_at_once(url: &str) {
 /// root, through the real WebSocket mounts.
 #[tokio::test(flavor = "multi_thread")]
 async fn two_collab_sessions_converge_on_a_wiki_page() {
-    let (url, _tmp) = boot().await;
+    // It writes the page on disk too, and expects the server to see it.
+    let (url, _tmp) = support::boot_ws_watching().await.expect("boot");
     let writer: VaultSyncClient = lane(&url).await;
     let pages: PagesClient = lane(&url).await;
     let path = "Concepts/Collab.md".to_string();
@@ -310,7 +311,7 @@ async fn two_collab_sessions_converge_on_a_wiki_page() {
     // A types; B and the wiki's own reader observe it.
     doc_a
         .loro()
-        .get_text(COLLAB_TEXT_CONTAINER)
+        .get_text(COLLAB_BODY_CONTAINER)
         .insert(0, "alpha ")
         .unwrap();
     doc_a.loro().commit();
@@ -328,7 +329,7 @@ async fn two_collab_sessions_converge_on_a_wiki_page() {
     // B types too — both converge.
     doc_b
         .loro()
-        .get_text(COLLAB_TEXT_CONTAINER)
+        .get_text(COLLAB_BODY_CONTAINER)
         .insert(11, "beta\n")
         .unwrap();
     doc_b.loro().commit();

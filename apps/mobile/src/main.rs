@@ -2,6 +2,8 @@ use dioxus::prelude::*;
 use ui::App;
 
 mod ios_auth;
+mod keyboard_bar;
+mod typing_keys;
 mod watch_sync;
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -30,13 +32,39 @@ fn main() {
     // at the issuer covers every FastTrackStudio app on the device
     // (no-op off iOS — the login screen then offers the form only).
     ios_auth::init();
+    // The app draws its own bar over the keyboard; drop the web view's.
+    keyboard_bar::init();
+    // A typing-test launch types through the web view's own keyboard input.
+    typing_keys::init();
 
     // Before launch — the nav is built on first render, and an app
     // registered after that has no tab until something else redraws.
     task_plugins::register_all();
 
-    dioxus::launch(Root);
+    // The phone is a node of its own (`offline.local`, `offline.peers`):
+    // the backend in-process over the app container's data dir, booted
+    // on first use. With no host configured the app runs on it; a host
+    // URL (TASK_VOX_URL, a baked TASK_VOX_URL_NATIVE, or one chosen in
+    // Settings) still wins. `TASK_NODE_DISABLE=1` keeps a pure client.
+    if std::env::var("TASK_NODE_DISABLE").is_ok_and(|v| v != "0") {
+        tracing::info!("node: disabled by TASK_NODE_DISABLE — remote only");
+    } else if let Some(opts) = task_node_host::options_from_env() {
+        task_node_host::install(opts);
+    }
+
+    // The webview's own colour, set before any HTML renders. Without it
+    // a light-mode phone flashed white between the launch screen and the
+    // first paint — the app is dark by default, and so is the launch
+    // screen (LaunchBackground, apps/mobile/ios/app-plist.sh), so the
+    // flash was the only light frame in the whole start.
+    dioxus::LaunchBuilder::new()
+        .with_cfg(dioxus::mobile::Config::new().with_background_color(LAUNCH_BACKGROUND))
+        .launch(Root);
 }
+
+/// The brand theme's dark background (`#09090b`), the colour the launch
+/// screen and the loading screen sit on.
+const LAUNCH_BACKGROUND: (u8, u8, u8, u8) = (0x09, 0x09, 0x0b, 0xff);
 
 /// Make the webview behave like an app rather than a page.
 ///

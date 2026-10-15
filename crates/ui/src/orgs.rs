@@ -247,6 +247,21 @@ async fn fetch_orgs_live() -> Result<Discovered, String> {
 /// proceed (`vox_clients::org_ws_url` needs a real slug).
 #[cfg(not(target_arch = "wasm32"))]
 async fn fetch_orgs_live() -> Result<Discovered, String> {
+    // t[impl offline.local] — the device's own node answers discovery
+    // itself: the same document a host serves at
+    // `/.well-known/task-server.json`, produced by the same server code,
+    // read by the same parser. No HTTP, no listener.
+    if task_ui_core::node::local_active() {
+        let node = task_ui_core::node::host().ok_or("this build hosts no node")?;
+        let bearer = crate::vox_session::bearer();
+        let body = node.discovery(bearer.clone()).await?;
+        let found = parse_orgs(&body, bearer.as_deref())?;
+        tracing::info!(
+            count = found.orgs.len(),
+            "org discovery ok (this device's node)"
+        );
+        return Ok(found);
+    }
     let base = http_base();
     if base.is_empty() {
         return Err("no server URL configured".to_owned());

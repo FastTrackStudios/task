@@ -109,7 +109,10 @@ pub(crate) fn NoteView(
     // most writing apps (at a line start or after a space, so URLs and
     // "and/or" never do). The editor's own default is `\`, for Keyflow,
     // where `/` is chord and rhythm syntax.
-    use_hook(|| editor::editor_view::palette::set_trigger('/'));
+    // The palette catalog and the Linear typography are the shared
+    // document editor's (`crate::doc_editor`), so a note and a task's
+    // description read and type alike.
+    use_hook(crate::doc_editor::install_palette);
     let is_focused = use_memo(move || *focused.read() == pane_index);
     let mode = use_memo(move || write_mode.map_or(WriteMode::Direct, |m| m()));
     // Saves, the live session and renames go to the file only in Direct.
@@ -138,7 +141,7 @@ pub(crate) fn NoteView(
     }
 
     // ── Editor extensions ─────────────────────────────────────
-    let keymap = use_signal(editor::standard_markdown_keymap);
+    let keymap = use_signal(crate::doc_editor::doc_keymap);
     // Frontmatter properties now live in the right sidebar (Properties
     // tab), so the editor's inline `.md-properties` widget stays
     // collapsed — the class below is always `props-collapsed`.
@@ -170,55 +173,62 @@ pub(crate) fn NoteView(
     // ── Autocomplete candidates ───────────────────────────────
     let link_candidates = use_memo(move || vault_lookup::wikilink_candidates(&pages.read()));
 
-    // ── Per-file CRDT collaboration (focused pane only) ───────
+    // ── Per-file document replica ─────────────────────────────
     // Same page-owned-handles + keyed-`CollabSession` split as the
-    // original vault page (see collab.rs module docs). Armed only while
-    // this pane is focused: a 2-way split never runs two live CRDT
-    // sessions — the unfocused pane's edits persist through the sha
-    // autosave instead, and collab re-arms the instant it regains focus.
+    // original vault page (see collab.rs module docs). Armed the first
+    // time this pane is focused on an open file, and then **kept**: once
+    // the replica has taken the buffer over it owns persistence — through
+    // focus changes, through going offline, through reconnecting (the
+    // driver re-attaches by itself) — so the sha autosave can never write
+    // a buffer the replica is also carrying (`offline.doc.replica`).
+    // Only a change of write permission disarms it. A replica that has
+    // not taken over yet is let go when the pane loses focus.
     let handles = crate::collab::use_collab_handles();
     let mut collab = use_signal(|| None::<crate::collab::CollabHandles>);
     let mut collab_doc = use_signal(|| None::<uuid::Uuid>);
     let account = try_use_context::<Signal<Option<crate::auth::ActiveAccount>>>();
-    let conn = architect::use_connection::<vox_core::Caller>();
     let collab_path = path.clone();
     let collab_vault = vault_id.clone();
     use_effect(move || {
-        // Reactive reads: re-open collab on reconnect (generation bump)
-        // and whenever this pane gains/loses focus.
-        let _generation = conn.generation();
         let focused_now = is_focused();
         let writing = may_write();
-        collab_doc.set(None);
-        collab.set(None);
-        handles.reset();
-        if !focused_now {
-            return; // unfocused pane stays in plain sha mode
-        }
+        let opened = session.current_path().as_deref() == Some(collab_path.as_str());
+        let armed = collab_doc.peek().is_some();
+        let taken_over = *handles.live.read();
         if !writing {
+            if armed {
+                collab_doc.set(None);
+                collab.set(None);
+                handles.reset();
+            }
             return; // a reader does not join the live session
         }
-        let slug = home.peek().clone();
-        let path = collab_path.clone();
-        let vault = collab_vault.clone();
-        spawn(async move {
-            match crate::collab::open_collab(slug, vault, path.clone()).await {
-                Ok(ack) => {
-                    if session.current_path().as_deref() == Some(path.as_str()) {
-                        collab_doc.set(Some(ack.doc_id));
-                        collab.set(Some(handles));
-                    }
-                }
-                Err(e) => tracing::debug!("vault collab unavailable for {path}: {e}"),
+        if armed {
+            if !focused_now && !taken_over {
+                collab_doc.set(None);
+                collab.set(None);
+                handles.reset();
             }
-        });
+            return;
+        }
+        if focused_now && opened {
+            collab_doc.set(Some(vault_proto::collab_doc_id(
+                &collab_vault,
+                &collab_path,
+            )));
+            collab.set(Some(handles));
+        }
     });
-    // Autosave pauses exactly while collab is live — and for good when
-    // this person may not write.
+    // Autosave pauses exactly while the replica owns the buffer — and
+    // for good when this person may not write.
     use_effect(move || {
         let live = collab.read().as_ref().is_some_and(|c| c.is_live());
         session.set_autosave_paused(live || !may_write());
     });
+    // Whether an explicit save may write the file: never while the
+    // replica owns the buffer (it would write edits the replica also
+    // carries — the double-apply).
+    let replica_owns = use_memo(move || collab.read().as_ref().is_some_and(|c| c.is_live()));
     // The editor's reading view follows Read mode and write permission.
     use_effect(move || {
         let on = reading();
@@ -228,18 +238,6 @@ pub(crate) fn NoteView(
                 editor::TransactionSpec::new().reading_mode(on),
                 None,
             );
-        }
-    });
-    // Live → Offline teardown: fall back to sha saves.
-    use_effect(move || {
-        let went_offline = collab
-            .read()
-            .as_ref()
-            .is_some_and(|c| (c.live)() && c.doc.status() == crdt::SyncStatus::Offline);
-        if went_offline {
-            collab_doc.set(None);
-            collab.set(None);
-            handles.reset();
         }
     });
 
@@ -259,11 +257,7 @@ pub(crate) fn NoteView(
                     c.doc.revision(),
                     c.doc
                         .doc()
-                        .map(|d| {
-                            d.loro()
-                                .get_text(vault_proto::COLLAB_TEXT_CONTAINER)
-                                .to_string()
-                        })
+                        .map(|d| vault_doc::render(d.loro(), Some(&text)))
                         .unwrap_or_default(),
                 ),
                 None => (false, "none".to_owned(), 0, String::new()),
@@ -291,6 +285,91 @@ pub(crate) fn NoteView(
             .and_then(|a| a.peek().as_ref().map(|acct| acct.name.clone()))
             .unwrap_or_else(|| "anonymous".to_owned());
         crate::collab::on_editor_transaction(&c, &session, &event, &who);
+    });
+
+    // ── The body: what the editor shows ───────────────────────
+    // A note is a body and its properties (`offline.doc.shape`). The
+    // editor holds the body alone, so a caret can never land in the
+    // properties and a keystroke can never break them; the properties
+    // are edited in their own panel. `session.state` stays the whole
+    // file — the session, the replica bridge, the widgets and the
+    // properties panel all read it — and these two bridges keep the
+    // body in step with it.
+    let mut body_state = use_signal(|| {
+        let full = session.state.peek().doc.to_string();
+        editor::EditorState::new(full[body_offset(&full)..].to_owned())
+    });
+    // Body edits → the file: spliced under the frontmatter and dispatched
+    // through the note's own transaction sink, so the replica and the
+    // autosave see an ordinary edit.
+    let on_body_transaction = use_callback(move |event: editor::TransactionEvent| {
+        if event.changes.is_empty() || event.user_event.as_deref() == Some("remote") {
+            return;
+        }
+        let full = session.state.peek().doc.to_string();
+        let next = with_body(&full, &event.doc_after.to_string());
+        if let Some((range, insert)) = crate::doc_editor::minimal_replace(&full, &next) {
+            editor::dispatch_spec(
+                session.state,
+                editor::TransactionSpec::new().changes(editor::Changes::replace(range, insert)),
+                Some(on_transaction),
+            );
+        }
+    });
+    // The file → the body: a reload, a peer's edit, a property change.
+    // Our own edits come back identical and do nothing.
+    use_effect(move || {
+        let full = session.state.read().doc.to_string();
+        let body = &full[body_offset(&full)..];
+        let shown = body_state.peek().doc.to_string();
+        if body == shown {
+            return;
+        }
+        match crate::doc_editor::minimal_replace(&shown, body) {
+            Some((range, insert)) => editor::dispatch_spec(
+                body_state,
+                editor::TransactionSpec::new()
+                    .changes(editor::Changes::replace(range, insert))
+                    .user_event("remote"),
+                None,
+            ),
+            None => body_state.set(editor::EditorState::new(body.to_owned())),
+        }
+    });
+    use_effect(move || {
+        let on = session.state.read().reading_mode;
+        if body_state.peek().reading_mode != on {
+            editor::dispatch_spec(
+                body_state,
+                editor::TransactionSpec::new().reading_mode(on),
+                None,
+            );
+        }
+    });
+    // A fresh, empty note is opened to be written in: it may take the
+    // caret on its own. Any other note only on a touch — the shell's
+    // focus rule (`phone_gestures::FOCUS_RULE_JS`) reads this.
+    let fresh_path = path.clone();
+    // Whether the body has focus: the phone's keyboard toolbar shows
+    // while it does.
+    // The typing test reads the body and caret the editor holds.
+    let publish_path = path.clone();
+    use_effect(move || {
+        let s = body_state.read();
+        crate::typing_test::publish_note(
+            &publish_path,
+            &s.doc.to_string(),
+            s.selection.primary().head,
+        );
+    });
+    let mut body_focused = use_signal(|| false);
+    // A phone shows the name in the top strip and no heading over the
+    // body; a desk the other way round.
+    let on_phone =
+        try_use_context::<crate::shell::phone_gestures::PhonePanels>().is_some_and(|p| (p.phone)());
+    let autofocus = use_memo(move || {
+        session.current_path().as_deref() == Some(fresh_path.as_str())
+            && body_state.read().doc.is_empty()
     });
 
     // Publish this doc to the sidebar Properties panel while focused, so
@@ -335,10 +414,12 @@ pub(crate) fn NoteView(
     // widget decoration passes (section tabs, …) ride along: they are
     // app-lifetime plain fns, so baking them into the once-created
     // source keeps `DecorationSource`'s Rc-identity equality contract.
-    let decorations = {
-        let passes = registry.decoration_passes();
-        use_hook(move || crate::collab::collab_decoration_source(lookup, collab, passes))
-    };
+    // The passes are this note's claimants' (set below, once the note's
+    // type is known): the editor holds the body only, so a pass can't
+    // find the note's `type:` in the text it decorates.
+    let mut passes = use_signal(Vec::<task_widgets::DecorationPass>::new);
+    let decorations =
+        use_hook(move || crate::collab::collab_decoration_source(lookup, collab, passes));
     let completion = use_hook(|| vault_lookup::vault_completion_source(link_candidates, tag_rows));
 
     // ── `type:` dispatch (from the folder index) ──────────────
@@ -413,6 +494,23 @@ pub(crate) fn NoteView(
     // widget IS the title) — skip the shell's duplicate header.
     let hide_note_header = note_widgets.iter().any(|s| s.hide_note_header);
     let widget_render = note_widgets.iter().find_map(|s| s.render.clone());
+    let mut claimed: Vec<task_widgets::DecorationPass> = Vec::new();
+    for p in note_widgets.iter().filter_map(|s| s.decorations) {
+        if !claimed.iter().any(|q| std::ptr::fn_addr_eq(*q, p)) {
+            claimed.push(p);
+        }
+    }
+    let same = {
+        let now = passes.peek();
+        now.len() == claimed.len()
+            && now
+                .iter()
+                .zip(&claimed)
+                .all(|(a, b)| std::ptr::fn_addr_eq(*a, *b))
+    };
+    if !same {
+        passes.set(claimed);
+    }
 
     // Editor link clicks: widget hrefs first (`song-play:` /
     // `setlist-play:` / `event-tab:` … — dispatched through the
@@ -542,12 +640,19 @@ pub(crate) fn NoteView(
     });
 
     // ── Save / conflict state ─────────────────────────────────
-    let is_dirty = session.dirty();
-    let status_msg = match session.status() {
-        SaveStatus::Idle => String::new(),
-        SaveStatus::Saving => "Saving…".to_owned(),
-        SaveStatus::Saved => "Saved".to_owned(),
-        SaveStatus::Failed(msg) => msg,
+    // While the replica owns the buffer, "dirty" means "not synced" and
+    // the strip says what the replica says (`offline.visible`, per doc).
+    let owned_by = (*collab.read()).filter(|c| c.is_live());
+    let is_dirty = match owned_by {
+        Some(c) => c.doc.unsynced(),
+        None => session.dirty(),
+    };
+    let status_msg = match (owned_by, session.status()) {
+        (Some(c), _) => c.label().to_owned(),
+        (None, SaveStatus::Idle) => String::new(),
+        (None, SaveStatus::Saving) => "Saving…".to_owned(),
+        (None, SaveStatus::Saved) => "Saved".to_owned(),
+        (None, SaveStatus::Failed(msg)) => msg,
     };
     let conflict_open = session.conflict().is_some();
     let mut edit_base_source = use_signal(|| false);
@@ -595,10 +700,13 @@ pub(crate) fn NoteView(
         let collab_label = collab
             .read()
             .as_ref()
-            .map(|c| if c.is_live() { "live" } else { "connecting…" });
+            .map(crate::collab::CollabHandles::label);
         // A draft or a read-only note has nothing to save: say what it is
         // instead of offering a Save that would be refused.
         let (save, dirty, on_save) = match mode() {
+            // While the replica owns the buffer there is no file save to
+            // offer: the document is what persists (and syncs).
+            WriteMode::Direct if replica_owns() => (String::new(), false, None),
             WriteMode::Direct => (save, session.dirty(), Some(on_save_cb)),
             WriteMode::Draft => ("Draft — not saved".to_owned(), false, None),
             WriteMode::ReadOnly => ("Read only".to_owned(), false, None),
@@ -640,7 +748,7 @@ pub(crate) fn NoteView(
                 let key = evt.key().to_string();
                 if (m.ctrl() || m.meta()) && key == "s" {
                     evt.prevent_default();
-                    if may_write() {
+                    if may_write() && !replica_owns() {
                         session.save();
                     }
                     return;
@@ -656,12 +764,25 @@ pub(crate) fn NoteView(
                 }
             },
             // Mobile-only name + save-state strip.
-            div { class: "note-mobile-status flex items-center justify-between gap-3 border-b border-border/60 px-4 py-1.5 md:hidden",
-                div { class: "flex min-w-0 items-center gap-2",
+            div { class: "note-mobile-status flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2 md:hidden",
+                div { class: "flex min-w-0 flex-1 items-center gap-2",
                     if is_dirty {
                         span { class: "size-2 shrink-0 rounded-full bg-primary", title: "Unsaved changes" }
                     }
-                    div { class: "min-w-0 truncate text-sm font-medium", "{current}" }
+                    // The note's name, renamed in place (tap). The body has no
+                    // second copy of it on a phone.
+                    if on_phone {
+                        crate::pages::note_header::NoteHeader {
+                            home,
+                            props_open,
+                            focus_req: focus_title,
+                            on_renamed: move |_| on_renamed.call(()),
+                            renamable: may_write(),
+                            compact: true,
+                        }
+                    } else {
+                        div { class: "min-w-0 truncate text-sm font-medium", "{current}" }
+                    }
                 }
                 if !status_msg.is_empty() {
                     Text { variant: TextVariant::Muted, class: "shrink-0 text-xs", "{status_msg}" }
@@ -753,7 +874,7 @@ pub(crate) fn NoteView(
                         // the same left edge.
                         // A note whose body opens with its own `# Title` has
                         // its title already; the header would say it twice.
-                        if !hide_note_header && !opens_with_title(&session.state.read().doc.to_string()) {
+                        if !on_phone && !hide_note_header && !opens_with_title(&session.state.read().doc.to_string()) {
                             crate::pages::note_header::NoteHeader {
                                 home,
                                 props_open,
@@ -767,20 +888,28 @@ pub(crate) fn NoteView(
                                 {raw_body_text(&session.state.read().doc.to_string())}
                             }
                         } else {
-                            div { class: if props_open() { "editor-app" } else { "editor-app props-collapsed" },
+                            div { class: if props_open() { "doc-linear editor-app note-body pt-3 md:pt-0" } else { "doc-linear editor-app note-body props-collapsed pt-3 md:pt-0" },
+                                "data-autofocus": "{autofocus}",
+                                onfocusin: move |_| body_focused.set(true),
+                                onfocusout: move |_| body_focused.set(false),
                                 div { class: "editor-frame editor-frame--flush",
                                     Editor {
-                                        state: session.state,
+                                        state: body_state,
                                         keymap: keymap.read().clone(),
                                         decorations: decorations.clone(),
                                         vim,
                                         palette: Some(palette),
                                         completion: completion.clone(),
-                                        on_transaction,
+                                        on_transaction: on_body_transaction,
                                         on_link_click,
                                         editable: !reading(),
                                     }
-                                    CommandPalette { state: session.state, palette, on_transaction }
+                                    CommandPalette { state: body_state, palette, on_transaction: on_body_transaction }
+                                }
+                                crate::doc_editor::KeyboardToolbar {
+                                    state: body_state,
+                                    sink: Some(on_body_transaction),
+                                    focused: body_focused(),
                                 }
                             }
                         }
@@ -790,9 +919,17 @@ pub(crate) fn NoteView(
                 {footer}
             }
             document::Style { {READING_STYLE} }
-            // Keyed collab child: remount per doc id = fresh replica.
+            document::Style { {crate::doc_editor::DOC_CSS} }
+            // Keyed collab child: one per doc id (its replica persists on
+            // the device, so a remount reopens the same document).
             if let Some(doc_id) = collab_doc() {
-                crate::collab::CollabSession { key: "{doc_id}", doc_id, handles }
+                crate::collab::CollabSession {
+                    key: "{doc_id}",
+                    slug: home.peek().clone(),
+                    vault_id: vault_id.clone(),
+                    path: path.clone(),
+                    handles,
+                }
             }
         }
     }
@@ -816,6 +953,45 @@ fn opens_with_title(text: &str) -> bool {
         .is_some_and(|line| line.starts_with("# ") && line.len() > 2)
 }
 
+/// Where the body starts in a note's file text: after the frontmatter
+/// fence and the blank lines under it, or 0 when there is no fence. The
+/// note editor shows and edits `text[body_offset(text)..]` only — the
+/// document's properties are not part of what you type in
+/// (`offline.doc.shape`).
+fn body_offset(text: &str) -> usize {
+    let Some(rest) = text.strip_prefix("---") else {
+        return 0;
+    };
+    let Some(close) = rest.find("\n---") else {
+        return 0;
+    };
+    let after = 3 + close + 4;
+    // The rest of the closing fence's line, then the blank lines.
+    let line_end = text[after..]
+        .find('\n')
+        .map_or(text.len(), |i| after + i + 1);
+    if !text[after..line_end].trim().is_empty() {
+        return 0; // `---something` is not a fence
+    }
+    // One blank line under the fence is the separator, not the body's.
+    // Only one: a body that opens with blank lines keeps them, so a
+    // newline typed at its top stays put.
+    let body = &text[line_end..];
+    line_end
+        + if body.starts_with("\r\n") {
+            2
+        } else if body.starts_with('\n') {
+            1
+        } else {
+            0
+        }
+}
+
+/// The file text with its body replaced, frontmatter kept as it is.
+fn with_body(file: &str, body: &str) -> String {
+    format!("{}{body}", &file[..body_offset(file)])
+}
+
 /// The Raw view's text: the file minus its YAML frontmatter fence (the
 /// properties live in the right-sidebar Properties tab).
 fn raw_body_text(text: &str) -> String {
@@ -837,6 +1013,37 @@ fn raw_body_text(text: &str) -> String {
 /// opening). Not mounting it removes that sink entirely.
 fn note_body_visible(is_experience_note: bool, fullscreen: bool) -> bool {
     !(is_experience_note && fullscreen)
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::{body_offset, with_body};
+
+    const NOTE: &str = "---\ncreated: 2026-10-14\ntags: []\n---\n\nSetlist ideas\n";
+
+    #[test]
+    fn the_editor_sees_the_body_and_never_the_properties() {
+        assert_eq!(&NOTE[body_offset(NOTE)..], "Setlist ideas\n");
+        assert_eq!(body_offset("no fence\n"), 0);
+        assert_eq!(body_offset("---not a fence\n"), 0);
+        // A fresh note: properties, nothing typed yet.
+        let fresh = "---\ncreated: 2026-10-14\n---\n\n";
+        assert_eq!(&fresh[body_offset(fresh)..], "");
+    }
+
+    #[test]
+    fn typing_in_the_body_keeps_the_frontmatter_whole() {
+        let next = with_body(NOTE, "Opener\nClosing\n");
+        assert_eq!(
+            next,
+            "---\ncreated: 2026-10-14\ntags: []\n---\n\nOpener\nClosing\n"
+        );
+        // A blank line typed at the body's top is the body's, and stays.
+        let top = with_body(NOTE, "\nSetlist ideas\n");
+        assert_eq!(&top[body_offset(&top)..], "\nSetlist ideas\n");
+        let fresh = with_body("---\ncreated: 2026-10-14\n---\n\n", "Hello");
+        assert_eq!(fresh, "---\ncreated: 2026-10-14\n---\n\nHello");
+    }
 }
 
 #[cfg(test)]

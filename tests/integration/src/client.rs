@@ -192,6 +192,12 @@ impl Session {
         self.establish().await
     }
 
+    /// The org's inbox — where every capture lands before it is
+    /// processed into anything (`process.capture.single-path`).
+    pub async fn inbox(&self) -> inbox_proto::InboxClient {
+        self.establish().await
+    }
+
     /// The org's set of wikis — the call made before a caller has a
     /// wiki id (`wiki.many.addressable`).
     pub async fn wikis(&self) -> wiki_proto::service::registry::RegistryClient {
@@ -387,6 +393,7 @@ signable!(
     SyncServiceClient,
     ProjectServiceClient,
     TaskServiceClient,
+    inbox_proto::InboxClient,
     wiki_proto::service::registry::RegistryClient,
     wiki_proto::service::pages::PagesClient,
     wiki_proto::service::schema::SchemaClient,

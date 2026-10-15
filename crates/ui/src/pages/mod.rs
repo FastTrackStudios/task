@@ -6,6 +6,7 @@
 
 pub mod auth_callback;
 pub mod bases;
+pub mod block_sheet;
 pub mod contacts;
 pub mod files;
 pub mod gantt;

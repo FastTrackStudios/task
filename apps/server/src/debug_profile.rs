@@ -22,7 +22,7 @@
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -109,6 +109,9 @@ pub async fn threads_handler(State(state): State<AppState>, headers: HeaderMap) 
 
 #[cfg(target_os = "linux")]
 async fn sample(seconds: u64, format: Format) -> Response {
+    // Linux-only like the profiler itself: imported at the top, it was an
+    // unused import (and so a clippy error) on every other host.
+    use axum::http::header;
     use std::io::Write as _;
 
     let guard = match pprof::ProfilerGuardBuilder::default()

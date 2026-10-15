@@ -219,6 +219,7 @@ const VAULT: ServicePermits = ServicePermits {
         MethodPermit::new("set_folder", Action::WRITE, "vault/{path}"),
         MethodPermit::new("open_collab", Action::READ, "vault/{path}"),
         MethodPermit::new("base_views", Action::READ, "vault/{path}"),
+        MethodPermit::new("search_text", Action::READ, "vault/**"),
     ],
 };
 
@@ -550,6 +551,11 @@ pub use files::peer::REPLICA_RESOURCE;
 /// at a time.
 const FILES_REPLICA: ServicePermits = files::peer::REPLICA_PERMITS;
 
+/// The document lane's rows (`offline.peers`), defined with the peer
+/// model for the same reason the replica lane's are: a device's node
+/// serves it too, and one definition cannot drift.
+const DOC_PEER: ServicePermits = files::peer::DOC_PEER_PERMITS;
+
 // Who may see and change what (`files.access.*`).
 //
 // Every mutation here is audited without exception: granting, revoking
@@ -737,6 +743,11 @@ table!(NOTIFY, "notify", "notifications/**", [
     rd "list", wr "mark_read", wr "mark_all_read", wa "delete",
 ]);
 table!(NOTIFY_STREAM, "notify-stream", "notifications/**", [rd "events"]);
+// The activity feed: read-only to clients — every entry is written by
+// the server (notifier, comment hook, seed).
+// t[impl activity.feed.server-written]
+table!(ACTIVITY, "activity-feed", "notifications/activity/**", [rd "list"]);
+table!(ACTIVITY_STREAM, "activity-feed-stream", "notifications/activity/**", [rd "events"]);
 table!(INBOX, "inbox", "inbox/**", [
     rd "list_inbox", rd "review_queue", rd "get_inbox_item",
     wr "upsert_inbox_item", wa "delete_inbox_item",
@@ -1141,6 +1152,11 @@ pub fn mounts() -> Vec<Mount> {
         m("core", crdt::sync::doc_sync_service_descriptor(), DOC_SYNC),
         m(
             "core",
+            vault_doc::peer::doc_peer_service_descriptor(),
+            DOC_PEER,
+        ),
+        m(
+            "core",
             crdt::sync::doc_presence_service_descriptor(),
             DOC_PRESENCE,
         ),
@@ -1353,6 +1369,16 @@ pub fn mounts() -> Vec<Mount> {
             "core",
             notify_proto::notify_stream_descriptor(),
             NOTIFY_STREAM,
+        ),
+        m(
+            "core",
+            notify_proto::activity_feed_rpc_service_descriptor(),
+            ACTIVITY,
+        ),
+        m(
+            "core",
+            notify_proto::activity_feed_stream_service_descriptor(),
+            ACTIVITY_STREAM,
         ),
     ]);
     #[cfg(feature = "plugin-recall")]

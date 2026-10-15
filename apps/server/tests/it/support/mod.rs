@@ -128,6 +128,8 @@ const TEST_ENV: &[&str] = &[
     "TASK_WATCH_TOKEN",
     "TASK_SESSION_FILE",
     "TASK_AUTH_SECRET",
+    "TASK_IROH_PEER_DIR",
+    "TASK_DEVICE_SYNC_SECS",
 ];
 
 /// Take the process environment ([`ENV_LOCK`]), cleared of every test's
@@ -139,12 +141,39 @@ const TEST_ENV: &[&str] = &[
 /// is only sound one-test-per-process — how nextest runs this binary, and
 /// what `just test` does (see the Justfile).
 pub async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    init_tracing();
     let guard = ENV_LOCK.lock().await;
     for name in TEST_ENV {
         // SAFETY: under the binary's one env lock.
         unsafe { std::env::remove_var(name) };
     }
     guard
+}
+
+/// The server's tracing, for the test that booted it: every boot takes
+/// [`env_lock`], which installs this once per process. Output goes
+/// through the test writer, so a passing test stays quiet and a failing
+/// one (nextest prints its output) shows what the server was doing —
+/// the spans and events a hang or a wrong answer happened inside.
+/// `RUST_LOG` overrides the default filter.
+pub fn init_tracing() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,sqlx=warn"));
+        // `TASK_TEST_SPANS=1` also prints each span as it closes, with
+        // how long it was busy — how a slow boot step shows itself.
+        let spans = if std::env::var_os("TASK_TEST_SPANS").is_some() {
+            tracing_subscriber::fmt::format::FmtSpan::CLOSE
+        } else {
+            tracing_subscriber::fmt::format::FmtSpan::NONE
+        };
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_span_events(spans)
+            .with_test_writer()
+            .try_init();
+    });
 }
 
 async fn boot_over(
@@ -194,6 +223,18 @@ async fn boot_over_env(
 /// port. Returns the `ws://…/vox` URL.
 pub async fn boot_ws() -> eyre::Result<(String, tempfile::TempDir)> {
     boot_ws_with(|_| {}).await
+}
+
+/// [`boot_ws`], returning once the server's disk watchers are up
+/// (`AppState::watching`) — for a test that edits files on disk behind
+/// the server's back and expects the server to notice. The app's boot
+/// does not wait for them (each is an OS registration, seconds apiece on
+/// a busy Mac), so a test that needs them has to say so.
+pub async fn boot_ws_watching() -> eyre::Result<(String, tempfile::TempDir)> {
+    let tmp = tempfile::tempdir()?;
+    let state = boot_over(tmp.path(), |_| {}).await?;
+    state.watching().await;
+    Ok((serve(state).await?, tmp))
 }
 
 /// [`boot_ws`] with `env` set for the server (see [`boot_app_state_env`]).

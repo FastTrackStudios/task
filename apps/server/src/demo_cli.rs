@@ -54,6 +54,23 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
     }
 
     let slug = crate::admin_cli::flag(args, "--org").unwrap_or_else(|| "acme-audio".to_owned());
+    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
+    plant(&data_root, &slug).await
+}
+
+/// Plant the example org `slug` into `data_root` — the body of
+/// `admin demo`, callable with an explicit root.
+///
+/// The app's "Load example studio" (`offline.local`) plants into its
+/// own on-device data root with this, so the demo world a person can
+/// reach from a local node is the one the servers serve, by the same
+/// code. Idempotent, like the command.
+///
+/// # Errors
+///
+/// An unknown slug, or any failure planting the tree or the accounts.
+pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<()> {
+    let slug = slug.to_owned();
     let Some((_, display)) = example_org::ORGS.iter().find(|(s, _)| *s == slug) else {
         bail!(
             "`{slug}` is not in the example. It has: {}",
@@ -65,7 +82,6 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
         );
     };
 
-    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
     data_root
         .ensure()
         .map_err(|e| eyre::eyre!("ensure data root: {e}"))?;
@@ -315,6 +331,57 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                 .update(t)
                 .map_err(|e| eyre::eyre!("give \"{title}\" its contexts: {e}"))?;
         }
+        // Tags, topped up the same way: a tag already there is kept,
+        // one missing is added — `#chore` is how a maintenance hour
+        // finds a task with no `@context` at all.
+        for (title, tags) in example_org::TASK_TAGS {
+            if !declared.tasks.iter().any(|(t, _, _)| t == title) {
+                continue;
+            }
+            let Some(mut t) = tasks_backend
+                .list()
+                .ok()
+                .and_then(|ts| ts.into_iter().find(|t| t.title == *title))
+            else {
+                continue;
+            };
+            let missing: Vec<&str> = tags
+                .iter()
+                .copied()
+                .filter(|tag| !t.tags.iter().any(|have| have == tag))
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            for tag in missing {
+                t.tags.0.push(tag.to_owned());
+            }
+            tasks_backend
+                .update(t)
+                .map_err(|e| eyre::eyre!("give \"{title}\" its tags: {e}"))?;
+        }
+        // Descriptions: a body for the document editor to open on.
+        // Planted into an empty description only, so an edit made in the
+        // demo survives the next plant.
+        for (title, details) in example_org::TASK_DETAILS {
+            if !declared.tasks.iter().any(|(t, _, _)| t == title) {
+                continue;
+            }
+            let Some(mut t) = tasks_backend
+                .list()
+                .ok()
+                .and_then(|ts| ts.into_iter().find(|t| t.title == *title))
+            else {
+                continue;
+            };
+            if !t.details.trim().is_empty() {
+                continue;
+            }
+            t.details = (*details).to_owned();
+            tasks_backend
+                .update(t)
+                .map_err(|e| eyre::eyre!("give \"{title}\" its description: {e}"))?;
+        }
         // Owners: a production board shows who is on what. Topped up
         // like everything else — a task that already has an owner keeps
         // it.
@@ -344,6 +411,15 @@ pub async fn demo(args: &[String]) -> eyre::Result<()> {
                 .update(t)
                 .map_err(|e| eyre::eyre!("give \"{title}\" its owner: {e}"))?;
         }
+    }
+
+    // History, now that the cast and the board exist: the board's recent
+    // past and a comment thread, so `/activity` and a task's page open
+    // on something. Idempotent (fixed ids; comments matched by body).
+    match example_org::plant_activity(&org, &slug, &auth).await {
+        Ok(0) => {}
+        Ok(n) => println!("  activity: {n} entries planted"),
+        Err(e) => println!("  activity: not planted ({e})"),
     }
 
     // Video deliverables: generated rather than committed — even a tiny

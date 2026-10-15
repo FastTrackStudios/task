@@ -6,7 +6,7 @@
 //! context (discovered at app start). The Palette button is the
 //! per-org theme picker, unchanged.
 
-use architect_ui::lucide_dioxus::Palette;
+use architect_ui::lucide_dioxus::{ChevronsUpDown, Layers, Palette};
 use architect_ui::prelude::*;
 use architect_ui::primitives::{ContentAlign, ContentSide};
 use dioxus::prelude::*;
@@ -15,7 +15,13 @@ use crate::orgs::{OrgMeta, OrgSelection};
 use crate::theming::use_org_theme_switcher_state;
 
 #[component]
-pub fn OrgSwitcher(#[props(default = false)] compact: bool) -> Element {
+pub fn OrgSwitcher(
+    #[props(default = false)] compact: bool,
+    /// Offer the theme picker beside it (off where the host has its own
+    /// buttons there — the phone's section menu).
+    #[props(default = true)]
+    theme: bool,
+) -> Element {
     // Data selection + discovered org list.
     let mut selection = use_context::<Signal<OrgSelection>>();
     let org_list = use_context::<Signal<Vec<OrgMeta>>>();
@@ -42,10 +48,24 @@ pub fn OrgSwitcher(#[props(default = false)] compact: bool) -> Element {
                 on_open_change: move |o| open.set(o),
                 class: if compact { "" } else { "w-full flex-1" },
                 DropdownTrigger { class: if compact { "" } else { "w-full" },
-                    button {
-                        r#type: "button",
-                        class: "flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-accent",
-                        span { class: "max-w-[10rem] truncate", "{trigger_label}" }
+                    if compact {
+                        button {
+                            r#type: "button",
+                            class: "flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-accent",
+                            span { class: "max-w-[10rem] truncate", "{trigger_label}" }
+                        }
+                    } else {
+                        // Full size (the phone's section menu, the sidebar
+                        // foot): the org's mark, its name, ⌃⌄ — and "All
+                        // organizations" the same size, with its own mark,
+                        // so the row is one shape whatever is chosen.
+                        button {
+                            r#type: "button",
+                            class: "flex h-11 w-full min-w-0 items-center gap-2.5 rounded-xl px-1.5 text-left text-foreground active:bg-accent/60",
+                            OrgMark { name: trigger_label.clone(), all: current == OrgSelection::All }
+                            span { class: "min-w-0 truncate text-[17px] font-semibold tracking-[-0.01em]", "{trigger_label}" }
+                            span { class: "shrink-0 text-muted-foreground", ChevronsUpDown { size: 15 } }
+                        }
                     }
                 }
                 DropdownContent {
@@ -93,6 +113,7 @@ pub fn OrgSwitcher(#[props(default = false)] compact: bool) -> Element {
                     }
                 }
             }
+            if theme {
             Popover {
                 open: theme_open(),
                 is_modal: false,
@@ -100,13 +121,13 @@ pub fn OrgSwitcher(#[props(default = false)] compact: bool) -> Element {
                 PopoverTrigger { class: "inline-flex",
                     button {
                         r#type: "button",
-                        class: "inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                        class: if compact { "inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-accent hover:text-accent-foreground" } else { "inline-flex size-10 items-center justify-center rounded-full text-foreground hover:bg-accent active:bg-accent" },
                         title: "Theme",
                         onclick: move |_| {
                             let v = !*theme_open.read();
                             theme_open.set(v);
                         },
-                        Palette { size: 14 }
+                        Palette { size: if compact { 14 } else { 19 } }
                     }
                 }
                 PopoverContent {
@@ -121,6 +142,39 @@ pub fn OrgSwitcher(#[props(default = false)] compact: bool) -> Element {
                     }
                 }
             }
+            }
+        }
+    }
+}
+
+/// An org's mark: a rounded tile with its initial, coloured from its
+/// name so each org keeps its own; for "All organizations", a layered
+/// tile in the same size.
+#[component]
+fn OrgMark(name: String, all: bool) -> Element {
+    if all {
+        return rsx! {
+            span { class: "flex size-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary/80 to-primary/40 text-primary-foreground shadow-[inset_0_0_0_1px_rgb(255_255_255/0.15)]",
+                Layers { size: 15 }
+            }
+        };
+    }
+    const HUES: [&str; 6] = [
+        "from-sky-500 to-indigo-500",
+        "from-emerald-500 to-teal-600",
+        "from-amber-500 to-orange-600",
+        "from-rose-500 to-pink-600",
+        "from-violet-500 to-purple-600",
+        "from-cyan-500 to-blue-600",
+    ];
+    let hue = HUES[name.bytes().map(usize::from).sum::<usize>() % HUES.len()];
+    let initial = name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or_else(|| "?".to_owned(), |c| c.to_uppercase().to_string());
+    rsx! {
+        span { class: "flex size-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br {hue} text-[13px] font-bold text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/0.15)]",
+            "{initial}"
         }
     }
 }

@@ -12,11 +12,25 @@
 //! an app route (`/tasks`, `/vault?path=…`, `/agents?session=…`) the
 //! UI navigates to when the row is clicked.
 
+pub mod activity;
 pub mod error;
 pub mod model;
 pub mod service;
 
+pub use activity::{
+    Activity, ActivityCursor, ActivityEvent, ActivityFeed, ActivityFilter, ActivityGroup,
+    ActivityKind,
+};
 pub use error::NotifyError;
+
+// The activity feed's vox bits — a second capability beside `Notify`,
+// served from the same per-org `notify.sqlite` (see `activity`).
+#[cfg(feature = "vox")]
+pub use activity::{
+    ActivityFeedClient, ActivityFeedStream, ActivityFeedStreamClient, ActivityFeedStreamSource,
+    activity_feed_rpc_service_descriptor, activity_feed_stream_service_descriptor,
+    layer as activity_layer, serve as activity_serve, stream_layer as activity_stream_layer,
+};
 pub use model::{Notification, NotifyKind, NotifyListFilter, NotifySource};
 pub use service::{Notify, NotifyEvent};
 

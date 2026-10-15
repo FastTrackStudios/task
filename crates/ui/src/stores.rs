@@ -42,9 +42,10 @@
 use std::collections::HashSet;
 
 use architect::{
-    AtomResult, Id, Mutation, StoreEntity, use_mutation, use_store_entry, use_store_list,
+    AtomResult, Id, Mutation, QueuedCall, StoreEntity, use_mutation, use_store_entry,
+    use_store_list,
 };
-use chrono::{Datelike, NaiveDate, Utc, Weekday};
+use chrono::{NaiveDate, Utc};
 use dioxus::prelude::*;
 use project_proto::ProjectInfo;
 use task_proto::TaskInfo as DbTask;
@@ -52,7 +53,9 @@ use task_ui::TaskMutation;
 use timer_proto::{StartTimerRequest, WorkSession};
 use uuid::Uuid;
 
-use task_stores::{run_create, use_multi_org_list, use_org_scope};
+use task_stores::{
+    run_create, use_org_scope, use_persisted_first_org_list, use_persisted_multi_org_list,
+};
 
 task_stores::stores! {
     TaskStore: OrgTask {
@@ -89,7 +92,6 @@ task_stores::stores! {
     MilestoneStore: milestone_proto::Milestone {
         provide: provide_milestone_store,
         handle: use_milestone_store,
-        list: use_milestone_list -> Uuid = crate::feeds::fetch_milestones,
         stream: first milestone_proto::MilestoneServiceStreamClient => fold_milestone_event,
         mutations: MilestoneMutations via use_milestone_mutations,
     }
@@ -97,7 +99,6 @@ task_stores::stores! {
     InboxStore: inbox_proto::InboxItem {
         provide: provide_inbox_store,
         handle: use_inbox_store,
-        list: use_inbox_list -> String = crate::feeds::fetch_inbox,
         stream:
             /// Live capture queue — an item captured on another
             /// device (CLI, watch, phone) appears without a refetch.
@@ -112,17 +113,26 @@ task_stores::stores! {
     NotificationStore: notify_proto::Notification {
         provide: provide_notification_store,
         handle: use_notification_store,
-        list: use_notification_list -> Uuid = crate::feeds::fetch_notifications,
         stream:
             /// Live bell — the notifier's pushes and read-flips fold
             /// in as they happen, so the unread badge is real-time.
             first notify_proto::NotifyStreamClient => fold_notify_event,
     }
 
+    ActivityStore: notify_proto::Activity {
+        provide: provide_activity_store,
+        handle: use_activity_store,
+        stream:
+            /// Live history — every entry the server records folds in,
+            /// so `/activity`, a task's timeline and a project's update
+            /// as things happen. Filtered pages and scroll-back put
+            /// their rows into this same store (`crate::activity`).
+            first notify_proto::ActivityFeedStreamClient => fold_activity_event,
+    }
+
     ContactStore: contacts_proto::Contact {
         provide: provide_contact_store,
         handle: use_contact_store,
-        list: use_contact_list -> String = crate::feeds::fetch_contacts,
         stream:
             /// Live directory — a CardDAV sync run's writes stream in
             /// card by card.
@@ -165,6 +175,49 @@ task_stores::stores! {
         provide: provide_message_store,
         handle: use_message_store,
     }
+}
+
+// ── single-org lists, backed by the device copy ─────────────────────
+//
+// What the `list:` rows of the table above used to generate, with the
+// device copy in front (`offline.replica`): the rows last seen for this
+// account and org show at once, and a fetch that fails leaves them.
+
+/// Milestones of the first selected org.
+pub fn use_milestone_list() -> AtomResult<Vec<(Id<Uuid>, milestone_proto::Milestone)>, String> {
+    use_persisted_first_org_list(use_milestone_store(), "milestones", |slug| async move {
+        crate::feeds::fetch_milestones(&slug).await
+    })
+}
+
+/// The capture queue of the first selected org.
+pub fn use_inbox_list() -> AtomResult<Vec<(Id<String>, inbox_proto::InboxItem)>, String> {
+    use_persisted_first_org_list(use_inbox_store(), "inbox", |slug| async move {
+        crate::feeds::fetch_inbox(&slug).await
+    })
+}
+
+/// The bell's notifications for the first selected org.
+pub fn use_notification_list() -> AtomResult<Vec<(Id<Uuid>, notify_proto::Notification)>, String> {
+    use_persisted_first_org_list(
+        use_notification_store(),
+        "notifications",
+        |slug| async move { crate::feeds::fetch_notifications(&slug).await },
+    )
+}
+
+/// Recent activity of the first selected org.
+pub fn use_activity_list() -> AtomResult<Vec<(Id<Uuid>, notify_proto::Activity)>, String> {
+    use_persisted_first_org_list(use_activity_store(), "activity", |slug| async move {
+        crate::feeds::fetch_activity(&slug).await
+    })
+}
+
+/// The people directory of the first selected org.
+pub fn use_contact_list() -> AtomResult<Vec<(Id<String>, contacts_proto::Contact)>, String> {
+    use_persisted_first_org_list(use_contact_store(), "contacts", |slug| async move {
+        crate::feeds::fetch_contacts(&slug).await
+    })
 }
 
 // ── shared plumbing ─────────────────────────────────────────────────
@@ -220,6 +273,13 @@ fn fold_notify_event(store: &NotificationStore, _slug: &str, ev: notify_proto::N
     }
 }
 
+fn fold_activity_event(store: &ActivityStore, _slug: &str, ev: notify_proto::ActivityEvent) {
+    match ev {
+        notify_proto::ActivityEvent::Recorded(a) => store.put(a),
+        notify_proto::ActivityEvent::Removed(id) => store.remove_real(&id),
+    }
+}
+
 fn fold_contact_event(store: &ContactStore, _slug: &str, ev: contacts_proto::ContactsEvent) {
     match ev {
         contacts_proto::ContactsEvent::Upserted(contact) => store.put(contact),
@@ -242,7 +302,7 @@ fn fold_timer_event(store: &SessionStore, slug: &str, ev: timer_proto::TimerEven
 /// switcher moves (the closure reads the selection signals); `None`
 /// (discovery pending) keeps the phase at `Loading`.
 #[allow(clippy::type_complexity)] // `AtomResult<Vec<(Id, T)>, _>` reads fine.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OrgTask {
     pub slug: String,
     pub task: DbTask,
@@ -279,13 +339,66 @@ pub fn unique_tasks(rows: &[(Id<Uuid>, OrgTask)]) -> Vec<&OrgTask> {
 
 /// Tasks across the selected orgs as one [`AtomResult`].
 pub fn use_task_list() -> AtomResult<Vec<(Id<Uuid>, OrgTask)>, String> {
-    use_multi_org_list(use_task_store(), |slugs| async move {
+    use_persisted_multi_org_list(use_task_store(), "tasks", |slugs| async move {
         crate::feeds::fetch_tasks_tagged(&slugs).await.map(|rows| {
             rows.into_iter()
                 .map(|(slug, task)| OrgTask { slug, task })
                 .collect()
         })
     })
+}
+
+/// A new task: `draft` (what the title's words say) with everything the
+/// caller set on top. Set means not the default — a quick-add line that
+/// only carries a title keeps the parse; the composer's priority, person,
+/// labels, dates, details and chosen id are kept as given.
+fn with_given(
+    mut draft: task_proto::TaskInfo,
+    given: &task_proto::TaskInfo,
+) -> task_proto::TaskInfo {
+    if !given.id.is_nil() {
+        draft.id = given.id;
+    }
+    if given.status != task_proto::model::Status::Open.as_str() && !given.status.is_empty() {
+        draft.status.clone_from(&given.status);
+    }
+    if given.priority != task_proto::model::Priority::Normal.as_str() && !given.priority.is_empty()
+    {
+        draft.priority.clone_from(&given.priority);
+    }
+    for (have, add) in [
+        (&mut draft.tags, &given.tags),
+        (&mut draft.contexts, &given.contexts),
+        (&mut draft.projects, &given.projects),
+    ] {
+        for v in add.iter() {
+            if !have.iter().any(|h| h.eq_ignore_ascii_case(v)) {
+                have.0.push(v.clone());
+            }
+        }
+    }
+    let keep = |d: &mut Option<String>, g: &Option<String>| {
+        if g.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+            d.clone_from(g);
+        }
+    };
+    keep(&mut draft.due, &given.due);
+    keep(&mut draft.scheduled, &given.scheduled);
+    keep(&mut draft.recurrence, &given.recurrence);
+    keep(&mut draft.recurrence_anchor, &given.recurrence_anchor);
+    if given.time_estimate.is_some() {
+        draft.time_estimate = given.time_estimate;
+    }
+    if given.milestone_id.is_some() {
+        draft.milestone_id = given.milestone_id;
+    }
+    if !given.details.trim().is_empty() {
+        draft.details.clone_from(&given.details);
+    }
+    if given.workflow.is_some() {
+        draft.workflow.clone_from(&given.workflow);
+    }
+    draft
 }
 
 /// Optimistic writes for the task board, keyed off the store's slug tag.
@@ -343,7 +456,10 @@ impl TaskMutations {
     pub fn apply(&self, create_slug: &str, mu: TaskMutation) {
         match mu {
             TaskMutation::Create { task } => {
-                let mut draft = task_proto::capture(&task.title);
+                // The title's own words (a quick-add line), then whatever
+                // the caller set on top — the composer's priority, person,
+                // labels, dates, details and chosen id must survive.
+                let mut draft = with_given(task_proto::capture(&task.title), &task);
                 // Filing priority: explicit picker > page scope
                 // (project detail board) > [[wikilink]] inference.
                 let known: Vec<(Uuid, String)> = self
@@ -467,7 +583,7 @@ impl TaskMutations {
 // ── projects (multi-org, slug-tagged) ───────────────────────────────
 
 /// One project tagged with its owning org's slug.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OrgProject {
     pub slug: String,
     pub project: ProjectInfo,
@@ -483,7 +599,7 @@ impl StoreEntity for OrgProject {
 /// Projects across the selected orgs as one [`AtomResult`]. Hydrates
 /// the shared store, so `/projects/:id` is instant after a list visit.
 pub fn use_project_list() -> AtomResult<Vec<(Id<Uuid>, OrgProject)>, String> {
-    use_multi_org_list(use_project_store(), |slugs| async move {
+    use_persisted_multi_org_list(use_project_store(), "projects", |slugs| async move {
         crate::feeds::fetch_projects_tagged(&slugs)
             .await
             .map(|rows| {
@@ -582,7 +698,7 @@ impl ProjectMutations {
 
 /// One goal tagged with its owning org's slug — the tag keys the
 /// live stream fold (and any future write-back), like [`OrgTask`].
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OrgGoal {
     pub slug: String,
     pub goal: goal_proto::Goal,
@@ -599,7 +715,7 @@ impl StoreEntity for OrgGoal {
 /// page renders the merged hierarchy from this store, which the
 /// app-root `GoalService` stream subscription keeps live.
 pub fn use_goal_list() -> AtomResult<Vec<(Id<Uuid>, OrgGoal)>, String> {
-    use_multi_org_list(use_goal_store(), |slugs| async move {
+    use_persisted_multi_org_list(use_goal_store(), "goals", |slugs| async move {
         crate::feeds::fetch_goals_tagged(&slugs).await.map(|rows| {
             rows.into_iter()
                 .map(|(slug, goal)| OrgGoal { slug, goal })
@@ -708,6 +824,62 @@ impl InboxMutations {
         );
     }
 
+    /// Process an item into the task the person shaped for it (title,
+    /// project, contexts, dates, estimate — or `in-progress` with a
+    /// running clock for "do it now"): optimistically mark it processed,
+    /// create the task, persist the back-link. Same shape as
+    /// [`Self::promote_to_task`], which makes a bare one.
+    // t[impl process.outcome.task]
+    pub fn process_into_task(
+        &self,
+        slug: String,
+        item: inbox_proto::InboxItem,
+        task: task_proto::TaskInfo,
+    ) {
+        let mut done = item;
+        done.status = inbox_proto::InboxItem::STATUS_PROCESSED.to_string();
+        let id = done.id.clone();
+        let row = done.clone();
+        self.write.run(
+            self.store,
+            move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
+            move || async move {
+                let task = crate::feeds::create_task_info(&slug, task).await?;
+                let mut done = done;
+                done.processed_into = Some(task.path);
+                crate::feeds::upsert_inbox_item(&slug, done.clone())
+                    .await
+                    .map(|()| Some(done))
+            },
+        );
+    }
+
+    /// Process an item into a project of its own ("too big for one
+    /// task"): mark it processed, create the project, link it back.
+    pub fn process_into_project(
+        &self,
+        slug: String,
+        item: inbox_proto::InboxItem,
+        project: project_proto::ProjectInfo,
+    ) {
+        let mut done = item;
+        done.status = inbox_proto::InboxItem::STATUS_PROCESSED.to_string();
+        let id = done.id.clone();
+        let row = done.clone();
+        self.write.run(
+            self.store,
+            move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
+            move || async move {
+                let project = crate::feeds::create_project(&slug, project).await?;
+                let mut done = done;
+                done.processed_into = Some(format!("project:{}", project.id));
+                crate::feeds::upsert_inbox_item(&slug, done.clone())
+                    .await
+                    .map(|()| Some(done))
+            },
+        );
+    }
+
     /// Promote an item into an atomic wiki note (same shape as
     /// [`Self::promote_to_task`], writing markdown to the vault).
     pub fn promote_to_note(
@@ -786,7 +958,7 @@ impl ContactMutations {
 /// template fallback rather than explicitly saved (rendered
 /// dashed/faded). A save persists the whole merged day and clears the
 /// soft set: every block is explicit from there on.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DayPlanRow {
     pub date: NaiveDate,
     pub plan: scheduling_proto::DayPlan,
@@ -800,48 +972,24 @@ impl StoreEntity for DayPlanRow {
     }
 }
 
-/// The template a date defaults to: `weekend` for Sat/Sun, else
-/// `weekday`; falls back to the first template if those ids are absent.
-fn template_for(
-    date: NaiveDate,
-    templates: &[scheduling_proto::DayTemplate],
-) -> Option<&scheduling_proto::DayTemplate> {
-    let weekend = matches!(date.weekday(), Weekday::Sat | Weekday::Sun);
-    let want = if weekend { "weekend" } else { "weekday" };
-    templates
-        .iter()
-        .find(|t| t.id.0 == want)
-        .or_else(|| templates.first())
-}
-
 /// Resolve a date to the row the page renders: the saved plan's blocks
 /// verbatim (explicit) plus the matching template's blocks reflowed
-/// into the remaining free time as *soft* fallback (see
-/// `scheduling_proto::resolve::merge_template`). A date with no saved
-/// plan is the all-soft template; a *sparse* saved plan (e.g. only a
-/// scheduled meal block) still shows the rest of its day.
+/// into the remaining free time as *soft* fallback
+/// (`scheduling_proto::resolve_day`, shared with the watch bridge). A
+/// date with no saved plan is the all-soft template; a *sparse* saved
+/// plan (e.g. only a scheduled meal block) still shows the rest of its
+/// day.
 fn resolve_day(
     date: NaiveDate,
     saved: Option<scheduling_proto::DayPlan>,
     templates: &[scheduling_proto::DayTemplate],
 ) -> DayPlanRow {
-    let tpl = template_for(date, templates);
-    let saved_blocks: &[scheduling_proto::PlannedBlock] =
-        saved.as_ref().map_or(&[], |p| &p.blocks.0);
-    let tpl_blocks: &[scheduling_proto::TimeBlock] = tpl.map_or(&[], |t| &t.blocks.0);
-    let merged = scheduling_proto::resolve::merge_template(saved_blocks, tpl_blocks);
+    let (plan, merged) = scheduling_proto::resolve_day(date, saved, templates);
     let soft_ids: HashSet<String> = merged
         .iter()
         .filter(|rb| rb.soft)
         .map(|rb| rb.block.id.0.clone())
         .collect();
-    let plan = scheduling_proto::DayPlan {
-        date: date.to_string(),
-        from_template: saved
-            .and_then(|p| p.from_template)
-            .or_else(|| tpl.map(|t| t.id.clone())),
-        blocks: merged.into_iter().map(|rb| rb.block).collect(),
-    };
     DayPlanRow {
         date,
         plan,
@@ -863,7 +1011,18 @@ pub fn use_dayplan_list(
     let (selection, orgs) = use_org_scope();
     let store = use_dayplan_store();
     let key = use_memo(use_reactive!(|(range, templates)| (range, templates)));
-    use_store_list(store, move || {
+    let identity = try_use_context::<task_ui_core::identity::CurrentIdentity>();
+    // The device copy is keyed by account, org and visible range: the
+    // week the person last looked at is the week they can see offline.
+    let scope = move || {
+        let user = identity?.0.read().as_ref()?.user_id;
+        let slug = crate::orgs::selected_slugs(&selection.read(), &orgs.read())
+            .into_iter()
+            .next()?;
+        let (start, end) = key().0?;
+        Some(format!("{user}/{slug}/{start}..{end}"))
+    };
+    architect::use_persisted_store_list(store, "day-plans", scope, move || {
         let slug = crate::orgs::selected_slugs(&selection.read(), &orgs.read())
             .into_iter()
             .next();
@@ -932,6 +1091,7 @@ impl DayPlanMutations {
         label: String,
         minutes: (u16, u16),
         assignment: Option<scheduling_proto::BlockAssignment>,
+        category: scheduling_proto::BlockCategory,
     ) {
         self.save_day(slug, date, move |plan| {
             if let Some(b) = plan.blocks.0.iter_mut().find(|b| b.id.0 == id) {
@@ -939,7 +1099,48 @@ impl DayPlanMutations {
                 b.start = clamp_time(minutes.0);
                 b.end = clamp_time(minutes.1);
                 b.assignment = assignment;
+                b.category = category;
             }
+            plan.blocks
+                .0
+                .sort_by_key(|b| b.start.minutes_since_midnight);
+        });
+    }
+
+    /// Add a block to a day's plan (the Schedule header's +). Returns
+    /// the new block's id, so the page can open it to edit.
+    pub fn add_block(
+        &self,
+        slug: String,
+        date: NaiveDate,
+        label: String,
+        category: scheduling_proto::BlockCategory,
+        minutes: (u16, u16),
+    ) -> String {
+        let id = format!("b-{}", Uuid::new_v4().simple());
+        let block = scheduling_proto::PlannedBlock {
+            id: scheduling_proto::TimeBlockId(id.clone()),
+            start: clamp_time(minutes.0),
+            end: clamp_time(minutes.1),
+            label,
+            category,
+            note: None,
+            assignment: None,
+            fixed: false,
+        };
+        self.save_day(slug, date, move |plan| {
+            plan.blocks.0.push(block);
+            plan.blocks
+                .0
+                .sort_by_key(|b| b.start.minutes_since_midnight);
+        });
+        id
+    }
+
+    /// Take a block off a day's plan.
+    pub fn remove_block(&self, slug: String, date: NaiveDate, id: String) {
+        self.save_day(slug, date, move |plan| {
+            plan.blocks.0.retain(|b| b.id.0 != id);
         });
     }
 
@@ -1024,7 +1225,7 @@ impl DayPlanMutations {
 // ── timer sessions (multi-org, slug-tagged) ─────────────────────────
 
 /// One work session tagged with its owning org's slug.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OrgSession {
     pub slug: String,
     pub session: WorkSession,
@@ -1041,7 +1242,7 @@ impl StoreEntity for OrgSession {
 /// is *derived* from this one list (the open row for the active org +
 /// owner) — the single-record `active_timer` round-trip is gone.
 pub fn use_session_list() -> AtomResult<Vec<(Id<Uuid>, OrgSession)>, String> {
-    use_multi_org_list(use_session_store(), |slugs| async move {
+    use_persisted_multi_org_list(use_session_store(), "timer-sessions", |slugs| async move {
         Ok(crate::feeds::fetch_sessions_multi(&slugs)
             .await
             .into_iter()
@@ -1081,20 +1282,36 @@ impl TimerMutations {
             slug: slug.clone(),
             session: draft_session(&req),
         };
-        run_create(self.write, self.store, row, move |_| async move {
-            crate::feeds::start_timer(&slug, req)
-                .await
-                .map(|session| OrgSession {
-                    slug: slug.clone(),
-                    session,
-                })
-        });
+        // t[impl offline.outbox] — with no connection the open row stays
+        // and the start waits in the device's call queue.
+        let queued = QueuedCall::new(
+            crate::offline::calls::TIMER_START,
+            slug.clone(),
+            crate::offline::payload(&req),
+            "Start the timer",
+        );
+        self.write.run_queued(
+            self.store,
+            move |s| s.insert_optimistic(row).0,
+            move || async move {
+                crate::feeds::start_timer(&slug, req)
+                    .await
+                    .map(|session| Some(OrgSession { slug, session }))
+            },
+            queued,
+        );
     }
 
     /// Stop the running session: it closes instantly (end = now), then
     /// reconciles to the server's closed row (authoritative end + rate).
     pub fn stop(&self, slug: String, user_id: Uuid, session_id: Uuid) {
-        self.write.run(
+        let queued = QueuedCall::new(
+            crate::offline::calls::TIMER_STOP,
+            slug.clone(),
+            crate::offline::payload(&crate::offline::StopPayload { user_id }),
+            "Stop the timer",
+        );
+        self.write.run_queued(
             self.store,
             move |s| {
                 s.update_optimistic(Id::Real(session_id), |r| {
@@ -1106,6 +1323,7 @@ impl TimerMutations {
                     .await
                     .map(|session| Some(OrgSession { slug, session }))
             },
+            queued,
         );
     }
 
@@ -1120,7 +1338,13 @@ impl TimerMutations {
             slug: slug.clone(),
             session: draft_session(&req),
         };
-        self.write.run(
+        let queued = QueuedCall::new(
+            crate::offline::calls::TIMER_SWITCH,
+            slug.clone(),
+            crate::offline::payload(&req),
+            "Switch the timer",
+        );
+        self.write.run_queued(
             self.store,
             move |s| {
                 // Close the outgoing row so the recent list doesn't show
@@ -1136,6 +1360,7 @@ impl TimerMutations {
                     .await
                     .map(|session| Some(OrgSession { slug, session }))
             },
+            queued,
         );
     }
 
@@ -1164,11 +1389,22 @@ impl TimerMutations {
                 updated_at: now,
             },
         };
-        run_create(self.write, self.store, draft, move |_| async move {
-            crate::feeds::log_session(&slug, req)
-                .await
-                .map(|session| OrgSession { slug, session })
-        });
+        let queued = QueuedCall::new(
+            crate::offline::calls::TIMER_LOG,
+            slug.clone(),
+            crate::offline::payload(&req),
+            "Log time",
+        );
+        self.write.run_queued(
+            self.store,
+            move |s| s.insert_optimistic(draft).0,
+            move || async move {
+                crate::feeds::log_session(&slug, req)
+                    .await
+                    .map(|session| Some(OrgSession { slug, session }))
+            },
+            queued,
+        );
     }
 
     /// Edit a session (description / billable), then reconcile.
@@ -1176,7 +1412,13 @@ impl TimerMutations {
         let id = req.id;
         let desc = req.description.clone();
         let billable = req.billable;
-        self.write.run(
+        let queued = QueuedCall::new(
+            crate::offline::calls::TIMER_UPDATE,
+            slug.clone(),
+            crate::offline::payload(&req),
+            "Edit a time entry",
+        );
+        self.write.run_queued(
             self.store,
             move |s| {
                 s.update_optimistic(Id::Real(id), move |r| {
@@ -1193,15 +1435,24 @@ impl TimerMutations {
                     .await
                     .map(|session| Some(OrgSession { slug, session }))
             },
+            queued,
         );
     }
 
-    /// Delete a session now; restored (and reported) on failure.
+    /// Delete a session now; restored (and reported) on refusal, queued
+    /// with no connection.
     pub fn delete(&self, slug: String, id: Uuid) {
-        self.write.run(
+        let queued = QueuedCall::new(
+            crate::offline::calls::TIMER_DELETE,
+            slug.clone(),
+            crate::offline::payload(&crate::offline::DeletePayload { id }),
+            "Delete a time entry",
+        );
+        self.write.run_queued(
             self.store,
             move |s| s.remove_optimistic(Id::Real(id)),
             move || async move { crate::feeds::delete_session(&slug, id).await.map(|()| None) },
+            queued,
         );
     }
 }
@@ -1315,5 +1566,35 @@ impl ThreadMutations {
         run_create(self.message_m, self.messages, draft, move |_| async move {
             crate::feeds::post_thread_message(&slug, req).await
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_created_task_keeps_what_it_was_given_and_its_title_still_parses() {
+        let mut given = task_proto::capture("Ask Sam about the engineer");
+        given.id = Uuid::new_v4();
+        given.priority = "high".into();
+        given.details = "Before the master".into();
+        given.tags.0.push("mixing".into());
+        let given = task_ui::with_assignee(&given, Some(("u1".into(), "Alice".into())));
+        let t = with_given(task_proto::capture(&given.title), &given);
+        assert_eq!(t.id, given.id, "subtasks name this id as their parent");
+        assert_eq!(t.priority, "high");
+        assert_eq!(t.details, "Before the master");
+        assert!(t.tags.iter().any(|g| g == "mixing"));
+        assert!(
+            task_proto::is_assigned_to(&t, "u1"),
+            "the composer's person"
+        );
+
+        // A quick-add line: only a title, so the parse decides.
+        let line = task_proto::TaskInfo::new("Post the parcel @errands tomorrow");
+        let t = with_given(task_proto::capture(&line.title), &line);
+        assert!(t.contexts.iter().any(|c| c.contains("errands")));
+        assert!(t.due.is_some());
     }
 }

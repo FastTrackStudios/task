@@ -18,9 +18,14 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 facet = { workspace = true }
 thiserror = { workspace = true }
-uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+# A task's file text ⇄ `TaskInfo` (`doc`): the one mapping the server,
+# the device's record book and the shell share.
+serde_yaml = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v5", "v7", "serde"] }
 # `AgentRef` (task assignees / claims) is workflows' wire type.
 workflows-proto = { workspace = true }
+# Day plans — what `suggest::now_hint` reads to say what now is for.
+scheduling-proto = { workspace = true }
 
 vox = { workspace = true, optional = true }
 vox-types = { workspace = true, optional = true }
@@ -37,6 +42,11 @@ atom = ["architect/atom"]
 server = ["architect/server-seaorm", "dep:sea-orm"]
 fake = ["dep:fake", "architect/fake", "workflows-proto/fake"]
 full = ["vox", "server", "fake"]
+
+[dev-dependencies]
+# The mapping's document-side test: an edit merged into a real Loro
+# document keeps every key that is not a task field.
+vault-doc = { workspace = true }
 
 [lints]
 workspace = true

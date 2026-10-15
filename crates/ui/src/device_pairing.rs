@@ -202,6 +202,12 @@ pub(crate) mod native {
 
     /// Pair this machine with `slug`. Returns the log line.
     pub async fn pair(slug: &str) -> String {
+        // Pointed at this device's own node: re-pointing the agent at it
+        // would take the agent off the host it syncs with, for an org the
+        // node already holds in-process. The agent keeps its host.
+        if task_ui_core::node::local_active() {
+            return "sync: this device is its own node — the agent keeps its host".into();
+        }
         let Some(agent) = agent() else {
             return "sync: no agent beside this build — background sync is off".into();
         };

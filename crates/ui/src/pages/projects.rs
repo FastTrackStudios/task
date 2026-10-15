@@ -24,7 +24,11 @@ use dioxus::prelude::*;
 use project_proto::ProjectInfo;
 
 use crate::routes::Route;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
+use crate::shell::mobile::BottomSheet;
+
+/// The projects page's "new project" sheet, reachable from its header.
+#[derive(Clone, Copy)]
+struct NewProjectOpen(Signal<bool>);
 use crate::task_sort::{priority_rank, status_rank};
 
 /// Page-scoped keyframes for the staggered card entrance. Injected once
@@ -81,6 +85,8 @@ pub fn ProjectsView() -> Element {
     // Mobile create sheet — the desktop header (and its quick-add) is
     // hidden below `md`, so the sticky action bar owns creation there.
     let mut new_open = use_signal(|| false);
+    // The header's round + (phone) opens the same sheet.
+    use_context_provider(|| NewProjectOpen(new_open));
 
     let derived = use_memo(move || {
         let rows: Vec<ProjectInfo> = store.list().into_iter().map(|r| r.project).collect();
@@ -139,16 +145,6 @@ pub fn ProjectsView() -> Element {
             }
             div { class: "mx-auto w-full max-w-6xl flex flex-col gap-8 p-4 pb-14 sm:p-6 md:pb-6 lg:p-10",
                 {view}
-            }
-        }
-        // ── Mobile: sticky create above the tab bar ─────────────────
-        MobileActionBar {
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85",
-                onclick: move |_| new_open.set(true),
-                Plus { size: 16 }
-                "New project"
             }
         }
         BottomSheet {
@@ -428,9 +424,11 @@ pub(crate) fn ProjectQuickAdd(
         on_create.call((slug, title));
         value.set(String::new());
     };
+    // Full width on a phone, where it has a row of its own; a fixed
+    // slot beside the section label from `sm` up.
     let (form_cls, placeholder) = if compact {
         (
-            "flex w-56 items-center gap-1.5 rounded-lg border border-border/60 bg-transparent px-2 py-1 focus-within:border-border focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/50",
+            "flex w-full items-center gap-1.5 rounded-lg border border-border/60 bg-transparent px-2 py-1 focus-within:border-border focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/50 sm:w-72",
             "New project…",
         )
     } else {
@@ -461,7 +459,12 @@ pub(crate) fn ProjectQuickAdd(
                 Select {
                     value: chosen,
                     placeholder: "Org".to_string(),
-                    class: "shrink-0".to_string(),
+                    // `Select` is `w-full` by default, which inside this
+                    // one-line form took the whole row: the name field
+                    // shrank to nothing and the picker ran past the
+                    // form's edge (off screen on a phone). Sized to its
+                    // label instead, and capped.
+                    class: "w-auto max-w-[9rem] shrink-0".to_string(),
                     SelectContent {
                         for (i, (slug, name)) in orgs.iter().enumerate() {
                             SelectItem { key: "{slug}", value: "{slug}", index: i, "{name}" }
@@ -499,6 +502,15 @@ fn page_header(props: PageHeaderProps) -> Element {
             div { class: "flex flex-wrap items-end justify-between gap-3",
                 Heading { level: HeadingLevel::H1, class: "tracking-tight", "Projects" }
                 div { class: "flex items-center gap-2",
+                    if let Some(NewProjectOpen(mut open)) = try_use_context::<NewProjectOpen>() {
+                        button {
+                            r#type: "button",
+                            class: "order-last flex size-10 items-center justify-center rounded-full border border-border/70 bg-popover/80 text-foreground active:bg-accent md:hidden",
+                            aria_label: "New project",
+                            onclick: move |_| open.set(true),
+                            Plus { size: 18 }
+                        }
+                    }
                     if let Some(mut rel) = props.relevant {
                         button {
                             r#type: "button",
@@ -537,8 +549,11 @@ fn page_header(props: PageHeaderProps) -> Element {
                 class: "hidden max-w-prose md:block",
                 "Everything in flight across the org, live from the project service."
             }
+            // Desk only: a phone creates from the "New project" bar above
+            // the tab bar (the same form, in a sheet), and showing both
+            // put two ways to do one thing on a screen with one project.
             if let Some(qa) = &props.quick_add {
-                {qa.clone()}
+                div { class: "hidden md:block", {qa.clone()} }
             }
         }
     }

@@ -12,6 +12,11 @@ task-ui-core.workspace = true
 task-plugin-ui.workspace = true
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
+# Math in notes: the editor's Typst renderer. Native apps only — the web
+# build leaves it off (it is the largest thing the editor adds to wasm;
+# see the root Cargo.toml). Cargo unifies features per build, so this
+# reaches the editor `ui` uses without touching the web bundle.
+editor = { workspace = true, features = ["typst"] }
 # `otel` so shipped clients export traces/logs/metrics through the
 # server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
 architect-telemetry = { workspace = true, features = ["otel"] }
@@ -31,6 +36,10 @@ files-daemon-proto = { workspace = true }
 # into shipping different ones.
 task-plugins = { workspace = true }
 vox = { workspace = true, features = ["transport-websocket"] }
+# The device's own node (offline.local / offline.peers): this install
+# hosts the backend itself, so the app works with no server and is a
+# peer of the org's other nodes.
+task-node-host = { workspace = true }
 
 [features]
 default = ["desktop"]

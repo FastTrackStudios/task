@@ -31,6 +31,7 @@
 #[allow(dead_code)]
 mod support;
 
+mod activity_e2e;
 mod anonymous_lane_stays_anonymous;
 mod asset_libraries_e2e;
 mod asset_migration_e2e;
@@ -54,6 +55,7 @@ mod guest_review_e2e;
 mod iroh_peer_dir;
 #[cfg(feature = "plugin-fasttrackstudio")]
 mod live_e2e;
+mod local_node_e2e;
 mod local_transport;
 mod mcp_account_e2e;
 mod mcp_chart_e2e;
@@ -63,8 +65,12 @@ mod mcp_telemetry_e2e;
 mod mcp_wiki_e2e;
 mod media_auth;
 mod media_stream_e2e;
+mod notes_search_e2e;
 mod notify_e2e;
+mod offline_doc_e2e;
+mod offline_queue_e2e;
 mod org_membership;
+mod peer_docs_e2e;
 mod permissions_observe_only;
 mod permits_cover_router;
 mod personal_org_e2e;
@@ -81,10 +87,13 @@ mod share_wiki_note_e2e;
 mod signup_gate;
 mod snapshot_async;
 mod snapshot_e2e;
+mod starter_notes_e2e;
 mod task_client_e2e;
+mod task_files_e2e;
 mod vault_collab_e2e;
 mod vault_graph_e2e;
 mod vault_sync_e2e;
 mod watch_bridge_auth;
+mod watch_suggested_e2e;
 mod webdav_auth;
 mod wiki_editor_e2e;

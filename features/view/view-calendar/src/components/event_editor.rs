@@ -1,9 +1,15 @@
-//! Side sheet that opens when a chip is clicked. Edits title + time
-//! window + color + all-day flag + description, and offers a
-//! destructive delete.
+//! The event sheet, opened by tapping an event chip.
+//!
+//! Drawn the way the app's other edit sheets are (the Schedule's block
+//! sheet, Display options): on a phone a full-width sheet rising from
+//! the bottom edge, on a desk a panel down the right side; the title as
+//! the heading with Done beside it, then grouped inset rows — all day,
+//! starts, ends, colour, repeats — the notes, and Delete at the end.
+//!
+//! Edits apply as they are made (each is a [`CalendarMutation`]), so
+//! Done only closes.
 
-use architect_ui::lucide_dioxus::Trash2;
-use architect_ui::prelude::*;
+use architect_ui::lucide_dioxus::{Check, Trash2};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
 use dioxus::prelude::*;
 
@@ -19,6 +25,15 @@ const COLOR_OPTIONS: &[ColorTag] = &[
     ColorTag::Info,
 ];
 
+/// One grouped row's frame (label left, value right).
+const ROW: &str =
+    "flex min-h-[54px] items-center justify-between gap-3 px-4 text-[16px] text-foreground";
+/// A grouped inset list.
+const GROUP: &str =
+    "mb-3 flex flex-col divide-y divide-foreground/[0.06] rounded-[20px] bg-foreground/[0.05]";
+/// A value control sitting at a row's right edge.
+const VALUE: &str = "bg-transparent text-right text-[16px] text-muted-foreground outline-none";
+
 #[derive(Props, Clone, PartialEq)]
 pub struct EventEditorProps {
     pub event: CalendarEvent,
@@ -29,110 +44,133 @@ pub struct EventEditorProps {
 
 #[component]
 pub fn EventEditor(props: EventEditorProps) -> Element {
+    if !props.open {
+        return rsx! {};
+    }
     let event = props.event.clone();
     let id: EventId = event.id;
     let on_event = props.on_event;
     let on_close = props.on_close;
 
     rsx! {
-        Sheet {
-            open: props.open,
-            on_close: move |()| on_close.call(()),
-            // Below `md` the side sheet becomes a bottom sheet (the
-            // app's mobile convention): full-width, pinned to the
-            // bottom edge, capped + scrollable, rounded top, safe-area
-            // padded. The overrides ride on architect-ui Sheet's `class`
-            // merge — `max-md:` wins over the base `inset-y-0 right-0
-            // w-3/4 h-full` at phone widths, and desktop is untouched.
-            class: "max-md:top-auto max-md:bottom-0 max-md:inset-x-0 max-md:h-auto \
-                    max-md:max-h-[85dvh] max-md:w-full max-md:max-w-none \
-                    max-md:overflow-y-auto max-md:rounded-t-2xl max-md:border-t \
-                    max-md:border-l-0 \
-                    max-md:pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]"
-                .to_string(),
-            SheetHeader {
-                SheetTitle { "Edit event" }
-                SheetDescription { "Changes apply immediately." }
-            }
-            div { class: "flex flex-col gap-4 mt-2",
-                // Title
-                div { class: "flex flex-col gap-1.5",
-                    Label { "Title" }
+        div {
+            class: "fixed inset-0 z-50 bg-black/55 supports-[backdrop-filter]:backdrop-blur-[2px]",
+            onclick: move |_| on_close.call(()),
+        }
+        div {
+            class: "fixed inset-x-0 bottom-0 z-50 flex max-h-[88vh] flex-col overflow-hidden rounded-t-[30px] bg-popover text-foreground shadow-[0_-12px_40px_-12px_rgb(0_0_0/0.6),inset_0_1px_0_rgb(255_255_255/0.07)] outline-none md:inset-x-auto md:inset-y-0 md:right-0 md:max-h-none md:w-[24rem] md:rounded-none md:rounded-l-[24px]",
+            role: "dialog",
+            aria_label: "Edit event",
+            tabindex: "-1",
+            onclick: move |e| e.stop_propagation(),
+            onkeydown: move |e| {
+                if e.key() == Key::Escape {
+                    on_close.call(());
+                }
+            },
+            div { class: "mx-auto mt-2 h-[5px] w-9 shrink-0 rounded-full bg-foreground/20 md:hidden" }
+            div {
+                class: "min-h-0 flex-1 overflow-y-auto px-3 pt-2 md:pt-5",
+                style: "padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));",
+                // ── title, as the heading ──
+                div { class: "flex items-center gap-2 px-2 pb-3",
                     input {
-                        class: "w-full bg-background border border-input rounded px-2 py-1 text-sm",
+                        class: "min-w-0 flex-1 bg-transparent text-[22px] font-semibold tracking-[-0.01em] text-foreground outline-none placeholder:text-muted-foreground",
+                        aria_label: "Event title",
+                        placeholder: "Event title",
                         value: "{event.title}",
                         oninput: move |e: FormEvent| {
                             on_event.call(CalendarMutation::Rename { id, title: e.value() });
                         },
                     }
+                    button {
+                        r#type: "button",
+                        class: "h-10 shrink-0 rounded-full bg-primary px-4 text-[15px] font-semibold text-primary-foreground active:scale-95",
+                        onclick: move |_| on_close.call(()),
+                        "Done"
+                    }
                 }
-                // All-day toggle
-                label { class: "flex items-center gap-2 text-sm",
-                    input {
-                        r#type: "checkbox",
-                        checked: event.all_day,
-                        onchange: move |e: FormEvent| {
-                            on_event.call(CalendarMutation::SetAllDay { id, all_day: e.value() == "true" });
+
+                // ── when ──
+                div { class: GROUP,
+                    label { class: ROW,
+                        span { "All day" }
+                        input {
+                            r#type: "checkbox",
+                            role: "switch",
+                            class: "peer sr-only",
+                            checked: event.all_day,
+                            onchange: move |e: FormEvent| {
+                                on_event.call(CalendarMutation::SetAllDay { id, all_day: e.checked() });
+                            },
+                        }
+                        span {
+                            class: if event.all_day { "relative h-[31px] w-[51px] shrink-0 rounded-full bg-primary p-[2px] transition-colors" } else { "relative h-[31px] w-[51px] shrink-0 rounded-full bg-foreground/15 p-[2px] transition-colors" },
+                            span { class: if event.all_day { "block size-[27px] translate-x-5 rounded-full bg-white shadow transition-transform" } else { "block size-[27px] rounded-full bg-white shadow transition-transform" } }
+                        }
+                    }
+                    DateTimeRow {
+                        label: "Starts",
+                        value: event.start,
+                        all_day: event.all_day,
+                        on_change: move |dt: chrono::DateTime<chrono::Utc>| {
+                            on_event.call(CalendarMutation::Reschedule {
+                                id,
+                                start: dt,
+                                end: event.end.max(dt + chrono::Duration::minutes(15)),
+                            });
                         },
                     }
-                    "All day"
+                    DateTimeRow {
+                        label: "Ends",
+                        value: event.end,
+                        all_day: event.all_day,
+                        on_change: move |dt: chrono::DateTime<chrono::Utc>| {
+                            on_event.call(CalendarMutation::Reschedule {
+                                id,
+                                start: event.start,
+                                end: dt.max(event.start + chrono::Duration::minutes(15)),
+                            });
+                        },
+                    }
                 }
-                // Start / end
-                DateTimeField {
-                    label: "Starts",
-                    value: event.start,
-                    all_day: event.all_day,
-                    on_change: move |dt: chrono::DateTime<chrono::Utc>| {
-                        on_event.call(CalendarMutation::Reschedule {
-                            id,
-                            start: dt,
-                            end: event.end.max(dt + chrono::Duration::minutes(15)),
-                        });
-                    },
-                }
-                DateTimeField {
-                    label: "Ends",
-                    value: event.end,
-                    all_day: event.all_day,
-                    on_change: move |dt: chrono::DateTime<chrono::Utc>| {
-                        on_event.call(CalendarMutation::Reschedule {
-                            id,
-                            start: event.start,
-                            end: dt.max(event.start + chrono::Duration::minutes(15)),
-                        });
-                    },
-                }
-                // Color swatches
-                div { class: "flex flex-col gap-1.5",
-                    Label { "Color" }
-                    div { class: "flex items-center gap-2",
-                        for color in COLOR_OPTIONS.iter() {
-                            {
-                                let c = *color;
-                                let stem = c.stem();
-                                let ring = if c == event.color { "ring-2 ring-foreground/60" } else { "" };
-                                let key = format!("swatch-{stem}");
-                                rsx! {
-                                    button {
-                                        key: "{key}",
-                                        r#type: "button",
-                                        class: "w-6 h-6 rounded-full bg-{stem}-500 {ring} transition-shadow",
-                                        title: "{stem}",
-                                        onclick: move |_| {
-                                            on_event.call(CalendarMutation::Recolor { id, color: c });
-                                        },
+
+                // ── look and repeat ──
+                div { class: GROUP,
+                    div { class: ROW,
+                        span { "Colour" }
+                        div { class: "flex items-center gap-2",
+                            for color in COLOR_OPTIONS.iter() {
+                                {
+                                    let c = *color;
+                                    let stem = c.stem();
+                                    let on = c == event.color;
+                                    rsx! {
+                                        button {
+                                            key: "swatch-{stem}",
+                                            r#type: "button",
+                                            class: "flex size-7 items-center justify-center rounded-full bg-{stem}-500 text-white active:scale-90",
+                                            aria_label: "{stem}",
+                                            aria_pressed: "{on}",
+                                            onclick: move |_| on_event.call(CalendarMutation::Recolor { id, color: c }),
+                                            if on {
+                                                Check { size: 14 }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    RepeatRow { event_id: id, current: event.recurrence.clone(), on_event }
                 }
-                // Description
-                div { class: "flex flex-col gap-1.5",
-                    Label { "Description" }
+
+                // ── notes ──
+                div { class: "mb-3 rounded-[20px] bg-foreground/[0.05] px-4 py-3",
                     textarea {
-                        class: "w-full bg-background border border-input rounded px-2 py-1 text-sm",
-                        rows: 4,
+                        class: "min-h-20 w-full resize-none bg-transparent text-[16px] leading-6 text-foreground outline-none [field-sizing:content] placeholder:text-muted-foreground",
+                        aria_label: "Notes",
+                        placeholder: "Notes",
                         value: event.description.clone().unwrap_or_default(),
                         oninput: move |e: FormEvent| {
                             let v = e.value();
@@ -141,61 +179,45 @@ pub fn EventEditor(props: EventEditorProps) -> Element {
                         },
                     }
                 }
-                // Recurrence — preset chips + raw RRULE input. The
-                // chips set common rules; the input shows the raw
-                // RFC-5545 string for power users.
-                RecurrenceField {
-                    event_id: id,
-                    current: event.recurrence.clone(),
-                    on_event,
-                }
-            }
-            SheetFooter {
-                Button {
-                    variant: ButtonVariant::Outline,
-                    on_click: move |_| {
-                        on_event.call(CalendarMutation::Remove { id });
-                        on_close.call(());
-                    },
-                    Trash2 { size: 14 }
-                    "Delete"
-                }
-                Button {
-                    on_click: move |_| on_close.call(()),
-                    "Done"
+
+                div { class: GROUP,
+                    button {
+                        r#type: "button",
+                        class: "flex min-h-[54px] w-full items-center gap-3 px-4 text-left text-[16px] text-red-400 active:bg-foreground/[0.04]",
+                        onclick: move |_| {
+                            on_event.call(CalendarMutation::Remove { id });
+                            on_close.call(());
+                        },
+                        Trash2 { size: 17 }
+                        "Delete event"
+                    }
                 }
             }
         }
     }
 }
 
-#[derive(Props, Clone, PartialEq)]
-struct DateTimeFieldProps {
+/// A row with native date (+ time) pickers at its right edge. The two
+/// fields are stitched back together when either commits — the inputs
+/// are read as UTC-aligned, as v1 has always done.
+#[component]
+fn DateTimeRow(
     label: &'static str,
     value: chrono::DateTime<chrono::Utc>,
     all_day: bool,
     on_change: EventHandler<chrono::DateTime<chrono::Utc>>,
-}
-
-/// Side-by-side native `date` + `time` inputs. The two fields are
-/// stitched back together when either commits — keeps the editor
-/// free of timezone juggling for v1 (we treat the user's local
-/// inputs as already UTC-aligned).
-#[component]
-fn DateTimeField(props: DateTimeFieldProps) -> Element {
-    let naive = props.value.naive_utc();
+) -> Element {
+    let naive = value.naive_utc();
     let date_str = naive.format("%Y-%m-%d").to_string();
     let time_str = naive.format("%H:%M").to_string();
-    let on_change = props.on_change;
-    let cur = props.value;
-
+    let cur = value;
     rsx! {
-        div { class: "flex flex-col gap-1.5",
-            Label { "{props.label}" }
-            div { class: "flex items-center gap-2",
+        div { class: ROW,
+            span { "{label}" }
+            div { class: "flex items-center gap-3",
                 input {
                     r#type: "date",
-                    class: "bg-background border border-input rounded px-2 py-1 text-sm",
+                    class: VALUE,
                     value: "{date_str}",
                     onchange: move |e: FormEvent| {
                         if let Some(dt) = recombine(Some(&e.value()), None, cur) {
@@ -203,10 +225,10 @@ fn DateTimeField(props: DateTimeFieldProps) -> Element {
                         }
                     },
                 }
-                if !props.all_day {
+                if !all_day {
                     input {
                         r#type: "time",
-                        class: "bg-background border border-input rounded px-2 py-1 text-sm",
+                        class: VALUE,
                         value: "{time_str}",
                         onchange: move |e: FormEvent| {
                             if let Some(dt) = recombine(None, Some(&e.value()), cur) {
@@ -220,70 +242,45 @@ fn DateTimeField(props: DateTimeFieldProps) -> Element {
     }
 }
 
-#[derive(Props, Clone, PartialEq)]
-struct RecurrenceFieldProps {
+const RRULE_PRESETS: &[(&str, &str)] = &[
+    ("Never", ""),
+    ("Every day", "FREQ=DAILY"),
+    ("Every weekday", "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"),
+    ("Every week", "FREQ=WEEKLY"),
+    ("Every month", "FREQ=MONTHLY"),
+    ("Every year", "FREQ=YEARLY"),
+];
+
+/// "Repeats" as one row with a native picker of the common rules; a
+/// rule set elsewhere (a raw RRULE) shows as "Custom".
+#[component]
+fn RepeatRow(
     event_id: EventId,
     current: Option<String>,
     on_event: EventHandler<CalendarMutation>,
-}
-
-const RRULE_PRESETS: &[(&str, &str)] = &[
-    ("None", ""),
-    ("Daily", "FREQ=DAILY"),
-    ("Weekly", "FREQ=WEEKLY"),
-    ("Mon-Fri", "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"),
-    ("Monthly", "FREQ=MONTHLY"),
-    ("Yearly", "FREQ=YEARLY"),
-];
-
-#[component]
-fn RecurrenceField(props: RecurrenceFieldProps) -> Element {
-    let id = props.event_id;
-    let on_event = props.on_event;
-    let current = props.current.clone().unwrap_or_default();
-
+) -> Element {
+    let id = event_id;
+    let cur = current.unwrap_or_default();
+    let known = RRULE_PRESETS.iter().any(|(_, r)| *r == cur);
     rsx! {
-        div { class: "flex flex-col gap-1.5",
-            Label { "Repeats" }
-            div { class: "flex flex-wrap gap-1.5",
-                for (label, rule) in RRULE_PRESETS.iter() {
-                    {
-                        let label = *label;
-                        let rule_str = (*rule).to_string();
-                        let active = if rule.is_empty() {
-                            current.is_empty()
-                        } else {
-                            current == *rule
-                        };
-                        let cls = if active {
-                            "px-2 py-0.5 text-xs rounded bg-primary text-primary-foreground"
-                        } else {
-                            "px-2 py-0.5 text-xs rounded border border-border hover:bg-accent"
-                        };
-                        rsx! {
-                            button {
-                                key: "{label}",
-                                r#type: "button",
-                                class: "{cls}",
-                                onclick: move |_| {
-                                    let recurrence = if rule_str.is_empty() { None } else { Some(rule_str.clone()) };
-                                    on_event.call(CalendarMutation::SetRecurrence { id, recurrence });
-                                },
-                                "{label}"
-                            }
-                        }
-                    }
-                }
-            }
-            input {
-                class: "w-full bg-background border border-input rounded px-2 py-1 text-xs font-mono",
-                placeholder: "RRULE: FREQ=…",
-                value: "{current}",
-                oninput: move |e: FormEvent| {
+        label { class: ROW,
+            span { "Repeats" }
+            select {
+                class: "{VALUE} appearance-none",
+                onchange: move |e: FormEvent| {
                     let v = e.value();
-                    let recurrence = if v.trim().is_empty() { None } else { Some(v) };
+                    if v == "__custom" {
+                        return;
+                    }
+                    let recurrence = if v.is_empty() { None } else { Some(v) };
                     on_event.call(CalendarMutation::SetRecurrence { id, recurrence });
                 },
+                for (label, rule) in RRULE_PRESETS.iter() {
+                    option { key: "{label}", value: "{rule}", selected: *rule == cur, "{label}" }
+                }
+                if !known {
+                    option { value: "__custom", selected: true, "Custom" }
+                }
             }
         }
     }

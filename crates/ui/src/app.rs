@@ -35,7 +35,7 @@ const MOBILE_BASELINE_CSS: &str = "\
 html,body{overflow-x:clip;-webkit-text-size-adjust:100%}\
 *{-webkit-tap-highlight-color:transparent}\
 .overflow-x-auto,.overflow-x-scroll{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}\
-@media (max-width:640px){\
+@media (max-width:767px){\
 input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{font-size:16px!important}\
 }";
 
@@ -321,6 +321,10 @@ pub fn App() -> Element {
     // route page's `use_<entity>_list` / `use_<entity>_mutations` hooks
     // read. Provided after `use_app_supervised` so mutations find the
     // notifications + reactivity registries it installed above.
+    // Offline (docs/spec/offline.md): the device copy every list reads
+    // first, and the durable queue for timer calls made with no
+    // connection, replayed when the connection comes back.
+    crate::offline::provide_offline(conn);
     crate::stores::provide_stores();
 
     // Web auth: the active-account context + boot restore (validate

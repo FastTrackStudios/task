@@ -8,6 +8,11 @@ license.workspace = true
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
+# Math in notes: the editor's Typst renderer. Native apps only — the web
+# build leaves it off (it is the largest thing the editor adds to wasm;
+# see the root Cargo.toml). Cargo unifies features per build, so this
+# reaches the editor `ui` uses without touching the web bundle.
+editor = { workspace = true, features = ["typst"] }
 # The shipped app set — same list as desktop and web, by construction
 # rather than by remembering.
 task-plugins = { workspace = true }
@@ -15,6 +20,10 @@ task-plugins = { workspace = true }
 # server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
 architect-telemetry = { workspace = true, features = ["otel"] }
 tracing = { workspace = true }
+# The device's own node (offline.local): the phone hosts the backend
+# itself and works with no server. task-server checks clean for
+# aarch64-apple-ios-sim.
+task-node-host = { workspace = true }
 
 # Apple Watch config bridge (`src/watch_sync.rs`) — pure-Rust WCSession
 # host over the objc2 ecosystem, iOS builds only.
@@ -28,6 +37,14 @@ objc2-watch-connectivity = "0.3"
 objc2-authentication-services = "0.3"
 objc2-ui-kit = "0.3"
 block2 = "0.6"
+# The phone's own node carries architect-auth, whose passkeys
+# (webauthn-rs) link OpenSSL. iOS has none to link, and the build
+# otherwise finds the dev shell's macOS one — so it is built from source
+# for the phone (features unify: this vendors every openssl-sys user).
+openssl = { version = "0.10", features = ["vendored"] }
+# Same for bzip2 (zip, under the node's mail lane): pkg-config finds the
+# dev shell's macOS libbz2 unless the library is built for the target.
+bzip2 = { version = "0.5", features = ["static"] }
 
 [features]
 default = ["mobile"]

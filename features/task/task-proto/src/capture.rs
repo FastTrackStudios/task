@@ -32,6 +32,10 @@ use chrono::{Datelike, Duration, Local, NaiveDate, Weekday};
 
 use crate::model::TaskInfo;
 
+/// Words that only introduce a date ("for Friday", "by tomorrow"), so
+/// they leave the title along with the date they introduced.
+const DATE_CONNECTORS: &[&str] = &["for", "on", "by", "due", "until", "before"];
+
 /// Parse an input line into a `TaskInfo`. The returned task
 /// has `path = ""` — the vault-backed sibling crate's
 /// `task::write::default_task_path` computes one, and
@@ -84,6 +88,14 @@ pub fn capture(input: &str) -> TaskInfo {
         }
         if let Some(date) = parse_date_token(&tok, today) {
             due = Some(date.format("%Y-%m-%d").to_string());
+            // "Book the booth for Friday" → "Book the booth": the word
+            // that only introduced the date goes with it.
+            if title_parts
+                .last()
+                .is_some_and(|w| DATE_CONNECTORS.contains(&w.to_lowercase().as_str()))
+            {
+                title_parts.pop();
+            }
             continue;
         }
         title_parts.push(tok);
@@ -462,6 +474,20 @@ mod tests {
         let t = capture("Standup next monday");
         assert!(t.due.is_some());
         assert_eq!(t.title, "Standup");
+    }
+
+    #[test]
+    fn the_word_that_introduced_a_date_leaves_with_it() {
+        assert_eq!(
+            capture("Book the vocal booth for friday").title,
+            "Book the vocal booth"
+        );
+        assert_eq!(capture("Send stems by tomorrow").title, "Send stems");
+        assert_eq!(
+            capture("Plan for the release").title,
+            "Plan for the release",
+            "no date, the word stays"
+        );
     }
 
     #[test]

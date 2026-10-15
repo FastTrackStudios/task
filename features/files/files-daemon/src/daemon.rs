@@ -650,6 +650,9 @@ impl SyncDaemon {
         match gone {
             // Dropping the session unmounts.
             Some((at, session)) => {
+                // Off Linux `Session` is a Drop-less stub (mount.rs), so
+                // clippy calls this a no-op there; on Linux it unmounts.
+                #[allow(clippy::drop_non_drop)]
                 drop(session);
                 tracing::info!(%root_id, mountpoint = %at.display(), "unmounted");
                 self.save_mounts();

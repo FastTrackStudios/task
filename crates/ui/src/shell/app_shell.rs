@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 
-use crate::chrome::{FleetingFab, FleetingModal, TopBar, provide_chrome_contexts};
+use crate::chrome::{FleetingModal, TopBar, provide_chrome_contexts};
 use crate::routes::Route;
 use crate::shell::mobile::{BottomTabBar, MobileTimerDock};
 
@@ -15,10 +15,29 @@ pub fn AppShell() -> Element {
 
     // Quick-capture + data-refresh signals for the persistent chrome.
     provide_chrome_contexts();
+    crate::process::provide_process_now();
+    crate::new_issue::provide_new_issue();
+    crate::favorites::provide_favorites();
+    crate::nav_layout::provide_nav_layout();
     // The docked player a citation's timestamp plays in.
     crate::source_dock::provide_source_dock();
     // Ctrl+P command-palette visibility (same pattern as FleetingOpen).
     crate::palette::provide_palette_context();
+    // The left drawer's Search: the text of every vault and wiki.
+    crate::notes_search::provide_notes_search();
+    // `--kb`: the on-screen keyboard's height, for bottom-pinned phone UI.
+    crate::shell::mobile::use_keyboard_inset();
+    // The phone's drawers (swipe right / left) and pull-for-palette.
+    let phone = crate::shell::phone_gestures::provide_phone_panels();
+    {
+        // Moving to another screen closes them.
+        let at = current.to_string();
+        let mut seen = use_signal(|| at.clone());
+        if *seen.peek() != at {
+            seen.set(at);
+            phone.close();
+        }
+    }
     // Obsidian-style route tabs (the strip lives in the TopBar) —
     // restores the persisted strip and seeds it with the boot route.
     crate::tabs::provide_tabs(current.clone());
@@ -99,7 +118,7 @@ pub fn AppShell() -> Element {
             div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:overflow-hidden",
                 div { class: "flex min-w-0 flex-col md:min-h-0 md:flex-1 md:flex-row",
                     if explorer.read().0 && !chromeless() && side_panel_for(&current) != SidePanel::None {
-                        div { class: "hidden w-[17rem] shrink-0 border-r border-border/60 md:flex md:min-h-0 md:flex-col md:overflow-hidden",
+                        div { class: "hidden w-[17rem] shrink-0 border-r border-border/60 bg-popover md:flex md:min-h-0 md:flex-col md:overflow-hidden",
                             // The column shows the best companion for
                             // where the person is ([`side_panel_for`]).
                             match side_panel_for(&current) {
@@ -132,8 +151,7 @@ pub fn AppShell() -> Element {
                             }
                         }
                         if !share {
-                            BottomTabBar { current }
-                            FleetingFab {}
+                            BottomTabBar { current: current.clone() }
                             MobileTimerDock {}
                         }
                     }
@@ -213,12 +231,58 @@ pub fn AppShell() -> Element {
                 task_player_ui::NowPlayingTab {}
             }
         }
+        // Phone: the drawers and the pull. The left falls back to the
+        // screen's companion column (the work sidebar where there is
+        // none); the right to the docked app panels. A page that fills a
+        // side renders its own drawer and these give way.
+        if !share {
+            crate::shell::phone_gestures::PhoneGestures { has_left: true, has_right: !docked.is_empty() }
+            crate::shell::phone_gestures::PhoneDrawer {
+                side: crate::shell::phone_gestures::Side::Left,
+                fallback: true,
+                match side_panel_for(&current) {
+                    SidePanel::Files => rsx! { files_ui::FilesSidebar {} },
+                    SidePanel::Project(id) => rsx! {
+                        crate::shell::project_sidebar::ProjectSidebar { id }
+                    },
+                    SidePanel::Wiki { org, wiki } => rsx! {
+                        crate::shell::explorer::VaultExplorer { org, wiki }
+                    },
+                    SidePanel::Vault => rsx! { crate::shell::explorer::VaultExplorer {} },
+                    SidePanel::Work | SidePanel::None => rsx! {
+                        crate::shell::work_sidebar::WorkSidebar { current: current.clone() }
+                    },
+                }
+            }
+            if !docked.is_empty() {
+                crate::shell::phone_gestures::PhoneDrawer {
+                    side: crate::shell::phone_gestures::Side::Right,
+                    fallback: true,
+                    for render in docked.clone() {
+                        {render()}
+                    }
+                }
+            }
+        }
         // Single global capture modal, toggled from any fleeting button.
         FleetingModal {}
+        // Quick-add's capture-then-process sheet (one capture path).
+        crate::process::ProcessNowOverlay {}
+        // The one way to make an issue (Linear's composer).
+        crate::new_issue::NewIssueHost {}
         crate::source_dock::SourceDockView {}
         // Ctrl+P command palette — pages + vault notes, fuzzy-ranked.
         // Mounts its own document-level hotkey listener.
         crate::palette::CommandPalette {}
+        crate::notes_search::NotesSearch {}
+        // A typing-test launch (`TASK_TYPING_TEST=1`) types every case
+        // into notes and reports; nothing otherwise.
+        if crate::typing_test::enabled() {
+            crate::typing_test::TypingTestRunner {}
+        }
+        if crate::typing_test::trace_requested() {
+            crate::typing_test::TypingTraceRecorder {}
+        }
         // App-wide notice queue (architect::Notifications, provided by
         // `use_app_reactive` at the app root). Mutations + the vault
         // DocumentSession report failures here so they outlive the
@@ -352,20 +416,41 @@ fn ConnectionBanner() -> Element {
         }
     });
 
+    // t[impl offline.visible] — what has not reached the server yet.
+    // Counted from the device's call queue; the pill says it while
+    // anything waits and clears when the queue empties. It never says
+    // "synced" — only how many are still waiting.
+    let waiting = architect::try_use_call_queue().map_or(0, |q| q.waiting());
+    let waiting_label = match waiting {
+        0 => String::new(),
+        1 => " · 1 change waiting to sync".to_owned(),
+        n => format!(" · {n} changes waiting to sync"),
+    };
+
     let generation = conn.generation();
     match conn.state() {
+        architect::ConnectionState::Ready(_) if waiting > 0 => {
+            return rsx! {
+                div { class: "pointer-events-none fixed left-1/2 top-2 z-50 -translate-x-1/2",
+                    div {
+                        class: "pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-lg backdrop-blur",
+                        "data-sync-waiting": "{waiting}",
+                        span { class: "size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" }
+                        "Syncing{waiting_label}"
+                    }
+                }
+            };
+        }
         architect::ConnectionState::Ready(_) => return rsx! {},
         architect::ConnectionState::Connecting if generation == 0 => return rsx! {},
         _ => {}
     }
     let (cls, label, title) = match last_failure.read().clone() {
+        // offline.boot: a quiet state, not an alarm — the workspace is
+        // open from the device's copy and writes are kept.
         Some(e) => (
-            "border-destructive/40 bg-destructive/15 text-destructive",
-            if generation == 0 {
-                "Can't reach the server — retrying"
-            } else {
-                "Connection lost — retrying"
-            },
+            "border-border bg-background/90 text-muted-foreground",
+            "Offline — changes will sync",
             e,
         ),
         None => (
@@ -379,8 +464,9 @@ fn ConnectionBanner() -> Element {
             div {
                 class: "pointer-events-auto flex items-center gap-2 rounded-full border {cls} px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur",
                 title: "{title}",
+                "data-sync-waiting": "{waiting}",
                 span { class: "size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" }
-                "{label}"
+                "{label}{waiting_label}"
             }
         }
     }
@@ -450,9 +536,9 @@ fn side_panel_for(route: &Route) -> SidePanel {
 }
 
 /// Where a phone opens when the person has not picked a start page:
-/// the task list, whose first section is Today. On a phone the app is
-/// for doing the next thing, and the dashboard is a tab away.
-const PHONE_START: &str = "/tasks";
+/// the Inbox, the first tab — capture → process is the core loop, and
+/// there is no Home (Linear's shell).
+const PHONE_START: &str = "/inbox";
 
 /// Redirect `/` to the user's preferred start page, once per session,
 /// when their prefs load (renders nothing). With no preference set, a
@@ -479,10 +565,11 @@ fn StartPageRedirect() -> Element {
             nav.replace(target.as_str());
             return;
         }
-        // The same breakpoint the phone layout (bottom tab bar) uses.
+        // The same breakpoint the phone layout (bottom tab bar) uses:
+        // Tailwind's `md` is 768px, so a phone is anything narrower.
         spawn(async move {
             let phone =
-                dioxus::document::eval("return window.matchMedia('(max-width: 640px)').matches;")
+                dioxus::document::eval("return window.matchMedia('(max-width: 767px)').matches;")
                     .await
                     .ok()
                     .and_then(|v| v.as_bool())

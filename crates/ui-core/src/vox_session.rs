@@ -153,7 +153,7 @@ pub fn active_server() -> Option<ActiveServer> {
 ///    localhost/127.0.0.1 (a bare `dx serve` without the env —
 ///    same-origin would dial the static server's own port).
 ///
-/// Native: `TASK_VOX_URL` at runtime, empty when unset.
+/// Native: `TASK_VOX_URL` at runtime, else [`native_default_vox_url`].
 #[must_use]
 pub fn vox_url() -> String {
     // A user-selected server (multi-server registry) always wins.
@@ -172,8 +172,42 @@ pub fn vox_url() -> String {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::env::var("TASK_VOX_URL").unwrap_or_default()
+        if let Ok(url) = std::env::var("TASK_VOX_URL")
+            && !url.is_empty()
+        {
+            return url;
+        }
+        let baked = native_default_vox_url();
+        // Nothing configured and this build hosts a node: the device is
+        // its own server (`offline.local`). A baked default (TestFlight's
+        // host) still wins — a shipped build that names a host means it.
+        if baked.is_empty() && crate::node::installed() {
+            return crate::node::LOCAL_VOX_URL.to_owned();
+        }
+        baked.to_string()
     }
+}
+
+/// The server a native build dials when nothing at runtime names one.
+///
+/// A phone app has no shell to export `TASK_VOX_URL` from, so without
+/// a baked default a fresh install sat on "Restoring your session…"
+/// until someone typed a server URL by hand. Shipped builds bake
+/// `TASK_VOX_URL_NATIVE` (the TestFlight workflow sets it); a debug
+/// iOS build otherwise dials the dev server, which the simulator
+/// reaches over the Mac's own loopback.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_default_vox_url() -> &'static str {
+    if let Some(baked) = option_env!("TASK_VOX_URL_NATIVE") {
+        return baked;
+    }
+    // A build that hosts its own node needs no dev server to open: the
+    // node is the default (`vox_url`), and `just mobile-sim` names the
+    // demo server explicitly through TASK_VOX_URL when it wants one.
+    if cfg!(all(target_os = "ios", debug_assertions)) && !crate::node::installed() {
+        return DEFAULT_VOX_URL;
+    }
+    ""
 }
 
 /// A share-guest session (issue #272): the app was opened from a

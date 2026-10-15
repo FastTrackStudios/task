@@ -9,34 +9,89 @@ struct TimerView: View {
     @State private var description: String = ""
 
     var body: some View {
-        VStack(spacing: 8) {
-            if let active = store.active, active.running {
-                running(active)
-            } else {
-                idle()
+        ScrollView {
+            VStack(spacing: 8) {
+                if let s = store.suggestion {
+                    suggested(s)
+                }
+                if let active = store.active, active.running {
+                    running(active)
+                } else {
+                    idle()
+                }
+                if let err = store.lastError {
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                }
             }
-            if let err = store.lastError {
-                Text(err)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
-            }
+            .padding(.horizontal, 4)
         }
-        .padding(.horizontal, 4)
         .navigationTitle("Timer")
         // Poll while visible so the running state stays fresh.
         .task {
             await store.refreshActive()
-            // 1 Hz tick to advance the clock; also re-poll every ~10s.
+            await store.refreshSuggestion()
+            // 1 Hz tick to advance the clock; re-poll the timer every ~10s
+            // and the suggestion every minute (the plan moves by the minute).
             var n: UInt64 = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 store.tick &+= 1
                 n &+= 1
                 if n % 10 == 0 { await store.refreshActive() }
+                if n % 60 == 0 { await store.refreshSuggestion() }
             }
         }
+    }
+
+    /// The Suggested card: why now (small), the thing, one action, Not now.
+    @ViewBuilder private func suggested(_ s: SuggestionDto) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(s.eyebrow)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(s.title)
+                .font(.headline)
+                .lineLimit(2)
+            if !s.detail.isEmpty {
+                Text(s.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            HStack(spacing: 6) {
+                if s.action == "Process" {
+                    // Deciding what each capture is needs the phone.
+                    Text("Open on phone")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Button {
+                        Task { await store.actOnSuggestion() }
+                    } label: {
+                        Label(s.action, systemImage: s.action == "Start" ? "play.fill" : "checkmark")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .tint(.accentColor)
+                    .disabled(store.busy)
+                }
+                Button("Not now") {
+                    Task { await store.notNow() }
+                }
+                .font(.caption2)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
     }
 
     @ViewBuilder private func running(_ active: TimerDto) -> some View {
