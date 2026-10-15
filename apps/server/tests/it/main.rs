@@ -87,6 +87,7 @@ mod share_wiki_note_e2e;
 mod signup_gate;
 mod snapshot_async;
 mod snapshot_e2e;
+mod starter_notes_e2e;
 mod task_client_e2e;
 mod task_files_e2e;
 mod vault_collab_e2e;
