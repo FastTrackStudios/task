@@ -41,6 +41,13 @@ async fn every_vault_starts_with_example_formatting_once() {
         idx.pages.iter().any(|p| p.path == "Home.md"),
         "every vault starts with Home.md"
     );
+    // And a day shape, so the Calendar has blocks from the first day.
+    assert!(
+        idx.pages
+            .iter()
+            .any(|p| p.path == "Projects/Scheduling/templates/weekday.md"),
+        "every vault starts with day templates"
+    );
     let bytes = sync
         .get_file("default".into(), PATH.into())
         .await

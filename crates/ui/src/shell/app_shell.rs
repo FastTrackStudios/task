@@ -151,10 +151,8 @@ pub fn AppShell() -> Element {
                             }
                         }
                         if !share {
-                            // The vault brings its own bar (back, search, new, tabs).
-                            if !matches!(current, Route::VaultRoute { .. }) {
-                                BottomTabBar { current: current.clone() }
-                            }
+                            // On every page — the vault adds its own row above it.
+                            BottomTabBar { current: current.clone() }
                             // No floating timer pill: it sat over the page's own
                             // buttons. A running timer shows in the Dynamic Island
                             // (its Live Activity) and on its page, /timer/now.

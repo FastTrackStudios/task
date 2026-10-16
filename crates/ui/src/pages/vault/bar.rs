@@ -1,7 +1,7 @@
 //! The vault's own bottom bar on a phone — Obsidian's: back, forward,
 //! search, a new note, the open tabs (a count you tap to switch), and ☰
-//! for everything else. It stands in for the app's tab bar on the vault,
-//! the way Obsidian's does, so writing has its own controls in reach.
+//! for everything else — a row just above the app's tab bar, which stays,
+//! so writing has its own controls in reach.
 
 use architect_ui::lucide_dioxus::{ChevronLeft, ChevronRight, Menu, Plus, Search, X};
 use dioxus::prelude::*;
@@ -31,14 +31,16 @@ pub(crate) fn VaultBar(
     let route = use_route::<Route>();
     let sections = nav_tabs_for(&use_active_plugins());
     let n = tabs.len();
-    let btn = "flex h-[2.875rem] flex-1 items-center justify-center rounded-full text-foreground/85 active:bg-accent/60 disabled:opacity-30";
+    let btn = "flex h-10 flex-1 items-center justify-center rounded-full text-foreground/85 active:bg-accent/60 disabled:opacity-30";
 
     rsx! {
         nav {
             "data-testid": "vault-bar",
-            class: "fixed inset-x-0 bottom-0 z-30 flex px-7 md:hidden [.kb-open_&]:hidden",
-            style: "padding-bottom: max(0.75rem, calc(env(safe-area-inset-bottom, 0px) - 4px));",
-            div { class: "flex h-[3.375rem] flex-1 items-center gap-0.5 rounded-full border border-border/70 bg-popover/95 p-1 shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur",
+            // Just above the app's tab bar (3.375rem + its 0.5rem gap and
+            // the safe-area padding the tab bar uses).
+            class: "fixed inset-x-0 z-30 flex px-7 md:hidden [.kb-open_&]:hidden",
+            style: "bottom: calc(3.375rem + 0.5rem + max(0.75rem, calc(env(safe-area-inset-bottom, 0px) - 4px)));",
+            div { class: "flex h-11 flex-1 items-center gap-0.5 rounded-full border border-border/70 bg-popover/95 p-0.5 shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur",
                 button {
                     r#type: "button",
                     class: btn,

@@ -480,6 +480,13 @@ pub fn BottomTabBar(current: Route) -> Element {
                         swiping.set(up >= SWIPE_TIMER);
                     }
                 },
+                // A swipe the system takes over ends in a cancel, not an end:
+                // settle the button either way.
+                ontouchcancel: move |_| {
+                    touch_y.set(None);
+                    lift.set(0.0);
+                    swiping.set(false);
+                },
                 ontouchend: move |_| {
                     let go = swiping();
                     touch_y.set(None);

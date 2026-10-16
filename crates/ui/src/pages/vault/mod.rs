@@ -777,7 +777,8 @@ pub fn VaultView(
         .unwrap_or_default();
 
     rsx! {
-        div { class: "flex h-full min-h-[80vh]",
+        // Room at the foot for the vault's row above the tab bar.
+        div { class: "flex h-full min-h-[80vh] pb-14 md:pb-0",
             // ── Virtual-folder tree (mobile-only) ─────────
             aside {
                 class: if has_file { "hidden" } else { "flex w-full flex-col overflow-y-auto pb-14 md:hidden" },
@@ -871,7 +872,7 @@ pub fn VaultView(
                 below: drawer_search,
             }
         }
-        // The vault's own bottom bar (the app's tab bar steps aside here).
+        // The vault's own row, above the app's tab bar.
         bar::VaultBar {
             tabs: bar_tabs,
             on_search: move |()| notes_search.set(true),

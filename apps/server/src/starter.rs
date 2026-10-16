@@ -1,6 +1,6 @@
 //! Notes every vault starts with.
 //!
-//! Two: **Home** (`starter/home.md`), the note the vault opens on — the
+//! **Home** (`starter/home.md`), the note the vault opens on — the
 //! front page the person makes their own, as in Obsidian — and **Example
 //! Formatting** (`starter/example-formatting.md`), a tour of everything a
 //! note can do. Each is planted into an org's vault the first time the
@@ -34,6 +34,17 @@ pub(crate) const EXAMPLE_FORMATTING: &str = include_str!("starter/example-format
 /// before it existed still receive it, once.
 const STARTERS: &[(&str, &str, &str)] = &[
     (HOME_PATH, HOME, ".planted-home"),
+    // A day shape, so the Calendar has blocks from the first day.
+    (
+        "Projects/Scheduling/templates/weekday.md",
+        include_str!("starter/weekday.md"),
+        ".planted-day-templates",
+    ),
+    (
+        "Projects/Scheduling/templates/weekend.md",
+        include_str!("starter/weekend.md"),
+        ".planted-day-templates-weekend",
+    ),
     (
         EXAMPLE_FORMATTING_PATH,
         EXAMPLE_FORMATTING,
@@ -53,7 +64,7 @@ pub(crate) fn plant(vault_root: &Path, org_dir: &Path) -> std::io::Result<usize>
         }
         let note = vault_root.join(path);
         if !note.exists() {
-            std::fs::create_dir_all(vault_root)?;
+            std::fs::create_dir_all(note.parent().unwrap_or(vault_root))?;
             std::fs::write(&note, text)?;
             wrote += 1;
         }
@@ -71,7 +82,11 @@ mod tests {
     fn planted_once_and_a_deletion_sticks() {
         let tmp = tempfile::tempdir().unwrap();
         let (vault, org) = (tmp.path().join("vault"), tmp.path().join("org"));
-        assert_eq!(plant(&vault, &org).unwrap(), 2, "home and the tour");
+        assert_eq!(
+            plant(&vault, &org).unwrap(),
+            4,
+            "home, the day templates and the tour"
+        );
         assert_eq!(
             std::fs::read_to_string(vault.join(HOME_PATH)).unwrap(),
             HOME
@@ -91,8 +106,13 @@ mod tests {
         // The tour's marker alone: what an older build left behind.
         std::fs::create_dir_all(&org).unwrap();
         std::fs::write(org.join(".planted-example-formatting"), b"").unwrap();
-        assert_eq!(plant(&vault, &org).unwrap(), 1);
+        assert_eq!(plant(&vault, &org).unwrap(), 3);
         assert!(vault.join(HOME_PATH).exists());
+        assert!(
+            vault
+                .join("Projects/Scheduling/templates/weekday.md")
+                .exists()
+        );
         assert!(
             !vault.join(EXAMPLE_FORMATTING_PATH).exists(),
             "the tour was planted (and deleted) before; it stays gone"
@@ -105,7 +125,11 @@ mod tests {
         let (vault, org) = (tmp.path().join("vault"), tmp.path().join("org"));
         std::fs::create_dir_all(&vault).unwrap();
         std::fs::write(vault.join(EXAMPLE_FORMATTING_PATH), "mine").unwrap();
-        assert_eq!(plant(&vault, &org).unwrap(), 1, "only Home is new");
+        assert_eq!(
+            plant(&vault, &org).unwrap(),
+            3,
+            "only Home and the day templates are new"
+        );
         assert_eq!(
             std::fs::read_to_string(vault.join(EXAMPLE_FORMATTING_PATH)).unwrap(),
             "mine"
