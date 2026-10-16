@@ -9,8 +9,13 @@ blocks:
     start: "08:00"
     end: "08:30"
     category: reset
+  - id: breakfast
+    label: Breakfast
+    start: "08:30"
+    end: "09:15"
+    category: meal
   - id: maintenance
-    label: Errands & chores
+    label: Maintenance
     start: "10:00"
     end: "12:00"
     category: maintenance
@@ -25,6 +30,11 @@ blocks:
     start: "13:30"
     end: "18:00"
     category: other
+  - id: dinner
+    label: Dinner
+    start: "18:30"
+    end: "19:30"
+    category: meal
 ---
 
 # Weekend

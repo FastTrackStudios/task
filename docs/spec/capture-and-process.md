@@ -402,6 +402,6 @@ acme-audio's inbox (one suggested from mail, one snoozed two weeks out,
 two carrying `@errands` / `#chore`, and two marked up with a person, a
 `#tag` and an `@context` — Sam by handle, Casey by name — and one naming
 Jordan, a mastering engineer who is a contact but not a member), weekday and weekend templates with
-an "Errands & chores" maintenance block (16:00–17:00 on weekdays), and
+a "Maintenance" block (16:00–17:00 on weekdays), and
 three open album tasks tagged `@errands`, `@chores` and `#chore` for that
 hour to bring forward. What is not met is in [unmet](unmet.md).

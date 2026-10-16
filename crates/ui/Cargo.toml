@@ -101,6 +101,11 @@ agent-proto = { workspace = true, features = ["vox"] }
 # Same arrangement as `finance-proto` above — the shell asking a server
 # capability a question, not depending on the mealplan app.
 mealplan-proto = { workspace = true, features = ["vox"] }
+# The meal sheet on Planner food blocks: recipes to plan from, and the
+# day's intake log to record what was eaten (calories) — the same
+# arrangement, asking the server, not depending on the apps.
+cookbook-proto = { workspace = true, features = ["vox"] }
+fitness-proto = { workspace = true, features = ["vox"] }
 scheduling-ui.workspace = true
 # Extracted feature pages — the shell routes to them, they own their
 # own protos and RPC calls. See crates/task/ui/ARCHITECTURE.md.

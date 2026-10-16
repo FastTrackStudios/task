@@ -24,7 +24,7 @@ pub type Assign = (String, String, Option<String>);
 /// The kinds a block can be, as the sheet offers them.
 const KINDS: &[(BlockCategory, &str)] = &[
     (BlockCategory::Allocatable, "Work"),
-    (BlockCategory::Maintenance, "Errands & chores"),
+    (BlockCategory::Maintenance, "Maintenance"),
     (BlockCategory::Meal, "Meal"),
     (BlockCategory::Exercise, "Exercise"),
     (BlockCategory::Spiritual, "Quiet time"),

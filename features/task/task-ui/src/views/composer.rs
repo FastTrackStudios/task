@@ -19,14 +19,14 @@
 //!
 //! On a phone it is a full-screen sheet; on a desk, a card. ⌘↩ creates.
 
-use architect_ui::lucide_dioxus::{CalendarDays, Clock, Link2, ListTree, Repeat, X};
+use architect_ui::lucide_dioxus::{CalendarDays, Clock, Link2, ListTree, Plus, Repeat, Tag, X};
 use dioxus::prelude::*;
 use uuid::Uuid;
 
 use super::issue_view::with_assignee;
 use super::picker::{PickOption, PropertyPicker, filtered};
 use super::properties::{
-    AssigneeChip, LabelsChip, PersonDot, PriorityChip, ProjectChip, StatusChip, label_color,
+    AssigneeChip, Hotkey, LabelsChip, PersonDot, PriorityChip, ProjectChip, StatusChip, label_color,
 };
 use crate::TaskInfo;
 
@@ -177,7 +177,37 @@ pub fn project_title(text: &str) -> String {
     rest.trim().to_owned()
 }
 
-/// The repeats the ⋯ menu offers, as RRULE bodies.
+/// The days the Due picker offers, one tap each: `(YYYY-MM-DD, label)`,
+/// and "No date" to clear it.
+fn due_options() -> Vec<PickOption> {
+    use chrono::Datelike as _;
+    let today = chrono::Local::now().date_naive();
+    let days_to_monday = (7 - today.weekday().num_days_from_monday()) % 7;
+    let next_monday = today
+        + chrono::Duration::days(i64::from(if days_to_monday == 0 {
+            7
+        } else {
+            days_to_monday
+        }));
+    let days_to_sat = (5 + 7 - today.weekday().num_days_from_monday()) % 7;
+    let weekend = today + chrono::Duration::days(i64::from(days_to_sat));
+    let opt = |d: chrono::NaiveDate, label: &str| {
+        PickOption::new(
+            d.to_string(),
+            format!("{label} · {}", d.format("%a %-d %b")),
+        )
+    };
+    vec![
+        opt(today, "Today"),
+        opt(today + chrono::Duration::days(1), "Tomorrow"),
+        opt(weekend, "This weekend"),
+        opt(next_monday, "Next week"),
+        opt(today + chrono::Duration::days(14), "In two weeks"),
+        PickOption::new("", "No date"),
+    ]
+}
+
+/// The repeats the More menu offers, as RRULE bodies.
 const REPEATS: &[(&str, &str)] = &[
     ("Every day", "FREQ=DAILY"),
     ("Every weekday", "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"),
@@ -238,6 +268,10 @@ pub fn Composer(props: ComposerProps) -> Element {
     let mut sub_draft = use_signal(String::new);
     let mut adding_sub = use_signal(|| false);
     let mut repeat_open = use_signal(|| false);
+    let mut due_open = use_signal(|| false);
+    let mut more_open = use_signal(|| false);
+    let mut show_labels = use_signal(|| false);
+    let mut labels_key = use_signal(|| None::<Hotkey>);
     let mut link_draft = use_signal(|| None::<String>);
     let mut create_more = use_signal(|| false);
     let mut cursor = use_signal(|| 0usize);
@@ -421,6 +455,16 @@ pub fn Composer(props: ComposerProps) -> Element {
         .is_none()
         .then(|| parsed.recurrence.clone())
         .flatten();
+    // Labels chosen by hand, then any the title's `#tags` add.
+    let chosen_labels: Vec<String> = {
+        let mut l = labels();
+        for t in parsed.tags.iter().filter(|t| *t != "task") {
+            if !l.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+                l.push(t.clone());
+            }
+        }
+        l
+    };
     let parsed_priority = priority()
         .is_none()
         .then(|| Some(parsed.priority.clone()).filter(|p| p != "normal" && p != "none"))
@@ -657,52 +701,83 @@ pub fn Composer(props: ComposerProps) -> Element {
                         })),
                         pending: new_project(),
                     }
-                    LabelsChip {
-                        chosen: {
-                            let mut l = labels();
-                            for t in parsed.tags.iter().filter(|t| *t != "task") {
-                                if !l.iter().any(|x| x.eq_ignore_ascii_case(t)) { l.push(t.clone()); }
-                            }
-                            l
-                        },
-                        known: props.known_labels.clone(),
-                        on_toggle: move |name: String| {
-                            let mut l = labels();
-                            if let Some(i) = l.iter().position(|x| x.eq_ignore_ascii_case(&name)) { l.remove(i); } else { l.push(name); }
-                            labels.set(l);
-                        },
-                    }
-                    // When — a date picker behind the chip.
-                    label {
-                        class: if due().or(parsed_due.clone()).is_some() { "relative inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" } else { "relative inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" },
-                        title: "Due date",
-                        span { class: "text-muted-foreground", CalendarDays { size: 14 } }
-                        {
-                            match due().or(parsed_due.clone()) {
-                                Some(d) => d.get(..10).and_then(|s| s.parse::<chrono::NaiveDate>().ok()).map_or(d.clone(), |x| x.format("%b %-d").to_string()),
-                                None => "Due".to_owned(),
-                            }
-                        }
-                        input {
-                            r#type: "date",
-                            class: "absolute inset-0 cursor-pointer opacity-0",
-                            onchange: move |e| due.set(Some(e.value()).filter(|v| !v.is_empty())),
+                    // The rest only once set — chosen from More.
+                    if !chosen_labels.is_empty() || show_labels() {
+                        LabelsChip {
+                            chosen: chosen_labels.clone(),
+                            known: props.known_labels.clone(),
+                            hotkey: Some(labels_key),
+                            on_toggle: move |name: String| {
+                                let mut l = labels();
+                                if let Some(i) = l.iter().position(|x| x.eq_ignore_ascii_case(&name)) { l.remove(i); } else { l.push(name); }
+                                labels.set(l);
+                            },
                         }
                     }
-                    // How often.
-                    div { class: "relative shrink-0",
+                    if let Some(d) = due().or(parsed_due.clone()) {
                         button {
                             r#type: "button",
-                            class: if recurrence().or(parsed_repeat.clone()).is_some() { "inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" } else { "inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" },
+                            class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
+                            title: "Due date",
+                            onclick: move |_| due_open.set(true),
+                            span { class: "text-muted-foreground", CalendarDays { size: 14 } }
+                            {d.get(..10).and_then(|s| s.parse::<chrono::NaiveDate>().ok()).map_or(d.clone(), |x| x.format("%b %-d").to_string())}
+                        }
+                    }
+                    if let Some(r) = recurrence().or(parsed_repeat.clone()) {
+                        button {
+                            r#type: "button",
+                            class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
                             title: "Repeat",
                             onclick: move |_| repeat_open.set(true),
                             span { class: "text-muted-foreground", Repeat { size: 14 } }
-                            {
-                                match recurrence().or(parsed_repeat.clone()) {
-                                    Some(r) => super::time::recurrence_summary(&r),
-                                    None => "Repeat".to_owned(),
+                            {super::time::recurrence_summary(&r)}
+                        }
+                    }
+                    // More: labels, a date, a repeat, a subtask, a link.
+                    div { class: "relative shrink-0",
+                        button {
+                            r#type: "button",
+                            "data-testid": "composer-more",
+                            class: "inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
+                            aria_label: "More properties",
+                            onclick: move |_| more_open.set(true),
+                            Plus { size: 14 }
+                            "More"
+                        }
+                        PropertyPicker {
+                            open: more_open(),
+                            title: "Add…",
+                            options: vec![
+                                PickOption::new("labels", "Labels").icon(rsx! { Tag { size: 15 } }),
+                                PickOption::new("due", "Due date").icon(rsx! { CalendarDays { size: 15 } }),
+                                PickOption::new("repeat", "Repeat").icon(rsx! { Repeat { size: 15 } }),
+                                PickOption::new("subtask", "Subtask").icon(rsx! { ListTree { size: 15 } }),
+                                PickOption::new("link", "Link").icon(rsx! { Link2 { size: 15 } }),
+                            ],
+                            number_from: None,
+                            on_pick: move |what: String| match what.as_str() {
+                                "labels" => {
+                                    show_labels.set(true);
+                                    labels_key.set(Some(Hotkey::Labels));
                                 }
-                            }
+                                "due" => due_open.set(true),
+                                "repeat" => repeat_open.set(true),
+                                "subtask" => adding_sub.set(true),
+                                "link" => link_draft.set(Some(String::new())),
+                                _ => {}
+                            },
+                            on_close: move |()| more_open.set(false),
+                        }
+                        // When: the common days, one tap each.
+                        PropertyPicker {
+                            open: due_open(),
+                            title: "Due…",
+                            options: due_options(),
+                            selected: vec![due().unwrap_or_default()],
+                            number_from: None,
+                            on_pick: move |d: String| due.set(Some(d).filter(|d| !d.is_empty())),
+                            on_close: move |()| due_open.set(false),
                         }
                         PropertyPicker {
                             open: repeat_open(),
@@ -715,20 +790,6 @@ pub fn Composer(props: ComposerProps) -> Element {
                             on_pick: move |rule: String| recurrence.set(Some(rule).filter(|r| !r.is_empty())),
                             on_close: move |()| repeat_open.set(false),
                         }
-                    }
-                    button {
-                        r#type: "button",
-                        class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
-                        onclick: move |_| adding_sub.set(true),
-                        span { class: "text-muted-foreground", ListTree { size: 14 } }
-                        "Subtask"
-                    }
-                    button {
-                        r#type: "button",
-                        class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
-                        onclick: move |_| link_draft.set(Some(String::new())),
-                        span { class: "text-muted-foreground", Link2 { size: 14 } }
-                        "Link"
                     }
                 }
 

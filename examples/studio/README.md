@@ -51,7 +51,7 @@ org, a peer replicates one, a server's data root holds `orgs/<slug>/`.
 | `vnt-video/Projects/Shared Project/` | **two orgs on one project**, on the disk of neither the one that started it. See its `project.md` |
 | `acme-audio/Projects/Z - Duplicates/` | housekeeping. Contains ` - `, so anything splitting on the dash before checking the prefix reads it as the project "Z" for the client "Duplicates" |
 | `acme-audio/Projects/tasks/` | all lowercase where people capitalise — Task's own storage, not somebody's work |
-| `acme-audio/Vault/Projects/Scheduling/templates/` | **a day with a maintenance hour** — weekday and weekend templates whose "Errands & chores" block brings `@errands` / `@chores` / `#chore` tasks forward (`docs/spec/capture-and-process.md`). The inbox captures it pairs with are generated at plant time (`example_org::INBOX`), because a snooze date has to be in the future of whenever you plant |
+| `acme-audio/Vault/Projects/Scheduling/templates/` | **a day with a maintenance hour** — weekday and weekend templates whose "Maintenance" block brings `@errands` / `@chores` / `#chore` tasks forward (`docs/spec/capture-and-process.md`). The inbox captures it pairs with are generated at plant time (`example_org::INBOX`), because a snooze date has to be in the future of whenever you plant |
 | `*.rpp-bak`, `*.rpp-bak-UNDO` | a DAW's own saves, beside the session file. Not sessions |
 | `.DS_Store`, `._Bass.wav` | platform droppings. `files.ignore.layers` says these never reach a listing |
 

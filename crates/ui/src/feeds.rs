@@ -532,6 +532,33 @@ feeds! {
         /// backend lists them.
         fetch_meal_plans() -> Vec<mealplan_proto::Meal>
             = list() as "list meal plans";
+        /// Plan a meal (the Planner's meal sheet).
+        create_meal(meal: mealplan_proto::Meal) -> mealplan_proto::Meal
+            = create(meal) as "plan a meal";
+        /// Take a planned meal off the plan.
+        delete_meal(id: &str) -> ()
+            = delete(id.to_owned()) as "remove a meal";
+    }
+}
+
+// The cookbook and the day's intake, for the same meal sheet: recipes to
+// plan from, and what was eaten (with its calories) recorded on the day.
+feeds! {
+    cookbook_proto::CookbookServiceClient {
+        /// Every recipe in the org's cookbook.
+        fetch_recipes() -> Vec<cookbook_proto::Recipe>
+            = list() as "list recipes";
+    }
+}
+
+feeds! {
+    fitness_proto::intake::IntakeServiceClient {
+        /// The day's intake log, made if it does not exist yet.
+        fetch_intake_day(date: &str) -> fitness_proto::intake::IntakeLog
+            = for_day(date.to_owned()) as "read the day's intake";
+        /// Save the day's intake log.
+        save_intake(log: fitness_proto::intake::IntakeLog) -> fitness_proto::intake::IntakeLog
+            = update(log) as "save the day's intake";
     }
 }
 

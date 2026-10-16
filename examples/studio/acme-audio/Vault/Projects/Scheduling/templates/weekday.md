@@ -9,6 +9,11 @@ blocks:
     start: "07:00"
     end: "07:30"
     category: reset
+  - id: breakfast
+    label: Breakfast
+    start: "07:30"
+    end: "08:00"
+    category: meal
   - id: studio-am
     label: Studio block
     start: "09:00"
@@ -26,11 +31,16 @@ blocks:
     end: "16:00"
     category: allocatable
   - id: maintenance
-    label: Errands & chores
+    label: Maintenance
     start: "16:00"
     end: "17:00"
     category: maintenance
     note: The maintenance hour — @errands, @chores and #chore tasks lead the list
+  - id: dinner
+    label: Dinner
+    start: "18:30"
+    end: "19:30"
+    category: meal
   - id: wind-down
     label: Wind-down
     start: "21:30"

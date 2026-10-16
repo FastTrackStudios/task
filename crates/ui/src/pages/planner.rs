@@ -2,10 +2,11 @@
 //!
 //! After Super Productivity's planner, made for a phone: you mostly need
 //! to know what today holds, so it shows one day as a single scrolling
-//! page — how full it is, then the day's shape in time (time blocks and
-//! events in order, the gaps between them as free time, a line where
-//! *now* is), then the work the day owes (overdue, due, in progress) and
-//! what got done. The week strip above it moves between days.
+//! page — its shape in time: time blocks and events in order, the gaps
+//! between them as free time, a line where *now* is. Meal blocks open the
+//! meal sheet. The work itself is the task list's, not repeated here
+//! ([`plan_day`] still reads it, for a later day view). The week strip
+//! above it moves between days.
 //!
 //! [`plan_day`] is the whole reading of the day — pure, so it is tested
 //! without a renderer; [`Planner`] draws it.
@@ -14,11 +15,9 @@ use chrono::{NaiveDate, Timelike};
 use dioxus::prelude::*;
 use task_proto::TaskInfo;
 use task_ui::display::TaskDisplay as _;
-use uuid::Uuid;
 use view_calendar::{ActualSpan, CalendarEvent, ColorTag, TemplateBlock};
 
-use crate::routes::Route;
-use crate::stores::{self, OrgTask};
+use crate::stores::OrgTask;
 
 /// Shorter gaps than this are not called free time.
 const MIN_FREE: u16 = 15;
@@ -34,6 +33,8 @@ pub enum Slot {
         label: String,
         assignment: Option<String>,
         color: ColorTag,
+        /// A Meal-kind block: it opens the meal sheet, not the editor.
+        meal: bool,
     },
     /// A calendar event.
     Event {
@@ -106,6 +107,7 @@ pub fn plan_day(
     events: &[CalendarEvent],
     actuals: &[ActualSpan],
     tasks: &[OrgTask],
+    meals: &[String],
 ) -> DayPlan {
     let today = now.date_naive();
     let mut plan = DayPlan::default();
@@ -121,6 +123,7 @@ pub fn plan_day(
             label: b.label.clone(),
             assignment: b.assignment.clone().filter(|a| !a.is_empty()),
             color: b.color,
+            meal: meals.contains(&b.id),
         });
     }
     for e in events {
@@ -272,139 +275,26 @@ pub fn Planner(
     blocks: Vec<TemplateBlock>,
     events: Vec<CalendarEvent>,
     actuals: Vec<ActualSpan>,
+    /// Ids of the blocks that are meals (breakfast, lunch, a snack…).
+    #[props(default)]
+    meal_blocks: Vec<String>,
     on_block: EventHandler<(NaiveDate, String)>,
+    /// A meal block was tapped: `(day, its label)`.
+    on_meal: EventHandler<(NaiveDate, String)>,
 ) -> Element {
-    let tasks = stores::use_task_list();
-    let task_muts = stores::use_task_mutations();
-    let projects = stores::use_project_store();
-    let _projects = stores::use_project_list();
-    let nav = use_navigator();
     // Re-read as time passes, so the now line and free time keep up.
     let tick = use_signal(|| 0u64);
     crate::chrome::use_second_tick(tick);
     let _ = tick();
-
-    let rows: Vec<OrgTask> = tasks
-        .value()
-        .map(|r| stores::unique_tasks(r).into_iter().cloned().collect())
-        .unwrap_or_default();
     let now = chrono::Local::now();
-    let plan = plan_day(day, now, &blocks, &events, &actuals, &rows);
-    let project_titles: std::collections::HashMap<Uuid, String> = projects
-        .list()
-        .iter()
-        .map(|r| (r.project.id, r.project.title.clone()))
-        .collect();
+    // The day's shape only — the work itself is the task list's.
+    let plan = plan_day(day, now, &blocks, &events, &actuals, &[], &meal_blocks);
     let is_today = day == now.date_naive();
-    let open = plan.overdue.len() + plan.due.len() + plan.doing.len();
-    let over = plan.estimate_min > plan.free_min && plan.free_min > 0;
-    let load = if plan.free_min == 0 {
-        0.0
-    } else {
-        (f64::from(plan.estimate_min) / f64::from(plan.free_min)).min(1.0) * 100.0
-    };
-
-    let task_row = move |row: OrgTask, done: bool| {
-        let t = row.task.clone();
-        let id = t.id;
-        let project = t.project_id.and_then(|p| project_titles.get(&p).cloned());
-        let estimate = t.time_estimate.filter(|m| *m > 0).map(dur);
-        let contexts = t.contexts.0.join(" ");
-        let late = !done && t.due_date().is_some_and(|d| d < now.date_naive());
-        let slug = row.slug.clone();
-        rsx! {
-            div { key: "{id}", class: "flex min-h-12 items-center gap-3 rounded-xl px-2 py-1.5 active:bg-accent/50",
-                button {
-                    r#type: "button",
-                    "data-testid": "planner-check",
-                    class: if done { "flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground" } else { "flex size-6 shrink-0 items-center justify-center rounded-full border-2 border-foreground/30 active:bg-foreground/10" },
-                    "aria-label": if done { "Mark open" } else { "Mark done" },
-                    onclick: move |e| {
-                        e.stop_propagation();
-                        let mut next = t.clone();
-                        if done {
-                            next.status = "todo".to_owned();
-                            next.completed_date = None;
-                        } else {
-                            next.status = "done".to_owned();
-                            next.completed_date = Some(chrono::Local::now().date_naive());
-                        }
-                        task_muts.apply(&slug, task_ui::TaskMutation::Update { task: next });
-                    },
-                    if done { architect_ui::lucide_dioxus::Check { size: 14 } }
-                }
-                button {
-                    r#type: "button",
-                    class: "flex min-w-0 flex-1 flex-col text-left",
-                    onclick: move |_| {
-                        nav.push(Route::TaskDetailRoute { id });
-                    },
-                    span { class: if done { "truncate text-[16px] text-muted-foreground line-through" } else { "truncate text-[16px] text-foreground" },
-                        "{row.task.title}"
-                    }
-                    if project.is_some() || !contexts.is_empty() || late {
-                        span { class: "flex items-center gap-1.5 truncate text-[13px] text-muted-foreground",
-                            if late {
-                                span { class: "text-rose-400", "Late" }
-                            }
-                            if let Some(p) = project { span { class: "truncate", "{p}" } }
-                            if !contexts.is_empty() { span { class: "truncate", "{contexts}" } }
-                        }
-                    }
-                }
-                if let Some(e) = estimate {
-                    span { class: "shrink-0 text-[13px] tabular-nums text-muted-foreground", "{e}" }
-                }
-            }
-        }
-    };
-    let section = |title: &'static str, n: usize| {
-        rsx! {
-            div { class: "flex items-center gap-2 px-2 pb-1 pt-5",
-                span { class: "text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/80", "{title}" }
-                span { class: "text-[12px] tabular-nums text-muted-foreground/60", "{n}" }
-            }
-        }
-    };
 
     rsx! {
         div {
             "data-testid": "planner",
-            class: "mx-auto flex w-full max-w-2xl flex-col px-3 pb-32 pt-2 sm:px-6",
-            // ── How full the day is ──
-            div { class: "rounded-2xl bg-card px-4 py-3.5",
-                div { class: "flex items-baseline gap-5",
-                    div { class: "flex flex-col",
-                        span { class: "text-[20px] font-semibold tabular-nums text-foreground", "{dur(plan.planned_min)}" }
-                        span { class: "text-[12px] text-muted-foreground", "planned" }
-                    }
-                    div { class: "flex flex-col",
-                        span { class: "text-[20px] font-semibold tabular-nums text-foreground", "{dur(plan.tracked_min)}" }
-                        span { class: "text-[12px] text-muted-foreground", "tracked" }
-                    }
-                    div { class: "flex flex-col",
-                        span { class: "text-[20px] font-semibold tabular-nums text-foreground", "{open}" }
-                        span { class: "text-[12px] text-muted-foreground", if open == 1 { "task" } else { "tasks" } }
-                    }
-                }
-                if plan.estimate_min > 0 && plan.free_min > 0 {
-                    div { class: "mt-3 flex flex-col gap-1.5",
-                        div { class: "h-1.5 overflow-hidden rounded-full bg-foreground/[0.08]",
-                            div {
-                                class: if over { "h-full rounded-full bg-rose-400" } else { "h-full rounded-full bg-primary" },
-                                style: "width: {load:.0}%",
-                            }
-                        }
-                        span { class: if over { "text-[13px] text-rose-300" } else { "text-[13px] text-muted-foreground" },
-                            if over {
-                                "{dur(plan.estimate_min)} of work, {dur(plan.free_min)} free — over by {dur(plan.estimate_min - plan.free_min)}"
-                            } else {
-                                "{dur(plan.estimate_min)} of work fits in {dur(plan.free_min)} free"
-                            }
-                        }
-                    }
-                }
-            }
+            class: "mx-auto flex w-full max-w-2xl flex-col px-3 pb-32 pt-1 sm:px-6",
             // ── All day ──
             if !plan.all_day.is_empty() {
                 div { class: "flex flex-wrap gap-1.5 px-1 pt-3",
@@ -439,7 +329,8 @@ pub fn Planner(
                                 }
                             }
                         }
-                        Slot::Block { id, start, end, label, assignment, color } => {
+                        Slot::Block { id, start, end, label, assignment, color, meal } => {
+                            let tap_label = label.clone();
                             let past = is_today && end <= now_minute(now);
                             let live = is_today && (start..end).contains(&now_minute(now));
                             rsx! {
@@ -448,14 +339,25 @@ pub fn Planner(
                                     r#type: "button",
                                     "data-testid": "planner-block",
                                     class: if past { "flex w-full items-stretch gap-3 rounded-xl py-2 text-left opacity-50 active:bg-accent/50" } else if live { "flex w-full items-stretch gap-3 rounded-xl bg-accent/50 py-2 text-left active:bg-accent" } else { "flex w-full items-stretch gap-3 rounded-xl py-2 text-left active:bg-accent/50" },
-                                    onclick: move |_| on_block.call((day, id.clone())),
+                                    onclick: move |_| {
+                                        if meal {
+                                            on_meal.call((day, tap_label.clone()));
+                                        } else {
+                                            on_block.call((day, id.clone()));
+                                        }
+                                    },
                                     span { class: "flex w-12 shrink-0 flex-col items-end pt-0.5",
                                         span { class: "text-[13px] font-medium tabular-nums text-foreground/85", "{clock(start)}" }
                                         span { class: "text-[12px] tabular-nums text-muted-foreground/70", "{clock(end)}" }
                                     }
                                     span { class: "w-1 shrink-0 rounded-full {bar(color)}" }
                                     span { class: "flex min-w-0 flex-1 flex-col",
-                                        span { class: "truncate text-[16px] text-foreground", "{label}" }
+                                        span { class: "flex items-center gap-1.5 truncate text-[16px] text-foreground",
+                                            if meal {
+                                                span { class: "text-amber-400", architect_ui::lucide_dioxus::Utensils { size: 14 } }
+                                            }
+                                            "{label}"
+                                        }
                                         if let Some(a) = assignment {
                                             span { class: "truncate text-[13px] text-muted-foreground", "{a}" }
                                         }
@@ -487,23 +389,6 @@ pub fn Planner(
                     }
                 }
             }
-            // ── What the day owes ──
-            if !plan.overdue.is_empty() {
-                {section("Overdue", plan.overdue.len())}
-                for r in plan.overdue.iter().cloned() { {task_row(r, false)} }
-            }
-            if !plan.doing.is_empty() {
-                {section("In progress", plan.doing.len())}
-                for r in plan.doing.iter().cloned() { {task_row(r, false)} }
-            }
-            if !plan.due.is_empty() {
-                {section(if is_today { "Due today" } else { "Due" }, plan.due.len())}
-                for r in plan.due.iter().cloned() { {task_row(r, false)} }
-            }
-            if !plan.done.is_empty() {
-                {section("Done", plan.done.len())}
-                for r in plan.done.iter().cloned() { {task_row(r, true)} }
-            }
         }
     }
 }
@@ -516,6 +401,7 @@ fn now_minute(now: chrono::DateTime<chrono::Local>) -> u16 {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use uuid::Uuid;
 
     fn day() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, 15).unwrap()
@@ -561,7 +447,7 @@ mod tests {
             block("Deep work", 9 * 60, 11 * 60),
             block("Mix", 13 * 60, 15 * 60),
         ];
-        let p = plan_day(day(), at(12, 0), &blocks, &[], &[], &[]);
+        let p = plan_day(day(), at(12, 0), &blocks, &[], &[], &[], &[]);
         let starts: Vec<u16> = p.timeline.iter().map(Slot::start).collect();
         assert_eq!(starts, vec![9 * 60, 11 * 60, 12 * 60, 13 * 60]);
         assert!(matches!(
@@ -589,6 +475,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         assert!(
             !p.timeline
@@ -606,7 +493,7 @@ mod tests {
             task("Next week", Some("2026-10-22"), "todo", Some(60)),
         ];
         let blocks = [block("A", 9 * 60, 10 * 60), block("B", 11 * 60, 12 * 60)];
-        let p = plan_day(day(), at(8, 0), &blocks, &[], &[], &tasks);
+        let p = plan_day(day(), at(8, 0), &blocks, &[], &[], &tasks, &[]);
         assert_eq!(p.due.len(), 1);
         assert_eq!(p.overdue.len(), 1);
         assert_eq!(p.doing.len(), 1);
@@ -620,9 +507,34 @@ mod tests {
             &[],
             &[],
             &tasks,
+            &[],
         );
         assert_eq!(later.due.len(), 1);
         assert!(later.overdue.is_empty() && later.doing.is_empty());
+    }
+
+    #[test]
+    fn a_meal_block_is_marked_so_it_opens_the_meal_sheet() {
+        let blocks = [
+            block("lunch", 12 * 60 + 30, 13 * 60 + 30),
+            block("studio", 9 * 60, 12 * 60),
+        ];
+        let p = plan_day(
+            day(),
+            at(8, 0),
+            &blocks,
+            &[],
+            &[],
+            &[],
+            &["lunch".to_owned()],
+        );
+        let meal = |id: &str| {
+            p.timeline
+                .iter()
+                .any(|s| matches!(s, Slot::Block { id: i, meal: true, .. } if i == id))
+        };
+        assert!(meal("lunch"));
+        assert!(!meal("studio"));
     }
 
     #[test]

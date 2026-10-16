@@ -12,6 +12,7 @@ pub mod files;
 pub mod gantt;
 pub mod home;
 pub mod inbox;
+pub mod meal_sheet;
 pub mod members;
 pub mod milestones;
 pub mod missing;

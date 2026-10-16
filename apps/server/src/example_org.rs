@@ -162,6 +162,8 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     })?;
     complete_mail_accounts(&mail)?;
     tracing::info_span!("plant.inbox").in_scope(|| plant_inbox(&vault, slug, &mut planted))?;
+    #[cfg(feature = "plugin-mealplan")]
+    tracing::info_span!("plant.meals").in_scope(|| plant_meals(&vault, slug, &mut planted))?;
     // Before the declared collections: a setlist declared over a library
     // names songs this import creates.
     tracing::info_span!("plant.chordsheets").in_scope(|| plant_chordsheet_library(org_root, slug));
@@ -963,6 +965,88 @@ pub fn plant_inbox(vault: &Path, slug: &str, planted: &mut Planted) -> std::io::
     Ok(())
 }
 
+/// A meal on the plan, dated against the plant.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredMeal {
+    pub org: &'static str,
+    /// The meal block it fills — `breakfast`, `lunch`, `dinner`.
+    pub slot: &'static str,
+    /// The recipe's name; its file is `Cookbook/<name>.cook` in the
+    /// org's Cooking wiki.
+    pub recipe: &'static str,
+    /// Planned for this many days after the plant.
+    pub in_days: i64,
+}
+
+/// What the demo has planned to eat: today's three meals and
+/// tomorrow's lunch, so the Planner's food blocks open onto a plan.
+pub const MEALS: &[DeclaredMeal] = &[
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "breakfast",
+        recipe: "Overnight Oats",
+        in_days: 0,
+    },
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "lunch",
+        recipe: "Red Lentil Soup",
+        in_days: 0,
+    },
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "dinner",
+        recipe: "Studio Chilli",
+        in_days: 0,
+    },
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "lunch",
+        recipe: "Session Grain Bowl",
+        in_days: 1,
+    },
+];
+
+/// A declared meal's recipe path, relative to the cookbook root.
+#[must_use]
+pub fn meal_recipe_path(m: &DeclaredMeal) -> String {
+    format!("Cookbook/{}.cook", m.recipe)
+}
+
+/// Plant [`MEALS`] for `slug` into its vault — each once, at the meal
+/// plan's own path, dated against now. A replant on a later day adds
+/// that day's, keeping what was there.
+#[cfg(feature = "plugin-mealplan")]
+pub fn plant_meals(vault: &Path, slug: &str, planted: &mut Planted) -> std::io::Result<()> {
+    let today = chrono::Local::now().date_naive();
+    for m in MEALS.iter().filter(|m| m.org == slug) {
+        let date = today + chrono::Duration::days(m.in_days);
+        let path = mealplan::default_meal_path(date, m.slot, None, None);
+        if vault.join(&path).exists() {
+            planted.kept += 1;
+            continue;
+        }
+        let mut meal = mealplan::model::Meal {
+            path,
+            id: uuid::Uuid::new_v4(),
+            name: m.recipe.to_owned(),
+            scheduled_for: date,
+            slot: m.slot.to_owned(),
+            servings: 1,
+            recipe_paths: mealplan::model::StringList(vec![meal_recipe_path(m)]),
+            status: mealplan::model::Status::Planned.as_str().to_owned(),
+            pantry_deductions: mealplan::model::PantryDeductions::default(),
+            tags: mealplan::model::StringList::default(),
+            date_created: None,
+            date_modified: None,
+            details: String::new(),
+        };
+        mealplan::write_meal(vault, &mut meal, false).map_err(std::io::Error::other)?;
+        planted.written += 1;
+    }
+    Ok(())
+}
+
 /// The example's members of one org.
 #[must_use]
 pub fn cast_of(slug: &str) -> Vec<Member> {
@@ -1375,6 +1459,13 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
                        sources, summaries, topics, words and paths, from which a page is \
                        taken into Bible Study (a promotion — copied, recorded on both ends) \
                        once it has been studied enough",
+    },
+    DeclaredWiki {
+        org: "acme-audio",
+        title: "Cooking",
+        visibility: Visibility::Private,
+        demonstrates: "the studio's cookbook — the recipes the Planner's meal blocks plan \
+                       from (`MEALS`), so a demo day has breakfast, lunch and dinner on it",
     },
     DeclaredWiki {
         org: "alice-personal",
@@ -2510,6 +2601,28 @@ mod declared_tests {
             has_tag && has_context,
             "the seed needs a #tag and an @context"
         );
+    }
+
+    /// Every planned meal names a recipe the org's Cooking wiki commits,
+    /// and the day templates have the meal blocks the plan fills.
+    #[test]
+    fn every_planned_meal_has_its_recipe_and_its_block() {
+        for m in MEALS {
+            let file = format!("{}/Wikis/Cooking/{}", m.org, meal_recipe_path(m));
+            assert!(STUDIO.get_file(&file).is_some(), "{file}: no such recipe");
+            let template = STUDIO
+                .get_file(format!(
+                    "{}/Vault/Projects/Scheduling/templates/weekday.md",
+                    m.org
+                ))
+                .and_then(|f| f.contents_utf8())
+                .expect("weekday template");
+            assert!(
+                template.contains(&format!("id: {}", m.slot)),
+                "the weekday template has no {} block",
+                m.slot
+            );
+        }
     }
 
     // t[verify process.capture.people]

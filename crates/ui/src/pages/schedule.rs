@@ -204,6 +204,15 @@ pub fn ScheduleView() -> Element {
         .unwrap_or_default();
     let plans_err = plans_result.error().cloned();
     let template_blocks = build_blocks(&plan_rows, &meal_lookup);
+    // Which blocks are meals: on the Planner they open the meal sheet.
+    let meal_blocks: Vec<String> = plan_rows
+        .iter()
+        .flat_map(|r| r.plan.blocks.iter())
+        .filter(|b| b.category == BlockCategory::Meal)
+        .map(|b| b.id.0.clone())
+        .collect();
+    // The meal sheet open over the Planner: `(day, block label)`.
+    let mut meal_open = use_signal(|| None::<(NaiveDate, String)>);
     let nav = use_navigator();
     // Which apps may claim a file the overlay links to.
     let plugins = crate::nav::use_active_plugins();
@@ -573,6 +582,8 @@ pub fn ScheduleView() -> Element {
                         events: events.clone(),
                         actuals: actuals.clone(),
                         on_block: move |(date, id)| editing.set(Some((date, id))),
+                        meal_blocks: meal_blocks.clone(),
+                        on_meal: move |(date, label)| meal_open.set(Some((date, label))),
                     }
                 }
             } else {
@@ -606,6 +617,15 @@ pub fn ScheduleView() -> Element {
                 on_event: move |mu| on_event(mu),
             }
             }
+            }
+        }
+        if let (Some((date, label)), Some(slug)) = (meal_open(), slug()) {
+            crate::pages::meal_sheet::MealSheet {
+                key: "{date}-{label}",
+                slug,
+                date,
+                label,
+                on_close: move |()| meal_open.set(None),
             }
         }
         if let Some((date, id, label, start_min, end_min, assignment, category)) = editor {
