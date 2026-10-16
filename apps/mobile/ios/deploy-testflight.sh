@@ -191,6 +191,14 @@ task_app_plist "$APP"
 # All reads are `|| true`-guarded inside the command sub so a missing key
 # can't trip set -e (a bare `var=$(failing)` assignment DOES exit under -e).
 DEV="${XCODE_DIR:-$(xcode-select -p)}"
+# Inside the nix dev shell DEVELOPER_DIR (and so xcode-select -p) is the
+# nix apple-sdk, which has no iPhoneOS platform: every read below came back
+# as PlistBuddy's "File Doesn't Exist" and the stamps went in empty or
+# garbled — and App Store Connect rejected the upload (90207, 90534). Ask
+# for the real Xcode instead.
+case "$DEV" in
+    /nix/store/*) DEV="$(env -u DEVELOPER_DIR /usr/bin/xcode-select -p)" ;;
+esac
 SDK="$DEV/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
 SDK_VER="$(/usr/libexec/PlistBuddy -c 'Print :Version' "$SDK/SDKSettings.plist" 2>/dev/null || true)"
 SDK_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$DEV/Platforms/iPhoneOS.platform/version.plist" 2>/dev/null || true)"
@@ -355,6 +363,10 @@ IPA="$WORK/FastTrackStudio.ipa"
 ( cd "$WORK" && ditto -c -k --norsrc --noextattr --keepParent Payload "$IPA" )
 
 echo "=== uploading to TestFlight ==="
-xcrun altool --upload-app -t ios -f "$IPA" \
+# In a clean environment: under the nix shell's variables altool's own
+# unpacking of the IPA failed ("Info.plist doesn't exist") and the server
+# then saw an app with no executable (90207).
+env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="$WORK" \
+    /usr/bin/xcrun altool --upload-app -t ios -f "$IPA" \
     --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 echo "=== DONE — build $BUILD_NO uploaded; it appears in TestFlight after Apple processes it (~5-15 min) ==="
