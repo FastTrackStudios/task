@@ -284,6 +284,10 @@ if [ -n "$WATCH_APP" ]; then
     # platform installed. Defaults to the main build's Xcode ($DEV).
     WATCH_DEV="${WATCH_XCODE_DIR:-$DEV}"
     # Unsigned generic-watchOS-device build; we re-sign manually below.
+    # Without the nix shell's toolchain variables: Xcode honours an
+    # exported LD and calls the bare linker with clang's flags
+    # ("ld: unknown options: -Xlinker …").
+    env -u LD -u LDPLUSPLUS -u CC -u CXX -u NIX_LDFLAGS -u NIX_CFLAGS_COMPILE \
     DEVELOPER_DIR="$WATCH_DEV" xcodebuild \
         -project "$WATCH_DIR/$WATCH_SCHEME.xcodeproj" -scheme "$WATCH_SCHEME" \
         -configuration Release -destination 'generic/platform=watchOS' \
@@ -343,8 +347,12 @@ mkdir -p "$WORK/Payload"
 cp -R "$APP" "$WORK/Payload/"
 IPA="$WORK/FastTrackStudio.ipa"
 # ditto (not zip) — preserves the _CodeSignature/CodeResources symlink that
-# altool requires; a plain zip breaks it.
-( cd "$WORK" && ditto -c -k --sequesterRsrc --keepParent Payload "$IPA" )
+# altool requires; a plain zip breaks it. --norsrc --noextattr: no
+# __MACOSX/ AppleDouble tree. Files built on a recent macOS carry a
+# com.apple.provenance xattr, and with --sequesterRsrc the archive grew a
+# second __MACOSX/Payload/TaskAppMobile.app/ that the upload read as an
+# app with no executable (ITMS 90207).
+( cd "$WORK" && ditto -c -k --norsrc --noextattr --keepParent Payload "$IPA" )
 
 echo "=== uploading to TestFlight ==="
 xcrun altool --upload-app -t ios -f "$IPA" \
