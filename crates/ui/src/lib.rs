@@ -25,6 +25,7 @@ pub mod auth;
 pub mod central_login;
 pub mod chrome;
 pub mod collab;
+pub mod deep_link;
 pub mod device_pairing;
 pub mod device_store;
 pub mod doc_editor;

@@ -58,7 +58,21 @@ fn main() {
     // screen (LaunchBackground, apps/mobile/ios/app-plist.sh), so the
     // flash was the only light frame in the whole start.
     dioxus::LaunchBuilder::new()
-        .with_cfg(dioxus::mobile::Config::new().with_background_color(LAUNCH_BACKGROUND))
+        .with_cfg(
+            dioxus::mobile::Config::new()
+                .with_background_color(LAUNCH_BACKGROUND)
+                // Links the app is opened with — the Action button, a
+                // Shortcut, a widget (`app.fasttrackstudio.task://capture`
+                // …): tao hands them over as `Opened`, cold launch included;
+                // `ui::deep_link` goes where they say.
+                .with_custom_event_handler(|event, _| {
+                    if let dioxus::mobile::tao::event::Event::Opened { urls } = event {
+                        for url in urls {
+                            ui::deep_link::push(url.to_string());
+                        }
+                    }
+                }),
+        )
         .launch(Root);
 }
 

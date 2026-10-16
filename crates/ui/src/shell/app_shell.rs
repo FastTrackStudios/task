@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 
 use crate::chrome::{FleetingModal, TopBar, provide_chrome_contexts};
 use crate::routes::Route;
-use crate::shell::mobile::{BottomTabBar, MobileTimerDock};
+use crate::shell::mobile::BottomTabBar;
 
 #[component]
 pub fn AppShell() -> Element {
@@ -155,10 +155,9 @@ pub fn AppShell() -> Element {
                             if !matches!(current, Route::VaultRoute { .. }) {
                                 BottomTabBar { current: current.clone() }
                             }
-                            // Not on the timer's own page — it is the timer.
-                            if !matches!(current, Route::TimerNowRoute {}) {
-                                MobileTimerDock {}
-                            }
+                            // No floating timer pill: it sat over the page's own
+                            // buttons. A running timer shows in the Dynamic Island
+                            // (its Live Activity) and on its page, /timer/now.
                         }
                     }
                     // The right dock: whatever an app puts beside the
@@ -281,6 +280,8 @@ pub fn AppShell() -> Element {
         // Mounts its own document-level hotkey listener.
         crate::palette::CommandPalette {}
         crate::notes_search::NotesSearch {}
+        // Links the Action button, Shortcuts and widgets open.
+        crate::deep_link::DeepLinks {}
         // A typing-test launch (`TASK_TYPING_TEST=1`) types every case
         // into notes and reports; nothing otherwise.
         if crate::typing_test::enabled() {
