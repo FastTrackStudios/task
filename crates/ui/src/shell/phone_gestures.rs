@@ -274,6 +274,16 @@ pub fn PhoneGestures(has_left: bool, has_right: bool) -> Element {
             r.set(has_right);
         }
     }
+    // A drawer coming in puts the keyboard away: the note under it keeps
+    // focus otherwise, and the keyboard covers half the drawer. Watches
+    // the open state, so a swipe and a button both count.
+    use_effect(move || {
+        if (panels.left_open)() || (panels.right_open)() {
+            let _ = dioxus::document::eval(
+                "const a=document.activeElement;if(a&&a!==document.body&&a.blur)a.blur();",
+            );
+        }
+    });
     use_hook(|| {
         let _ = document::eval(FOCUS_RULE_JS);
     });

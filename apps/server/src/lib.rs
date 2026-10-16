@@ -1053,9 +1053,9 @@ pub(crate) async fn build_org_state(
         // used to be constructed with its root already in, which is
         // precisely the second registration path this removes.
         std::fs::create_dir_all(&vault_root).map_err(|e| eyre::eyre!("vault backend: {e}"))?;
-        // The notes every vault starts with (Example Formatting), once.
+        // The notes every vault starts with (Home, Example Formatting), once.
         match starter::plant(&vault_root, org_root.path()) {
-            Ok(planted) => architect_telemetry::wide::set("starter.planted", planted),
+            Ok(planted) => architect_telemetry::wide::set("starter.planted", planted as i64),
             Err(e) => architect_telemetry::wide::set("starter.error", e.to_string()),
         }
         let vault_sync_state = vault::Backend::with_roots(std::collections::HashMap::new());

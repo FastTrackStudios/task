@@ -1,5 +1,5 @@
 #![allow(clippy::large_futures)]
-//! Every vault starts with an **Example Formatting** note, end to end over
+//! Every vault starts with **Home** and an **Example Formatting** note, end to end over
 //! a live `task-server`: the org's first boot plants it in the vault, it
 //! is served like any note (in the folder index, readable, a tour of the
 //! formatting), and a note the person deleted is not planted again when
@@ -32,6 +32,15 @@ async fn every_vault_starts_with_example_formatting_once() {
     let sync: VaultSyncClient = lane(&url).await;
 
     assert!(has_note(&sync).await, "the first boot plants the note");
+    // And the home note the vault opens on.
+    let idx = sync
+        .folder_index("default".into())
+        .await
+        .expect("folder index");
+    assert!(
+        idx.pages.iter().any(|p| p.path == "Home.md"),
+        "every vault starts with Home.md"
+    );
     let bytes = sync
         .get_file("default".into(), PATH.into())
         .await

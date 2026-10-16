@@ -99,6 +99,10 @@ pub(crate) use rpc::{create_new_file, fetch_backlinks, fetch_folder_index, fetch
 
 use crate::document_session::VAULT_ID;
 
+/// The note the vault opens on — the server plants it in every vault
+/// (`task_server::starter::HOME_PATH`).
+pub(crate) const HOME_NOTE: &str = "Home.md";
+
 /// Minimal payload to open a file: its path + last-known sha.
 #[derive(Clone, PartialEq)]
 pub struct FileMeta {
@@ -397,6 +401,29 @@ pub fn VaultView(
         }
     });
 
+    // The vault opens on its home note, as Obsidian does: `/vault` with
+    // nothing asked for goes to `Home.md` once the index has it. The
+    // node plants it in every vault (`starter.rs`); the page never makes
+    // one — racing the planter, it wrote an empty Home the planter then
+    // kept as the person's own. A vault whose Home was deleted opens on
+    // the list. Once per visit, so closing the note stays closed.
+    let mut went_home = use_signal(|| false);
+    use_effect(move || {
+        if *went_home.peek() || !initial_path().is_empty() || selected.peek().is_some() {
+            return;
+        }
+        let Some(Ok(pages)) = &*files.read() else {
+            return;
+        };
+        if pages.iter().any(|p| p.path == HOME_NOTE) {
+            went_home.set(true);
+            nav.replace(crate::routes::Route::VaultRoute {
+                path: HOME_NOTE.to_owned(),
+                org: active.peek().clone(),
+            });
+        }
+    });
+
     // Pane → route sync: keep the top tab strip (the ONE tab UI now
     // that the inner note-tab bar is hidden in single-pane mode)
     // tracking the focused pane's active note. Shares `last_link` with
@@ -609,33 +636,24 @@ pub fn VaultView(
             }
         }
     };
-    // The drawer's head: the name, then New note, Collapse all and
-    // Search in thumb-sized buttons (Obsidian's drawer toolbar).
+    // The drawer's head is the navigator's own Vault | Wikis row; this
+    // page adds New note at its right and the search bar under it —
+    // every vault and wiki's text, whichever side is showing. (Commands
+    // and pages are the palette's — pull down.)
     let icon_btn = "flex size-10 items-center justify-center rounded-full text-foreground/80 active:bg-foreground/10";
-    let drawer_toolbar = rsx! {
-        div { class: "flex items-center gap-1 px-4 pb-2 pt-3 md:hidden",
-            h2 { class: "min-w-0 flex-1 truncate text-[20px] font-semibold tracking-[-0.01em]", "Notes" }
-            button {
-                r#type: "button",
-                class: icon_btn,
-                title: "New note",
-                "aria-label": "New note",
-                "data-testid": "drawer-new-note",
-                onclick: move |_| new_untitled(),
-                SquarePen { size: 20 }
-            }
-            button {
-                r#type: "button",
-                class: icon_btn,
-                title: "Collapse all",
-                "aria-label": "Collapse all",
-                onclick: move |_| collapse_all(),
-                ChevronsDownUp { size: 20 }
-            }
+    let drawer_actions = rsx! {
+        button {
+            r#type: "button",
+            class: icon_btn,
+            title: "New note",
+            "aria-label": "New note",
+            "data-testid": "drawer-new-note",
+            onclick: move |_| new_untitled(),
+            SquarePen { size: 20 }
         }
-        // The search bar: every vault and wiki's text. (Commands and
-        // pages are the palette's — pull down.)
-        div { class: "px-3 pb-2 md:hidden",
+    };
+    let drawer_search = rsx! {
+        div { class: "px-3 pb-2",
             button {
                 r#type: "button",
                 class: "flex h-11 w-full items-center gap-2 rounded-full bg-foreground/[0.06] px-4 text-left text-[16px] text-muted-foreground active:bg-foreground/10",
@@ -828,10 +846,17 @@ pub fn VaultView(
             }
         }
         // ── Phone drawers (the shell swipes them in) ──
-        // Left: the files, with the new-note toolbar — the vault's own
-        // tree rather than the shell's explorer. Right, while a note is
-        // open: its properties, links, graph and share.
-        PhoneDrawer { side: Side::Left, testid: "vault-drawer".to_owned(), {drawer_toolbar} {tree_body} }
+        // Left: the new-note toolbar over the same navigator the desk
+        // shows — Folders (each note under the parent it names) or Tags,
+        // the toggle at its top. Right, while a note is open: its
+        // properties, links, graph and share.
+        PhoneDrawer { side: Side::Left, testid: "vault-drawer".to_owned(),
+            crate::shell::explorer::VaultExplorer {
+                org: active(),
+                actions: drawer_actions,
+                below: drawer_search,
+            }
+        }
         if has_file {
             PhoneDrawer { side: Side::Right, testid: "note-drawer".to_owned(),
                 NoteInspector {

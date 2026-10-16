@@ -367,8 +367,13 @@ pub(crate) fn NoteView(
     // body; a desk the other way round.
     let on_phone =
         try_use_context::<crate::shell::phone_gestures::PhonePanels>().is_some_and(|p| (p.phone)());
+    // An empty note takes the keyboard — it was just made to be written
+    // in. Never the vault's Home: it is a page you arrive on and read
+    // (its links are the point), edited when you choose to.
+    let is_home = fresh_path == crate::pages::vault::HOME_NOTE;
     let autofocus = use_memo(move || {
-        session.current_path().as_deref() == Some(fresh_path.as_str())
+        !is_home
+            && session.current_path().as_deref() == Some(fresh_path.as_str())
             && body_state.read().doc.is_empty()
     });
 
