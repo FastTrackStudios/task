@@ -357,6 +357,12 @@ pub fn ProjectChip(
     projects: Vec<(Uuid, String)>,
     on_change: EventHandler<Option<Uuid>>,
     #[props(default)] hotkey: Option<Signal<Option<Hotkey>>>,
+    /// Offer "Create “…”" for a name no project has; the caller makes it.
+    #[props(default)]
+    on_create: Option<EventHandler<String>>,
+    /// A project about to be made (named, no id yet) — shown as chosen.
+    #[props(default)]
+    pending: Option<String>,
 ) -> Element {
     let mut open = use_signal(|| false);
     follow_hotkey(hotkey, Hotkey::Project, open);
@@ -370,12 +376,14 @@ pub fn ProjectChip(
                 .icon(rsx! { span { class: "text-primary", BoxIcon { size: 14 } } }),
         );
     }
-    let label = project.and_then(|p| {
-        projects
-            .iter()
-            .find(|(id, _)| *id == p)
-            .map(|(_, n)| n.clone())
-    });
+    let label = project
+        .and_then(|p| {
+            projects
+                .iter()
+                .find(|(id, _)| *id == p)
+                .map(|(_, n)| n.clone())
+        })
+        .or(pending);
     rsx! {
         div { class: "relative",
             Chip {
@@ -393,6 +401,7 @@ pub fn ProjectChip(
                 selected: vec![project.map(|p| p.to_string()).unwrap_or_default()],
                 number_from: None,
                 on_pick: move |id: String| on_change.call(id.parse::<Uuid>().ok()),
+                on_create,
                 on_close: move |()| open.set(false),
             }
         }

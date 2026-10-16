@@ -19,12 +19,12 @@
 //!
 //! On a phone it is a full-screen sheet; on a desk, a card. ⌘↩ creates.
 
-use architect_ui::lucide_dioxus::{CalendarDays, Clock, Ellipsis, Link2, ListTree, Repeat, X};
+use architect_ui::lucide_dioxus::{CalendarDays, Clock, Link2, ListTree, Repeat, X};
 use dioxus::prelude::*;
 use uuid::Uuid;
 
 use super::issue_view::with_assignee;
-use super::picker::{PickOption, filtered};
+use super::picker::{PickOption, PropertyPicker, filtered};
 use super::properties::{
     AssigneeChip, LabelsChip, PersonDot, PriorityChip, ProjectChip, StatusChip, label_color,
 };
@@ -237,21 +237,24 @@ pub fn Composer(props: ComposerProps) -> Element {
     let mut subs = use_signal(Vec::<String>::new);
     let mut sub_draft = use_signal(String::new);
     let mut adding_sub = use_signal(|| false);
-    let mut menu = use_signal(|| false);
+    let mut repeat_open = use_signal(|| false);
     let mut link_draft = use_signal(|| None::<String>);
     let mut create_more = use_signal(|| false);
     let mut cursor = use_signal(|| 0usize);
     // What it becomes: picked by hand, else read from the text while it
     // opened as a note (a plain thought stays a note).
     let opened_as = props.kind;
-    // Capture or Project — the one choice made by hand.
-    let mut picked = use_signal(|| None::<CaptureKind>);
-    let switchable = props.on_note.is_some() && props.on_project.is_some();
+    // A project typed into the Project picker that does not exist yet —
+    // made along with the task. (There is no Capture | Project switch:
+    // a new project comes from here, or from the project list.)
+    let mut new_project = use_signal(|| None::<String>);
+    let switchable = props.on_note.is_some();
     // Given anything a task has, a capture is a task.
     let given = status() != "open"
         || priority().is_some()
         || assignee().is_some()
         || project().is_some()
+        || new_project().is_some()
         || !labels().is_empty()
         || due().is_some()
         || recurrence().is_some()
@@ -260,13 +263,10 @@ pub fn Composer(props: ComposerProps) -> Element {
     let tasky = opened_as == CaptureKind::Task || given || text_kind == CaptureKind::Task;
     let kind = if !switchable {
         opened_as
+    } else if tasky {
+        CaptureKind::Task
     } else {
-        match picked() {
-            Some(CaptureKind::Project) => CaptureKind::Project,
-            None if text_kind == CaptureKind::Project => CaptureKind::Project,
-            _ if tasky => CaptureKind::Task,
-            _ => CaptureKind::Note,
-        }
+        CaptureKind::Note
     };
     // Yours unless you say otherwise — once it is a task.
     let default_assignee = props.people.first().cloned();
@@ -363,7 +363,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                 }
                 CaptureKind::Task => {}
             }
-            let task = compose(
+            let mut task = compose(
                 &t,
                 &description.peek(),
                 &status.peek(),
@@ -375,6 +375,15 @@ pub fn Composer(props: ComposerProps) -> Element {
                 recurrence.peek().as_deref(),
                 &projects,
             );
+            // A project named in the picker that does not exist yet is
+            // made now, and the task filed under it by name.
+            if let (None, Some(name)) = (project.peek().clone(), new_project.peek().clone()) {
+                if let Some(on_project) = props.on_project {
+                    on_project.call((name.clone(), String::new()));
+                }
+                task.project_id = None;
+                task.projects = task_proto::model::StringList(vec![format!("[[{name}]]")]);
+            }
             props.on_create.call((task, subs.peek().clone()));
             if *create_more.peek() {
                 title.set(String::new());
@@ -442,33 +451,17 @@ pub fn Composer(props: ComposerProps) -> Element {
                         span { class: "rounded-md bg-muted/60 px-1.5 py-0.5 font-medium text-foreground/80", "{props.place}" }
                         span { "›" }
                     }
-                    if switchable {
-                        // Capture or Project: the capture turns itself into
-                        // a task when it is given a person, a date, a
-                        // priority… — a project is the deliberate choice.
-                        div { class: "flex items-center gap-0.5 rounded-full bg-foreground/[0.06] p-0.5",
-                            role: "radiogroup",
-                            aria_label: "What this is",
-                            button {
-                                r#type: "button",
-                                role: "radio",
-                                aria_checked: "{kind != CaptureKind::Project}",
-                                class: if kind != CaptureKind::Project { "rounded-full bg-foreground/[0.12] px-3 py-1 text-[13px] font-semibold text-foreground" } else { "rounded-full px-3 py-1 text-[13px] text-muted-foreground active:text-foreground" },
-                                onclick: move |_| picked.set(Some(CaptureKind::Note)),
-                                // Says what it has become: Capture, or Task.
-                                if kind == CaptureKind::Task { "Task" } else { "Capture" }
-                            }
-                            button {
-                                r#type: "button",
-                                role: "radio",
-                                aria_checked: "{kind == CaptureKind::Project}",
-                                class: if kind == CaptureKind::Project { "rounded-full bg-foreground/[0.12] px-3 py-1 text-[13px] font-semibold text-foreground" } else { "rounded-full px-3 py-1 text-[13px] text-muted-foreground active:text-foreground" },
-                                onclick: move |_| picked.set(Some(CaptureKind::Project)),
-                                "Project"
-                            }
+                    // What it is right now: a capture, until it is given
+                    // something a task has — then a task. Nothing to pick.
+                    span {
+                        "data-testid": "composer-kind",
+                        class: if kind == CaptureKind::Task { "rounded-full bg-primary/15 px-2.5 py-0.5 text-[13px] font-semibold text-primary" } else { "rounded-full bg-foreground/[0.07] px-2.5 py-0.5 text-[13px] font-semibold text-foreground/80" },
+                        match kind {
+                            CaptureKind::Task if switchable => "Task",
+                            CaptureKind::Task => "New task",
+                            CaptureKind::Project => "New project",
+                            CaptureKind::Note => "Capture",
                         }
-                    } else {
-                        span { "New task" }
                     }
                     button {
                         r#type: "button",
@@ -626,6 +619,9 @@ pub fn Composer(props: ComposerProps) -> Element {
                 }
 
                 // ── the chips ──
+                // Rides on top of the keyboard; each chip opens its picker
+                // above it. Wrapped, not a sideways scroller: iOS clips a
+                // fixed sheet to a scrolling parent, which hid the pickers.
                 div { class: if kind != CaptureKind::Project { "flex flex-wrap items-center gap-1.5 border-t border-border/60 px-4 py-2.5" } else { "hidden" },
                     StatusChip { status: status(), on_change: move |s: String| status.set(s) }
                     PriorityChip {
@@ -653,6 +649,13 @@ pub fn Composer(props: ComposerProps) -> Element {
                             let projects = projects.clone();
                             move |id: Option<Uuid>| project.set(id.and_then(|id| projects.iter().find(|(p, _)| *p == id).cloned()))
                         },
+                        // Type a name no project has and press Enter: it is made
+                        // with the task.
+                        on_create: props.on_project.map(|_| EventHandler::new(move |name: String| {
+                            project.set(None);
+                            new_project.set(Some(name));
+                        })),
+                        pending: new_project(),
                     }
                     LabelsChip {
                         chosen: {
@@ -669,67 +672,63 @@ pub fn Composer(props: ComposerProps) -> Element {
                             labels.set(l);
                         },
                     }
-                    if let Some(d) = due().or(parsed_due.clone()) {
-                        span { class: "inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-foreground md:h-7",
-                            CalendarDays { size: 14 }
-                            {d.get(..10).and_then(|s| s.parse::<chrono::NaiveDate>().ok()).map_or(d.clone(), |x| x.format("%b %-d").to_string())}
+                    // When — a date picker behind the chip.
+                    label {
+                        class: if due().or(parsed_due.clone()).is_some() { "relative inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" } else { "relative inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" },
+                        title: "Due date",
+                        span { class: "text-muted-foreground", CalendarDays { size: 14 } }
+                        {
+                            match due().or(parsed_due.clone()) {
+                                Some(d) => d.get(..10).and_then(|s| s.parse::<chrono::NaiveDate>().ok()).map_or(d.clone(), |x| x.format("%b %-d").to_string()),
+                                None => "Due".to_owned(),
+                            }
+                        }
+                        input {
+                            r#type: "date",
+                            class: "absolute inset-0 cursor-pointer opacity-0",
+                            onchange: move |e| due.set(Some(e.value()).filter(|v| !v.is_empty())),
                         }
                     }
-                    if let Some(r) = recurrence().or(parsed_repeat.clone()) {
-                        span { class: "inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-foreground md:h-7",
-                            Repeat { size: 14 }
-                            {super::time::recurrence_summary(&r)}
-                        }
-                    }
-                    // ⋯ — the rest.
-                    div { class: "relative",
+                    // How often.
+                    div { class: "relative shrink-0",
                         button {
                             r#type: "button",
-                            class: "inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 text-muted-foreground hover:bg-accent md:h-7 md:w-7",
-                            aria_label: "More options",
-                            onclick: move |_| menu.toggle(),
-                            Ellipsis { size: 14 }
-                        }
-                        if menu() {
-                            div { class: "fixed inset-0 z-40", onclick: move |_| menu.set(false) }
-                            div { class: "absolute bottom-full right-0 z-50 mb-1 flex w-60 flex-col rounded-lg border border-border bg-popover p-1 text-[13px] shadow-xl md:bottom-auto md:left-0 md:right-auto md:top-full md:mb-0 md:mt-1",
-                                label { class: "relative flex min-h-10 cursor-pointer items-center gap-2.5 rounded-md px-2.5 hover:bg-accent md:min-h-8",
-                                    CalendarDays { size: 14 }
-                                    span { class: "flex-1", "Set due date" }
-                                    kbd { class: "font-mono text-[10px] text-muted-foreground", "⇧D" }
-                                    input {
-                                        r#type: "date",
-                                        class: "absolute inset-0 cursor-pointer opacity-0",
-                                        onchange: move |e| { due.set(Some(e.value()).filter(|v| !v.is_empty())); menu.set(false); },
-                                    }
-                                }
-                                for (label, rule) in REPEATS.iter().copied() {
-                                    button {
-                                        key: "{rule}",
-                                        r#type: "button",
-                                        class: "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left hover:bg-accent md:min-h-8",
-                                        onclick: move |_| { recurrence.set(Some(rule.to_owned())); menu.set(false); },
-                                        Repeat { size: 14 }
-                                        span { "{label}" }
-                                    }
-                                }
-                                button {
-                                    r#type: "button",
-                                    class: "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left hover:bg-accent md:min-h-8",
-                                    onclick: move |_| { link_draft.set(Some(String::new())); menu.set(false); },
-                                    Link2 { size: 14 }
-                                    span { class: "flex-1", "Add link…" }
-                                }
-                                div { class: "my-1 h-px bg-border" }
-                                button {
-                                    r#type: "button",
-                                    class: "flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-left hover:bg-accent md:min-h-8",
-                                    onclick: move |_| { adding_sub.set(true); menu.set(false); },
-                                    ListTree { size: 14 }
-                                    span { class: "flex-1", "Add subtask" }
+                            class: if recurrence().or(parsed_repeat.clone()).is_some() { "inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" } else { "inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]" },
+                            title: "Repeat",
+                            onclick: move |_| repeat_open.set(true),
+                            span { class: "text-muted-foreground", Repeat { size: 14 } }
+                            {
+                                match recurrence().or(parsed_repeat.clone()) {
+                                    Some(r) => super::time::recurrence_summary(&r),
+                                    None => "Repeat".to_owned(),
                                 }
                             }
                         }
+                        PropertyPicker {
+                            open: repeat_open(),
+                            title: "Repeat…",
+                            options: std::iter::once(PickOption::new("", "Doesn't repeat"))
+                                .chain(REPEATS.iter().map(|(label, rule)| PickOption::new(*rule, *label)))
+                                .collect::<Vec<_>>(),
+                            selected: vec![recurrence().unwrap_or_default()],
+                            number_from: None,
+                            on_pick: move |rule: String| recurrence.set(Some(rule).filter(|r| !r.is_empty())),
+                            on_close: move |()| repeat_open.set(false),
+                        }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
+                        onclick: move |_| adding_sub.set(true),
+                        span { class: "text-muted-foreground", ListTree { size: 14 } }
+                        "Subtask"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
+                        onclick: move |_| link_draft.set(Some(String::new())),
+                        span { class: "text-muted-foreground", Link2 { size: 14 } }
+                        "Link"
                     }
                 }
 
