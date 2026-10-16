@@ -178,6 +178,21 @@ pub fn project_title(text: &str) -> String {
     rest.trim().to_owned()
 }
 
+/// Installed while the composer is open (see [`Composer`]). Idempotent.
+const KEEP_KEYBOARD_JS: &str = r#"
+if (!window.__composerKeep) {
+  window.__composerKeep = true;
+  document.addEventListener('focusout', () => {
+    setTimeout(() => {
+      const t = document.getElementById('composer-title');
+      if (!t) return;
+      const a = document.activeElement;
+      if (!a || a === document.body) t.focus({ preventScroll: true });
+    }, 0);
+  }, true);
+}
+"#;
+
 /// The days the Due picker offers, one tap each: `(YYYY-MM-DD, label)`,
 /// and "No date" to clear it.
 fn due_options() -> Vec<PickOption> {
@@ -475,6 +490,14 @@ pub fn Composer(props: ComposerProps) -> Element {
         .then(|| Some(parsed.priority.clone()).filter(|p| p != "normal" && p != "none"))
         .flatten();
 
+    // Keep the keyboard up while the properties are used: a row tapped
+    // or a picker closed leaves focus on nothing, which drops the
+    // keyboard — so focus goes back to the title, unless it went to
+    // another field (a picker's search, the details).
+    use_effect(|| {
+        let _ = document::eval(KEEP_KEYBOARD_JS);
+    });
+
     rsx! {
         div {
             // A phone: the visible viewport — the space above the keyboard —
@@ -525,6 +548,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                     div { class: "relative",
                         textarea {
                             aria_label: "{title_hint}",
+                            id: "composer-title",
                             rows: "1",
                             class: "w-full resize-none bg-transparent pt-2 text-[20px] font-semibold leading-7 tracking-[-0.1px] text-foreground outline-none [field-sizing:content] placeholder:text-muted-foreground md:text-[18px]",
                             placeholder: "{title_hint}",

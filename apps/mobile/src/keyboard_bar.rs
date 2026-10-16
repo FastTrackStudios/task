@@ -10,7 +10,9 @@
 //! answer `inputAccessoryView` with nil.
 //!
 //! The method is added on that class alone (`class_replaceMethod`), so
-//! no other responder in the app changes. Everything is
+//! no other responder in the app changes. The same module lets a page's own
+//! `focus()` raise the keyboard (WebKit otherwise wants a tap first),
+//! so capture opened from the Action button or a widget is ready to type. Everything is
 //! `cfg(target_os = "ios")`; [`init`] is a no-op elsewhere.
 
 #[cfg(target_os = "ios")]
@@ -45,6 +47,79 @@ mod ios {
             );
         }
         tracing::info!("keyboard bar: the web view's accessory bar is off");
+        allow_programmatic_focus();
+    }
+
+    use std::sync::OnceLock;
+
+    use objc2::runtime::Bool;
+
+    static ORIGINAL: OnceLock<usize> = OnceLock::new();
+
+    type ElementDidFocus = unsafe extern "C-unwind" fn(
+        *mut AnyObject,
+        Sel,
+        *mut std::ffi::c_void,
+        Bool,
+        Bool,
+        u64,
+        *mut AnyObject,
+    );
+
+    /// `-[WKContentView _elementDidFocus:userIsInteracting:…]`, told the
+    /// person is interacting — so a page's `focus()` raises the keyboard.
+    unsafe extern "C-unwind" fn element_did_focus(
+        this: *mut AnyObject,
+        cmd: Sel,
+        element: *mut std::ffi::c_void,
+        _user_is_interacting: Bool,
+        blur_previous: Bool,
+        activity_changes: u64,
+        user_object: *mut AnyObject,
+    ) {
+        let Some(&imp) = ORIGINAL.get() else { return };
+        // SAFETY: `imp` is the method's own implementation, saved when it
+        // was replaced; the arguments pass through unchanged but one.
+        unsafe {
+            let original: ElementDidFocus = std::mem::transmute(imp);
+            original(
+                this,
+                cmd,
+                element,
+                Bool::YES,
+                blur_previous,
+                activity_changes,
+                user_object,
+            );
+        }
+    }
+
+    /// Let the page's own `focus()` start the keyboard, as a tap does —
+    /// Cordova's `KeyboardDisplayRequiresUserAction = false`. Capture
+    /// opened from the Action button or a widget arrives with no tap,
+    /// and WebKit otherwise focuses the field without a keyboard.
+    fn allow_programmatic_focus() {
+        let Some(cls) = AnyClass::get(c"WKContentView") else {
+            return;
+        };
+        for m in cls.instance_methods().iter() {
+            let name = m.name().name().to_bytes();
+            // `self`, `_cmd` and the five arguments.
+            if name.starts_with(b"_elementDidFocus:userIsInteracting:") && m.arguments_count() == 7
+            {
+                // SAFETY: the replacement has the method's signature and
+                // forwards to the original it replaces.
+                unsafe {
+                    let replacement: Imp =
+                        std::mem::transmute::<ElementDidFocus, Imp>(element_did_focus);
+                    let original = m.set_implementation(replacement);
+                    let _ = ORIGINAL.set(original as usize);
+                }
+                tracing::info!("keyboard: a page's focus() raises the keyboard");
+                return;
+            }
+        }
+        tracing::warn!("keyboard: no _elementDidFocus: on WKContentView; focus needs a tap");
     }
 }
 

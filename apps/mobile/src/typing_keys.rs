@@ -169,7 +169,6 @@ mod ios {
 pub fn init() {
     #[cfg(all(target_os = "ios", debug_assertions))]
     if ui::typing_test::requested() {
-        ios::allow_programmatic_focus();
         ui::typing_test::set_keyboard(ui::typing_test::Keyboard {
             type_text: ios::type_text,
             backspace: ios::backspace,
