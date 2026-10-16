@@ -6,7 +6,8 @@
 //! - **Swipe left**: the right drawer — what the screen is about: a
 //!   note's properties and links, an issue's properties, the docked
 //!   app panels elsewhere.
-//! - **Pull down** at the top of a screen: the command palette.
+//! - **Pull down** from the top bar: the command palette (a scroll that
+//!   reaches the top of a list does not open it).
 //!
 //! Swipe an open drawer back towards its edge, or tap the dimmed
 //! screen, to close it; moving to another screen closes it too.
@@ -190,7 +191,10 @@ const held = (t) => !!(t.closest && t.closest('[data-no-swipe], input[type=range
 document.addEventListener('touchstart', (e) => {
   if (window.innerWidth >= 768 || e.touches.length !== 1) { s = null; return; }
   const p = e.touches[0];
-  s = { x: p.clientX, y: p.clientY, at: Date.now(), top: window.scrollY <= 2,
+  // The palette only answers a pull that starts on the top bar (status
+  // bar + header, ~120pt on a notched phone): a scroll that reaches
+  // the top of a list must not open it.
+  s = { x: p.clientX, y: p.clientY, at: Date.now(), top: p.clientY <= 120,
         target: e.target, kind: null };
 }, { passive: true });
 document.addEventListener('touchmove', (e) => {

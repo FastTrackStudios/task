@@ -111,21 +111,26 @@ pub fn ScheduleView() -> Element {
     let mut cal_anchor = use_signal(|| chrono::Local::now().date_naive());
     // The view is remembered per device; with none chosen yet, a phone
     // opens on Day (seven columns don't fit) and a desk on Week.
-    let stored_view = crate::local_store::get(VIEW_KEY).and_then(|v| view_from_key(&v));
-    let mut cal_view = use_signal(|| stored_view.unwrap_or(ViewMode::Week));
-    let mut new_event = use_signal(|| 0u64);
-    use_hook(move || {
-        if stored_view.is_none() {
-            spawn(async move {
-                let mut probe = dioxus::document::eval(
-                    "dioxus.send(window.matchMedia('(max-width: 640px)').matches)",
-                );
-                if let Ok(true) = probe.recv::<bool>().await {
-                    cal_view.set(ViewMode::Day);
-                }
-            });
+    let stored_raw = crate::local_store::get(VIEW_KEY);
+    let stored_view = stored_raw.as_deref().and_then(view_from_key);
+    let mut cal_view = use_signal(|| stored_view.unwrap_or(ViewMode::Day));
+    // The Planner — one day, top to bottom — is the default view; a
+    // calendar view is a choice the device remembers.
+    let mut planner = use_signal(|| stored_raw.as_deref().is_none_or(|v| v == PLANNER_KEY));
+    // The Planner mounts no calendar to report what is in view, so it
+    // keeps the loaded week around the day it shows itself.
+    use_effect(move || {
+        if !planner() {
+            return;
         }
+        let day = cal_anchor();
+        if range.peek().is_some_and(|(s, e)| s <= day && day <= e) {
+            return;
+        }
+        let monday = day - chrono::Duration::days(i64::from(day.weekday().num_days_from_monday()));
+        range.set(Some((monday, monday + chrono::Duration::days(6))));
     });
+    let mut new_event = use_signal(|| 0u64);
     // Planned meals — previewed inside Meal-category blocks
     // ("what's for dinner on that date").
     let meals = use_resource(move || async move {
@@ -347,6 +352,7 @@ pub fn ScheduleView() -> Element {
     // ── The phone header ──
     let today = chrono::Local::now().date_naive();
     let header_title = match cal_view() {
+        _ if planner() => view_calendar::day_title(cal_anchor(), today),
         ViewMode::Day => view_calendar::day_title(cal_anchor(), today),
         ViewMode::Month => cal_anchor().format("%B").to_string(),
         // The week's own day header (full width, under the title) says
@@ -446,7 +452,7 @@ pub fn ScheduleView() -> Element {
                     title: header_title,
                     // The week leads the header (tap a day, swipe for the
                     // next week); the month view keeps its name.
-                    lead: (cal_view() == ViewMode::Day).then(|| rsx! {
+                    lead: (planner() || cal_view() == ViewMode::Day).then(|| rsx! {
                         view_calendar::WeekStrip {
                             anchor: cal_anchor(),
                             on_pick: move |d: NaiveDate| {
@@ -466,6 +472,15 @@ pub fn ScheduleView() -> Element {
                             on_click: move |()| cal_anchor.set(today),
                         }
                     }
+                    task_ui_core::section_header::SectionMenuItem {
+                        label: "Planner",
+                        icon: rsx! { architect_ui::lucide_dioxus::ListTodo { size: 18 } },
+                        note: planner().then(|| "✓".to_owned()),
+                        on_click: move |()| {
+                            planner.set(true);
+                            crate::local_store::set(VIEW_KEY, PLANNER_KEY);
+                        },
+                    }
                     for (mode, name) in [
                         (ViewMode::Day, "Day"),
                         (ViewMode::Week, "Week"),
@@ -476,8 +491,9 @@ pub fn ScheduleView() -> Element {
                             key: "{name}",
                             label: name,
                             icon: rsx! { architect_ui::lucide_dioxus::CalendarDays { size: 18 } },
-                            note: (cal_view() == mode).then(|| "✓".to_owned()),
+                            note: (!planner() && cal_view() == mode).then(|| "✓".to_owned()),
                             on_click: move |()| {
+                                planner.set(false);
                                 cal_view.set(mode);
                                 crate::local_store::set(VIEW_KEY, view_key(mode));
                             },
@@ -510,6 +526,56 @@ pub fn ScheduleView() -> Element {
             // The calendar takes what is left under the header — sized to
             // the whole page it overflowed, and its focus scrolled the
             // header away.
+            if planner() {
+                // Desk: the day and the way to the calendar views (the
+                // phone has both in its header).
+                div { class: "hidden shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2 md:flex",
+                    button {
+                        r#type: "button",
+                        class: "rounded-md px-2 py-1 text-sm hover:bg-accent",
+                        onclick: move |_| { let d = cal_anchor() - chrono::Duration::days(1); cal_anchor.set(d); },
+                        "‹"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "rounded-md px-2 py-1 text-sm hover:bg-accent",
+                        onclick: move |_| cal_anchor.set(today),
+                        "Today"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "rounded-md px-2 py-1 text-sm hover:bg-accent",
+                        onclick: move |_| { let d = cal_anchor() + chrono::Duration::days(1); cal_anchor.set(d); },
+                        "›"
+                    }
+                    span { class: "text-sm font-semibold", "{view_calendar::day_title(cal_anchor(), today)}" }
+                    div { class: "ml-auto flex items-center gap-1",
+                        span { class: "rounded-md bg-accent px-2 py-1 text-xs font-medium", "Planner" }
+                        for (mode, name) in [(ViewMode::Day, "Day"), (ViewMode::Week, "Week"), (ViewMode::Month, "Month")] {
+                            button {
+                                key: "{name}",
+                                r#type: "button",
+                                class: "rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
+                                onclick: move |_| {
+                                    planner.set(false);
+                                    cal_view.set(mode);
+                                    crate::local_store::set(VIEW_KEY, view_key(mode));
+                                },
+                                "{name}"
+                            }
+                        }
+                    }
+                }
+                div { class: "min-h-0 flex-1 overflow-y-auto",
+                    crate::pages::planner::Planner {
+                        day: cal_anchor(),
+                        blocks: template_blocks.clone(),
+                        events: events.clone(),
+                        actuals: actuals.clone(),
+                        on_block: move |(date, id)| editing.set(Some((date, id))),
+                    }
+                }
+            } else {
             div { class: "min-h-0 flex-1",
             Calendar {
                 events,
@@ -538,6 +604,7 @@ pub fn ScheduleView() -> Element {
                     move_block(orig, target, id, s, e);
                 },
                 on_event: move |mu| on_event(mu),
+            }
             }
             }
         }
@@ -851,6 +918,9 @@ fn actual_spans(
 
 /// Where this device remembers the Schedule's view.
 const VIEW_KEY: &str = "task.schedule.view";
+
+/// The stored value that means the Planner.
+const PLANNER_KEY: &str = "planner";
 
 fn view_key(v: ViewMode) -> &'static str {
     match v {

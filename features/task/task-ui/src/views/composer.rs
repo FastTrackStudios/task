@@ -419,7 +419,10 @@ pub fn Composer(props: ComposerProps) -> Element {
 
     rsx! {
         div {
-            class: "fixed inset-0 z-50 flex justify-center bg-background md:items-start md:bg-black/50 md:p-6 md:pt-[10vh]",
+            // A phone: the visible viewport — the space above the keyboard —
+            // so the chips and the create row ride on top of it (`--vv-*`,
+            // kept by the shell) instead of under it.
+            class: "fixed inset-x-0 top-[var(--vv-top,0px)] z-50 flex h-[var(--vv-h,100dvh)] justify-center bg-background md:inset-0 md:h-auto md:items-start md:bg-black/50 md:p-6 md:pt-[10vh]",
             onclick: move |_| props.on_close.call(()),
             div {
                 class: "flex h-full w-full flex-col overflow-hidden bg-background md:h-auto md:max-h-[80vh] md:max-w-2xl md:rounded-xl md:border md:border-border md:bg-popover md:shadow-2xl",
@@ -731,7 +734,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                 }
 
                 // ── create ──
-                footer { class: "flex items-center gap-3 border-t border-border/60 px-4 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:pb-2.5",
+                footer { class: "flex items-center gap-3 border-t border-border/60 px-4 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:pb-2.5 [.kb-open_&]:pb-2.5",
                     if let (CaptureKind::Note, Some(on_timer)) = (kind, props.on_timer) {
                         button {
                             r#type: "button",
