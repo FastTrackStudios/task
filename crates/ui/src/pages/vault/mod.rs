@@ -67,6 +67,7 @@
 //! [`set_folder`]: vault_proto::VaultSync::set_folder
 //! [`PageMeta`]: vault_proto::PageMeta
 
+mod bar;
 pub(crate) mod rpc;
 mod tabs;
 mod tree;
@@ -761,6 +762,19 @@ pub fn VaultView(
     let pane_list = panes.read().clone();
     let n_panes = pane_list.len();
     let focused_idx = (*focused.read()).min(n_panes.saturating_sub(1));
+    let bar_tabs: Vec<bar::BarTab> = pane_list
+        .get(focused_idx)
+        .map(|p| {
+            p.tabs
+                .iter()
+                .enumerate()
+                .map(|(i, t)| bar::BarTab {
+                    title: basename_of(&t.path).to_owned(),
+                    active: i == p.active,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     rsx! {
         div { class: "flex h-full min-h-[80vh]",
@@ -856,6 +870,14 @@ pub fn VaultView(
                 actions: drawer_actions,
                 below: drawer_search,
             }
+        }
+        // The vault's own bottom bar (the app's tab bar steps aside here).
+        bar::VaultBar {
+            tabs: bar_tabs,
+            on_search: move |()| notes_search.set(true),
+            on_new: move |()| new_untitled(),
+            on_focus: move |i: usize| focus_tab.call((focused_idx, i)),
+            on_close: move |i: usize| close_tab.call((focused_idx, i)),
         }
         if has_file {
             PhoneDrawer { side: Side::Right, testid: "note-drawer".to_owned(),

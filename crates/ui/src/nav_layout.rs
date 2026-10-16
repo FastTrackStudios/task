@@ -15,9 +15,9 @@ use dioxus::prelude::*;
 
 use crate::nav::NavTab;
 
-// v2: the bar became four sections (Inbox, Tasks, Projects, Vault) with
-// no switcher — a layout saved for three would pin Favorites there.
-const KEY: &str = "task.nav.layout.v2";
+// v3: the bar is Inbox, Tasks, Schedule, Vault (v2 had Projects third,
+// v1 three tabs and a switcher) — an old saved layout would pin those.
+const KEY: &str = "task.nav.layout.v3";
 
 /// How many sections the tab bar holds.
 pub const PRIMARY: usize = 4;
@@ -348,7 +348,7 @@ mod tests {
 
         let layout = NavLayout {
             order: vec![
-                "Schedule".into(),
+                "Calendar".into(),
                 "Inbox".into(),
                 "Tasks".into(),
                 "Gone".into(),
@@ -358,7 +358,7 @@ mod tests {
         let (shown, hidden) = layout.arrange(tabs.clone());
         assert_eq!(
             &labels(&shown)[..3],
-            ["Schedule", "Inbox", "Tasks"],
+            ["Calendar", "Inbox", "Tasks"],
             "first three = tab bar"
         );
         assert_eq!(labels(&hidden), ["Favorites"]);

@@ -27,7 +27,7 @@ const RAIL_TABS: &[&str] = &[
     "Contacts",
     "Projects",
     "Tasks",
-    "Schedule",
+    "Calendar",
     "Timer",
     "Finance",
     "Files",

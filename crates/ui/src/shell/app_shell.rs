@@ -151,7 +151,10 @@ pub fn AppShell() -> Element {
                             }
                         }
                         if !share {
-                            BottomTabBar { current: current.clone() }
+                            // The vault brings its own bar (back, search, new, tabs).
+                            if !matches!(current, Route::VaultRoute { .. }) {
+                                BottomTabBar { current: current.clone() }
+                            }
                             MobileTimerDock {}
                         }
                     }

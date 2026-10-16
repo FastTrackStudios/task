@@ -25,7 +25,7 @@ const PAGE_CHOICES: &[(&str, &str)] = &[
     ("", "Inbox (default)"),
     ("/tasks", "Tasks"),
     ("/projects", "Projects"),
-    ("/schedule", "Schedule"),
+    ("/schedule", "Calendar"),
     ("/vault", "Vault"),
 ];
 

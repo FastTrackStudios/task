@@ -87,11 +87,13 @@ pub fn nav_tabs() -> Vec<NavTab> {
             icon: icon_tasks,
             route: Route::TasksRoute {},
         },
+        // Third: the day — Calendar opens on the Planner. Projects are a
+        // sidebar row away, and their work shows up in Tasks and Inbox.
         NavTab {
-            label: "Projects",
-            plugin: "core",
-            icon: icon_projects,
-            route: Route::ProjectsRoute {},
+            label: "Calendar",
+            plugin: "scheduling",
+            icon: icon_schedule,
+            route: Route::ScheduleRoute {},
         },
         NavTab {
             label: "Vault",
@@ -101,6 +103,12 @@ pub fn nav_tabs() -> Vec<NavTab> {
                 path: String::new(),
                 org: String::new(),
             },
+        },
+        NavTab {
+            label: "Projects",
+            plugin: "core",
+            icon: icon_projects,
+            route: Route::ProjectsRoute {},
         },
         NavTab {
             label: "Favorites",
@@ -123,12 +131,6 @@ pub fn nav_tabs() -> Vec<NavTab> {
             plugin: "core",
             icon: icon_projects,
             route: Route::ProjectWorkRoute {},
-        },
-        NavTab {
-            label: "Schedule",
-            plugin: "scheduling",
-            icon: icon_schedule,
-            route: Route::ScheduleRoute {},
         },
         // Contacts — the people directory.
         NavTab {
@@ -321,7 +323,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::ProjectWorkRoute {} => "Project work",
         Route::VaultRoute { .. } => "Vault",
         Route::MilestonesRoute {} => "Milestones",
-        Route::ScheduleRoute {} => "Schedule",
+        Route::ScheduleRoute {} => "Calendar",
         Route::GanttRoute {} => "Gantt",
         Route::TimerRoute {} => "Timer",
         Route::MembersRoute {} => "Members",

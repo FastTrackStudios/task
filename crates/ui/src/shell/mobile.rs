@@ -396,7 +396,7 @@ fn MobileTimerSheet(mut open: Signal<bool>) -> Element {
 // ── the phone's tab bar (Linear's) ──────────────────────────────────
 
 /// The phone shell's bottom: a floating pill of four sections — Inbox,
-/// Tasks, Projects and Vault by default (the person's own first four,
+/// Tasks, Schedule and Vault by default (the person's own first four,
 /// from Customize) — and, apart from it on the right, the capture
 /// button: a fleeting thought, into the inbox.
 ///
