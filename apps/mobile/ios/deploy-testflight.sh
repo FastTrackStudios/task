@@ -337,6 +337,46 @@ if [ -n "$WATCH_APP" ]; then
     echo "=== embedded + signed watch companion: $EMB ==="
 fi
 
+# ── Widget extension (apps/ios-widgets) ──────────────────────────────────
+# Widgets, the Capture control and the timer's Live Activity, embedded at
+# <iOS.app>/PlugIns/ and signed inside-out with its own App Store profile
+# (bundle id + App Group set up by setup-extensions.rb).
+WIDGETS_APP="${WIDGETS_APP:-apps/ios-widgets}"
+WIDGETS_BUNDLE_ID="${WIDGETS_BUNDLE_ID:-$DX_BUNDLE_ID.widgets}"
+if [ -n "$WIDGETS_APP" ] && [ -d "$ROOT/$WIDGETS_APP" ]; then
+    echo "=== building widget extension ($WIDGETS_BUNDLE_ID) ==="
+    WIDGETS_DIR="$ROOT/$WIDGETS_APP"
+    ( cd "$WIDGETS_DIR" && "$NIX" run nixpkgs#xcodegen -- generate ) > /tmp/fts-widgets-xcodegen.log 2>&1 \
+        || { echo "ERROR: widgets xcodegen failed"; tail -20 /tmp/fts-widgets-xcodegen.log; exit 1; }
+    WIDGETS_DD="$(mktemp -d)"
+    TMP_DIRS+=("$WIDGETS_DD")
+    env -u LD -u LDPLUSPLUS -u CC -u CXX -u NIX_LDFLAGS -u NIX_CFLAGS_COMPILE -u SDKROOT \
+    DEVELOPER_DIR="$DEV" xcodebuild \
+        -project "$WIDGETS_DIR/TaskWidgets.xcodeproj" -scheme TaskWidgets \
+        -configuration Release -destination 'generic/platform=iOS' \
+        -derivedDataPath "$WIDGETS_DD" \
+        CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+        build > /tmp/fts-widgets-build.log 2>&1 \
+        || { echo "ERROR: widgets build failed"; tail -30 /tmp/fts-widgets-build.log; exit 1; }
+    WIDGETS_BUILT="$WIDGETS_DD/Build/Products/Release-iphoneos/TaskWidgets.appex"
+    WIDGETS_PROFILE="$(PROFILE_TYPE=IOS_APP_STORE CERT_TYPE=DISTRIBUTION \
+        ruby "$SCRIPT_DIR/mint-dev-profile.rb" - "$WIDGETS_BUNDLE_ID" "FTS Widgets App Store" \
+        | awk -F= '/PROFILE_PATH=/{print $2}')"
+    mkdir -p "$APP/PlugIns"
+    rm -rf "$APP/PlugIns/TaskWidgets.appex"
+    cp -R "$WIDGETS_BUILT" "$APP/PlugIns/"
+    WEX="$APP/PlugIns/TaskWidgets.appex"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VER" "$WEX/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$WEX/Info.plist"
+    cp "$WIDGETS_PROFILE" "$WEX/embedded.mobileprovision"
+    security cms -D -i "$WIDGETS_PROFILE" > /tmp/fts-widgets-prof.plist
+    /usr/libexec/PlistBuddy -x -c "Print :Entitlements" /tmp/fts-widgets-prof.plist > /tmp/fts-widgets-ent.plist
+    codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" \
+        --entitlements /tmp/fts-widgets-ent.plist --timestamp "$WEX"
+    codesign --verify --strict "$WEX"
+    echo "=== embedded + signed widget extension: $WEX ==="
+fi
+
 echo "=== signing (distribution) ==="
 cp "$PROFILE" "$APP/embedded.mobileprovision"
 security cms -D -i "$PROFILE" > /tmp/fts-prof.plist

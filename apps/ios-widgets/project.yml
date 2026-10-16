@@ -1,0 +1,44 @@
+# XcodeGen manifest for the Task iPhone app's widget extension:
+# lock-screen and home-screen widgets (Vault Search, Fleeting Capture,
+# Task List, Calendar), the Capture control (Control Center, the Action
+# button), and the running timer's Live Activity (Dynamic Island, lock
+# screen, the Apple Watch's Smart Stack).
+#
+# `xcodegen generate` → TaskWidgets.xcodeproj. Built and embedded at
+# <Task.app>/PlugIns/ by apps/mobile/ios/build-ios.sh (simulator) and
+# deploy-testflight.sh (TestFlight). The app writes what the widgets show
+# into the App Group (apps/mobile/ios/TaskLive); the widgets open the app
+# with app.fasttrackstudio.task://… links (ui::deep_link).
+name: TaskWidgets
+options:
+  bundleIdPrefix: app.fasttrackstudio.task
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  TaskWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - TaskWidgets
+      - path: ../mobile/ios/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.fasttrackstudio.task.widgets
+        PRODUCT_NAME: TaskWidgets
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.0.2
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: 28C2G63DA7
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: TaskWidgets/TaskWidgets.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+    info:
+      path: TaskWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Task
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

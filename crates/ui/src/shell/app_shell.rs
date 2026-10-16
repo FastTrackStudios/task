@@ -282,6 +282,8 @@ pub fn AppShell() -> Element {
         crate::notes_search::NotesSearch {}
         // Links the Action button, Shortcuts and widgets open.
         crate::deep_link::DeepLinks {}
+        // The lock screen: the timer's Live Activity, the widgets' numbers.
+        crate::live::LiveFeed {}
         // A typing-test launch (`TASK_TYPING_TEST=1`) types every case
         // into notes and reports; nothing otherwise.
         if crate::typing_test::enabled() {

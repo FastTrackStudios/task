@@ -37,6 +37,7 @@ pub mod forge_views;
 pub mod fuzzy;
 pub mod gantt_adapt;
 pub mod guest_share;
+pub mod live;
 pub mod loading_screen;
 pub mod local_store;
 pub mod media_session;

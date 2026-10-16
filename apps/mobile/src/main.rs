@@ -3,6 +3,7 @@ use ui::App;
 
 mod ios_auth;
 mod keyboard_bar;
+mod live;
 mod typing_keys;
 mod watch_sync;
 
@@ -34,6 +35,8 @@ fn main() {
     ios_auth::init();
     // The app draws its own bar over the keyboard; drop the web view's.
     keyboard_bar::init();
+    // The timer's Live Activity and the widgets' data (Swift half: build.rs).
+    live::init();
     // A typing-test launch types through the web view's own keyboard input.
     typing_keys::init();
 

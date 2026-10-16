@@ -90,6 +90,11 @@ task_app_plist() {
     $pb -c "Set :CFBundleName $name" "$plist" 2>/dev/null \
         || $pb -c "Add :CFBundleName string $name" "$plist"
 
+    # The running timer is a Live Activity (Dynamic Island, lock screen,
+    # the watch's Smart Stack) — `ios/TaskLive`.
+    $pb -c "Set :NSSupportsLiveActivities true" "$plist" 2>/dev/null \
+        || $pb -c "Add :NSSupportsLiveActivities bool true" "$plist"
+
     # Minimum OS — App Store rejects a bundle without it (dx doesn't emit one).
     $pb -c "Set :MinimumOSVersion 15.0" "$plist" 2>/dev/null \
         || $pb -c "Add :MinimumOSVersion string 15.0" "$plist"

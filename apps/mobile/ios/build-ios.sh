@@ -74,8 +74,41 @@ else
     echo "note: actool failed; launching without the compiled asset catalog" >&2
 fi
 
-# Editing Info.plist broke dx's signature; the simulator takes ad hoc.
-codesign --force --sign - "$APP" >/dev/null 2>&1
+# The widget extension (apps/ios-widgets): widgets, the Capture control
+# and the timer's Live Activity, embedded at PlugIns/. Best effort: the app
+# runs without it.
+WIDGETS_DIR="$ROOT/apps/ios-widgets"
+WIDGETS_DD="${TMPDIR:-/tmp}/task-widgets-sim"
+if [ -d "$WIDGETS_DIR" ]; then
+    ( cd "$WIDGETS_DIR" && nix run nixpkgs#xcodegen -- generate >/dev/null 2>&1 ) || true
+    if env -u LD -u CC -u CXX -u SDKROOT -u DEVELOPER_DIR /usr/bin/xcodebuild \
+        -project "$WIDGETS_DIR/TaskWidgets.xcodeproj" -scheme TaskWidgets \
+        -configuration Debug -destination 'generic/platform=iOS Simulator' \
+        -derivedDataPath "$WIDGETS_DD" CODE_SIGNING_ALLOWED=NO build \
+        > "${TMPDIR:-/tmp}/task-widgets-sim.log" 2>&1; then
+        mkdir -p "$APP/PlugIns"
+        rm -rf "$APP/PlugIns/TaskWidgets.appex"
+        cp -R "$WIDGETS_DD/Build/Products/Debug-iphonesimulator/TaskWidgets.appex" "$APP/PlugIns/"
+        codesign --force --sign - \
+            --entitlements "$WIDGETS_DIR/TaskWidgets/TaskWidgets.entitlements" \
+            "$APP/PlugIns/TaskWidgets.appex" >/dev/null 2>&1
+        echo "widgets: embedded"
+    else
+        echo "note: widget extension failed to build (${TMPDIR:-/tmp}/task-widgets-sim.log)" >&2
+    fi
+fi
+
+# Editing Info.plist broke dx's signature; the simulator takes ad hoc —
+# with the App Group the widgets read.
+APP_ENT="${TMPDIR:-/tmp}/task-app-sim.entitlements"
+cat > "$APP_ENT" <<'ENT'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.security.application-groups</key><array><string>group.app.fasttrackstudio.task</string></array>
+</dict></plist>
+ENT
+codesign --force --sign - --entitlements "$APP_ENT" "$APP" >/dev/null 2>&1
 echo "built: $APP"
 
 BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
