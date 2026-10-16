@@ -155,7 +155,10 @@ pub fn AppShell() -> Element {
                             if !matches!(current, Route::VaultRoute { .. }) {
                                 BottomTabBar { current: current.clone() }
                             }
-                            MobileTimerDock {}
+                            // Not on the timer's own page — it is the timer.
+                            if !matches!(current, Route::TimerNowRoute {}) {
+                                MobileTimerDock {}
+                            }
                         }
                     }
                     // The right dock: whatever an app puts beside the

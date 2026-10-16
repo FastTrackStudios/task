@@ -326,6 +326,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::ScheduleRoute {} => "Calendar",
         Route::GanttRoute {} => "Gantt",
         Route::TimerRoute {} => "Timer",
+        Route::TimerNowRoute {} => "Timer",
         Route::MembersRoute {} => "Members",
         Route::WikiRoute {} => "Wiki",
         Route::GraphRoute { .. } => "Graph",

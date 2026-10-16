@@ -34,6 +34,7 @@ pub mod take_into_study;
 pub mod task_detail;
 pub mod tasks;
 pub mod timer;
+pub mod timer_focus;
 pub mod vault;
 pub mod wiki;
 pub mod wiki_access;

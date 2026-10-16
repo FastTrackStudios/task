@@ -170,6 +170,17 @@ pub const CHIP_CLASS: &str = "inline-flex h-8 max-w-[12rem] items-center gap-1.5
 /// A chip for an unset property: the same shape, read as an invitation.
 pub const CHIP_QUIET_CLASS: &str = "inline-flex h-8 max-w-[12rem] items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:h-7";
 
+/// The composer's phone layout: each property a row down the left —
+/// icon, then its value — instead of a chip. Back to a chip on a desk.
+pub const CHIP_ROW_CLASS: &str = "flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] text-foreground active:bg-foreground/[0.08] md:inline-flex md:h-7 md:w-auto md:max-w-[12rem] md:gap-1.5 md:rounded-md md:border md:border-border/70 md:px-2 md:text-[13px] md:font-medium md:hover:bg-accent [&>svg]:shrink-0 [&>span:first-child]:flex [&>span:first-child]:w-5 [&>span:first-child]:justify-center";
+
+/// [`CHIP_ROW_CLASS`] for an unset property.
+pub const CHIP_ROW_QUIET_CLASS: &str = "flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] text-muted-foreground active:bg-foreground/[0.08] md:inline-flex md:h-7 md:w-auto md:max-w-[12rem] md:gap-1.5 md:rounded-md md:border md:border-border/70 md:px-2 md:text-[13px] md:font-medium md:hover:bg-accent md:hover:text-foreground";
+
+/// Provided by a surface that wants its chips as rows (the composer).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ChipRows;
+
 /// One row of the desk properties column: the name muted on the left,
 /// the value (a chip) on the right. Tasks and notes both lay their
 /// properties out with it.
@@ -200,7 +211,12 @@ fn Chip(
     rsx! {
         button {
             r#type: "button",
-            class: if quiet { CHIP_QUIET_CLASS } else { CHIP_CLASS },
+            class: match (try_use_context::<ChipRows>().is_some(), quiet) {
+                (true, true) => CHIP_ROW_QUIET_CLASS,
+                (true, false) => CHIP_ROW_CLASS,
+                (false, true) => CHIP_QUIET_CLASS,
+                (false, false) => CHIP_CLASS,
+            },
             title: "{title}",
             onclick: move |_| on_click.call(()),
             {icon}

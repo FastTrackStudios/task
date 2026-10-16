@@ -395,6 +395,9 @@ fn MobileTimerSheet(mut open: Signal<bool>) -> Element {
 
 // ── the phone's tab bar (Linear's) ──────────────────────────────────
 
+/// How far the capture button travels up to mean "start a timer".
+const SWIPE_TIMER: f64 = 36.0;
+
 /// The phone shell's bottom: a floating pill of four sections — Inbox,
 /// Tasks, Schedule and Vault by default (the person's own first four,
 /// from Customize) — and, apart from it on the right, the capture
@@ -407,6 +410,13 @@ fn MobileTimerSheet(mut open: Signal<bool>) -> Element {
 pub fn BottomTabBar(current: Route) -> Element {
     let to_process = crate::process::use_to_process_count();
     let new_issue = use_context::<crate::new_issue::NewIssue>();
+    // The capture button's swipe-up: how far it has lifted, and whether
+    // it has gone far enough to mean "start a timer".
+    let mut touch_y = use_signal(|| None::<f64>);
+    let mut lift = use_signal(|| 0.0f64);
+    let mut swiping = use_signal(|| false);
+    let mut swallow_click = use_signal(|| false);
+    let start_timer = crate::pages::timer_focus::use_start_timer_now();
     let every = nav_tabs_for(&use_active_plugins());
     let layout = crate::nav_layout::use_nav_layout();
     let (all, _hidden) = layout.read().arrange(every);
@@ -449,12 +459,49 @@ pub fn BottomTabBar(current: Route) -> Element {
             // Quick capture — a fleeting thought, from anywhere; it waits in
             // the inbox to be processed. (New issues are each section's
             // header action.)
+            // Tap: capture. Press and swipe up: a timer starts at once and
+            // its page opens — for when you are starting before you know
+            // what to call it.
             button {
                 r#type: "button",
-                class: "flex size-[3.375rem] shrink-0 items-center justify-center rounded-full border border-border/70 bg-popover/95 text-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur active:bg-accent",
-                aria_label: "Capture a fleeting thought",
-                onclick: move |_| new_issue.capture(String::new()),
-                Feather { size: 22 }
+                "data-testid": "capture-button",
+                class: if swiping() { "flex size-[3.375rem] shrink-0 items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] transition-transform" } else { "flex size-[3.375rem] shrink-0 items-center justify-center rounded-full border border-border/70 bg-popover/95 text-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur active:bg-accent" },
+                style: if lift() > 0.0 { format!("transform: translateY(-{:.0}px)", lift().min(48.0)) } else { String::new() },
+                aria_label: "Capture a fleeting thought — swipe up to start a timer",
+                ontouchstart: move |e: TouchEvent| {
+                    if let Some(t) = e.touches().first() {
+                        touch_y.set(Some(t.client_coordinates().y));
+                    }
+                },
+                ontouchmove: move |e: TouchEvent| {
+                    if let (Some(y0), Some(t)) = (touch_y(), e.touches().first()) {
+                        let up = (y0 - t.client_coordinates().y).max(0.0);
+                        lift.set(up);
+                        swiping.set(up >= SWIPE_TIMER);
+                    }
+                },
+                ontouchend: move |_| {
+                    let go = swiping();
+                    touch_y.set(None);
+                    lift.set(0.0);
+                    swiping.set(false);
+                    if go {
+                        swallow_click.set(true);
+                        start_timer(String::new());
+                    }
+                },
+                onclick: move |_| {
+                    if swallow_click() {
+                        swallow_click.set(false);
+                        return;
+                    }
+                    new_issue.capture(String::new());
+                },
+                if swiping() {
+                    architect_ui::lucide_dioxus::Timer { size: 22 }
+                } else {
+                    Feather { size: 22 }
+                }
             }
         }
     }

@@ -26,7 +26,8 @@ use uuid::Uuid;
 use super::issue_view::with_assignee;
 use super::picker::{PickOption, PropertyPicker, filtered};
 use super::properties::{
-    AssigneeChip, Hotkey, LabelsChip, PersonDot, PriorityChip, ProjectChip, StatusChip, label_color,
+    AssigneeChip, CHIP_ROW_CLASS, CHIP_ROW_QUIET_CLASS, Hotkey, LabelsChip, PersonDot,
+    PriorityChip, ProjectChip, StatusChip, label_color,
 };
 use crate::TaskInfo;
 
@@ -268,6 +269,10 @@ pub fn Composer(props: ComposerProps) -> Element {
     let mut sub_draft = use_signal(String::new);
     let mut adding_sub = use_signal(|| false);
     let mut repeat_open = use_signal(|| false);
+    let mut details_open = use_signal(|| false);
+    let mut details_focus = use_signal(|| false);
+    // Property chips render as rows down the left on a phone.
+    use_context_provider(|| super::properties::ChipRows);
     let mut due_open = use_signal(|| false);
     let mut more_open = use_signal(|| false);
     let mut show_labels = use_signal(|| false);
@@ -475,10 +480,10 @@ pub fn Composer(props: ComposerProps) -> Element {
             // A phone: the visible viewport — the space above the keyboard —
             // so the chips and the create row ride on top of it (`--vv-*`,
             // kept by the shell) instead of under it.
-            class: "fixed inset-x-0 top-[var(--vv-top,0px)] z-50 flex h-[var(--vv-h,100dvh)] justify-center bg-background md:inset-0 md:h-auto md:items-start md:bg-black/50 md:p-6 md:pt-[10vh]",
+            class: "fixed inset-x-0 top-[var(--vv-top,0px)] z-50 flex h-[var(--vv-h,100dvh)] justify-center bg-popover md:inset-0 md:h-auto md:items-start md:bg-black/50 md:p-6 md:pt-[10vh]",
             onclick: move |_| props.on_close.call(()),
             div {
-                class: "flex h-full w-full flex-col overflow-hidden bg-background md:h-auto md:max-h-[80vh] md:max-w-2xl md:rounded-xl md:border md:border-border md:bg-popover md:shadow-2xl",
+                class: "flex h-full w-full flex-col overflow-hidden bg-popover md:h-auto md:max-h-[80vh] md:max-w-2xl md:rounded-xl md:border md:border-border md:bg-popover md:shadow-2xl",
                 onclick: move |e| e.stop_propagation(),
                 onkeydown: move |e: KeyboardEvent| {
                     if e.key() == Key::Enter && (e.modifiers().meta() || e.modifiers().ctrl()) {
@@ -584,12 +589,24 @@ pub fn Composer(props: ComposerProps) -> Element {
                             }
                         }
                     }
+                    if details_open() || !description.read().is_empty() {
                     textarea {
                         aria_label: "Description",
+                        onmounted: move |e| async move { if *details_focus.peek() { let _ = e.set_focus(true).await; } },
                         class: "mt-1 min-h-20 w-full resize-none bg-transparent text-[15px] font-[450] leading-6 tracking-[-0.1px] text-foreground/90 outline-none [field-sizing:content] placeholder:text-muted-foreground",
                         placeholder: "{detail_hint}",
                         value: "{description}",
                         oninput: move |e| description.set(e.value()),
+                    }
+                    } else {
+                        button {
+                            r#type: "button",
+                            "data-testid": "composer-details",
+                            class: "mt-1 flex items-center gap-1.5 self-start rounded-full px-0.5 py-1 text-[15px] text-muted-foreground active:text-foreground",
+                            onclick: move |_| { details_focus.set(true); details_open.set(true); },
+                            Plus { size: 15 }
+                            "Add details"
+                        }
                     }
 
                     // ── sub-issues ──
@@ -666,7 +683,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                 // Rides on top of the keyboard; each chip opens its picker
                 // above it. Wrapped, not a sideways scroller: iOS clips a
                 // fixed sheet to a scrolling parent, which hid the pickers.
-                div { class: if kind != CaptureKind::Project { "flex flex-wrap items-center gap-1.5 border-t border-border/60 px-4 py-2.5" } else { "hidden" },
+                div { class: if kind != CaptureKind::Project { "flex flex-col items-stretch gap-0.5 px-2 pb-1 pt-1 md:flex-row md:flex-wrap md:items-center md:gap-1.5 md:border-t md:border-border/60 md:px-4 md:py-2.5" } else { "hidden" },
                     StatusChip { status: status(), on_change: move |s: String| status.set(s) }
                     PriorityChip {
                         priority: priority().or(parsed_priority.clone()).unwrap_or_else(|| "none".to_owned()),
@@ -717,7 +734,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                     if let Some(d) = due().or(parsed_due.clone()) {
                         button {
                             r#type: "button",
-                            class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
+                            class: CHIP_ROW_CLASS,
                             title: "Due date",
                             onclick: move |_| due_open.set(true),
                             span { class: "text-muted-foreground", CalendarDays { size: 14 } }
@@ -727,7 +744,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                     if let Some(r) = recurrence().or(parsed_repeat.clone()) {
                         button {
                             r#type: "button",
-                            class: "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
+                            class: CHIP_ROW_CLASS,
                             title: "Repeat",
                             onclick: move |_| repeat_open.set(true),
                             span { class: "text-muted-foreground", Repeat { size: 14 } }
@@ -735,11 +752,11 @@ pub fn Composer(props: ComposerProps) -> Element {
                         }
                     }
                     // More: labels, a date, a repeat, a subtask, a link.
-                    div { class: "relative shrink-0",
+                    div { class: "relative",
                         button {
                             r#type: "button",
                             "data-testid": "composer-more",
-                            class: "inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 px-3 text-[14px] text-muted-foreground md:h-7 md:rounded-md md:px-2 md:text-[13px]",
+                            class: CHIP_ROW_QUIET_CLASS,
                             aria_label: "More properties",
                             onclick: move |_| more_open.set(true),
                             Plus { size: 14 }
@@ -793,22 +810,26 @@ pub fn Composer(props: ComposerProps) -> Element {
                     }
                 }
 
-                // ── create ──
-                footer { class: "flex items-center gap-3 border-t border-border/60 px-4 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:pb-2.5 [.kb-open_&]:pb-2.5",
-                    if let (CaptureKind::Note, Some(on_timer)) = (kind, props.on_timer) {
+                // Start a timer instead — the swipe-up on the capture button, for
+                // whoever has not found it yet.
+                if let (CaptureKind::Note, Some(on_timer)) = (kind, props.on_timer) {
+                    div { class: "px-2 pb-1",
                         button {
                             r#type: "button",
-                            class: "flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-muted-foreground hover:bg-accent hover:text-foreground md:min-h-8",
+                            "data-testid": "composer-timer",
+                            class: CHIP_ROW_QUIET_CLASS,
                             title: "Start a timer with this as its description",
                             onclick: move |_| {
                                 on_timer.call(title.peek().trim().to_owned());
                                 props.on_close.call(());
                             },
-                            Clock { size: 14 }
-                            "Start timer"
+                            span { Clock { size: 16 } }
+                            "Start a timer"
                         }
                     }
-                    div { class: "flex-1" }
+                }
+                // ── create ──
+                footer { class: "flex items-center justify-end gap-3 border-t border-border/60 px-4 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:pb-2.5 [.kb-open_&]:pb-2.5",
                     label { class: if kind == CaptureKind::Task { "ml-auto flex items-center gap-2 text-[13px] text-muted-foreground" } else { "hidden" },
                         input {
                             r#type: "checkbox",
@@ -819,7 +840,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                     }
                     button {
                         r#type: "button",
-                        class: "flex min-h-10 items-center rounded-lg bg-primary px-4 text-[13px] font-semibold text-primary-foreground disabled:opacity-50 md:min-h-8",
+                        class: "flex h-11 flex-1 items-center justify-center rounded-xl bg-primary px-4 text-[16px] font-semibold text-primary-foreground disabled:opacity-50 md:h-8 md:flex-none md:rounded-lg md:text-[13px]",
                         disabled: title.read().trim().is_empty(),
                         onclick: move |_| create_btn(),
                         "{action_label}"

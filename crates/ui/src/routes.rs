@@ -118,6 +118,11 @@ pub enum Route {
         #[route("/timer")]
         TimerRoute {},
 
+        // The running timer, full page — where a swipe up from capture
+        // lands (`pages::timer_focus`).
+        #[route("/timer/now")]
+        TimerNowRoute {},
+
         #[route("/members")]
         MembersRoute {},
 
@@ -417,6 +422,11 @@ fn GanttRoute() -> Element {
 #[component]
 fn TimerRoute() -> Element {
     rsx! { pages::timer::TimerView {} }
+}
+
+#[component]
+fn TimerNowRoute() -> Element {
+    rsx! { pages::timer_focus::TimerFocus {} }
 }
 
 #[component]

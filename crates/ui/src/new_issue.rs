@@ -51,8 +51,7 @@ pub fn NewIssueHost() -> Element {
     let project_store = stores::use_project_store();
     let muts = stores::use_task_mutations();
     let inbox = stores::use_inbox_mutations();
-    let timers = stores::use_timer_mutations();
-    let active_timer = crate::chrome::use_active_timer();
+    let start_timer = crate::pages::timer_focus::use_start_timer_now();
     let target = use_memo(move || crate::orgs::create_target(&selection.read(), &org_list.read()));
     let member_names = crate::pages::wiki_access::use_member_names(target);
 
@@ -135,23 +134,9 @@ pub fn NewIssueHost() -> Element {
                     inbox.process_into_project(slug.clone(), item, project);
                 }
             },
-            on_timer: move |desc: String| {
-                let Some((slug, org_id)) = crate::chrome::resolve_org(&selection.read(), &org_list.read()) else {
-                    return;
-                };
-                let req = timer_proto::StartTimerRequest {
-                    user_id: crate::chrome::owner_id(org_id),
-                    org_id,
-                    project_id: None,
-                    project_path: String::new(),
-                    task_note_path: String::new(),
-                    description: desc,
-                };
-                match active_timer.as_ref() {
-                    Some(at) => timers.switch(slug, at.session.id, req),
-                    None => timers.start(slug, req),
-                }
-            },
+            // Start timer: the clock starts with whatever was typed, and
+            // its page opens to name or finish it.
+            on_timer: move |desc: String| start_timer(desc),
             place,
             on_create: move |(mut task, subs): (task_proto::TaskInfo, Vec<String>)| {
                 // The id is chosen here so the sub-issues can name their
