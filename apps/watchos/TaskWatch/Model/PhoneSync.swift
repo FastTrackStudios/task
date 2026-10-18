@@ -79,3 +79,30 @@ final class PhoneSync: NSObject, WCSessionDelegate {
         Task { @MainActor [weak self] in self?.apply(base: base, slug: slug, token: token) }
     }
 }
+
+/// The watch API, asked of the paired iPhone instead of a server. Used
+/// when the phone runs Task itself (`local://this-device`): it has no
+/// address the watch could dial, so the phone answers each request
+/// through its own node (`apps/mobile/src/watch_sync.rs`). Messaging
+/// wakes the phone's app in the background when it is not open.
+enum PhoneRelay {
+    static func send(method: String, path: String, token: String, body: String) async throws -> (Int, Data) {
+        let session = WCSession.default
+        guard session.activationState == .activated else {
+            throw TaskClientError.transport("Still connecting to your iPhone.")
+        }
+        guard session.isReachable else {
+            throw TaskClientError.transport("Your iPhone isn't reachable — bring it closer.")
+        }
+        let message: [String: Any] = ["method": method, "path": path, "token": token, "body": body]
+        return try await withCheckedThrowingContinuation { cont in
+            session.sendMessage(message, replyHandler: { reply in
+                let status = Int(reply["status"] as? String ?? "") ?? 0
+                let body = reply["body"] as? String ?? ""
+                cont.resume(returning: (status, Data(body.utf8)))
+            }, errorHandler: { error in
+                cont.resume(throwing: TaskClientError.transport(error.localizedDescription))
+            })
+        }
+    }
+}

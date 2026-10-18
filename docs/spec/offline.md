@@ -237,7 +237,10 @@ default when no host is configured, and Settings offers it beside "Connect
 to a host / another device". A debug build may plant the example studio into
 the node instead. When a host cannot be reached, an org the device also holds
 a node for is served from the node; an org it does not hold is not replaced
-by a different one.
+by a different one. A paired Apple Watch reaches a phone's node through the
+phone: the phone tells the watch its address is `local://this-device`, and
+the watch sends each watch-API call over WatchConnectivity for the phone to
+answer from its node, the bearer checked as a host checks it.
 
 ---
 
@@ -308,7 +311,7 @@ app never claims a change synced that has not.
 | `offline.doc.history` | unit tests (restore is a new change; checkpoint restores every document's version); e2e: an offline edit appears in history with its author after sync |
 | `offline.sources` | e2e: a repo-sourced wiki pull lands as changes; a local edit becomes an Edit Request |
 | `offline.export` | e2e: export from the device's documents with the server unreachable; re-import yields identical documents |
-| `offline.local` | e2e (`apps/server/tests/it/local_node_e2e.rs`): a fresh node on a temp root with no listener provisions its person, who signs in and drives task create/update, inbox capture + process, the Suggested pick and the activity feed; a reboot keeps both. Unit: `task_ui_core::node` routing table (local vs remote, unreachable fallback only for a held org) |
+| `offline.local` | e2e (`apps/server/tests/it/local_node_e2e.rs`): a fresh node on a temp root with no listener provisions its person, who signs in and drives task create/update, inbox capture + process, the Suggested pick and the activity feed; a reboot keeps both. `a_watch_reaches_the_phones_node_through_the_phone` — the watch API answered in-process (the phone's relay), an unsigned call refused. Unit: `task_ui_core::node` routing table (local vs remote, unreachable fallback only for a held org) |
 | `offline.peers` | e2e: two embedded nodes with no host converge a note edited on both, then a third (the host) catches up from either. Today: `peer_docs_e2e` — two device nodes, no host, dialling each other over iroh: a note written on one arrives on the other as a file, a task made on the other shows in the first's task list, and a note edited on both while apart converges to one text holding both edits on both (the `DocPeer` lane + `doc_peer::pull_peer` in the device sweep); `local_node_e2e` — the join handshake; `vault-doc` unit — the same file seeds the same document on every node. Not yet: the third-node catch-up, per-person access (a peer is an org device, trusted with the org's documents) |
 | `offline.doc.access` | e2e: a document for a path the person can't write is refused and kept local. Today: `offline_doc_e2e::refused_documents_stay_on_the_device` (foreign lineage, unadmitted path); the per-person write refusal itself is `wiki_edits` (`open_collab` refused for a non-Editor) |
 | `offline.outbox` | unit tests over a fake transport; e2e: timer started offline lands on reconnect |

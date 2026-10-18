@@ -80,6 +80,30 @@ impl Panel {
     }
 }
 
+/// The account as a page of its own — who you are, your devices and
+/// servers, your status, sign-in and sign-out. Where the phone's account
+/// row goes; on a desk the same panel is in Settings.
+#[component]
+pub fn AccountView() -> Element {
+    let nav = use_navigator();
+    rsx! {
+        div { class: "mx-auto flex w-full max-w-2xl flex-col md:p-8",
+            div { class: "relative flex h-11 items-center justify-center px-3 md:hidden",
+                button {
+                    r#type: "button",
+                    class: "absolute left-3 flex size-11 items-center justify-center rounded-full bg-foreground/[0.07] text-foreground active:scale-95",
+                    aria_label: "Back",
+                    onclick: move |_| nav.go_back(),
+                    ChevronLeft { size: 20 }
+                }
+                span { class: "text-[17px] font-semibold text-foreground", "Account" }
+            }
+            h1 { class: "hidden pb-4 text-xl font-semibold text-foreground md:block", "Account" }
+            div { class: "px-3 pb-8 pt-3 md:px-0 md:pt-0", AccountPanel {} }
+        }
+    }
+}
+
 #[component]
 pub fn SettingsView() -> Element {
     // Phone: `None` is the list. Desktop shows a panel always.

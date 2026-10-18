@@ -186,23 +186,29 @@ fn host_of(url: &str) -> String {
         .to_owned()
 }
 
-/// Add / select / remove the servers the app can connect to. Reads the
-/// [`ServerRegistry`] from context; selecting an entry re-points the app
-/// (org discovery + connection) at that server via the app root's holder
-/// sync. Sign-in to the selected server happens through the login form
-/// (which dials the active server).
+/// The devices and servers this app reaches, as one grouped list: this
+/// device's own node first, then each host, then a row that opens the
+/// form for adding another. Selecting a host re-points the app (org
+/// discovery + connection) at it via the app root's holder sync; sign-in
+/// to it happens through the sign-in chooser, which dials the active
+/// server.
 #[component]
 pub fn ServersPanel() -> Element {
     let mut registry = use_context::<ServerRegistry>();
     let mut label = use_signal(String::new);
     let mut url = use_signal(String::new);
+    let mut adding = use_signal(|| false);
     // Why discovery didn't resolve for the active server, if it failed.
     let discovery_err = use_context::<crate::orgs::DiscoveryError>().0;
 
-    let servers = registry.list();
+    let hosts: Vec<ServerEntry> = registry
+        .list()
+        .into_iter()
+        .filter(|s| !task_ui_core::node::is_local(&s.server_url))
+        .collect();
     let active = registry.active_id();
 
-    let add = move |_| {
+    let mut add = move || {
         let raw = url.peek().trim().to_owned();
         if raw.is_empty() {
             return;
@@ -220,70 +226,93 @@ pub fn ServersPanel() -> Element {
         registry.set_active(Some(id));
         label.set(String::new());
         url.set(String::new());
+        adding.set(false);
     };
 
     rsx! {
-        div { class: "flex flex-col gap-3",
-            ThisDevice {}
-            div { class: "px-1 pt-1 text-xs font-medium text-muted-foreground",
-                "Connect to a host / another device"
-            }
+        div { class: "flex flex-col",
             if let Some(err) = discovery_err.read().as_ref() {
-                div { class: "rounded-lg border border-destructive/40 bg-destructive/10 px-2 py-2 text-xs text-destructive",
+                div { class: "mb-2 rounded-2xl bg-destructive/10 px-4 py-3 text-[13px] text-destructive",
                     div { class: "font-medium", "Couldn't reach this server" }
                     div { class: "mt-0.5 break-words opacity-90", "{err}" }
                 }
             }
-            if servers.iter().all(|s| task_ui_core::node::is_local(&s.server_url)) {
-                div { class: "px-1 text-xs text-muted-foreground",
-                    "No hosts yet. Add one below (e.g. task.starcommand.live) — a host is just another node of your org that is always on."
-                }
-            } else {
-                div { class: "flex flex-col gap-1",
-                    for s in servers.into_iter().filter(|s| !task_ui_core::node::is_local(&s.server_url)) {
-                        div {
-                            key: "{s.id}",
-                            class: "flex items-center gap-2 rounded-lg border border-border px-2 py-2",
-                            button {
-                                r#type: "button",
-                                class: "flex min-w-0 flex-1 flex-col text-left",
-                                onclick: {
-                                    let id = s.id;
-                                    move |_| registry.set_active(Some(id))
-                                },
-                                span { class: "truncate text-sm font-medium text-foreground", "{s.label}" }
-                                span { class: "truncate text-xs text-muted-foreground", "{s.server_url}" }
+            div { class: "flex flex-col divide-y divide-foreground/[0.06] overflow-hidden rounded-[20px] bg-foreground/[0.05]",
+                ThisDevice {}
+                for s in hosts {
+                    div {
+                        key: "{s.id}",
+                        class: "flex min-h-[60px] items-center gap-3 px-4",
+                        button {
+                            r#type: "button",
+                            class: "flex min-w-0 flex-1 items-center gap-3 py-2 text-left",
+                            onclick: {
+                                let id = s.id;
+                                move |_| registry.set_active(Some(id))
+                            },
+                            span { class: "flex size-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.08] text-foreground/80",
+                                architect_ui::lucide_dioxus::Server { size: 17 }
                             }
-                            if Some(s.id) == active {
-                                span { class: "text-xs text-primary", "● active" }
+                            span { class: "flex min-w-0 flex-1 flex-col",
+                                span { class: "truncate text-[15px] text-foreground", "{s.label}" }
+                                span { class: "truncate text-[13px] text-muted-foreground", {host_of(&s.server_url)} }
                             }
-                            button {
-                                r#type: "button",
-                                class: "text-xs text-muted-foreground hover:text-destructive",
-                                onclick: {
-                                    let id = s.id;
-                                    move |_| registry.remove(id)
-                                },
-                                "Remove"
+                        }
+                        if Some(s.id) == active {
+                            span { class: "shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[12px] font-medium text-primary",
+                                "Connected"
                             }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-foreground/[0.08] active:text-destructive",
+                            aria_label: "Remove {s.label}",
+                            onclick: {
+                                let id = s.id;
+                                move |_| registry.remove(id)
+                            },
+                            architect_ui::lucide_dioxus::X { size: 16 }
                         }
                     }
                 }
-            }
-
-            div { class: "flex flex-col gap-2",
-                Input { value: label, placeholder: "Label (optional)" }
-                Input {
-                    value: url,
-                    input_type: "url".to_string(),
-                    placeholder: "Host URL (task.starcommand.live)",
-                }
-                Button {
-                    variant: ButtonVariant::Secondary,
-                    size: ButtonSize::Medium,
-                    on_click: add,
-                    class: "w-full",
-                    "Add host"
+                if adding() {
+                    div { class: "flex flex-col gap-2 px-4 py-3",
+                        Input {
+                            value: url,
+                            input_type: "url".to_string(),
+                            placeholder: "Address — task.example.com",
+                        }
+                        Input { value: label, placeholder: "Name (optional)" }
+                        div { class: "flex gap-2 pt-1",
+                            button {
+                                r#type: "button",
+                                class: "flex h-11 flex-1 items-center justify-center rounded-2xl bg-foreground/[0.06] text-[15px] text-foreground active:bg-foreground/[0.1]",
+                                onclick: move |_| adding.set(false),
+                                "Cancel"
+                            }
+                            button {
+                                r#type: "button",
+                                "data-testid": "add-server-confirm",
+                                class: "flex h-11 flex-1 items-center justify-center rounded-2xl bg-primary text-[15px] font-semibold text-primary-foreground active:opacity-90",
+                                onclick: move |_| add(),
+                                "Connect"
+                            }
+                        }
+                        p { class: "px-1 text-[12px] leading-4 text-muted-foreground",
+                            "A server is just another node of your org that is always on — your desktop, or a host."
+                        }
+                    }
+                } else {
+                    button {
+                        r#type: "button",
+                        "data-testid": "add-server",
+                        class: "flex min-h-[54px] w-full items-center gap-3 px-4 text-left text-[15px] text-primary active:bg-foreground/[0.06]",
+                        onclick: move |_| adding.set(true),
+                        span { class: "flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/15",
+                            architect_ui::lucide_dioxus::Plus { size: 18 }
+                        }
+                        "Add peer or server"
+                    }
                 }
             }
         }
@@ -323,7 +352,6 @@ fn ThisDevice() -> Element {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod this_device {
-    use architect_ui::prelude::*;
     use dioxus::prelude::*;
     use files_proto::service::sync::SyncServiceClient;
     use task_ui_core::orgs::OrgMeta;
@@ -340,7 +368,6 @@ mod this_device {
         let orgs = use_context::<Signal<Vec<OrgMeta>>>();
         let mut note = use_signal(|| None::<String>);
         let local = task_ui_core::node::local_active();
-        let root = node.data_root().display().to_string();
 
         let run_here = move |_| {
             let id = this_device_entry(&mut registry);
@@ -372,38 +399,41 @@ mod this_device {
             .collect();
 
         rsx! {
-            div { class: "flex flex-col gap-2 rounded-lg border border-border px-2 py-2",
-                div { class: "flex items-center gap-2",
+            div { class: "flex flex-col gap-2 px-4 py-3",
+                div { class: "flex items-center gap-3",
+                    span { class: "flex size-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.08] text-foreground/80",
+                        architect_ui::lucide_dioxus::Smartphone { size: 17 }
+                    }
                     div { class: "flex min-w-0 flex-1 flex-col",
-                        span { class: "text-sm font-medium text-foreground", "This device" }
-                        span { class: "truncate text-xs text-muted-foreground",
-                            "Runs Task itself, with no server — {root}"
+                        span { class: "text-[15px] text-foreground", "This device" }
+                        span { class: "truncate text-[13px] text-muted-foreground",
+                            if held.is_empty() {
+                                "Runs Task itself, no server needed"
+                            } else {
+                                {format!("Holds {}", held.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", "))}
+                            }
                         }
                     }
                     if local {
-                        span { class: "text-xs text-primary", "● running here" }
+                        span { class: "shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[12px] font-medium text-primary",
+                            "Running here"
+                        }
                     } else {
-                        Button {
-                            variant: ButtonVariant::Secondary,
-                            size: ButtonSize::Small,
-                            on_click: run_here,
-                            "Run on this device"
+                        button {
+                            r#type: "button",
+                            class: "shrink-0 rounded-full bg-foreground/[0.08] px-3 py-1.5 text-[13px] font-medium text-foreground active:bg-foreground/[0.14]",
+                            onclick: run_here,
+                            "Use"
                         }
                     }
                 }
-                for (name, id) in held {
-                    div { class: "truncate px-1 text-xs text-muted-foreground",
-                        "{name} — node "
-                        span { class: "font-mono", {id.unwrap_or_else(|| "not bound yet".to_owned())} }
-                    }
-                }
                 for org in joinable {
-                    div { class: "flex items-center gap-2 px-1",
-                        span { class: "min-w-0 flex-1 truncate text-xs text-foreground", "{org.name}" }
-                        Button {
-                            variant: ButtonVariant::Ghost,
-                            size: ButtonSize::Small,
-                            on_click: {
+                    div { class: "flex items-center gap-2 pl-12",
+                        span { class: "min-w-0 flex-1 truncate text-[13px] text-foreground", "{org.name}" }
+                        button {
+                            r#type: "button",
+                            class: "shrink-0 text-[13px] font-medium text-primary active:opacity-70",
+                            onclick: {
                                 let org = org.clone();
                                 move |_| {
                                     let org = org.clone();
@@ -419,7 +449,7 @@ mod this_device {
                     }
                 }
                 if let Some(n) = note.read().as_ref() {
-                    div { class: "px-1 text-xs text-muted-foreground break-words", "{n}" }
+                    div { class: "pl-12 text-[12px] text-muted-foreground break-words", "{n}" }
                 }
             }
         }

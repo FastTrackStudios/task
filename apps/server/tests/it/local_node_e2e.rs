@@ -394,3 +394,73 @@ async fn a_second_device_joins_the_org_as_a_node() {
         .await;
     assert!(refused.is_err(), "a namesake org is refused");
 }
+
+/// A phone that runs Task itself has no address its watch could dial,
+/// so the phone relays the watch's requests to its node
+/// (`LocalNode::watch`, called from the iOS shell's WatchConnectivity
+/// delegate). The relay checks the bearer exactly as a host does: the
+/// watch captures and runs a timer as the phone's person, and an
+/// unsigned request is refused.
+// t[verify offline.local]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watch_reaches_the_phones_node_through_the_phone() {
+    let _env = crate::support::env_lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let node = LocalNode::open(opts(tmp.path(), false))
+        .await
+        .expect("the phone boots its node");
+    let token = sign_in(&node).await;
+    let base = format!("/org/{PERSONAL_SLUG}/watch/v1");
+
+    let (status, _) = node
+        .watch("GET", &format!("{base}/timer/active"), None, Vec::new())
+        .await;
+    assert_eq!(status, 401, "no bearer, no answer");
+
+    let (status, body) = node
+        .watch(
+            "POST",
+            &format!("{base}/inbox"),
+            Some(token.clone()),
+            br#"{"body":"Restring the Telecaster"}"#.to_vec(),
+        )
+        .await;
+    assert_eq!(status, 201, "capture: {}", String::from_utf8_lossy(&body));
+
+    let (status, body) = node
+        .watch(
+            "POST",
+            &format!("{base}/timer/start"),
+            Some(token.clone()),
+            br#"{"description":"Practice"}"#.to_vec(),
+        )
+        .await;
+    assert!(
+        (200..300).contains(&status),
+        "start: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let (status, body) = node
+        .watch(
+            "GET",
+            &format!("{base}/timer/active"),
+            Some(token.clone()),
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let active: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        active["description"], "Practice",
+        "the running timer: {active}"
+    );
+
+    // The capture is in the phone's inbox, where the phone's UI reads it.
+    let lane = node.caller(PERSONAL_SLUG, Some(token)).await.unwrap();
+    let inbox: inbox_proto::InboxClient = client(&lane);
+    let items = inbox.list_inbox().await.expect("list inbox");
+    assert!(
+        items.iter().any(|i| i.body.contains("Telecaster")),
+        "the watch's capture landed on the phone"
+    );
+}

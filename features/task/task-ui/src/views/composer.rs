@@ -12,14 +12,22 @@
 //!   follows the `@`; ↑ / ↓ / Enter (or Tab) pick, Esc dismisses. Picking
 //!   removes the `@…` from the title and sets the Assignee chip — the
 //!   assignment that puts an issue on someone's Tasks list.
+//!   The same list offers contexts (`@errands`, `@home`), which file the
+//!   capture under where it gets done — a chore — instead of who.
 //! - `#la…` does the same for labels (and offers to create one).
 //! - `[[Project]]`, `tomorrow`, `fri`, `every week`, `!high` are read by
 //!   the quick-add parser (`task_proto::capture`) and shown as chips the
 //!   moment they're typed; a chip set by hand wins over the text.
 //!
+//! The symbols sit in a row of buttons over the properties (`#`, `@`,
+//! `[[ ]]`, `!`), each typing its symbol for you, and a ? beside them
+//! lists what every symbol means.
+//!
 //! On a phone it is a full-screen sheet; on a desk, a card. ⌘↩ creates.
 
-use architect_ui::lucide_dioxus::{CalendarDays, Clock, Link2, ListTree, Plus, Repeat, Tag, X};
+use architect_ui::lucide_dioxus::{
+    CalendarDays, CircleQuestionMark, Clock, DoorOpen, Link2, ListTree, Plus, Repeat, Tag, X,
+};
 use dioxus::prelude::*;
 use uuid::Uuid;
 
@@ -231,6 +239,61 @@ const REPEATS: &[(&str, &str)] = &[
     ("Every month", "FREQ=MONTHLY"),
 ];
 
+/// A context in the `@` list: its option id is this prefix and the name.
+const CONTEXT_ID: &str = "ctx:";
+/// A context the `@` list offers to make.
+const CONTEXT_NEW: &str = "ctx+:";
+
+/// The context an `@` suggestion names, if it is one (not a person).
+fn context_of(id: &str) -> Option<&str> {
+    id.strip_prefix(CONTEXT_NEW)
+        .or_else(|| id.strip_prefix(CONTEXT_ID))
+}
+
+/// The symbol buttons: what shows, what it types, what it means.
+const SIGILS: [(&str, &str, &str); 4] = [
+    ("#", "#", "Label"),
+    ("@", "@", "Person or context"),
+    ("[[ ]]", "[[", "Project"),
+    ("!", "!", "Priority"),
+];
+
+/// Every bit of shorthand the title understands, as the ? list shows
+/// it. A row's id is what picking it types (nothing, for the words).
+fn syntax_options() -> Vec<PickOption> {
+    let sym = |s: &'static str| {
+        rsx! { span { class: "whitespace-nowrap font-mono text-[15px] font-semibold text-foreground", "{s}" } }
+    };
+    vec![
+        PickOption::new("#", "Label — #mix, #client").icon(sym("#")),
+        PickOption::new("@", "Person — @sam, or a context — @errands, @home").icon(sym("@")),
+        PickOption::new("[[", "Project — [[Example Album]]").icon(sym("[[")),
+        PickOption::new("!", "Priority — !low, !high, !urgent").icon(sym("!")),
+        PickOption::new("", "Due — today, tomorrow, fri, next monday, 2026-11-02")
+            .icon(rsx! { CalendarDays { size: 15 } }),
+        PickOption::new("", "Repeat — daily, every week, every other monday")
+            .icon(rsx! { Repeat { size: 15 } }),
+    ]
+}
+
+/// Type `symbol` at the end of the title (after a space) and put the
+/// cursor after it, so what follows is the name. `[[` gets its `]]` and
+/// the cursor goes between them.
+fn type_symbol(mut title: Signal<String>, symbol: &str) {
+    let t = title.peek().clone();
+    let sep = if t.is_empty() || t.ends_with(char::is_whitespace) {
+        ""
+    } else {
+        " "
+    };
+    let close = if symbol == "[[" { "]]" } else { "" };
+    title.set(format!("{t}{sep}{symbol}{close}"));
+    let back = close.len();
+    let _ = document::eval(&format!(
+        "setTimeout(() => {{ const t = document.getElementById('composer-title'); if (!t) return; t.focus({{ preventScroll: true }}); const n = t.value.length - {back}; t.setSelectionRange(n, n); }}, 30);"
+    ));
+}
+
 #[derive(Props, Clone, PartialEq)]
 pub struct ComposerProps {
     /// `(user id, name)` — the signed-in person first; they are the
@@ -240,6 +303,10 @@ pub struct ComposerProps {
     pub projects: Vec<(Uuid, String)>,
     #[props(default)]
     pub known_labels: Vec<String>,
+    /// Contexts already in use, without the `@` — where things get done
+    /// (`home`, `errands`).
+    #[props(default)]
+    pub known_contexts: Vec<String>,
     /// Text to start from (a capture being processed, a quick-add line).
     #[props(default)]
     pub initial_title: String,
@@ -278,6 +345,10 @@ pub fn Composer(props: ComposerProps) -> Element {
     let mut assignee = use_signal(move || me.clone());
     let mut project = use_signal(|| None::<(Uuid, String)>);
     let mut labels = use_signal(Vec::<String>::new);
+    // Contexts chosen by hand, without the `@`.
+    let mut contexts = use_signal(Vec::<String>::new);
+    let mut context_open = use_signal(|| false);
+    let mut syntax_open = use_signal(|| false);
     let mut due = use_signal(|| None::<String>);
     let mut recurrence = use_signal(|| None::<String>);
     let mut subs = use_signal(Vec::<String>::new);
@@ -310,6 +381,7 @@ pub fn Composer(props: ComposerProps) -> Element {
         || project().is_some()
         || new_project().is_some()
         || !labels().is_empty()
+        || !contexts().is_empty()
         || due().is_some()
         || recurrence().is_some()
         || !subs().is_empty();
@@ -342,12 +414,40 @@ pub fn Composer(props: ComposerProps) -> Element {
         .iter()
         .map(|l| PickOption::new(l.clone(), l.clone()).dot(label_color(l)))
         .collect();
+    let context_opts: Vec<PickOption> = props
+        .known_contexts
+        .iter()
+        .map(|c| {
+            PickOption::new(format!("{CONTEXT_ID}{c}"), format!("@{c}"))
+                .icon(rsx! { DoorOpen { size: 15 } })
+        })
+        .collect();
     let suggestions: Vec<PickOption> = match &trigger {
-        Some(Trigger::Person(q)) => filtered(&people_opts, q)
-            .into_iter()
-            .map(|(_, o)| o)
-            .take(6)
-            .collect(),
+        Some(Trigger::Person(q)) => {
+            let mut hits: Vec<PickOption> = filtered(&people_opts, q)
+                .into_iter()
+                .map(|(_, o)| o)
+                .take(4)
+                .collect();
+            hits.extend(
+                filtered(&context_opts, q)
+                    .into_iter()
+                    .map(|(_, o)| o)
+                    .take(4),
+            );
+            let known = props
+                .known_contexts
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(q))
+                || props.people.iter().any(|(_, n)| n.eq_ignore_ascii_case(q));
+            if !q.is_empty() && !known {
+                hits.push(
+                    PickOption::new(format!("{CONTEXT_NEW}{q}"), format!("New context “@{q}”"))
+                        .icon(rsx! { DoorOpen { size: 15 } }),
+                );
+            }
+            hits
+        }
         Some(Trigger::Label(q)) => {
             let mut hits: Vec<PickOption> = filtered(&label_opts, q)
                 .into_iter()
@@ -369,8 +469,16 @@ pub fn Composer(props: ComposerProps) -> Element {
     let resolve = move |opt: PickOption| {
         match trigger_at_end(&title.peek()) {
             Some(Trigger::Person(_)) => {
-                let who = people_c.iter().find(|(id, _)| *id == opt.id).cloned();
-                assignee.set(who);
+                if let Some(name) = context_of(&opt.id) {
+                    let mut c = contexts();
+                    if !c.iter().any(|x| x.eq_ignore_ascii_case(name)) {
+                        c.push(name.to_owned());
+                    }
+                    contexts.set(c);
+                } else {
+                    let who = people_c.iter().find(|(id, _)| *id == opt.id).cloned();
+                    assignee.set(who);
+                }
             }
             Some(Trigger::Label(_)) => {
                 let name = opt.id.strip_prefix('+').unwrap_or(&opt.id).to_owned();
@@ -429,6 +537,12 @@ pub fn Composer(props: ComposerProps) -> Element {
                 recurrence.peek().as_deref(),
                 &projects,
             );
+            for c in contexts.peek().iter() {
+                let tag = format!("@{c}");
+                if !task.contexts.iter().any(|x| x.eq_ignore_ascii_case(&tag)) {
+                    task.contexts.0.push(tag);
+                }
+            }
             // A project named in the picker that does not exist yet is
             // made now, and the task filed under it by name.
             if let (None, Some(name)) = (project.peek().clone(), new_project.peek().clone()) {
@@ -485,6 +599,37 @@ pub fn Composer(props: ComposerProps) -> Element {
         }
         l
     };
+    // Contexts chosen by hand, then any the title's `@contexts` add —
+    // an `@word` that is not a person.
+    let chosen_contexts: Vec<String> = {
+        let mut c = contexts();
+        // The word still being typed after `@` is not a context yet.
+        let typing = match &trigger {
+            Some(Trigger::Person(q)) => Some(q.as_str()),
+            _ => None,
+        };
+        for t in parsed.contexts.iter() {
+            let t = t.trim_start_matches('@');
+            if typing == Some(t) {
+                continue;
+            }
+            let person = props.people.iter().any(|(_, n)| {
+                n.split_whitespace()
+                    .next()
+                    .is_some_and(|f| f.eq_ignore_ascii_case(t))
+            });
+            if !person && !c.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+                c.push(t.to_owned());
+            }
+        }
+        c
+    };
+    let mut context_choices: Vec<String> = props.known_contexts.clone();
+    for c in &chosen_contexts {
+        if !context_choices.iter().any(|x| x.eq_ignore_ascii_case(c)) {
+            context_choices.push(c.clone());
+        }
+    }
     let parsed_priority = priority()
         .is_none()
         .then(|| Some(parsed.priority.clone()).filter(|p| p != "normal" && p != "none"))
@@ -703,6 +848,46 @@ pub fn Composer(props: ComposerProps) -> Element {
                     }
                 }
 
+                // ── the symbols ──
+                // Each types its symbol into the title, so the shorthand
+                // is found by looking rather than by knowing; ? says what
+                // each one means.
+                if kind != CaptureKind::Project {
+                    div { class: "relative flex items-center gap-1.5 px-3 pt-1.5 md:px-4",
+                        for (sigil, insert, what) in SIGILS {
+                            button {
+                                key: "{sigil}",
+                                r#type: "button",
+                                "data-testid": "composer-sigil",
+                                class: "flex h-8 min-w-9 items-center justify-center rounded-lg bg-foreground/[0.06] px-2 font-mono text-[15px] font-semibold text-foreground/80 active:bg-foreground/[0.12] md:h-7 md:text-[13px]",
+                                title: "{what}",
+                                onclick: move |_| type_symbol(title, insert),
+                                "{sigil}"
+                            }
+                        }
+                        button {
+                            r#type: "button",
+                            "data-testid": "composer-syntax",
+                            class: "flex size-8 items-center justify-center rounded-lg text-muted-foreground active:bg-foreground/[0.08] md:size-7",
+                            aria_label: "What the symbols do",
+                            onclick: move |_| syntax_open.set(true),
+                            CircleQuestionMark { size: 17 }
+                        }
+                        PropertyPicker {
+                            open: syntax_open(),
+                            title: "Type these in the title…",
+                            options: syntax_options(),
+                            number_from: None,
+                            on_pick: move |insert: String| {
+                                if !insert.is_empty() {
+                                    type_symbol(title, &insert);
+                                }
+                            },
+                            on_close: move |()| syntax_open.set(false),
+                        }
+                    }
+                }
+
                 // ── the chips ──
                 // Rides on top of the keyboard; each chip opens its picker
                 // above it. Wrapped, not a sideways scroller: iOS clips a
@@ -741,6 +926,55 @@ pub fn Composer(props: ComposerProps) -> Element {
                             new_project.set(Some(name));
                         })),
                         pending: new_project(),
+                    }
+                    // Where it gets done — what makes a chore a chore.
+                    div { class: "relative",
+                        button {
+                            r#type: "button",
+                            "data-testid": "composer-context",
+                            class: if chosen_contexts.is_empty() { CHIP_ROW_QUIET_CLASS } else { CHIP_ROW_CLASS },
+                            title: "Context",
+                            onclick: move |_| context_open.set(true),
+                            if chosen_contexts.is_empty() {
+                                DoorOpen { size: 14 }
+                                "Context"
+                            } else {
+                                span { class: "text-muted-foreground", DoorOpen { size: 14 } }
+                                {chosen_contexts.iter().map(|c| format!("@{c}")).collect::<Vec<_>>().join(", ")}
+                            }
+                        }
+                        PropertyPicker {
+                            open: context_open(),
+                            title: "Context…",
+                            options: context_choices
+                                .iter()
+                                .map(|c| PickOption::new(c.clone(), format!("@{c}")).icon(rsx! { DoorOpen { size: 15 } }))
+                                .collect::<Vec<_>>(),
+                            selected: chosen_contexts.clone(),
+                            multi: true,
+                            number_from: None,
+                            on_create: Some(EventHandler::new(move |name: String| {
+                                let name = name.trim().trim_start_matches('@').to_owned();
+                                if name.is_empty() {
+                                    return;
+                                }
+                                let mut c = contexts();
+                                if !c.iter().any(|x| x.eq_ignore_ascii_case(&name)) {
+                                    c.push(name);
+                                }
+                                contexts.set(c);
+                            })),
+                            on_pick: move |name: String| {
+                                let mut c = contexts();
+                                if let Some(i) = c.iter().position(|x| x.eq_ignore_ascii_case(&name)) {
+                                    c.remove(i);
+                                } else {
+                                    c.push(name);
+                                }
+                                contexts.set(c);
+                            },
+                            on_close: move |()| context_open.set(false),
+                        }
                     }
                     // The rest only once set — chosen from More.
                     if !chosen_labels.is_empty() || show_labels() {
@@ -878,6 +1112,34 @@ pub fn Composer(props: ComposerProps) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `@` list holds people and contexts; only a context's id says
+    /// so, and a made-up one is a context too.
+    #[test]
+    fn an_at_suggestion_knows_a_context_from_a_person() {
+        assert_eq!(context_of("ctx:errands"), Some("errands"));
+        assert_eq!(context_of("ctx+:garage"), Some("garage"));
+        assert_eq!(context_of("6f1c0d2e-user"), None);
+    }
+
+    /// Every symbol button is explained in the ? list, and what each
+    /// types is what the parser reads.
+    #[test]
+    fn every_symbol_is_explained_and_parsed() {
+        let help = syntax_options();
+        for (_, insert, _) in SIGILS {
+            assert!(
+                help.iter().any(|o| o.id == insert),
+                "{insert} has no help row"
+            );
+        }
+        let t = task_proto::capture("Clean the gutters #chore @home [[House]] !high");
+        assert_eq!(t.title, "Clean the gutters");
+        assert!(t.tags.iter().any(|x| x == "chore"));
+        assert!(t.contexts.iter().any(|x| x == "@home"));
+        assert!(t.projects.iter().any(|x| x == "[[House]]"));
+        assert_eq!(t.priority, "high");
+    }
 
     #[test]
     fn the_last_word_says_what_it_wants() {

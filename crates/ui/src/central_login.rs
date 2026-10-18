@@ -221,7 +221,7 @@ impl std::fmt::Display for LoginError {
 /// Returns only on failure: on success the page is navigating away.
 #[cfg(target_arch = "wasm32")]
 pub fn begin(redirect_uri: &str) -> Result<(), LoginError> {
-    let issuer = task_ui_core::central_auth::issuer().ok_or(LoginError::NoIssuer)?;
+    let issuer = task_ui_core::central_auth::issuer_or_default().ok_or(LoginError::NoIssuer)?;
     let pkce = Pkce::from_entropy(random_bytes::<32>()?, random_bytes::<16>()?);
 
     // Stored BEFORE navigating: once `assign` runs this context is on
@@ -618,7 +618,7 @@ pub mod native {
     /// system's or the issuer's own words otherwise.
     pub async fn sign_in() -> Result<Redeemed, LoginError> {
         let browser = BROWSER.get().cloned().ok_or(LoginError::NoBrowser)?;
-        let issuer = task_ui_core::central_auth::issuer().ok_or(LoginError::NoIssuer)?;
+        let issuer = task_ui_core::central_auth::issuer_or_default().ok_or(LoginError::NoIssuer)?;
         let redirect_uri = redirect_uri().ok_or(LoginError::NoBrowser)?;
         let pkce = Pkce::from_entropy(entropy::<32>(), entropy::<16>());
         let url = oidc::authorize_url(&issuer, CLIENT_ID, &redirect_uri, &pkce, SCOPE);

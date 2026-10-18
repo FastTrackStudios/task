@@ -129,9 +129,13 @@ pub fn use_watch_config_publisher() {
             .filter(|t| !t.is_empty())
             .or_else(|| entry.as_ref().and_then(|e| e.session_token.clone()))
             .unwrap_or_default();
-        let base_url = entry
-            .map(|e| http_base_from_vox_url(&e.server_url))
-            .unwrap_or_default();
+        // No entry is a phone on its own node by default; the watch then
+        // gets `local://this-device`, which tells it to go through the
+        // phone (the relay in the iOS shell) rather than dial.
+        let base_url = entry.map_or_else(
+            || http_base_from_vox_url(&task_ui_core::vox_session::vox_url()),
+            |e| http_base_from_vox_url(&e.server_url),
+        );
         publish(WatchConfig {
             base_url,
             org_slug,

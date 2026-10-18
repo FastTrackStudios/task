@@ -48,6 +48,19 @@ pub fn issuer() -> Option<String> {
     ISSUER.read().ok()?.clone()
 }
 
+/// FastTrackStudio's own issuer — where "Continue with FastTrackStudio"
+/// goes when nothing was advertised.
+pub const DEFAULT_ISSUER: &str = "https://auth.fasttrackstudio.app";
+
+/// The issuer for signing in with a FastTrackStudio account: the one the
+/// server advertised, or — in the native apps, whose own node advertises
+/// none — FastTrackStudio's. Only the FTS button and its flow use this;
+/// [`issuer`] still decides where an email/password sign-in goes.
+#[must_use]
+pub fn issuer_or_default() -> Option<String> {
+    issuer().or_else(|| (!cfg!(target_arch = "wasm32")).then(|| DEFAULT_ISSUER.to_owned()))
+}
+
 /// The issuer's vox endpoint, as a URL a lane can dial.
 ///
 /// `https` → `wss` and `http` → `ws`, because the issuer advertises the

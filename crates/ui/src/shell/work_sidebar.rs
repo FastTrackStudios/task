@@ -346,7 +346,7 @@ pub fn WorkSidebar(current: Route) -> Element {
 }
 
 /// The sidebar's foot: who is signed in, their status, and where this
-/// device's data lives. Opens the account sheet on a phone and Settings
+/// device's data lives. Opens the Account page on a phone and Settings
 /// on a desk.
 #[component]
 fn AccountFooter() -> Element {
@@ -360,7 +360,6 @@ fn AccountFooter() -> Element {
     let status = local.effective_status();
     let phone =
         try_use_context::<crate::shell::phone_gestures::PhonePanels>().is_some_and(|p| (p.phone)());
-    let mut sheet = use_signal(|| false);
     let nav = use_navigator();
     rsx! {
         // No safe-area inset here: the phone drawer already keeps clear of
@@ -371,7 +370,7 @@ fn AccountFooter() -> Element {
                 class: "flex w-full items-center gap-3 rounded-[10px] px-2 py-2 text-left hover:bg-foreground/[0.05] active:bg-foreground/[0.08]",
                 onclick: move |_| {
                     if phone {
-                        sheet.set(true);
+                        nav.push(Route::AccountRoute {});
                     } else {
                         nav.push(Route::SettingsRoute {});
                     }
@@ -386,12 +385,6 @@ fn AccountFooter() -> Element {
                 }
                 span { class: "text-muted-foreground", architect_ui::lucide_dioxus::ChevronsUpDown { size: 16 } }
             }
-        }
-        task_ui_core::sheet::BottomSheet {
-            open: sheet(),
-            title: "Account & status".to_string(),
-            on_close: move |()| sheet.set(false),
-            crate::auth::AccountSheetBody { on_done: move |()| sheet.set(false) }
         }
     }
 }

@@ -286,6 +286,46 @@ impl LocalNode {
         serve_in_process(router, &self.state.scope).await
     }
 
+    /// One call to the watch API (`watch_bridge`), answered in-process —
+    /// how a paired Apple Watch reaches a phone that runs Task itself.
+    /// The watch cannot dial this node (it has no socket, and the
+    /// watch's own loopback is the watch), so the phone relays the
+    /// watch's request over WatchConnectivity and hands it here.
+    /// `path` is the full path and query (`/org/{slug}/watch/v1/…`); the
+    /// bearer is checked exactly as a host checks it. Returns the status
+    /// and body.
+    pub async fn watch(
+        &self,
+        method: &str,
+        path: &str,
+        bearer: Option<String>,
+        body: Vec<u8>,
+    ) -> (u16, Vec<u8>) {
+        use tower::ServiceExt as _;
+        let mut req = axum::http::Request::builder().method(method).uri(path);
+        if let Some(token) = bearer.filter(|t| !t.is_empty()) {
+            req = req.header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        if !body.is_empty() {
+            req = req.header(axum::http::header::CONTENT_TYPE, "application/json");
+        }
+        let req = match req.body(axum::body::Body::from(body)) {
+            Ok(r) => r,
+            Err(e) => return (400, format!("bad request: {e}").into_bytes()),
+        };
+        let router = crate::watch_bridge::watch_router().with_state(self.state.clone());
+        let resp = match router.oneshot(req).await {
+            Ok(r) => r,
+            Err(never) => match never {},
+        };
+        let status = resp.status().as_u16();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .map(|b| b.to_vec())
+            .unwrap_or_default();
+        (status, bytes)
+    }
+
     /// The node's `/server/vox` surface in-process — org management,
     /// snapshots, the identity locker, device enrolment. NOT the
     /// local-trusted variant: the app is a client of its node, and the

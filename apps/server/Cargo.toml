@@ -22,6 +22,9 @@ tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["io"] }
 axum = { version = "0.8", features = ["ws", "macros"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+# `ServiceExt::oneshot`: the local node answers the watch API in-process
+# (`LocalNode::watch`), with no socket for a router to listen on.
+tower = { version = "0.5", features = ["util"] }
 # Forwarding client for the OTLP proxy (src/otlp.rs).
 reqwest = { workspace = true }
 tracing.workspace = true
@@ -300,7 +303,6 @@ chrono = { workspace = true }
 tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 walkdir = { workspace = true }
-tower = { version = "0.5", features = ["util"] }
 vault-proto = { workspace = true, features = ["vox"] }
 project = { workspace = true, features = ["vox"] }
 collection-proto = { workspace = true, features = ["vox"] }

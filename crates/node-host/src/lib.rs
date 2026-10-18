@@ -85,6 +85,13 @@ pub fn install(opts: Options) {
     task_ui_core::node::install(Arc::new(Host::new(opts)));
 }
 
+/// Drive `fut` to completion from a plain thread — a platform callback
+/// (the phone's WatchConnectivity delegate) that is on no runtime. Never
+/// call it from inside an async task.
+pub fn block_on<T>(fut: impl std::future::Future<Output = T>) -> T {
+    runtime().block_on(fut)
+}
+
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RT.get_or_init(|| {
@@ -220,6 +227,19 @@ impl NodeHost for Host {
                 .await
                 .map_err(|e| format!("join: {e:#}"))?;
             Ok(joined.endpoint_id)
+        }))
+    }
+
+    fn watch(
+        &self,
+        method: String,
+        path: String,
+        bearer: Option<String>,
+        body: Vec<u8>,
+    ) -> NodeFuture<(u16, Vec<u8>)> {
+        let node = self.node();
+        Box::pin(on_node(async move {
+            Ok(node.await?.watch(&method, &path, bearer, body).await)
         }))
     }
 

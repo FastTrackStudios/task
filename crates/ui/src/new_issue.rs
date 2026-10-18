@@ -95,12 +95,28 @@ pub fn NewIssueHost() -> Element {
         }
     }
     known_labels.sort_by_key(|l| l.to_lowercase());
+    // Contexts in use, plus the everyday ones, so a chore can be filed
+    // under one before any task has it.
+    let mut known_contexts: Vec<String> = ["home", "errands", "office", "phone", "computer"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    for r in task_store.list().iter() {
+        for c in r.task.contexts.iter() {
+            let c = c.trim_start_matches('@').to_owned();
+            if !c.is_empty() && !known_contexts.iter().any(|k| k.eq_ignore_ascii_case(&c)) {
+                known_contexts.push(c);
+            }
+        }
+    }
+    known_contexts.sort_by_key(|c| c.to_lowercase());
 
     rsx! {
         Composer {
             people,
             projects,
             known_labels,
+            known_contexts,
             initial_title: initial,
             kind,
             // A note is a capture, kept verbatim in the inbox until it

@@ -179,6 +179,9 @@ pub enum Route {
         #[route("/settings")]
         SettingsRoute {},
 
+        #[route("/account")]
+        AccountRoute {},
+
         #[route("/sync")]
         SyncRoute {},
 
@@ -521,6 +524,11 @@ fn WikiSourceRoute(name: String) -> Element {
 #[component]
 fn SettingsRoute() -> Element {
     rsx! { pages::settings::SettingsView {} }
+}
+
+#[component]
+fn AccountRoute() -> Element {
+    rsx! { pages::settings::AccountView {} }
 }
 
 #[component]

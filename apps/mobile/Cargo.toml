@@ -24,6 +24,8 @@ tracing = { workspace = true }
 # itself and works with no server. task-server checks clean for
 # aarch64-apple-ios-sim.
 task-node-host = { workspace = true }
+# `node::host()`: the watch relay answers through the phone's node.
+task-ui-core = { workspace = true }
 
 # Apple Watch config bridge (`src/watch_sync.rs`) — pure-Rust WCSession
 # host over the objc2 ecosystem, iOS builds only.

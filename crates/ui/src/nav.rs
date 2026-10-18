@@ -342,6 +342,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::WikiScopedSourceRoute { .. } => "Source",
         Route::FilesRoute {} => "Files",
         Route::SettingsRoute {} => "Settings",
+        Route::AccountRoute {} => "Account",
         Route::SyncRoute {} => "Sync",
         // Titled, though nobody should ever read it: the page redeems a
         // code and navigates away. It shows only if the exchange fails

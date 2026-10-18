@@ -166,6 +166,17 @@ mod native {
         /// Take a node for an org held elsewhere; returns this node's
         /// endpoint id for it (what the peer enrolls).
         fn join(&self, request: JoinRequest) -> NodeFuture<Option<String>>;
+        /// One watch-API call (`/org/{slug}/watch/v1/…`, path and query),
+        /// answered in-process: the phone relays its paired watch's
+        /// requests here, since the watch cannot dial this node. Returns
+        /// the HTTP status and body.
+        fn watch(
+            &self,
+            method: String,
+            path: String,
+            bearer: Option<String>,
+            body: Vec<u8>,
+        ) -> NodeFuture<(u16, Vec<u8>)>;
         /// Whether the node holds `slug` — answered from what the node
         /// has said so far, so it is cheap and never boots the node.
         fn holds(&self, slug: &str) -> bool;

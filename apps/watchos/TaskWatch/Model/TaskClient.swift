@@ -172,8 +172,21 @@ struct TaskClient {
     ) async throws -> T {
         guard config.isComplete else { throw TaskClientError.notConfigured }
         let base = config.baseURL.trimmingCharacters(in: .whitespaces)
-        let root = base.contains("://") ? base : "https://\(base)"
         let slug = config.orgSlug.trimmingCharacters(in: .whitespaces)
+        // A phone that runs Task itself has no address to dial: ask it.
+        if base.hasPrefix("local://") {
+            var path = "/org/\(slug)/watch/v1/\(path)"
+            if !query.isEmpty {
+                var parts = URLComponents()
+                parts.queryItems = query
+                path += "?" + (parts.percentEncodedQuery ?? "")
+            }
+            let payload = try body.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) } ?? ""
+            let (code, data) = try await PhoneRelay.send(
+                method: method, path: path, token: config.token, body: payload)
+            return try decodeResponse(code: code, data: data)
+        }
+        let root = base.contains("://") ? base : "https://\(base)"
         guard var url = URL(string: root) else { throw TaskClientError.badURL }
         url.append(path: "org/\(slug)/watch/v1/\(path)")
         if !query.isEmpty { url.append(queryItems: query) }
@@ -193,7 +206,10 @@ struct TaskClient {
             throw TaskClientError.transport(error.localizedDescription)
         }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        return try decodeResponse(code: code, data: data)
+    }
 
+    private func decodeResponse<T: Decodable>(code: Int, data: Data) throws -> T {
         // 204 No Content → nil (the callers that can 204 decode into Optional).
         if code == 204 {
             return try JSONDecoder().decode(T.self, from: Data("null".utf8))

@@ -55,23 +55,27 @@ struct StaticProvider: TimelineProvider {
     }
 }
 
-/// A round launcher: one symbol, one place.
+/// A round launcher: one symbol, one place. `custom` names a symbol in
+/// this extension's asset catalog (the feather) rather than SF Symbols.
 struct Launcher: View {
     let symbol: String
     let label: String
+    var custom = false
     @Environment(\.widgetFamily) var family
+
+    var glyph: Image { custom ? Image(symbol) : Image(systemName: symbol) }
 
     var body: some View {
         switch family {
         case .accessoryCircular:
             ZStack {
                 AccessoryWidgetBackground()
-                Image(systemName: symbol).font(.title2.weight(.semibold))
+                glyph.font(.title2.weight(.semibold))
             }
             .widgetAccentable()
         default:
             VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: symbol).font(.title.weight(.semibold))
+                glyph.font(.title.weight(.semibold))
                 Spacer()
                 Text(label).font(.headline)
             }
@@ -100,7 +104,7 @@ struct SearchWidget: Widget {
 struct CaptureWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "task.capture", provider: StaticProvider()) { _ in
-            Launcher(symbol: "square.and.pencil", label: "Capture")
+            Launcher(symbol: "feather", label: "Capture", custom: true)
                 .widgetURL(link("capture"))
                 .containerBackground(.fill.tertiary, for: .widget)
         }
@@ -199,16 +203,36 @@ struct CalendarWidget: Widget {
 
 // ── The Capture control (Control Center, the Action button) ──────────
 
+/// Opens the app at `place`. A control's button cannot open a URL by
+/// itself — handed a bare `OpenURLIntent` it runs in the extension and
+/// the Action button shows its glyph with nothing after — so the button
+/// runs this, whose result asks the system to open the link, which
+/// brings Task forward on that page.
+@available(iOS 18.0, *)
+struct OpenTaskIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Task"
+    static let isDiscoverable = false
+
+    @Parameter(title: "Place") var place: String
+
+    init() {}
+    init(_ place: String) { self.place = place }
+
+    func perform() async throws -> some IntentResult & OpensIntent {
+        .result(opensIntent: OpenURLIntent(link(place)))
+    }
+}
+
 @available(iOS 18.0, *)
 struct CaptureControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "task.capture.control") {
-            ControlWidgetButton(action: OpenURLIntent(link("capture"))) {
-                Label("Capture", systemImage: "square.and.pencil")
+            ControlWidgetButton(action: OpenTaskIntent("capture")) {
+                Label("Capture", image: "feather")
             }
         }
         .displayName("Fleeting Capture")
-        .description("Open Task straight to capture.")
+        .description("Open Task straight to a fleeting note.")
     }
 }
 
@@ -216,7 +240,7 @@ struct CaptureControl: ControlWidget {
 struct TimerControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "task.timer.control") {
-            ControlWidgetButton(action: OpenURLIntent(link("timer"))) {
+            ControlWidgetButton(action: OpenTaskIntent("timer")) {
                 Label("Start Timer", systemImage: "timer")
             }
         }
