@@ -165,7 +165,7 @@ BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plis
 # requires CFBundleShortVersionString to be 1-3 period-separated integers
 # (the crate's "0.0.1-alpha" is rejected); CFBundleVersion just has to climb.
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
-MARKETING_VER="${MARKETING_VER:-0.0.1}"
+MARKETING_VER="${MARKETING_VER:-0.0.3}"
 # Everything that changes how the app RUNS — the scene manifest iOS 27
 # requires, launch screen, orientations, URL scheme, display name, usage
 # strings — is shared with the simulator build (build-ios.sh), so a dev
