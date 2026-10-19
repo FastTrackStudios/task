@@ -377,6 +377,18 @@ if [ -n "$WIDGETS_APP" ] && [ -d "$ROOT/$WIDGETS_APP" ]; then
     echo "=== embedded + signed widget extension: $WEX ==="
 fi
 
+# The app's App Intents metadata (apps/mobile/build.rs): without it the
+# Capture and Timer controls cannot run their intent in the app.
+INTENTS="$(ls -dt "$ROOT"/target/aarch64-apple-ios/*/appintents/Metadata.appintents 2>/dev/null | head -1)"
+if [ -n "$INTENTS" ]; then
+    rm -rf "$APP/Metadata.appintents"
+    cp -R "$INTENTS" "$APP/"
+    echo "=== app intents metadata: $INTENTS ==="
+elif [ "$DX_PACKAGE" = task-app-mobile ]; then
+    echo "error: no Metadata.appintents from apps/mobile/build.rs" >&2
+    exit 1
+fi
+
 echo "=== signing (distribution) ==="
 cp "$PROFILE" "$APP/embedded.mobileprovision"
 security cms -D -i "$PROFILE" > /tmp/fts-prof.plist

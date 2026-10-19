@@ -203,31 +203,16 @@ struct CalendarWidget: Widget {
 
 // ── The Capture control (Control Center, the Action button) ──────────
 
-/// Opens the app at `place`. A control's button cannot open a URL by
-/// itself — handed a bare `OpenURLIntent` it runs in the extension and
-/// the Action button shows its glyph with nothing after — so the button
-/// runs this, whose result asks the system to open the link, which
-/// brings Task forward on that page.
-@available(iOS 18.0, *)
-struct OpenTaskIntent: AppIntent {
-    static let title: LocalizedStringResource = "Open Task"
-    static let isDiscoverable = false
-
-    @Parameter(title: "Place") var place: String
-
-    init() {}
-    init(_ place: String) { self.place = place }
-
-    func perform() async throws -> some IntentResult & OpensIntent {
-        .result(opensIntent: OpenURLIntent(link(place)))
-    }
-}
+// Each button runs `OpenTaskIntent` (apps/mobile/ios/Shared), which the
+// system runs in the app, not here.
 
 @available(iOS 18.0, *)
 struct CaptureControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "task.capture.control") {
             ControlWidgetButton(action: OpenTaskIntent("capture")) {
+                // The feather needs all three scales (feather.svg):
+                // Control Center asks for one other than Medium.
                 Label("Capture", image: "feather")
             }
         }

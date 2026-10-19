@@ -98,6 +98,16 @@ if [ -d "$WIDGETS_DIR" ]; then
     fi
 fi
 
+# The app's App Intents metadata (apps/mobile/build.rs): without it the
+# Capture and Timer controls cannot run their intent in the app.
+INTENTS="$(ls -dt "$ROOT"/target/aarch64-apple-ios-sim/*/appintents/Metadata.appintents 2>/dev/null | head -1)"
+if [ -n "$INTENTS" ]; then
+    rm -rf "$APP/Metadata.appintents"
+    cp -R "$INTENTS" "$APP/"
+else
+    echo "note: no Metadata.appintents from build.rs; the controls will not open the app" >&2
+fi
+
 # Editing Info.plist broke dx's signature; the simulator takes ad hoc —
 # with the App Group the widgets read.
 APP_ENT="${TMPDIR:-/tmp}/task-app-sim.entitlements"
