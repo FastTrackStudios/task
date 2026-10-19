@@ -266,7 +266,9 @@ async fn sweep_peer(
     hosting: Hosting,
     org_root: &Path,
 ) -> Result<(), files_sync::SyncError> {
-    let peer = files_sync::dial_peer(endpoint, &host.0).await?;
+    // Held to the end of the sweep: dropping it closes the connection,
+    // which dropping the client alone does not.
+    let (peer, _hangup) = files_sync::dial_peer(endpoint, &host.0).await?;
     let offered = peer
         .roots()
         .await

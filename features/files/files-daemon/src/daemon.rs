@@ -58,6 +58,10 @@ struct PeerLink {
     /// `None` for a peer handed in by an embedder (a test, an in-process
     /// link), which has no address to come back to.
     endpoint: Option<String>,
+    /// Closes the connection under `client` when this link is replaced
+    /// or dropped — see [`files_sync::Hangup`]. `None` for a client an
+    /// embedder handed in, whose connection is the embedder's.
+    hangup: Option<files_sync::Hangup>,
 }
 
 /// The sync choices, as they survive a restart.
@@ -113,7 +117,32 @@ struct RootRuntimeStatus {
     /// Consecutive failed pulls. Drives the backoff below; reset by any
     /// pull that succeeds.
     failed_pulls: u32,
+    /// The daemon tick before which this root is not tried again — see
+    /// [`backoff_ticks`]. Zero for a root that is not backing off.
+    retry_at: u64,
 }
+
+/// Whether a pull failed because the peer refused this machine.
+///
+/// The permissions gate's documented wire form for a denial is
+/// `InvalidPayload("permission denied: …")`, and by the time it reaches
+/// the pull it is text inside a transport error — there is no variant to
+/// match. It is still worth telling apart from an outage: a peer that
+/// does not admit this device keeps refusing until somebody admits it,
+/// and redialling it every tick fixes nothing (the connection was fine;
+/// the far side said no).
+fn is_refusal(error: &str) -> bool {
+    error.contains("permission denied")
+}
+
+/// Extra doublings a refusal starts its backoff with.
+///
+/// An outage is worth retrying on the next tick — a peer restarting is
+/// back in seconds. A refusal is not: it changes only when somebody on
+/// the other side admits this machine, or somebody here signs in or
+/// chooses the root again (both of which clear the backoff at once).
+/// So the first retry after a refusal waits four ticks, not one.
+const REFUSAL_HEAD_START: u32 = 2;
 
 /// Ticks to wait before retrying a root whose pull keeps failing:
 /// doubling from one, capped at an hour of default ticks.
@@ -143,6 +172,18 @@ mod backoff_tests {
         assert_eq!(backoff_ticks(3), 4);
         assert_eq!(backoff_ticks(8), 120, "capped at an hour of ticks");
         assert_eq!(backoff_ticks(u32::MAX), 120, "and stays there");
+    }
+
+    /// The exact text a refused pull arrived as on 2026-10-19, and an
+    /// outage, which must not be mistaken for one.
+    #[test]
+    fn a_refusal_is_told_apart_from_an_outage() {
+        assert!(super::is_refusal(
+            "io: heads rpc: invalid vox payload: permission denied: anonymous may not read \
+             files/replica (files-replica/heads)"
+        ));
+        assert!(!super::is_refusal("io: heads rpc: vox connection closed"));
+        assert!(!super::is_refusal("io: dialling abc: timed out"));
     }
 }
 
@@ -310,6 +351,8 @@ struct DaemonInner {
     /// Set once the daemon knows where to sync from; the control
     /// surface's `set_sync_choice` uses it.
     coordinator: Mutex<Option<SyncServiceClient>>,
+    /// Closes the coordinator's connection when it is replaced.
+    coordinator_hangup: Mutex<Option<files_sync::Hangup>>,
     live: LiveStatus,
     paused: std::sync::atomic::AtomicBool,
     events: EventHub,
@@ -323,6 +366,9 @@ struct DaemonInner {
     account_peers: Mutex<Vec<String>>,
     /// When the last round ran, so `tick` knows when the next is due.
     last_enroll: Mutex<Option<std::time::Instant>>,
+    /// Ticks this daemon has run. Per daemon rather than per process, so
+    /// two daemons in one test process back off on their own beats.
+    ticks: std::sync::atomic::AtomicU64,
 }
 
 impl SyncDaemon {
@@ -360,6 +406,7 @@ impl SyncDaemon {
                 shared: Mutex::new(None),
                 roots: Mutex::new(BTreeMap::new()),
                 coordinator: Mutex::new(None),
+                coordinator_hangup: Mutex::new(None),
                 live: LiveStatus {
                     roots: Arc::new(Mutex::new(BTreeMap::new())),
                 },
@@ -369,6 +416,7 @@ impl SyncDaemon {
                 account_sync: Mutex::new(account_sync),
                 account_peers: Mutex::new(account_peers),
                 last_enroll: Mutex::new(None),
+                ticks: std::sync::atomic::AtomicU64::new(0),
             }),
         })
     }
@@ -511,8 +559,9 @@ impl SyncDaemon {
             .collect()
     }
 
-    /// Open the replica lane on `endpoint_id`.
-    pub async fn dial(&self, endpoint_id: &str) -> Result<SyncServiceClient> {
+    /// Open the replica lane on `endpoint_id`. The connection closes
+    /// when the returned [`files_sync::Hangup`] is dropped.
+    pub async fn dial(&self, endpoint_id: &str) -> Result<(SyncServiceClient, files_sync::Hangup)> {
         crate::peering::dial(&self.endpoint()?, endpoint_id).await
     }
 
@@ -521,8 +570,13 @@ impl SyncDaemon {
     /// `ws://` URL, and the reason enrollment needs no token: the org
     /// admitted this device's endpoint, and the handshake proves it.
     pub async fn set_coordinator_peer(&self, endpoint_id: &str) -> Result<()> {
-        let peer = self.dial(endpoint_id).await?;
+        let (peer, hangup) = self.dial(endpoint_id).await?;
         self.set_coordinator(peer);
+        *self
+            .inner
+            .coordinator_hangup
+            .lock()
+            .expect("coordinator lock") = Some(hangup);
         // Written down, because being *told* the org over the socket and
         // being *started* with it in the environment should not differ
         // after a reboot. Without this, an agent paired from the app
@@ -558,6 +612,24 @@ impl SyncDaemon {
         *self.inner.shared.lock().expect("shared dirs lock") = Some(dirs);
     }
 
+    /// Clear the backoff on `root_id` (or every root), so the next tick
+    /// tries it.
+    ///
+    /// What "until something changes" means for a refused root: the
+    /// things on this side that can change the answer — signing in,
+    /// choosing the root again, a person pressing resume — make the next
+    /// tick ask, rather than waiting out an hour of backoff that was
+    /// earned under the old arrangement.
+    fn retry_now(&self, root_id: Option<Uuid>) {
+        let mut roots = self.inner.live.roots.lock().expect("status lock");
+        for (id, s) in roots.iter_mut() {
+            if root_id.is_none_or(|r| r == *id) {
+                s.failed_pulls = 0;
+                s.retry_at = 0;
+            }
+        }
+    }
+
     /// Replace a root's peer connection with a fresh one.
     ///
     /// Best effort by design: a peer that is genuinely gone (shut lid,
@@ -565,7 +637,7 @@ impl SyncDaemon {
     /// again next tick rather than to drop a choice the person made.
     async fn redial(&self, root_id: Uuid, endpoint: &str) {
         match self.dial(endpoint).await {
-            Ok(fresh) => {
+            Ok((fresh, hangup)) => {
                 if let Some(link) = self
                     .inner
                     .roots
@@ -579,6 +651,9 @@ impl SyncDaemon {
                     })
                 {
                     link.client = fresh;
+                    // Dropping the old guard here is what closes the
+                    // old connection.
+                    link.hangup = Some(hangup);
                 }
                 tracing::info!(%root_id, peer = %endpoint, "files-daemon: reconnected to the peer");
             }
@@ -1468,7 +1543,7 @@ impl SyncDaemon {
     /// What `endpoint_id` holds — the "what have you got" a fresh
     /// machine starts from.
     pub async fn peer_roots(&self, endpoint_id: &str) -> Result<Vec<files_sync::WireRoot>> {
-        let peer = self.dial(endpoint_id).await?;
+        let (peer, _hangup) = self.dial(endpoint_id).await?;
         Self::remote_roots(&peer).await
     }
 
@@ -1496,7 +1571,7 @@ impl SyncDaemon {
         slice: Vec<String>,
         under: &std::path::Path,
     ) -> Result<DaemonStatus> {
-        let peer = self.dial(endpoint_id).await?;
+        let (peer, hangup) = self.dial(endpoint_id).await?;
         let name = match self.inner.backend.get(RootId::new(root_id)).await {
             Ok(local) => local.name,
             Err(_) => {
@@ -1528,8 +1603,15 @@ impl SyncDaemon {
         };
         // With the endpoint, so a restart dials this peer again rather
         // than coming back having quietly stopped syncing this root.
-        self.set_sync_choice_from(root_id, &name, slice, peer, Some(endpoint_id.to_string()))
-            .await?;
+        self.set_sync_choice_from(
+            root_id,
+            &name,
+            slice,
+            peer,
+            Some(endpoint_id.to_string()),
+            Some(hangup),
+        )
+        .await?;
         Ok(self.status())
     }
 
@@ -1561,7 +1643,7 @@ impl SyncDaemon {
         slice: Vec<String>,
         peer: SyncServiceClient,
     ) -> Result<()> {
-        self.set_sync_choice_from(root_id, name, slice, peer, None)
+        self.set_sync_choice_from(root_id, name, slice, peer, None, None)
             .await
     }
 
@@ -1574,6 +1656,7 @@ impl SyncDaemon {
         slice: Vec<String>,
         peer: SyncServiceClient,
         peer_endpoint: Option<String>,
+        hangup: Option<files_sync::Hangup>,
     ) -> Result<()> {
         // Always write the policy — including an empty one — so
         // re-choosing a root with slice=[] ("the whole root") CLEARS a
@@ -1601,13 +1684,20 @@ impl SyncDaemon {
             .iter_mut()
             .find(|p| p.endpoint.is_some() && p.endpoint == peer_endpoint)
         {
-            Some(existing) => existing.client = peer,
+            Some(existing) => {
+                existing.client = peer;
+                existing.hangup = hangup;
+            }
             None => entry.peers.push(PeerLink {
                 client: peer,
                 endpoint: peer_endpoint,
+                hangup,
             }),
         }
         drop(roots);
+        // A choice made again — or against a different peer — is a
+        // change worth asking about at once, whatever the last answer.
+        self.retry_now(Some(root_id));
         self.save_choices();
         self.inner.events.publish(self.status());
         Ok(())
@@ -1683,7 +1773,7 @@ impl SyncDaemon {
         let mut restored = 0;
         for choice in choices.roots {
             match self.dial(&choice.peer).await {
-                Ok(peer) => {
+                Ok((peer, hangup)) => {
                     if let Err(e) = self
                         .set_sync_choice_from(
                             choice.root_id,
@@ -1691,6 +1781,7 @@ impl SyncDaemon {
                             choice.slice.clone(),
                             peer,
                             Some(choice.peer.clone()),
+                            Some(hangup),
                         )
                         .await
                     {
@@ -1785,6 +1876,7 @@ impl SyncDaemon {
                 }
             }
         }
+        self.retry_now(root_id);
         self.inner.events.publish(self.status());
     }
 
@@ -1818,14 +1910,16 @@ impl SyncDaemon {
         if self.is_paused() {
             return;
         }
-        // Ticks since this process started, for the slow beats below —
+        // Ticks since this daemon opened, for the slow beats below —
         // the work that is right to do regularly and wrong to do every
         // time round.
-        static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         /// Ticks between attempts to settle a root already known to be
         /// carrying a fork. See the use site.
         const FORK_RETRY_EVERY: u64 = 10;
-        let tick_no = TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tick_no = self
+            .inner
+            .ticks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.maybe_enroll().await;
         // Capture before pulling. The order matters on the machine that
         // has been offline: its own work becomes a commit first, so the
@@ -1883,8 +1977,7 @@ impl SyncDaemon {
             // picked up within one window rather than needing a restart.
             let skip = {
                 let roots = self.inner.live.roots.lock().expect("status lock");
-                let failures = roots.get(&root_id).map_or(0, |s| s.failed_pulls);
-                failures > 0 && !tick_no.is_multiple_of(backoff_ticks(failures))
+                roots.get(&root_id).is_some_and(|s| tick_no < s.retry_at)
             };
             if skip {
                 continue;
@@ -1923,15 +2016,42 @@ impl SyncDaemon {
                         s.chunks_fetched = u64::from(report.chunks_fetched);
                         s.chunks_skipped = u64::from(report.chunks_skipped);
                         s.failed_pulls = 0;
+                        s.retry_at = 0;
                     }
                 }
                 Err(e) => {
+                    let refused = is_refusal(&e.to_string());
                     let failures = {
                         let mut roots = self.inner.live.roots.lock().expect("status lock");
                         let entry = roots.entry(root_id).or_default();
                         entry.failed_pulls = entry.failed_pulls.saturating_add(1);
+                        let head_start = if refused { REFUSAL_HEAD_START } else { 0 };
+                        entry.retry_at =
+                            tick_no + backoff_ticks(entry.failed_pulls.saturating_add(head_start));
                         entry.failed_pulls
                     };
+                    if refused {
+                        // Once, loudly, with what would fix it — then
+                        // quiet. The peer will say the same thing every
+                        // time until a person on one side acts.
+                        if failures == 1 {
+                            tracing::warn!(
+                                %root_id,
+                                peer = peer_endpoint.as_deref().unwrap_or("(embedded)"),
+                                this_device = self.endpoint_id().as_deref().unwrap_or("(none)"),
+                                error = %e,
+                                "files-daemon: the peer does not admit this device — backing off \
+                                 until it does (admit this device there, sign in again, or choose \
+                                 the root again)"
+                            );
+                        } else {
+                            tracing::debug!(%root_id, failures, error = %e, "files-daemon: still refused");
+                        }
+                        // No redial: the connection answered, and a fresh
+                        // one carries the same identity to the same gate.
+                        self.inner.events.publish(self.status());
+                        continue;
+                    }
                     // Loud the first few times, then at the rate the
                     // backoff retries — a broken root should be findable
                     // in the log without drowning it.
@@ -2538,6 +2658,9 @@ impl SyncDaemon {
             last_error: None,
         });
         *self.inner.last_enroll.lock().expect("enroll lock") = None;
+        // A new account is a new set of admissions; a root refused under
+        // the old one deserves a fresh ask.
+        self.retry_now(None);
         self.inner.events.publish(self.status());
         Ok(())
     }

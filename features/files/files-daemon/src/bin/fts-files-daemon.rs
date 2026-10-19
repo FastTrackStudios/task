@@ -1187,13 +1187,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // start line and nothing else, so "is it syncing?" had no answer
     // anywhere on the machine. iroh and jj are noisy at info and are
     // turned down rather than the rest turned off.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("info,iroh=warn,jj_lib=warn,netwatch=warn")
-            }),
+    //
+    // Two iroh/QUIC targets are off outright rather than at `warn`.
+    // `remote_state`'s "could not close last open path" is an ERROR
+    // about a path iroh is tearing down anyway, and `noq_proto`'s
+    // `LastOpenPath` is its twin at WARN; when a batch of connections
+    // drops together they fire many times a second for as long as the
+    // network is unsettled. They took the log to 8 GB once. Nothing in
+    // them is actionable from here — the connection loss they follow is
+    // reported by vox and by the pull that fails.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(
+            "info,iroh=warn,iroh::socket::remote_map::remote_state=off,\
+             noq_proto::connection=error,jj_lib=warn,netwatch=warn",
         )
-        .init();
+    });
+    // An installed agent names its own log file and writes it through a
+    // size cap (see `files_daemon::log_file`); run by hand it prints to
+    // the terminal as before.
+    match env("FTS_FILES_DAEMON_LOG") {
+        Some(path) => {
+            let log = files_daemon::log_file::CappedLog::open(
+                &path,
+                files_daemon::log_file::DEFAULT_MAX_BYTES,
+            )?;
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(log))
+                .init();
+        }
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
 
     let data_dir = PathBuf::from(env("FTS_FILES_DAEMON_DATA").unwrap_or_else(|| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());

@@ -71,6 +71,17 @@ the machine decided instead, and it is usually one line.
 journalctl --user -u task-sync.service -f | sed -E 's/\x1b\[[0-9;]*m//g'
 ```
 
+On macOS the installed agent writes `~/Library/Logs/task-sync.log`
+itself, capped at 10 MB and rolled to `task-sync.log.1`; launchd's own
+capture (panics, anything before logging starts) is
+`task-sync.stderr.log`. Re-run `fts-files-daemon install` after
+upgrading from an agent older than the cap — the old plist had launchd
+append to the log forever, which is how one filled a disk.
+
+```bash
+tail -F ~/Library/Logs/task-sync.log
+```
+
 The lines that carry the answer:
 
 | line | meaning |
@@ -80,6 +91,7 @@ The lines that carry the answer:
 | `pulled a peer's work heads=N` | a real import. `heads=0` forever means you are watching a healthy idle system. |
 | `merged two lines that did not disagree` | a fork rejoined by itself. |
 | `two machines changed the same files` | a real dispute, waiting for `resolve`. |
+| `the peer does not admit this device` | the far side refused this machine's endpoint (`permission denied: anonymous …`). Logged once; the root then backs off (four ticks, doubling to an hour) without redialling. Admit `this_device` on the peer, or sign in / choose the root again here to retry at once. |
 
 And the three states a root can be in, from `fts-files-daemon status`:
 `Idle` (nothing to do), `Error` (the last pull failed — the reason is on

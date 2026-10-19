@@ -388,9 +388,17 @@ fn xml_escape(s: &str) -> String {
 
 fn macos_plan(home: &Path, config: &ServiceConfig) -> Plan {
     let path = unit_path(home);
+    // The agent writes `log` itself, through a size cap — launchd's
+    // `StandardOutPath` is appended to forever, and once filled a boot
+    // disk (see `crate::log_file`). What launchd still captures is what
+    // never reaches tracing: a panic, an error before the subscriber is
+    // up. That goes to its own file, which a healthy agent never writes.
     let log = home.join("Library/Logs/task-sync.log");
+    let stderr = home.join("Library/Logs/task-sync.stderr.log");
+    let mut pairs = config.env_pairs();
+    pairs.push(("FTS_FILES_DAEMON_LOG", log.to_string_lossy().into_owned()));
     let mut env = String::new();
-    for (key, value) in config.env_pairs() {
+    for (key, value) in pairs {
         env.push_str(&format!(
             "        <key>{key}</key>\n        <string>{}</string>\n",
             xml_escape(&value)
@@ -419,14 +427,14 @@ fn macos_plan(home: &Path, config: &ServiceConfig) -> Plan {
     <key>ProcessType</key>
     <string>Background</string>
     <key>StandardOutPath</key>
-    <string>{log}</string>
+    <string>{stderr}</string>
     <key>StandardErrorPath</key>
-    <string>{log}</string>
+    <string>{stderr}</string>
 </dict>
 </plist>
 "#,
         program = xml_escape(&config.program.to_string_lossy()),
-        log = xml_escape(&log.to_string_lossy()),
+        stderr = xml_escape(&stderr.to_string_lossy()),
     );
 
     let domain = format!("gui/{}", uid());
@@ -625,6 +633,30 @@ mod tests {
         assert!(
             unit_path(home.path()).starts_with(home.path()),
             "the unit was written outside the given home"
+        );
+    }
+
+    /// launchd never appends to the agent's log: the agent writes it
+    /// through a size cap, and launchd's own capture goes elsewhere. A
+    /// plist that pointed `StandardOutPath` at the log again would undo
+    /// the cap the moment the agent printed anything.
+    #[test]
+    fn the_agent_writes_its_own_capped_log_on_macos() {
+        let plan = macos_plan(Path::new("/Users/cody"), &config());
+        let (_, body) = plan.written().expect("a plist");
+        assert!(
+            body.contains("<key>FTS_FILES_DAEMON_LOG</key>")
+                && body.contains("<string>/Users/cody/Library/Logs/task-sync.log</string>"),
+            "the agent is not told where its log is:\n{body}"
+        );
+        let out = body
+            .split("<key>StandardOutPath</key>")
+            .nth(1)
+            .and_then(|rest| rest.split("</string>").next())
+            .expect("a StandardOutPath");
+        assert!(
+            out.ends_with("task-sync.stderr.log"),
+            "launchd captures stdout into {out}"
         );
     }
 

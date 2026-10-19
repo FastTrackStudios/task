@@ -33,6 +33,7 @@ mod error;
 mod hub;
 pub mod identity;
 pub mod install;
+pub mod log_file;
 pub mod mount;
 pub mod peering;
 

@@ -74,7 +74,13 @@ pub async fn serve(backend: FilesBackend, whose: String, endpoint: iroh::Endpoin
 /// Signs nothing: what reaches the far gate is the endpoint iroh proved
 /// during the handshake, so what authorises the pull is `peer` having
 /// admitted this machine.
-pub async fn dial(endpoint: &iroh::Endpoint, peer: &str) -> Result<SyncServiceClient> {
+///
+/// The connection stays open while the [`files_sync::Hangup`] is held
+/// and closes when it is dropped.
+pub async fn dial(
+    endpoint: &iroh::Endpoint,
+    peer: &str,
+) -> Result<(SyncServiceClient, files_sync::Hangup)> {
     files_sync::dial_peer(endpoint, peer)
         .await
         .map_err(crate::error::from_sync)

@@ -457,6 +457,111 @@ async fn a_restart_resumes_what_it_was_syncing() {
     );
 }
 
+/// A peer that refuses this machine is asked again later, not every tick.
+///
+/// On 2026-10-19 an agent pulling a root from a peer that no longer
+/// admitted it asked on every thirty-second tick for fourteen hours, and
+/// redialled after each refusal — a fresh connection every time, none of
+/// them closed — until the log had filled the disk. A refusal does not
+/// change because it is asked again; it changes when somebody admits the
+/// machine. So the daemon backs off, and the test is that a peer which
+/// *does* re-admit it is not heard from on the very next tick, and is
+/// heard from once the backoff has run.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_pull_backs_off_instead_of_retrying_at_once() {
+    let server = Machine::open().await;
+    let laptop = Machine::open().await;
+    let album = server.with_album(b"admitted").await;
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    laptop
+        .daemon
+        .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("choose the album");
+    laptop.daemon.tick().await;
+    assert_eq!(laptop.read("mix.wav"), b"admitted");
+
+    // The server stops admitting the laptop, and the laptop's next pull
+    // is refused.
+    server.daemon.dismiss_peer(&laptop.endpoint_id);
+    laptop.daemon.tick().await;
+    let root = laptop
+        .daemon
+        .status()
+        .roots
+        .into_iter()
+        .find(|r| r.root_id == album)
+        .expect("the album is still a sync choice");
+    let error = root.last_error.unwrap_or_default();
+    assert!(
+        error.contains("permission denied"),
+        "the pull was not refused: {error:?}"
+    );
+
+    // Admitted again, with new work waiting. A daemon that retried at
+    // once would take it on the next tick.
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    std::fs::write(server.album_tree().join("mix.wav"), b"re-admitted").unwrap();
+    server
+        .backend
+        .checkpoint(RootId::new(album), None)
+        .await
+        .expect("checkpoint");
+    for _ in 0..3 {
+        laptop.daemon.tick().await;
+        assert_eq!(
+            laptop.read("mix.wav"),
+            b"admitted",
+            "a refused root was asked again straight away"
+        );
+    }
+
+    // Backing off, not giving up: the next window asks, and gets it.
+    laptop.daemon.tick().await;
+    assert_eq!(
+        laptop.read("mix.wav"),
+        b"re-admitted",
+        "the backoff never ran out"
+    );
+}
+
+/// Choosing a refused root again is a change worth asking about at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn choosing_a_refused_root_again_asks_at_once() {
+    let server = Machine::open().await;
+    let laptop = Machine::open().await;
+    let album = server.with_album(b"admitted").await;
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    laptop
+        .daemon
+        .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("choose the album");
+    laptop.daemon.tick().await;
+
+    server.daemon.dismiss_peer(&laptop.endpoint_id);
+    laptop.daemon.tick().await;
+
+    server.daemon.admit_peer(&laptop.endpoint_id);
+    std::fs::write(server.album_tree().join("mix.wav"), b"re-admitted").unwrap();
+    server
+        .backend
+        .checkpoint(RootId::new(album), None)
+        .await
+        .expect("checkpoint");
+    laptop
+        .daemon
+        .sync_from_peer(&server.endpoint_id, album, vec![], &laptop.dir)
+        .await
+        .expect("choose the album again");
+    laptop.daemon.tick().await;
+    assert_eq!(
+        laptop.read("mix.wav"),
+        b"re-admitted",
+        "re-choosing the root left it waiting out the old backoff"
+    );
+}
+
 /// An org that cannot be reached is not a reason to stop working.
 ///
 /// The agent used to exit when its coordinator failed to dial, and

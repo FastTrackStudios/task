@@ -340,11 +340,14 @@ pub const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// shut. Neither presents a credential — what reaches the far gate is
 /// the endpoint iroh proved during the handshake, so what authorises the
 /// pull is the far side having admitted this machine.
+///
+/// The [`Hangup`] beside the client is what ends the connection: hold it
+/// as long as the client is in use, and drop it when you are done.
 #[cfg(feature = "vox")]
 pub async fn dial_peer(
     endpoint: &architect::iroh_link::iroh::Endpoint,
     peer: &str,
-) -> Result<SyncServiceClient, SyncError> {
+) -> Result<(SyncServiceClient, Hangup), SyncError> {
     use architect::iroh_link;
 
     let id: iroh_link::iroh::EndpointId = peer
@@ -352,14 +355,50 @@ pub async fn dial_peer(
         // A malformed id is not an outage. Saying "unavailable" here
         // would tell the caller to retry something that cannot come back.
         .map_err(|e| SyncError::BadRequest(format!("not an endpoint id: {peer} ({e})")))?;
-    let link = tokio::time::timeout(DIAL_TIMEOUT, iroh_link::connect(endpoint, id))
+    let dial = async {
+        let connection = endpoint
+            .connect(id, iroh_link::VOX_ALPN)
+            .await
+            .map_err(|e| SyncError::Io(format!("dialling {peer}: {e}")))?;
+        let (send, recv) = connection
+            .open_bi()
+            .await
+            .map_err(|e| SyncError::Io(format!("dialling {peer}: {e}")))?;
+        Ok::<_, SyncError>((
+            connection.clone(),
+            iroh_link::IrohLink::new(connection, send, recv),
+        ))
+    };
+    let (connection, link) = tokio::time::timeout(DIAL_TIMEOUT, dial)
         .await
-        .map_err(|_| SyncError::Io(format!("dialling {peer}: timed out")))?
-        .map_err(|e| SyncError::Io(format!("dialling {peer}: {e}")))?;
-    architect::vox::initiator_on(link)
+        .map_err(|_| SyncError::Io(format!("dialling {peer}: timed out")))??;
+    let hangup = Hangup(connection);
+    let client = architect::vox::initiator_on(link)
         .establish()
         .await
-        .map_err(|e| SyncError::Io(format!("establishing the replica lane on {peer}: {e}")))
+        .map_err(|e| SyncError::Io(format!("establishing the replica lane on {peer}: {e}")))?;
+    Ok((client, hangup))
+}
+
+/// Closes a dialled peer's connection when dropped.
+///
+/// Dropping a vox client does not: its handles going away "is not a
+/// protocol shutdown", so the connection under it stays open until the
+/// network takes it. A daemon that redialled a refusing peer every
+/// thirty seconds held one more open connection each time, and when the
+/// network blipped hours later, hundreds of them died at once — iroh
+/// logging every path it could not close, many times a second, until the
+/// log filled the disk. The client cannot carry this itself (it is
+/// generated), so it rides beside it.
+#[cfg(feature = "vox")]
+#[derive(Debug)]
+pub struct Hangup(architect::iroh_link::iroh::endpoint::Connection);
+
+#[cfg(feature = "vox")]
+impl Drop for Hangup {
+    fn drop(&mut self) {
+        self.0.close(0u32.into(), b"done");
+    }
 }
 
 /// [`SyncService`] served straight off a [`FilesBackend`] — the shape
