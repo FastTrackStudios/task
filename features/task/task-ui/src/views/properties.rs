@@ -170,14 +170,16 @@ pub const CHIP_CLASS: &str = "inline-flex h-8 max-w-[12rem] items-center gap-1.5
 /// A chip for an unset property: the same shape, read as an invitation.
 pub const CHIP_QUIET_CLASS: &str = "inline-flex h-8 max-w-[12rem] items-center gap-1.5 rounded-md border border-border/70 px-2 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:h-7";
 
-/// The composer's phone layout: each property a row down the left —
-/// icon, then its value — instead of a chip. Back to a chip on a desk.
-pub const CHIP_ROW_CLASS: &str = "flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] text-foreground active:bg-foreground/[0.08] md:inline-flex md:h-7 md:w-auto md:max-w-[12rem] md:gap-1.5 md:rounded-md md:border md:border-border/70 md:px-2 md:text-[13px] md:font-medium md:hover:bg-accent [&>svg]:shrink-0 [&>span:first-child]:flex [&>span:first-child]:w-5 [&>span:first-child]:justify-center";
+/// The composer's phone layout: each property a segment of the bar that
+/// rides the keyboard — icon, then its value, in a pill that scrolls
+/// sideways. Back to a chip on a desk.
+pub const CHIP_ROW_CLASS: &str = "inline-flex h-10 max-w-[14rem] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[15px] text-foreground active:bg-foreground/10 md:h-7 md:max-w-[12rem] md:rounded-md md:border md:border-border/70 md:px-2 md:text-[13px] md:font-medium md:hover:bg-accent [&>svg]:shrink-0";
 
 /// [`CHIP_ROW_CLASS`] for an unset property.
-pub const CHIP_ROW_QUIET_CLASS: &str = "flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[16px] text-muted-foreground active:bg-foreground/[0.08] md:inline-flex md:h-7 md:w-auto md:max-w-[12rem] md:gap-1.5 md:rounded-md md:border md:border-border/70 md:px-2 md:text-[13px] md:font-medium md:hover:bg-accent md:hover:text-foreground";
+pub const CHIP_ROW_QUIET_CLASS: &str = "inline-flex h-10 max-w-[14rem] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[15px] text-muted-foreground active:bg-foreground/10 md:h-7 md:max-w-[12rem] md:rounded-md md:border md:border-border/70 md:px-2 md:text-[13px] md:font-medium md:hover:bg-accent md:hover:text-foreground [&>svg]:shrink-0";
 
-/// Provided by a surface that wants its chips as rows (the composer).
+/// Provided by a surface that wants its chips as bar segments (the
+/// composer).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ChipRows;
 
@@ -225,6 +227,18 @@ fn Chip(
     }
 }
 
+/// A chip's tap: open its own picker, or — a chip in a bar that scrolls
+/// sideways (the composer's, on a phone) — ask its twin outside the bar
+/// to open, since iOS clips a fixed sheet to a scrolling parent. The
+/// twin is the same chip with `picker_only`, following `opens` as its
+/// `hotkey`.
+fn tap(opens: Option<Signal<Option<Hotkey>>>, me: Hotkey, mut open: Signal<bool>) {
+    match opens {
+        Some(mut ask) => ask.set(Some(me)),
+        None => open.set(true),
+    }
+}
+
 /// Open when the shared hotkey names this property, then clear it.
 fn follow_hotkey(hotkey: Option<Signal<Option<Hotkey>>>, me: Hotkey, mut open: Signal<bool>) {
     use_effect(move || {
@@ -242,6 +256,12 @@ pub fn StatusChip(
     status: String,
     on_change: EventHandler<String>,
     #[props(default)] hotkey: Option<Signal<Option<Hotkey>>>,
+    /// In a scrolling bar: the chip only; its picker is a twin's ([`tap`]).
+    #[props(default)]
+    opens: Option<Signal<Option<Hotkey>>>,
+    /// The picker only — the twin of a chip in a scrolling bar.
+    #[props(default)]
+    picker_only: bool,
 ) -> Element {
     let mut open = use_signal(|| false);
     follow_hotkey(hotkey, Hotkey::Status, open);
@@ -254,14 +274,14 @@ pub fn StatusChip(
         .collect();
     rsx! {
         div { class: "relative",
-            Chip {
+            if !picker_only { Chip {
                 icon: rsx! { StatusIcon { status: current.to_owned() } },
                 label: shown(STATUSES, current).to_owned(),
                 quiet: false,
                 title: "Status (S)",
-                on_click: move |()| open.set(true),
-            }
-            PropertyPicker {
+                on_click: move |()| tap(opens, Hotkey::Status, open),
+            } }
+            if opens.is_none() { PropertyPicker {
                 open: open(),
                 title: "Change status…",
                 hotkey: "S".to_owned(),
@@ -270,7 +290,7 @@ pub fn StatusChip(
                 number_from: Some(1),
                 on_pick: move |id: String| on_change.call(id),
                 on_close: move |()| open.set(false),
-            }
+            } }
         }
     }
 }
@@ -280,6 +300,12 @@ pub fn PriorityChip(
     priority: String,
     on_change: EventHandler<String>,
     #[props(default)] hotkey: Option<Signal<Option<Hotkey>>>,
+    /// In a scrolling bar: the chip only; its picker is a twin's ([`tap`]).
+    #[props(default)]
+    opens: Option<Signal<Option<Hotkey>>>,
+    /// The picker only — the twin of a chip in a scrolling bar.
+    #[props(default)]
+    picker_only: bool,
 ) -> Element {
     let mut open = use_signal(|| false);
     follow_hotkey(hotkey, Hotkey::Priority, open);
@@ -292,14 +318,14 @@ pub fn PriorityChip(
         .collect();
     rsx! {
         div { class: "relative",
-            Chip {
+            if !picker_only { Chip {
                 icon: rsx! { PriorityIcon { priority: current.to_owned() } },
                 label: if current == "none" { "Priority".to_owned() } else { shown(PRIORITIES, current).to_owned() },
                 quiet: current == "none",
                 title: "Priority (P)",
-                on_click: move |()| open.set(true),
-            }
-            PropertyPicker {
+                on_click: move |()| tap(opens, Hotkey::Priority, open),
+            } }
+            if opens.is_none() { PropertyPicker {
                 open: open(),
                 title: "Set priority to…",
                 hotkey: "P".to_owned(),
@@ -308,7 +334,7 @@ pub fn PriorityChip(
                 number_from: Some(0),
                 on_pick: move |id: String| on_change.call(id),
                 on_close: move |()| open.set(false),
-            }
+            } }
         }
     }
 }
@@ -321,6 +347,12 @@ pub fn AssigneeChip(
     people: Vec<(String, String)>,
     on_change: EventHandler<Option<String>>,
     #[props(default)] hotkey: Option<Signal<Option<Hotkey>>>,
+    /// In a scrolling bar: the chip only; its picker is a twin's ([`tap`]).
+    #[props(default)]
+    opens: Option<Signal<Option<Hotkey>>>,
+    /// The picker only — the twin of a chip in a scrolling bar.
+    #[props(default)]
+    picker_only: bool,
 ) -> Element {
     let mut open = use_signal(|| false);
     follow_hotkey(hotkey, Hotkey::Assignee, open);
@@ -343,7 +375,7 @@ pub fn AssigneeChip(
     let label = assignee.as_deref().map(name_of);
     rsx! {
         div { class: "relative",
-            Chip {
+            if !picker_only { Chip {
                 icon: match label.clone() {
                     Some(n) => rsx! { PersonDot { name: n } },
                     None => rsx! { span { class: "text-muted-foreground", UserRound { size: 14 } } },
@@ -351,9 +383,9 @@ pub fn AssigneeChip(
                 label: label.clone().unwrap_or_else(|| "Assignee".to_owned()),
                 quiet: label.is_none(),
                 title: "Assignee (A)",
-                on_click: move |()| open.set(true),
-            }
-            PropertyPicker {
+                on_click: move |()| tap(opens, Hotkey::Assignee, open),
+            } }
+            if opens.is_none() { PropertyPicker {
                 open: open(),
                 title: "Assign to…",
                 hotkey: "A".to_owned(),
@@ -362,7 +394,7 @@ pub fn AssigneeChip(
                 number_from: Some(0),
                 on_pick: move |id: String| on_change.call(Some(id).filter(|s| !s.is_empty())),
                 on_close: move |()| open.set(false),
-            }
+            } }
         }
     }
 }
@@ -373,6 +405,12 @@ pub fn ProjectChip(
     projects: Vec<(Uuid, String)>,
     on_change: EventHandler<Option<Uuid>>,
     #[props(default)] hotkey: Option<Signal<Option<Hotkey>>>,
+    /// In a scrolling bar: the chip only; its picker is a twin's ([`tap`]).
+    #[props(default)]
+    opens: Option<Signal<Option<Hotkey>>>,
+    /// The picker only — the twin of a chip in a scrolling bar.
+    #[props(default)]
+    picker_only: bool,
     /// Offer "Create “…”" for a name no project has; the caller makes it.
     #[props(default)]
     on_create: Option<EventHandler<String>>,
@@ -402,14 +440,14 @@ pub fn ProjectChip(
         .or(pending);
     rsx! {
         div { class: "relative",
-            Chip {
+            if !picker_only { Chip {
                 icon: rsx! { span { class: if label.is_some() { "text-primary" } else { "text-muted-foreground" }, BoxIcon { size: 14 } } },
                 label: label.clone().unwrap_or_else(|| "Project".to_owned()),
                 quiet: label.is_none(),
                 title: "Project (R)",
-                on_click: move |()| open.set(true),
-            }
-            PropertyPicker {
+                on_click: move |()| tap(opens, Hotkey::Project, open),
+            } }
+            if opens.is_none() { PropertyPicker {
                 open: open(),
                 title: "Add to project…",
                 hotkey: "R".to_owned(),
@@ -419,7 +457,7 @@ pub fn ProjectChip(
                 on_pick: move |id: String| on_change.call(id.parse::<Uuid>().ok()),
                 on_create,
                 on_close: move |()| open.set(false),
-            }
+            } }
         }
     }
 }
@@ -444,6 +482,12 @@ pub fn LabelsChip(
     known: Vec<String>,
     on_toggle: EventHandler<String>,
     #[props(default)] hotkey: Option<Signal<Option<Hotkey>>>,
+    /// In a scrolling bar: the chip only; its picker is a twin's ([`tap`]).
+    #[props(default)]
+    opens: Option<Signal<Option<Hotkey>>>,
+    /// The picker only — the twin of a chip in a scrolling bar.
+    #[props(default)]
+    picker_only: bool,
 ) -> Element {
     let mut open = use_signal(|| false);
     follow_hotkey(hotkey, Hotkey::Labels, open);
@@ -460,13 +504,13 @@ pub fn LabelsChip(
         .collect();
     rsx! {
         div { class: "relative flex flex-wrap items-center gap-1",
-            if chosen.is_empty() {
+            if !picker_only { if chosen.is_empty() {
                 Chip {
                     icon: rsx! { span { class: "text-muted-foreground", Tag { size: 14 } } },
                     label: "Labels".to_owned(),
                     quiet: true,
                     title: "Labels (L)",
-                    on_click: move |()| open.set(true),
+                    on_click: move |()| tap(opens, Hotkey::Labels, open),
                 }
             } else {
                 for c in chosen.iter() {
@@ -476,11 +520,11 @@ pub fn LabelsChip(
                         label: c.clone(),
                         quiet: false,
                         title: "Labels (L)",
-                        on_click: move |()| open.set(true),
+                        on_click: move |()| tap(opens, Hotkey::Labels, open),
                     }
                 }
-            }
-            PropertyPicker {
+            } }
+            if opens.is_none() { PropertyPicker {
                 open: open(),
                 title: "Add labels…",
                 hotkey: "L".to_owned(),
@@ -491,7 +535,7 @@ pub fn LabelsChip(
                 on_create: move |name: String| on_toggle.call(name),
                 on_pick: move |id: String| on_toggle.call(id),
                 on_close: move |()| open.set(false),
-            }
+            } }
         }
     }
 }

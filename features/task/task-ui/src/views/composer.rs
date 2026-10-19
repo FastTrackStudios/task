@@ -19,14 +19,13 @@
 //!   the quick-add parser (`task_proto::capture`) and shown as chips the
 //!   moment they're typed; a chip set by hand wins over the text.
 //!
-//! The symbols sit in a row of buttons over the properties (`#`, `@`,
-//! `[[ ]]`, `!`), each typing its symbol for you, and a ? beside them
-//! lists what every symbol means.
-//!
-//! On a phone it is a full-screen sheet; on a desk, a card. ⌘↩ creates.
+//! On a phone it is a full-screen sheet whose text gets the whole page:
+//! the properties ride the keyboard as one scrolling bar (the vault
+//! editor's keyboard toolbar), with the create button beside it. On a
+//! desk, a card with the chips in a row. ⌘↩ creates.
 
 use architect_ui::lucide_dioxus::{
-    CalendarDays, CircleQuestionMark, Clock, DoorOpen, Link2, ListTree, Plus, Repeat, Tag, X,
+    ArrowUp, CalendarDays, Clock, DoorOpen, Link2, ListTree, Plus, Repeat, Tag, X,
 };
 use dioxus::prelude::*;
 use uuid::Uuid;
@@ -250,50 +249,6 @@ fn context_of(id: &str) -> Option<&str> {
         .or_else(|| id.strip_prefix(CONTEXT_ID))
 }
 
-/// The symbol buttons: what shows, what it types, what it means.
-const SIGILS: [(&str, &str, &str); 4] = [
-    ("#", "#", "Label"),
-    ("@", "@", "Person or context"),
-    ("[[ ]]", "[[", "Project"),
-    ("!", "!", "Priority"),
-];
-
-/// Every bit of shorthand the title understands, as the ? list shows
-/// it. A row's id is what picking it types (nothing, for the words).
-fn syntax_options() -> Vec<PickOption> {
-    let sym = |s: &'static str| {
-        rsx! { span { class: "whitespace-nowrap font-mono text-[15px] font-semibold text-foreground", "{s}" } }
-    };
-    vec![
-        PickOption::new("#", "Label — #mix, #client").icon(sym("#")),
-        PickOption::new("@", "Person — @sam, or a context — @errands, @home").icon(sym("@")),
-        PickOption::new("[[", "Project — [[Example Album]]").icon(sym("[[")),
-        PickOption::new("!", "Priority — !low, !high, !urgent").icon(sym("!")),
-        PickOption::new("", "Due — today, tomorrow, fri, next monday, 2026-11-02")
-            .icon(rsx! { CalendarDays { size: 15 } }),
-        PickOption::new("", "Repeat — daily, every week, every other monday")
-            .icon(rsx! { Repeat { size: 15 } }),
-    ]
-}
-
-/// Type `symbol` at the end of the title (after a space) and put the
-/// cursor after it, so what follows is the name. `[[` gets its `]]` and
-/// the cursor goes between them.
-fn type_symbol(mut title: Signal<String>, symbol: &str) {
-    let t = title.peek().clone();
-    let sep = if t.is_empty() || t.ends_with(char::is_whitespace) {
-        ""
-    } else {
-        " "
-    };
-    let close = if symbol == "[[" { "]]" } else { "" };
-    title.set(format!("{t}{sep}{symbol}{close}"));
-    let back = close.len();
-    let _ = document::eval(&format!(
-        "setTimeout(() => {{ const t = document.getElementById('composer-title'); if (!t) return; t.focus({{ preventScroll: true }}); const n = t.value.length - {back}; t.setSelectionRange(n, n); }}, 30);"
-    ));
-}
-
 #[derive(Props, Clone, PartialEq)]
 pub struct ComposerProps {
     /// `(user id, name)` — the signed-in person first; they are the
@@ -348,7 +303,6 @@ pub fn Composer(props: ComposerProps) -> Element {
     // Contexts chosen by hand, without the `@`.
     let mut contexts = use_signal(Vec::<String>::new);
     let mut context_open = use_signal(|| false);
-    let mut syntax_open = use_signal(|| false);
     let mut due = use_signal(|| None::<String>);
     let mut recurrence = use_signal(|| None::<String>);
     let mut subs = use_signal(Vec::<String>::new);
@@ -357,12 +311,11 @@ pub fn Composer(props: ComposerProps) -> Element {
     let mut repeat_open = use_signal(|| false);
     let mut details_open = use_signal(|| false);
     let mut details_focus = use_signal(|| false);
-    // Property chips render as rows down the left on a phone.
+    // Property chips render as segments of the keyboard bar on a phone.
     use_context_provider(|| super::properties::ChipRows);
     let mut due_open = use_signal(|| false);
     let mut more_open = use_signal(|| false);
     let mut show_labels = use_signal(|| false);
-    let mut labels_key = use_signal(|| None::<Hotkey>);
     let mut link_draft = use_signal(|| None::<String>);
     let mut create_more = use_signal(|| false);
     let mut cursor = use_signal(|| 0usize);
@@ -564,6 +517,7 @@ pub fn Composer(props: ComposerProps) -> Element {
     };
     let mut create_key = create.clone();
     let mut create_btn = create.clone();
+    let mut create_round = create.clone();
     let mut create_enter = create.clone();
     let (title_hint, detail_hint, action_label) = match kind {
         CaptureKind::Note => (
@@ -634,6 +588,61 @@ pub fn Composer(props: ComposerProps) -> Element {
         .is_none()
         .then(|| Some(parsed.priority.clone()).filter(|p| p != "normal" && p != "none"))
         .flatten();
+
+    // What the bar's chips show and do. Each chip lives twice — its
+    // button in the bar, its picker outside it (`opens` / `picker_only`)
+    // — so both read from here.
+    let mut bar_key = use_signal(|| None::<Hotkey>);
+    let priority_now = priority()
+        .or(parsed_priority.clone())
+        .unwrap_or_else(|| "none".to_owned());
+    // Once it is a task, it shows who it goes to: you, unless someone
+    // else was chosen.
+    let assignee_now = assignee()
+        .or_else(|| {
+            (kind == CaptureKind::Task)
+                .then(|| default_assignee_chip.clone())
+                .flatten()
+        })
+        .map(|(id, _)| id);
+    let project_now = project().map(|(id, _)| id).or_else(|| {
+        parsed_project.as_ref().and_then(|n| {
+            projects
+                .iter()
+                .find(|(_, t)| t.eq_ignore_ascii_case(n))
+                .map(|(id, _)| *id)
+        })
+    });
+    let on_status = EventHandler::new(move |s: String| status.set(s));
+    let on_priority = EventHandler::new(move |p: String| priority.set(Some(p)));
+    let on_assignee = {
+        let people = props.people.clone();
+        EventHandler::new(move |id: Option<String>| {
+            assignee.set(id.and_then(|id| people.iter().find(|(p, _)| *p == id).cloned()));
+        })
+    };
+    let on_project_pick = {
+        let projects = projects.clone();
+        EventHandler::new(move |id: Option<Uuid>| {
+            project.set(id.and_then(|id| projects.iter().find(|(p, _)| *p == id).cloned()));
+        })
+    };
+    // Type a name no project has and press Enter: it is made with the task.
+    let on_project_create = props.on_project.map(|_| {
+        EventHandler::new(move |name: String| {
+            project.set(None);
+            new_project.set(Some(name));
+        })
+    });
+    let on_label = EventHandler::new(move |name: String| {
+        let mut l = labels();
+        if let Some(i) = l.iter().position(|x| x.eq_ignore_ascii_case(&name)) {
+            l.remove(i);
+        } else {
+            l.push(name);
+        }
+        labels.set(l);
+    });
 
     // Keep the keyboard up while the properties are used: a row tapped
     // or a picker closed leaves focus on nothing, which drops the
@@ -848,87 +857,38 @@ pub fn Composer(props: ComposerProps) -> Element {
                     }
                 }
 
-                // ── the symbols ──
-                // Each types its symbol into the title, so the shorthand
-                // is found by looking rather than by knowing; ? says what
-                // each one means.
-                if kind != CaptureKind::Project {
-                    div { class: "relative flex items-center gap-1.5 px-3 pt-1.5 md:px-4",
-                        for (sigil, insert, what) in SIGILS {
-                            button {
-                                key: "{sigil}",
-                                r#type: "button",
-                                "data-testid": "composer-sigil",
-                                class: "flex h-8 min-w-9 items-center justify-center rounded-lg bg-foreground/[0.06] px-2 font-mono text-[15px] font-semibold text-foreground/80 active:bg-foreground/[0.12] md:h-7 md:text-[13px]",
-                                title: "{what}",
-                                onclick: move |_| type_symbol(title, insert),
-                                "{sigil}"
-                            }
-                        }
-                        button {
-                            r#type: "button",
-                            "data-testid": "composer-syntax",
-                            class: "flex size-8 items-center justify-center rounded-lg text-muted-foreground active:bg-foreground/[0.08] md:size-7",
-                            aria_label: "What the symbols do",
-                            onclick: move |_| syntax_open.set(true),
-                            CircleQuestionMark { size: 17 }
-                        }
-                        PropertyPicker {
-                            open: syntax_open(),
-                            title: "Type these in the title…",
-                            options: syntax_options(),
-                            number_from: None,
-                            on_pick: move |insert: String| {
-                                if !insert.is_empty() {
-                                    type_symbol(title, &insert);
-                                }
-                            },
-                            on_close: move |()| syntax_open.set(false),
-                        }
-                    }
-                }
-
-                // ── the chips ──
-                // Rides on top of the keyboard; each chip opens its picker
-                // above it. Wrapped, not a sideways scroller: iOS clips a
-                // fixed sheet to a scrolling parent, which hid the pickers.
-                div { class: if kind != CaptureKind::Project { "flex flex-col items-stretch gap-0.5 px-2 pb-1 pt-1 md:flex-row md:flex-wrap md:items-center md:gap-1.5 md:border-t md:border-border/60 md:px-4 md:py-2.5" } else { "hidden" },
-                    StatusChip { status: status(), on_change: move |s: String| status.set(s) }
-                    PriorityChip {
-                        priority: priority().or(parsed_priority.clone()).unwrap_or_else(|| "none".to_owned()),
-                        on_change: move |p: String| priority.set(Some(p)),
-                    }
+                // ── the bar ──
+                // A phone: one row riding the keyboard (the sheet ends
+                // at the visible viewport) — the properties in a pill that
+                // scrolls sideways, the create button beside it — so the
+                // text above gets the rest of the screen. Each chip opens
+                // its picker as a sheet over the keyboard. The pill has no
+                // backdrop filter or transform: either would make it the
+                // pickers' containing block and clip them to the pill. A
+                // desk: the chips wrap in a row over the footer.
+                div { class: "flex items-center gap-2 px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] [.kb-open_&]:pb-2 md:block md:border-t md:border-border/60 md:px-4 md:py-2.5",
+                div {
+                    "data-testid": "composer-bar",
+                    "data-keep-focus": "true",
+                    class: if kind != CaptureKind::Project { "flex h-12 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-full bg-foreground/[0.07] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:h-auto md:flex-wrap md:gap-1.5 md:overflow-visible md:rounded-none md:bg-transparent md:px-0" } else { "min-w-0 flex-1 md:hidden" },
+                    if kind != CaptureKind::Project {
+                    StatusChip { status: status(), on_change: on_status, opens: Some(bar_key) }
+                    PriorityChip { priority: priority_now.clone(), on_change: on_priority, opens: Some(bar_key) }
                     AssigneeChip {
-                        // Once it is a task, it shows who it goes to: you,
-                        // unless someone else was chosen.
-                        assignee: assignee()
-                            .or_else(|| (kind == CaptureKind::Task).then(|| default_assignee_chip.clone()).flatten())
-                            .map(|(id, _)| id),
+                        assignee: assignee_now.clone(),
                         people: props.people.clone(),
-                        on_change: {
-                            let people = props.people.clone();
-                            move |id: Option<String>| assignee.set(id.and_then(|id| people.iter().find(|(p, _)| *p == id).cloned()))
-                        },
+                        on_change: on_assignee,
+                        opens: Some(bar_key),
                     }
                     ProjectChip {
-                        project: project().map(|(id, _)| id).or_else(|| {
-                            parsed_project.as_ref().and_then(|n| projects.iter().find(|(_, t)| t.eq_ignore_ascii_case(n)).map(|(id, _)| *id))
-                        }),
+                        project: project_now,
                         projects: projects.clone(),
-                        on_change: {
-                            let projects = projects.clone();
-                            move |id: Option<Uuid>| project.set(id.and_then(|id| projects.iter().find(|(p, _)| *p == id).cloned()))
-                        },
-                        // Type a name no project has and press Enter: it is made
-                        // with the task.
-                        on_create: props.on_project.map(|_| EventHandler::new(move |name: String| {
-                            project.set(None);
-                            new_project.set(Some(name));
-                        })),
+                        on_change: on_project_pick,
+                        on_create: on_project_create,
                         pending: new_project(),
+                        opens: Some(bar_key),
                     }
                     // Where it gets done — what makes a chore a chore.
-                    div { class: "relative",
                         button {
                             r#type: "button",
                             "data-testid": "composer-context",
@@ -942,6 +902,106 @@ pub fn Composer(props: ComposerProps) -> Element {
                                 span { class: "text-muted-foreground", DoorOpen { size: 14 } }
                                 {chosen_contexts.iter().map(|c| format!("@{c}")).collect::<Vec<_>>().join(", ")}
                             }
+                        }
+                    // The rest only once set — chosen from More.
+                    if !chosen_labels.is_empty() || show_labels() {
+                        LabelsChip {
+                            chosen: chosen_labels.clone(),
+                            known: props.known_labels.clone(),
+                            on_toggle: on_label,
+                            opens: Some(bar_key),
+                        }
+                    }
+                    if let Some(d) = due().or(parsed_due.clone()) {
+                        button {
+                            r#type: "button",
+                            class: CHIP_ROW_CLASS,
+                            title: "Due date",
+                            onclick: move |_| due_open.set(true),
+                            span { class: "text-muted-foreground", CalendarDays { size: 14 } }
+                            {d.get(..10).and_then(|s| s.parse::<chrono::NaiveDate>().ok()).map_or(d.clone(), |x| x.format("%b %-d").to_string())}
+                        }
+                    }
+                    if let Some(r) = recurrence().or(parsed_repeat.clone()) {
+                        button {
+                            r#type: "button",
+                            class: CHIP_ROW_CLASS,
+                            title: "Repeat",
+                            onclick: move |_| repeat_open.set(true),
+                            span { class: "text-muted-foreground", Repeat { size: 14 } }
+                            {super::time::recurrence_summary(&r)}
+                        }
+                    }
+                    // More: labels, a date, a repeat, a subtask, a link.
+                        button {
+                            r#type: "button",
+                            "data-testid": "composer-more",
+                            class: CHIP_ROW_QUIET_CLASS,
+                            aria_label: "More properties",
+                            onclick: move |_| more_open.set(true),
+                            Plus { size: 14 }
+                            "More"
+                        }
+                    // Start a timer instead — the swipe-up on the capture
+                    // button, for whoever has not found it yet.
+                    if let (CaptureKind::Note, Some(on_timer)) = (kind, props.on_timer) {
+                        button {
+                            r#type: "button",
+                            "data-testid": "composer-timer",
+                            class: CHIP_ROW_QUIET_CLASS,
+                            title: "Start a timer with this as its description",
+                            onclick: move |_| {
+                                on_timer.call(title.peek().trim().to_owned());
+                                props.on_close.call(());
+                            },
+                            Clock { size: 15 }
+                            "Start a timer"
+                        }
+                    }
+                    }
+                }
+                    // Create, on a phone: the round button at the bar's end.
+                    button {
+                        r#type: "button",
+                        "data-testid": "composer-create",
+                        "data-keep-focus": "true",
+                        class: "flex size-12 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40 md:hidden",
+                        aria_label: "{action_label}",
+                        title: "{action_label}",
+                        disabled: title.read().trim().is_empty(),
+                        onclick: move |_| create_round(),
+                        ArrowUp { size: 22 }
+                    }
+                }
+                // ── the pickers ──
+                // Outside the bar, so iOS does not clip their sheets to the
+                // bar's scroller; the bar's chips open them (`bar_key`). On
+                // a desk they drop down from here, under the chips.
+                div { class: "relative md:mx-4",
+                        StatusChip { status: status(), on_change: on_status, hotkey: Some(bar_key), picker_only: true }
+                        PriorityChip { priority: priority_now.clone(), on_change: on_priority, hotkey: Some(bar_key), picker_only: true }
+                        AssigneeChip {
+                            assignee: assignee_now.clone(),
+                            people: props.people.clone(),
+                            on_change: on_assignee,
+                            hotkey: Some(bar_key),
+                            picker_only: true,
+                        }
+                        ProjectChip {
+                            project: project_now,
+                            projects: projects.clone(),
+                            on_change: on_project_pick,
+                            on_create: on_project_create,
+                            pending: new_project(),
+                            hotkey: Some(bar_key),
+                            picker_only: true,
+                        }
+                        LabelsChip {
+                            chosen: chosen_labels.clone(),
+                            known: props.known_labels.clone(),
+                            on_toggle: on_label,
+                            hotkey: Some(bar_key),
+                            picker_only: true,
                         }
                         PropertyPicker {
                             open: context_open(),
@@ -975,51 +1035,6 @@ pub fn Composer(props: ComposerProps) -> Element {
                             },
                             on_close: move |()| context_open.set(false),
                         }
-                    }
-                    // The rest only once set — chosen from More.
-                    if !chosen_labels.is_empty() || show_labels() {
-                        LabelsChip {
-                            chosen: chosen_labels.clone(),
-                            known: props.known_labels.clone(),
-                            hotkey: Some(labels_key),
-                            on_toggle: move |name: String| {
-                                let mut l = labels();
-                                if let Some(i) = l.iter().position(|x| x.eq_ignore_ascii_case(&name)) { l.remove(i); } else { l.push(name); }
-                                labels.set(l);
-                            },
-                        }
-                    }
-                    if let Some(d) = due().or(parsed_due.clone()) {
-                        button {
-                            r#type: "button",
-                            class: CHIP_ROW_CLASS,
-                            title: "Due date",
-                            onclick: move |_| due_open.set(true),
-                            span { class: "text-muted-foreground", CalendarDays { size: 14 } }
-                            {d.get(..10).and_then(|s| s.parse::<chrono::NaiveDate>().ok()).map_or(d.clone(), |x| x.format("%b %-d").to_string())}
-                        }
-                    }
-                    if let Some(r) = recurrence().or(parsed_repeat.clone()) {
-                        button {
-                            r#type: "button",
-                            class: CHIP_ROW_CLASS,
-                            title: "Repeat",
-                            onclick: move |_| repeat_open.set(true),
-                            span { class: "text-muted-foreground", Repeat { size: 14 } }
-                            {super::time::recurrence_summary(&r)}
-                        }
-                    }
-                    // More: labels, a date, a repeat, a subtask, a link.
-                    div { class: "relative",
-                        button {
-                            r#type: "button",
-                            "data-testid": "composer-more",
-                            class: CHIP_ROW_QUIET_CLASS,
-                            aria_label: "More properties",
-                            onclick: move |_| more_open.set(true),
-                            Plus { size: 14 }
-                            "More"
-                        }
                         PropertyPicker {
                             open: more_open(),
                             title: "Add…",
@@ -1034,7 +1049,7 @@ pub fn Composer(props: ComposerProps) -> Element {
                             on_pick: move |what: String| match what.as_str() {
                                 "labels" => {
                                     show_labels.set(true);
-                                    labels_key.set(Some(Hotkey::Labels));
+                                    bar_key.set(Some(Hotkey::Labels));
                                 }
                                 "due" => due_open.set(true),
                                 "repeat" => repeat_open.set(true),
@@ -1065,29 +1080,9 @@ pub fn Composer(props: ComposerProps) -> Element {
                             on_pick: move |rule: String| recurrence.set(Some(rule).filter(|r| !r.is_empty())),
                             on_close: move |()| repeat_open.set(false),
                         }
-                    }
                 }
-
-                // Start a timer instead — the swipe-up on the capture button, for
-                // whoever has not found it yet.
-                if let (CaptureKind::Note, Some(on_timer)) = (kind, props.on_timer) {
-                    div { class: "px-2 pb-1",
-                        button {
-                            r#type: "button",
-                            "data-testid": "composer-timer",
-                            class: CHIP_ROW_QUIET_CLASS,
-                            title: "Start a timer with this as its description",
-                            onclick: move |_| {
-                                on_timer.call(title.peek().trim().to_owned());
-                                props.on_close.call(());
-                            },
-                            span { Clock { size: 16 } }
-                            "Start a timer"
-                        }
-                    }
-                }
-                // ── create ──
-                footer { class: "flex items-center justify-end gap-3 border-t border-border/60 px-4 py-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] md:pb-2.5 [.kb-open_&]:pb-2.5",
+                // ── create, on a desk ──
+                footer { class: "hidden items-center justify-end gap-3 border-t border-border/60 px-4 py-2.5 md:flex",
                     label { class: if kind == CaptureKind::Task { "ml-auto flex items-center gap-2 text-[13px] text-muted-foreground" } else { "hidden" },
                         input {
                             r#type: "checkbox",
@@ -1122,17 +1117,9 @@ mod tests {
         assert_eq!(context_of("6f1c0d2e-user"), None);
     }
 
-    /// Every symbol button is explained in the ? list, and what each
-    /// types is what the parser reads.
+    /// The shorthand still typed by hand is what the parser reads.
     #[test]
-    fn every_symbol_is_explained_and_parsed() {
-        let help = syntax_options();
-        for (_, insert, _) in SIGILS {
-            assert!(
-                help.iter().any(|o| o.id == insert),
-                "{insert} has no help row"
-            );
-        }
+    fn the_title_shorthand_is_parsed() {
         let t = task_proto::capture("Clean the gutters #chore @home [[House]] !high");
         assert_eq!(t.title, "Clean the gutters");
         assert!(t.tags.iter().any(|x| x == "chore"));

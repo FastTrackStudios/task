@@ -83,6 +83,22 @@ pub struct DayPlan {
     pub estimate_min: u32,
     /// Free minutes left in the day's span (after now, on today).
     pub free_min: u32,
+    /// The current minute, on today. When it falls inside a block or an
+    /// event, that slot draws the now line through itself and the
+    /// timeline holds no separate [`Slot::Now`].
+    pub now: Option<u16>,
+}
+
+impl DayPlan {
+    /// Where the now line crosses a slot from `start` to `end`, as a
+    /// fraction of its height — `None` unless now is inside it.
+    #[must_use]
+    pub fn now_within(&self, start: u16, end: u16) -> Option<f32> {
+        let n = self.now?;
+        (start..end)
+            .contains(&n)
+            .then(|| f32::from(n - start) / f32::from(end - start))
+    }
 }
 
 fn minute_of(t: chrono::DateTime<chrono::Local>) -> u16 {
@@ -184,8 +200,12 @@ pub fn plan_day(
             plan.free_min += u32::from(end.saturating_sub(from));
         }
     }
+    plan.now = now_min;
+    // Between things, now is its own line; inside one, that slot shows it.
     if let Some(n) = now_min {
-        timed.push(Slot::Now(n));
+        if !merged.iter().any(|(s, e)| (*s..*e).contains(&n)) {
+            timed.push(Slot::Now(n));
+        }
     }
     // Time order; at one minute, now first, then free, then the rest.
     timed.sort_by_key(|s| {
@@ -250,9 +270,39 @@ pub fn dur(min: u32) -> String {
     }
 }
 
-/// "9:30" on a 24-hour day.
-fn clock(min: u16) -> String {
-    format!("{}:{:02}", min / 60, min % 60)
+/// "9 AM", "12:30 PM" — a 12-hour clock; midnight at either end of the
+/// day is 12 AM.
+#[must_use]
+pub fn clock(min: u16) -> String {
+    let (h, m) = ((min / 60) % 24, min % 60);
+    let half = if h < 12 { "AM" } else { "PM" };
+    let h12 = match h % 12 {
+        0 => 12,
+        h => h,
+    };
+    if m == 0 {
+        format!("{h12} {half}")
+    } else {
+        format!("{h12}:{m:02} {half}")
+    }
+}
+
+/// The now line drawn across a live block or event, `frac` of the way
+/// down it: the time in the gutter, a dot on the bar, the rule over the
+/// rest. Sits over the slot without taking taps.
+#[component]
+fn NowAcross(min: u16, frac: f32) -> Element {
+    let pct = (frac * 100.0).clamp(0.0, 100.0);
+    rsx! {
+        div {
+            "data-testid": "planner-now",
+            class: "pointer-events-none absolute inset-x-0 z-10 flex -translate-y-1/2 items-center gap-2",
+            style: "top: {pct}%",
+            span { class: "w-16 shrink-0 rounded bg-background/90 pr-1 text-right text-[12px] font-semibold tabular-nums text-rose-400", "{clock(min)}" }
+            span { class: "-ml-1 size-2 shrink-0 rounded-full bg-rose-400" }
+            span { class: "h-px flex-1 bg-rose-400/70" }
+        }
+    }
 }
 
 /// The bar beside a slot — static class names, so the stylesheet has them.
@@ -314,7 +364,7 @@ pub fn Planner(
                     match slot {
                         Slot::Now(m) => rsx! {
                             div { key: "s{i}", "data-testid": "planner-now", class: "flex items-center gap-2 py-1",
-                                span { class: "w-12 shrink-0 text-right text-[12px] font-semibold tabular-nums text-rose-400", "{clock(m)}" }
+                                span { class: "w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums text-rose-400", "{clock(m)}" }
                                 span { class: "size-2 shrink-0 rounded-full bg-rose-400" }
                                 span { class: "h-px flex-1 bg-rose-400/60" }
                             }
@@ -323,7 +373,7 @@ pub fn Planner(
                             let past = is_today && end <= now_minute(now);
                             rsx! {
                                 div { key: "s{i}", class: if past { "flex items-center gap-3 py-1 opacity-40" } else { "flex items-center gap-3 py-1" },
-                                    span { class: "w-12 shrink-0" }
+                                    span { class: "w-16 shrink-0" }
                                     span { class: "w-1 shrink-0 self-stretch rounded-full border-l-2 border-dashed border-foreground/15" }
                                     span { class: "text-[13px] text-muted-foreground/70", "{dur(u32::from(end - start))} free" }
                                 }
@@ -333,12 +383,13 @@ pub fn Planner(
                             let tap_label = label.clone();
                             let past = is_today && end <= now_minute(now);
                             let live = is_today && (start..end).contains(&now_minute(now));
+                            let across = plan.now_within(start, end);
                             rsx! {
                                 button {
                                     key: "s{i}",
                                     r#type: "button",
                                     "data-testid": "planner-block",
-                                    class: if past { "flex w-full items-stretch gap-3 rounded-xl py-2 text-left opacity-50 active:bg-accent/50" } else if live { "flex w-full items-stretch gap-3 rounded-xl bg-accent/50 py-2 text-left active:bg-accent" } else { "flex w-full items-stretch gap-3 rounded-xl py-2 text-left active:bg-accent/50" },
+                                    class: if past { "relative flex w-full items-stretch gap-3 rounded-xl py-2 text-left opacity-50 active:bg-accent/50" } else if live { "relative flex w-full items-stretch gap-3 rounded-xl bg-accent/50 py-2 text-left active:bg-accent" } else { "relative flex w-full items-stretch gap-3 rounded-xl py-2 text-left active:bg-accent/50" },
                                     onclick: move |_| {
                                         if meal {
                                             on_meal.call((day, tap_label.clone()));
@@ -346,7 +397,10 @@ pub fn Planner(
                                             on_block.call((day, id.clone()));
                                         }
                                     },
-                                    span { class: "flex w-12 shrink-0 flex-col items-end pt-0.5",
+                                    if let (Some(frac), Some(n)) = (across, plan.now) {
+                                        NowAcross { min: n, frac }
+                                    }
+                                    span { class: "flex w-16 shrink-0 flex-col items-end pt-0.5",
                                         span { class: "text-[13px] font-medium tabular-nums text-foreground/85", "{clock(start)}" }
                                         span { class: "text-[12px] tabular-nums text-muted-foreground/70", "{clock(end)}" }
                                     }
@@ -368,12 +422,16 @@ pub fn Planner(
                         }
                         Slot::Event { start, end, title, color } => {
                             let past = is_today && end <= now_minute(now);
+                            let across = plan.now_within(start, end);
                             rsx! {
                                 div {
                                     key: "s{i}",
                                     "data-testid": "planner-event",
-                                    class: if past { "flex items-stretch gap-3 py-2 opacity-50" } else { "flex items-stretch gap-3 py-2" },
-                                    span { class: "flex w-12 shrink-0 flex-col items-end pt-0.5",
+                                    class: if past { "relative flex items-stretch gap-3 py-2 opacity-50" } else { "relative flex items-stretch gap-3 py-2" },
+                                    if let (Some(frac), Some(n)) = (across, plan.now) {
+                                        NowAcross { min: n, frac }
+                                    }
+                                    span { class: "flex w-16 shrink-0 flex-col items-end pt-0.5",
                                         span { class: "text-[13px] font-medium tabular-nums text-foreground/85", "{clock(start)}" }
                                         span { class: "text-[12px] tabular-nums text-muted-foreground/70", "{clock(end)}" }
                                     }
@@ -535,6 +593,31 @@ mod tests {
         };
         assert!(meal("lunch"));
         assert!(!meal("studio"));
+    }
+
+    #[test]
+    fn now_inside_a_block_is_drawn_through_it_not_beside_it() {
+        let blocks = [
+            block("studio", 9 * 60, 12 * 60),
+            block("lunch", 12 * 60, 13 * 60),
+        ];
+        let p = plan_day(day(), at(12, 15), &blocks, &[], &[], &[], &[]);
+        assert!(
+            !p.timeline.iter().any(|s| matches!(s, Slot::Now(_))),
+            "no separate now line while lunch is on"
+        );
+        assert_eq!(p.now, Some(12 * 60 + 15));
+        assert_eq!(p.now_within(12 * 60, 13 * 60), Some(0.25));
+        assert_eq!(p.now_within(9 * 60, 12 * 60), None, "studio has ended");
+    }
+
+    #[test]
+    fn the_clock_reads_twelve_hour() {
+        assert_eq!(clock(0), "12 AM");
+        assert_eq!(clock(9 * 60 + 30), "9:30 AM");
+        assert_eq!(clock(12 * 60), "12 PM");
+        assert_eq!(clock(13 * 60 + 5), "1:05 PM");
+        assert_eq!(clock(24 * 60), "12 AM");
     }
 
     #[test]
