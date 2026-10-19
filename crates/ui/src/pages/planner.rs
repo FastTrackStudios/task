@@ -292,7 +292,10 @@ pub fn clock(min: u16) -> String {
 /// rest. Sits over the slot without taking taps.
 #[component]
 fn NowAcross(min: u16, frac: f32) -> Element {
-    let pct = (frac * 100.0).clamp(0.0, 100.0);
+    // The live slot is drawn taller with its start and end times at its
+    // top and bottom; the line keeps to the middle half so it never
+    // covers them, still reading earlier-higher, later-lower.
+    let pct = 25.0 + frac.clamp(0.0, 1.0) * 50.0;
     rsx! {
         div {
             "data-testid": "planner-now",
@@ -389,7 +392,7 @@ pub fn Planner(
                                     key: "s{i}",
                                     r#type: "button",
                                     "data-testid": "planner-block",
-                                    class: if past { "relative flex w-full items-stretch gap-3 rounded-xl py-2 text-left opacity-50 active:bg-accent/50" } else if live { "relative flex w-full items-stretch gap-3 rounded-xl bg-accent/50 py-2 text-left active:bg-accent" } else { "relative flex w-full items-stretch gap-3 rounded-xl py-2 text-left active:bg-accent/50" },
+                                    class: if past { "relative flex w-full items-stretch gap-3 rounded-xl py-2 text-left opacity-50 active:bg-accent/50" } else if live { "relative flex min-h-28 w-full items-stretch gap-3 rounded-xl bg-accent/50 py-2 text-left active:bg-accent" } else { "relative flex w-full items-stretch gap-3 rounded-xl py-2 text-left active:bg-accent/50" },
                                     onclick: move |_| {
                                         if meal {
                                             on_meal.call((day, tap_label.clone()));
@@ -400,7 +403,7 @@ pub fn Planner(
                                     if let (Some(frac), Some(n)) = (across, plan.now) {
                                         NowAcross { min: n, frac }
                                     }
-                                    span { class: "flex w-16 shrink-0 flex-col items-end pt-0.5",
+                                    span { class: if across.is_some() { "flex w-16 shrink-0 flex-col items-end justify-between py-0.5" } else { "flex w-16 shrink-0 flex-col items-end pt-0.5" },
                                         span { class: "text-[13px] font-medium tabular-nums text-foreground/85", "{clock(start)}" }
                                         span { class: "text-[12px] tabular-nums text-muted-foreground/70", "{clock(end)}" }
                                     }
@@ -427,11 +430,11 @@ pub fn Planner(
                                 div {
                                     key: "s{i}",
                                     "data-testid": "planner-event",
-                                    class: if past { "relative flex items-stretch gap-3 py-2 opacity-50" } else { "relative flex items-stretch gap-3 py-2" },
+                                    class: if past { "relative flex items-stretch gap-3 py-2 opacity-50" } else if across.is_some() { "relative flex min-h-28 items-stretch gap-3 py-2" } else { "relative flex items-stretch gap-3 py-2" },
                                     if let (Some(frac), Some(n)) = (across, plan.now) {
                                         NowAcross { min: n, frac }
                                     }
-                                    span { class: "flex w-16 shrink-0 flex-col items-end pt-0.5",
+                                    span { class: if across.is_some() { "flex w-16 shrink-0 flex-col items-end justify-between py-0.5" } else { "flex w-16 shrink-0 flex-col items-end pt-0.5" },
                                         span { class: "text-[13px] font-medium tabular-nums text-foreground/85", "{clock(start)}" }
                                         span { class: "text-[12px] tabular-nums text-muted-foreground/70", "{clock(end)}" }
                                     }
