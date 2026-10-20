@@ -1,0 +1,74 @@
+# Release — the guard on release PRs, and the tag + GitHub Release once
+# production serves the result. The procedure and its reasons are in
+# skills/release-workflow.md; the logic is scripts/release.sh, so a human
+# can run every step of it by hand (`just release-*`).
+#
+#   pull_request -> main   "Release guard": cheap, on a hosted runner. It
+#                          fails a release PR that would deploy something
+#                          other than what `checks` tested:
+#                            - the head is `dev` (or hotfix/*),
+#                            - Cargo.toml's version is new and greater,
+#                            - CHANGELOG.md has that version's section,
+#                            - the head commit IS `chore(release): v<ver>`
+#                              (nothing slipped onto dev after the bump),
+#                            - merging produces exactly the head's tree.
+#   workflow_call          from deploy.yml after "Verify live": tag
+#                          `v<version>` and publish the GitHub Release.
+#   workflow_dispatch      the same, by hand, on main (a re-run, or a
+#                          release whose deploy was skipped).
+#
+# Merge release PRs with "Create a merge commit". Squash or rebase would
+# give main a commit dev does not have, and the next release's guard
+# would (rightly) refuse.
+
+name: release
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Release guard
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Is this a sound release?
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: bash scripts/release.sh guard
+
+  publish:
+    name: Tag + GitHub Release
+    # In a called workflow `github` is the CALLER's context: a push to
+    # main from deploy.yml, or this file's own dispatch.
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release.sh publish

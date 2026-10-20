@@ -152,6 +152,46 @@ mobile-sim *ARGS:
 release-desktop VERSION:
     bash apps/desktop/macos/release.sh {{VERSION}}
 
+# ── Releases ─────────────────────────────────────────────────────────────
+#
+# main = production, dev = integration (skills/release-workflow.md). Card
+# PRs squash into dev; a release is a `dev -> main` PR, merged with a merge
+# commit, which deploys and then tags `v<version>`. One version for
+# everything, `[workspace.package] version` in Cargo.toml; the changelog
+# is generated from dev's commit subjects by git-cliff (cliff.toml).
+
+# The product version (server, web, iOS, macOS, desktop-v*).
+version:
+    @bash scripts/release.sh version
+
+# What the next release would be: suggested version, unreleased
+# changelog, and the database migrations it carries.
+release-plan:
+    bash scripts/release.sh plan
+
+# Bump the version, regenerate CHANGELOG.md and commit
+# `chore(release): v<next>` on a fresh `release/v<next>` off origin/dev.
+# BUMP: auto (from the commits), patch, minor, major, or an exact X.Y.Z.
+release-prepare BUMP="auto":
+    bash scripts/release.sh prepare {{BUMP}}
+
+# Open the release PR, dev -> main, with the changelog as its body.
+release-pr:
+    bash scripts/release.sh pr
+
+# On a hotfix/* branch cut from origin/main (fix already committed): the
+# patch bump + changelog + release commit the release guard requires.
+release-hotfix:
+    bash scripts/release.sh hotfix
+
+# One version's section of CHANGELOG.md (default: the current version).
+release-notes *VERSION:
+    @bash scripts/release.sh notes {{VERSION}}
+
+# The release PR's gate, locally: everything `just ci` runs plus docs
+# (rustdoc -D warnings), which only the release gate runs.
+ci-release: ci ci-docs
+
 # The typing test: every markdown construct typed into the app's note
 # view on the booted simulator through the iOS keyboard's input calls;
 # text, caret and rendering checked, a screenshot per case.
@@ -339,9 +379,10 @@ ci-wasm: css
 ci-docs:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Everything the PR gate runs, in the gate's order. Run it before pushing:
-# a failure here costs seconds, the same failure on the gate costs a round
-# trip. (`ci-docs` is main-only on the gate, so it is not included here.)
+# Everything the gate runs, in the gate's order. Run it before pushing a
+# card: on a PR into dev this IS the gate (CI does not run there), and
+# its output is the evidence the reviewer checks on the card. (`ci-docs`
+# runs only on release PRs; `just ci-release` adds it.)
 ci: ci-fmt ci-manifests ci-tests ci-clippy ci-wasm
 
 # ── Git hooks (capn) ─────────────────────────────────────────────────────

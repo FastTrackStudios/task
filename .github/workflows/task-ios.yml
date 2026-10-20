@@ -15,6 +15,10 @@
 #
 # CHANGE-GATED by the push `paths:` filter (Task app + its Rust deps).
 # workflow_dispatch forces a build regardless of what changed.
+#
+# ONCE PER RELEASE: main moves only by release PRs from `dev` (see
+# skills/release-workflow.md), so a push here is a release, and the build
+# is marked with the release's version (the Version step).
 
 name: task-ios
 
@@ -47,9 +51,9 @@ on:
   workflow_dispatch:
     inputs:
       marketing_version:
-        description: "CFBundleShortVersionString (e.g. 0.0.2)"
+        description: "CFBundleShortVersionString. Empty = the workspace version in Cargo.toml (the release's)."
         required: false
-        default: "0.0.1"
+        default: ""
 
 # Serialize with the audio iOS build too — one iOS build at a time on the
 # single Mac. Shared group name across both workflows; queue, never cancel.
@@ -106,11 +110,23 @@ jobs:
         with:
           clean: false
 
+      # One version for every shipped thing: the release's, from
+      # [workspace.package] in Cargo.toml (scripts/release.sh). Main only
+      # moves by releases, so a push here is a release and TestFlight
+      # shows the same number as the GitHub Release and the server.
+      - name: Version
+        env:
+          INPUT_VERSION: ${{ inputs.marketing_version }}
+        run: |
+          v="${INPUT_VERSION:-$(bash scripts/release.sh version)}"
+          echo "MARKETING_VER=$v" >> "$GITHUB_ENV"
+          echo "marketing version: $v"
+
       - name: Build, sign, and upload Task to TestFlight
         env:
           KEYCHAIN: fts-build.keychain
           KEYCHAIN_PW: fts-build
-          MARKETING_VER: ${{ inputs.marketing_version || '0.0.2' }}
+          # MARKETING_VER comes from the Version step.
           # 26.6 GM builds/signs/uploads; the beta's actool compiles the icon
           # catalog (26.6's actool can't produce Assets.car on macOS 27).
           ACTOOL_DEVELOPER_DIR: /Applications/Xcode-beta.app/Contents/Developer
