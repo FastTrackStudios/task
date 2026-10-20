@@ -114,35 +114,34 @@ enough for git). Add new songs there, never by hand.
 
 ## The PR gate
 
-`checks` runs on THEBATTLESHIP (self-hosted, the `task`-labelled runners —
-which share the machine, and its dev drive, with runners for a dozen other
-repos, so a busy gate is felt as slow local builds), against a target
-dir that persists between runs. The check set lives in the `Justfile`, one
-recipe per check, and the workflow invokes those same recipes — so the two
-cannot drift:
+**`main` is production, `dev` is integration** — the whole procedure,
+with what the reviewer checks, is `skills/release-workflow.md`. In short:
+card PRs go **into `dev`**, and CI does **not** build them. The gate for a
+card is `just ci`, run by you on the final tree in the host's canonical
+warm checkout, under the build lease, and recorded on the card:
 
 ```bash
+git fetch origin && git rebase origin/dev
 just ci        # ci-fmt, ci-manifests, ci-tests, ci-clippy, ci-wasm
 ```
 
-Run it before pushing. It is the gate's set in the gate's order, so a pass
-here is the gate's answer for the price of a local build.
+The check set lives in the `Justfile`, one recipe per check, and the
+`checks` workflow invokes those same recipes — so a pass here is the
+gate's answer for the price of a local build. `checks` itself runs on
+THEBATTLESHIP (self-hosted, the `task`-labelled runners, which share the
+machine and its dev drive with a dozen other repos) only for release PRs
+`dev -> main`, nightly on dev, and by hand
+(`gh workflow run checks.yml --ref <branch> -f base=dev`).
 
-Do not wait on the gate — push and let it merge itself:
+Open the PR into dev with a conventional-commit title (it becomes the
+squash commit and the changelog line; `pr-title` checks it):
 
 ```bash
-gh pr create --fill && gh pr merge --auto --squash
+gh pr create --base dev --title "fix(files): …" --body "Card <id>: just ci passed on <sha>"
 ```
 
-**`[skip checks]`** in a commit message turns the gate off for that PR, for
-when `just ci` already passed against that exact tree. Two limits, both real:
-
-- **Pull requests only.** A push to main runs the full gate whatever the
-  message says, because main is what deploys.
-- **It is a claim, not a proof.** A PR run builds the MERGE of the branch
-  with main; `just ci` built the branch alone. If main moved under you, a
-  local pass does not cover the merge. Use it for a follow-up commit on a
-  branch you just verified, not for the first push of a stale branch.
+The reviewer squash-merges it once the card's evidence matches the PR head.
+There is no skip token: release PRs always run the full set.
 
 Never use GitHub's own skip tokens here — the bracketed `skip ci`,
 `ci skip`, `no ci`, `skip actions` and `actions skip` forms. They are
