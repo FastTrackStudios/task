@@ -214,3 +214,74 @@ async fn bots_reach_their_orgs_and_tools_with_their_key() {
         "a revoked key reaches nothing: {res}"
     );
 }
+
+/// Settings → Bots: the same lifecycle through `BotService` on the
+/// server lane (`/server/vox`), as the person signed in — and refused
+/// to anyone who is not.
+// t[verify mcp.bots]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_manages_bots_through_the_server_lane() {
+    use org_proto::{BotServiceClient, BotTools, CreateBotRequest, RevokeBotRequest};
+
+    let _env = crate::support::env_lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let node = LocalNode::open(NodeOptions {
+        owner_name: "Sam Server".into(),
+        peers: false,
+        ..NodeOptions::at(root.path())
+    })
+    .await
+    .unwrap();
+    let owner = node.owner().clone();
+    let anon = node.caller(&owner.org, None).await.unwrap();
+    let session = AuthServiceClient::from_vox_lane(anon, None)
+        .sign_in_email_password(SignInEmailPassword {
+            email: owner.email.clone(),
+            password: owner.password.clone(),
+            ip_address: None,
+            user_agent: Some("bots-e2e".into()),
+        })
+        .await
+        .unwrap();
+    node.admit_account(session.user.id, &[PERSONAL_SLUG.to_owned()], "admin")
+        .await
+        .unwrap();
+    let bots = BotServiceClient::from_vox_lane(node.server_caller().await.unwrap(), None);
+
+    assert!(
+        bots.list_bots("not-a-token".into()).await.is_err(),
+        "nobody's token manages nobody's bots"
+    );
+    let made = bots
+        .create_bot(CreateBotRequest {
+            session_token: session.token.clone(),
+            name: "Atlas".into(),
+            orgs: vec![PERSONAL_SLUG.to_owned()],
+            tools: BotTools::All,
+        })
+        .await
+        .expect("the person makes Atlas from the app");
+    assert!(made.key.starts_with("ak_"));
+    let listed = bots.list_bots(session.token.clone()).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "Atlas");
+    assert_eq!(listed[0].orgs, [PERSONAL_SLUG]);
+    assert!(
+        bots.create_bot(CreateBotRequest {
+            session_token: session.token.clone(),
+            name: "Snoop".into(),
+            orgs: vec!["someone-elses".into()],
+            tools: BotTools::Library,
+        })
+        .await
+        .is_err(),
+        "an org the person is not in is refused"
+    );
+    bots.revoke_bot(RevokeBotRequest {
+        session_token: session.token.clone(),
+        bot_id: made.bot.id.clone(),
+    })
+    .await
+    .unwrap();
+    assert!(bots.list_bots(session.token).await.unwrap().is_empty());
+}

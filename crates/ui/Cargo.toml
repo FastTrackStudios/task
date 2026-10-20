@@ -156,6 +156,8 @@ prefs-proto = { workspace = true, features = ["vox"] }
 # from the home locker on sign-in, push new links up. `vox` feature
 # only (no `server`), wasm-clean like the other proto clients above.
 identity-proto = { workspace = true, features = ["vox"] }
+# Settings → Bots: `BotService` on the server's `/server/vox`.
+org-proto = { workspace = true, features = ["vox"] }
 
 # App-wide keyboard shortcuts (src/shortcuts.rs): trie-based key
 # dispatch (multi-key `g h` sequences, chord parsing, keymap config).

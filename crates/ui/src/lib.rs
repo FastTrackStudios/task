@@ -21,6 +21,7 @@ pub mod actions;
 pub mod activity;
 pub mod app;
 pub mod app_views;
+pub mod bots;
 pub mod appearance;
 pub mod auth;
 pub mod central_login;

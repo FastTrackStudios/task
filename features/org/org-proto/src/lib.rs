@@ -12,6 +12,7 @@
 //! database, no server, no CLI. Downstream crates (server,
 //! CLI) use [`OrgRoot`] to find where their files belong.
 
+pub mod bots;
 pub mod issuer;
 pub mod manifest;
 pub mod mount;
@@ -23,6 +24,10 @@ pub mod service;
 pub mod shelf;
 pub mod snapshot;
 
+pub use bots::{
+    BotError, BotInfo, BotService, BotServiceRpc, BotTools, CreateBotRequest, CreatedBot,
+    RevokeBotRequest,
+};
 pub use issuer::{IssuerError, IssuerProfile};
 pub use manifest::{OrgManifest, ParseError};
 pub use mount::{KnowledgeTree, TreePlace};
@@ -47,6 +52,12 @@ pub use service::{
 pub use snapshot::{
     BranchResult, RepoResult, RestoreReport, SnapshotError, SnapshotLogEntry, SnapshotReport,
     SnapshotService,
+};
+
+#[cfg(feature = "vox")]
+pub use bots::{
+    BotServiceClient, BotServiceRpcDispatcher as BotDispatcher, bot_service_rpc_service_descriptor as bot_descriptor,
+    serve as serve_bots,
 };
 
 #[cfg(feature = "vox")]

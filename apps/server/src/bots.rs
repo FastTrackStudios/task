@@ -336,6 +336,92 @@ pub async fn revoke(
     Ok(())
 }
 
+/// [`org_proto::BotService`] over this server's home identity: the
+/// app's Settings → Bots, on `/server/vox`.
+#[derive(Clone, architect::HasDispatcher)]
+pub struct BotServiceImpl {
+    state: std::sync::Arc<crate::AppState>,
+}
+
+impl BotServiceImpl {
+    #[must_use]
+    pub fn new(state: crate::AppState) -> Self {
+        Self {
+            state: std::sync::Arc::new(state),
+        }
+    }
+
+    /// The person behind `token`, and the home identity bots live in.
+    fn caller(&self, token: &str) -> Result<(Uuid, crate::HomeIdentity), org_proto::BotError> {
+        use org_proto::BotError;
+        let home = self
+            .state
+            .home_identity
+            .clone()
+            .ok_or_else(|| BotError::Refused("this server has no home org to keep bots in".into()))?;
+        let state = self.state.clone();
+        let token = token.to_owned();
+        let who = tokio::runtime::Handle::current()
+            .block_on(async move { crate::central_auth::home_principal(&state, &token).await })
+            .ok_or_else(|| BotError::Unauthorized("sign in to manage bots".into()))?;
+        Ok((who, home))
+    }
+}
+
+fn wire(bot: Bot) -> org_proto::BotInfo {
+    org_proto::BotInfo {
+        id: bot.id.to_string(),
+        name: bot.name,
+        tools: match bot.tools {
+            Tools::All => org_proto::BotTools::All,
+            Tools::Library => org_proto::BotTools::Library,
+        },
+        orgs: bot.orgs,
+    }
+}
+
+impl org_proto::BotService for BotServiceImpl {
+    fn list_bots(&self, session_token: String) -> Result<Vec<org_proto::BotInfo>, org_proto::BotError> {
+        let (owner, home) = self.caller(&session_token)?;
+        tokio::runtime::Handle::current()
+            .block_on(async move { list(&home.auth, &home.memberships, owner).await })
+            .map(|bots| bots.into_iter().map(wire).collect())
+            .map_err(|e| org_proto::BotError::Internal(format!("{e:#}")))
+    }
+
+    fn create_bot(
+        &self,
+        req: org_proto::CreateBotRequest,
+    ) -> Result<org_proto::CreatedBot, org_proto::BotError> {
+        let (owner, home) = self.caller(&req.session_token)?;
+        let tools = match req.tools {
+            org_proto::BotTools::All => Tools::All,
+            org_proto::BotTools::Library => Tools::Library,
+        };
+        let made = tokio::runtime::Handle::current()
+            .block_on(async move {
+                create(&home.auth, &home.memberships, owner, &req.name, &req.orgs, tools).await
+            })
+            // What `create` refuses is the request, not the server.
+            .map_err(|e| org_proto::BotError::Refused(format!("{e:#}")))?;
+        Ok(org_proto::CreatedBot {
+            bot: wire(made.bot),
+            key: made.key,
+        })
+    }
+
+    fn revoke_bot(&self, req: org_proto::RevokeBotRequest) -> Result<(), org_proto::BotError> {
+        let (owner, home) = self.caller(&req.session_token)?;
+        let bot = req
+            .bot_id
+            .parse::<Uuid>()
+            .map_err(|_| org_proto::BotError::Refused("not a bot id".into()))?;
+        tokio::runtime::Handle::current()
+            .block_on(async move { revoke(&home.auth, &home.memberships, owner, bot).await })
+            .map_err(|e| org_proto::BotError::Refused(format!("{e:#}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
