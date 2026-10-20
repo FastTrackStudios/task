@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 # The node itself — the whole backend, in-process.
 task-server = { workspace = true }
+architect-auth = { workspace = true }
 # The seam it is installed behind.
 task-ui-core = { workspace = true }
 vox-core = { workspace = true }

@@ -31,6 +31,7 @@
 #[allow(dead_code)]
 mod support;
 
+mod account_devices_e2e;
 mod activity_e2e;
 mod anonymous_lane_stays_anonymous;
 mod asset_libraries_e2e;

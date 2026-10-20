@@ -17,6 +17,7 @@
 //! `project-crdt` crates. CRDT now lives only at the per-file
 //! editor layer (future); vault is the sole storage path.
 
+pub mod account_devices;
 pub mod activity;
 pub mod admin_cli;
 #[cfg(feature = "plugin-agent")]

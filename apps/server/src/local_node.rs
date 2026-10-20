@@ -258,6 +258,42 @@ impl LocalNode {
             .and_then(|held| held.iter().find(|(s, _)| s == slug).map(|(_, e)| e.clone()))
     }
 
+    /// The local slug of the org whose id is `id`, if this node holds it.
+    /// A device may hold an org under a slug of its own choosing (an
+    /// account's shared org, when the account's slug is taken here).
+    #[must_use]
+    pub fn slug_of(&self, id: Uuid) -> Option<String> {
+        self.org_slugs().into_iter().find(|slug| {
+            self.state
+                .data_root
+                .org(slug.as_str())
+                .manifest()
+                .is_ok_and(|m| m.id == id)
+        })
+    }
+
+    /// The manifest of a held org.
+    pub fn manifest(&self, slug: &str) -> eyre::Result<org_proto::manifest::OrgManifest> {
+        self.state
+            .data_root
+            .org(slug)
+            .manifest()
+            .map_err(|e| eyre::eyre!("read `{slug}` manifest: {e}"))
+    }
+
+    /// Admit `peer` to `slug` now: written to `admitted-devices` (so it
+    /// survives a restart) and applied, rather than waiting for the next
+    /// sweep. Idempotent.
+    pub fn admit_peer(&self, slug: &str, peer: &str) -> eyre::Result<()> {
+        let Some(org) = self.state.org(slug) else {
+            bail!("this device holds no org `{slug}`");
+        };
+        let org_root = self.state.data_root.org(slug);
+        admit(org_root.path(), peer)?;
+        crate::device_sync::apply_admissions(&org.files, org_root.path());
+        Ok(())
+    }
+
     /// The org-discovery document this node would serve at
     /// `/.well-known/task-server.json`, for `bearer`.
     pub async fn discovery(&self, bearer: Option<String>) -> serde_json::Value {

@@ -563,6 +563,16 @@ where
     Ok(C::from_vox_lane(caller, None))
 }
 
+/// The shared lane [`establish_shared_at`] wraps, untyped — for a caller
+/// that hands it on to code which names the client itself (the node's
+/// account sync takes a lane to the issuer).
+pub async fn issuer_caller_at(
+    url: &str,
+    bearer: Option<String>,
+) -> Result<vox_core::Caller, String> {
+    shared_caller_with(url, bearer).await
+}
+
 #[cfg(test)]
 mod subprotocol_tests {
     //! The subprotocol rule itself moved to `task-dial` with the dial it

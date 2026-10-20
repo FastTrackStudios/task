@@ -342,6 +342,7 @@ pub fn App() -> Element {
     // authority of the sign-in this app already holds. Once per launch,
     // native only, and it prompts nobody — see the module docs.
     crate::device_pairing::use_device_pairing();
+    crate::account_devices::use_account_devices();
     // The other half of a folder becoming a project: the agent records
     // who made it, and the app — which is signed in — writes the
     // declaration that says whose it is.

@@ -2039,6 +2039,9 @@ pub fn AccountSheetBody(on_done: EventHandler<()>) -> Element {
                 }
             }
 
+            // ── Your devices (the account's, through the issuer) ──
+            crate::account_devices::AccountDevicesSection {}
+
             // ── Devices & servers ──
             div {
                 task_ui_core::sheet::SheetSection { label: "Devices & servers".to_owned() }

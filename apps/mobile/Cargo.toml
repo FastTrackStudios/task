@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# A process-level rustls CryptoProvider, installed first thing in `main`:
+# the graph unifies both `ring` and `aws-lc-rs`, so rustls cannot infer
+# one and the first TLS dial (the issuer, after a FastTrackStudio
+# sign-in) panicked on the main thread and aborted the app.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
 # Math in notes: the editor's Typst renderer. Native apps only — the web

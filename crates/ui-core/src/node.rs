@@ -184,6 +184,48 @@ mod native {
         fn endpoint_id(&self, slug: &str) -> Option<String>;
         /// Where the node keeps its data, for Settings to show.
         fn data_root(&self) -> std::path::PathBuf;
+        /// One pass of the account's device address book on the issuer
+        /// (`issuer`, a lane to `fts-auth`): register this install, join
+        /// the org the account's devices share if this one does not hold
+        /// it, and admit the account's other devices
+        /// (`task_server::account_devices`). `account` is the issuer's
+        /// subject for the signed-in person.
+        fn account_sync(&self, request: AccountSyncRequest) -> NodeFuture<AccountReport>;
+    }
+
+    /// What [`NodeHost::account_sync`] needs.
+    #[derive(Clone)]
+    pub struct AccountSyncRequest {
+        pub issuer: vox_core::Caller,
+        /// The account's token on the issuer (session or access token).
+        pub token: String,
+        /// The issuer's subject for the account.
+        pub account: String,
+        /// What a person calls this device ("Cody's iPhone").
+        pub device_name: String,
+        /// `ios`, `macos`, `linux`, `windows`.
+        pub platform: String,
+    }
+
+    /// One of the account's other devices.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct PeerSummary {
+        pub name: String,
+        pub platform: String,
+        /// Whether it has said where it is (holds the shared org).
+        pub reachable: bool,
+        /// RFC 3339.
+        pub last_seen: String,
+    }
+
+    /// What a pass found.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct AccountReport {
+        /// The shared org's slug on this device, once held.
+        pub slug: Option<String>,
+        /// Whether this pass joined it.
+        pub joined: bool,
+        pub others: Vec<PeerSummary>,
     }
 
     static HOST: OnceLock<Arc<dyn NodeHost>> = OnceLock::new();

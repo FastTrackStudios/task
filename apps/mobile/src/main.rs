@@ -10,6 +10,10 @@ mod watch_sync;
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
+    // Before anything can open a TLS socket: the graph carries both rustls
+    // backends, so it cannot pick one itself, and a TLS dial without one
+    // panics (on the main thread, where it aborts). Err = already set.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     // Error/crash telemetry — hold `_sentry` for the life of `main`
     // (`dioxus::launch` diverges, so binding it here is sufficient).
     // The tracing subscriber carries the Sentry layer so `warn!`/

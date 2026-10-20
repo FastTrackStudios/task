@@ -16,6 +16,7 @@
 //!
 //! See `ARCHITECTURE.md` for the recipe for extracting the next slice.
 
+pub mod account_devices;
 pub mod actions;
 pub mod activity;
 pub mod app;

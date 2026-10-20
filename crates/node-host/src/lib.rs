@@ -28,7 +28,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use task_server::local_node::{JoinSpec, LocalNode, NodeOptions};
-use task_ui_core::node::{JoinRequest, NodeFuture, NodeHost, NodeOwner};
+use task_ui_core::node::{
+    AccountReport, AccountSyncRequest, JoinRequest, NodeFuture, NodeHost, NodeOwner, PeerSummary,
+};
 
 pub use task_server::local_node::NodeOptions as Options;
 
@@ -227,6 +229,40 @@ impl NodeHost for Host {
                 .await
                 .map_err(|e| format!("join: {e:#}"))?;
             Ok(joined.endpoint_id)
+        }))
+    }
+
+    fn account_sync(&self, request: AccountSyncRequest) -> NodeFuture<AccountReport> {
+        use task_server::account_devices::{ThisDevice, device_id, install_id, sync_account};
+        use vox_core::FromVoxLane as _;
+        let node = self.node();
+        let data_root = self.opts.data_root.clone();
+        Box::pin(on_node(async move {
+            let node = node.await?;
+            let install = install_id(&data_root).map_err(|e| format!("install id: {e:#}"))?;
+            let me = ThisDevice {
+                device_id: device_id(install, &request.account),
+                name: request.device_name,
+                platform: request.platform,
+            };
+            let issuer = architect_auth::DeviceServiceClient::from_vox_lane(request.issuer, None);
+            let pass = sync_account(&node, &issuer, &request.token, &me)
+                .await
+                .map_err(|e| format!("account sync: {e:#}"))?;
+            Ok(AccountReport {
+                slug: pass.slug,
+                joined: pass.joined,
+                others: pass
+                    .others
+                    .into_iter()
+                    .map(|d| PeerSummary {
+                        name: d.name,
+                        platform: d.platform,
+                        reachable: d.endpoint_id.is_some(),
+                        last_seen: d.last_seen_at.to_rfc3339(),
+                    })
+                    .collect(),
+            })
         }))
     }
 

@@ -263,6 +263,23 @@ person may read, never more.
 
 ---
 
+### One account's devices find each other
+
+t[offline.account]
+A device signed in with a FastTrackStudio account registers itself with the
+issuer (`fts-auth`'s device address book): its name, its platform and its
+endpoint id for the account's shared org. The first device to register offers
+its own personal org, which becomes the one every device of the account
+shares; a later device joins it from a device that holds it — under the
+account's slug, or one of its own when that is taken there — and keeps its
+own earlier data as a separate org. Each device admits every other device's
+endpoint, so the nodes sync directly (`offline.peers`) with no host and no
+id copied by hand. The issuer stores names and endpoint ids, never content,
+and answers each account only about its own devices. A debug build's planted
+example studio is never offered.
+
+---
+
 ### Access is checked per document
 
 t[offline.doc.access]
@@ -313,6 +330,7 @@ app never claims a change synced that has not.
 | `offline.export` | e2e: export from the device's documents with the server unreachable; re-import yields identical documents |
 | `offline.local` | e2e (`apps/server/tests/it/local_node_e2e.rs`): a fresh node on a temp root with no listener provisions its person, who signs in and drives task create/update, inbox capture + process, the Suggested pick and the activity feed; a reboot keeps both. `a_watch_reaches_the_phones_node_through_the_phone` — the watch API answered in-process (the phone's relay), an unsigned call refused. Unit: `task_ui_core::node` routing table (local vs remote, unreachable fallback only for a held org) |
 | `offline.peers` | e2e: two embedded nodes with no host converge a note edited on both, then a third (the host) catches up from either. Today: `peer_docs_e2e` — two device nodes, no host, dialling each other over iroh: a note written on one arrives on the other as a file, a task made on the other shows in the first's task list, and a note edited on both while apart converges to one text holding both edits on both (the `DocPeer` lane + `doc_peer::pull_peer` in the device sweep); `local_node_e2e` — the join handshake; `vault-doc` unit — the same file seeds the same document on every node. Not yet: the third-node catch-up, per-person access (a peer is an org device, trusted with the org's documents) |
+| `offline.account` | e2e (`apps/server/tests/it/account_devices_e2e.rs`): an in-process issuer (architect's `DeviceService`) and two device nodes with one account — the phone's personal org becomes the account's, the laptop joins it under its own slug and keeps its own, each admits the other, a note on the phone reaches the laptop and a task on the laptop reaches the phone. Issuer side: architect `auth-native-tests::devices_tests` (scoping, first offer wins, a device id held by another account refused, input checked). Unit: `account_devices` (device id per install and account). Not yet: forgetting a device here, the access token's refresh before a pass |
 | `offline.doc.access` | e2e: a document for a path the person can't write is refused and kept local. Today: `offline_doc_e2e::refused_documents_stay_on_the_device` (foreign lineage, unadmitted path); the per-person write refusal itself is `wiki_edits` (`open_collab` refused for a non-Editor) |
 | `offline.outbox` | unit tests over a fake transport; e2e: timer started offline lands on reconnect |
 | `offline.boot`, `offline.visible` | iOS simulator check with the demo server stopped (manual until a UI harness exists) |
