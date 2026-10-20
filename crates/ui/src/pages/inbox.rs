@@ -342,11 +342,13 @@ fn ProcessDeck(
         move |outcome: Outcome| {
             // t[impl process.undo]
             // Undo puts the item back as it was and steps the deck to it.
-            let undo = |before: InboxItem| {
+            // `stored`: false once the decision removed the file, so the
+            // undo recreates it.
+            let undo = |before: InboxItem, stored: bool| {
                 let slug = slug_now.clone();
                 let at = positions.iter().position(|id| *id == before.id);
                 move || {
-                    muts.save(slug.clone(), before.clone());
+                    muts.carry(slug.clone(), inbox_proto::decision::undo(&before), stored);
                     if let Some(at) = at {
                         // A copy per call: toast actions are `Fn`.
                         let mut c = cursor;
@@ -358,18 +360,21 @@ fn ProcessDeck(
                 Outcome::Filed(msg) => toast.success(msg, ToastOptions::new()),
                 Outcome::Noted => toast.success("Saved as a note".to_owned(), ToastOptions::new()),
                 Outcome::Later { before, label } => {
-                    toast.info(label, ToastOptions::new().action("Undo", undo(before)));
+                    toast.info(
+                        label,
+                        ToastOptions::new().action("Undo", undo(before, true)),
+                    );
                 }
                 Outcome::Done { before } => {
                     toast.success(
                         "Marked done".to_owned(),
-                        ToastOptions::new().action("Undo", undo(before)),
+                        ToastOptions::new().action("Undo", undo(before, true)),
                     );
                 }
                 Outcome::Deleted { before } => {
                     toast.info(
                         "Deleted".to_owned(),
-                        ToastOptions::new().action("Undo", undo(before)),
+                        ToastOptions::new().action("Undo", undo(before, false)),
                     );
                 }
                 Outcome::Skipped => {}

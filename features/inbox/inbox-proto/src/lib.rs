@@ -15,11 +15,13 @@
 //! disk-backed backend, exactly like `scheduling` sits on top of
 //! `scheduling-proto`.
 
+pub mod decision;
 pub mod error;
 pub mod inbox_item;
 pub mod schedule;
 pub mod service;
 
+pub use decision::{Decision, Write};
 pub use error::InboxError;
 pub use inbox_item::InboxItem;
 pub use schedule::{ReviewResponse, review, schedule};

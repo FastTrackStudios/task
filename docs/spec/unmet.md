@@ -391,13 +391,21 @@ grouped:
 Remove entries as their rules gain markers; the section goes when the
 last does.
 
-**[`capture-and-process.md`](capture-and-process.md) — 22 rules: 8
-verified, 5 with an implementation marker, 3 not met, 11 built in the
-app and verified by nothing.** Tallied separately from the count at the
-top. What is checked: one capture path, a capture's words and back-link,
-the due rule and processing into a task over the Inbox and Task lanes
-(`tests/integration/tests/it/process.rs`), the planted inbox and
-maintenance hour (`example_org::declared_tests`), and the four
+**[`capture-and-process.md`](capture-and-process.md) — 28 rules: 25
+verified, 2 not met, 1 built in the app and verified by nothing.**
+Tallied separately from the count at the top. What is checked: one
+capture path, a capture's words and back-link, the due rule, and every
+outcome — task, waiting, do it now, note, reference, project, snooze,
+done, delete, a suggestion kept or dismissed, and Undo — over the Inbox,
+Task, Project and Vault lanes (`tests/integration/tests/it/process.rs`),
+each through the shared decision (`inbox_proto::Decision`, the function
+the app's card calls) and walked back from what it made; the same
+decisions between two device nodes with no host
+(`apps/server/tests/it/capture_peers_e2e.rs`); process-now from the ✎
+capture (`task-ui` composer unit test, and the browser spec
+`apps/tests/playwright/capture-process-now.spec.js`); the planted inbox,
+with a capture in every state, and the maintenance hour
+(`example_org::declared_tests`); and the four
 `process.focus.{steering,surfaces,opens,ranks}` rules in
 `task-proto::relevance` / `scheduling-proto::focus` unit tests and over
 `TaskService::query`. `process.focus.mode` is unit-tested (the session
@@ -407,10 +415,6 @@ session → focused query yet.
 
 Not met:
 
-- **`process.capture.process-now`** — quick-add (Tasks page) offers
-  process-now through `crate::process::ProcessNow`; the ✎ capture box
-  (`crates/ui/src/chrome.rs`, `FleetingModal`) only files the capture,
-  open, and offers no way to decide it there.
 - **`process.focus.everywhere`** — the web board, Home and the Tasks
   page read the steering block (`crates/ui/src/now_block.rs`); the CLI
   passes `focus: Vec::new()` (`apps/cli/src/task_cmd.rs`, marked
@@ -422,21 +426,12 @@ Not met:
   (`crates/ui/src/task_board.rs`, `FUTURE(relevancy-and-inbox)`), and
   the CLI only has it when the person passes `--device`.
 
-Built in the app, verified by nothing: `process.outcome.{waiting,now,
-project,note,later,done,delete}`, `process.suggestion`,
-`process.outcome.reference`, `process.card` and `process.undo`. All live in
-`crates/ui/src/process.rs` and `crates/ui/src/pages/inbox.rs`, which carry
-no markers yet and have no test that drives them; each outcome is a pair
-of ordinary lane calls, so each can be pinned the way
-`process.rs::a_capture_processed_into_a_task_links_back_to_it` pins the
-task outcome. Two rules are verified without an implementation marker
-for the same reason — `process.capture.single-path` and `process.due`
-are implemented in the UI (`ProcessNow`, `pages::inbox::is_due`), and
-`process.outcome.task` in `stores::InboxMutations::process_into_task`.
-The due rule now has a home below the UI (`InboxItem::is_due`, which
-`pages::inbox::is_due` and the watch bridge call), but
-`Inbox::review_queue` is still the open half only, so a caller of the
-lane has to restate the `suggested` clause.
+Built in the app, verified by nothing: `process.card` (the card's
+layout and keys in `crates/ui/src/process.rs`; the browser spec sees
+every outcome on it, but nothing in Rust drives it). The due rule has a home below the UI
+(`InboxItem::is_due`, which `pages::inbox::is_due` and the watch bridge
+call), but `Inbox::review_queue` is still the open half only, so a
+caller of the lane has to restate the `suggested` clause.
 
 `process.suggested` is verified over the watch bridge and in unit tests,
 but neither client's card is: the web slot (`crates/ui/src/suggested.rs`)

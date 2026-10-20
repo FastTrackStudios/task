@@ -205,11 +205,15 @@ pub fn ProcessNowOverlay() -> Element {
         }
     };
     let mut keep_bg = keep.clone();
+    let undo_slug = slug.clone();
     rsx! {
         div {
             class: "fixed inset-0 z-50 flex justify-center bg-background md:items-start md:bg-black/50 md:p-6 md:pt-[8vh]",
             onclick: move |_| keep_bg(),
             div {
+                "data-testid": "process-now",
+                role: "dialog",
+                aria_label: "Process this capture",
                 class: "flex h-full w-full flex-col overflow-hidden bg-background md:h-auto md:max-h-[84vh] md:max-w-xl md:rounded-2xl md:border md:border-border md:shadow-2xl",
                 onclick: move |e| e.stop_propagation(),
                 header { class: "flex items-center gap-3 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2",
@@ -230,14 +234,35 @@ pub fn ProcessNowOverlay() -> Element {
                         slug,
                         mode,
                         stored: false,
-                        on_done: move |outcome: Outcome| {
-                            match outcome {
-                                Outcome::Filed(msg) => toast.success(msg, dioxus_primitives::toast::ToastOptions::new()),
-                                Outcome::Noted => toast.success("Saved as a note".to_owned(), dioxus_primitives::toast::ToastOptions::new()),
-                                Outcome::Later { label, .. } => toast.info(label, dioxus_primitives::toast::ToastOptions::new()),
-                                Outcome::Done { .. } | Outcome::Deleted { .. } | Outcome::Skipped => {}
+                        on_done: {
+                            let slug = undo_slug.clone();
+                            move |outcome: Outcome| {
+                                use dioxus_primitives::toast::ToastOptions;
+                                // t[impl process.undo]
+                                // Undo files the capture in the inbox as it
+                                // was typed — open — so nothing is lost
+                                // however the decision went. A delete wrote
+                                // nothing, so its undo creates the file.
+                                let undo = |before: InboxItem, stored: bool| {
+                                    let slug = slug.clone();
+                                    move || muts.carry(slug.clone(), inbox_proto::decision::undo(&before), stored)
+                                };
+                                match outcome {
+                                    Outcome::Filed(msg) => toast.success(msg, ToastOptions::new()),
+                                    Outcome::Noted => toast.success("Saved as a note".to_owned(), ToastOptions::new()),
+                                    Outcome::Later { label, before } => {
+                                        toast.info(label, ToastOptions::new().action("Undo", undo(before, true)));
+                                    }
+                                    Outcome::Done { before } => {
+                                        toast.success("Marked done".to_owned(), ToastOptions::new().action("Undo", undo(before, true)));
+                                    }
+                                    Outcome::Deleted { before } => {
+                                        toast.info("Deleted".to_owned(), ToastOptions::new().action("Undo", undo(before, false)));
+                                    }
+                                    Outcome::Skipped => {}
+                                }
+                                now.set(None);
                             }
-                            now.set(None);
                         },
                     }
                 }
@@ -346,46 +371,40 @@ pub fn ProcessCard(
             match outcome {
                 // t[impl process.outcome.reference]
                 Decision::Note => {
-                    let (title, _) = split_title_body(&item.body);
-                    let path = format!(
-                        "Wiki/Atomic/{}-{}.md",
-                        slugify(&title),
-                        item.id.get(..6).unwrap_or("note")
-                    );
-                    let md = atomic_markdown(&title, &item.body, &Utc::now().to_rfc3339());
+                    let path = inbox_proto::decision::reference_path(&item);
+                    let md =
+                        inbox_proto::decision::reference_markdown(&item, &Utc::now().to_rfc3339());
                     muts.promote_to_note(slug, item, path, md);
                     on_done.call(Outcome::Noted);
                 }
                 // t[impl process.outcome.later]
                 Decision::Later(resp) => {
                     let before = item.clone();
-                    let (interval, ease, resurface_on, reviews) =
-                        review(&item, resp, Utc::now().date_naive());
-                    let label = format!("Back in {}", fmt_interval(interval));
-                    let mut next = item;
                     // A suggestion put off is still accepted into the inbox.
-                    next.status = InboxItem::STATUS_OPEN.to_string();
-                    next.interval = interval;
-                    next.ease = ease;
-                    next.resurface_on = Some(resurface_on);
-                    next.reviews = reviews;
-                    muts.save(slug, next);
+                    let write =
+                        inbox_proto::Decision::Later(resp).apply(&item, Utc::now().date_naive());
+                    let label = match &write {
+                        inbox_proto::Write::Save(next) => {
+                            format!("Back in {}", fmt_interval(next.interval))
+                        }
+                        inbox_proto::Write::Remove(_) => String::new(),
+                    };
+                    muts.carry(slug, write, stored);
                     on_done.call(Outcome::Later { before, label });
                 }
                 // t[impl process.outcome.done]
                 Decision::Done => {
                     let before = item.clone();
-                    let mut done = item;
-                    done.status = InboxItem::STATUS_PROCESSED.to_string();
-                    muts.save(slug, done);
+                    let write = inbox_proto::Decision::Done.apply(&item, Utc::now().date_naive());
+                    muts.carry(slug, write, stored);
                     on_done.call(Outcome::Done { before });
                 }
                 // t[impl process.outcome.delete]
                 Decision::Delete => {
                     let before = item.clone();
-                    if stored {
-                        muts.delete(slug, item.id);
-                    }
+                    // A fresh capture that was never stored writes nothing.
+                    let write = inbox_proto::Decision::Delete.apply(&item, Utc::now().date_naive());
+                    muts.carry(slug, write, stored);
                     on_done.call(Outcome::Deleted { before });
                 }
                 // t[impl process.outcome.now]
@@ -421,9 +440,8 @@ pub fn ProcessCard(
         let item = item.clone();
         let slug = slug.clone();
         move |_| {
-            let mut next = item.clone();
-            next.status = InboxItem::STATUS_OPEN.to_string();
-            muts.save(slug.clone(), next);
+            let write = inbox_proto::Decision::Keep.apply(&item, Utc::now().date_naive());
+            muts.carry(slug.clone(), write, stored);
         }
     };
 
@@ -791,7 +809,7 @@ fn NoteRewrite(
                     let t = title.peek().trim().to_owned();
                     let p = parent.peek().clone().map(|(b, _)| b);
                     let path = format!("{}.md", note_file_name(&t));
-                    let md = rewritten_note(&t, &body.peek(), &original, p.as_deref(), &Utc::now().to_rfc3339());
+                    let md = rewritten_note(&body.peek(), &original, p.as_deref(), &Utc::now().to_rfc3339());
                     on_save.call((path, md));
                 },
                 Check { size: 18 }
@@ -801,64 +819,9 @@ fn NoteRewrite(
     }
 }
 
-/// A note's file name from its title: the title itself, minus what a
-/// file name can't hold. A note is found by what it says, so the name is
-/// the sentence, not an id.
-#[must_use]
-pub fn note_file_name(title: &str) -> String {
-    let cleaned: String = title
-        .chars()
-        .map(|c| {
-            if matches!(
-                c,
-                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' | '^' | '[' | ']'
-            ) {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect();
-    let squashed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut name: String = squashed.chars().take(120).collect();
-    if name.is_empty() {
-        name = "Untitled note".to_owned();
-    }
-    name
-}
-
-/// The markdown for a rewritten note: tagged `atomic`, placed under its
-/// parent (`folder`), the person's words, and the original capture kept
-/// beneath as a quote.
-#[must_use]
-pub fn rewritten_note(
-    title: &str,
-    body: &str,
-    original: &str,
-    parent: Option<&str>,
-    created: &str,
-) -> String {
-    let mut fm = format!(
-        "---\ntags: [atomic]\ncreated: {}\n",
-        created.get(..10).unwrap_or(created)
-    );
-    if let Some(p) = parent {
-        fm.push_str(&format!("folder: \"[[{p}]]\"\n"));
-    }
-    fm.push_str("---\n");
-    let quoted: String = original.lines().map(|l| format!("> {l}\n")).collect();
-    let body = body.trim();
-    let mut out = fm;
-    out.push('\n');
-    if !body.is_empty() {
-        out.push_str(body);
-        out.push_str("\n\n");
-    }
-    let _ = title;
-    out.push_str("> [!quote] Original capture\n");
-    out.push_str(&quoted);
-    out
-}
+// The note shape and its names live with the decision, so every
+// surface that processes writes the same file.
+pub use inbox_proto::decision::{note_file_name, rewritten_note, slugify, split_title_body};
 
 /// The question a clarify step asks, with a way back to the last one.
 #[component]
@@ -1211,83 +1174,9 @@ pub fn fmt_interval(days: i64) -> String {
     }
 }
 
-/// First non-empty line (capped) as the title; the remainder as the
-/// body.
-#[must_use]
-pub fn split_title_body(body: &str) -> (String, String) {
-    let trimmed = body.trim();
-    let (first, rest) = trimmed.split_once('\n').unwrap_or((trimmed, ""));
-    let title: String = first.trim().chars().take(120).collect();
-    let title = if title.is_empty() {
-        "Untitled".to_string()
-    } else {
-        title
-    };
-    (title, rest.trim().to_string())
-}
-
-/// Kebab-case a title into a vault-safe filename stem.
-#[must_use]
-pub fn slugify(s: &str) -> String {
-    let mut out = String::new();
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            prev_dash = false;
-        } else if !prev_dash && !out.is_empty() {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    let capped: String = out.trim_matches('-').chars().take(60).collect();
-    let capped = capped.trim_matches('-').to_string();
-    if capped.is_empty() {
-        "note".to_string()
-    } else {
-        capped
-    }
-}
-
-/// Markdown for a promoted atomic note: frontmatter over the verbatim
-/// capture.
-#[must_use]
-pub fn atomic_markdown(title: &str, body: &str, created: &str) -> String {
-    let esc = title.replace('"', "'");
-    format!(
-        "---\ntitle: \"{esc}\"\ntype: atomic\ntags:\n  - atomic\ncreated: {created}\n---\n\n{body}\n"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_rewritten_note_keeps_the_original_and_names_its_parent() {
-        let md = rewritten_note(
-            "Writer's block is reader's block",
-            "You can't write what you haven't read.",
-            "writer's block = reader's block?",
-            Some("Writing"),
-            "2026-10-15T09:00:00Z",
-        );
-        assert!(md.contains("tags: [atomic]"));
-        assert!(md.contains("folder: \"[[Writing]]\""), "{md}");
-        assert!(md.contains("You can't write what you haven't read."));
-        assert!(md.contains("> [!quote] Original capture\n> writer's block = reader's block?"));
-        assert!(!rewritten_note("t", "", "o", None, "2026-10-15").contains("folder:"));
-    }
-
-    #[test]
-    fn a_note_is_named_by_what_it_says() {
-        assert_eq!(
-            note_file_name("Writer's block is reader's block"),
-            "Writer's block is reader's block"
-        );
-        assert_eq!(note_file_name("a/b: c?"), "a b c");
-        assert_eq!(note_file_name("   "), "Untitled note");
-    }
 
     #[test]
     fn a_capture_drafts_the_task_quick_add_would_make() {
