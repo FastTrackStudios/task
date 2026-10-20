@@ -27,6 +27,12 @@ on the CLI for idempotence + audit.
 
 ## Current skills
 
+- [`architecture-guardrails.md`](architecture-guardrails.md) — the
+  checklist every design, ticket and PR is held to: every node is a
+  full peer (servers are just always-on peers) and storage is one
+  pooled system across disks, NAS and S3 (ADR 0006). Includes the
+  host-absent and mixed-storage scenario requirements.
+
 - [`live-dev.md`](live-dev.md) — the local web app against the
   deployed server and the real issuer, signed in as the account in
   `.env` (`just live`); the CLI as that account; the traps that make
