@@ -336,7 +336,7 @@ ci-wasm: css
     # needs it as much as the dial.
     cargo check --target wasm32-unknown-unknown -p files-client
 
-ci-docs:
+ci-docs: css
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 # Everything the PR gate runs, in the gate's order. Run it before pushing:
