@@ -1876,6 +1876,25 @@ async fn mcp_dispatch(
                             // told to name an org; the other two have
                             // nothing to name it with.
                             let caller = classify_caller(&state, &headers).await;
+                            // …and a placed caller that belongs to
+                            // nothing still gets its (empty) answer to
+                            // `list_orgs`: a bot made with no orgs asks
+                            // exactly this before it is granted one.
+                            if matches!(caller, Caller::Known)
+                                && params.get("name").and_then(Value::as_str) == Some("list_orgs")
+                            {
+                                return Json(rpc_result(
+                                    id,
+                                    tool_ok(&json!({
+                                        "count": 0,
+                                        "orgs": [],
+                                        "default": Value::Null,
+                                        "note": "This account belongs to no organization on this \
+                                                 server yet. Ask its operator to grant one.",
+                                    })),
+                                ))
+                                .into_response();
+                            }
                             let msg = match caller {
                                 Caller::Known => concat!(
                                     "your account does not belong to any organization on this ",
@@ -2371,6 +2390,14 @@ async fn classify_caller(state: &AppState, headers: &HeaderMap) -> Caller {
     };
     let reachable = reachable_orgs(state, headers).await;
     if !reachable.is_empty() {
+        return Caller::Known;
+    }
+    // A live bot key with no orgs yet (`admin bot create --no-orgs`) is
+    // a real account that belongs to nothing — not a dead token. Its
+    // key is checked against the home store; a revoked one fails here.
+    if let Some(home) = &state.home_identity
+        && crate::bots::resolve(&home.auth, &token).await.is_some()
+    {
         return Caller::Known;
     }
     // Empty. Either nobody knows this token, or the issuer does and the

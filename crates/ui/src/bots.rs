@@ -148,7 +148,13 @@ fn ServerBots(entry: ServerEntry) -> Element {
 #[component]
 fn BotRow(bot: BotInfo, entry: ServerEntry, on_revoked: EventHandler<()>) -> Element {
     let mut busy = use_signal(|| false);
-    let orgs = bot.orgs.join(", ");
+    // A bot made with no orgs (`admin bot create --no-orgs`) waits for
+    // an operator's `admin grant`; say so rather than show a blank.
+    let orgs = if bot.orgs.is_empty() {
+        "no orgs yet".to_owned()
+    } else {
+        bot.orgs.join(", ")
+    };
     let id = bot.id.clone();
     rsx! {
         div { class: "flex min-h-[60px] items-center gap-3 px-4 py-2",
@@ -263,6 +269,7 @@ fn NewBot(entry: ServerEntry, on_made: EventHandler<(String, String)>) -> Elemen
                                 session_token: token,
                                 name: req_name.clone(),
                                 orgs,
+                                no_orgs: false,
                                 tools,
                             })
                             .await

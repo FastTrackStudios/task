@@ -18,6 +18,28 @@
 //! A person can only give a bot orgs they are in themselves, and a bot
 //! is a `member`, never an admin. Revoking deletes the account, which
 //! takes its key with it, and its rows.
+//!
+//! ## A bot with no orgs
+//!
+//! A bot may be made with **no** orgs, but only on purpose
+//! ([`OrgChoice::None`], `admin bot create --no-orgs`): an empty list
+//! by accident is still refused. Such a bot is a live key that reaches
+//! nothing — refused on every `/org/{slug}/mcp`, an empty `list_orgs`
+//! on the account lane — until an operator grants it an org with
+//! `task-server admin grant --org <slug> --principal <bot id>`. That
+//! row is `local`, so no issuer sync ever takes it away; the issuer
+//! could not grant it in the first place, since a `@`[`BOT_DOMAIN`]
+//! account exists only in this server's home store.
+//!
+//! Because such a bot holds no membership rows, bots are found by
+//! **account and key** ([`list`]): a home-store user under
+//! [`BOT_DOMAIN`] holding a key whose metadata says `bot` and names its
+//! owner. Rows only add the orgs. Scoping is by owner and nothing
+//! else: a caller sees, and may revoke, exactly the bots whose key
+//! names them as owner, with or without orgs. A zero-org bot is
+//! therefore visible to the person (or the `--owner` uuid) that made it
+//! and to nobody else; an operator reaches anyone's bots only by naming
+//! that owner with `--owner`, which needs the data root anyway.
 
 // t[impl mcp.bots]
 
@@ -102,6 +124,43 @@ pub struct NewBot {
     pub key: String,
 }
 
+/// Which orgs a new bot is given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrgChoice {
+    /// These, each of which the owner must be a member of. Never empty.
+    Some(Vec<String>),
+    /// None at all, chosen explicitly: an operator grants orgs later
+    /// (`admin grant --principal <bot id>`).
+    None,
+}
+
+impl OrgChoice {
+    /// From the two ways a caller can say it: a list, and a "no orgs"
+    /// switch. Exactly one of them must say something.
+    ///
+    /// # Errors
+    ///
+    /// Both given, or neither.
+    pub fn from_request(orgs: Vec<String>, no_orgs: bool) -> eyre::Result<Self> {
+        match (orgs.is_empty(), no_orgs) {
+            (true, true) => Ok(Self::None),
+            (false, false) => Ok(Self::Some(orgs)),
+            (false, true) => eyre::bail!("give a bot orgs or no orgs, not both"),
+            (true, false) => eyre::bail!(
+                "a bot needs at least one org — or make it with no orgs on purpose \
+                 (`--no-orgs`) and grant them later"
+            ),
+        }
+    }
+
+    fn slugs(&self) -> &[String] {
+        match self {
+            Self::Some(orgs) => orgs,
+            Self::None => &[],
+        }
+    }
+}
+
 /// The bot behind a presented key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BotPrincipal {
@@ -124,23 +183,25 @@ fn random_secret() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
-/// Make a bot for `owner`, a member of `orgs`, offered `tools`.
+/// Make a bot for `owner`, a member of `orgs` (or of none, when that
+/// was chosen), offered `tools`.
 ///
 /// # Errors
 ///
-/// An org `owner` is not a member of; a name already taken; the auth
-/// store or membership table refusing.
+/// An empty [`OrgChoice::Some`]; an org `owner` is not a member of; a
+/// name already taken; the auth store or membership table refusing.
 pub async fn create(
     home: &AuthState,
     memberships: &Memberships,
     owner: Uuid,
     name: &str,
-    orgs: &[String],
+    orgs: &OrgChoice,
     tools: Tools,
 ) -> eyre::Result<NewBot> {
-    if orgs.is_empty() {
+    if matches!(orgs, OrgChoice::Some(list) if list.is_empty()) {
         eyre::bail!("a bot needs at least one org");
     }
+    let orgs = orgs.slugs();
     let mine: Vec<String> = memberships
         .for_user(owner)
         .await?
@@ -248,31 +309,43 @@ pub async fn resolve(home: &AuthState, token: &str) -> Option<BotPrincipal> {
     })
 }
 
-/// The bots `owner` made.
+/// The bots `owner` made, with the orgs each may reach. An empty org
+/// list is a valid answer.
+///
+/// Found by account and key, not by membership rows: a bot made with
+/// no orgs has no rows, and a bot missing from this list would be a
+/// live key nobody could see or revoke.
 pub async fn list(
     home: &AuthState,
     memberships: &Memberships,
     owner: Uuid,
 ) -> eyre::Result<Vec<Bot>> {
     use architect_auth::AuthStorage as _;
-    // Every bot holds at least one row, so the rows name every candidate.
-    let mut ids: Vec<Uuid> = memberships
-        .all()
-        .await?
-        .into_iter()
-        .map(|(id, ..)| id)
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    let mut bots = Vec::new();
-    for id in ids {
-        let Ok(Some(user)) = home.auth.storage.find_user_by_id(id).await else {
-            continue;
-        };
-        let email = user.email.clone().unwrap_or_default();
-        if !email.ends_with(&format!("@{BOT_DOMAIN}")) {
-            continue;
+    const PAGE: usize = 500;
+    let suffix = format!("@{BOT_DOMAIN}");
+    let mut accounts = Vec::new();
+    let mut offset = 0;
+    loop {
+        let (page, total) = home
+            .auth
+            .storage
+            .list_users(offset, PAGE)
+            .await
+            .map_err(|e| eyre::eyre!("list the home store's accounts: {e:?}"))?;
+        let got = page.len();
+        accounts.extend(
+            page.into_iter()
+                .filter(|u| u.email.as_deref().is_some_and(|e| e.ends_with(&suffix))),
+        );
+        offset += got;
+        if got == 0 || offset >= total {
+            break;
         }
+    }
+    let mut bots = Vec::new();
+    for user in accounts {
+        let id = user.id;
+        let email = user.email.clone().unwrap_or_default();
         let Ok(keys) = home.auth.storage.list_api_keys_by_user_id(id).await else {
             continue;
         };
@@ -399,6 +472,8 @@ impl org_proto::BotService for BotServiceImpl {
             org_proto::BotTools::All => Tools::All,
             org_proto::BotTools::Library => Tools::Library,
         };
+        let orgs = OrgChoice::from_request(req.orgs, req.no_orgs)
+            .map_err(|e| org_proto::BotError::Refused(format!("{e:#}")))?;
         let made = tokio::runtime::Handle::current()
             .block_on(async move {
                 create(
@@ -406,7 +481,7 @@ impl org_proto::BotService for BotServiceImpl {
                     &home.memberships,
                     owner,
                     &req.name,
-                    &req.orgs,
+                    &orgs,
                     tools,
                 )
                 .await
@@ -449,5 +524,23 @@ mod tests {
         assert_eq!(slugify("  The Librarian! "), "the-librarian");
         assert_eq!(slugify("???"), "bot");
         assert_eq!(Tools::parse("wiki"), Some(Tools::Library));
+    }
+
+    #[test]
+    fn no_orgs_is_said_on_purpose_and_never_with_orgs() {
+        let one = vec!["acme-audio".to_owned()];
+        assert_eq!(
+            OrgChoice::from_request(one.clone(), false).unwrap(),
+            OrgChoice::Some(one.clone())
+        );
+        assert_eq!(
+            OrgChoice::from_request(Vec::new(), true).unwrap(),
+            OrgChoice::None
+        );
+        assert!(
+            OrgChoice::from_request(Vec::new(), false).is_err(),
+            "an empty list by accident is still refused"
+        );
+        assert!(OrgChoice::from_request(one, true).is_err(), "not both");
     }
 }
