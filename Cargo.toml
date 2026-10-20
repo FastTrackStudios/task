@@ -821,6 +821,16 @@ inherits = "dev"
 debug = 2
 split-debuginfo = "packed"
 
+# The desktop app's release build. dx makes this profile ad hoc
+# (`inherits = "release"`, and always `strip = false`) unless it is defined
+# here; defining it exactly so lets the bundle's other binaries — the sync
+# agent and the CLI, built by `apps/desktop/macos/build-dmg.sh` with
+# `--profile desktop-release --target aarch64-apple-darwin` — reuse every
+# dependency the app's build compiled, instead of a second `release` cache.
+[profile.desktop-release]
+inherits = "release"
+strip = false
+
 # dx web builds: native debuginfo in the wasm module blew past Chrome's
 # 1 GiB WebAssembly module cap (1.14 GB observed). Wasm dev builds don't
 # need it — strip it and dev bundles come back to a loadable size.

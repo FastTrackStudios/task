@@ -50,6 +50,15 @@ task-node-host = { workspace = true }
 # ASWebAuthenticationSession, its anchor (the key NSWindow), and the
 # block its completion handler is — the macOS twin of the phone's.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The app's own node carries architect-auth, whose passkeys (webauthn-rs)
+# link OpenSSL, and the mail lane's zip links bzip2. Left to pkg-config
+# both resolve to the dev shell's /nix/store dylibs, which exist on no
+# other Mac and which the hardened runtime refuses anyway (another team's
+# signature) — 0.0.2 and the first 0.0.3 died in dyld for exactly this.
+# Built from source and linked in instead, as `apps/mobile` does (features
+# unify, so this covers every openssl-sys / bzip2-sys user).
+openssl = { version = "0.10", features = ["vendored"] }
+bzip2 = { version = "0.5", features = ["static"] }
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-authentication-services = "0.3"

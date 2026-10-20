@@ -101,13 +101,19 @@ echo "=== app bundle: $APP ==="
 # registers this binary as a LaunchAgent on first run, and it keeps syncing
 # after the window closes. Contents/MacOS because that is where the app looks
 # (next to its own executable) and where nested code may be signed.
+# Same profile and target as the app (dx builds `--target aarch64-apple-darwin`
+# with `desktop-release`), so the dependencies the app just built are reused:
+# a plain `--release` is a second cache, rebuilt from tokio up when stale.
+BIN_TARGET=aarch64-apple-darwin
+BIN_PROFILE=desktop-release
+BIN_DIR="$ROOT/target/$BIN_TARGET/$BIN_PROFILE"
 echo "=== building the sync agent ==="
 "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
     set -euo pipefail
     cd '$ROOT'
-    cargo build --release -p files-daemon --features daemon-bin --bin fts-files-daemon
+    cargo build --profile $BIN_PROFILE --target $BIN_TARGET -p files-daemon --features daemon-bin --bin fts-files-daemon
 "
-cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
+cp "$BIN_DIR/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
 
 # ── The CLI, inside the app ─────────────────────────────────────────────────
 # `task` ships with the app and is linked onto PATH at launch
@@ -117,9 +123,9 @@ echo "=== building the task CLI ==="
 "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
     set -euo pipefail
     cd '$ROOT'
-    cargo build --release -p task-cli --bin task
+    cargo build --profile $BIN_PROFILE --target $BIN_TARGET -p task-cli --bin task
 "
-cp "$ROOT/target/release/task" "$APP/Contents/MacOS/task"
+cp "$BIN_DIR/task" "$APP/Contents/MacOS/task"
 
 # ── The cloud folder ────────────────────────────────────────────────────────
 # The File Provider extension is what makes a synced root show up in Finder
@@ -182,6 +188,31 @@ echo "=== app: $PRODUCT_NAME ($DX_BUNDLE_ID) $MARKETING_VER build $BUILD_NO ==="
 # Hardened runtime (--options runtime) is required for notarization. Nested
 # code first: signing anything inside the bundle after the bundle itself
 # invalidates the outer signature.
+# ── Only what every Mac has ─────────────────────────────────────────────────
+# The dev shell links its own libiconv (and, left alone, OpenSSL and bzip2,
+# which the manifests now build in). A /nix/store path exists on no other
+# Mac, and the hardened runtime refuses another team's dylib even here, so
+# a bundle that names one dies in dyld before main. libiconv is part of
+# macOS (ABI-compatible), so those references are pointed at /usr/lib;
+# anything else from the store fails the build rather than the launch.
+echo "=== system libraries only ==="
+for bin in "$APP"/Contents/MacOS/* "$APP"/Contents/PlugIns/*.appex/Contents/MacOS/*; do
+    [ -f "$bin" ] || continue
+    file -b "$bin" | grep -q Mach-O || continue
+    for lib in $(otool -L "$bin" | awk 'NR>1 && $1 ~ /^\/nix\/store\// {print $1}'); do
+        case "$lib" in
+            */libiconv.2.dylib) install_name_tool -change "$lib" /usr/lib/libiconv.2.dylib "$bin" ;;
+            */libz.1.dylib) install_name_tool -change "$lib" /usr/lib/libz.1.dylib "$bin" ;;
+            *) ;;
+        esac
+    done
+    if otool -L "$bin" | awk 'NR>1' | grep -q '/nix/store/'; then
+        echo "ERROR: $(basename "$bin") links libraries from /nix/store:" >&2
+        otool -L "$bin" | grep '/nix/store/' >&2
+        exit 1
+    fi
+done
+
 echo "=== signing (Developer ID + hardened runtime) ==="
 ENTITLEMENTS="$SCRIPT_DIR/Task-devid.entitlements"
 # Checked, not assumed. codesign hands entitlements to AMFI, which

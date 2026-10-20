@@ -312,6 +312,13 @@ plugin-recall = ["task-server/plugin-recall", "task-client/plugin-recall"]
 plugin-home = ["task-server/plugin-home",
     "task-client/plugin-home", "dep:locations"]
 
+# The CLI ships inside the desktop app's bundle, so it links what it
+# carries rather than the dev shell's /nix/store OpenSSL and bzip2 — see
+# the same block in `apps/desktop/Cargo.toml`.
+[target.'cfg(target_os = "macos")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+bzip2 = { version = "0.5", features = ["static"] }
+
 [dev-dependencies]
 # `collection`'s local `slug()` is a 12th copy of the slugify rule and
 # diverges from the canonical one outside ASCII. The test module pins
