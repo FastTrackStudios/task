@@ -9,9 +9,13 @@ edition.workspace = true
 [lib]
 path = "src/lib.rs"
 
+# doc = false: a one-call wrapper over the library, and its name would
+# overwrite the `task` crate's docs (features/task/task) under
+# `cargo doc --workspace` (cargo#6313).
 [[bin]]
 name = "task"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 vox = { workspace = true, features = ["transport-websocket", "transport-websocket-tls"] }
