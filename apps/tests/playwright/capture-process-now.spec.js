@@ -13,10 +13,16 @@ const { test, expect } = require("@playwright/test");
  * typed is lost. Once the words carry something a task has (`!high`),
  * the surface is making a task and the door is not offered.
  *
- * UI-only, like the smoke suite: it needs no `task-server` (the writes
- * a decision makes are covered over the wire by
- * tests/integration/tests/it/process.rs). Screenshots land in
- * `screenshots/` (gitignored).
+ * The shell only mounts once org discovery answers, so this needs the
+ * example studio served and the web app pointed at it:
+ *
+ *   just demo serve                      # ACME on :18080
+ *   just demo web                        # web app on :8766, signed in as Alice
+ *   PW_PORT=8766 pnpm exec playwright test capture-process-now.spec.js
+ *
+ * It asserts the door and the card only; the writes a decision makes
+ * are covered over the wire by tests/integration/tests/it/process.rs.
+ * Screenshots land in `screenshots/` (gitignored).
  */
 
 const SHELL_TIMEOUT = 45_000;
