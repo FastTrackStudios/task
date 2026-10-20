@@ -85,3 +85,12 @@ pub use vault::{PropertyTypes, VaultBase};
 pub use walker::{VaultEntry, VaultEntryKind, walk_vault};
 pub use watcher::{FsEvent, VaultEvent, WatchError, watch, watch_any};
 pub use write_guard::WriteGuard;
+
+/// Node-private directories (`vault.private.node-only`): a directory
+/// holding [`private::PRIVATE_MARKER`] stays on this machine — out of
+/// the manifest, the page walk and every replica. Re-exported so the
+/// crates that walk a vault without depending on `files-proto` agree
+/// on the same marker.
+pub mod private {
+    pub use files_proto::consts::{PRIVATE_MARKER, is_private_dir, is_within_private};
+}

@@ -161,6 +161,16 @@ fn walk_dir(
             if path.join(MARKER_FILE).exists() {
                 continue;
             }
+            // A node-private directory (`PRIVATE_MARKER`) is not
+            // content at all: never versioned, so never in history and
+            // never replicated. Pruned unconditionally — unlike an
+            // ignore pattern, even paths already tracked under it stop
+            // being tracked, because the whole point is that they must
+            // not reach a peer (`vault.private.node-only`).
+            // t[impl vault.private.node-only]
+            if crate::consts::is_private_dir(&path) {
+                continue;
+            }
             let child_ignored = dir_ignored || ignores.matches_dir(&child_repo_path);
             if child_ignored && !ctx.tracks_anything_under(&child_repo_path) {
                 // Ignored and holding no history: pruned unvisited.
