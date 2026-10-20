@@ -136,20 +136,29 @@ async fn bot(args: &[String]) -> eyre::Result<()> {
                 .filter(|w| w[0] == "--org")
                 .map(|w| w[1].clone())
                 .collect();
+            let orgs = crate::bots::OrgChoice::from_request(slugs, has(args, "--no-orgs"))?;
             let tools = match flag(args, "--tools") {
                 Some(raw) => crate::bots::Tools::parse(&raw)
                     .ok_or_else(|| eyre::eyre!("--tools is `all` or `library`"))?,
                 None => crate::bots::Tools::All,
             };
-            let made =
-                crate::bots::create(&auth, &memberships, owner, &name, &slugs, tools).await?;
+            let made = crate::bots::create(&auth, &memberships, owner, &name, &orgs, tools).await?;
             println!(
                 "{} ({}) — {:?} tools in {}",
                 made.bot.name,
                 made.bot.id,
                 made.bot.tools,
-                made.bot.orgs.join(", ")
+                orgs_label(&made.bot.orgs)
             );
+            if made.bot.orgs.is_empty() {
+                println!();
+                println!("It reaches nothing until it is granted an org:");
+                println!();
+                println!(
+                    "    task-server admin grant --org <slug> --principal {}",
+                    made.bot.id
+                );
+            }
             println!();
             println!("Its key, shown this once — put it in the bot's environment:");
             println!();
@@ -163,9 +172,19 @@ async fn bot(args: &[String]) -> eyre::Result<()> {
             let bots = crate::bots::list(&auth, &memberships, owner).await?;
             if bots.is_empty() {
                 println!("no bots");
+            } else {
+                // The first column is the bot's principal — what
+                // `admin grant --principal` and `bot revoke --bot` take.
+                println!("PRINCIPAL  NAME  TOOLS  ORGS");
             }
             for b in bots {
-                println!("{}  {}  {:?}  {}", b.id, b.name, b.tools, b.orgs.join(", "));
+                println!(
+                    "{}  {}  {:?}  {}",
+                    b.id,
+                    b.name,
+                    b.tools,
+                    orgs_label(&b.orgs)
+                );
             }
         }
         Some("revoke") => {
@@ -180,12 +199,22 @@ async fn bot(args: &[String]) -> eyre::Result<()> {
             println!("{bot} revoked — its key no longer works");
         }
         _ => bail!(
-            "usage:\n  task-server admin bot create --name <name> --org <slug> [--org <slug>…] [--tools all|library] [--owner <uuid>]\n  \
-             task-server admin bot list [--owner <uuid>]\n  \
+            "usage:\n  task-server admin bot create --name <name> (--org <slug> [--org <slug>…] | --no-orgs) [--tools all|library] [--owner <uuid>]\n    \
+             (--no-orgs: a key that reaches nothing until `admin grant --org <slug> --principal <bot id>`)\n  \
+             task-server admin bot list [--owner <uuid>]  (first column: the bot's principal uuid)\n  \
              task-server admin bot revoke --bot <uuid> [--owner <uuid>]"
         ),
     }
     Ok(())
+}
+
+/// A bot's orgs for a terminal: the slugs, or that it has none yet.
+fn orgs_label(orgs: &[String]) -> String {
+    if orgs.is_empty() {
+        "(no orgs)".to_owned()
+    } else {
+        orgs.join(", ")
+    }
 }
 
 /// Minimal `--flag value` parsing. Deliberately not clap: this is two
