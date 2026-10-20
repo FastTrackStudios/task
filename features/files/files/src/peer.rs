@@ -110,6 +110,45 @@ pub const DOC_PEER_PERMITS: architect_permissions::ServicePermits =
         ],
     };
 
+/// The device-owned corner of the sync lane (`files.device.identity`):
+/// a device reading and setting **its own** subscription and pins.
+///
+/// Its own resource rather than `files/**` for the reason
+/// [`REPLICA_RESOURCE`] is: an enrolled device must be able to say what
+/// it keeps, and that must not make it a machine that may browse,
+/// write or re-grant the org. Which device the call is about is not the
+/// gate's question — the lane answers it from the same proved endpoint
+/// and refuses anything not enrolled, revoked, or no longer admitted.
+pub const DEVICE_SYNC_RESOURCE: &str = "files/device-sync";
+
+/// The sync lane's methods a device calls about itself.
+///
+/// Once, for both kinds of node, like [`REPLICA_PERMITS`]: a device
+/// installs these as that service's whole table, and a server's
+/// `files-sync` table puts the same three methods on the same resource
+/// (a test there holds the two in step) — so between two devices with no
+/// server present (ADR 0006, peer parity) the same three methods are the
+/// whole of what one may ask the other about subscriptions. The rest of
+/// the lane — devices, enrolment, revocation, facet maps — is a
+/// member's, and a device's gate refuses it as unlisted.
+pub const DEVICE_SYNC_PERMITS: architect_permissions::ServicePermits =
+    architect_permissions::ServicePermits {
+        service: "files-sync",
+        methods: &[
+            architect_permissions::MethodPermit::new(
+                "subscription",
+                Action::READ,
+                DEVICE_SYNC_RESOURCE,
+            ),
+            architect_permissions::MethodPermit::new(
+                "subscribe",
+                Action::WRITE,
+                DEVICE_SYNC_RESOURCE,
+            ),
+            architect_permissions::MethodPermit::new("pin", Action::WRITE, DEVICE_SYNC_RESOURCE),
+        ],
+    };
+
 /// Resolve an admitted peer to a principal of its own.
 ///
 /// Peers are not people and must not borrow a person's identity to be
@@ -195,13 +234,15 @@ impl IdentityResolver for AnonymousFallback {
     }
 }
 
-/// What an admitted peer may do: read the replica lane, and nothing.
+/// What an admitted peer may do: read the replica lane, exchange
+/// documents, and say what it keeps — and nothing else.
 ///
 /// The narrowness is the point. A peer needs the commit graph and the
-/// chunks under it to converge an org's structure; it does not need to
-/// write, to grant, to browse the vault, or to read anyone's mail. On
-/// `files/**` — the resource every other files lane shares — "read" would
-/// have meant all of those.
+/// chunks under it to converge an org's structure, and a device needs to
+/// record its own subscription ([`DEVICE_SYNC_RESOURCE`]); it does not
+/// need to write, to grant, to browse the vault, or to read anyone's
+/// mail. On `files/**` — the resource every other files lane shares —
+/// "read" would have meant all of those.
 #[derive(Debug, Default)]
 pub struct HostEngine;
 
@@ -219,6 +260,15 @@ impl PermissionEngine for HostEngine {
         // host reach it.
         if matches!(who, Principal::Host { .. })
             && what.as_str() == DOCS_REPLICA_RESOURCE
+            && matches!(action.as_str(), "read" | "write")
+        {
+            return Decision::Allow;
+        }
+        // A device's own subscription. The gate lets a host reach it;
+        // the lane decides whether this host is an enrolled, unrevoked
+        // device and answers about that device only.
+        if matches!(who, Principal::Host { .. })
+            && what.as_str() == DEVICE_SYNC_RESOURCE
             && matches!(action.as_str(), "read" | "write")
         {
             return Decision::Allow;
@@ -244,6 +294,10 @@ impl PermissionEngine for HostEngine {
             ),
             (
                 Resource::new(DOCS_REPLICA_RESOURCE),
+                vec![Action::READ.into(), Action::WRITE.into()],
+            ),
+            (
+                Resource::new(DEVICE_SYNC_RESOURCE),
                 vec![Action::READ.into(), Action::WRITE.into()],
             ),
         ]

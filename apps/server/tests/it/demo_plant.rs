@@ -28,6 +28,63 @@ fn plant(data_root: &std::path::Path, slug: &str) -> eyre::Result<()> {
     Ok(())
 }
 
+/// The planted org has two paired machines that took different halves of
+/// the same album, each under its own device row — and a replant keeps
+/// them as they were rather than pairing them again.
+///
+/// Read through a fresh backend over the planted disk, so what this sees
+/// is what the seeder wrote down, not what its process remembered.
+// t[verify files.device.identity] — reachable from the planted world
+// t[verify files.sync.selective]
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_two_devices_with_their_own_subscriptions() -> eyre::Result<()> {
+    use files::service::sync::{FacetName, SyncService};
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(tmp.path(), slug)?;
+    plant(tmp.path(), slug)?;
+
+    let org = org_proto::DataRoot::new(tmp.path().to_owned()).org(slug);
+    let files = files::FilesBackend::new(org.path().join("files"), org.vault_dir())
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    let roots = RootsService::list(&files).await?;
+    let devices = SyncService::devices(&files).await?;
+
+    let declared: Vec<_> = task_server::example_org::devices_of(slug).collect();
+    eyre::ensure!(declared.len() >= 2, "the seed declares two machines");
+    let mut seen = Vec::new();
+    for d in declared {
+        let endpoint = d.endpoint();
+        let rows: Vec<_> = devices
+            .iter()
+            .filter(|r| r.endpoint.as_deref() == Some(endpoint.as_str()))
+            .collect();
+        eyre::ensure!(
+            rows.len() == 1,
+            "{}: one row however often planted, got {rows:?}",
+            d.name
+        );
+        eyre::ensure!(rows[0].name == d.name && !rows[0].revoked);
+        let root = roots
+            .iter()
+            .find(|r| r.name == d.project)
+            .ok_or_else(|| eyre::eyre!("no root {}", d.project))?;
+        let sub = files.device_subscription(rows[0].id, files::RootId::new(root.id))?;
+        let want: Vec<FacetName> = d.facets.iter().map(|f| FacetName((*f).into())).collect();
+        eyre::ensure!(sub.device == rows[0].id, "{}: {sub:?}", d.name);
+        eyre::ensure!(sub.facets == want, "{}: {sub:?}", d.name);
+        seen.push(sub.facets);
+    }
+    eyre::ensure!(
+        seen[0] != seen[1],
+        "the two planted machines keep the same thing: {seen:?}"
+    );
+    Ok(())
+}
+
 fn ffmpeg_on_path() -> bool {
     std::process::Command::new("ffmpeg")
         .arg("-version")

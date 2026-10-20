@@ -96,9 +96,13 @@ root and hears nothing of it on the live stream. The v1 `FilesService`,
 which checked nothing per path, is deleted — there is one Files API. Three
 things stay open, each its own piece of work:
 
-- **Device identity is still per process.** The sync lane keys subscriptions
-  and pins to `this_device()`; a restarted device reads back an empty
-  subscription. A device principal does not reach the lanes yet.
+- **A session is not a device.** The sync lane resolves a subscription's
+  owner from the connection: a peer by the endpoint it proved (enrolled,
+  unrevoked, admitted), everyone else as the node itself. A person driving
+  the lane through a session therefore sets *the node's* subscription; a
+  device sets its own over its own endpoint, and no client (daemon or app)
+  does that remotely yet — it is exercised by the integration suite
+  (`device_identity.rs`, `peer_to_peer.rs`) and the seed only.
 - **Upload sessions are process-lifetime.** `pending` is now per person, but a
   server restart forgets open sessions (progress in a media root survives in
   the chunk store; a software root re-sends).

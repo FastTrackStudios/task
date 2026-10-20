@@ -287,10 +287,14 @@ pub const WINDOW_ABOVE: u64 = WINDOW_CHUNKS * BAO_CHUNK;
 /// smaller model than a server's, and the whole model here, because a
 /// laptop has nobody to authenticate.
 ///
-/// Only the replica lane is mounted. A device is not an org and must not
-/// answer as one: browsing its tree, reading its grants, writing to it are
-/// questions for the server that holds the org, and a device answering
-/// them would be a second authority nobody registered.
+/// The replica lane is mounted, and beside it the one corner of the files
+/// sync lane a device owns: an enrolled peer's *own* subscription and
+/// pins ([`files::peer::DEVICE_SYNC_PERMITS`]), so two devices with no
+/// server present keep each other's choices the way a server would (ADR
+/// 0006, peer parity). A device is still not an org and must not answer
+/// as one: browsing its tree, reading its grants, writing to it,
+/// enrolling or revoking devices are questions for the org's members, and
+/// a device answering them would be a second authority nobody registered.
 ///
 /// Runs until the endpoint closes.
 #[cfg(feature = "vox")]
@@ -302,11 +306,23 @@ pub async fn serve_peer(
     // The one table a device has. Its gate refuses anything unlisted, so
     // without this it would refuse the lane it exists to serve — which is
     // what it did, loudly, the first time this ran.
-    let gate = std::sync::Arc::new(files::peer::device_gate(&backend, &whose).permit(
-        sync_service_service_descriptor(),
-        &files::peer::REPLICA_PERMITS,
-    ));
-    let router = architect::LayerRouter::new().merge(layer(SyncHost::new(backend)));
+    //
+    // And the device-owned corner of the files sync lane: an enrolled
+    // peer reading and setting its own subscription here, as it would on
+    // the org's host (ADR 0006 — peer parity). Only those three methods
+    // are tabled; the rest of that lane — devices, enrolment, revocation —
+    // is unlisted, so this gate refuses it.
+    let gate = std::sync::Arc::new(
+        files::peer::device_gate(&backend, &whose)
+            .permit(
+                sync_service_service_descriptor(),
+                &files::peer::REPLICA_PERMITS,
+            )
+            .permit(files::sync_descriptor(), &files::peer::DEVICE_SYNC_PERMITS),
+    );
+    let router = architect::LayerRouter::new()
+        .merge(layer(SyncHost::new(backend.clone())))
+        .merge(files::sync_layer(backend));
     files::peer::serve_over_iroh(
         endpoint,
         move |bearer| {

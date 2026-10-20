@@ -447,17 +447,25 @@ async fn a_pin_survives_a_restart() {
 /// The lane state used to be a process-wide `static`, but `FilesBackend`
 /// is constructed once per org — so `devices()` was answering with every
 /// org's machines, and revoking one org's laptop revoked it everywhere.
+///
+/// The same laptop is enrolled in both orgs (the same endpoint, which is
+/// the same machine), so the only thing separating its two rows is the
+/// org each lives in.
 #[tokio::test(flavor = "multi_thread")]
 async fn one_orgs_devices_are_not_anothers() {
     let (_a_tmp, a, _a_root) = album("alpha").await;
     let (_b_tmp, b, _b_root) = album("beta").await;
+    let endpoint = "4444444444444444444444444444444444444444444444444444444444444444";
 
     let me = a
-        .devices()
+        .enroll_device(endpoint.into(), "laptop".into())
         .await
-        .expect("alpha devices")
-        .first()
-        .expect("this process registers itself")
+        .expect("enrol in alpha")
+        .id;
+    let there = b
+        .enroll_device(endpoint.into(), "laptop".into())
+        .await
+        .expect("enrol in beta")
         .id;
     a.revoke_device(me).await.expect("revoke in alpha");
     a.set_transfer_policy(
@@ -473,7 +481,7 @@ async fn one_orgs_devices_are_not_anothers() {
     let elsewhere = b.devices().await.expect("beta devices");
     let there = elsewhere
         .iter()
-        .find(|d| d.id == me)
+        .find(|d| d.id == there)
         .expect("the same machine talks to both orgs");
     assert!(
         !there.revoked,
@@ -482,6 +490,10 @@ async fn one_orgs_devices_are_not_anothers() {
     assert_eq!(
         there.transfer.max_bytes_per_sec, None,
         "nor must one org's throttle be another's"
+    );
+    assert!(
+        b.admits(&files_domain::HostId(endpoint.into())).is_some(),
+        "and beta still admits it"
     );
     assert!(
         a.devices()

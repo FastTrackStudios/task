@@ -1325,6 +1325,65 @@ pub fn declared_of(slug: &str) -> impl Iterator<Item = &'static DeclaredProject>
     DECLARED.iter().filter(move |p| p.org == slug)
 }
 
+/// A machine an example org has paired, and what it keeps of one project.
+///
+/// The seed's half of `files.device.identity`: a demo user opening the
+/// devices list should see more than "this device", and should see two
+/// machines that took *different* halves of the same album — which is
+/// the whole point of subscribing per device. Each is enrolled the way
+/// the app enrols one (by the endpoint id it holds) and its subscription
+/// recorded under its own device row.
+pub struct DeclaredDevice {
+    pub org: &'static str,
+    pub name: &'static str,
+    /// The device's endpoint key is derived from this byte, so a replant
+    /// enrols the same machine rather than a new one (enrolment is keyed
+    /// by endpoint) and the seed stays reproducible. Distinct per device.
+    pub key_seed: u8,
+    /// The declared project, by title, whose File Root it subscribes to.
+    pub project: &'static str,
+    /// The facets it takes — disjoint between the two, on purpose.
+    pub facets: &'static [&'static str],
+}
+
+/// The example's paired machines: a mix room that keeps the sessions, and
+/// a producer's laptop that keeps only the mixes.
+pub const DECLARED_DEVICES: &[DeclaredDevice] = &[
+    DeclaredDevice {
+        org: "acme-audio",
+        name: "Mix Room iMac",
+        key_seed: 0xA1,
+        project: "Example Album",
+        facets: &["sessions"],
+    },
+    DeclaredDevice {
+        org: "acme-audio",
+        name: "Producer's Laptop",
+        key_seed: 0xA2,
+        project: "Example Album",
+        facets: &["mixes"],
+    },
+];
+
+/// The paired machines of one org.
+pub fn devices_of(slug: &str) -> impl Iterator<Item = &'static DeclaredDevice> {
+    DECLARED_DEVICES.iter().filter(move |d| d.org == slug)
+}
+
+impl DeclaredDevice {
+    /// The endpoint id this machine presents — a real ed25519 public key,
+    /// so anything that parses it as one (the device sweep dials admitted
+    /// peers) gets an address, not an error. Nobody holds the machine, so
+    /// a dial finds nothing, which is the ordinary state of a laptop that
+    /// is shut.
+    #[must_use]
+    pub fn endpoint(&self) -> String {
+        architect::iroh_link::iroh::SecretKey::from_bytes(&[self.key_seed; 32])
+            .public()
+            .to_string()
+    }
+}
+
 /// An audio deliverable's song-folder slug — the same spelling the app
 /// derives a playback queue entry from (`song_slug` in the project
 /// detail page) and `examples/studio/tools/gen_audio.py` names its
@@ -2412,6 +2471,45 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
 #[cfg(test)]
 mod declared_tests {
     use super::*;
+
+    /// The paired machines are a contract like the projects are: each
+    /// names a project its org declares (so the seeder finds a root to
+    /// subscribe it to), no two share a key (one machine would become two
+    /// rows), and within an org their facets are disjoint — two devices
+    /// taking the same thing would not show that a subscription is a
+    /// device's own.
+    #[test]
+    fn declared_devices_are_distinct_machines_on_declared_projects() {
+        for org in ORGS.iter().map(|(slug, _)| *slug) {
+            let devices: Vec<_> = devices_of(org).collect();
+            for d in &devices {
+                assert!(
+                    declared_of(org).any(|p| p.title == d.project),
+                    "{}: {} is not a declared project of {org}",
+                    d.name,
+                    d.project
+                );
+                assert!(!d.facets.is_empty(), "{} keeps nothing", d.name);
+            }
+            for (i, a) in devices.iter().enumerate() {
+                for b in &devices[i + 1..] {
+                    assert_ne!(a.endpoint(), b.endpoint(), "{} and {}", a.name, b.name);
+                    if a.project == b.project {
+                        assert!(
+                            a.facets.iter().all(|f| !b.facets.contains(f)),
+                            "{} and {} take overlapping facets",
+                            a.name,
+                            b.name
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            DECLARED_DEVICES.len() >= 2,
+            "the seed needs two devices to show they differ"
+        );
+    }
 
     /// The org's committed day templates, parsed the way the scheduler
     /// parses them.
