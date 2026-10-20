@@ -23,41 +23,24 @@ use std::path::PathBuf;
 
 use architect_auth::client::{FileTokenStore, StoredSession, TokenStore as _};
 
-/// `<app data>/task`, as the desktop app resolves it.
+/// `<app data>/task`, as the desktop app resolves it
+/// ([`task_dial::default_app_dir`], the one place the path is spelled).
 #[must_use]
 pub fn app_dir() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-    {
-        return Some(xdg.join("task"));
-    }
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    let base = if cfg!(target_vendor = "apple") {
-        home.join("Library").join("Application Support")
-    } else {
-        home.join(".local").join("share")
-    };
-    Some(base.join("task"))
+    task_dial::default_app_dir()
 }
 
-/// The desktop node's data root.
+/// The desktop node's data root ([`task_dial::default_node_root`]).
 #[must_use]
 pub fn node_root() -> Option<PathBuf> {
-    if let Some(root) = std::env::var_os("TASK_NODE_ROOT").filter(|r| !r.is_empty()) {
-        return Some(PathBuf::from(root));
-    }
-    Some(app_dir()?.join("node"))
+    task_dial::default_node_root()
 }
 
-/// The running desktop node's `ws://` base, if it says it is serving.
+/// The running desktop node's `ws://` base, if it says it is serving
+/// ([`task_dial::read_local_endpoint`]: loopback only).
 #[must_use]
 pub fn node_endpoint() -> Option<String> {
-    let file = node_root()?.join(task_server::local_node::LOCAL_ENDPOINT_FILE);
-    std::fs::read_to_string(file)
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| s.starts_with("ws://127.0.0.1:") || s.starts_with("ws://[::1]:"))
+    task_dial::read_local_endpoint(&node_root()?)
 }
 
 fn tokens_dir() -> Option<PathBuf> {

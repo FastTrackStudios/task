@@ -307,6 +307,22 @@ store, not a separate one. The app links the CLI it carries onto `PATH`
 
 ---
 
+### An app dials a node, local first
+
+t[offline.app-node]
+An app outside this repo (Session, Signal, Keyflow, Ignition) resolves the
+node it dials rather than naming a server (`task_dial::resolve_node`): the
+local node first — the one whose `local-endpoint` names a loopback base
+that answers and holds the account's org, found by org id since the slug is
+local — then the account's other devices that have an endpoint for the org,
+most recently seen first, and a public host only when the app names one.
+The resolver has no default host; with nothing reachable and none named it
+answers that there is no node. With two device nodes and no host the app
+works on its local node, and a host coming up does not change which node it
+dials.
+
+---
+
 ### Access is checked per document
 
 t[offline.doc.access]
