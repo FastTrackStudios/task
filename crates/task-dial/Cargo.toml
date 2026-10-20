@@ -14,6 +14,9 @@ repository.workspace = true
 # dials build their own socket so the identity can ride the handshake.
 vox-core.workspace = true
 vox-websocket.workspace = true
+# The local node's discovery document, read by the resolver to learn
+# which slug it holds the account's org under.
+serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser dial. `js_sys::Array` is the subprotocol list — a browser
@@ -33,12 +36,16 @@ futures-channel.workspace = true
 # The native dial. `vox-websocket` never enables tokio-tungstenite's TLS
 # itself, so naming the features here unifies `wss://` support into the
 # shared instance — the same declaration `apps/cli` and `ui-core` carry.
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "io-util", "time"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = [
     "connect",
     "handshake",
     "rustls-tls-webpki-roots",
 ] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

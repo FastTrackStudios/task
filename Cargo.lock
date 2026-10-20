@@ -19855,6 +19855,8 @@ version = "0.2.0"
 dependencies = [
  "futures-channel",
  "js-sys",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "vox-core",

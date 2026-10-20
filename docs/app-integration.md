@@ -76,10 +76,57 @@ let org = orgs
 
 ### 4. Dial the org
 
+Resolve a node first, then dial it. An app talks to a node, not to "the
+server" (ADR 0006 §3): the desktop's own node on this machine if it is
+running, else another of the account's nodes, and a public host only as
+the last resort. `task_dial::resolve_node` does that, and names no host of
+its own — the one below is yours to pass, or leave out:
+
+```rust
+use task_dial::{Account, AccountDevice, NodePrefs};
+
+// The account's org, and its device address book from the issuer
+// (`DeviceService` → `DeviceDirectory`), copied across as plain strings.
+let account = Account {
+    org_slug: org.slug.clone(),
+    org_id: Some(org.id.to_string()),
+    this_device: Some(my_device_id.to_string()),
+    devices: directory.devices.iter().map(|d| AccountDevice {
+        device_id: d.device_id.to_string(),
+        endpoint_id: d.endpoint_id.clone(),
+        last_seen_unix: Some(d.last_seen_at.timestamp()),
+    }).collect(),
+};
+let node = task_dial::resolve_node(&account, &NodePrefs {
+    // Last resort only. Omit it and an app with no node reachable gets an
+    // error rather than a dial to a host it was never told about.
+    public_host: Some("wss://task.fasttrackstudio.app".into()),
+    ..NodePrefs::default()
+}).await?;
+let url = node.url; // ws://127.0.0.1:<port>/org/<slug>/vox when the desktop runs
+```
+
+What the three stages are:
+
+1. **The local node** — the desktop app's, which writes its loopback
+   `ws://` base to `<app data>/task/node/local-endpoint` while it runs
+   (`$TASK_NODE_ROOT` overrides the root; `NodePrefs::node_root` too). The
+   resolver asks it for its discovery document, so a stale file from a
+   killed app is skipped, and the org is found by id — the local node may
+   hold it under a different slug.
+2. **The account's other nodes** — `iroh://<endpoint id>`, most recently
+   seen first. That address is dialled over iroh (`task-ui-core`'s
+   `iroh_transport`), not by `establish_at`, which refuses it with a
+   message saying so. `task_dial::candidates` lists every stage in order
+   for an app that falls through on a failed dial.
+3. **The public host** you named, as `<host>/org/<slug>/vox`.
+
+A browser app cannot read the data root; pass `NodePrefs::local_endpoint`
+if it was told the local node's base, or `skip_local: true`.
+
 One connection per typed client (the token rides each handshake):
 
 ```rust
-let url = format!("wss://task.fasttrackstudio.app/org/{}/vox", org.slug);
 let dial = |u: &str| task_dial::establish_at(u, Some(&token));
 let files = files_client::FilesClient::new(
     dial(&url).await?, dial(&url).await?, dial(&url).await?,
@@ -316,6 +363,7 @@ The current list of gaps is `docs/spec/unmet.md`; the full surface is
 | what | where |
 |---|---|
 | the client | `features/files/files-client/src/lib.rs` |
+| which node to dial (local first) | `crates/task-dial/src/resolve.rs`; proved in `apps/server/tests/it/node_resolver_e2e.rs` |
 | Files lanes (wire) | `features/files/files-proto/src/service/` — one trait per spec section |
 | Files rules | `features/files/spec/files.md` |
 | manifests | `features/resources/resources-proto/src/lib.rs` |

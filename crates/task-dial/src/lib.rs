@@ -18,6 +18,10 @@
 //! literally the same type a plugin holds. Only the dial differs, and only
 //! because browsers and native clients are handed different levers.
 //!
+//! Which node to dial is [`resolve_node`]'s answer: the local node first,
+//! then another of the account's nodes, then a public host the caller
+//! names — never one this crate names (see [`resolve`]).
+//!
 //! # Why the identity rides the handshake
 //!
 //! vox middleware is per *typed client*, keyed to a service descriptor, so
@@ -44,6 +48,15 @@
 //! cancel-safety in [`dial_ws`] is the part a hand-rolled version gets
 //! wrong, and it is a page-killing bug when it is wrong — so it lives
 //! somewhere an app can depend on without depending on a UI framework.
+
+pub mod resolve;
+
+pub use resolve::{
+    Account, AccountDevice, IROH_SCHEME, LOCAL_ENDPOINT_FILE, NoNode, NodePrefs, Resolved, Via,
+    candidates, endpoint_id_of, is_loopback_ws, peer_url, resolve_node,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use resolve::{default_app_dir, default_node_root, read_local_endpoint};
 
 /// The subprotocol every dial offers and the server selects.
 ///
@@ -75,6 +88,12 @@ where
 {
     if url.is_empty() {
         return Err("no vox URL given".to_owned());
+    }
+    if url.starts_with(IROH_SCHEME) {
+        return Err(format!(
+            "`{url}` is a peer node, dialled by endpoint id over iroh, not a WebSocket: \
+             use an iroh transport (task-ui-core's `iroh_transport`)"
+        ));
     }
     #[cfg(target_arch = "wasm32")]
     let link = dial_ws(url, bearer).await?;
