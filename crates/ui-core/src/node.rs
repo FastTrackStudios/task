@@ -125,6 +125,31 @@ pub async fn local_owner() -> Option<NodeOwner> {
     }
 }
 
+/// One of the account's other devices.
+///
+/// Plain data, so it exists on every target: the web build (no node)
+/// still names [`AccountReport`] in `ui::account_devices`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerSummary {
+    pub name: String,
+    pub platform: String,
+    /// Whether it has said where it is (holds the shared org).
+    pub reachable: bool,
+    /// RFC 3339.
+    pub last_seen: String,
+}
+
+/// What a pass of `NodeHost::account_sync` found (native builds; the
+/// web build only ever holds `None` of it).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccountReport {
+    /// The shared org's slug on this device, once held.
+    pub slug: Option<String>,
+    /// Whether this pass joined it.
+    pub joined: bool,
+    pub others: Vec<PeerSummary>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
 
@@ -136,7 +161,7 @@ mod native {
     /// desktop polls from whichever runtime thread picks it up.
     pub type NodeFuture<T> = futures_util::future::BoxFuture<'static, Result<T, String>>;
 
-    use super::NodeOwner;
+    use super::{AccountReport, NodeOwner};
 
     /// Taking a node for an org a host or another device holds.
     #[derive(Clone, Debug)]
@@ -205,27 +230,6 @@ mod native {
         pub device_name: String,
         /// `ios`, `macos`, `linux`, `windows`.
         pub platform: String,
-    }
-
-    /// One of the account's other devices.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct PeerSummary {
-        pub name: String,
-        pub platform: String,
-        /// Whether it has said where it is (holds the shared org).
-        pub reachable: bool,
-        /// RFC 3339.
-        pub last_seen: String,
-    }
-
-    /// What a pass found.
-    #[derive(Clone, Debug, Default, PartialEq, Eq)]
-    pub struct AccountReport {
-        /// The shared org's slug on this device, once held.
-        pub slug: Option<String>,
-        /// Whether this pass joined it.
-        pub joined: bool,
-        pub others: Vec<PeerSummary>,
     }
 
     static HOST: OnceLock<Arc<dyn NodeHost>> = OnceLock::new();
