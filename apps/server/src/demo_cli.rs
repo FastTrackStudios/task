@@ -571,6 +571,8 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
                 Err(e) => println!("  sample: the bound sample was not planted ({e})"),
             }
         }
+
+        plant_devices(&backend, &slug).await?;
     }
 
     println!("\nplanted. sign in with any of:");
@@ -598,6 +600,74 @@ pub async fn plant(data_root: &org_proto::DataRoot, slug: &str) -> eyre::Result<
         for name in names {
             println!("  {}", projects.join(name).display());
         }
+    }
+    Ok(())
+}
+
+/// Pair the org's declared machines and record what each keeps
+/// (`files.device.identity`, `files.sync.selective`).
+///
+/// Enrolled the way the app enrols a machine — by the endpoint id it
+/// holds — and each subscription recorded under that machine's own
+/// device row, so the devices list shows two machines that took
+/// different halves of one album rather than one shared answer.
+///
+/// Idempotent by omission, like the tree: a machine already enrolled is
+/// left exactly as it is. Re-enrolling would un-revoke it, and a demo
+/// user who revoked the producer's laptop must not find it back after a
+/// replant.
+async fn plant_devices(backend: &files::FilesBackend, slug: &str) -> eyre::Result<()> {
+    use files::service::roots::RootsService;
+    use files::service::sync::{FacetName, SyncService};
+
+    let declared: Vec<_> = example_org::devices_of(slug).collect();
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let roots = RootsService::list(backend)
+        .await
+        .map_err(|e| eyre::eyre!("list roots: {e}"))?;
+    let known = SyncService::devices(backend)
+        .await
+        .map_err(|e| eyre::eyre!("list devices: {e}"))?;
+    for device in declared {
+        let endpoint = device.endpoint();
+        if known
+            .iter()
+            .any(|d| d.endpoint.as_deref() == Some(endpoint.as_str()))
+        {
+            println!("  device: {} already paired", device.name);
+            continue;
+        }
+        let Some(root) = roots.iter().find(|r| r.name == device.project) else {
+            println!(
+                "  device: {} not paired — no root named {}",
+                device.name, device.project
+            );
+            continue;
+        };
+        let row = backend
+            .enroll_device(endpoint, device.name.to_owned())
+            .await
+            .map_err(|e| eyre::eyre!("enrol {}: {e}", device.name))?;
+        backend
+            .record_device_subscription(
+                row.id,
+                files::RootId::new(root.id),
+                device
+                    .facets
+                    .iter()
+                    .map(|f| FacetName((*f).to_owned()))
+                    .collect(),
+            )
+            .await
+            .map_err(|e| eyre::eyre!("subscribe {}: {e}", device.name))?;
+        println!(
+            "  device: {} paired, keeps {} of {}",
+            device.name,
+            device.facets.join(", "),
+            device.project
+        );
     }
     Ok(())
 }

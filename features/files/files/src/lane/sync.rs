@@ -22,16 +22,31 @@
 //! process, and one org's `devices()` can no longer answer with another
 //! org's rows, which a process-wide `static` did.
 //!
-//! **The half that is still missing is device *identity*.**
-//! [`this_device`] mints an id per process, so a restart comes back as a
-//! stranger: its subscriptions are on disk under the old id and it reads
-//! back an empty one, and the devices table grows a row per process
-//! lifetime. Nothing degrades into a *wrong* answer — an unrecognised
-//! device takes nothing, and under `files.sync.selective` taking nothing
-//! means stubs, never absent content — but a revocation does not yet
-//! outlive the process it was issued in, which is the security-relevant
-//! half. Closing that needs a device registry to mint a stable id from;
-//! it is not a change to this file's storage.
+//! ## Whose subscription a call is about
+//!
+//! A subscription belongs to the **device that asked**, and which device
+//! asked is a property of the connection, never of this process
+//! (`files.device.identity`). [`Holder`] is that answer, and there are
+//! exactly two:
+//!
+//! - **A peer device** — the caller is `Principal::Host`, i.e. an
+//!   endpoint the transport proved during the handshake. It is looked up
+//!   by that endpoint in the device rows `enroll_device` wrote, so the
+//!   same machine is the same device across its restarts (it reloads the
+//!   same endpoint key) and across ours (the rows are durable). An
+//!   endpoint with no row, a revoked row, or a row whose admission has
+//!   since been withdrawn is refused: per-device revocation is enforced
+//!   here, on every call, and not only at the gate.
+//! - **This node** — the process itself, or a person signed into it. A
+//!   session is not a device and carries no device identity, so a person
+//!   at this node's UI is choosing what *this node* keeps. Its id is
+//!   minted once per org and persisted with the rest of [`SyncState`],
+//!   so this node, too, is one device across restarts rather than a new
+//!   stranger per process.
+//!
+//! Only this node's subscription changes this node's disk. A peer's
+//! subscription is a record of what that peer keeps — applying it here
+//! would let a laptop that unticks "footage" release the host's copy.
 //!
 //! **A project's capabilities are derived from its `RootFlavor`.** Facets
 //! come from capabilities, capabilities come from a project declaration,
@@ -42,7 +57,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::OnceLock;
 
 use crate::error::FilesError;
 use chrono::Utc;
@@ -83,6 +97,10 @@ struct SyncState {
     /// `files.facet.project-override` half that the capability does not
     /// know about.
     mappings: HashMap<RootId, BTreeMap<String, FacetName>>,
+    /// The device row that is *this node*. Minted on first use and kept,
+    /// so a restart is the same device with the same subscriptions — see
+    /// the module note on [`Holder`].
+    local: Option<DeviceId>,
 }
 
 /// The on-disk shape.
@@ -105,6 +123,10 @@ struct Wire {
     subscriptions: Vec<Subscription>,
     devices: Vec<DeviceInfo>,
     mappings: Vec<MappingRow>,
+    /// Absent in files written before this node had a stable id; such a
+    /// file loads with none and mints one on the next write.
+    #[facet(default)]
+    local: Option<DeviceId>,
 }
 
 #[derive(facet::Facet)]
@@ -129,6 +151,7 @@ impl From<Wire> for SyncState {
                 .map(|d| (d.id.to_string(), d))
                 .collect(),
             mappings: w.mappings.into_iter().map(|m| (m.root, m.facets)).collect(),
+            local: w.local,
         }
     }
 }
@@ -143,6 +166,7 @@ impl From<SyncState> for Wire {
                 .into_iter()
                 .map(|(root, facets)| MappingRow { root, facets })
                 .collect(),
+            local: s.local,
         }
     }
 }
@@ -161,43 +185,39 @@ impl crate::durable::Durable for SyncState {
 
 static SYNC: crate::durable::Scoped<SyncState> = crate::durable::Scoped::new("sync");
 
-/// The device this process speaks for.
+/// Whose subscription a sync-lane call reads or writes.
 ///
-/// **Deliberately not persisted, and persisting it would be worse than
-/// leaving it.** `files.device.identity` says a device presents an
-/// identity it holds itself and the server records it rather than
-/// minting one — and that machinery already exists: `files-daemon`'s
-/// `DeviceIdentity` is a per-machine `(device id, secret)` on disk,
-/// surviving restart and session expiry, mapped onto storage-agent
-/// enrollment so an operator can revoke one device without touching
-/// others.
-///
-/// A server-side id is not that. The server is ONE machine serving many
-/// devices, so making this stable would make it stably wrong: every
-/// client would present as the same device forever, one subscription
-/// would belong to all of them, and revoking it would cut everyone.
-/// Minting it per process at least keeps the error obvious.
-///
-/// The fix is to thread the caller's identity from the connection, which
-/// no method on this trait carries and `FilesBackend` holds no session
-/// for. Until then, revocation is only as precise as identity is — which
-/// is not very.
-// FUTURE: take the device id from the connection, not from here.
-fn this_device() -> DeviceId {
-    static ID: OnceLock<DeviceId> = OnceLock::new();
-    *ID.get_or_init(DeviceId::generate)
+/// Resolved from the caller by [`holder`], never from the process: see
+/// the module note. The `local` half is what decides whether a change
+/// touches this node's disk, so it is carried rather than re-derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Holder {
+    device: DeviceId,
+    /// Whether `device` is this node — the only device whose
+    /// subscription this node's live tree follows.
+    local: bool,
 }
 
-/// Mutate this org's state and persist it, registering this device first.
+/// Make sure this node has its device row, minting its id the first time.
 ///
-/// The registration is why announcing a device belongs on the write path
-/// and not on the read one: a row saying "this device exists" is a fact
-/// about the org, and a table that only remembered it for as long as the
-/// process ran could not be revoked against.
-fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut SyncState) -> T) -> T {
-    SYNC.write(backend, |s| {
-        let local = this_device();
-        s.devices.entry(local.to_string()).or_insert(DeviceInfo {
+/// The id is minted *once per org* and then read back from the durable
+/// state, so this node is one device for as long as its data directory
+/// exists. That is the difference from the per-process id this replaced,
+/// under which every restart came back as a stranger with an empty
+/// subscription and the devices table grew a row per process lifetime.
+///
+/// Stable is right here, where it would be wrong for a peer: nothing but
+/// this node is ever resolved to this row. A peer is resolved by the
+/// endpoint it proved ([`enrolled`]), so making this one stable cannot
+/// make every client the same device — which is the failure a stable
+/// server-side id used to risk when it was the answer for *every* caller.
+fn ensure_local(s: &mut SyncState, backend: &FilesBackend) -> DeviceId {
+    let local = *s.local.get_or_insert_with(DeviceId::generate);
+    let endpoint = backend.endpoint_id();
+    let row = s
+        .devices
+        .entry(local.to_string())
+        .or_insert_with(|| DeviceInfo {
             id: local,
             name: "this device".to_string(),
             // The machine this backend is running on, which for a server
@@ -205,7 +225,7 @@ fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut SyncState) -> T) ->
             // need to be — a host does not admit itself — but a row with
             // no address at all would read as "a device that cannot
             // sync", and this one is the one every sync goes through.
-            endpoint: backend.endpoint_id(),
+            endpoint: endpoint.clone(),
             last_seen: Utc::now(),
             transfer: TransferPolicy {
                 max_bytes_per_sec: None,
@@ -213,7 +233,122 @@ fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut SyncState) -> T) ->
             },
             revoked: false,
         });
+    // An endpoint is bound after the backend is built (`with_remotes`),
+    // and the row may predate it. Keep the row's address current rather
+    // than frozen at whatever the first write happened to see.
+    if endpoint.is_some() && row.endpoint != endpoint {
+        row.endpoint = endpoint;
+    }
+    local
+}
+
+/// Mutate this org's state and persist it, registering this node first.
+///
+/// The registration is why announcing a device belongs on the write path
+/// and not on the read one: a row saying "this device exists" is a fact
+/// about the org, and a table that only remembered it for as long as the
+/// process ran could not be revoked against.
+fn with_state<T>(backend: &FilesBackend, f: impl FnOnce(&mut SyncState) -> T) -> T {
+    SYNC.write(backend, |s| {
+        ensure_local(s, backend);
         f(s)
+    })
+}
+
+/// This node's own device id — the device a person or the process acts
+/// for. Read-only once it exists; minted and persisted the first time.
+fn local_device(backend: &FilesBackend) -> DeviceId {
+    let known = read_state(backend, |s| {
+        s.local.filter(|id| s.devices.contains_key(&id.to_string()))
+    });
+    match known {
+        Some(id) => id,
+        None => SYNC.write(backend, |s| ensure_local(s, backend)),
+    }
+}
+
+/// The enrolled device behind a peer `endpoint`, or why it may not act
+/// as one.
+///
+/// Three refusals, all `Denied` because each is the same answer to the
+/// caller — "you are not a device of this org" — and the reason is for
+/// the operator reading the log, not for the machine being turned away:
+///
+/// - **never enrolled**: a verified endpoint is still a stranger until a
+///   member pairs it (`enroll_device`);
+/// - **revoked**: the row says so, and the row is durable, so a
+///   revocation outlives the process that issued it;
+/// - **no longer admitted**: the admitted set is the other durable half
+///   of a revocation (`revoke_device` dismisses the endpoint), and an
+///   operator can also withdraw it directly. Either is enough.
+///
+/// This node's own row is excluded: it is reached as [`Holder::local`],
+/// never by presenting an endpoint.
+fn enrolled(backend: &FilesBackend, endpoint: &str) -> Result<DeviceId, FilesFault> {
+    let row = read_state(backend, |s| {
+        s.devices
+            .values()
+            .filter(|d| Some(d.id) != s.local)
+            .find(|d| d.endpoint.as_deref() == Some(endpoint))
+            .map(|d| (d.id, d.revoked))
+    });
+    let refuse = |why: &str| {
+        tracing::warn!(
+            device = endpoint,
+            why,
+            "files sync: a peer was refused as a device"
+        );
+        Err(FilesFault::denied(
+            format!("sync as {why}"),
+            RootPath::root(),
+        ))
+    };
+    match row {
+        None => refuse("a device this org never enrolled"),
+        Some((_, true)) => refuse("a revoked device"),
+        Some((id, false)) => {
+            if backend
+                .admits(&files_domain::HostId(endpoint.to_string()))
+                .is_none()
+            {
+                return refuse("a device this org no longer admits");
+            }
+            Ok(id)
+        }
+    }
+}
+
+/// Who this call is about, authorised.
+///
+/// A peer device is authorised by being one — enrolled, not revoked,
+/// admitted — and acts on its own subscription only. Everyone else is
+/// authorised the way every lane authorises a person ([`caller`]), at
+/// the root or at each named path, and acts for this node.
+///
+/// [`caller`]: crate::lane::caller
+async fn holder(
+    backend: &FilesBackend,
+    root_id: RootId,
+    paths: &[RootPath],
+    can: Can,
+) -> Result<Holder, FilesFault> {
+    if let Some(endpoint) = crate::lane::caller::host_endpoint() {
+        crate::lane::root_or_fault(backend, root_id)?;
+        return Ok(Holder {
+            device: enrolled(backend, &endpoint)?,
+            local: false,
+        });
+    }
+    if paths.is_empty() {
+        crate::lane::caller::authorise_root(backend, root_id, can).await?;
+    } else {
+        for path in paths {
+            crate::lane::caller::authorise(backend, root_id, path, can).await?;
+        }
+    }
+    Ok(Holder {
+        device: local_device(backend),
+        local: true,
     })
 }
 
@@ -296,9 +431,12 @@ impl FilesBackend {
         Ok(set)
     }
 
-    /// This device's subscription to a root, as the domain wants it.
+    /// This node's subscription to a root, as the domain wants it.
+    ///
+    /// This node's, and never a peer's: it is what the live tree here is
+    /// brought into line with.
     fn plan_for(&self, root_id: RootId) -> Plan {
-        let stored = stored_subscription(self, root_id);
+        let stored = stored_subscription(self, local_device(self), root_id);
         let mut plan = Plan::new(stored.facets.into_iter().map(|f| Facet::new(f.0)));
         for pinned in stored.pinned {
             plan.pin(pinned);
@@ -306,7 +444,7 @@ impl FilesBackend {
         plan
     }
 
-    /// Bring the live tree into line with this device's subscription.
+    /// Bring the live tree into line with this node's subscription.
     ///
     /// Returns the paths whose residency this pass changed. Two refusals
     /// are deliberate and are *skipped* rather than propagated:
@@ -479,14 +617,13 @@ fn ancestor_is_classified(path: &RootPath, map: &FacetMap) -> bool {
     false
 }
 
-/// This device's stored subscription, or an empty one.
+/// A device's stored subscription, or an empty one.
 ///
 /// Empty rather than absent: a device that has said nothing takes
 /// nothing, which under `files.sync.selective` means everything is a
 /// stub — present, sized, hydrating on access. There is no state in
 /// which content is missing.
-fn stored_subscription(backend: &FilesBackend, root_id: RootId) -> Subscription {
-    let device = this_device();
+fn stored_subscription(backend: &FilesBackend, device: DeviceId, root_id: RootId) -> Subscription {
     read_state(backend, |s| {
         s.subscriptions
             .get(&(device, root_id))
@@ -500,11 +637,105 @@ fn stored_subscription(backend: &FilesBackend, root_id: RootId) -> Subscription 
     })
 }
 
+/// Record a subscription under the device it names.
+///
+/// Also the moment a peer was last heard from: a device that changes
+/// what it takes is a device that is alive, which is what `last_seen`
+/// tells the person deciding whether to revoke it.
 fn store_subscription(backend: &FilesBackend, sub: &Subscription) {
     with_state(backend, |s| {
+        if let Some(row) = s.devices.get_mut(&sub.device.to_string()) {
+            row.last_seen = Utc::now();
+        }
         s.subscriptions
             .insert((sub.device, sub.root_id), sub.clone());
     });
+}
+
+/// Set `holder`'s facets in a root, and — only when the holder is this
+/// node — bring this node's disk into line with them.
+async fn set_facets(
+    backend: &FilesBackend,
+    holder: Holder,
+    root_id: RootId,
+    facets: Vec<FacetName>,
+) -> Result<Subscription, FilesFault> {
+    let mut sub = stored_subscription(backend, holder.device, root_id);
+    sub.facets = facets;
+    sub.facets.sort_by(|a, b| a.0.cmp(&b.0));
+    sub.facets.dedup();
+    store_subscription(backend, &sub);
+    // Content leaving the subscription becomes a stub here rather
+    // than at some later sweep: a user who unticks "footage" and
+    // then unplugs must already have the space back.
+    if holder.local {
+        backend.apply_subscription(root_id).await?;
+    }
+    Ok(sub)
+}
+
+impl FilesBackend {
+    /// This node's own device id in this org.
+    ///
+    /// Stable for the life of the org's data directory — minted the first
+    /// time anything asks and persisted with the lane's state.
+    #[must_use]
+    pub fn local_device(&self) -> DeviceId {
+        local_device(self)
+    }
+
+    /// What `device` takes from `root_id`, as this org recorded it.
+    ///
+    /// The operator's view, in-process only. Over the wire a device reads
+    /// its own subscription and nobody else's — [`SyncService::subscription`]
+    /// answers for whoever is calling — so there is deliberately no wire
+    /// method taking a device id.
+    ///
+    /// # Errors
+    ///
+    /// [`FilesFault::DeviceNotFound`] for a device this org has no row
+    /// for; [`FilesFault::RootNotFound`] for an unknown root.
+    pub fn device_subscription(
+        &self,
+        device: DeviceId,
+        root_id: RootId,
+    ) -> Result<Subscription, FilesFault> {
+        crate::lane::root_or_fault(self, root_id)?;
+        if !read_state(self, |s| s.devices.contains_key(&device.to_string())) {
+            return Err(FilesFault::DeviceNotFound(device));
+        }
+        Ok(stored_subscription(self, device, root_id))
+    }
+
+    /// Record what an enrolled `device` takes from `root_id`, on its
+    /// behalf.
+    ///
+    /// In-process only, for the places with no device on the other end of
+    /// a connection to ask: the example seed, and an operator setting up a
+    /// headless machine before it first dials in. Over the wire a device
+    /// sets its own subscription by calling
+    /// [`SyncService::subscribe`] as itself.
+    ///
+    /// For this node's own device it is exactly `subscribe` — the disk
+    /// follows. For any other device it is a record and nothing more.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::device_subscription`], and whatever bringing this node's
+    /// disk into line refuses.
+    pub async fn record_device_subscription(
+        &self,
+        device: DeviceId,
+        root_id: RootId,
+        facets: Vec<FacetName>,
+    ) -> Result<Subscription, FilesFault> {
+        self.device_subscription(device, root_id)?;
+        let holder = Holder {
+            device,
+            local: device == local_device(self),
+        };
+        set_facets(self, holder, root_id, facets).await
+    }
 }
 
 // ── The lane ───────────────────────────────────────────────────────
@@ -588,28 +819,24 @@ impl SyncService for FilesBackend {
         SyncService::ignore_set(self, root_id).await
     }
 
+    // t[impl files.device.identity] — the subscription read is the
+    // caller's own: a peer device by the endpoint it proved, otherwise
+    // this node
     async fn subscription(&self, root_id: RootId) -> Result<Subscription, FilesFault> {
-        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
-        Ok(stored_subscription(self, root_id))
+        let holder = holder(self, root_id, &[], Can::Read).await?;
+        Ok(stored_subscription(self, holder.device, root_id))
     }
 
     // t[impl files.sync.selective] — facets, not globs; unsubscribed is a stub
+    // t[impl files.device.identity] — and they are the calling device's
+    // facets, under the identity it holds, not this process's
     async fn subscribe(
         &self,
         root_id: RootId,
         facets: Vec<FacetName>,
     ) -> Result<Subscription, FilesFault> {
-        crate::lane::caller::authorise_root(self, root_id, Can::Read).await?;
-        let mut sub = stored_subscription(self, root_id);
-        sub.facets = facets;
-        sub.facets.sort_by(|a, b| a.0.cmp(&b.0));
-        sub.facets.dedup();
-        store_subscription(self, &sub);
-        // Content leaving the subscription becomes a stub here rather
-        // than at some later sweep: a user who unticks "footage" and
-        // then unplugs must already have the space back.
-        self.apply_subscription(root_id).await?;
-        Ok(sub)
+        let holder = holder(self, root_id, &[], Can::Read).await?;
+        set_facets(self, holder, root_id, facets).await
     }
 
     // t[impl files.device.control] — a pin beats the facets, and is not a cache hint
@@ -624,11 +851,9 @@ impl SyncService for FilesBackend {
             .into_iter()
             .map(|p| p.validate())
             .collect::<Result<_, _>>()?;
-        for path in &paths {
-            crate::lane::caller::authorise(self, root_id, path, Can::Read).await?;
-        }
+        let holder = holder(self, root_id, &paths, Can::Read).await?;
 
-        let mut sub = stored_subscription(self, root_id);
+        let mut sub = stored_subscription(self, holder.device, root_id);
         if pinned {
             sub.pinned.extend(paths);
             sub.pinned.sort();
@@ -637,7 +862,9 @@ impl SyncService for FilesBackend {
             sub.pinned.retain(|p| !paths.contains(p));
         }
         store_subscription(self, &sub);
-        self.apply_subscription(root_id).await?;
+        if holder.local {
+            self.apply_subscription(root_id).await?;
+        }
         Ok(sub)
     }
 
@@ -857,6 +1084,71 @@ mod tests {
         assert!(!ancestor_is_classified(&p("Audio Files"), &map));
         assert!(ancestor_is_classified(&p("Audio Files/Vox"), &map));
         assert!(!ancestor_is_classified(&p("Project Assembly"), &map));
+    }
+
+    // t[verify files.device.identity] — this node is one device across
+    // restarts, read back from disk rather than minted per process
+    #[test]
+    fn this_node_is_the_same_device_after_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = FilesBackend::new(dir.path(), dir.path().join("vault")).expect("backend");
+        let before = local_device(&backend);
+        assert_eq!(local_device(&backend), before, "stable within a process");
+
+        // Drop the in-memory state, so the next read is the disk's answer
+        // — which is what a fresh process gets.
+        SYNC.forget(&backend);
+        let after = local_device(&backend);
+        assert_eq!(after, before, "a restart minted a new device for this node");
+        assert_eq!(
+            read_state(&backend, |s| s.devices.len()),
+            1,
+            "a restart grew the devices table"
+        );
+    }
+
+    // t[verify files.device.identity] — a peer is the row its endpoint
+    // was enrolled under, and nothing else
+    #[test]
+    fn a_peer_is_resolved_only_by_an_enrolled_unrevoked_admitted_endpoint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = FilesBackend::new(dir.path(), dir.path().join("vault")).expect("backend");
+        let endpoint = "3333333333333333333333333333333333333333333333333333333333333333";
+
+        assert!(enrolled(&backend, endpoint).is_err(), "never enrolled");
+
+        let id = DeviceId::generate();
+        with_state(&backend, |s| {
+            s.devices.insert(
+                id.to_string(),
+                DeviceInfo {
+                    id,
+                    name: "laptop".into(),
+                    endpoint: Some(endpoint.into()),
+                    last_seen: Utc::now(),
+                    transfer: TransferPolicy {
+                        max_bytes_per_sec: None,
+                        paused: false,
+                    },
+                    revoked: false,
+                },
+            );
+        });
+        assert!(
+            enrolled(&backend, endpoint).is_err(),
+            "a row without admission is not a device that may sync"
+        );
+        backend.admit_host(
+            files_domain::HostId(endpoint.into()),
+            files_domain::Hosting::working(),
+        );
+        assert_eq!(enrolled(&backend, endpoint).expect("enrolled"), id);
+        assert_ne!(local_device(&backend), id, "a peer is never this node");
+
+        with_state(&backend, |s| {
+            s.devices.get_mut(&id.to_string()).unwrap().revoked = true;
+        });
+        assert!(enrolled(&backend, endpoint).is_err(), "revoked");
     }
 
     #[test]

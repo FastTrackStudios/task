@@ -141,3 +141,114 @@ async fn two_laptops_sync_without_the_server_taking_part() {
         "the take did not arrive"
     );
 }
+
+/// Whose subscription is whose, with no host anywhere (ADR 0006 — peer
+/// parity).
+///
+/// The host-side chapter (`device_identity.rs`) proves this against an
+/// org's server. Here the node holding the records is a laptop, the other
+/// device is a laptop, and no server was ever booted: one device's
+/// choices must still be its own, survive its restart, and be revocable
+/// without touching the node's own. A rule that only held because a
+/// server was in the middle would be a rule about servers.
+// t[verify files.device.identity]
+// t[verify files.device.control]
+// t[verify files.sync.selective]
+#[tokio::test]
+async fn two_laptops_keep_their_own_subscriptions_with_no_host() {
+    use files::service::sync::{FacetName, SyncService};
+
+    let sessions = vec![FacetName("sessions".into())];
+    let proxies = vec![FacetName("proxies".into())];
+
+    let holder = Laptop::open().await;
+    let mut other = Laptop::empty_peer(holder.album).await;
+    let album = holder.album;
+
+    // Paired at the holder: somebody at that machine enrols the other
+    // one's endpoint, exactly as a member would on a server.
+    let other_row = holder
+        .backend
+        .enroll_device(other.endpoint.id().to_string(), "second laptop".into())
+        .await
+        .expect("enrol the second laptop");
+
+    // The holder's own choice, made at the holder — its disk follows.
+    holder
+        .backend
+        .subscribe(album, sessions.clone())
+        .await
+        .expect("the holder subscribes");
+    // The other's choice, made over the wire as itself.
+    let theirs = other
+        .files_sync(holder.endpoint.id())
+        .await
+        .subscribe(album, proxies.clone())
+        .await
+        .expect("the second laptop subscribes on the first");
+    assert_eq!(theirs.device, other_row.id);
+
+    let mine = holder.backend.subscription(album).await.expect("own");
+    assert_eq!(
+        mine.facets, sessions,
+        "the other laptop's choice landed on the holder"
+    );
+    assert_ne!(mine.device, other_row.id);
+    assert!(
+        holder.reel_on_disk() < Laptop::REEL_BYTES,
+        "another device subscribing to proxies hydrated the holder's footage"
+    );
+
+    // The other laptop restarts — same key — and is the same device.
+    other.restart().await;
+    let theirs = other
+        .files_sync(holder.endpoint.id())
+        .await
+        .subscription(album)
+        .await
+        .expect("after its restart");
+    assert_eq!(theirs.device, other_row.id, "a restart made it a stranger");
+    assert_eq!(theirs.facets, proxies);
+
+    // A peer may say what it keeps, not administer the holder's devices.
+    let lane = other.files_sync(holder.endpoint.id()).await;
+    assert!(
+        lane.devices().await.is_err(),
+        "a peer listed the holder's devices"
+    );
+    assert!(
+        lane.revoke_device(mine.device).await.is_err(),
+        "a peer revoked the holder's own device"
+    );
+
+    // Revoke it at the holder.
+    holder
+        .backend
+        .revoke_device(other_row.id)
+        .await
+        .expect("revoke the second laptop");
+    let refused = other
+        .files_sync(holder.endpoint.id())
+        .await
+        .subscription(album)
+        .await;
+    assert!(refused.is_err(), "a revoked laptop still read: {refused:?}");
+
+    // The holder's own is intact, on the lane and on the disk.
+    let mine = holder.backend.subscription(album).await.expect("own");
+    assert_eq!(
+        mine.facets, sessions,
+        "revoking a peer disturbed the holder's own"
+    );
+    assert!(holder.reel_on_disk() < Laptop::REEL_BYTES);
+    assert!(
+        holder
+            .tree
+            .join("Sessions")
+            .join("Audio Files")
+            .join("vox.wav")
+            .metadata()
+            .is_ok_and(|m| m.len() == b"vox take one".len() as u64),
+        "the holder's subscribed sessions stopped being resident"
+    );
+}

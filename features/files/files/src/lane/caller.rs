@@ -187,6 +187,31 @@ pub fn current() -> Caller {
     }
 }
 
+/// The endpoint of the peer machine on the other end of this call, when
+/// the caller is one.
+///
+/// [`current`] folds a host into [`Caller::Other`], because a machine
+/// holds nothing on the content lanes and those lanes have no reason to
+/// tell one machine from another. The sync lane does: a subscription is
+/// one *device's* answer about one root, and the only identity a device
+/// has is the endpoint the transport proved (`files.device.identity`).
+/// So this is that endpoint, read from the same gate-resolved principal
+/// and never from anything the caller sent.
+///
+/// `None` for everything that is not a host — a person, a guest, the
+/// process itself, and a call the share-link mount is making on a
+/// link's behalf.
+#[must_use]
+pub fn host_endpoint() -> Option<String> {
+    if is_for_link() {
+        return None;
+    }
+    match architect::permissions_gate::caller() {
+        Some(architect_permissions::Principal::Host { endpoint }) => Some(endpoint),
+        _ => None,
+    }
+}
+
 /// The caller as a principal, when they have one. What a hold, a
 /// favourite, an upload session and a grant's issuer are keyed by.
 #[must_use]

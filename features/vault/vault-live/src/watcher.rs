@@ -196,7 +196,7 @@ fn attach<T: notify::Watcher + Send + 'static, F: DebounceEventHandler>(
 ) -> Result<(usize, WatcherGuard), WatchError> {
     let config = Config::default()
         .with_timeout(delay)
-        .with_notify_config(notify::Config::default().with_poll_interval(POLL_EVERY));
+        .with_notify_config(notify_config());
     let mut debouncer = new_debouncer_opt::<F, T>(config, handler)
         .map_err(|e| WatchError::Notify(e.to_string()))?;
     let mut added = 0usize;
@@ -220,6 +220,22 @@ fn attach<T: notify::Watcher + Send + 'static, F: DebounceEventHandler>(
     ))
 }
 
+/// How the underlying `notify` watcher is configured.
+///
+/// The polling watcher ([`POLL_ENV`]) compares contents, not only
+/// modification times. `notify`'s `PollWatcher` keeps a file's mtime
+/// truncated to whole seconds and reports a change only when that
+/// number grows, so a file rewritten within the same second it was last
+/// polled — a save right after a create, the commonest edit there is —
+/// produced no event. Hashing every file each poll is what this mode can
+/// afford: it only runs over test trees of a handful of small files. The
+/// native watcher ignores both settings.
+fn notify_config() -> notify::Config {
+    notify::Config::default()
+        .with_poll_interval(POLL_EVERY)
+        .with_compare_contents(true)
+}
+
 fn is_markdown(path: &std::path::Path) -> bool {
     matches!(
         path.extension()
@@ -228,4 +244,52 @@ fn is_markdown(path: &std::path::Path) -> bool {
             .as_deref(),
         Some("md" | "markdown")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rewrite the poller's whole-second mtime cannot see — here made
+    /// certain by putting the old mtime back — is still a change, because
+    /// the poller hashes contents. Without that a save within a second of
+    /// the last poll (a create then an edit, the commonest pair there is)
+    /// produced no event at all under [`POLL_ENV`].
+    #[test]
+    fn the_poller_sees_a_rewrite_that_leaves_the_mtime_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, b"hello").unwrap();
+        let mtime = std::fs::metadata(&file).unwrap().modified().unwrap();
+
+        let (tx, rx) = mpsc::channel::<DebounceEventResult>();
+        let (added, _guard) = attach::<notify::PollWatcher, _>(
+            Duration::from_millis(50),
+            tx,
+            &[dir.path().to_path_buf()],
+        )
+        .expect("poll watcher");
+        assert_eq!(added, 1);
+
+        std::fs::write(&file, b"hello, again").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let seen = loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(Ok(events)) if events.iter().any(|e| e.path.ends_with("note.md")) => {
+                    break true;
+                }
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        };
+        assert!(seen, "a rewrite within the same second produced no event");
+    }
 }

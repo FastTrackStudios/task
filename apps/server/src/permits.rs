@@ -510,16 +510,40 @@ table!(FILES_CURATION, "files-curation", "files/**", [
 // but "which laptops hold this org" is exactly what an operator reads an
 // audit log to find out. `coordinator` is a plain read: the org's own
 // endpoint id is the address it publishes, not a secret.
-table!(FILES_SYNC, "files-sync", "files/**", [
-    rd "facets", wr "map_facet", rd "ignore_set", wr "set_project_ignores",
-    rd "subscription", wr "subscribe", wr "pin", wa "hydrate",
-    rd "devices", wr "set_transfer_policy", wa "revoke_device",
-    wa "enroll_device", rd "coordinator",
-    // Residency: reading and setting the policy change nothing on disk;
-    // applying it dehydrates and hydrates in bulk — a write, and not
-    // audited, because the content it releases survives in the store.
-    rd "residency", wr "set_residency", wr "apply_residency",
-]);
+//
+// `subscription`, `subscribe` and `pin` are the device's own corner
+// (`files.device.identity`) and sit on `files/device-sync` rather than
+// `files/**`: an enrolled device reaches them over the org router as
+// itself, and that must not make it a reader of every files lane.
+// Members are unaffected — their rule is `**`. Which device a call is
+// about is the lane's answer, from the endpoint the transport proved.
+// The rows are the device gate's own (`files::peer::DEVICE_SYNC_PERMITS`)
+// and `device_sync_rows_match_the_device_gate` holds the two in step.
+const FILES_SYNC: ServicePermits = ServicePermits {
+    service: "files-sync",
+    methods: &[
+        rd("facets", "files/**"),
+        wr("map_facet", "files/**"),
+        rd("ignore_set", "files/**"),
+        wr("set_project_ignores", "files/**"),
+        rd("subscription", files::peer::DEVICE_SYNC_RESOURCE),
+        wr("subscribe", files::peer::DEVICE_SYNC_RESOURCE),
+        wr("pin", files::peer::DEVICE_SYNC_RESOURCE),
+        wa("hydrate", "files/**"),
+        rd("devices", "files/**"),
+        wr("set_transfer_policy", "files/**"),
+        wa("revoke_device", "files/**"),
+        wa("enroll_device", "files/**"),
+        rd("coordinator", "files/**"),
+        // Residency: reading and setting the policy change nothing on
+        // disk; applying it dehydrates and hydrates in bulk — a write,
+        // and not audited, because the content it releases survives in
+        // the store.
+        rd("residency", "files/**"),
+        wr("set_residency", "files/**"),
+        wr("apply_residency", "files/**"),
+    ],
+};
 
 // Replica sync — the commit graph and the chunks under it
 // (`files.peering.replication`).
@@ -2340,6 +2364,41 @@ pub fn coverage_summary() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server's `files-sync` rows for a device's own subscription are
+    /// the device gate's rows, method for method.
+    ///
+    /// Two copies of one rule, and the failure if they drift is the one
+    /// peer parity (ADR 0006) exists to rule out: a device that may set
+    /// its subscription on the org's host and is refused the same call by
+    /// another device, or the reverse.
+    #[test]
+    fn device_sync_rows_match_the_device_gate() {
+        assert_eq!(FILES_SYNC.service, files::peer::DEVICE_SYNC_PERMITS.service);
+        for device in files::peer::DEVICE_SYNC_PERMITS.methods {
+            let server = FILES_SYNC
+                .methods
+                .iter()
+                .find(|p| p.method == device.method)
+                .unwrap_or_else(|| panic!("files-sync has no row for {}", device.method));
+            assert_eq!(
+                (server.action, server.resource),
+                (device.action, device.resource),
+                "{} differs between the server and a device",
+                device.method
+            );
+        }
+        // And nothing else of the lane is on the device's resource: an
+        // enrolled machine reaching `devices` or `revoke_device` would be
+        // a device administering the org.
+        let on_device: Vec<&str> = FILES_SYNC
+            .methods
+            .iter()
+            .filter(|p| p.resource == files::peer::DEVICE_SYNC_RESOURCE)
+            .map(|p| p.method)
+            .collect();
+        assert_eq!(on_device, ["subscription", "subscribe", "pin"]);
+    }
 
     /// Every mounted service has a table, every descriptor method has a
     /// permit, and no permit names a method that does not exist. This is

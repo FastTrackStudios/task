@@ -36,6 +36,10 @@ pub struct Laptop {
     /// This machine's identity, and the address other peers dial. One
     /// thing, not two — see the module note.
     pub endpoint: iroh::Endpoint,
+    /// The key behind `endpoint`, kept so a restart comes back as the
+    /// same machine — what a real device does by persisting it
+    /// (`files-daemon`'s `DeviceIdentity::endpoint_key`).
+    key: iroh::SecretKey,
     /// The composed project, as one root on this device.
     pub album: RootId,
     /// Where that project sits on this disk. Tests read it directly —
@@ -96,22 +100,17 @@ impl Laptop {
 
         // The machine's identity, and its address. A real device persists
         // this key — `files.device.identity` requires the identity to
-        // survive restart and the expiry of any login — and a test lives
-        // for one process, so a fresh key is the same thing here.
-        let endpoint = crate::net::bind(iroh::SecretKey::generate()).await;
-
-        // And it serves. Only the replica lane, only to endpoints it
-        // admits — see `files_sync::serve_peer`.
-        let serving = endpoint.clone();
-        let served = backend.clone();
-        tokio::spawn(async move {
-            files_sync::serve_peer(served, "laptop".into(), &serving).await;
-        });
+        // survive restart and the expiry of any login — and the test
+        // keeps it in memory for the same reason: [`Self::restart`] comes
+        // back on it.
+        let key = iroh::SecretKey::generate();
+        let endpoint = serve(&backend, key.clone()).await;
 
         Self {
             _dir: dir,
             backend,
             endpoint,
+            key,
             album,
             tree,
         }
@@ -137,20 +136,36 @@ impl Laptop {
             )
             .expect("adopt the replica");
 
-        let endpoint = crate::net::bind(iroh::SecretKey::generate()).await;
-        let serving = endpoint.clone();
-        let served = backend.clone();
-        tokio::spawn(async move {
-            files_sync::serve_peer(served, "laptop".into(), &serving).await;
-        });
+        let key = iroh::SecretKey::generate();
+        let endpoint = serve(&backend, key.clone()).await;
 
         Self {
             _dir: dir,
             backend,
             endpoint,
+            key,
             album,
             tree,
         }
+    }
+
+    /// Stop this laptop's endpoint and bring it back on the same key.
+    ///
+    /// What a restart is to every *other* machine: the same endpoint id
+    /// at fresh addresses. The laptop's disk and backend are untouched —
+    /// this is the device's identity surviving, which is the half of a
+    /// restart the sync lane's ownership rests on.
+    pub async fn restart(&mut self) {
+        self.endpoint.close().await;
+        self.endpoint = serve(&self.backend, self.key.clone()).await;
+    }
+
+    /// Open the files sync lane on `origin` **as this device**.
+    ///
+    /// Signs nothing: the endpoint iroh proved is the identity the far
+    /// gate sees, and the far lane looks it up among its enrolled devices.
+    pub async fn files_sync(&self, origin: iroh::EndpointId) -> files::SyncServiceClient {
+        dial_files_sync(&self.endpoint, origin).await
     }
 
     /// This machine's identity, as an admitted-peer list records it.
@@ -187,5 +202,71 @@ impl Laptop {
     #[must_use]
     pub fn reel_on_disk(&self) -> u64 {
         std::fs::metadata(self.reel()).map_or(u64::MAX, |m| m.len())
+    }
+}
+
+/// Bind `key` and serve `backend` on it the way a device does — the
+/// replica lane and a device's own corner of the sync lane, to endpoints
+/// it admits. See `files_sync::serve_peer`.
+async fn serve(backend: &files::FilesBackend, key: iroh::SecretKey) -> iroh::Endpoint {
+    let endpoint = crate::net::bind(key).await;
+    let serving = endpoint.clone();
+    let served = backend.clone();
+    tokio::spawn(async move {
+        files_sync::serve_peer(served, "laptop".into(), &serving).await;
+    });
+    endpoint
+}
+
+/// Open the files sync lane on `origin`, dialling from `from`.
+async fn dial_files_sync(
+    from: &iroh::Endpoint,
+    origin: iroh::EndpointId,
+) -> files::SyncServiceClient {
+    let link = architect::iroh_link::connect(from, origin)
+        .await
+        .expect("dial the origin");
+    vox_core::initiator_on(link)
+        .establish()
+        .await
+        .expect("establish the files sync lane")
+}
+
+/// A device that talks to an org's host and holds nothing the test
+/// looks at — only an identity.
+///
+/// What the host-side chapter needs from a machine is exactly what
+/// `files.device.identity` says a device has: a key it holds and
+/// persists, so that it is the same device after it restarts. Its disk
+/// is the daemon's business and not what is being asserted.
+pub struct PeerDevice {
+    key: iroh::SecretKey,
+    pub endpoint: iroh::Endpoint,
+}
+
+impl PeerDevice {
+    /// A machine with a fresh key, bound and published.
+    pub async fn new() -> Self {
+        let key = iroh::SecretKey::generate();
+        let endpoint = crate::net::bind(key.clone()).await;
+        Self { key, endpoint }
+    }
+
+    /// The endpoint id this machine presents — what an org enrols.
+    #[must_use]
+    pub fn id(&self) -> String {
+        self.endpoint.id().to_string()
+    }
+
+    /// Stop and come back on the same key — a restart, as every other
+    /// machine sees one.
+    pub async fn restart(&mut self) {
+        self.endpoint.close().await;
+        self.endpoint = crate::net::bind(self.key.clone()).await;
+    }
+
+    /// Open the files sync lane on `origin` as this device.
+    pub async fn files_sync(&self, origin: iroh::EndpointId) -> files::SyncServiceClient {
+        dial_files_sync(&self.endpoint, origin).await
     }
 }
