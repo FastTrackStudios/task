@@ -32,6 +32,7 @@ mod app_store;
 mod archive;
 mod charts;
 mod collaboration;
+mod contacts_security;
 mod content_ref;
 mod cross_server_wiki;
 mod deliverables;

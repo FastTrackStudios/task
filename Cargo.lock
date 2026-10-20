@@ -2962,18 +2962,27 @@ name = "contacts"
 version = "0.1.0"
 dependencies = [
  "architect 0.1.0 (git+https://github.com/FastTrackStudios/architect?tag=v0.9.6)",
+ "auth",
  "chrono",
  "contacts-proto",
+ "email-secret",
  "ical",
  "roxmltree",
+ "rustls",
+ "rustls-pemfile",
+ "rustls-pki-types",
  "serde",
  "serde_yaml",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "ureq 2.12.1",
+ "url",
  "uuid",
  "vault-entity",
+ "vault-live",
+ "webpki-roots 0.26.11",
+ "zeroize",
 ]
 
 [[package]]
@@ -10269,6 +10278,8 @@ dependencies = [
  "blake3",
  "chrono",
  "collection-proto",
+ "contacts",
+ "contacts-proto",
  "crdt",
  "email-proto",
  "files",
