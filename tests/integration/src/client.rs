@@ -311,6 +311,17 @@ impl Session {
     pub async fn replica(&self) -> SyncServiceClient {
         self.establish().await
     }
+
+    /// The files sync lane — facets, subscriptions and the org's devices
+    /// (enrolment and revocation among them).
+    ///
+    /// As a person: what a subscription read here returns is *the node's*
+    /// subscription, not a device's, because a session carries no device
+    /// identity. A device reaches its own over its own endpoint —
+    /// [`crate::device::PeerDevice::files_sync`].
+    pub async fn devices(&self) -> files::SyncServiceClient {
+        self.establish().await
+    }
 }
 
 /// The endpoint every session in this process dials from.
@@ -391,6 +402,7 @@ signable!(
     AccessServiceClient,
     FederationServiceClient,
     SyncServiceClient,
+    files::SyncServiceClient,
     ProjectServiceClient,
     TaskServiceClient,
     inbox_proto::InboxClient,
