@@ -116,14 +116,12 @@ impl RootWatcher {
                 }
             }
         };
-        // Native, or polling for the test suites (`POLL_ENV`): see there.
+        // Native, or polling for the test suites (`POLL_ENV`): see there
+        // and `poll_config` for why the poller hashes contents.
         let mut watcher: Box<dyn Watcher + Send + Sync> = if std::env::var_os(POLL_ENV).is_some() {
             Box::new(
-                notify_fs::PollWatcher::new(
-                    handler,
-                    notify_fs::Config::default().with_poll_interval(POLL_EVERY),
-                )
-                .map_err(|e| Error::Repo(format!("watcher: {e}")))?,
+                notify_fs::PollWatcher::new(handler, poll_config())
+                    .map_err(|e| Error::Repo(format!("watcher: {e}")))?,
             )
         } else {
             Box::new(
@@ -168,6 +166,22 @@ impl RootWatcher {
     }
 }
 
+/// How the polling watcher (`POLL_ENV`) is configured.
+///
+/// It compares contents, not only modification times. `notify`'s
+/// `PollWatcher` keeps a file's mtime truncated to whole seconds and
+/// reports a change only when that number grows, so a file rewritten
+/// within the same second it was last polled — a save right after a
+/// create, the commonest edit there is — produced no hint, no session
+/// opened, and nothing was captured. Hashing every file each poll is
+/// what this mode can afford: it only runs over test trees of a handful
+/// of small files.
+fn poll_config() -> notify_fs::Config {
+    notify_fs::Config::default()
+        .with_poll_interval(POLL_EVERY)
+        .with_compare_contents(true)
+}
+
 /// Does this event mean someone touched content? Access events (and
 /// pure metadata reads) are not activity — opening a session because a
 /// backup tool walked the tree would checkpoint nothing and reset
@@ -205,4 +219,56 @@ fn relative_paths(root_path: &Path, paths: &[PathBuf]) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rewrite the poller's whole-second mtime cannot see — here made
+    /// certain by putting the old mtime back — is still a change, because
+    /// the poller hashes contents. Without that the commonest edit (a
+    /// save within a second of the last poll) opened no session.
+    #[test]
+    fn the_poller_sees_a_rewrite_that_leaves_the_mtime_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, b"hello").unwrap();
+        let mtime = std::fs::metadata(&file).unwrap().modified().unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify_fs::PollWatcher::new(
+            move |res: notify_fs::Result<Event>| {
+                if let Ok(event) = res
+                    && is_write_like(&event)
+                {
+                    let _ = tx.send(event);
+                }
+            },
+            poll_config(),
+        )
+        .expect("poll watcher");
+        watcher
+            .watch(dir.path(), RecursiveMode::Recursive)
+            .expect("watch");
+
+        std::fs::write(&file, b"hello, again").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let seen = loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(event) if event.paths.iter().any(|p| p.ends_with("note.txt")) => break true,
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        };
+        assert!(seen, "a rewrite within the same second produced no event");
+    }
 }

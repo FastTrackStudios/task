@@ -133,6 +133,12 @@ async fn rig() -> (Agent, Agent, uuid::Uuid) {
             RootFlavor::Media,
         )
         .expect("adopt replica");
+    // The replica's watch is registered on a thread of its own after
+    // `adopt_replica` answers (an adopt does not wait on the OS). An edit
+    // made before it lands is part of the watch's starting picture, not a
+    // change, so it never becomes a hint: wait for it, as a person's
+    // first edit in a mount comes long after the mount appeared.
+    replica.backend.watches_settled().await;
     reconcile(&replica.backend, &primary.client, root.id)
         .await
         .expect("first pull");
