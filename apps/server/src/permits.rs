@@ -2009,6 +2009,44 @@ impl<R> AuditedIdentityResolver<R> {
     }
 }
 
+/// The home org's identities: its sessions, then its bots' keys
+/// ([`crate::bots`]). Used as the `home` side of
+/// [`HomeFallbackResolver`], so a bot key passes exactly the membership
+/// fence a person's home session does — and reaches only its orgs.
+pub struct HomeOrBotResolver<R> {
+    sessions: R,
+    home: crate::AuthState,
+}
+
+impl<R> HomeOrBotResolver<R> {
+    pub fn new(sessions: R, home: crate::AuthState) -> Self {
+        Self { sessions, home }
+    }
+}
+
+impl<R: IdentityResolver> IdentityResolver for HomeOrBotResolver<R> {
+    fn resolve<'a>(&'a self, bearer_token: Option<&'a str>) -> BoxIdentityFuture<'a> {
+        Box::pin(async move {
+            let session = self.sessions.resolve(bearer_token).await;
+            if matches!(session, Principal::User { .. }) {
+                return session;
+            }
+            match bearer_token {
+                Some(token) => match crate::bots::resolve(&self.home, token).await {
+                    Some(bot) => {
+                        architect_telemetry::wide::set("auth.bot", true);
+                        Principal::User {
+                            user_id: bot.user_id.to_string(),
+                        }
+                    }
+                    None => session,
+                },
+                None => session,
+            }
+        })
+    }
+}
+
 /// Accept a home-org token for THIS org — but only with a membership row.
 ///
 /// The org's own store answers first, so nothing about single-org

@@ -26,6 +26,7 @@ pub mod api_ref;
 pub mod attachments;
 #[cfg(feature = "plugin-scripture")]
 pub mod bible_cli;
+pub mod bots;
 pub mod capability;
 pub mod central_auth;
 #[cfg(feature = "plugin-git")]
@@ -64,6 +65,7 @@ pub mod notifier;
 pub mod operator;
 pub mod org_roots;
 pub mod otlp;
+pub mod peer_cli;
 pub mod permits;
 pub mod presence;
 pub mod server_mgmt;
@@ -3660,14 +3662,20 @@ fn build_org_permissions_gate(
     let own = architect_auth::identity::SessionIdentityResolver::new(auth.auth.clone());
     // Cross-org identity: a token this org does not know may still be a
     // home-org token belonging to a principal with a membership row for
-    // this org. Not installed on the home org itself (its own resolver
-    // already IS the home resolver) or when there is no home identity.
+    // this org. On the home org itself too, though its own resolver already
+    // IS the home session resolver: a bot key (`HomeOrBotResolver`) still
+    // needs its membership row there. Not installed with no home identity.
     let resolver: Arc<dyn architect_permissions::IdentityResolver + Send + Sync> =
         match home_identity {
-            Some(home) if home.slug != slug => Arc::new(permits::AuditedIdentityResolver::new(
+            Some(home) => Arc::new(permits::AuditedIdentityResolver::new(
                 permits::HomeFallbackResolver::new(
                     own,
-                    architect_auth::identity::SessionIdentityResolver::new(home.auth.auth.clone()),
+                    permits::HomeOrBotResolver::new(
+                        architect_auth::identity::SessionIdentityResolver::new(
+                            home.auth.auth.clone(),
+                        ),
+                        home.auth.clone(),
+                    ),
                     Arc::clone(&home.memberships),
                     slug,
                 ),

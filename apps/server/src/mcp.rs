@@ -1824,6 +1824,12 @@ async fn mcp_dispatch(
             match authenticate_for(&state, &target, &headers).await {
                 Ok(org) => {
                     let mut payload = tools_list_payload(&org.plugins);
+                    // A bot is offered only what its key allows.
+                    if let Some(tools) = bot_tools(&state, &headers).await
+                        && let Some(list) = payload["tools"].as_array_mut()
+                    {
+                        list.retain(|t| t["name"].as_str().is_some_and(|n| tools.allows(n)));
+                    }
                     if pinned.is_none() {
                         payload = account_tools_payload(payload, &target);
                         // Cluster telemetry: listed only when a backend
@@ -1841,6 +1847,19 @@ async fn mcp_dispatch(
             }
         }
         "tools/call" => {
+            if let Some(name) = params.get("name").and_then(Value::as_str)
+                && let Some(tools) = bot_tools(&state, &headers).await
+                && !tools.allows(name)
+            {
+                return Json(rpc_result(
+                    id,
+                    tool_err(&format!(
+                        "`{name}` is not offered to this bot — its key is for notes and wikis. \
+                         Call `tools/list` for what it may use."
+                    )),
+                ))
+                .into_response();
+            }
             let args_peek = params
                 .get("arguments")
                 .cloned()
@@ -2499,6 +2518,16 @@ async fn mcp_principal(org: &crate::OrgAppState, headers: &HeaderMap) -> Option<
         architect_permissions::Principal::User { user_id } => Some(user_id),
         _ => None,
     }
+}
+
+/// The tool scope of the bot behind this call's key, when it is one
+/// ([`crate::bots`]); `None` for people and for the static token.
+async fn bot_tools(state: &AppState, headers: &HeaderMap) -> Option<crate::bots::Tools> {
+    let token = crate::watch_bridge::bearer(headers)?;
+    let home = state.home_identity.as_ref()?;
+    crate::bots::resolve(&home.auth, &token)
+        .await
+        .map(|b| b.tools)
 }
 
 /// Add the account-lane `org` argument to a per-org tool's schema.

@@ -17,6 +17,10 @@ async fn main() -> eyre::Result<()> {
     if task_server::admin_cli::dispatch().await? {
         return Ok(());
     }
+    // `task-server peer`: this server as one more of a person's devices.
+    if task_server::peer_cli::dispatch().await? {
+        return Ok(());
+    }
 
     // Sentry error/crash telemetry — hold the guard for all of `main`.
     let _sentry = architect_telemetry::init("task-server");

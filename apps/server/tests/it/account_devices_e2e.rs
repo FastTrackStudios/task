@@ -183,9 +183,18 @@ async fn an_accounts_devices_find_each_other_through_the_issuer() {
     // The signed-in account is let in where it should be: on the phone,
     // its org (the shared one); on the laptop, the shared org and the
     // laptop's own — so its FTS sign-in sees them, not an empty list.
-    assert_eq!(role_on(&phone, account, PERSONAL_SLUG).await.as_deref(), Some("admin"));
-    assert_eq!(role_on(&mac, account, &mac_slug).await.as_deref(), Some("admin"));
-    assert_eq!(role_on(&mac, account, PERSONAL_SLUG).await.as_deref(), Some("admin"));
+    assert_eq!(
+        role_on(&phone, account, PERSONAL_SLUG).await.as_deref(),
+        Some("admin")
+    );
+    assert_eq!(
+        role_on(&mac, account, &mac_slug).await.as_deref(),
+        Some("admin")
+    );
+    assert_eq!(
+        role_on(&mac, account, PERSONAL_SLUG).await.as_deref(),
+        Some("admin")
+    );
     // And a pass is idempotent.
     let m2 = sync_account(&mac, &devices, &token, &mac_me)
         .await

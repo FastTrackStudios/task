@@ -27,6 +27,10 @@ tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 tower = { version = "0.5", features = ["util"] }
 # Forwarding client for the OTLP proxy (src/otlp.rs).
 reqwest = { workspace = true }
+# `task-server peer`: the account pass dials the issuer's `DeviceService`
+# over wss, which needs a rustls provider picked (two are in the graph).
+task-dial = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 architect-telemetry = { workspace = true, features = ["otel"] }
