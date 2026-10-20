@@ -18,20 +18,16 @@
 //! screen doing it on mount.
 
 use bookings_ui::{BookingsView, provide_stores};
-use task_plugin_ui::architect_ui::lucide_dioxus::CalendarClock;
+use task_plugin_ui::PluginApp;
 use task_plugin_ui::dioxus::prelude::*;
-use task_plugin_ui::{PluginApp, PluginNav};
 
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
     id: bookings_ui::APP_ID,
     version: env!("CARGO_PKG_VERSION"),
-    nav: &[PluginNav {
-        label: "Bookings",
-        icon,
-        path: "",
-        rail: false,
-    }],
+    // No sidebar entry: reached from where it belongs (see the crate
+    // docs), not as a section of its own.
+    nav: &[],
     view,
     panel: None,
     claim_file: None,
@@ -46,10 +42,6 @@ pub const APP: PluginApp = PluginApp {
 /// web, installed once it has downloaded.
 fn provide() {
     task_plugin_ui::lazy_provide!("bookings_stores", provide_stores)
-}
-
-fn icon() -> Element {
-    rsx! { CalendarClock { size: 16 } }
 }
 
 fn view(path: &str, query: &str) -> Option<Element> {

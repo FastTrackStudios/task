@@ -471,6 +471,192 @@ async fn demo_plants_the_collections_that_gather_the_assets() -> eyre::Result<()
     Ok(())
 }
 
+// t[verify process.due]
+// t[verify process.focus.surfaces]
+/// The planted world can show the capture-and-process loop: captures
+/// waiting in Alice's inbox (one suggested, one put off), a day with a
+/// maintenance hour, and tasks for that hour to bring forward —
+/// `@errands`, `@chores` and a `#chore` tag. Asserted through the
+/// backends the server mounts, after the real `admin demo`, twice: a
+/// replant tops up rather than duplicating or reopening.
+#[cfg(feature = "plugin-scheduling")]
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_an_inbox_to_process_and_a_maintenance_hour() -> eyre::Result<()> {
+    use inbox::Inbox as _;
+    use scheduling_proto::BlockCategory;
+    use scheduling_proto::service::day_templates::DayTemplates as _;
+    use task::TaskService as _;
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(tmp.path(), slug)?;
+    plant(tmp.path(), slug)?;
+    let org = org_proto::DataRoot::new(tmp.path().to_path_buf()).org(slug);
+
+    // The inbox: every declared capture, once.
+    let inbox = inbox::VaultInbox::new(org.vault_dir()).map_err(|e| eyre::eyre!("{e}"))?;
+    let items = inbox.list_inbox().map_err(|e| eyre::eyre!("{e:?}"))?;
+    let declared: Vec<_> = task_server::example_org::inbox_of(slug).collect();
+    eyre::ensure!(
+        items.len() == declared.len(),
+        "one item per declared capture, however often planted: {items:?}"
+    );
+    let today = chrono::Utc::now().date_naive().to_string();
+    let queue = inbox
+        .review_queue(today.clone())
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    eyre::ensure!(
+        items.iter().any(|i| i.status == "suggested"),
+        "an agent suggestion awaits a decision"
+    );
+    eyre::ensure!(
+        items
+            .iter()
+            .any(|i| i.is_open() && !queue.iter().any(|q| q.id == i.id)),
+        "one capture is put off, not due"
+    );
+    eyre::ensure!(queue.len() >= 4, "something to process today: {queue:?}");
+
+    // The day: a maintenance hour on both kinds of day.
+    let scheduler =
+        scheduling::VaultScheduler::new(org.vault_dir()).map_err(|e| eyre::eyre!("{e}"))?;
+    let templates = scheduler
+        .list_day_templates()
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    for id in ["weekday", "weekend"] {
+        let t = templates
+            .iter()
+            .find(|t| t.id.0 == id)
+            .ok_or_else(|| eyre::eyre!("no `{id}` template planted"))?;
+        eyre::ensure!(
+            t.blocks
+                .iter()
+                .any(|b| b.category == BlockCategory::Maintenance),
+            "`{id}` has no maintenance block"
+        );
+    }
+
+    // The board: work the hour is for, with its contexts and tags.
+    let focus: Vec<String> = BlockCategory::Maintenance
+        .surfaces()
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let ctx = task::RelevanceContext {
+        focus,
+        ..Default::default()
+    };
+    let tasks = task::TaskBackend::new(org.vault_dir())
+        .list()
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    for title in [
+        "Return the hired mic stands",
+        "Vacuum the live room",
+        "Take the studio recycling out",
+    ] {
+        let matching: Vec<_> = tasks.iter().filter(|t| t.title == title).collect();
+        eyre::ensure!(matching.len() == 1, "`{title}` planted once");
+        eyre::ensure!(
+            task::relevance::matches_focus(matching[0], &ctx),
+            "`{title}` is not brought forward by a maintenance hour: \
+             contexts {:?}, tags {:?}",
+            matching[0].contexts,
+            matching[0].tags
+        );
+    }
+    Ok(())
+}
+
+/// The planted world opens `/activity` on history, and Alice's vocal
+/// comp on a comment thread from Sam — asserted through the stores the
+/// server mounts, after the real `admin demo`, twice: a replant writes
+/// no second copy of anything.
+// t[verify activity.seed]
+#[tokio::test(flavor = "multi_thread")]
+async fn demo_plants_activity_history_and_a_comment_thread() -> eyre::Result<()> {
+    use notify_proto::{ActivityFeed as _, ActivityFilter, ActivityKind};
+    use sea_orm_migration::MigratorTrait as _;
+    use task::TaskService as _;
+    use threads::ThreadsService as _;
+
+    let tmp = tempfile::tempdir()?;
+    let slug = "acme-audio";
+    // SAFETY: nextest runs one process per test.
+    unsafe { std::env::set_var("TASK_DEMO_NO_BIBLE", "1") };
+    plant(tmp.path(), slug)?;
+    plant(tmp.path(), slug)?;
+    let org = org_proto::DataRoot::new(tmp.path().to_path_buf()).org(slug);
+
+    let conn = sea_orm::Database::connect(format!(
+        "sqlite://{}?mode=ro",
+        org.path().join("notify.sqlite").display()
+    ))
+    .await?;
+    let feed = notify::ActivityStore::new(conn);
+    let all = feed
+        .list(ActivityFilter::default())
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    let declared = task_server::example_org::SEED_ACTIVITY
+        .iter()
+        .filter(|a| a.org == slug)
+        .count()
+        + task_server::example_org::SEED_COMMENTS
+            .iter()
+            .filter(|c| c.org == slug)
+            .count();
+    eyre::ensure!(
+        all.len() == declared,
+        "one entry per declared line, however often planted: {all:#?}"
+    );
+    eyre::ensure!(
+        all.iter().all(|a| a.actor_name != "Someone"),
+        "every seeded line has a byline"
+    );
+
+    let tasks = task::TaskBackend::new(org.vault_dir())
+        .list()
+        .map_err(|e| eyre::eyre!("{e:?}"))?;
+    let vocals = tasks
+        .iter()
+        .find(|t| t.title == "Comp lead vocals — Track One")
+        .ok_or_else(|| eyre::eyre!("the vocal comp is planted"))?;
+    let its = feed
+        .list(ActivityFilter::entity("task", vocals.id))
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    eyre::ensure!(
+        its.iter()
+            .any(|a| a.kind == ActivityKind::Commented && a.actor_name == "Sam"),
+        "Sam's comment is on the vocal comp's history: {its:#?}"
+    );
+
+    let threads_conn =
+        sea_orm::Database::connect(format!("sqlite://{}?mode=rwc", org.threads_db().display()))
+            .await?;
+    threads::Migrator::up(&threads_conn, None).await?;
+    let store = threads::Store::new(threads_conn);
+    let thread = store
+        .list_threads("task".into(), vocals.id)
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    eyre::ensure!(
+        thread.len() == 1,
+        "one thread on the vocal comp: {thread:?}"
+    );
+    let messages = store
+        .list_messages(thread[0].id)
+        .await
+        .map_err(|e| eyre::eyre!("{e}"))?;
+    eyre::ensure!(
+        messages.len() == 2 && messages[0].author_label == "Sam",
+        "Sam's comment then Alice's reply, once each: {messages:?}"
+    );
+    Ok(())
+}
+
 /// The seeded booking the finance integration is written against.
 ///
 /// The repo's policy is that a feature lives in the suite *and* in the

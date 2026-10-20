@@ -186,23 +186,29 @@ fn host_of(url: &str) -> String {
         .to_owned()
 }
 
-/// Add / select / remove the servers the app can connect to. Reads the
-/// [`ServerRegistry`] from context; selecting an entry re-points the app
-/// (org discovery + connection) at that server via the app root's holder
-/// sync. Sign-in to the selected server happens through the login form
-/// (which dials the active server).
+/// The devices and servers this app reaches, as one grouped list: this
+/// device's own node first, then each host, then a row that opens the
+/// form for adding another. Selecting a host re-points the app (org
+/// discovery + connection) at it via the app root's holder sync; sign-in
+/// to it happens through the sign-in chooser, which dials the active
+/// server.
 #[component]
 pub fn ServersPanel() -> Element {
     let mut registry = use_context::<ServerRegistry>();
     let mut label = use_signal(String::new);
     let mut url = use_signal(String::new);
+    let mut adding = use_signal(|| false);
     // Why discovery didn't resolve for the active server, if it failed.
     let discovery_err = use_context::<crate::orgs::DiscoveryError>().0;
 
-    let servers = registry.list();
+    let hosts: Vec<ServerEntry> = registry
+        .list()
+        .into_iter()
+        .filter(|s| !task_ui_core::node::is_local(&s.server_url))
+        .collect();
     let active = registry.active_id();
 
-    let add = move |_| {
+    let mut add = move || {
         let raw = url.peek().trim().to_owned();
         if raw.is_empty() {
             return;
@@ -220,68 +226,284 @@ pub fn ServersPanel() -> Element {
         registry.set_active(Some(id));
         label.set(String::new());
         url.set(String::new());
+        adding.set(false);
     };
 
     rsx! {
-        div { class: "flex flex-col gap-3",
+        div { class: "flex flex-col",
             if let Some(err) = discovery_err.read().as_ref() {
-                div { class: "rounded-lg border border-destructive/40 bg-destructive/10 px-2 py-2 text-xs text-destructive",
+                div { class: "mb-2 rounded-2xl bg-destructive/10 px-4 py-3 text-[13px] text-destructive",
                     div { class: "font-medium", "Couldn't reach this server" }
                     div { class: "mt-0.5 break-words opacity-90", "{err}" }
                 }
             }
-            if servers.is_empty() {
-                div { class: "px-1 text-xs text-muted-foreground",
-                    "No servers yet. Add one below (e.g. task.starcommand.live)."
-                }
-            } else {
-                div { class: "flex flex-col gap-1",
-                    for s in servers {
-                        div {
-                            key: "{s.id}",
-                            class: "flex items-center gap-2 rounded-lg border border-border px-2 py-2",
-                            button {
-                                r#type: "button",
-                                class: "flex min-w-0 flex-1 flex-col text-left",
-                                onclick: {
-                                    let id = s.id;
-                                    move |_| registry.set_active(Some(id))
-                                },
-                                span { class: "truncate text-sm font-medium text-foreground", "{s.label}" }
-                                span { class: "truncate text-xs text-muted-foreground", "{s.server_url}" }
+            div { class: "flex flex-col divide-y divide-foreground/[0.06] overflow-hidden rounded-[20px] bg-foreground/[0.05]",
+                ThisDevice {}
+                for s in hosts {
+                    div {
+                        key: "{s.id}",
+                        class: "flex min-h-[60px] items-center gap-3 px-4",
+                        button {
+                            r#type: "button",
+                            class: "flex min-w-0 flex-1 items-center gap-3 py-2 text-left",
+                            onclick: {
+                                let id = s.id;
+                                move |_| registry.set_active(Some(id))
+                            },
+                            span { class: "flex size-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.08] text-foreground/80",
+                                architect_ui::lucide_dioxus::Server { size: 17 }
                             }
-                            if Some(s.id) == active {
-                                span { class: "text-xs text-primary", "● active" }
+                            span { class: "flex min-w-0 flex-1 flex-col",
+                                span { class: "truncate text-[15px] text-foreground", "{s.label}" }
+                                span { class: "truncate text-[13px] text-muted-foreground", {host_of(&s.server_url)} }
                             }
-                            button {
-                                r#type: "button",
-                                class: "text-xs text-muted-foreground hover:text-destructive",
-                                onclick: {
-                                    let id = s.id;
-                                    move |_| registry.remove(id)
-                                },
-                                "Remove"
+                        }
+                        if Some(s.id) == active {
+                            span { class: "shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[12px] font-medium text-primary",
+                                "Connected"
                             }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-foreground/[0.08] active:text-destructive",
+                            aria_label: "Remove {s.label}",
+                            onclick: {
+                                let id = s.id;
+                                move |_| registry.remove(id)
+                            },
+                            architect_ui::lucide_dioxus::X { size: 16 }
                         }
                     }
                 }
+                if adding() {
+                    div { class: "flex flex-col gap-2 px-4 py-3",
+                        Input {
+                            value: url,
+                            input_type: "url".to_string(),
+                            placeholder: "Address — task.example.com",
+                        }
+                        Input { value: label, placeholder: "Name (optional)" }
+                        div { class: "flex gap-2 pt-1",
+                            button {
+                                r#type: "button",
+                                class: "flex h-11 flex-1 items-center justify-center rounded-2xl bg-foreground/[0.06] text-[15px] text-foreground active:bg-foreground/[0.1]",
+                                onclick: move |_| adding.set(false),
+                                "Cancel"
+                            }
+                            button {
+                                r#type: "button",
+                                "data-testid": "add-server-confirm",
+                                class: "flex h-11 flex-1 items-center justify-center rounded-2xl bg-primary text-[15px] font-semibold text-primary-foreground active:opacity-90",
+                                onclick: move |_| add(),
+                                "Connect"
+                            }
+                        }
+                        p { class: "px-1 text-[12px] leading-4 text-muted-foreground",
+                            "A server is just another node of your org that is always on — your desktop, or a host."
+                        }
+                    }
+                } else {
+                    button {
+                        r#type: "button",
+                        "data-testid": "add-server",
+                        class: "flex min-h-[54px] w-full items-center gap-3 px-4 text-left text-[15px] text-primary active:bg-foreground/[0.06]",
+                        onclick: move |_| adding.set(true),
+                        span { class: "flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/15",
+                            architect_ui::lucide_dioxus::Plus { size: 18 }
+                        }
+                        "Add peer or server"
+                    }
+                }
             }
+        }
+    }
+}
 
-            div { class: "flex flex-col gap-2",
-                Input { value: label, placeholder: "Label (optional)" }
-                Input {
-                    value: url,
-                    input_type: "url".to_string(),
-                    placeholder: "Server URL (task.starcommand.live)",
+/// The registry entry that means "this device's own node", created on
+/// first use. One per registry, found by its address.
+fn this_device_entry(registry: &mut ServerRegistry) -> Uuid {
+    if let Some(found) = registry
+        .list()
+        .into_iter()
+        .find(|e| task_ui_core::node::is_local(&e.server_url))
+    {
+        return found.id;
+    }
+    let entry = ServerEntry::new("This device", task_ui_core::node::LOCAL_VOX_URL);
+    let id = entry.id;
+    registry.upsert(entry);
+    id
+}
+
+/// "This device" — the node this install runs (`offline.local`,
+/// `offline.peers`). Run on it, see its address, and keep a node of a
+/// host's org here. Renders nothing on the browser, which holds no node.
+#[component]
+fn ThisDevice() -> Element {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        rsx! { this_device::Panel {} }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        rsx! {}
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod this_device {
+    use dioxus::prelude::*;
+    use files_proto::service::sync::SyncServiceClient;
+    use task_ui_core::orgs::OrgMeta;
+
+    use super::{ServerRegistry, this_device_entry};
+
+    #[component]
+    pub fn Panel() -> Element {
+        let Some(node) = task_ui_core::node::host() else {
+            return rsx! {};
+        };
+        let mut registry = use_context::<ServerRegistry>();
+        let auth = use_context::<crate::auth::AuthCtx>();
+        let orgs = use_context::<Signal<Vec<OrgMeta>>>();
+        let mut note = use_signal(|| None::<String>);
+        let local = task_ui_core::node::local_active();
+
+        let run_here = move |_| {
+            let id = this_device_entry(&mut registry);
+            registry.set_active(Some(id));
+            spawn(async move {
+                // Straight in as the device's person: the node knows them.
+                if let Some(owner) = task_ui_core::node::local_owner().await {
+                    auth.switch_account(owner.email);
                 }
-                Button {
-                    variant: ButtonVariant::Secondary,
-                    size: ButtonSize::Medium,
-                    on_click: add,
-                    class: "w-full",
-                    "Add server"
+            });
+        };
+
+        // Orgs a host serves that this node does not hold yet — what
+        // "keep a node here" applies to.
+        let joinable: Vec<OrgMeta> = if local {
+            Vec::new()
+        } else {
+            orgs.read()
+                .iter()
+                .filter(|o| o.member != Some(false) && o.id.is_some() && !node.holds(&o.slug))
+                .cloned()
+                .collect()
+        };
+        let held: Vec<(String, Option<String>)> = orgs
+            .read()
+            .iter()
+            .filter(|o| node.holds(&o.slug))
+            .map(|o| (o.name.clone(), node.endpoint_id(&o.slug)))
+            .collect();
+
+        rsx! {
+            div { class: "flex flex-col gap-2 px-4 py-3",
+                div { class: "flex items-center gap-3",
+                    span { class: "flex size-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.08] text-foreground/80",
+                        architect_ui::lucide_dioxus::Smartphone { size: 17 }
+                    }
+                    div { class: "flex min-w-0 flex-1 flex-col",
+                        span { class: "text-[15px] text-foreground", "This device" }
+                        span { class: "truncate text-[13px] text-muted-foreground",
+                            if held.is_empty() {
+                                "Runs Task itself, no server needed"
+                            } else {
+                                {format!("Holds {}", held.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", "))}
+                            }
+                        }
+                    }
+                    if local {
+                        span { class: "shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[12px] font-medium text-primary",
+                            "Running here"
+                        }
+                    } else {
+                        button {
+                            r#type: "button",
+                            class: "shrink-0 rounded-full bg-foreground/[0.08] px-3 py-1.5 text-[13px] font-medium text-foreground active:bg-foreground/[0.14]",
+                            onclick: run_here,
+                            "Use"
+                        }
+                    }
+                }
+                for org in joinable {
+                    div { class: "flex items-center gap-2 pl-12",
+                        span { class: "min-w-0 flex-1 truncate text-[13px] text-foreground", "{org.name}" }
+                        button {
+                            r#type: "button",
+                            class: "shrink-0 text-[13px] font-medium text-primary active:opacity-70",
+                            onclick: {
+                                let org = org.clone();
+                                move |_| {
+                                    let org = org.clone();
+                                    spawn(async move {
+                                        note.set(Some(format!("Joining {}…", org.name)));
+                                        let said = join(&org).await;
+                                        note.set(Some(said));
+                                    });
+                                }
+                            },
+                            "Keep on this device"
+                        }
+                    }
+                }
+                if let Some(n) = note.read().as_ref() {
+                    div { class: "pl-12 text-[12px] text-muted-foreground break-words", "{n}" }
                 }
             }
+        }
+    }
+
+    /// The join handshake, both halves, with the session already held
+    /// on the host: the host's endpoint id for the org → this node takes
+    /// the org and admits it → the host enrolls this node's endpoint id.
+    /// From then each admits the other (`offline.peers`).
+    pub(super) async fn join(org: &OrgMeta) -> String {
+        let Some(node) = task_ui_core::node::host() else {
+            return "This build holds no node.".into();
+        };
+        let Some(id) = org.id else {
+            return format!(
+                "{} did not say its org id — cannot hold a node of it.",
+                org.name
+            );
+        };
+        let host: SyncServiceClient =
+            match task_ui_core::vox_clients::establish_for(&org.slug).await {
+                Ok(c) => c,
+                Err(e) => return format!("Could not reach {}'s host: {e}", org.name),
+            };
+        let peer = host.coordinator().await.ok();
+        let mine = match node
+            .join(task_ui_core::node::JoinRequest {
+                slug: org.slug.clone(),
+                id,
+                display_name: org.name.clone(),
+                peer,
+                role: None,
+            })
+            .await
+        {
+            Ok(Some(mine)) => mine,
+            Ok(None) => {
+                return format!(
+                    "{} is now held here, but this node has no endpoint to enroll (peers off?).",
+                    org.name
+                );
+            }
+            Err(e) => return format!("Could not take a node of {}: {e}", org.name),
+        };
+        match host
+            .enroll_device(mine.clone(), "Task app node".to_owned())
+            .await
+        {
+            Ok(_) => format!(
+                "{} is held on this device too (node {}). Its host admits this node.",
+                org.name,
+                &mine[..mine.len().min(8)]
+            ),
+            Err(e) => format!("Held here, but the host refused to enroll this node: {e}"),
         }
     }
 }
@@ -350,7 +572,7 @@ fn save_active(id: Option<Uuid>) {
 /// `XDG_DATA_HOME` still wins when explicitly set, so a Linux desktop or
 /// a test harness can point this wherever it likes.
 #[cfg(not(target_arch = "wasm32"))]
-fn data_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())

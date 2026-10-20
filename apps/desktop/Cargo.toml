@@ -6,12 +6,22 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# A process-level rustls CryptoProvider, installed first thing in `main`:
+# the graph unifies both `ring` and `aws-lc-rs`, so rustls cannot infer
+# one and the first TLS dial (the issuer, after a FastTrackStudio
+# sign-in) panicked on the main thread and aborted the app.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # The window-chrome context this frameless shell provides (drag /
 # minimize / maximize / close callbacks the shared top bar renders).
 task-ui-core.workspace = true
 task-plugin-ui.workspace = true
 dioxus = { workspace = true, features = ["router"] }
 ui.workspace = true
+# Math in notes: the editor's Typst renderer. Native apps only — the web
+# build leaves it off (it is the largest thing the editor adds to wasm;
+# see the root Cargo.toml). Cargo unifies features per build, so this
+# reaches the editor `ui` uses without touching the web bundle.
+editor = { workspace = true, features = ["typst"] }
 # `otel` so shipped clients export traces/logs/metrics through the
 # server's /otlp proxy — inert unless the build bakes TASK_OTLP_ENDPOINT.
 architect-telemetry = { workspace = true, features = ["otel"] }
@@ -31,6 +41,23 @@ files-daemon-proto = { workspace = true }
 # into shipping different ones.
 task-plugins = { workspace = true }
 vox = { workspace = true, features = ["transport-websocket"] }
+# The device's own node (offline.local / offline.peers): this install
+# hosts the backend itself, so the app works with no server and is a
+# peer of the org's other nodes.
+task-node-host = { workspace = true }
+
+# Central sign-in through the system browser sheet (`src/mac_auth.rs`):
+# ASWebAuthenticationSession, its anchor (the key NSWindow), and the
+# block its completion handler is — the macOS twin of the phone's.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-authentication-services = "0.3"
+objc2-app-kit = "0.3"
+block2 = "0.6"
+# The updater reads the releases API and an update's manifest.
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [features]
 default = ["desktop"]

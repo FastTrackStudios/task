@@ -512,6 +512,9 @@ pub(crate) async fn run_task(cmd: TaskCmd) -> eyre::Result<()> {
                     location,
                     device,
                     active_project: None,
+                    // FUTURE: the current day-plan block's focus, as
+                    // the web board reads it.
+                    focus: Vec::new(),
                 }
             });
             if let Some(ctx) = &relevance_ctx {

@@ -32,6 +32,9 @@ pub struct CalendarProps {
     /// month view.
     #[props(default)]
     pub template_blocks: Vec<TemplateBlock>,
+    /// Timer sessions in range, drawn beside the plan (week / day).
+    #[props(default)]
+    pub actuals: Vec<crate::types::ActualSpan>,
     /// Fired with `(date, block_id)` when a plan block is clicked, so
     /// the consumer can edit that date's plan.
     #[props(default)]
@@ -68,13 +71,31 @@ pub struct CalendarProps {
     #[props(default = false)]
     pub readonly: bool,
     pub on_event: EventHandler<CalendarMutation>,
+    /// The page owns the day in view (its header and week strip move
+    /// it). Unset, the calendar keeps its own.
+    #[props(default)]
+    pub anchor: Option<Signal<NaiveDate>>,
+    /// The page owns the view mode (its ⋯ menu changes it).
+    #[props(default)]
+    pub view: Option<Signal<ViewMode>>,
+    /// The page draws the phone's header: the toolbar is desk-only.
+    #[props(default = false)]
+    pub phone_chrome: bool,
+    /// Bumped by the page to make a new event on the day in view (the
+    /// phone header's "New event") and open it.
+    #[props(default)]
+    pub new_event: Option<Signal<u64>>,
 }
 
 #[component]
 pub fn Calendar(props: CalendarProps) -> Element {
     let today = chrono::Local::now().date_naive();
-    let mut anchor = use_signal(|| props.initial_anchor.unwrap_or(today));
-    let mut view = use_signal(|| props.initial_view.unwrap_or_default());
+    let own_anchor = use_signal(|| props.initial_anchor.unwrap_or(today));
+    let own_view = use_signal(|| props.initial_view.unwrap_or_default());
+    let mut anchor = props.anchor.unwrap_or(own_anchor);
+    let mut view = props.view.unwrap_or(own_view);
+    // Where a possible day swipe began.
+    let mut swipe_from = use_signal(|| None::<(f64, f64)>);
     let mut editing: Signal<Option<EventId>> = use_signal(|| None);
 
     use_context_provider(|| DragContext {
@@ -111,7 +132,12 @@ pub fn Calendar(props: CalendarProps) -> Element {
     // small screens. One-shot probe at mount that only ever switches
     // *to* Day, so desktop keeps its `initial_view` and a failed/absent
     // probe is a harmless no-op (the requested view stands).
+    // A page that owns the view decides this itself.
+    let page_owns_view = props.view.is_some();
     use_hook(move || {
+        if page_owns_view {
+            return;
+        }
         spawn(async move {
             let mut probe = dioxus::document::eval(
                 "dioxus.send(window.matchMedia('(max-width: 640px)').matches)",
@@ -134,6 +160,28 @@ pub fn Calendar(props: CalendarProps) -> Element {
 
     let on_event = props.on_event;
     let events = props.events.clone();
+
+    // The page asked for a new event: from the next hour on the day in
+    // view (09:00 on another day), then open it to name it.
+    let mut seen_request = use_signal(|| props.new_event.map_or(0, |s| *s.peek()));
+    if let Some(req) = props.new_event {
+        let n = req();
+        if n != *seen_request.peek() {
+            seen_request.set(n);
+            let day = *anchor.peek();
+            let now = chrono::Local::now();
+            let hour = if day == now.date_naive() {
+                i64::from((chrono::Timelike::hour(&now) + 1).min(23))
+            } else {
+                9
+            };
+            let start = day_start_utc(day) + chrono::Duration::hours(hour);
+            let event = CalendarEvent::new("New event", start, start + chrono::Duration::hours(1));
+            let id = event.id;
+            on_event.call(CalendarMutation::Create { event });
+            editing.set(Some(id));
+        }
+    }
 
     // Expand any recurring masters to instances inside the visible
     // range so the views stay recurrence-agnostic. Buffered by one
@@ -302,12 +350,15 @@ pub fn Calendar(props: CalendarProps) -> Element {
         div {
             class: "flex flex-col h-full w-full outline-none",
             tabindex: 0,
-            autofocus: true,
+            // Keyboard shortcuts are a desk thing; on a phone, focus only
+            // scrolls the page.
+            autofocus: !props.phone_chrome,
             onkeydown: on_keydown,
             onpointerup: on_pointer_up,
             onpointercancel: on_pointer_cancel,
             onpointermove: on_pointer_move,
             ontouchmove: on_touch_move,
+            div { class: if props.phone_chrome { "hidden md:block" } else { "" },
             Toolbar {
                 anchor: *anchor.read(),
                 view: *view.read(),
@@ -329,7 +380,33 @@ pub fn Calendar(props: CalendarProps) -> Element {
                 summary: props.summary.clone(),
                 readonly: props.readonly,
             }
-            div { class: "flex-1 min-h-0",
+            }
+            div {
+                class: "flex-1 min-h-0",
+                // Swipe sideways for the next or previous day / week / month
+                // (a deliberate, mostly-horizontal stroke — scrolling
+                // and dragging a block both stay vertical).
+                onpointerdown: move |e: Event<PointerData>| {
+                    let p = e.data().client_coordinates();
+                    swipe_from.set(Some((p.x, p.y)));
+                },
+                onpointerup: move |e: Event<PointerData>| {
+                    let Some((x0, y0)) = swipe_from.take() else { return };
+                    // Day, Week and Month page by their own unit; the
+                    // block grid scrolls sideways itself.
+                    let unit = *view.peek();
+                    if unit == ViewMode::Blocks {
+                        return;
+                    }
+                    let dragging = drag_ctx.state.peek().as_ref().is_some_and(|d| d.committed)
+                        || block_ctx.drag.peek().as_ref().is_some_and(|d| d.committed);
+                    let p = e.data().client_coordinates();
+                    let (dx, dy) = (p.x - x0, p.y - y0);
+                    if !dragging && dx.abs() > 70.0 && dy.abs() < 50.0 {
+                        let dir = if dx < 0.0 { 1 } else { -1 };
+                        anchor.with_mut(|d| *d = step(*d, unit, dir));
+                    }
+                },
                 match *view.read() {
                     ViewMode::Month => rsx! {
                         MonthView {
@@ -349,6 +426,7 @@ pub fn Calendar(props: CalendarProps) -> Element {
                             anchor: *anchor.read(),
                             events: events_for_view,
                             template_blocks: props.template_blocks.clone(),
+                            actuals: props.actuals.clone(),
                             on_block_click: props.on_block_click,
                             on_block_edit: props.on_block_edit,
                             readonly: props.readonly,
@@ -379,6 +457,7 @@ pub fn Calendar(props: CalendarProps) -> Element {
                             anchor: *anchor.read(),
                             events: events_for_view,
                             template_blocks: props.template_blocks.clone(),
+                            actuals: props.actuals.clone(),
                             on_block_click: props.on_block_click,
                             on_block_edit: props.on_block_edit,
                             readonly: props.readonly,

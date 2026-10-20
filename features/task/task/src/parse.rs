@@ -182,7 +182,9 @@ fn parse_page_impl(page: &ParsePageRef<'_>) -> Result<TaskInfo, ParseError> {
         )),
         date_created,
         date_modified,
-        details: body.to_string(),
+        // The writer sets the body off with one blank line; take exactly
+        // that one back (see `write::serialize_task`), so details round-trip.
+        details: body.strip_prefix('\n').unwrap_or(body).to_string(),
         workflow: take_workflow_attrs(&map),
     })
 }

@@ -155,6 +155,38 @@ pub async fn start(state: &AppState) -> Option<IrohHost> {
     Some(IrohHost { endpoints })
 }
 
+/// Bind one org that joined after [`start`] — a device node taking an
+/// org it did not hold at boot (`local_node::LocalNode::join`). Same
+/// key file, same publish, same install as the boot path, and the same
+/// rescan of `TASK_IROH_PEER_DIR`: an org joined from a peer is one whose
+/// other nodes come and go after this one is up, so a single read would
+/// leave it unable to dial whoever binds next.
+///
+/// # Errors
+///
+/// The key cannot be loaded or created, or the endpoint cannot bind.
+pub async fn bind_one(state: &AppState, slug: &str) -> eyre::Result<iroh::Endpoint> {
+    let peer_dir = std::env::var_os("TASK_IROH_PEER_DIR").map(PathBuf::from);
+    let book = peer_dir.as_ref().map(|dir| {
+        let book = AddressBook::new();
+        absorb_addrs(dir, &book);
+        book
+    });
+    let endpoint = bind_org(state, slug, book.clone(), peer_dir.as_deref()).await?;
+    if let (Some(dir), Some(book)) = (peer_dir, book) {
+        // Lives as long as the endpoint does: once it is closed there is
+        // nobody left to dial with what this reads.
+        let watched = endpoint.clone();
+        tokio::spawn(async move {
+            while !watched.is_closed() {
+                tokio::time::sleep(RESCAN).await;
+                absorb_addrs(&dir, &book);
+            }
+        });
+    }
+    Ok(endpoint)
+}
+
 /// Bind, publish, install and serve one org.
 async fn bind_org(
     state: &AppState,

@@ -24,7 +24,11 @@ use dioxus::prelude::*;
 use project_proto::ProjectInfo;
 
 use crate::routes::Route;
-use crate::shell::mobile::{BottomSheet, MobileActionBar};
+use crate::shell::mobile::BottomSheet;
+
+/// The projects page's "new project" sheet, reachable from its header.
+#[derive(Clone, Copy)]
+struct NewProjectOpen(Signal<bool>);
 use crate::task_sort::{priority_rank, status_rank};
 
 /// Page-scoped keyframes for the staggered card entrance. Injected once
@@ -34,6 +38,8 @@ const PAGE_CSS: &str = "@keyframes ftsFadeUp{from{opacity:0;transform:translateY
 /// How the project list is laid out. Persisted for the page's lifetime.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum ViewMode {
+    /// Square covers, album-style: each project's picture first.
+    Grid,
     Cards,
     #[default]
     List,
@@ -81,6 +87,8 @@ pub fn ProjectsView() -> Element {
     // Mobile create sheet — the desktop header (and its quick-add) is
     // hidden below `md`, so the sticky action bar owns creation there.
     let mut new_open = use_signal(|| false);
+    // The header's round + (phone) opens the same sheet.
+    use_context_provider(|| NewProjectOpen(new_open));
 
     let derived = use_memo(move || {
         let rows: Vec<ProjectInfo> = store.list().into_iter().map(|r| r.project).collect();
@@ -139,16 +147,6 @@ pub fn ProjectsView() -> Element {
             }
             div { class: "mx-auto w-full max-w-6xl flex flex-col gap-8 p-4 pb-14 sm:p-6 md:pb-6 lg:p-10",
                 {view}
-            }
-        }
-        // ── Mobile: sticky create above the tab bar ─────────────────
-        MobileActionBar {
-            button {
-                r#type: "button",
-                class: "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground active:bg-primary/85",
-                onclick: move |_| new_open.set(true),
-                Plus { size: 16 }
-                "New project"
             }
         }
         BottomSheet {
@@ -362,6 +360,13 @@ fn render_loaded(
         }
 
         match view_mode() {
+            ViewMode::Grid => rsx! {
+                div { class: "grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5",
+                    for (parent, kids) in groups.iter() {
+                        ProjectCover { key: "{parent.id}", p: parent.clone(), sub_count: kids.len() }
+                    }
+                }
+            },
             ViewMode::Cards => rsx! {
                 // Equal-height cards: the grid stretches each cell to the
                 // row's tallest, and the card fills it (`h-full`).
@@ -428,9 +433,11 @@ pub(crate) fn ProjectQuickAdd(
         on_create.call((slug, title));
         value.set(String::new());
     };
+    // Full width on a phone, where it has a row of its own; a fixed
+    // slot beside the section label from `sm` up.
     let (form_cls, placeholder) = if compact {
         (
-            "flex w-56 items-center gap-1.5 rounded-lg border border-border/60 bg-transparent px-2 py-1 focus-within:border-border focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/50",
+            "flex w-full items-center gap-1.5 rounded-lg border border-border/60 bg-transparent px-2 py-1 focus-within:border-border focus-within:bg-card focus-within:ring-2 focus-within:ring-primary/50 sm:w-72",
             "New project…",
         )
     } else {
@@ -461,7 +468,12 @@ pub(crate) fn ProjectQuickAdd(
                 Select {
                     value: chosen,
                     placeholder: "Org".to_string(),
-                    class: "shrink-0".to_string(),
+                    // `Select` is `w-full` by default, which inside this
+                    // one-line form took the whole row: the name field
+                    // shrank to nothing and the picker ran past the
+                    // form's edge (off screen on a phone). Sized to its
+                    // label instead, and capped.
+                    class: "w-auto max-w-[9rem] shrink-0".to_string(),
                     SelectContent {
                         for (i, (slug, name)) in orgs.iter().enumerate() {
                             SelectItem { key: "{slug}", value: "{slug}", index: i, "{name}" }
@@ -499,6 +511,15 @@ fn page_header(props: PageHeaderProps) -> Element {
             div { class: "flex flex-wrap items-end justify-between gap-3",
                 Heading { level: HeadingLevel::H1, class: "tracking-tight", "Projects" }
                 div { class: "flex items-center gap-2",
+                    if let Some(NewProjectOpen(mut open)) = try_use_context::<NewProjectOpen>() {
+                        button {
+                            r#type: "button",
+                            class: "order-last flex size-10 items-center justify-center rounded-full border border-border/70 bg-popover/80 text-foreground active:bg-accent md:hidden",
+                            aria_label: "New project",
+                            onclick: move |_| open.set(true),
+                            Plus { size: 18 }
+                        }
+                    }
                     if let Some(mut rel) = props.relevant {
                         button {
                             r#type: "button",
@@ -537,8 +558,11 @@ fn page_header(props: PageHeaderProps) -> Element {
                 class: "hidden max-w-prose md:block",
                 "Everything in flight across the org, live from the project service."
             }
+            // Desk only: a phone creates from the "New project" bar above
+            // the tab bar (the same form, in a sheet), and showing both
+            // put two ways to do one thing on a screen with one project.
             if let Some(qa) = &props.quick_add {
-                {qa.clone()}
+                div { class: "hidden md:block", {qa.clone()} }
             }
         }
     }
@@ -548,10 +572,12 @@ fn page_header(props: PageHeaderProps) -> Element {
 fn MobileViewToggle(props: ViewToggleProps) -> Element {
     let mut view = props.view;
     let next = match view() {
+        ViewMode::List => ViewMode::Grid,
+        ViewMode::Grid => ViewMode::Cards,
         ViewMode::Cards => ViewMode::List,
-        ViewMode::List => ViewMode::Cards,
     };
     let label = match next {
+        ViewMode::Grid => "Switch to grid",
         ViewMode::Cards => "Switch to cards",
         ViewMode::List => "Switch to list",
     };
@@ -563,7 +589,8 @@ fn MobileViewToggle(props: ViewToggleProps) -> Element {
             aria_label: "{label}",
             onclick: move |_| view.set(next),
             match next {
-                ViewMode::Cards => rsx! { LayoutGrid { size: 15 } },
+                ViewMode::Grid => rsx! { LayoutGrid { size: 15 } },
+                ViewMode::Cards => rsx! { Layers { size: 15 } },
                 ViewMode::List => rsx! { LayoutList { size: 15 } },
             }
         }
@@ -580,7 +607,7 @@ fn ViewToggle(props: ViewToggleProps) -> Element {
     let mut view = props.view;
     rsx! {
         div { class: "inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 text-xs",
-            for (mode, label) in [(ViewMode::Cards, "Cards"), (ViewMode::List, "List")] {
+            for (mode, label) in [(ViewMode::Grid, "Grid"), (ViewMode::Cards, "Cards"), (ViewMode::List, "List")] {
                 {
                     let active = view() == mode;
                     let cls = if active {
@@ -793,8 +820,6 @@ struct ProjectTileProps {
 #[component]
 fn ProjectTile(props: ProjectTileProps) -> Element {
     let p = &props.p;
-    let accent = accent(p);
-    let initials = initials(&p.title);
     let cls = format!(
         "{} {} relative shrink-0 overflow-hidden",
         props.class, props.rounded
@@ -824,16 +849,12 @@ fn ProjectTile(props: ProjectTileProps) -> Element {
                     class: "h-full w-full object-cover",
                 }
             } else {
-                // Two stops of the same accent: enough shape to read as
-                // a deliberate tile, quiet enough not to shout in a
-                // list of twenty.
-                div {
-                    class: "flex h-full w-full items-center justify-center",
-                    style: "background: linear-gradient(140deg, color-mix(in oklch, {accent} 82%, transparent) 0%, color-mix(in oklch, {accent} 28%, var(--card)) 100%);",
-                    span {
-                        class: "{props.text_class} font-semibold tracking-tight text-background mix-blend-luminosity",
-                        "{initials}"
-                    }
+                // No cover of its own: the project's abstract, painted
+                // from its id — the same picture everywhere it appears.
+                img {
+                    src: "{task_ui_core::abstract_art::data_url(&p.id.to_string())}",
+                    alt: "",
+                    class: "h-full w-full object-cover",
                 }
             }
         }
@@ -889,29 +910,46 @@ async fn cover_src(image: &str, slug: Option<&str>) -> Option<String> {
     Some(format!("/org/{slug}/media/{path}{suffix}"))
 }
 
-/// Up to two initials from a title. `PNG Worship Collective Album` →
-/// `PW`; `Task` → `T`. Leading numbers are skipped — a studio archive
-/// is full of `01 Michael Kaplan Sessions`, and `0M` identifies
-/// nothing.
-fn initials(title: &str) -> String {
-    let words: Vec<&str> = title
-        .split_whitespace()
-        .filter(|w| w.chars().next().is_some_and(char::is_alphabetic))
-        .collect();
-    let mut out = String::new();
-    for w in words.iter().take(2) {
-        if let Some(c) = w.chars().next() {
-            out.extend(c.to_uppercase());
+// ── project cover (grid view) ───────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct ProjectCoverProps {
+    p: ProjectInfo,
+    sub_count: usize,
+}
+
+/// One project as an album: its square cover (its own image, or its
+/// abstract), and under it the title and where it stands.
+#[component]
+fn ProjectCover(props: ProjectCoverProps) -> Element {
+    let p = &props.p;
+    let pid = p.id.to_string();
+    let progress = (p.progress_percent >= 0).then(|| p.progress_percent.clamp(0, 100));
+    rsx! {
+        Link {
+            to: Route::ProjectDetailRoute { id: pid },
+            class: "group flex min-w-0 flex-col gap-2",
+            div { class: "aspect-square w-full overflow-hidden rounded-xl bg-muted shadow-[0_8px_24px_-12px_rgb(0_0_0/0.6)] ring-1 ring-inset ring-white/5 transition-transform duration-300 group-hover:-translate-y-0.5 group-active:scale-[0.98]",
+                ProjectTile {
+                    p: props.p.clone(),
+                    class: "h-full w-full".to_string(),
+                    text_class: "text-3xl".to_string(),
+                    rounded: String::new(),
+                }
+            }
+            div { class: "flex min-w-0 flex-col gap-0.5 px-0.5",
+                span { class: "truncate text-[15px] font-medium text-foreground md:text-sm", "{p.title}" }
+                span { class: "flex items-center gap-1.5 truncate text-[13px] text-muted-foreground md:text-xs",
+                    span { class: "capitalize", "{p.status}" }
+                    if let Some(pct) = progress {
+                        span { "· {pct}%" }
+                    }
+                    if props.sub_count > 0 {
+                        span { "· {props.sub_count} sub" }
+                    }
+                }
+            }
         }
-    }
-    if out.is_empty() {
-        title
-            .chars()
-            .find(|c| c.is_alphanumeric())
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_else(|| "·".into())
-    } else {
-        out
     }
 }
 
@@ -946,9 +984,9 @@ fn ProjectRow(props: ProjectRowProps) -> Element {
             // and a readable fallback.
             ProjectTile {
                 p: props.p.clone(),
-                class: "size-10".to_string(),
-                text_class: "text-xs".to_string(),
-                rounded: "rounded-lg".to_string(),
+                class: "size-16 md:size-14".to_string(),
+                text_class: "text-base".to_string(),
+                rounded: "rounded-xl".to_string(),
             }
             // title + inline meta
             div { class: "flex min-w-0 flex-1 flex-col gap-0.5",

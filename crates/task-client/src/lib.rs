@@ -80,6 +80,7 @@
 //!
 //! [`LocalServer`]: architect::local
 
+pub mod desktop;
 pub mod error;
 pub mod session;
 pub mod transport;
@@ -260,7 +261,9 @@ impl TaskClient {
     /// 2. the active session's stored server URL — signing in against a
     ///    remote records where, so later calls need nothing but the
     ///    session
-    /// 3. the localhost default
+    /// 3. the desktop app's own node, while it runs ([`desktop`]) — so the
+    ///    CLI works on the same data, as the same person, with no setup
+    /// 4. the localhost default
     #[must_use]
     pub fn server_base(&self) -> String {
         // Only consult the session file when nothing explicit is set —
@@ -272,6 +275,7 @@ impl TaskClient {
                 .ok()
                 .flatten()
                 .and_then(|s| s.active_server().map(|e| e.url.clone()))
+                .or_else(desktop::node_endpoint)
         };
         transport::pick_server_base(self.config.server.as_deref(), session_url.as_deref())
     }

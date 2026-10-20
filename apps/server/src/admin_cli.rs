@@ -48,6 +48,7 @@ pub async fn dispatch() -> eyre::Result<bool> {
         Some("invites") => show_invites(&args[2..]).await.map(|()| true),
         Some("memberships") => show_memberships(&args[2..]).await.map(|()| true),
         Some("rename-org") => rename_org(&args[2..]).await.map(|()| true),
+        Some("bot") => bot(&args[2..]).await.map(|()| true),
         // Dev-only: compiled OUT of release builds entirely, so the
         // deployed (release) server can never seed a known-password
         // admin (PR #295 review). In a release binary `seed` is just an
@@ -100,6 +101,91 @@ pub async fn dispatch() -> eyre::Result<bool> {
             bail!("unknown admin subcommand: {}", other.unwrap_or("(none)"));
         }
     }
+}
+
+/// `admin bot create|list|revoke` — a person's agents ([`crate::bots`]).
+///
+/// The owner is `--owner <uuid>`, or the account a personal server is
+/// signed in as (`task-server peer sign-in`).
+async fn bot(args: &[String]) -> eyre::Result<()> {
+    let data_root = org_proto::DataRoot::from_env().map_err(|e| eyre::eyre!("data root: {e}"))?;
+    let orgs = data_root
+        .scan_orgs()
+        .map_err(|e| eyre::eyre!("scan orgs: {e}"))?;
+    let home = home_org(&orgs)?;
+    let auth = open_org_auth(home.slug()).await?;
+    let memberships = crate::memberships::Memberships::open(&home.memberships_db()).await?;
+    let owner = match flag(args, "--owner") {
+        Some(raw) => raw
+            .trim()
+            .parse::<uuid::Uuid>()
+            .map_err(|e| eyre::eyre!("--owner must be a uuid: {e}"))?,
+        None => crate::peer_cli::load(data_root.path())
+            .and_then(|a| a.user_id.parse().ok())
+            .ok_or_else(|| {
+                eyre::eyre!("--owner <uuid> is required (this server is not signed in as anyone)")
+            })?,
+    };
+    match args.first().map(String::as_str) {
+        Some("create") => {
+            let Some(name) = flag(args, "--name") else {
+                bail!("--name is required");
+            };
+            let slugs: Vec<String> = args
+                .windows(2)
+                .filter(|w| w[0] == "--org")
+                .map(|w| w[1].clone())
+                .collect();
+            let tools = match flag(args, "--tools") {
+                Some(raw) => crate::bots::Tools::parse(&raw)
+                    .ok_or_else(|| eyre::eyre!("--tools is `all` or `library`"))?,
+                None => crate::bots::Tools::All,
+            };
+            let made =
+                crate::bots::create(&auth, &memberships, owner, &name, &slugs, tools).await?;
+            println!(
+                "{} ({}) — {:?} tools in {}",
+                made.bot.name,
+                made.bot.id,
+                made.bot.tools,
+                made.bot.orgs.join(", ")
+            );
+            println!();
+            println!("Its key, shown this once — put it in the bot's environment:");
+            println!();
+            println!("    TASK_TOKEN={}", made.key);
+            println!();
+            println!(
+                "and point its MCP client at this server's /mcp with `Authorization: Bearer ${{TASK_TOKEN}}`."
+            );
+        }
+        Some("list") => {
+            let bots = crate::bots::list(&auth, &memberships, owner).await?;
+            if bots.is_empty() {
+                println!("no bots");
+            }
+            for b in bots {
+                println!("{}  {}  {:?}  {}", b.id, b.name, b.tools, b.orgs.join(", "));
+            }
+        }
+        Some("revoke") => {
+            let Some(raw) = flag(args, "--bot") else {
+                bail!("--bot <uuid> is required");
+            };
+            let bot = raw
+                .trim()
+                .parse::<uuid::Uuid>()
+                .map_err(|e| eyre::eyre!("--bot must be a uuid: {e}"))?;
+            crate::bots::revoke(&auth, &memberships, owner, bot).await?;
+            println!("{bot} revoked — its key no longer works");
+        }
+        _ => bail!(
+            "usage:\n  task-server admin bot create --name <name> --org <slug> [--org <slug>…] [--tools all|library] [--owner <uuid>]\n  \
+             task-server admin bot list [--owner <uuid>]\n  \
+             task-server admin bot revoke --bot <uuid> [--owner <uuid>]"
+        ),
+    }
+    Ok(())
 }
 
 /// Minimal `--flag value` parsing. Deliberately not clap: this is two
@@ -1453,7 +1539,10 @@ async fn seed_owner(
 }
 
 /// Create one auth account if it doesn't exist yet (idempotent seed).
-#[cfg(debug_assertions)]
+///
+/// In every build, not only debug: a device's node creates its owner's
+/// account with it on first run (`local_node::provision_personal`), and a
+/// release app that could not do that could not start.
 pub(crate) async fn seed_account(
     auth: &crate::AuthState,
     email: &str,

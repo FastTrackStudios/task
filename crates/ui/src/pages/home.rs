@@ -2,10 +2,8 @@
 //!
 //! A morning-briefing layout instead of a second task list:
 //!
-//! - **Header** — time-of-day greeting + the day's numbers (open
-//!   tasks, due today, active projects).
-//! - **Quick actions** — the four doors: new note (the `<space> n`
-//!   flow, straight into naming), search everything, capture, tasks.
+//! - **Find or write** — search as a field, and a new note beside it
+//!   (the `<space> n` flow, straight into naming).
 //! - **Today** — the task list's own Today section (in progress,
 //!   overdue, due today), behind the same three-state checkbox as the
 //!   board.
@@ -19,7 +17,7 @@
 
 use crate::format::status_variant;
 use architect_ui::lucide_dioxus::{
-    ArrowRight, CalendarDays, CircleCheck, NotebookPen, Search, Zap,
+    ArrowRight, CalendarDays, CircleCheck, Inbox as InboxIcon, NotebookPen, Search,
 };
 use architect_ui::prelude::*;
 use dioxus::prelude::*;
@@ -67,7 +65,6 @@ pub fn HomeView() -> Element {
     let nav = use_navigator();
     let pending_title = use_context::<crate::chrome::PendingTitleEdit>().0;
     let mut search_open = use_context::<crate::chrome::SearchOpen>().0;
-    let mut fleeting = use_context::<crate::chrome::FleetingOpen>().0;
 
     let cards = use_memo(move || {
         let projects = project_store.list();
@@ -103,24 +100,17 @@ pub fn HomeView() -> Element {
         due
     });
 
-    // The day's numbers for the header line.
-    let stats = use_memo(move || {
-        let entries = task_store.entries();
-        let open = stores::unique_tasks(&entries)
-            .into_iter()
-            .filter(|r| is_open_task(&r.task))
-            .count();
-        let due_today = today_tasks.read().len();
-        let active_projects = project_store
-            .list()
-            .iter()
-            .filter(|r| !r.project.archived && is_active(&r.project.status))
-            .count();
-        (open, due_today, active_projects)
-    });
-
     // Same as the Tasks page: completing offers Undo.
     let toast = use_toast();
+    let to_process = crate::process::use_to_process_count();
+
+    let focus_mode = crate::now_block::use_focus_mode();
+    let for_hour_memo = use_memo(move || {
+        stores::unique_tasks(&task_store.entries())
+            .into_iter()
+            .map(|r| r.task.clone())
+            .collect::<Vec<DbTask>>()
+    });
     let on_status = move |(id, status): (uuid::Uuid, String)| {
         crate::task_board::apply_with_undo(
             muts,
@@ -143,7 +133,6 @@ pub fn HomeView() -> Element {
         projects.error().or(tasks.error()),
     ) {
         (Some(_), Some(_), _) => {
-            let (open, due_today, active_projects) = stats();
             let org_choices: Vec<(String, String)> = org_list
                 .read()
                 .iter()
@@ -167,52 +156,71 @@ pub fn HomeView() -> Element {
             let today_overflow = today_tasks.read().len().saturating_sub(today_list.len());
             // No rail when there is nothing due: an empty "Today" card
             // holding a congratulation is dead furniture — the projects
-            // take the full width instead, and the header's "0 due
-            // today" chip already tells the story.
+            // take the full width instead.
             let has_today = !today_list.is_empty() || today_overflow > 0;
+            // The Today list's own heading badge — the size of the list
+            // beneath it, not a dashboard figure.
+            let due_today = today_tasks.read().len();
+            let for_hour = for_hour_memo();
 
             rsx! {
-                // ── Header: greeting + the day's numbers ──────────
-                div { class: "flex flex-wrap items-end justify-between gap-x-4 gap-y-2",
-                    div { class: "flex flex-col gap-0.5",
-                        Heading { level: HeadingLevel::H1, class: "tracking-tight", "{greeting()}" }
-                        span { class: "text-sm text-muted-foreground",
-                            {chrono::Local::now().format("%A, %B %-d").to_string()}
+                // No greeting, date or counts up top. The status bar has
+                // the time, and how many tasks are open or how many
+                // projects exist is what the Tasks and Projects pages are
+                // for — Home is the next thing to do, not a report on it.
+
+                // ── Find or write ─────────────────────────────────
+                // Search as a field, the way a phone app offers it, with
+                // a new note beside it. Capture and Tasks used to sit here
+                // too; the floating capture button and the tab bar are
+                // already one tap away.
+                div { class: "flex items-center gap-2",
+                    button {
+                        r#type: "button",
+                        class: "flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 px-3 text-left text-sm text-muted-foreground transition-colors hover:border-border active:bg-accent/40",
+                        onclick: move |_| search_open.set(true),
+                        Search { size: 16 }
+                        span { class: "truncate", "Search notes and tasks…" }
+                        kbd { class: "ml-auto hidden shrink-0 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] sm:inline",
+                            "Space Space"
                         }
                     }
-                    div { class: "flex items-center gap-2",
-                        StatChip { value: open, label: "open" }
-                        StatChip { value: due_today, label: "today" }
-                        StatChip { value: active_projects, label: "projects" }
+                    button {
+                        r#type: "button",
+                        class: "flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-card/60 px-3 text-sm text-foreground transition-colors hover:border-border active:bg-accent/40",
+                        aria_label: "New note",
+                        title: "New note (Space n)",
+                        onclick: new_note,
+                        NotebookPen { size: 16 }
+                        span { class: "hidden sm:inline", "New note" }
                     }
                 }
 
-                // ── Quick actions ─────────────────────────────────
-                div { class: "flex flex-wrap items-center gap-2",
-                    ActionTile {
-                        label: "New note",
-                        hint: "Space n",
-                        onclick: new_note,
-                        NotebookPen { size: 16 }
+                // ── Process ───────────────────────────────────────
+                // What's been captured and not yet decided comes first:
+                // the inbox is where the system stays trustworthy.
+                if to_process > 0 {
+                    Link {
+                        to: Route::InboxRoute {},
+                        class: "flex min-h-14 items-center gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 transition-colors hover:bg-primary/15 active:bg-primary/20",
+                        span { class: "flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/20 text-primary",
+                            InboxIcon { size: 18 }
+                        }
+                        span { class: "flex min-w-0 flex-1 flex-col leading-tight",
+                            span { class: "text-sm font-semibold text-foreground",
+                                if to_process == 1 { "1 capture to process" } else { "{to_process} captures to process" }
+                            }
+                            span { class: "text-xs text-muted-foreground", "Decide what each one is" }
+                        }
+                        ArrowRight { size: 16 }
                     }
-                    ActionTile {
-                        label: "Search",
-                        hint: "Space Space",
-                        onclick: move |_| search_open.set(true),
-                        Search { size: 16 }
-                    }
-                    ActionTile {
-                        label: "Capture",
-                        hint: "Space c",
-                        onclick: move |_| fleeting.set(true),
-                        Zap { size: 16 }
-                    }
-                    ActionTile {
-                        label: "Tasks",
-                        hint: "g t",
-                        onclick: move |_| { nav.push(Route::TasksRoute {}); },
-                        CircleCheck { size: 16 }
-                    }
+                }
+
+                // ── This hour ─────────────────────────────────────
+                crate::now_block::ModeBand {
+                    mode: focus_mode(),
+                    tasks: for_hour,
+                    on_status,
                 }
 
                 // ── Today + Projects ──────────────────────────────
@@ -247,18 +255,19 @@ pub fn HomeView() -> Element {
                     div { class: if has_today { "flex flex-col gap-2.5 lg:col-span-2" } else { "flex flex-col gap-2.5 lg:col-span-3" },
                         // Wraps on a phone: the org picker gets its own
                         // line instead of squeezing the label to two.
-                        div { class: "flex flex-wrap items-center justify-between gap-x-3 gap-y-2",
+                        // The label and "All projects" on one line. The
+                        // new-project field joins them from `sm` up; a phone
+                        // creates projects from the Projects tab's own bar.
+                        div { class: "flex flex-wrap items-center gap-x-3 gap-y-2",
                             span { class: "shrink-0 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground",
                                 "Active work"
                             }
-                            div { class: "flex min-w-0 flex-wrap items-center gap-2",
-                                {quick_add}
-                                Link {
-                                    to: Route::ProjectsRoute {},
-                                    class: "flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground",
-                                    if overflow > 0 { "All projects · {card_list.len()}" } else { "All projects" }
-                                    ArrowRight { size: 12 }
-                                }
+                            div { class: "hidden sm:ml-auto sm:block", {quick_add} }
+                            Link {
+                                to: Route::ProjectsRoute {},
+                                class: "ml-auto flex min-h-11 items-center gap-1 text-xs text-muted-foreground hover:text-foreground sm:ml-0 sm:min-h-0",
+                                if overflow > 0 { "All projects · {card_list.len()}" } else { "All projects" }
+                                ArrowRight { size: 12 }
                             }
                         }
                         if shown.is_empty() {
@@ -300,53 +309,6 @@ pub fn HomeView() -> Element {
     rsx! {
         div { class: "mx-auto flex w-full max-w-6xl flex-col gap-5 p-3 sm:p-5 lg:px-8 lg:py-6",
             {view}
-        }
-    }
-}
-
-/// Time-of-day greeting for the header.
-fn greeting() -> &'static str {
-    match chrono::Local::now().format("%H").to_string().parse::<u8>() {
-        Ok(h) if h < 5 => "Up late",
-        Ok(h) if h < 12 => "Good morning",
-        Ok(h) if h < 17 => "Good afternoon",
-        _ => "Good evening",
-    }
-}
-
-/// One number + label in the header's stat strip.
-#[component]
-fn StatChip(value: usize, label: &'static str) -> Element {
-    rsx! {
-        div { class: "flex items-baseline gap-1.5 rounded-lg border border-border/60 bg-card/50 px-2.5 py-1.5",
-            span { class: "text-sm font-semibold tabular-nums text-foreground", "{value}" }
-            span { class: "text-[11px] text-muted-foreground", "{label}" }
-        }
-    }
-}
-
-/// One quick-action door: icon, label, and its key sequence.
-#[component]
-fn ActionTile(
-    label: &'static str,
-    hint: &'static str,
-    onclick: EventHandler<MouseEvent>,
-    children: Element,
-) -> Element {
-    // Compact pills, not four equal panels: these are shortcuts, and
-    // shortcuts don't get to out-weigh the work below them.
-    rsx! {
-        button {
-            r#type: "button",
-            class: "group flex items-center gap-2 rounded-full border border-border/70 bg-card/60 py-1.5 pl-3 pr-2 text-left transition-colors hover:border-border hover:bg-accent/40",
-            onclick: move |e| onclick.call(e),
-            span { class: "text-muted-foreground transition-colors group-hover:text-foreground",
-                {children}
-            }
-            span { class: "text-sm text-foreground", "{label}" }
-            kbd { class: "hidden shrink-0 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline",
-                "{hint}"
-            }
         }
     }
 }
@@ -491,7 +453,9 @@ fn ProjectCard(
             // neighbour.
             Link {
                 to: detail.clone(),
-                class: "-mx-3.5 -mt-3.5 mb-0.5 block h-24 overflow-hidden rounded-t-xl border-b border-border/50",
+                // Shorter on a phone: one card per row there, and a 96px
+                // monogram pushed the card's actual content below the fold.
+                class: "-mx-3.5 -mt-3.5 mb-0.5 block h-16 overflow-hidden rounded-t-xl border-b border-border/50 sm:h-24",
                 if let Some(u) = cover {
                     div {
                         class: "h-full w-full transition-transform duration-300 group-hover:scale-[1.02]",
@@ -541,7 +505,10 @@ fn ProjectCard(
                 }
             }
             // Done/total as a hairline bar — the project's pulse in
-            // 6 vertical pixels.
+            // 6 vertical pixels. Only once there is something to count:
+            // an empty track reading "0/0" above "No open tasks" said
+            // the same nothing twice.
+            if total > 0 {
             div { class: "flex items-center gap-2",
                 div { class: "h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted/20",
                     div {
@@ -552,6 +519,7 @@ fn ProjectCard(
                 span { class: "shrink-0 text-[11px] tabular-nums text-muted-foreground",
                     "{done}/{total}"
                 }
+            }
             }
             // The first action — live checkbox, same click cycle as
             // the board (start the clock, complete, reopen). A project

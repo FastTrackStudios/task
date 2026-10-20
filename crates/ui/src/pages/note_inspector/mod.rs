@@ -65,6 +65,17 @@ impl InspectorTab {
             InspectorTab::Share => "Share",
         }
     }
+
+    /// The picker's glyph for this panel.
+    pub fn icon(self) -> Element {
+        use architect_ui::lucide_dioxus as i;
+        match self {
+            InspectorTab::Properties => rsx! { i::SlidersHorizontal {} },
+            InspectorTab::Links => rsx! { i::Link2 {} },
+            InspectorTab::Graph => rsx! { i::Waypoints {} },
+            InspectorTab::Share => rsx! { i::Share2 {} },
+        }
+    }
 }
 
 /// The inspector: tab strip + the showing tab's body. See the module
@@ -94,23 +105,27 @@ pub fn NoteInspector(
     #[props(default)] extra: Option<Element>,
 ) -> Element {
     let showing = tab();
+    let mut picking = use_signal(|| false);
     rsx! {
-        div { class: "flex items-center gap-1 border-b border-border/60 px-2 py-1.5",
+        div { class: "flex min-h-0 flex-1 flex-col",
+        // Desk: the sidebar's compact tab strip. (A phone picks at the
+        // drawer's foot instead — see below.)
+        div { class: "hidden items-center gap-1 border-b border-border/60 px-2 py-1.5 md:flex",
             for t in InspectorTab::ALL {
                 button {
                     key: "{t.label()}",
                     r#type: "button",
                     "data-testid": "inspector-tab-{t.label()}",
                     class: if showing == t {
-                        "rounded px-2 py-1 text-xs font-medium text-foreground bg-accent"
+                        "h-9 flex-1 rounded-full bg-foreground/[0.12] text-[14px] font-semibold text-foreground shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)] md:h-auto md:flex-none md:rounded md:bg-accent md:px-2 md:py-1 md:text-xs md:font-medium md:shadow-none"
                     } else {
-                        "rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                        "h-9 flex-1 rounded-full text-[14px] text-muted-foreground active:bg-foreground/10 md:h-auto md:flex-none md:rounded md:px-2 md:py-1 md:text-xs md:hover:text-foreground"
                     },
                     onclick: move |_| tab.set(t),
                     "{t.label()}"
                 }
             }
-            div { class: "ml-auto flex items-center gap-1.5",
+            div { class: "ml-auto hidden items-center gap-1.5 md:flex",
                 {extra}
                 if let Some(hide) = on_hide {
                     button {
@@ -122,6 +137,7 @@ pub fn NoteInspector(
                 }
             }
         }
+        div { class: "min-h-0 flex-1 overflow-y-auto",
         match showing {
             InspectorTab::Properties => rsx! { crate::pages::note_properties::NoteProperties {} },
             InspectorTab::Share => rsx! {
@@ -157,6 +173,40 @@ pub fn NoteInspector(
                     div { class: "px-3 py-4 text-sm text-muted-foreground", "Open a note to see its local graph." }
                 },
             },
+        }
+        }
+        // Phone: what shows is picked at the drawer's foot (Obsidian's):
+        // the current panel as a row; tap it and every panel opens above.
+        div { class: "shrink-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 md:hidden",
+            div { class: "flex flex-col overflow-hidden rounded-[22px] bg-foreground/[0.06]",
+                if picking() {
+                    for t in InspectorTab::ALL {
+                        button {
+                            key: "{t.label()}",
+                            r#type: "button",
+                            "data-testid": "inspector-tab-{t.label()}",
+                            class: if showing == t { "mx-1.5 mt-1.5 flex min-h-12 items-center gap-3 rounded-[16px] bg-foreground/[0.1] px-3.5 text-[17px] font-semibold text-foreground" } else { "mx-1.5 mt-1.5 flex min-h-12 items-center gap-3 rounded-[16px] px-3.5 text-[17px] text-foreground/85 active:bg-foreground/10" },
+                            onclick: move |_| {
+                                tab.set(t);
+                                picking.set(false);
+                            },
+                            span { class: "flex size-6 items-center justify-center [&_svg]:size-5", {t.icon()} }
+                            "{t.label()}"
+                        }
+                    }
+                }
+                button {
+                    r#type: "button",
+                    "data-testid": "inspector-picker",
+                    "aria-expanded": "{picking()}",
+                    class: "flex min-h-12 items-center gap-3 px-5 text-[17px] text-muted-foreground active:bg-foreground/10",
+                    onclick: move |_| picking.toggle(),
+                    span { class: "flex size-6 items-center justify-center [&_svg]:size-5", {showing.icon()} }
+                    span { class: "flex-1 text-left", "{showing.label()}" }
+                    architect_ui::lucide_dioxus::ChevronsUpDown { size: 18 }
+                }
+            }
+        }
         }
     }
 }

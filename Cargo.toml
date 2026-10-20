@@ -21,6 +21,7 @@ members = [
     "apps/server",
     "apps/web",
     # ── crates/ — small shared crates ─────────────────────────────────
+    "crates/node-host",
     "crates/note-tabs",
     "crates/player-ui",
     "crates/plugin",
@@ -188,6 +189,7 @@ members = [
     "features/vault/vault-live",
     "features/vault/vault-obsidian",
     "features/vault/vault-proto",
+    "features/vault/vault-doc",
     "features/vault/vault-sync-client",
     "features/view/view",
     "features/view/view-calendar",
@@ -242,6 +244,8 @@ repository = "https://github.com/FastTrackStudios/task"
 # `native`). Note that cargo ignores a member's `default-features = false`
 # on a workspace dependency unless the workspace entry sets it too.
 # crates/
+# The device's own node (offline.local) — native app mains only.
+task-node-host = { path = "crates/node-host" }
 task-note-tabs = { path = "crates/note-tabs" }
 task-player-ui = { path = "crates/player-ui" }
 task-plugin = { path = "crates/plugin" }
@@ -297,6 +301,7 @@ vault-entity = { path = "features/vault/vault-entity" }
 vault-live = { path = "features/vault/vault-live" }
 vault-obsidian = { path = "features/vault/vault-obsidian" }
 vault-proto = { path = "features/vault/vault-proto", default-features = false }
+vault-doc = { path = "features/vault/vault-doc" }
 vault-sync-client = { path = "features/vault/vault-sync-client" }
 # features/wiki — LLM-wiki (proto / live backend / graph / search)
 wiki-archive = { path = "features/wiki/wiki-archive" }
@@ -439,13 +444,13 @@ view-table = { path = "features/view/view-table" }
 #
 # The chart renderer registers itself through `editor_state::fence_renderer`
 # rather than editor-state depending on it. See docs/SPLIT.md in that repo.
-editor ={ git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.22", default-features = false }
-editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.22" }
-editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.22", default-features = false }
+editor ={ git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24", default-features = false }
+editor-crdt = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24" }
+editor-state = { git = "https://github.com/FastTrackStudios/editor", tag = "v0.1.24", default-features = false }
 # The editor's keyflow half moved to the keyflow repo with v0.2.0: both
 # crates need `editor-state` from below AND `keyflow-text`/`engraver` from
 # above, so that is the only repo where they can live.
-editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+editor-keyflow = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
 # features/spaced-repetition — the FSRS scheduler the recall deck runs on
 spaced-repetition = { path = "features/spaced-repetition/spaced-repetition" }
 
@@ -463,23 +468,27 @@ ssg-vault = { path = "features/ssg/ssg-vault" }
 # Formerly libs/architect/* + libs/fts-ui + crates/task/telemetry in the
 # monorepo. `fts-ui` is now `architect-ui`; `task-telemetry` is now
 # `architect-telemetry`.
-architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3", features = ["iroh"] }
-architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
+architect = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6", features = ["iroh"] }
+architect-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
+architect-permissions = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
+architect-permissions-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
+architect-telemetry = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
+architect-ui = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
 # The primitives architect-ui is built on — the same git source and
 # branch, so cargo unifies them. Task renders its own toasts from these
 # (`crates/ui/src/toasts.rs`) to show toast action buttons.
 dioxus-primitives = { git = "https://github.com/FastTrackStudios/dioxus-components", package = "dioxus-primitives", branch = "main", default-features = false }
-auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
+auth = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
+auth-proto = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
 # `auth_client::oidc` is the shared redirect sign-in — PKCE and the
 # request/response shapes, one implementation for all five apps rather
 # than five chances to build a challenge wrong.
-auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
-crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.3" }
+auth-client = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
+crdt = { git = "https://github.com/FastTrackStudios/architect", tag = "v0.9.6" }
+# The device database engine (offline.md) — Turso's LOCAL engine only;
+# its sync is never used. Default features off: `mimalloc` would install
+# a global allocator from inside a library.
+turso = { version = "0.8.3", default-features = false }
 
 # ── FastTrackStudio monorepo — the music-production domains ───────────
 # These stay in the FTS monorepo; Task consumes them cross-repo. REPIN
@@ -670,6 +679,9 @@ facet-core = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.0
 # with "schema decode consumed N of M bytes" (it compares phon-schema's
 # allocation count against the slice length).
 vox-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.3.0" }
+# iOS release builds crashed on every launch: tao returned its scene
+# configuration already released (vendor README, `tao`).
+tao = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.4.2" }
 # The editor's vendored mermaid-rs-renderer fork now lives in the editor
 # repo, so it arrives as an ordinary transitive dep of `editor-mermaid`
 # and needs no patch entry here.
@@ -697,16 +709,16 @@ vox-phon = { git = "https://github.com/FastTrackStudios/vendor", tag = "v0.3.0" 
 # copies (or the keyflow repo should stop carrying them). Until one of
 # those ships, this is that fix, applied at the consumer.
 [patch."https://github.com/FastTrackStudios/FastTrackStudio"]
-engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
-engraver-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
-keyflow-text = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
-keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
-keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+engraver = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+engraver-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+keyflow-text = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+keyflow-chordpro = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
 
 [patch."https://github.com/FastTrackStudios/daw"]
-keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
-keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.5" }
+keyflow-proto = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
+keyflow-syntax = { git = "https://github.com/FastTrackStudios/keyflow", tag = "v0.2.7" }
 
 # dioxus-core with DioxusLabs/dioxus#5668's suspense fixes. With the
 # web bundle split into lazily loaded chunks every route sits behind a

@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use architect_ui::prelude::*;
 use chrono::{Datelike, NaiveDate, Utc};
 use dioxus::prelude::*;
 use scheduling_proto::{BlockAssignment, BlockCategory, CalEvent};
@@ -95,10 +94,43 @@ pub fn ScheduleView() -> Element {
     // Every visible date's resolved plan (saved blocks + soft template
     // fallback) as one shared-store list; all writes go through
     // [`stores::DayPlanMutations`] (optimistic, rollback-on-failure).
-    let plans_result = stores::use_dayplan_list(range(), tpl_list());
+    // One day before the view too: its overnight blocks run into the
+    // first visible morning.
+    let plans_result = stores::use_dayplan_list(
+        range().map(|(s, e)| (s.pred_opt().unwrap_or(s), e)),
+        tpl_list(),
+    );
     let plan_muts = stores::use_dayplan_mutations();
+    // Timer sessions, for the actual-vs-plan strips.
+    let _sessions = stores::use_session_list();
+    let session_store = stores::use_session_store();
     // Which (date, block_id) is being edited, if any.
     let mut editing = use_signal(|| None::<(NaiveDate, String)>);
+    // The day and view in sight — the page's, so the phone header and
+    // week strip drive the calendar.
+    let mut cal_anchor = use_signal(|| chrono::Local::now().date_naive());
+    // The view is remembered per device; with none chosen yet, a phone
+    // opens on Day (seven columns don't fit) and a desk on Week.
+    let stored_raw = crate::local_store::get(VIEW_KEY);
+    let stored_view = stored_raw.as_deref().and_then(view_from_key);
+    let mut cal_view = use_signal(|| stored_view.unwrap_or(ViewMode::Day));
+    // The Planner — one day, top to bottom — is the default view; a
+    // calendar view is a choice the device remembers.
+    let mut planner = use_signal(|| stored_raw.as_deref().is_none_or(|v| v == PLANNER_KEY));
+    // The Planner mounts no calendar to report what is in view, so it
+    // keeps the loaded week around the day it shows itself.
+    use_effect(move || {
+        if !planner() {
+            return;
+        }
+        let day = cal_anchor();
+        if range.peek().is_some_and(|(s, e)| s <= day && day <= e) {
+            return;
+        }
+        let monday = day - chrono::Duration::days(i64::from(day.weekday().num_days_from_monday()));
+        range.set(Some((monday, monday + chrono::Duration::days(6))));
+    });
+    let mut new_event = use_signal(|| 0u64);
     // Planned meals — previewed inside Meal-category blocks
     // ("what's for dinner on that date").
     let meals = use_resource(move || async move {
@@ -153,6 +185,16 @@ pub fn ScheduleView() -> Element {
     };
 
     let events = state.read().events.values().cloned().collect::<Vec<_>>();
+    // What was actually tracked, beside the plan — this org's sessions.
+    let actuals = {
+        let rows = session_store.list();
+        let mine: Vec<timer_proto::WorkSession> = rows
+            .iter()
+            .filter(|r| slug().is_some_and(|s| r.slug == s))
+            .map(|r| r.session.clone())
+            .collect();
+        actual_spans(&mine, chrono::Local::now())
+    };
     let meal_lookup = build_meal_lookup(meals().as_deref().unwrap_or(&[]));
     // Stale-while-revalidate: navigating the range keeps the last rows
     // rendered while the refetch is in flight.
@@ -162,9 +204,19 @@ pub fn ScheduleView() -> Element {
         .unwrap_or_default();
     let plans_err = plans_result.error().cloned();
     let template_blocks = build_blocks(&plan_rows, &meal_lookup);
+    // Which blocks are meals: on the Planner they open the meal sheet.
+    let meal_blocks: Vec<String> = plan_rows
+        .iter()
+        .flat_map(|r| r.plan.blocks.iter())
+        .filter(|b| b.category == BlockCategory::Meal)
+        .map(|b| b.id.0.clone())
+        .collect();
+    // The meal sheet open over the Planner: `(day, block label)`.
+    let mut meal_open = use_signal(|| None::<(NaiveDate, String)>);
     let nav = use_navigator();
     // Which apps may claim a file the overlay links to.
     let plugins = crate::nav::use_active_plugins();
+    let bookings_on = plugins.contains("bookings");
 
     // The same meals, on the block axis. The time grid can only show a
     // meal where a day-plan block happens to sit; this shows every
@@ -186,8 +238,62 @@ pub fn ScheduleView() -> Element {
             b.start.minutes_since_midnight,
             b.end.minutes_since_midnight,
             assignment,
+            b.category,
         ))
     });
+    // The mode the open block can start: it is today's, running now, and
+    // its kind steers the hour.
+    let focus_mode = crate::now_block::use_focus_mode();
+    let timers = stores::use_timer_mutations();
+    let active_timer = crate::chrome::use_active_timer();
+    let sheet_mode = editor.as_ref().and_then(|(date, _, _, s, e, _, cat)| {
+        use chrono::Timelike;
+        let now = chrono::Local::now();
+        let minute = u16::try_from(now.hour() * 60 + now.minute()).ok()?;
+        let label = cat.focus_label()?;
+        if *date != now.date_naive() || minute < *s || minute >= *e {
+            return None;
+        }
+        let name = task_proto::suggest::mode_name(*cat).to_owned();
+        Some(
+            match focus_mode.read().as_ref().filter(|m| m.category == *cat) {
+                Some(m) => crate::pages::block_sheet::ModeAction::Running(
+                    name,
+                    crate::chrome::fmt_hms((chrono::Utc::now() - m.started).num_seconds().max(0)),
+                ),
+                None => {
+                    let _ = label;
+                    crate::pages::block_sheet::ModeAction::Start(name)
+                }
+            },
+        )
+    });
+    let sheet_mode_cat = editor.as_ref().map(|t| t.6);
+    let toggle_mode = move || {
+        if let Some(m) = focus_mode.peek().clone() {
+            timers.stop(m.slug, m.user_id, m.session_id);
+            return;
+        }
+        let Some(label) = sheet_mode_cat.and_then(|c| c.focus_label()) else {
+            return;
+        };
+        let Some((slug, org_id)) = crate::chrome::resolve_org(&selection.read(), &org_list.read())
+        else {
+            return;
+        };
+        let req = timer_proto::StartTimerRequest {
+            user_id: crate::chrome::owner_id(org_id),
+            org_id,
+            project_id: None,
+            project_path: String::new(),
+            task_note_path: String::new(),
+            description: label.to_owned(),
+        };
+        match active_timer.as_ref() {
+            Some(at) => timers.switch(slug, at.session.id, req),
+            None => timers.start(slug, req),
+        }
+    };
     let (tasks, projects) = pickers().unwrap_or_default();
 
     // The named store mutations behind each edit surface — optimistic
@@ -196,9 +302,23 @@ pub fn ScheduleView() -> Element {
                                label: String,
                                s: u16,
                                e: u16,
-                               assign: Option<Assign>| {
+                               assign: Option<Assign>,
+                               category: BlockCategory| {
         let Some(slug) = slug() else { return };
-        plan_muts.save_block(slug, date, id, label, (s, e), assign.map(to_assignment));
+        let label = if label.is_empty() {
+            "Block".to_owned()
+        } else {
+            label
+        };
+        plan_muts.save_block(
+            slug,
+            date,
+            id,
+            label,
+            (s, e),
+            assign.map(to_assignment),
+            category,
+        );
         editing.set(None);
     };
 
@@ -238,6 +358,56 @@ pub fn ScheduleView() -> Element {
         (alloc_min.max(0) as f64 / 60.0, blocks, assigned)
     };
 
+    // ── The phone header ──
+    let today = chrono::Local::now().date_naive();
+    let header_title = match cal_view() {
+        _ if planner() => view_calendar::day_title(cal_anchor(), today),
+        ViewMode::Day => view_calendar::day_title(cal_anchor(), today),
+        ViewMode::Month => cal_anchor().format("%B").to_string(),
+        // The week's own day header (full width, under the title) says
+        // which days; the title says the month — or both, across one.
+        ViewMode::Week | ViewMode::Blocks => {
+            let a = cal_anchor();
+            let monday = a - chrono::Duration::days(i64::from(a.weekday().num_days_from_monday()));
+            let sunday = monday + chrono::Duration::days(6);
+            if monday.month() == sunday.month() {
+                monday.format("%B").to_string()
+            } else {
+                format!("{} – {}", monday.format("%b"), sunday.format("%b"))
+            }
+        }
+    };
+    // A new block on the day in view: from the next hour today, else
+    // 09:00 — then straight into its sheet to name it.
+    let mut add_block_now = move || {
+        let Some(slug) = slug() else { return };
+        let date = cal_anchor();
+        let start = if date == chrono::Local::now().date_naive() {
+            use chrono::Timelike;
+            let h = chrono::Local::now().hour() + 1;
+            u16::try_from(h.min(23) * 60).unwrap_or(540)
+        } else {
+            540
+        };
+        let end = (start + 60).min(1440);
+        let id = plan_muts.add_block(
+            slug,
+            date,
+            "New block".to_owned(),
+            BlockCategory::Allocatable,
+            (start, end),
+        );
+        editing.set(Some((date, id)));
+    };
+    // Days with an event, for the week strip's dots (every day has
+    // plan blocks, so those would dot everything).
+    let busy_days: Vec<NaiveDate> = state
+        .read()
+        .events
+        .values()
+        .map(|e| e.start.with_timezone(&chrono::Local).date_naive())
+        .collect();
+
     // One-line usage context, folded into the calendar toolbar on
     // wide screens instead of costing the page its own row.
     let summary = (overview.1 > 0).then(|| {
@@ -253,7 +423,10 @@ pub fn ScheduleView() -> Element {
         // compact banners above it. Phones subtract the mobile chrome
         // with `dvh` (browser-UI collapse can't hide the grid bottom);
         // `md:`+ keeps the desktop top-bar math.
-        div { class: "flex h-[calc(100dvh-8rem)] flex-col overflow-hidden pb-14 md:h-[calc(100vh-3.5rem)] md:pb-0 lg:h-screen",
+        // Phone: exactly the screen under the status bar — the grid
+        // scrolls under the floating tab bar (the shell's bottom padding
+        // is given back), so the document itself never scrolls.
+        div { class: "flex h-[calc(100dvh-env(safe-area-inset-top,0px))] -mb-[calc(6rem+env(safe-area-inset-bottom,0px))] flex-col overflow-hidden md:mb-0 md:h-[calc(100vh-3.5rem)] lg:h-screen",
             match &*templates.read_unchecked() {
                 Some(Err(e)) => rsx! {
                     div { class: "mx-3 mt-2 shrink-0",
@@ -263,9 +436,12 @@ pub fn ScheduleView() -> Element {
                         }
                     }
                 },
+                // Having no templates is a normal state, not a fault: a
+                // hint on a desk, nothing on a phone, where three lines of
+                // file paths sat above the calendar on every visit.
                 Some(Ok(t)) if t.is_empty() => rsx! {
-                    div { class: "mx-3 mt-2 shrink-0 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground",
-                        "No day-plan templates for this org under Projects/Scheduling/templates/ (weekday.md / weekend.md) — showing events only."
+                    div { class: "mx-3 mt-2 hidden shrink-0 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground md:block",
+                        "Showing events only. Plan your days by adding weekday.md and weekend.md under Projects/Scheduling/templates."
                     }
                 },
                 _ => rsx! {},
@@ -278,10 +454,148 @@ pub fn ScheduleView() -> Element {
                     }
                 }
             }
+            // Phone: the day as the title, + for a new block, ⋯ for the
+            // views and the day's plan; the week under it in reach.
+            div { class: "shrink-0 md:hidden",
+                task_ui_core::section_header::SectionHeader {
+                    title: header_title,
+                    // The week leads the header (tap a day, swipe for the
+                    // next week); the month view keeps its name.
+                    lead: (planner() || cal_view() == ViewMode::Day).then(|| rsx! {
+                        view_calendar::WeekStrip {
+                            anchor: cal_anchor(),
+                            on_pick: move |d: NaiveDate| {
+                                cal_anchor.set(d);
+                            },
+                            busy: busy_days.clone(),
+                            compact: true,
+                        }
+                    }),
+                    action: rsx! { architect_ui::lucide_dioxus::Plus { size: 21 } },
+                    action_label: "New block".to_owned(),
+                    on_action: move |()| add_block_now(),
+                    if cal_anchor() != today {
+                        task_ui_core::section_header::SectionMenuItem {
+                            label: "Go to today",
+                            icon: rsx! { architect_ui::lucide_dioxus::CalendarCheck { size: 18 } },
+                            on_click: move |()| cal_anchor.set(today),
+                        }
+                    }
+                    task_ui_core::section_header::SectionMenuItem {
+                        label: "Planner",
+                        icon: rsx! { architect_ui::lucide_dioxus::ListTodo { size: 18 } },
+                        note: planner().then(|| "✓".to_owned()),
+                        on_click: move |()| {
+                            planner.set(true);
+                            crate::local_store::set(VIEW_KEY, PLANNER_KEY);
+                        },
+                    }
+                    for (mode, name) in [
+                        (ViewMode::Day, "Day"),
+                        (ViewMode::Week, "Week"),
+                        (ViewMode::Month, "Month"),
+                        (ViewMode::Blocks, "Blocks"),
+                    ] {
+                        task_ui_core::section_header::SectionMenuItem {
+                            key: "{name}",
+                            label: name,
+                            icon: rsx! { architect_ui::lucide_dioxus::CalendarDays { size: 18 } },
+                            note: (!planner() && cal_view() == mode).then(|| "✓".to_owned()),
+                            on_click: move |()| {
+                                planner.set(false);
+                                cal_view.set(mode);
+                                crate::local_store::set(VIEW_KEY, view_key(mode));
+                            },
+                        }
+                    }
+                    task_ui_core::section_header::SectionMenuDivider {}
+                    task_ui_core::section_header::SectionMenuItem {
+                        label: "New event",
+                        icon: rsx! { architect_ui::lucide_dioxus::CalendarPlus { size: 18 } },
+                        on_click: move |()| new_event += 1,
+                    }
+                    task_ui_core::section_header::SectionMenuItem {
+                        label: "Reset day to template",
+                        icon: rsx! { architect_ui::lucide_dioxus::RotateCcw { size: 18 } },
+                        on_click: move |()| reset_day(cal_anchor()),
+                    }
+                    // Bookings live with the schedule, not as a section of
+                    // their own.
+                    if bookings_on {
+                        task_ui_core::section_header::SectionMenuItem {
+                            label: "Bookings",
+                            icon: rsx! { architect_ui::lucide_dioxus::CalendarClock { size: 18 } },
+                            on_click: move |()| {
+                                nav.push(task_plugin_ui::href("bookings", "", ""));
+                            },
+                        }
+                    }
+                }
+            }
+            // The calendar takes what is left under the header — sized to
+            // the whole page it overflowed, and its focus scrolled the
+            // header away.
+            if planner() {
+                // Desk: the day and the way to the calendar views (the
+                // phone has both in its header).
+                div { class: "hidden shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2 md:flex",
+                    button {
+                        r#type: "button",
+                        class: "rounded-md px-2 py-1 text-sm hover:bg-accent",
+                        onclick: move |_| { let d = cal_anchor() - chrono::Duration::days(1); cal_anchor.set(d); },
+                        "‹"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "rounded-md px-2 py-1 text-sm hover:bg-accent",
+                        onclick: move |_| cal_anchor.set(today),
+                        "Today"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "rounded-md px-2 py-1 text-sm hover:bg-accent",
+                        onclick: move |_| { let d = cal_anchor() + chrono::Duration::days(1); cal_anchor.set(d); },
+                        "›"
+                    }
+                    span { class: "text-sm font-semibold", "{view_calendar::day_title(cal_anchor(), today)}" }
+                    div { class: "ml-auto flex items-center gap-1",
+                        span { class: "rounded-md bg-accent px-2 py-1 text-xs font-medium", "Planner" }
+                        for (mode, name) in [(ViewMode::Day, "Day"), (ViewMode::Week, "Week"), (ViewMode::Month, "Month")] {
+                            button {
+                                key: "{name}",
+                                r#type: "button",
+                                class: "rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
+                                onclick: move |_| {
+                                    planner.set(false);
+                                    cal_view.set(mode);
+                                    crate::local_store::set(VIEW_KEY, view_key(mode));
+                                },
+                                "{name}"
+                            }
+                        }
+                    }
+                }
+                div { class: "min-h-0 flex-1 overflow-y-auto",
+                    crate::pages::planner::Planner {
+                        day: cal_anchor(),
+                        blocks: template_blocks.clone(),
+                        events: events.clone(),
+                        actuals: actuals.clone(),
+                        on_block: move |(date, id)| editing.set(Some((date, id))),
+                        meal_blocks: meal_blocks.clone(),
+                        on_meal: move |(date, label)| meal_open.set(Some((date, label))),
+                    }
+                }
+            } else {
+            div { class: "min-h-0 flex-1",
             Calendar {
                 events,
                 template_blocks,
-                initial_view: Some(ViewMode::Week),
+                actuals,
+                anchor: Some(cal_anchor),
+                view: Some(cal_view),
+                phone_chrome: true,
+                new_event: Some(new_event),
                 summary,
                 slot_rows,
                 slot_items,
@@ -302,186 +616,43 @@ pub fn ScheduleView() -> Element {
                 },
                 on_event: move |mu| on_event(mu),
             }
+            }
+            }
         }
-        if let Some((date, id, label, start_min, end_min, assignment)) = editor {
-            BlockEditor {
+        if let (Some((date, label)), Some(slug)) = (meal_open(), slug()) {
+            crate::pages::meal_sheet::MealSheet {
+                key: "{date}-{label}",
+                slug,
+                date,
+                label,
+                on_close: move |()| meal_open.set(None),
+            }
+        }
+        if let Some((date, id, label, start_min, end_min, assignment, category)) = editor {
+            crate::pages::block_sheet::BlockSheet {
                 key: "{date}-{id}",
                 label,
                 start_min,
                 end_min,
+                category,
                 assignment,
                 tasks,
                 projects,
-                on_save: move |(l, s, e, a): (String, u16, u16, Option<Assign>)| {
-                    save_block((date, id.clone()), l, s, e, a);
+                mode: sheet_mode,
+                on_mode: move |()| toggle_mode(),
+                on_save: {
+                    let id = id.clone();
+                    move |(l, s, e, a, c): crate::pages::block_sheet::BlockSave| {
+                        save_block((date, id.clone()), l, s, e, a, c);
+                    }
                 },
-                on_reset: move |()| reset_day(date),
-                on_cancel: move |()| editing.set(None),
-            }
-        }
-    }
-}
-
-/// Modal to move / relabel / assign a plan block. Holds its own working
-/// values so typing doesn't churn the page; commits on Save.
-#[component]
-fn BlockEditor(
-    label: ReadSignal<String>,
-    start_min: u16,
-    end_min: u16,
-    assignment: ReadSignal<Option<Assign>>,
-    tasks: ReadSignal<PickList>,
-    projects: ReadSignal<PickList>,
-    on_save: EventHandler<(String, u16, u16, Option<Assign>)>,
-    on_reset: EventHandler<()>,
-    on_cancel: EventHandler<()>,
-) -> Element {
-    // Working copies seeded once per mount (the parent keys this
-    // modal per block) — peek, so upstream writes don't churn the
-    // user's draft mid-edit.
-    let mut lbl = use_signal(move || label.peek().clone());
-    let mut start = use_signal(|| start_min);
-    let mut end = use_signal(|| end_min);
-    let mut assign = use_signal(move || assignment.peek().clone());
-    // The task/project picker binds a String; on_change dispatches into `assign`.
-    let pick_sel = use_signal(String::new);
-
-    let assign_title = assign().map(|a| a.1).unwrap_or_default();
-    // Copy signal handles for the picker's change handler — no list
-    // clones; the `for` loops below read the same signals.
-    let pick_tasks = tasks;
-    let pick_projects = projects;
-    let tasks = tasks.read();
-    let projects = projects.read();
-
-    let input_cls = "rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/40";
-
-    rsx! {
-        // Centered modal on desktop; below `sm` it docks to the
-        // bottom edge (bottom-sheet convention), capped + scrollable,
-        // safe-area padded.
-        div {
-            // Centered dialog on desktop; bottom sheet on phones
-            // (matches the app's other mobile editors); capped +
-            // scrollable so long forms never overflow the viewport.
-            class: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4",
-            onclick: move |_| on_cancel.call(()),
-            div {
-                class: "flex max-h-[85dvh] w-full flex-col gap-3 overflow-y-auto rounded-t-2xl border border-border bg-card p-5 shadow-xl sm:max-w-sm sm:rounded-xl",
-                style: "padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));",
-                onclick: move |e| e.stop_propagation(),
-                Heading { level: HeadingLevel::H3, "Edit block" }
-                label { class: "flex flex-col gap-1 text-xs text-muted-foreground",
-                    "Label"
-                    input {
-                        class: "{input_cls}",
-                        value: "{lbl}",
-                        oninput: move |e| lbl.set(e.value()),
+                on_delete: move |()| {
+                    if let Some(slug) = slug() {
+                        plan_muts.remove_block(slug, date, id.clone());
                     }
-                }
-                div { class: "flex gap-3",
-                    label { class: "flex flex-1 flex-col gap-1 text-xs text-muted-foreground",
-                        "Start"
-                        input {
-                            class: "{input_cls}",
-                            r#type: "time",
-                            value: "{fmt_minute_of_day(start())}",
-                            oninput: move |e| {
-                                if let Some(m) = parse_time(&e.value()) {
-                                    start.set(m);
-                                }
-                            },
-                        }
-                    }
-                    label { class: "flex flex-1 flex-col gap-1 text-xs text-muted-foreground",
-                        "End"
-                        input {
-                            class: "{input_cls}",
-                            r#type: "time",
-                            value: "{fmt_minute_of_day(end())}",
-                            oninput: move |e| {
-                                if let Some(m) = parse_time(&e.value()) {
-                                    end.set(m);
-                                }
-                            },
-                        }
-                    }
-                }
-                // Assignment — a free label, or pick a task / project.
-                div { class: "flex flex-col gap-1 text-xs text-muted-foreground",
-                    "Assignment"
-                    input {
-                        class: "{input_cls}",
-                        placeholder: "Type a label, or pick below",
-                        value: "{assign_title}",
-                        oninput: move |e| {
-                            let v = e.value();
-                            assign.set(if v.trim().is_empty() {
-                                None
-                            } else {
-                                Some(("label".into(), v, None))
-                            });
-                        },
-                    }
-                    Select {
-                        value: pick_sel,
-                        placeholder: "— pick task / project —".to_string(),
-                        on_change: move |v: String| {
-                            if let Some(id) = v.strip_prefix("task:") {
-                                if let Some((_, t)) = pick_tasks.read().iter().find(|(i, _)| i == id) {
-                                    assign.set(Some(("task".into(), t.clone(), Some(id.to_string()))));
-                                }
-                            } else if let Some(id) = v.strip_prefix("project:") {
-                                if let Some((_, t)) = pick_projects.read().iter().find(|(i, _)| i == id) {
-                                    assign.set(Some(("project".into(), t.clone(), Some(id.to_string()))));
-                                }
-                            } else if v == "__clear" {
-                                assign.set(None);
-                            }
-                        },
-                        SelectContent {
-                            SelectItem { value: "__clear".to_string(), index: 0, "— clear —" }
-                            if !tasks.is_empty() {
-                                SelectGroup {
-                                    SelectLabel { "Tasks" }
-                                    for (i, (id, title)) in tasks.iter().enumerate() {
-                                        SelectItem { key: "t-{id}", value: "task:{id}", index: i + 1, "{title}" }
-                                    }
-                                }
-                            }
-                            if !projects.is_empty() {
-                                SelectGroup {
-                                    SelectLabel { "Projects" }
-                                    for (i, (id, title)) in projects.iter().enumerate() {
-                                        SelectItem { key: "p-{id}", value: "project:{id}", index: i + 1 + tasks.len(), "{title}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                div { class: "mt-1 flex flex-wrap items-center justify-between gap-2",
-                    Button {
-                        variant: ButtonVariant::Outline,
-                        size: ButtonSize::Small,
-                        on_click: move |_| on_reset.call(()),
-                        "Reset day to template"
-                    }
-                    div { class: "flex gap-2",
-                        Button {
-                            variant: ButtonVariant::Outline,
-                            size: ButtonSize::Small,
-                            on_click: move |_| on_cancel.call(()),
-                            "Cancel"
-                        }
-                        Button {
-                            variant: ButtonVariant::Primary,
-                            size: ButtonSize::Small,
-                            on_click: move |_| on_save.call((lbl(), start(), end(), assign())),
-                            "Save"
-                        }
-                    }
-                }
+                    editing.set(None);
+                },
+                on_close: move |()| editing.set(None),
             }
         }
     }
@@ -607,25 +778,33 @@ fn build_blocks(
                     .get(&(date, slot.to_string()))
                     .map(|names| names.join(" · "))
             });
-            let mk = |start_min, end_min| TemplateBlock {
+            let mk = |on: NaiveDate, start_min, end_min, into_next, from_prev| TemplateBlock {
                 id: b.id.0.clone(),
-                date,
+                date: on,
                 label: b.label.clone(),
                 start_min,
                 end_min,
                 color,
                 assignment: assignment.clone(),
                 soft,
+                into_next,
+                from_prev,
             };
+            // Midnight is the cutoff. A block over it is drawn twice:
+            // its evening at the bottom of this day, its early hours at
+            // the top of the next — so each day shows the late night it
+            // ends with and the early morning it starts with.
             if end <= start {
                 if start < 1440 {
-                    out.push(mk(start, 1440));
+                    out.push(mk(date, start, 1440, end > 0, false));
                 }
                 if end > 0 {
-                    out.push(mk(0, end));
+                    if let Some(next) = date.succ_opt() {
+                        out.push(mk(next, 0, end, false, true));
+                    }
                 }
             } else {
-                out.push(mk(start, end));
+                out.push(mk(date, start, end, false, false));
             }
         }
     }
@@ -710,18 +889,173 @@ fn category_color(c: BlockCategory) -> ColorTag {
     }
 }
 
-fn fmt_minute_of_day(min: u16) -> String {
-    let m = min.min(1439);
-    format!("{:02}:{:02}", m / 60, m % 60)
+/// Timer sessions as the grid's "actual" strips: each clipped to the
+/// local days it touches (a session over midnight is two strips), an
+/// open one running to `now`.
+fn actual_spans(
+    sessions: &[timer_proto::WorkSession],
+    now: chrono::DateTime<chrono::Local>,
+) -> Vec<view_calendar::ActualSpan> {
+    use chrono::Timelike;
+    let minute = |t: chrono::DateTime<chrono::Local>| -> u16 {
+        u16::try_from(t.hour() * 60 + t.minute()).unwrap_or(0)
+    };
+    let mut out = Vec::new();
+    for s in sessions {
+        let start = s.start_time.with_timezone(&chrono::Local);
+        let end = s.end_time.map_or(now, |e| e.with_timezone(&chrono::Local));
+        if end <= start {
+            continue;
+        }
+        let mut day = start.date_naive();
+        let last = end.date_naive();
+        while day <= last {
+            let from = if day == start.date_naive() {
+                minute(start)
+            } else {
+                0
+            };
+            let to = if day == last { minute(end) } else { 1440 };
+            if to > from {
+                out.push(view_calendar::ActualSpan {
+                    date: day,
+                    start_min: from,
+                    end_min: to,
+                    label: if s.description.trim().is_empty() {
+                        "Tracked time".to_owned()
+                    } else {
+                        s.description.clone()
+                    },
+                    running: s.end_time.is_none(),
+                });
+            }
+            let Some(next) = day.succ_opt() else { break };
+            day = next;
+        }
+    }
+    out
 }
 
-fn parse_time(s: &str) -> Option<u16> {
-    let (h, m) = s.split_once(':')?;
-    let h: u16 = h.parse().ok()?;
-    let m: u16 = m.parse().ok()?;
-    if h < 24 && m < 60 {
-        Some(h * 60 + m)
-    } else {
-        None
+/// Where this device remembers the Schedule's view.
+const VIEW_KEY: &str = "task.schedule.view";
+
+/// The stored value that means the Planner.
+const PLANNER_KEY: &str = "planner";
+
+fn view_key(v: ViewMode) -> &'static str {
+    match v {
+        ViewMode::Day => "day",
+        ViewMode::Week => "week",
+        ViewMode::Month => "month",
+        ViewMode::Blocks => "blocks",
+    }
+}
+
+fn view_from_key(s: &str) -> Option<ViewMode> {
+    match s {
+        "day" => Some(ViewMode::Day),
+        "week" => Some(ViewMode::Week),
+        "month" => Some(ViewMode::Month),
+        "blocks" => Some(ViewMode::Blocks),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod actual_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn session(
+        start: chrono::DateTime<chrono::Local>,
+        end: Option<chrono::DateTime<chrono::Local>>,
+    ) -> timer_proto::WorkSession {
+        let now = chrono::Utc::now();
+        timer_proto::WorkSession {
+            id: uuid::Uuid::new_v4(),
+            org_id: uuid::Uuid::nil(),
+            user_id: uuid::Uuid::nil(),
+            project_id: None,
+            project_path: String::new(),
+            description: "Maintenance hour".into(),
+            start_time: start.with_timezone(&chrono::Utc),
+            end_time: end.map(|e| e.with_timezone(&chrono::Utc)),
+            billable: false,
+            rate_cents: 0,
+            currency: String::new(),
+            task_note_path: String::new(),
+            invoice_id: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn a_block_over_midnight_ends_this_day_and_starts_the_next() {
+        use scheduling_proto::day_plan::PlannedBlocks;
+        use scheduling_proto::{PlannedBlock, TimeBlockId, TimeOfDay};
+        let day = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap();
+        let row = DayPlanRow {
+            date: day,
+            plan: scheduling_proto::DayPlan {
+                date: day.to_string(),
+                from_template: None,
+                blocks: PlannedBlocks(vec![PlannedBlock {
+                    id: TimeBlockId("gig".into()),
+                    start: TimeOfDay::new(21, 0),
+                    end: TimeOfDay::new(2, 30),
+                    label: "Gig".into(),
+                    category: BlockCategory::Other,
+                    note: None,
+                    assignment: None,
+                    fixed: true,
+                }]),
+            },
+            soft_ids: std::collections::HashSet::new(),
+        };
+        let blocks = build_blocks(&[row], &HashMap::new());
+        assert_eq!(blocks.len(), 2);
+        let late = &blocks[0];
+        assert_eq!(
+            (late.date, late.start_min, late.end_min),
+            (day, 21 * 60, 1440)
+        );
+        assert!(
+            late.into_next && !late.from_prev,
+            "a late night, on its own day"
+        );
+        let early = &blocks[1];
+        assert_eq!(
+            early.date,
+            day.succ_opt().unwrap(),
+            "the small hours are tomorrow's"
+        );
+        assert_eq!((early.start_min, early.end_min), (0, 150));
+        assert!(early.from_prev && !early.into_next);
+    }
+
+    #[test]
+    fn tracked_time_is_drawn_per_day_and_open_sessions_run_to_now() {
+        let at = |d: u32, h: u32, m: u32| {
+            chrono::Local
+                .with_ymd_and_hms(2026, 10, d, h, m, 0)
+                .unwrap()
+        };
+        // Over midnight: two strips.
+        let spans = actual_spans(
+            &[session(at(12, 23, 30), Some(at(13, 0, 45)))],
+            at(13, 9, 0),
+        );
+        assert_eq!(spans.len(), 2);
+        assert_eq!((spans[0].start_min, spans[0].end_min), (23 * 60 + 30, 1440));
+        assert_eq!((spans[1].start_min, spans[1].end_min), (0, 45));
+        // Open: to now, and live.
+        let spans = actual_spans(&[session(at(12, 16, 5), None)], at(12, 16, 50));
+        assert_eq!(
+            (spans[0].start_min, spans[0].end_min),
+            (16 * 60 + 5, 16 * 60 + 50)
+        );
+        assert!(spans[0].running);
+        assert_eq!(spans[0].label, "Maintenance hour");
     }
 }

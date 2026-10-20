@@ -24,7 +24,7 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::List => "List",
             Self::Kanban => "Kanban",
@@ -46,6 +46,11 @@ pub struct TasksAppProps {
     #[props(default)]
     pub triage: Vec<TaskInfo>,
     pub on_event: EventHandler<TaskMutation>,
+    /// One capture path: when set, the quick-add line goes here (the
+    /// page captures it and processes it on the spot) instead of being
+    /// created as a task directly.
+    #[props(default)]
+    pub on_capture: Option<EventHandler<String>>,
     #[props(default)]
     pub initial_view: Option<ViewMode>,
     /// When set, the quick-edit sheet offers "Open full view" and
@@ -80,6 +85,13 @@ pub struct TasksAppProps {
     /// not only in a tooltip.
     #[props(default)]
     pub held_count: usize,
+    /// The page heading. Empty for none — the Tasks list doesn't name
+    /// itself; the tab bar already says where you are.
+    #[props(default = "Tasks".to_string())]
+    pub title: String,
+    /// Rendered where the list ends, after what Relevant holds back.
+    #[props(default)]
+    pub footer: Option<Element>,
     #[props(default)]
     pub held_by: Vec<String>,
     /// "Show them": the page turns the Relevant filter off.
@@ -92,11 +104,22 @@ pub struct TasksAppProps {
     /// page's.
     #[props(default = false)]
     pub embedded: bool,
+    /// The page drives List / Kanban (its Display options sheet) — when
+    /// set, this wins over the board's own switch.
+    #[props(default)]
+    pub view: Option<ViewMode>,
+    /// The page draws its own header on phones (title, main action, ⋯):
+    /// the board's header row is desktop-only.
+    #[props(default = false)]
+    pub phone_header: bool,
 }
 
 #[component]
 pub fn TasksApp(props: TasksAppProps) -> Element {
     let mut view = use_signal(|| props.initial_view.unwrap_or_default());
+    // A page-driven view (its Display options) wins over the switch.
+    let page_view = props.view;
+    let current_view = move || page_view.unwrap_or_else(|| view());
     let mut open_id: Signal<Option<Uuid>> = use_signal(|| None);
 
     // Triage rows open the same detail as list rows.
@@ -223,20 +246,30 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
             class: "{shell}",
             // The key listener stands down while the task sheet is open.
             "data-board-busy": "{open_id.read().is_some()}",
-            div { class: "flex flex-wrap items-center gap-x-3 gap-y-2",
-                if !props.embedded {
-                    Heading { level: HeadingLevel::H1, "Tasks" }
-                }
-                span { class: "text-xs tabular-nums text-muted-foreground",
-                    "{open_count} open"
-                    if done > 0 {
-                        " · {done} done"
+            div { class: if props.phone_header { "hidden flex-wrap items-center gap-x-3 gap-y-2 md:flex" } else { "flex flex-wrap items-center gap-x-3 gap-y-2" },
+                // Title and counts as one block: stacked on a phone, so a
+                // long count line ("57 open · 193 done hidden") wraps under
+                // the title instead of pushing the view switch onto a row
+                // of its own; side by side from `sm` up, as before.
+                div { class: "flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-3",
+                    if !props.embedded && !props.title.is_empty() {
+                        Heading { level: HeadingLevel::H1, "{props.title}" }
                     }
-                    if let Some(note) = props.hidden_note.clone() {
-                        " · {note}"
-                    }
-                    if tracked_today > 0 {
-                        " · {crate::display::duration_label(tracked_today)} tracked today"
+                    // Said only when there's something to say: "0 open"
+                    // over an empty list is the empty state twice.
+                    if open_count > 0 || done > 0 || tracked_today > 0 {
+                        span { class: "text-xs tabular-nums text-muted-foreground",
+                            "{open_count} open"
+                            if done > 0 {
+                                " · {done} done"
+                            }
+                            if let Some(note) = props.hidden_note.clone() {
+                                " · {note}"
+                            }
+                            if tracked_today > 0 {
+                                " · {crate::display::duration_label(tracked_today)} tracked today"
+                            }
+                        }
                     }
                 }
                 if let Some(extra) = props.header_extra.clone() {
@@ -249,7 +282,7 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                     div { class: "inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 text-xs",
                         for v in [ViewMode::List, ViewMode::Kanban] {
                             {
-                                let active = v == view();
+                                let active = v == current_view();
                                 // Touch-sized below `sm`, compact on desktop.
                                 let cls = if active {
                                     "bg-background text-foreground shadow-sm font-medium px-3 py-1.5 sm:px-2.5 sm:py-0.5 rounded-md transition-colors"
@@ -291,13 +324,16 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
             div { class: "hidden sm:block",
                 QuickAdd {
                     projects: props.projects.clone(),
-                    on_create: move |task: TaskInfo| props.on_event.call(TaskMutation::Create { task }),
+                    on_create: move |task: TaskInfo| match props.on_capture {
+                        Some(capture) => capture.call(task.title),
+                        None => props.on_event.call(TaskMutation::Create { task }),
+                    },
                 }
             }
             // Bottom room on phones: the capture button floats over the
             // list's end, and the last line must scroll clear of it.
             div { class: "flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto pb-20 md:pb-0",
-                match view() {
+                match current_view() {
                     ViewMode::List => rsx! {
                         TaskList {
                             tasks: props.tasks.clone(),
@@ -335,13 +371,19 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                                     }
                                 }
                             },
-                            on_open: move |id: Uuid| open_id.set(Some(id)),
+                            on_open: move |id: Uuid| match props.on_open_full {
+                                Some(full) => full.call(id),
+                                None => open_id.set(Some(id)),
+                            },
                         }
                     },
                     ViewMode::Kanban => rsx! {
                         KanbanBoard {
                             tasks: props.tasks.clone(),
-                            on_open: move |id: Uuid| open_id.set(Some(id)),
+                            on_open: move |id: Uuid| match props.on_open_full {
+                                Some(full) => full.call(id),
+                                None => open_id.set(Some(id)),
+                            },
                             on_set_status: move |(id, status): (Uuid, String)| {
                                 props
                                     .on_event
@@ -368,13 +410,21 @@ pub fn TasksApp(props: TasksAppProps) -> Element {
                         }
                     }
                 }
+                // Whatever the page wants said where the list ends (the
+                // Tasks list's way to project work).
+                if let Some(footer) = props.footer.clone() {
+                    {footer}
+                }
                 // Unfiled work, after the list: it is housekeeping, and
                 // the tasks themselves already sit under their dates.
                 super::triage::TriageStrip {
                     tasks: props.triage.clone(),
                     projects: props.projects.clone(),
                     on_event: props.on_event,
-                    on_open: move |id: Uuid| open_id.set(Some(id)),
+                    on_open: move |id: Uuid| match props.on_open_full {
+                                Some(full) => full.call(id),
+                                None => open_id.set(Some(id)),
+                            },
                 }
             }
             if let Some(t) = selected {

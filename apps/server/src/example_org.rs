@@ -139,30 +139,38 @@ pub fn install(org_root: &org_proto::OrgRoot, slug: &str) -> std::io::Result<Pla
     let repos = repos_dir(org_root);
     let mail = mail_dir(org_root);
 
+    // Each step a span (`plant.*`): every test world and every demo boot
+    // pays for planting, so a slow step should show itself.
+    let _install = tracing::info_span!("plant.install", %slug).entered();
     // `Dir::files` is one level deep, so walk the whole subtree.
     let mut planted = Planted::default();
-    plant(
-        dir,
-        slug,
-        &vault,
-        &wiki,
-        &wikis,
-        &files,
-        &resources,
-        &assets,
-        &projects,
-        &repos,
-        &mail,
-        &mut planted,
-    )?;
+    tracing::info_span!("plant.tree").in_scope(|| {
+        plant(
+            dir,
+            slug,
+            &vault,
+            &wiki,
+            &wikis,
+            &files,
+            &resources,
+            &assets,
+            &projects,
+            &repos,
+            &mail,
+            &mut planted,
+        )
+    })?;
     complete_mail_accounts(&mail)?;
+    tracing::info_span!("plant.inbox").in_scope(|| plant_inbox(&vault, slug, &mut planted))?;
+    #[cfg(feature = "plugin-mealplan")]
+    tracing::info_span!("plant.meals").in_scope(|| plant_meals(&vault, slug, &mut planted))?;
     // Before the declared collections: a setlist declared over a library
     // names songs this import creates.
-    plant_chordsheet_library(org_root, slug);
+    tracing::info_span!("plant.chordsheets").in_scope(|| plant_chordsheet_library(org_root, slug));
     #[cfg(feature = "plugin-fasttrackstudio")]
-    plant_collections(org_root, slug);
+    tracing::info_span!("plant.collections").in_scope(|| plant_collections(org_root, slug));
     #[cfg(feature = "plugin-wiki")]
-    plant_repo_wikis(org_root, slug);
+    tracing::info_span!("plant.repo_wikis").in_scope(|| plant_repo_wikis(org_root, slug));
     #[cfg(feature = "plugin-wiki")]
     declare_wiki_configs(org_root, slug)?;
     Ok(planted)
@@ -475,6 +483,15 @@ pub const TASK_OWNERS: &[(&str, &str)] = &[
     ("Collect streaming metadata", "sam@acme.test"),
     ("Cut the visualiser to the album mix", "sam@acme.test"),
     ("Rough cut review", "victor@vnt.test"),
+    // Alice's own next actions — the Tasks list is what is assigned to
+    // you (`task_proto::is_mine`), so the where/when work and the
+    // maintenance mode's errands and chores are hers to see.
+    ("Restring the studio guitars", "alice@acme.test"),
+    ("Pick up the test pressings", "alice@acme.test"),
+    ("Listen back to the rough mixes", "alice@acme.test"),
+    ("Return the hired mic stands", "alice@acme.test"),
+    ("Vacuum the live room", "alice@acme.test"),
+    ("Take the studio recycling out", "alice@acme.test"),
 ];
 
 /// Where or when a seeded task can be done, as `(task title, contexts)`
@@ -485,7 +502,550 @@ pub const TASK_CONTEXTS: &[(&str, &[&str])] = &[
     ("Restring the studio guitars", &["@studio"]),
     ("Pick up the test pressings", &["@out"]),
     ("Listen back to the rough mixes", &["@evening"]),
+    // The maintenance hour's work. Neither is a place Alice says she is
+    // or a time window; both are opened by the committed day template's
+    // 16:00 maintenance block (`BlockCategory::surfaces`), which is what
+    // `every_task_context_can_be_met` checks.
+    ("Return the hired mic stands", &["@errands"]),
+    ("Vacuum the live room", &["@chores"]),
 ];
+
+/// Tags a seeded task carries, as `(task title, tags)` — no `#`, the
+/// way `task_proto::capture` stores them. `#chore` is the spelling
+/// people write as often as `@chores`, so the seed carries both and a
+/// maintenance hour brings forward each (`matches_focus` reads tags as
+/// well as contexts).
+pub const TASK_TAGS: &[(&str, &[&str])] = &[("Take the studio recycling out", &["chore"])];
+
+/// One line of history the seed plants in an org's activity feed
+/// (`docs/spec/activity.md`), so `/activity` and a task's page are not
+/// empty on a fresh plant. Dated relative to the plant, like due dates.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredActivity {
+    pub org: &'static str,
+    /// Fixed, so a replant finds the entry it wrote and keeps it.
+    pub id: &'static str,
+    /// A declared task's title.
+    pub task: &'static str,
+    pub kind: notify_proto::ActivityKind,
+    /// A cast member's email — the byline.
+    pub actor: &'static str,
+    pub field: &'static str,
+    pub from: &'static str,
+    pub to: &'static str,
+    pub hours_ago: i64,
+}
+
+/// The board getting to where the declarations leave it: Alice took the
+/// vocal comp, started it, and wrapped the drums.
+pub const SEED_ACTIVITY: &[DeclaredActivity] = &[
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e01",
+        task: "Comp lead vocals — Track One",
+        kind: notify_proto::ActivityKind::Assigned,
+        actor: "alice@acme.test",
+        field: "assignee",
+        from: "",
+        to: "Alice",
+        hours_ago: 50,
+    },
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e02",
+        task: "Comp lead vocals — Track One",
+        kind: notify_proto::ActivityKind::StatusChanged,
+        actor: "alice@acme.test",
+        field: "status",
+        from: "open",
+        to: "in-progress",
+        hours_ago: 26,
+    },
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e03",
+        task: "Re-track drums — Track Three",
+        kind: notify_proto::ActivityKind::Completed,
+        actor: "alice@acme.test",
+        field: "status",
+        from: "in-progress",
+        to: "done",
+        hours_ago: 30,
+    },
+    DeclaredActivity {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e04",
+        task: "Master review with the label",
+        kind: notify_proto::ActivityKind::PriorityChanged,
+        actor: "alice@acme.test",
+        field: "priority",
+        from: "normal",
+        to: "high",
+        hours_ago: 4,
+    },
+];
+
+/// A seeded comment on a declared task: the thread a task's page opens
+/// with, and a `commented` line in the feed.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredComment {
+    pub org: &'static str,
+    /// The feed entry's fixed id (the message's own id is the threads
+    /// store's to mint; a replant matches it by author and body).
+    pub id: &'static str,
+    pub task: &'static str,
+    /// A cast member's email.
+    pub author: &'static str,
+    pub body: &'static str,
+    pub hours_ago: i64,
+}
+
+pub const SEED_COMMENTS: &[DeclaredComment] = &[
+    DeclaredComment {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e11",
+        task: "Comp lead vocals — Track One",
+        author: "sam@acme.test",
+        body: "Take three has the best chorus — the verse on take one is tighter though. Worth a look before you commit the comp.",
+        hours_ago: 20,
+    },
+    DeclaredComment {
+        org: "acme-audio",
+        id: "5e6a1c00-7a10-4c2b-9d3e-0a1b2c3d4e12",
+        task: "Comp lead vocals — Track One",
+        author: "alice@acme.test",
+        body: "Agreed. Comping verse 1 from take one, everything else from three.",
+        hours_ago: 19,
+    },
+];
+
+/// Plant `slug`'s declared history: [`SEED_ACTIVITY`] into the org's
+/// activity feed (`notify.sqlite`), and [`SEED_COMMENTS`] into each
+/// task's comment thread (`threads.sqlite`) with their `commented`
+/// lines. Run after the cast and the tasks exist — bylines are cast
+/// accounts, entries name declared tasks.
+///
+/// Idempotent: feed entries carry fixed ids, and a comment already in
+/// its thread (same body) is not posted again.
+///
+/// # Errors
+///
+/// Opening or migrating either database.
+// t[impl activity.seed]
+pub async fn plant_activity(
+    org_root: &org_proto::OrgRoot,
+    slug: &str,
+    auth: &crate::AuthState,
+) -> eyre::Result<usize> {
+    use notify_proto::{Activity, ActivityKind};
+    use sea_orm_migration::MigratorTrait as _;
+    use task::TaskService as _;
+    use threads::ThreadsService as _;
+
+    let decls: Vec<&DeclaredActivity> = SEED_ACTIVITY.iter().filter(|a| a.org == slug).collect();
+    let comments: Vec<&DeclaredComment> = SEED_COMMENTS.iter().filter(|c| c.org == slug).collect();
+    if decls.is_empty() && comments.is_empty() {
+        return Ok(0);
+    }
+    let open = |path: std::path::PathBuf| async move {
+        sea_orm::Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+            .await
+            .map_err(|e| eyre::eyre!("open {}: {e}", path.display()))
+    };
+    let notify_conn = open(org_root.path().join("notify.sqlite")).await?;
+    notify::Migrator::up(&notify_conn, None)
+        .await
+        .map_err(|e| eyre::eyre!("migrate notify: {e}"))?;
+    let feed = notify::ActivityStore::new(notify_conn);
+    let tasks = task::TaskBackend::new(org_root.vault_dir())
+        .list()
+        .unwrap_or_default();
+    let task_of = |title: &str| tasks.iter().find(|t| t.title == title).cloned();
+    let now = chrono::Utc::now();
+    let mut written = 0;
+
+    let entry = |id: &str,
+                 kind: ActivityKind,
+                 t: &task::TaskInfo,
+                 (user_id, name): (uuid::Uuid, Option<String>),
+                 hours: i64| Activity {
+        id: id.parse().unwrap_or_else(|_| uuid::Uuid::new_v4()),
+        at: now - chrono::Duration::hours(hours),
+        actor_id: user_id.to_string(),
+        actor_name: name.unwrap_or_else(|| "Someone".to_owned()),
+        kind,
+        entity_type: "task".to_owned(),
+        entity_id: t.id.to_string(),
+        entity_title: t.title.clone(),
+        href: format!("/tasks/{}", t.id),
+        project_id: t.project_id,
+        field: String::new(),
+        from: String::new(),
+        to: String::new(),
+        body: String::new(),
+    };
+
+    for d in decls {
+        let (Some(t), Ok(Some(user))) =
+            (task_of(d.task), auth.auth.find_user_by_email(d.actor).await)
+        else {
+            continue;
+        };
+        let mut a = entry(d.id, d.kind, &t, (user.id, user.name), d.hours_ago);
+        d.field.clone_into(&mut a.field);
+        d.from.clone_into(&mut a.from);
+        d.to.clone_into(&mut a.to);
+        if feed
+            .insert_if_absent(a)
+            .await
+            .map_err(|e| eyre::eyre!("seed activity: {e}"))?
+        {
+            written += 1;
+        }
+    }
+
+    if !comments.is_empty() {
+        let threads_conn = open(org_root.threads_db()).await?;
+        threads::Migrator::up(&threads_conn, None)
+            .await
+            .map_err(|e| eyre::eyre!("migrate threads: {e}"))?;
+        let store = threads::Store::new(threads_conn);
+        for c in comments {
+            let (Some(t), Ok(Some(user))) = (
+                task_of(c.task),
+                auth.auth.find_user_by_email(c.author).await,
+            ) else {
+                continue;
+            };
+            let existing = store
+                .list_threads("task".to_owned(), t.id)
+                .await
+                .map_err(|e| eyre::eyre!("list threads: {e}"))?;
+            let thread = match existing.into_iter().last() {
+                Some(th) => th,
+                None => store
+                    .create_thread(threads::CreateThreadRequest {
+                        org_id: uuid::Uuid::nil(),
+                        entity_type: "task".to_owned(),
+                        entity_id: t.id,
+                        title: "Comments".to_owned(),
+                        kind: String::new(),
+                        created_by: user.id,
+                        source_kind: "native".to_owned(),
+                        source_ref: None,
+                        source_url: None,
+                    })
+                    .await
+                    .map_err(|e| eyre::eyre!("create thread: {e}"))?,
+            };
+            let at = now - chrono::Duration::hours(c.hours_ago);
+            let posted = store
+                .list_messages(thread.id)
+                .await
+                .map_err(|e| eyre::eyre!("list messages: {e}"))?;
+            if !posted.iter().any(|m| m.body == c.body) {
+                store
+                    .post_message(threads::PostMessageRequest {
+                        thread_id: thread.id,
+                        org_id: uuid::Uuid::nil(),
+                        author_id: Some(user.id),
+                        author_label: user.name.clone().unwrap_or_default(),
+                        body: c.body.to_owned(),
+                        reply_to: None,
+                        source_kind: "native".to_owned(),
+                        external_id: None,
+                        original_text: None,
+                        source_url: None,
+                        posted_at: Some(at),
+                    })
+                    .await
+                    .map_err(|e| eyre::eyre!("post comment: {e}"))?;
+            }
+            let mut a = entry(
+                c.id,
+                ActivityKind::Commented,
+                &t,
+                (user.id, user.name.clone()),
+                c.hours_ago,
+            );
+            c.body.clone_into(&mut a.body);
+            if feed
+                .insert_if_absent(a)
+                .await
+                .map_err(|e| eyre::eyre!("seed comment activity: {e}"))?
+            {
+                written += 1;
+            }
+        }
+    }
+    Ok(written)
+}
+
+/// A seeded task's description, as `(task title, markdown body)` — a body
+/// with the structures the document editor writes (headings, a
+/// checklist, a quote, a code block, a folded section), so opening the
+/// issue shows the editor on real content and `/` has something to sit
+/// beside. Planted only into an empty description, so a demo edit stays.
+// t[impl doc.editor.one]
+pub const TASK_DETAILS: &[(&str, &str)] = &[(
+    "Master review with the label",
+    "The label hears the masters on Thursday. Go in with every track signed off and the notes from the last pass answered.\n\n## Before the call\n\n- [x] Bounce the masters at -14 LUFS integrated\n- [ ] Print the loudness report for each track\n- [ ] Send the private link the evening before\n\n## What they asked for last time\n\n> The low end on Track Two still feels a little shy next to the singles.\n\n1. Revisit the Track Two bass with the mix engineer\n2. A/B against the reference playlist\n3. Note the change in the delivery sheet\n\n### Delivery\n\n```\nAlbum master/\n  01 Track One.wav\n  02 Track Two.wav\n  03 Track Three.wav\n```\n\n> [!note]- What happens after sign-off\n> Masters go to the distributor and the vinyl cut is booked.\n",
+)];
+
+/// One capture sitting in an org's inbox at plant time — the input to
+/// processing, which is the centre of the app
+/// (`docs/spec/capture-and-process.md`).
+///
+/// Dates are relative to the plant, like task due dates: a fresh plant
+/// always has captures from the last few days and one snoozed into the
+/// future, whatever the date it runs on.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredCapture {
+    pub org: &'static str,
+    /// Fixed, so a replant finds the file it wrote and keeps it.
+    pub id: &'static str,
+    /// The capture, verbatim — quick-add syntax included, which is what
+    /// "make it a task" parses (`task_proto::capture`).
+    pub body: &'static str,
+    /// Where it came from: `ui`, `cli`, `watch`, or an agent's lane.
+    pub source: &'static str,
+    /// `open`, or `suggested` for something an agent proposed.
+    pub status: &'static str,
+    /// Captured this many days before the plant.
+    pub captured_days_ago: i64,
+    /// Snoozed: resurfaces this many days after the plant. `None` =
+    /// due now.
+    pub resurface_in_days: Option<i64>,
+}
+
+/// What is waiting in the inbox: plain thoughts, captures carrying
+/// quick-add syntax a maintenance hour can find once processed, one
+/// suggestion an agent made from mail, and one put off into the future
+/// that is NOT due today.
+pub const INBOX: &[DeclaredCapture] = &[
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a01",
+        body: "Call the piano tuner about Thursday",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 2,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a02",
+        body: "Pick up gaff tape and 9V batteries @errands",
+        source: "cli",
+        status: "open",
+        captured_days_ago: 1,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a03",
+        body: "Descale the espresso machine #chore",
+        source: "watch",
+        status: "open",
+        captured_days_ago: 1,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a04",
+        body: "Idea: a stems-only bonus edition of the album\n\nSell the multitracks of each song as a remix pack — Track Two first, it has the cleanest stems.",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 3,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a05",
+        body: "Reply to Example Client about the lyric video deadline",
+        source: "email",
+        status: "suggested",
+        captured_days_ago: 0,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a06",
+        body: "Look into a second pair of monitors for the B room",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 10,
+        resurface_in_days: Some(14),
+    },
+    // Marked up the way people capture: a person by @handle, a #tag
+    // and an @context — the inbox shows Sam's avatar, a badge, a chip.
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a07",
+        body: "Ask @sam to check the B-room patchbay before Friday's session #studio @office",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 0,
+        resurface_in_days: None,
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a08",
+        body: "Casey sent notes on the second verse — fold them into the mix #client @chamber",
+        source: "email",
+        status: "open",
+        captured_days_ago: 1,
+        resurface_in_days: None,
+    },
+    // Someone outside the org: Jordan is a contact, not a member, and
+    // the mention still opens their profile.
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a09",
+        body: "Send the final mixes to @jordan for mastering #album",
+        source: "ui",
+        status: "open",
+        captured_days_ago: 0,
+        resurface_in_days: None,
+    },
+];
+
+/// The declared captures of one org.
+pub fn inbox_of(slug: &str) -> impl Iterator<Item = &'static DeclaredCapture> + '_ {
+    INBOX.iter().filter(move |c| c.org == slug)
+}
+
+/// The inbox item a declaration plants, dated against `now`.
+#[must_use]
+pub fn capture_item(c: &DeclaredCapture, now: chrono::DateTime<chrono::Utc>) -> inbox::InboxItem {
+    let created = (now - chrono::Duration::days(c.captured_days_ago))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut item = inbox::InboxItem::capture(c.id, c.body, c.source, created);
+    c.status.clone_into(&mut item.status);
+    if let Some(days) = c.resurface_in_days {
+        item.resurface_on = Some(
+            (now + chrono::Duration::days(days))
+                .date_naive()
+                .to_string(),
+        );
+        // Put off once already — that is how an item comes to have a
+        // resurface date (`inbox_proto::review`, "later").
+        item.reviews = 1;
+        item.interval = days;
+        item.ease = inbox::schedule::BASE_EASE;
+    }
+    item
+}
+
+/// Write `slug`'s declared captures into `vault/Records/inbox/`, in
+/// the inbox backend's own format (`inbox::serialize_inbox_item`).
+///
+/// Idempotent by omission, like the tree: a capture already on disk is
+/// left as it is — Alice may have processed it since, and a replant
+/// that reopened it would be undoing her work.
+///
+/// # Errors
+///
+/// Any filesystem or serialisation error.
+pub fn plant_inbox(vault: &Path, slug: &str, planted: &mut Planted) -> std::io::Result<()> {
+    let now = chrono::Utc::now();
+    let dir = vault.join("Records").join("inbox");
+    for c in inbox_of(slug) {
+        let dest = dir.join(format!("{}.md", c.id));
+        if dest.exists() {
+            planted.kept += 1;
+            continue;
+        }
+        let page =
+            inbox::serialize_inbox_item(&capture_item(c, now)).map_err(std::io::Error::other)?;
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(&dest, page)?;
+        planted.written += 1;
+    }
+    Ok(())
+}
+
+/// A meal on the plan, dated against the plant.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclaredMeal {
+    pub org: &'static str,
+    /// The meal block it fills — `breakfast`, `lunch`, `dinner`.
+    pub slot: &'static str,
+    /// The recipe's name; its file is `Cookbook/<name>.cook` in the
+    /// org's Cooking wiki.
+    pub recipe: &'static str,
+    /// Planned for this many days after the plant.
+    pub in_days: i64,
+}
+
+/// What the demo has planned to eat: today's three meals and
+/// tomorrow's lunch, so the Planner's food blocks open onto a plan.
+pub const MEALS: &[DeclaredMeal] = &[
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "breakfast",
+        recipe: "Overnight Oats",
+        in_days: 0,
+    },
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "lunch",
+        recipe: "Red Lentil Soup",
+        in_days: 0,
+    },
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "dinner",
+        recipe: "Studio Chilli",
+        in_days: 0,
+    },
+    DeclaredMeal {
+        org: "acme-audio",
+        slot: "lunch",
+        recipe: "Session Grain Bowl",
+        in_days: 1,
+    },
+];
+
+/// A declared meal's recipe path, relative to the cookbook root.
+#[must_use]
+pub fn meal_recipe_path(m: &DeclaredMeal) -> String {
+    format!("Cookbook/{}.cook", m.recipe)
+}
+
+/// Plant [`MEALS`] for `slug` into its vault — each once, at the meal
+/// plan's own path, dated against now. A replant on a later day adds
+/// that day's, keeping what was there.
+#[cfg(feature = "plugin-mealplan")]
+pub fn plant_meals(vault: &Path, slug: &str, planted: &mut Planted) -> std::io::Result<()> {
+    let today = chrono::Local::now().date_naive();
+    for m in MEALS.iter().filter(|m| m.org == slug) {
+        let date = today + chrono::Duration::days(m.in_days);
+        let path = mealplan::default_meal_path(date, m.slot, None, None);
+        if vault.join(&path).exists() {
+            planted.kept += 1;
+            continue;
+        }
+        let mut meal = mealplan::model::Meal {
+            path,
+            id: uuid::Uuid::new_v4(),
+            name: m.recipe.to_owned(),
+            scheduled_for: date,
+            slot: m.slot.to_owned(),
+            servings: 1,
+            recipe_paths: mealplan::model::StringList(vec![meal_recipe_path(m)]),
+            status: mealplan::model::Status::Planned.as_str().to_owned(),
+            pantry_deductions: mealplan::model::PantryDeductions::default(),
+            tags: mealplan::model::StringList::default(),
+            date_created: None,
+            date_modified: None,
+            details: String::new(),
+        };
+        mealplan::write_meal(vault, &mut meal, false).map_err(std::io::Error::other)?;
+        planted.written += 1;
+    }
+    Ok(())
+}
 
 /// The example's members of one org.
 #[must_use]
@@ -619,6 +1179,12 @@ pub const DECLARED: &[DeclaredProject] = &[
             ("Sequence the album", "open", Some(10)),
             ("Restring the studio guitars", "open", None),
             ("Listen back to the rough mixes", "open", None),
+            // The maintenance hour's share of the board — see
+            // `TASK_CONTEXTS` / `TASK_TAGS` and the committed
+            // `Projects/Scheduling/templates/weekday.md`.
+            ("Return the hired mic stands", "open", Some(3)),
+            ("Vacuum the live room", "open", None),
+            ("Take the studio recycling out", "open", None),
         ],
     },
     // The subproject, and the reason the seed has one: an album's song
@@ -893,6 +1459,13 @@ pub const DECLARED_WIKIS: &[DeclaredWiki] = &[
                        sources, summaries, topics, words and paths, from which a page is \
                        taken into Bible Study (a promotion — copied, recorded on both ends) \
                        once it has been studied enough",
+    },
+    DeclaredWiki {
+        org: "acme-audio",
+        title: "Cooking",
+        visibility: Visibility::Private,
+        demonstrates: "the studio's cookbook — the recipes the Planner's meal blocks plan \
+                       from (`MEALS`), so a demo day has breakfast, lunch and dinner on it",
     },
     DeclaredWiki {
         org: "alice-personal",
@@ -1763,6 +2336,7 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
             tracing::warn!(org.slug = %slug, repo = w.repo, "declared repository was not planted");
             continue;
         }
+        let _git = tracing::info_span!("plant.repo_wiki.git").entered();
         let commit = if repo.join(".git").exists() {
             // A top-up may have added files; commit them so the wiki
             // sees them. An unchanged tree commits nothing.
@@ -1789,6 +2363,8 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
         let roots: std::collections::HashMap<String, std::path::PathBuf> =
             org_root.named_wikis().into_iter().collect();
         let backend = wiki_live::WikiBackend::with_roots_under(roots, wikis_dir);
+        drop(_git);
+        let _sync = tracing::info_span!("plant.repo_wiki.first_sync").entered();
         let outcome = if org_root.named_wiki_dir(&wiki_slug).is_dir() {
             backend.refresh_source(&wiki_slug).map(|s| s.commit)
         } else {
@@ -1837,15 +2413,65 @@ fn plant_repo_wikis(org_root: &org_proto::OrgRoot, slug: &str) {
 mod declared_tests {
     use super::*;
 
-    /// Every owned task is a declared task, owned by a cast member of
-    /// the org the task lives in — an owner from another company would
-    /// plant an assignee the board can't name.
+    /// The org's committed day templates, parsed the way the scheduler
+    /// parses them.
+    #[cfg(feature = "plugin-scheduling")]
+    fn committed_templates(slug: &str) -> Vec<scheduling_proto::DayTemplate> {
+        let Some(dir) = STUDIO.get_dir(format!("{slug}/Vault/Projects/Scheduling/templates"))
+        else {
+            return Vec::new();
+        };
+        dir.files()
+            .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("md"))
+            .map(|f| {
+                let path = f.path().display().to_string();
+                let text = f.contents_utf8().expect("a template is utf-8");
+                let (fm, _) = scheduling::scan::frontmatter_split(text)
+                    .unwrap_or_else(|| panic!("{path}: no frontmatter"));
+                scheduling::parse::parse_day_template(&path, fm)
+                    .unwrap_or_else(|e| panic!("{path}: {e}"))
+            })
+            .collect()
+    }
+
+    /// Context / tag names (no sigil) some block of the org's committed
+    /// templates brings forward — what a time block can open. `None`
+    /// when this build has no scheduling to ask.
+    #[allow(clippy::unnecessary_wraps)]
+    fn surfaced_by_templates(slug: &str) -> Option<Vec<&'static str>> {
+        #[cfg(feature = "plugin-scheduling")]
+        {
+            Some(
+                committed_templates(slug)
+                    .iter()
+                    .flat_map(|t| t.blocks.iter().map(|b| b.category))
+                    .flat_map(|c| c.surfaces().iter().copied())
+                    .collect(),
+            )
+        }
+        #[cfg(not(feature = "plugin-scheduling"))]
+        {
+            let _ = slug;
+            None
+        }
+    }
+
+    fn org_of_task(title: &str) -> &'static str {
+        DECLARED
+            .iter()
+            .find(|p| p.tasks.iter().any(|(t, _, _)| *t == title))
+            .unwrap_or_else(|| panic!("`{title}` is not a declared task"))
+            .org
+    }
+
     /// Every context-gated task is a declared one, and its contexts are
-    /// ones the app can satisfy: an "I'm at" place or a known time
-    /// window — a gate nothing can open would hide the task for good.
+    /// ones the app can satisfy: an "I'm at" place, a known time
+    /// window, or a name one of the org's own day templates brings
+    /// forward (a maintenance hour's `@errands`) — a gate nothing can
+    /// open would hide the task for good.
     #[test]
     fn every_task_context_can_be_met() {
-        const MEETABLE: &[&str] = &[
+        const PLACES_AND_WINDOWS: &[&str] = &[
             "@home",
             "@studio",
             "@out",
@@ -1854,20 +2480,336 @@ mod declared_tests {
             "@evening",
         ];
         for (title, contexts) in TASK_CONTEXTS {
-            assert!(
-                DECLARED
-                    .iter()
-                    .any(|p| p.tasks.iter().any(|(t, _, _)| t == title)),
-                "`{title}` is not a declared task"
-            );
+            let org = org_of_task(title);
             for c in *contexts {
-                assert!(MEETABLE.contains(c), "`{title}`: nothing can satisfy `{c}`");
+                if PLACES_AND_WINDOWS.contains(c) {
+                    continue;
+                }
+                let Some(surfaced) = surfaced_by_templates(org) else {
+                    continue;
+                };
+                assert!(
+                    surfaced.iter().any(|s| c.strip_prefix('@') == Some(*s)),
+                    "`{title}`: nothing can satisfy `{c}` — not a place, not a \
+                     time window, and no block in {org}'s day templates surfaces it"
+                );
             }
         }
     }
 
+    /// The same contract for tags: a seeded `#chore` is only worth
+    /// carrying if some block of the org's day brings it forward.
+    #[test]
+    fn every_task_tag_is_brought_forward_by_a_block() {
+        for (title, tags) in TASK_TAGS {
+            let org = org_of_task(title);
+            let Some(surfaced) = surfaced_by_templates(org) else {
+                continue;
+            };
+            for tag in *tags {
+                assert!(
+                    !tag.starts_with('#'),
+                    "`{title}`: tags are stored without `#`"
+                );
+                assert!(
+                    surfaced.contains(tag),
+                    "`{title}`: no block in {org}'s day templates surfaces `#{tag}`"
+                );
+            }
+        }
+    }
+
+    // t[verify process.focus.steering]
+    /// The seed has a maintenance hour, on both kinds of day, and it is
+    /// for errands and chores — the block the task list leads with
+    /// during it.
+    #[cfg(feature = "plugin-scheduling")]
+    #[test]
+    fn the_committed_day_templates_carry_a_maintenance_hour() {
+        use scheduling_proto::BlockCategory;
+        let templates = committed_templates("acme-audio");
+        for id in ["weekday", "weekend"] {
+            let t = templates
+                .iter()
+                .find(|t| t.id.0 == id)
+                .unwrap_or_else(|| panic!("acme-audio has no `{id}` template"));
+            let hour = t
+                .blocks
+                .iter()
+                .find(|b| b.category == BlockCategory::Maintenance)
+                .unwrap_or_else(|| panic!("`{id}` has no maintenance block"));
+            assert!(
+                hour.start.minutes_since_midnight < hour.end.minutes_since_midnight,
+                "`{id}`: the hour is empty"
+            );
+            for name in ["errands", "chores", "chore"] {
+                assert!(
+                    hour.category.surfaces().contains(&name),
+                    "a maintenance block does not bring `{name}` forward"
+                );
+            }
+        }
+        let weekday = templates.iter().find(|t| t.id.0 == "weekday").unwrap();
+        let hour = weekday
+            .blocks
+            .iter()
+            .find(|b| b.category == BlockCategory::Maintenance)
+            .unwrap();
+        assert_eq!(
+            (
+                hour.start.minutes_since_midnight,
+                hour.end.minutes_since_midnight
+            ),
+            (16 * 60, 17 * 60),
+            "the weekday maintenance hour is 16:00–17:00"
+        );
+    }
+
+    // t[verify process.capture.marks]
+    /// The seed shows the inbox's marks: some capture names a person of
+    /// its own org by `@handle` (an avatar), and some carry a `#tag`
+    /// and an `@context` that is nobody (a badge and a chip).
+    #[test]
+    fn the_seeded_inbox_shows_people_tags_and_contexts() {
+        let handle = |m: &Member| m.name.to_lowercase();
+        let words = |c: &DeclaredCapture| {
+            c.body
+                .split_whitespace()
+                .map(|w| {
+                    w.trim_end_matches(|ch: char| !ch.is_alphanumeric())
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mentions_member = INBOX.iter().any(|c| {
+            words(c).iter().any(|w| {
+                w.strip_prefix('@')
+                    .is_some_and(|h| CAST.iter().any(|m| m.org == c.org && handle(m) == h))
+            })
+        });
+        assert!(mentions_member, "no capture @-mentions someone in its org");
+        let has_tag = INBOX
+            .iter()
+            .any(|c| words(c).iter().any(|w| w.starts_with('#')));
+        let has_context = INBOX.iter().any(|c| {
+            words(c).iter().any(|w| {
+                w.strip_prefix('@')
+                    .is_some_and(|h| !CAST.iter().any(|m| handle(m) == h))
+            })
+        });
+        assert!(
+            has_tag && has_context,
+            "the seed needs a #tag and an @context"
+        );
+    }
+
+    /// Every planned meal names a recipe the org's Cooking wiki commits,
+    /// and the day templates have the meal blocks the plan fills.
+    #[test]
+    fn every_planned_meal_has_its_recipe_and_its_block() {
+        for m in MEALS {
+            let file = format!("{}/Wikis/Cooking/{}", m.org, meal_recipe_path(m));
+            assert!(STUDIO.get_file(&file).is_some(), "{file}: no such recipe");
+            let template = STUDIO
+                .get_file(format!(
+                    "{}/Vault/Projects/Scheduling/templates/weekday.md",
+                    m.org
+                ))
+                .and_then(|f| f.contents_utf8())
+                .expect("weekday template");
+            assert!(
+                template.contains(&format!("id: {}", m.slot)),
+                "the weekday template has no {} block",
+                m.slot
+            );
+        }
+    }
+
+    // t[verify process.capture.people]
+    /// Everyone a seeded capture names by `@handle` who is a member has
+    /// a profile — a committed contact in that org's vault — and every
+    /// contact is in one context at least. One contact is outside the
+    /// org, and a capture names them too.
+    #[test]
+    fn every_person_a_capture_names_has_a_profile() {
+        let mut contacts: Vec<(&str, String)> = Vec::new();
+        for (org, _) in ORGS {
+            let Some(dir) = STUDIO.get_dir(format!("{org}/Vault/Records/contacts")) else {
+                continue;
+            };
+            for f in dir.files() {
+                let src = f.contents_utf8().expect("utf-8 contact");
+                let (fm, _) = src
+                    .strip_prefix("---\n")
+                    .and_then(|s| s.split_once("\n---"))
+                    .expect("frontmatter");
+                let v: serde_yaml::Value = serde_yaml::from_str(fm).expect("yaml");
+                let first = v["given_name"].as_str().expect("given_name").to_lowercase();
+                let groups = v["groups"].as_sequence().map_or(0, Vec::len);
+                assert!(groups >= 1, "{first}: a person is in one context at least");
+                contacts.push((org, first));
+            }
+        }
+        let member = |org: &str, h: &str| {
+            CAST.iter()
+                .any(|m| m.org == org && m.name.to_lowercase() == h)
+        };
+        let contact = |org: &str, h: &str| contacts.iter().any(|(o, f)| *o == org && f == h);
+        let mut outsider_named = false;
+        for c in INBOX {
+            for w in c.body.split_whitespace() {
+                let w = w.trim_end_matches(|ch: char| !ch.is_alphanumeric());
+                let Some(h) = w.strip_prefix('@') else {
+                    continue;
+                };
+                assert!(
+                    !member(c.org, h) || contact(c.org, h),
+                    "@{h} is a member with no profile"
+                );
+                outsider_named |= contact(c.org, h) && !member(c.org, h);
+            }
+        }
+        assert!(
+            outsider_named,
+            "a capture should name someone outside the org"
+        );
+    }
+
+    #[test]
+    fn every_capture_belongs_to_a_seeded_org_once() {
+        let mut ids = std::collections::HashSet::new();
+        for c in INBOX {
+            assert!(
+                ORGS.iter().any(|(s, _)| *s == c.org),
+                "{}: no such org",
+                c.org
+            );
+            assert!(ids.insert(c.id), "{}: two captures share this id", c.id);
+            assert!(
+                [
+                    inbox::InboxItem::STATUS_OPEN,
+                    inbox::InboxItem::STATUS_SUGGESTED
+                ]
+                .contains(&c.status),
+                "{}: a seeded capture is waiting — open or suggested, not `{}`",
+                c.id,
+                c.status
+            );
+        }
+    }
+
+    // t[verify process.due]
+    /// What the plant leaves in Alice's inbox, read back through the
+    /// inbox backend the server mounts: captures due for processing
+    /// (open ones and one suggestion), one put off that is NOT due, and
+    /// captures whose quick-add syntax a maintenance hour can find once
+    /// they are tasks. A replant keeps what is there.
+    #[test]
+    fn the_planted_inbox_has_captures_to_process() {
+        use inbox::Inbox as _;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut planted = Planted::default();
+        plant_inbox(tmp.path(), "acme-audio", &mut planted).expect("plant");
+        assert_eq!(planted.written, inbox_of("acme-audio").count());
+
+        let backend = inbox::VaultInbox::new(tmp.path()).expect("inbox backend");
+        let items = backend.list_inbox().expect("list");
+        assert_eq!(items.len(), planted.written, "every capture parses back");
+
+        let today = chrono::Utc::now().date_naive().to_string();
+        // The deck's rule: open and resurfaced, or a suggestion awaiting
+        // a yes or no.
+        let due = |i: &inbox::InboxItem| {
+            i.status == inbox::InboxItem::STATUS_SUGGESTED || i.in_review_queue(&today)
+        };
+        let suggested: Vec<_> = items
+            .iter()
+            .filter(|i| i.status == inbox::InboxItem::STATUS_SUGGESTED)
+            .collect();
+        assert_eq!(suggested.len(), 1, "one agent suggestion");
+        assert!(due(suggested[0]), "a suggestion is due for a decision");
+        assert_ne!(
+            suggested[0].source, "ui",
+            "a suggestion came from elsewhere"
+        );
+
+        let snoozed: Vec<_> = items
+            .iter()
+            .filter(|i| i.is_open() && !i.in_review_queue(&today))
+            .collect();
+        assert_eq!(snoozed.len(), 1, "one capture put off into the future");
+        assert!(snoozed[0].resurface_on.as_deref() > Some(today.as_str()));
+
+        let due_now: Vec<_> = items.iter().filter(|i| due(i)).collect();
+        assert!(due_now.len() >= 4, "something to process: {due_now:?}");
+
+        // Processing turns a capture into a task by parsing it the way
+        // quick-add does — so these must parse into what a maintenance
+        // hour brings forward.
+        let errand = due_now
+            .iter()
+            .find(|i| i.body.contains("@errands"))
+            .expect("a capture with @errands");
+        let task = task::capture(&errand.body);
+        assert_eq!(task.contexts.0, vec!["@errands".to_owned()]);
+        let chore = due_now
+            .iter()
+            .find(|i| i.body.contains("#chore"))
+            .expect("a capture with #chore");
+        assert!(task::capture(&chore.body).tags.iter().any(|t| t == "chore"));
+        #[cfg(feature = "plugin-scheduling")]
+        {
+            let ctx = task::RelevanceContext {
+                focus: scheduling_proto::BlockCategory::Maintenance
+                    .surfaces()
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+                ..Default::default()
+            };
+            assert!(task::relevance::matches_focus(&task, &ctx));
+            assert!(task::relevance::matches_focus(
+                &task::capture(&chore.body),
+                &ctx
+            ));
+        }
+
+        // Idempotent by omission: a processed capture stays processed.
+        let mut processed = (*errand).clone();
+        processed.status = inbox::InboxItem::STATUS_PROCESSED.to_owned();
+        backend.upsert_inbox_item(&processed).expect("process");
+        let mut again = Planted::default();
+        plant_inbox(tmp.path(), "acme-audio", &mut again).expect("replant");
+        assert_eq!(again.written, 0, "a replant writes nothing new");
+        assert_eq!(
+            backend.get_inbox_item(&processed.id).expect("get").status,
+            inbox::InboxItem::STATUS_PROCESSED,
+            "a replant does not reopen what was processed"
+        );
+    }
+
+    /// Every seeded description belongs to a declared task.
+    #[test]
+    fn every_task_description_is_for_a_declared_task() {
+        for (title, details) in TASK_DETAILS {
+            let _ = org_of_task(title);
+            assert!(
+                !details.trim().is_empty(),
+                "`{title}`: an empty description"
+            );
+            assert!(
+                !details.starts_with("---"),
+                "`{title}`: a description is body only, never frontmatter"
+            );
+        }
+    }
+
+    /// Every owned task is a declared task, owned by a cast member of
+    /// the org the task lives in — an owner from another company would
+    /// plant an assignee the board can't name.
     #[test]
     fn every_task_owner_is_a_member_of_the_tasks_org() {
+        // (The seeded history is held to the same rule below.)
         for (title, email) in TASK_OWNERS {
             let project = DECLARED
                 .iter()
@@ -1879,6 +2821,44 @@ mod declared_tests {
                 project.org
             );
         }
+    }
+
+    /// The seeded history names declared tasks in its own org, by cast
+    /// members of that org, under distinct fixed ids — a line about a
+    /// task the board doesn't have would link nowhere, and a byline
+    /// from another company would name a stranger.
+    // t[verify activity.seed]
+    #[test]
+    fn the_seeded_history_is_about_the_seed() {
+        let mut ids = std::collections::HashSet::new();
+        let lines = SEED_ACTIVITY
+            .iter()
+            .map(|a| (a.org, a.id, a.task, a.actor))
+            .chain(
+                SEED_COMMENTS
+                    .iter()
+                    .map(|c| (c.org, c.id, c.task, c.author)),
+            );
+        for (org, id, task, who) in lines {
+            assert!(id.parse::<uuid::Uuid>().is_ok(), "`{id}` is not a uuid");
+            assert!(ids.insert(id), "`{id}` is used twice");
+            assert!(
+                declared_of(org).any(|p| p.tasks.iter().any(|(t, _, _)| *t == task)),
+                "`{task}` is not a declared task of {org}"
+            );
+            assert!(
+                cast_of(org).iter().any(|m| m.email == who),
+                "`{who}` is not in {org}"
+            );
+        }
+        // Alice opens the app on something: her org has history and a
+        // comment thread from someone else.
+        assert!(SEED_ACTIVITY.iter().any(|a| a.org == "acme-audio"));
+        assert!(
+            SEED_COMMENTS
+                .iter()
+                .any(|c| c.org == "acme-audio" && c.author != "alice@acme.test")
+        );
     }
 
     /// Every committed mail account is one a maildir backend will open.

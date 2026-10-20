@@ -228,14 +228,14 @@ pub fn TaskList(props: TaskListProps) -> Element {
     };
     let anchors = props.anchors.clone();
     let org_of = props.org_of.clone();
-    let rows = move |items: Vec<TaskInfo>| {
-        rsx! { Rows { items, anchors: anchors.clone(), org_of: org_of.clone(), handlers } }
+    let rows = move |items: Vec<TaskInfo>, under: Option<String>| {
+        rsx! { Rows { items, anchors: anchors.clone(), org_of: org_of.clone(), under, handlers } }
     };
 
     rsx! {
         div { class: "flex min-w-0 flex-col gap-5",
             if groups.is_empty() {
-                p { class: "px-1 py-6 text-sm text-muted-foreground", "Nothing to do. Add a task above." }
+                p { class: "px-1 py-6 text-sm text-muted-foreground", "Nothing to do right now. Anything you capture and process lands here." }
             }
             for (group, items) in groups.into_iter() {
                 Section {
@@ -256,10 +256,10 @@ pub fn TaskList(props: TaskListProps) -> Element {
                             rsx! {
                                 if !overdue.is_empty() {
                                     OverdueBand { overdue: overdue.clone(), today, on_event: props.on_event }
-                                    {rows(overdue)}
+                                    {rows(overdue, None)}
                                 }
                                 if !rest.is_empty() {
-                                    {rows(rest)}
+                                    {rows(rest, None)}
                                 }
                             }
                         }
@@ -274,12 +274,16 @@ pub fn TaskList(props: TaskListProps) -> Element {
                                                 {home.clone().unwrap_or_else(|| "No project".to_owned())}
                                             }
                                         }
-                                        {rows(items)}
+                                        // A chip repeating the heading above says
+                                        // nothing new ("EPIC: …" over "↳ EPIC: …")
+                                        // and costs a phone row a line; with no
+                                        // heading shown, every chip stays.
+                                        {rows(items, if headed { home.clone() } else { None })}
                                     }
                                 }
                             }
                         }
-                        _ => rows(items),
+                        _ => rows(items, None),
                     }
                 }
             }
@@ -331,6 +335,9 @@ struct RowsProps {
     anchors: Vec<(Uuid, AnchorChip)>,
     #[props(default)]
     org_of: Vec<(Uuid, String)>,
+    /// The heading these rows are listed under, if any (see `TaskRow::under`).
+    #[props(default)]
+    under: Option<String>,
     handlers: Handlers,
 }
 
@@ -349,8 +356,14 @@ fn Rows(props: RowsProps) -> Element {
                     // membership as structure, not fat indentation.
                     class: if depth > 0 { "ml-2.5 border-l border-border/60 pl-2.5" } else { "" },
                     TaskRow {
-                        anchor: props.anchors.iter().find(|(id, _)| *id == t.id).map(|(_, c)| c.clone()),
+                        anchor: props
+                            .anchors
+                            .iter()
+                            .find(|(id, _)| *id == t.id)
+                            .map(|(_, c)| c.clone())
+                            .filter(|c| props.under.as_deref() != Some(c.label.as_str())),
                         org: props.org_of.iter().find(|(id, _)| *id == t.id).map(|(_, o)| o.clone()),
+                        under: props.under.clone(),
                         task: t,
                         on_toggle: h.on_toggle,
                         on_open: h.on_open,

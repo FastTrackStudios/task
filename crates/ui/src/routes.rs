@@ -62,10 +62,23 @@ pub enum Route {
         #[route("/inbox")]
         InboxRoute {},
 
+        // Everything that happened, newest first — the history the
+        // bell's queue links into (`crate::activity`).
+        #[route("/activity")]
+        ActivityRoute {},
+
+        // What you starred — the third tab on a phone.
+        #[route("/favorites")]
+        FavoritesRoute {},
+
         // Contacts — the vault-backed people directory (adjacent to
         // Inbox; keep this anchor stable for clean merges).
         #[route("/contacts")]
         ContactsRoute {},
+
+        // One person's profile — where a mention in a capture opens.
+        #[route("/people/:id")]
+        PersonRoute { id: String },
 
         #[route("/projects")]
         ProjectsRoute {},
@@ -81,6 +94,11 @@ pub enum Route {
 
         #[route("/tasks/:id")]
         TaskDetailRoute { id: uuid::Uuid },
+
+        // Issues and pieces of projects with no where or when — what
+        // the Tasks list (next actions) points to rather than shows.
+        #[route("/project-work")]
+        ProjectWorkRoute {},
 
         // `path` deep-links straight to a note (vault-relative path,
         // e.g. from a knowledge-graph node click); empty opens the
@@ -99,6 +117,11 @@ pub enum Route {
 
         #[route("/timer")]
         TimerRoute {},
+
+        // The running timer, full page — where a swipe up from capture
+        // lands (`pages::timer_focus`).
+        #[route("/timer/now")]
+        TimerNowRoute {},
 
         #[route("/members")]
         MembersRoute {},
@@ -155,6 +178,9 @@ pub enum Route {
 
         #[route("/settings")]
         SettingsRoute {},
+
+        #[route("/account")]
+        AccountRoute {},
 
         #[route("/sync")]
         SyncRoute {},
@@ -302,10 +328,25 @@ fn InboxRoute() -> Element {
 }
 
 #[component]
+fn ActivityRoute() -> Element {
+    rsx! { crate::activity::ActivityPage {} }
+}
+
+#[component]
+fn FavoritesRoute() -> Element {
+    rsx! { crate::favorites::FavoritesView {} }
+}
+
+#[component]
 fn ContactsRoute() -> Element {
     rsx! {
         crate::plugin_gate::PluginGate { plugin: "contacts", pages::contacts::ContactsView {} }
     }
+}
+
+#[component]
+fn PersonRoute(id: String) -> Element {
+    rsx! { crate::people::PersonProfile { id } }
 }
 
 #[component]
@@ -335,6 +376,11 @@ fn GoalsRoute() -> Element {
 #[component]
 fn TasksRoute() -> Element {
     rsx! { pages::tasks::TasksView {} }
+}
+
+#[component]
+fn ProjectWorkRoute() -> Element {
+    rsx! { pages::tasks::ProjectWorkView {} }
 }
 
 #[component]
@@ -379,6 +425,11 @@ fn GanttRoute() -> Element {
 #[component]
 fn TimerRoute() -> Element {
     rsx! { pages::timer::TimerView {} }
+}
+
+#[component]
+fn TimerNowRoute() -> Element {
+    rsx! { pages::timer_focus::TimerFocus {} }
 }
 
 #[component]
@@ -473,6 +524,11 @@ fn WikiSourceRoute(name: String) -> Element {
 #[component]
 fn SettingsRoute() -> Element {
     rsx! { pages::settings::SettingsView {} }
+}
+
+#[component]
+fn AccountRoute() -> Element {
+    rsx! { pages::settings::AccountView {} }
 }
 
 #[component]

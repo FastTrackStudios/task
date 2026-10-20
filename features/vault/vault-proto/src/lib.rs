@@ -37,7 +37,8 @@ mod service;
 // the doc's container names, and the `open_collab` ack payload.
 pub use base_view::{BaseGroup, BaseRowView, BaseView};
 pub use collab::{
-    COLLAB_META_CONTAINER, COLLAB_META_FLUSHED_SHA, COLLAB_TEXT_CONTAINER, CollabAck,
+    COLLAB_BODY_CONTAINER, COLLAB_META_CONTAINER, COLLAB_META_DELETED, COLLAB_META_FLUSHED_AT,
+    COLLAB_META_FLUSHED_SHA, COLLAB_PROPS_CONTAINER, COLLAB_TEXT_CONTAINER, CollabAck,
     VAULT_DOC_NAMESPACE, collab_doc_id,
 };
 pub use error::VaultSyncError;
@@ -52,7 +53,7 @@ pub use graph::prelude::*;
 pub use graph::{GraphLink, GraphUnresolved, TagCount};
 pub use manifest::{Manifest, ManifestEntry};
 pub use page::VaultPage;
-pub use page_meta::{FolderIndex, PageMeta};
+pub use page_meta::{FolderIndex, PageMeta, TextHit};
 pub use service::{VaultSync, VaultSyncRpc};
 
 // architect-emitted vox bits from the auto-generated mirror

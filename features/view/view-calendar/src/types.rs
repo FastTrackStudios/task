@@ -100,6 +100,28 @@ pub struct TemplateBlock {
     /// dashed + faded so it reads as "planned shape", not a
     /// confirmed block.
     pub soft: bool,
+    /// The block runs on past midnight (this is its evening part) — a
+    /// late night, worth planning the morning around.
+    #[doc(alias = "late")]
+    pub into_next: bool,
+    /// The block began the night before (this is its early-morning
+    /// part) — an early start to prepare for.
+    pub from_prev: bool,
+}
+
+/// Time actually spent, beside the plan: a timer session, clipped to one
+/// date. The grid draws it as a thin strip at the right edge of the day
+/// so planned and actual can be read against each other.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActualSpan {
+    pub date: chrono::NaiveDate,
+    /// Minutes since local midnight, `[0, 1440]`, `end_min` exclusive.
+    pub start_min: u16,
+    pub end_min: u16,
+    /// What was worked on (the session's description).
+    pub label: String,
+    /// Still running — drawn live.
+    pub running: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

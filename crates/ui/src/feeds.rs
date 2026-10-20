@@ -151,6 +151,21 @@ feeds! {
         mark_all_notifications_read() -> u64
             = mark_all_read() as "mark all notifications read";
     }
+
+    notify_proto::ActivityFeedClient {
+        /// One page of the org's activity feed, newest first — the
+        /// `/activity` page's scroll-back, a task's or a project's
+        /// history (`ActivityFilter::entity` / `::project`).
+        fetch_activity_page(filter: notify_proto::ActivityFilter) -> Vec<notify_proto::Activity>
+            = list(filter) as "list activity";
+    }
+}
+
+/// The feed's newest page — the activity store's backing fetch; the
+/// live fold keeps it current, and pages fetched for filters or
+/// scroll-back are put into the same store.
+pub async fn fetch_activity(slug: &str) -> Result<Vec<notify_proto::Activity>, String> {
+    fetch_activity_page(slug, notify_proto::ActivityFilter::default()).await
 }
 
 // ── Contacts (vault-backed people directory) ─────────────────────────
@@ -292,7 +307,6 @@ pub async fn create_task(
     title: &str,
     details: &str,
 ) -> Result<task_proto::TaskInfo, String> {
-    let client = crate::vox_clients::establish_for::<task_proto::TaskServiceClient>(slug).await?;
     let t = task_proto::TaskInfo {
         id: uuid::Uuid::nil(),
         path: String::new(),
@@ -319,8 +333,19 @@ pub async fn create_task(
         details: details.to_owned(),
         workflow: None,
     };
+    create_task_info(slug, t).await
+}
+
+/// Create a fully-specified task — the processing flow's "make it a
+/// task", which arrives with its project, contexts, dates and estimate
+/// already chosen rather than as a bare title.
+pub async fn create_task_info(
+    slug: &str,
+    task: task_proto::TaskInfo,
+) -> Result<task_proto::TaskInfo, String> {
+    let client = crate::vox_clients::establish_for::<task_proto::TaskServiceClient>(slug).await?;
     client
-        .create(t)
+        .create(task)
         .await
         .map_err(|e| format!("{slug}: create task: {e:?}"))
 }
@@ -507,6 +532,33 @@ feeds! {
         /// backend lists them.
         fetch_meal_plans() -> Vec<mealplan_proto::Meal>
             = list() as "list meal plans";
+        /// Plan a meal (the Planner's meal sheet).
+        create_meal(meal: mealplan_proto::Meal) -> mealplan_proto::Meal
+            = create(meal) as "plan a meal";
+        /// Take a planned meal off the plan.
+        delete_meal(id: &str) -> ()
+            = delete(id.to_owned()) as "remove a meal";
+    }
+}
+
+// The cookbook and the day's intake, for the same meal sheet: recipes to
+// plan from, and what was eaten (with its calories) recorded on the day.
+feeds! {
+    cookbook_proto::CookbookServiceClient {
+        /// Every recipe in the org's cookbook.
+        fetch_recipes() -> Vec<cookbook_proto::Recipe>
+            = list() as "list recipes";
+    }
+}
+
+feeds! {
+    fitness_proto::intake::IntakeServiceClient {
+        /// The day's intake log, made if it does not exist yet.
+        fetch_intake_day(date: &str) -> fitness_proto::intake::IntakeLog
+            = for_day(date.to_owned()) as "read the day's intake";
+        /// Save the day's intake log.
+        save_intake(log: fitness_proto::intake::IntakeLog) -> fitness_proto::intake::IntakeLog
+            = update(log) as "save the day's intake";
     }
 }
 

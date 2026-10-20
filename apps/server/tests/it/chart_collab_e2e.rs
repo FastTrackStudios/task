@@ -55,7 +55,7 @@ use crdt::CrdtDoc;
 use crdt::sync::{DocSyncClient, SyncedDoc};
 use resources_proto::{ChartDoc, ResourcesServiceClient};
 use uuid::Uuid;
-use vault_proto::{COLLAB_TEXT_CONTAINER, VaultSyncClient};
+use vault_proto::{COLLAB_BODY_CONTAINER, VaultSyncClient};
 
 const SOURCE: &str = "[Verse]\n| G | C | D | G |\n";
 
@@ -87,7 +87,7 @@ async fn join(url: &str, doc_id: Uuid) -> CrdtDoc {
 }
 
 fn text_of(doc: &CrdtDoc) -> String {
-    doc.loro().get_text(COLLAB_TEXT_CONTAINER).to_string()
+    doc.loro().get_text(COLLAB_BODY_CONTAINER).to_string()
 }
 
 async fn eventually(what: &str, mut cond: impl AsyncFnMut() -> bool) {
@@ -153,14 +153,14 @@ async fn two_clients_editing_one_chart_converge() {
     let alice_note = "\n- capo 2 for Sunday\n";
     alice
         .loro()
-        .get_text(COLLAB_TEXT_CONTAINER)
+        .get_text(COLLAB_BODY_CONTAINER)
         .push_str(alice_note)
         .unwrap();
     alice.loro().commit();
 
     let bob_bar = "| Em | C |\n";
     {
-        let text = bob.loro().get_text(COLLAB_TEXT_CONTAINER);
+        let text = bob.loro().get_text(COLLAB_BODY_CONTAINER);
         let at = text.to_string().find(SOURCE).expect("bob sees the source") + SOURCE.len();
         // Loro indexes text in unicode code points; the fixture is
         // ASCII so the byte offset is the same number.

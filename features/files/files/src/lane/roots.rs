@@ -123,9 +123,12 @@ impl FilesBackend {
     /// yet" is a legitimate state and this is not the thing that should
     /// decide otherwise.
     pub async fn settled(&self, root_id: RootId) -> Option<AdoptionProgress> {
+        // The walk, and the root's watch: both run in the background
+        // after an adopt answers, and a caller about to edit the tree
+        // and expect the edit seen needs both done.
         for _ in 0..600 {
             let snapshot = self.adoptions().snapshot(root_id)?;
-            if !snapshot.is_running() {
+            if !snapshot.is_running() && !self.watch_pending(root_id.get()) {
                 return Some(progress_of(root_id, &snapshot));
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;

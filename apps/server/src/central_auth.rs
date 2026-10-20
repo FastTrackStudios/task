@@ -720,6 +720,14 @@ pub async fn home_principal(state: &crate::AppState, token: &str) -> Option<uuid
     {
         return Some(bundle.user.id);
     }
+    // A bot's key: its account, behind the same fence — a bot with no
+    // rows here is no one here.
+    if let Some(bot) = crate::bots::resolve(&home.auth, token).await {
+        return match home.memberships.for_user(bot.user_id).await {
+            Ok(rows) if !rows.is_empty() => Some(bot.user_id),
+            _ => None,
+        };
+    }
     let central = configured()?;
     let user_id = central.user_for(token).await?.parse::<uuid::Uuid>().ok()?;
 

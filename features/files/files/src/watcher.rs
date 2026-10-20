@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-use notify_fs::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify_fs::{Event, RecursiveMode, Watcher};
 use uuid::Uuid;
 
 use crate::consts::{MARKER_FILE, STORE_DIR};
@@ -31,11 +31,34 @@ pub trait ActivitySink: Send + Sync + 'static {
     fn note_activity(&self, root_id: Uuid, paths: Vec<String>);
 }
 
+/// Set (to anything) to watch roots by polling instead of with the OS's
+/// watcher: no `fseventsd` registration, a stat walk every
+/// [`POLL_EVERY`]. For the test suites, whose trees are a handful of
+/// files and whose binaries — on a busy external build volume — waited
+/// seconds per native registration. The same switch as `vault-live`'s.
+pub const POLL_ENV: &str = "TASK_WATCH_POLL";
+
+/// How often a polling watcher walks its roots.
+pub const POLL_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// A live recursive watch on one root's live tree. Dropping it stops
-/// the watch.
+/// the root's hints.
+///
+/// Several roots can share one OS watch ([`Self::spawn_many`]): on macOS
+/// every watch is a registration with `fseventsd`, seconds apiece on a
+/// busy machine or from a slow volume, so the roots an org boots with are
+/// watched by one stream rather than one each. A dropped handle takes its
+/// root out of the stream's routing — no OS call, so tearing a backend
+/// down costs nothing — and the stream itself stops with the last one.
 pub struct RootWatcher {
-    _watcher: RecommendedWatcher,
+    shared: std::sync::Arc<Shared>,
     root_id: Uuid,
+}
+
+/// One OS watch and the roots it reports for.
+struct Shared {
+    _watcher: Box<dyn Watcher + Send + Sync>,
+    routes: std::sync::Arc<std::sync::Mutex<Vec<(Uuid, PathBuf)>>>,
 }
 
 impl std::fmt::Debug for RootWatcher {
@@ -46,6 +69,14 @@ impl std::fmt::Debug for RootWatcher {
     }
 }
 
+impl Drop for RootWatcher {
+    fn drop(&mut self) {
+        if let Ok(mut routes) = self.shared.routes.lock() {
+            routes.retain(|(id, _)| *id != self.root_id);
+        }
+    }
+}
+
 impl RootWatcher {
     /// Start watching `root_path` recursively, reporting to `sink`.
     pub fn spawn<S: ActivitySink>(
@@ -53,9 +84,21 @@ impl RootWatcher {
         root_path: &Path,
         sink: std::sync::Arc<S>,
     ) -> Result<Self> {
-        let root_path = root_path.to_path_buf();
-        let watched = root_path.clone();
-        let mut watcher = notify_fs::recommended_watcher(move |res: notify_fs::Result<Event>| {
+        Self::spawn_many(vec![(root_id, root_path.to_path_buf())], sink)?
+            .pop()
+            .ok_or_else(|| Error::Repo(format!("watch {}: not watched", root_path.display())))
+    }
+
+    /// Watch every root in `roots` with **one** OS watch — all added,
+    /// then committed once. A root that cannot be watched is left out
+    /// (and logged); the rest are returned, one handle each.
+    pub fn spawn_many<S: ActivitySink>(
+        roots: Vec<(Uuid, PathBuf)>,
+        sink: std::sync::Arc<S>,
+    ) -> Result<Vec<Self>> {
+        let routes = std::sync::Arc::new(std::sync::Mutex::new(roots.clone()));
+        let routing = routes.clone();
+        let handler = move |res: notify_fs::Result<Event>| {
             let Ok(event) = res else {
                 // A dropped/failed event is survivable by construction:
                 // the next hint (or an explicit checkpoint) still finds
@@ -65,19 +108,58 @@ impl RootWatcher {
             if !is_write_like(&event) {
                 return;
             }
-            let paths = relative_paths(&root_path, &event.paths);
-            if !paths.is_empty() {
-                sink.note_activity(root_id, paths);
+            let Ok(routes) = routing.lock() else { return };
+            for (root_id, root_path) in routes.iter() {
+                let paths = relative_paths(root_path, &event.paths);
+                if !paths.is_empty() {
+                    sink.note_activity(*root_id, paths);
+                }
             }
-        })
-        .map_err(|e| Error::Repo(format!("watcher: {e}")))?;
-        watcher
-            .watch(&watched, RecursiveMode::Recursive)
-            .map_err(|e| Error::Repo(format!("watch {}: {e}", watched.display())))?;
-        Ok(Self {
+        };
+        // Native, or polling for the test suites (`POLL_ENV`): see there.
+        let mut watcher: Box<dyn Watcher + Send + Sync> = if std::env::var_os(POLL_ENV).is_some() {
+            Box::new(
+                notify_fs::PollWatcher::new(
+                    handler,
+                    notify_fs::Config::default().with_poll_interval(POLL_EVERY),
+                )
+                .map_err(|e| Error::Repo(format!("watcher: {e}")))?,
+            )
+        } else {
+            Box::new(
+                notify_fs::recommended_watcher(handler)
+                    .map_err(|e| Error::Repo(format!("watcher: {e}")))?,
+            )
+        };
+        let mut watched = Vec::with_capacity(roots.len());
+        {
+            let mut paths = watcher.paths_mut();
+            for (root_id, root_path) in &roots {
+                match paths.add(root_path, RecursiveMode::Recursive) {
+                    Ok(()) => watched.push(*root_id),
+                    Err(e) => {
+                        tracing::warn!(%root_id, path = %root_path.display(), "files: root not watched: {e}");
+                    }
+                }
+            }
+            paths
+                .commit()
+                .map_err(|e| Error::Repo(format!("watch roots: {e}")))?;
+        }
+        if let Ok(mut r) = routes.lock() {
+            r.retain(|(id, _)| watched.contains(id));
+        }
+        let shared = std::sync::Arc::new(Shared {
             _watcher: watcher,
-            root_id,
-        })
+            routes,
+        });
+        Ok(watched
+            .into_iter()
+            .map(|root_id| Self {
+                shared: shared.clone(),
+                root_id,
+            })
+            .collect())
     }
 
     #[must_use]

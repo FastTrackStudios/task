@@ -18,6 +18,30 @@ use crate::service::{
 };
 use crate::write::{default_task_path, write_task};
 
+/// What [`TaskBackend::notice_file`] / [`TaskBackend::notice_removed`]
+/// did with a change — the `task_sync.outcome` field on its span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Noticed {
+    /// The file is a task; announced as [`TaskEvent::Upserted`].
+    Upserted,
+    /// The path held a task that is gone (removed, or no longer a task);
+    /// announced as [`TaskEvent::Deleted`].
+    Deleted,
+    /// Not a task, and none was known there — nothing announced.
+    NotATask,
+}
+
+impl Noticed {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Upserted => "upserted",
+            Self::Deleted => "deleted",
+            Self::NotATask => "not_a_task",
+        }
+    }
+}
+
 #[derive(Clone, architect::HasDispatcher)]
 pub struct TaskBackend {
     vault_root: PathBuf,
@@ -34,6 +58,10 @@ pub struct TaskBackend {
     /// mount and the stream mount can each hold a backend clone.
     #[cfg(feature = "vox")]
     events: architect::PubSub<TaskEvent>,
+    /// Which task each file holds, as last seen — so a file removed
+    /// from outside the service (a peer's sync, the desktop folder,
+    /// Obsidian) can still be announced as [`TaskEvent::Deleted`] by id.
+    paths: Arc<Mutex<std::collections::HashMap<String, Uuid>>>,
 }
 
 // Manual impl: `PubSub` carries no `Debug`.
@@ -53,6 +81,48 @@ impl TaskBackend {
             claim_lock: Arc::new(Mutex::new(())),
             #[cfg(feature = "vox")]
             events: architect::PubSub::sliding(256),
+            paths: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// A vault file changed by something other than this service — a
+    /// document merged from a peer and written by the collab layer, an
+    /// edit in the desktop folder, an agent writing markdown — with its
+    /// current text. When it is a task, announce it as
+    /// [`TaskEvent::Upserted`], so every list, the activity feed and the
+    /// notifier see it exactly as they see a write made here. A file that
+    /// stopped being a task (its `type` changed) is announced as gone.
+    /// Writes this service made come back here too; announcing the same
+    /// state twice is harmless, since subscribers fold state.
+    // t[impl offline.doc.materialise]
+    pub fn notice_file(&self, rel_path: &str, raw: &str) -> Noticed {
+        match task_proto::doc::task_of(rel_path, raw) {
+            Some(task) => {
+                self.remember(rel_path, task.id);
+                self.publish(TaskEvent::Upserted(task));
+                Noticed::Upserted
+            }
+            None => self.notice_removed(rel_path),
+        }
+    }
+
+    /// A vault file was removed by something other than this service.
+    /// When it held a task, announce [`TaskEvent::Deleted`].
+    pub fn notice_removed(&self, rel_path: &str) -> Noticed {
+        let gone = self.paths.lock().ok().and_then(|mut m| m.remove(rel_path));
+        match gone {
+            Some(id) => {
+                self.publish(TaskEvent::Deleted(id));
+                Noticed::Deleted
+            }
+            None => Noticed::NotATask,
+        }
+    }
+
+    fn remember(&self, rel_path: &str, id: Uuid) {
+        if let Ok(mut m) = self.paths.lock() {
+            m.retain(|_, known| *known != id);
+            m.insert(rel_path.to_owned(), id);
         }
     }
 
@@ -84,7 +154,10 @@ impl TaskBackend {
                 continue;
             }
             match parse_page(&proto) {
-                Ok(t) => out.push(t),
+                Ok(t) => {
+                    self.remember(&t.path, t.id);
+                    out.push(t);
+                }
                 Err(e) => tracing::warn!(path = %proto.rel_path, ?e, "task parse failed"),
             }
         }
@@ -390,6 +463,40 @@ mod tests {
             be.create(chosen),
             Err(TaskError::AlreadyExists(_))
         ));
+    }
+
+    /// A task file written or removed by something other than the service
+    /// (a peer's sync, the desktop folder) is announced like a write made
+    /// here: Upserted with its state, then Deleted by the id it held.
+    #[cfg(feature = "vox")]
+    #[test]
+    // t[verify offline.doc.materialise]
+    fn a_task_file_changed_from_outside_is_announced() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let be = TaskBackend::new(tmp.path());
+        let rx = be.events.subscribe(16);
+        let mut t = crate::capture("Restring the bass @studio");
+        t.path = "Task/restring-the-bass.md".into();
+        let raw = task_proto::doc::serialize_task(&t).expect("serialize");
+
+        be.notice_file(&t.path, &raw);
+        match rx.try_recv().expect("an event") {
+            TaskEvent::Upserted(got) => {
+                assert_eq!(got.id, t.id);
+                assert_eq!(got.title, t.title);
+            }
+            TaskEvent::Deleted(_) => panic!("expected the task"),
+        }
+
+        // A note is not a task, and nothing was known at its path.
+        be.notice_file("Notes/idea.md", "---\ntitle: Idea\n---\nhi\n");
+        assert!(rx.try_recv().is_err());
+
+        be.notice_removed(&t.path);
+        assert!(matches!(rx.try_recv(), Ok(TaskEvent::Deleted(id)) if id == t.id));
+        // Once only.
+        be.notice_removed(&t.path);
+        assert!(rx.try_recv().is_err());
     }
 
     fn make(

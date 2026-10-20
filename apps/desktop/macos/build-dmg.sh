@@ -38,7 +38,7 @@ PRODUCT_NAME="${PRODUCT_NAME:-Task}"
 DX_TAILWIND="${DX_TAILWIND-../tailwind.css}"
 ICON_1024="${ICON_1024:-$ROOT/apps/mobile/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png}"
 OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"
-MARKETING_VER="${MARKETING_VER:-0.0.2}"
+MARKETING_VER="${MARKETING_VER:-0.0.3}"
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
 
 # Notarization credentials live where the TestFlight flow already keeps
@@ -109,6 +109,18 @@ echo "=== building the sync agent ==="
 "
 cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
 
+# ── The CLI, inside the app ─────────────────────────────────────────────────
+# `task` ships with the app and is linked onto PATH at launch
+# (apps/desktop/src/cli_link.rs), so it updates with the app and talks to
+# the app's own node as the person signed in to it.
+echo "=== building the task CLI ==="
+"$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
+    set -euo pipefail
+    cd '$ROOT'
+    cargo build --release -p task-cli --bin task
+"
+cp "$ROOT/target/release/task" "$APP/Contents/MacOS/task"
+
 # ── The cloud folder ────────────────────────────────────────────────────────
 # The File Provider extension is what makes a synced root show up in Finder
 # with everything listed and only some of it held — Linux gets the same
@@ -121,11 +133,16 @@ cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon
 # nothing in Finder. Worth having as a knob, not as a default.
 if [ -z "${SKIP_FILEPROVIDER:-}" ]; then
     echo "=== building the file provider extension ==="
-    "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
-        set -euo pipefail
-        TEAM_ID='${TEAM_ID:-}' SIGN_ID='$SIGN_ID' \
-            bash '$SCRIPT_DIR/build-fileprovider.sh'
-    "
+    # Swift wants Xcode's own SDK: the nix shell's apple-sdk is built for an
+    # older Swift and the compiler refuses it ("this SDK is not supported
+    # by the compiler"). So this step runs outside the shell's SDK env, on
+    # the real Xcode — the same fix deploy-testflight.sh carries.
+    REAL_XCODE="$(env -u DEVELOPER_DIR /usr/bin/xcode-select -p)"
+    env -u SDKROOT -u NIX_APPLE_SDK_VERSION DEVELOPER_DIR="$REAL_XCODE" \
+        PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH" \
+        TEAM_ID="${TEAM_ID:-$(sed -n 's/.*(\([A-Z0-9]*\))$/\1/p' <<<"$SIGN_ID")}" SIGN_ID="$SIGN_ID" \
+        OUT_DIR="$ROOT/target/fileprovider" \
+        bash "$SCRIPT_DIR/build-fileprovider.sh"
     mkdir -p "$APP/Contents/PlugIns"
     rm -rf "$APP/Contents/PlugIns/TaskFileProvider.appex"
     cp -R "$ROOT/target/fileprovider/TaskFileProvider.appex" \
@@ -185,6 +202,9 @@ find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0
 # not through the app, so it is verified on its own terms.
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
     --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP/Contents/MacOS/fts-files-daemon"
+# The CLI too: a program of its own, run from a shell.
+codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
+    --sign "$SIGN_ID" "$APP/Contents/MacOS/task"
 # The extension carries its own entitlements, not the app's: it must be
 # sandboxed (the system will not load one that is not) where the app must not
 # be, since an App-Sandboxed app cannot register the agent as a LaunchAgent.
@@ -255,8 +275,32 @@ spctl --assess --type execute --verbose=4 "$MOUNT/$(basename "$APP")" || {
 }
 hdiutil detach "$MOUNT" >/dev/null
 
+# ── What the in-app updater downloads (apps/desktop/src/updater.rs) ─────────
+# The same notarized app, stapled on its own (the DMG's ticket covers its
+# code; stapling the bundle lets an update pass Gatekeeper offline too),
+# zipped with ditto so the signature survives, and a manifest naming it.
+echo "=== the updater's zip and manifest ==="
+xcrun stapler staple "$APP"
+ZIP="$OUT_DIR/Task-macos.zip"
+rm -f "$ZIP"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+ZIP_SHA="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
+MANIFEST="$OUT_DIR/latest-macos.json"
+RELEASE_TAG="desktop-v$MARKETING_VER"
+cat > "$MANIFEST" <<JSON
+{
+  "version": "$MARKETING_VER",
+  "build": "$BUILD_NO",
+  "zip": "https://github.com/FastTrackStudios/task/releases/download/$RELEASE_TAG/Task-macos.zip",
+  "sha256": "$ZIP_SHA"
+}
+JSON
+cp "$DMG" "$OUT_DIR/Task-macos.dmg"
+
 echo
 echo "=== done ==="
 echo "dmg: $DMG"
+echo "zip: $ZIP ($ZIP_SHA)"
+echo "manifest: $MANIFEST"
 echo "Drag Task to Applications, open it once, sign in — the sync agent"
 echo "installs itself and this machine pairs with your org."

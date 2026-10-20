@@ -35,7 +35,7 @@ const MOBILE_BASELINE_CSS: &str = "\
 html,body{overflow-x:clip;-webkit-text-size-adjust:100%}\
 *{-webkit-tap-highlight-color:transparent}\
 .overflow-x-auto,.overflow-x-scroll{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}\
-@media (max-width:640px){\
+@media (max-width:767px){\
 input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{font-size:16px!important}\
 }";
 
@@ -125,9 +125,13 @@ pub fn App() -> Element {
     // Re-discover orgs whenever the active server OR the session changes
     // (reading both inside the resource closure registers them as
     // dependencies).
+    // Bumped by the account's device sync when it lets the signed-in
+    // account into orgs on this device's node (`account_devices`).
+    let orgs_epoch = use_context_provider(|| crate::account_devices::OrgsEpoch(Signal::new(0)));
     let orgs_res = use_resource(move || {
         let _active = server_registry.active_id();
         let _session = session_token();
+        let _epoch = (orgs_epoch.0)();
         async move { fetch_orgs().await }
     });
     // Pull the identity locker's per-org tokens once the session
@@ -321,6 +325,10 @@ pub fn App() -> Element {
     // route page's `use_<entity>_list` / `use_<entity>_mutations` hooks
     // read. Provided after `use_app_supervised` so mutations find the
     // notifications + reactivity registries it installed above.
+    // Offline (docs/spec/offline.md): the device copy every list reads
+    // first, and the durable queue for timer calls made with no
+    // connection, replayed when the connection comes back.
+    crate::offline::provide_offline(conn);
     crate::stores::provide_stores();
 
     // Web auth: the active-account context + boot restore (validate
@@ -338,6 +346,7 @@ pub fn App() -> Element {
     // authority of the sign-in this app already holds. Once per launch,
     // native only, and it prompts nobody — see the module docs.
     crate::device_pairing::use_device_pairing();
+    crate::account_devices::use_account_devices();
     // The other half of a folder becoming a project: the agent records
     // who made it, and the app — which is signed in — writes the
     // declaration that says whose it is.

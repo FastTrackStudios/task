@@ -11,12 +11,15 @@
 //!
 //! **Which vault** is a prop. Bare, it is the org switcher's own vault
 //! (`"default"`). Given a `wiki`, it is that wiki's pages served as the
-//! vault `wiki:<slug>` — the same component, the same two views
-//! (Folders by `folder:` frontmatter, Tags by every tag a note carries),
-//! rows routing to the wiki page instead of the vault page. A wiki
-//! opens in Tags (its pages are typed and tagged, rarely filed under
-//! folder notes), the vault in Folders; the toggle is remembered per
-//! vault id in `localStorage`.
+//! vault `wiki:<slug>` — the same component, rows routing to the wiki
+//! page instead of the vault page. The header switches between the two:
+//! **Vault | Wikis**.
+//!
+//! **One view: by parent.** Every note names one parent (`folder:` /
+//! `up:`), and the tree nests it there; a parent is a note itself — tap
+//! opens it, the chevron folds it. There is no tag view: tags are found
+//! by search, and one structure is all anyone has to keep in order.
+//! Records and tasks are left out (`is_note`) — their apps list them.
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -34,72 +37,12 @@ use crate::document_session::{VAULT_ID, wiki_vault_id};
 use crate::pages::vault::{TreeNode, build_tree, fetch_folder_index};
 use crate::routes::Route;
 
-/// How the explorer organizes the vault. `Folders` is the virt-folder
-/// model (obsidian-virt-folder): hierarchy from each note's
-/// `folder:`/`up:` wikilink property, folder notes carrying their own
-/// `icon:`. `Tags` groups by hierarchical tags instead.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ExplorerMode {
-    Tags,
-    Folders,
-}
-
-impl ExplorerMode {
-    /// What a vault opens in when nothing was remembered: a wiki in
-    /// Tags — its pages are typed and tagged, seldom filed under
-    /// folder notes — and the org's own vault in Folders.
-    fn default_for(is_wiki: bool) -> Self {
-        if is_wiki { Self::Tags } else { Self::Folders }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Tags => "tags",
-            Self::Folders => "folders",
-        }
-    }
-
-    // Read only where a browser remembers a choice (and by the tests).
-    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "tags" => Some(Self::Tags),
-            "folders" => Some(Self::Folders),
-            _ => None,
-        }
-    }
-}
-
-/// The `localStorage` key the toggle is remembered under — one per
-/// vault id, so the vault and each wiki keep their own choice.
-#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
-fn mode_key(vault_id: &str) -> String {
-    format!("task.explorer.mode.{vault_id}")
-}
-
-/// The remembered toggle, or the default for this kind of vault.
-fn initial_mode(vault_id: &str, is_wiki: bool) -> ExplorerMode {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let stored = web_sys::window()
-            .and_then(|w| w.local_storage().ok().flatten())
-            .and_then(|s| s.get_item(&mode_key(vault_id)).ok().flatten())
-            .and_then(|v| ExplorerMode::parse(&v));
-        if let Some(m) = stored {
-            return m;
-        }
-    }
-    let _ = vault_id;
-    ExplorerMode::default_for(is_wiki)
-}
-
-fn remember_mode(vault_id: &str, mode: ExplorerMode) {
-    #[cfg(target_arch = "wasm32")]
-    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(&mode_key(vault_id), mode.as_str());
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = (vault_id, mode);
+/// Whether a page belongs in the notes navigator. Records — captures,
+/// contacts, bookings, under `Records/` — and tasks are vault files the
+/// apps own and list on their own pages; among the notes they buried
+/// the notes (the seeded inbox alone filled "Unfiled").
+fn is_note(page: &vault_proto::PageMeta) -> bool {
+    !page.path.starts_with("Records/") && page.page_type != "task"
 }
 
 /// Which vault the explorer shows and where its rows go. `Clone`d into
@@ -122,13 +65,6 @@ impl ExplorerScope {
     fn is_wiki(&self) -> bool {
         self.wiki.is_some()
     }
-}
-
-/// One virtual folder in the tag tree.
-#[derive(Default)]
-struct TagNode {
-    children: std::collections::BTreeMap<String, TagNode>,
-    pages: Vec<vault_proto::PageMeta>,
 }
 
 /// Render the curated icon for a tag's frontmatter `icon:` name.
@@ -170,87 +106,21 @@ fn tag_icon(name: &str) -> Element {
     }
 }
 
-/// Display form of a tag segment: first letter capitalized.
-fn capitalize(seg: &str) -> String {
-    let mut chars = seg.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-/// Icon names declared by tag notes: any page with `type: tag` maps
-/// its basename (lowercased — matches tag segments) to its `icon:`.
-/// Stored in the vault, not in tagged documents — edit the tag note
-/// (e.g. `Tags/Finance.md`) to change the icon everywhere.
-fn tag_icon_map(pages: &[vault_proto::PageMeta]) -> std::collections::HashMap<String, String> {
-    pages
-        .iter()
-        .filter(|p| p.page_type == "tag" && !p.icon.is_empty())
-        .map(|p| (p.basename.to_lowercase(), p.icon.clone()))
-        .collect()
-}
-
-/// Structural `type:` values that describe the tree rather than the
-/// page — never a grouping of their own.
-const STRUCTURAL_TYPES: &[&str] = &["folder", "index", "tag"];
-
-/// The buckets a page lands in: every tag it carries and, when
-/// `type_counts`, its `type:` too. A wiki's pages are typed
-/// (`concept`, `person`, `source`) far more often than tagged — the
-/// wiki schema *is* the type — so a wiki explorer in Tags mode would
-/// otherwise show one long Untagged list. The vault keeps tags alone:
-/// its `type:` is the note's widget (`song`, `setlist`), not a topic.
-fn group_keys(page: &vault_proto::PageMeta, type_counts: bool) -> Vec<String> {
-    let mut keys: Vec<String> = page.tags.clone();
-    if type_counts {
-        let t = page.page_type.trim().to_lowercase();
-        if !t.is_empty() && !STRUCTURAL_TYPES.contains(&t.as_str()) && !keys.contains(&t) {
-            keys.push(t);
-        }
-    }
-    keys
-}
-
-/// Build the tag tree: every page lands under each of its groups
-/// (hierarchical on `/`); pages in no group are returned separately.
-fn build_tag_tree(
-    pages: &[vault_proto::PageMeta],
-    type_counts: bool,
-) -> (TagNode, Vec<vault_proto::PageMeta>) {
-    let mut root = TagNode::default();
-    let mut untagged = Vec::new();
-    for page in pages {
-        let keys = group_keys(page, type_counts);
-        if keys.is_empty() {
-            untagged.push(page.clone());
-            continue;
-        }
-        for tag in &keys {
-            let mut node = &mut root;
-            for seg in tag.split('/').filter(|s| !s.is_empty()) {
-                node = node.children.entry(seg.to_string()).or_default();
-            }
-            node.pages.push(page.clone());
-        }
-    }
-    fn sort(node: &mut TagNode) {
-        node.pages
-            .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
-        for child in node.children.values_mut() {
-            sort(child);
-        }
-    }
-    sort(&mut root);
-    untagged.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
-    (root, untagged)
-}
-
 /// The sidebar tree over one vault. Bare, the org switcher's vault;
 /// with `org` + `wiki`, that wiki's pages (vault `wiki:<slug>`), with
 /// the way back to the wiki list and the wiki's name above the tree.
 #[component]
-pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: String) -> Element {
+pub fn VaultExplorer(
+    #[props(default)] org: String,
+    #[props(default)] wiki: String,
+    /// Buttons at the right of the Vault | Wikis row (the phone drawer's
+    /// New note), so the switch is the header rather than a row under one.
+    #[props(default)]
+    actions: Option<Element>,
+    /// Under that row, above the tree (the drawer's search bar).
+    #[props(default)]
+    below: Option<Element>,
+) -> Element {
     let org_list = use_context::<Signal<Vec<crate::orgs::OrgMeta>>>();
     let selection = use_context::<Signal<crate::orgs::OrgSelection>>();
     // A wiki belongs to one org — the route's — and under "All" the
@@ -287,7 +157,11 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
     let mut files = use_resource(move || {
         let slug = active();
         let vault_id = scope.read().vault_id.clone();
-        async move { fetch_folder_index(slug, vault_id).await }
+        async move {
+            fetch_folder_index(slug, vault_id)
+                .await
+                .map(|pages| pages.into_iter().filter(is_note).collect::<Vec<_>>())
+        }
     });
     // No asset filter here, and its absence is the point. ADR 0004
     // moved charts and songs out of the vault entirely, onto
@@ -345,26 +219,11 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
         },
     );
 
-    // The leftover sections (Untagged / Unfiled) start collapsed —
-    // they exist to be ignorable.
-    let collapsed =
-        use_signal(|| HashSet::<String>::from(["untagged".to_string(), "unfiled".to_string()]));
-    // Folders and tag buckets both start COLLAPSED (an overview, not
-    // a wall) — these sets hold what the user has opened.
+    // Unfiled starts collapsed — it exists to be ignorable.
+    let collapsed = use_signal(|| HashSet::<String>::from(["unfiled".to_string()]));
+    // Parent notes start COLLAPSED (an overview, not a wall) — this set
+    // holds what the person has opened.
     let folder_expanded = use_signal(HashSet::<String>::new);
-    let tag_expanded = use_signal(HashSet::<String>::new);
-    // Tags for a wiki, Folders for the vault, unless this browser
-    // remembers a choice for this vault id.
-    let mode = use_signal(|| {
-        let s = scope.peek();
-        initial_mode(&s.vault_id, s.is_wiki())
-    });
-    let set_mode = move |m: ExplorerMode| {
-        // Signals are `Copy`; a fresh handle keeps this closure `Fn`.
-        let mut mode = mode;
-        mode.set(m);
-        remember_mode(&scope.peek().vault_id, m);
-    };
 
     // The wiki's own name, for the header of a wiki explorer.
     let wiki_title = use_resource(move || {
@@ -380,25 +239,17 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
         }
     });
 
-    // The org's wikis — reference material, AI-generated summaries,
-    // skills: everything that ISN'T the user's own writing. A shelf
-    // below the vault tree, one row per wiki, each opening its home, so
-    // the vault stays purely personal and every wiki is a click away
-    // rather than only the default one. A wiki explorer is already
-    // inside a wiki and has no shelf.
+    // The org's wikis — reference material, AI summaries, skills:
+    // everything that isn't the person's own writing. The header's
+    // Vault | Wikis switch lists them; each opens its home, and its
+    // pages then fill this same tree.
     let wikis = use_resource(move || {
         let slug = active();
-        let shelf = !scope.read().is_wiki();
-        async move {
-            if !shelf {
-                return Ok(Vec::new());
-            }
-            crate::feeds::fetch_wikis(&slug).await
-        }
+        async move { crate::feeds::fetch_wikis(&slug).await }
     });
-    // Starts collapsed — the vault is the primary navigation substrate;
-    // the wikis are the reference shelf.
-    let mut wiki_open = use_signal(|| false);
+    // Showing the list of wikis rather than a tree.
+    let mut wiki_list = use_signal(|| false);
+    let nav = use_navigator();
 
     // Selection = the current route's path in THIS vault.
     let route = use_route::<Route>();
@@ -416,54 +267,101 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
         .clone()
         .flatten()
         .or_else(|| scope_now.wiki.clone())
-        .unwrap_or_else(|| "Vault".to_owned());
+        .unwrap_or_default();
+    let on_wikis = is_wiki || wiki_list();
+    let seg = |on: bool| {
+        if on {
+            "rounded-full bg-accent px-3.5 py-1.5 text-[17px] font-semibold text-foreground md:px-2 md:py-0.5 md:text-xs md:font-medium"
+        } else {
+            "rounded-full px-3.5 py-1.5 text-[17px] font-semibold text-muted-foreground hover:text-foreground md:px-2 md:py-0.5 md:text-xs md:font-medium"
+        }
+    };
 
     rsx! {
         div { class: "flex h-full min-h-0 flex-col",
-            if let Some(wiki) = scope_now.wiki.clone() {
-                div { class: "flex flex-col gap-1 px-3 pt-3",
-                    Link {
-                        to: Route::WikiRoute {},
-                        class: "text-[0.7rem] text-muted-foreground hover:text-foreground",
-                        "← Wikis"
-                    }
-                    div { class: "flex items-center justify-between gap-2 pb-1",
-                        Link {
-                            to: Route::WikiHomeRoute { org: scope_now.org.clone(), wiki: wiki.clone() },
-                            class: "flex min-w-0 items-center gap-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground hover:text-foreground",
-                            span { class: "flex h-3.5 w-3.5 items-center justify-center", BookOpen { size: 13 } }
-                            span { class: "truncate", "{heading}" }
+            // Vault | Wikis — the same kind of thing, kept apart: your
+            // own writing, and the reference shelves beside it.
+            div { class: "flex items-center gap-1 px-3 pb-2 pt-3",
+                button {
+                    r#type: "button",
+                    "data-testid": "explorer-vault",
+                    "aria-pressed": "{!on_wikis}",
+                    class: seg(!on_wikis),
+                    onclick: move |_| {
+                        wiki_list.set(false);
+                        if is_wiki {
+                            nav.push(Route::VaultRoute { path: String::new(), org: String::new() });
                         }
-                        {mode_toggle(mode(), set_mode)}
-                    }
+                    },
+                    "Vault"
                 }
-            } else {
-                div { class: "flex items-center justify-between px-3 pb-1 pt-3",
-                    span { class: "text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground",
-                        "{heading}"
+                button {
+                    r#type: "button",
+                    "data-testid": "explorer-wikis",
+                    "aria-pressed": "{on_wikis}",
+                    class: seg(on_wikis),
+                    onclick: move |_| wiki_list.set(true),
+                    "Wikis"
+                }
+                if let Some(a) = actions {
+                    div { class: "ml-auto flex items-center gap-1", {a} }
+                }
+            }
+            if let Some(b) = below {
+                {b}
+            }
+            // Inside a wiki: its name, and the way back to the list.
+            if let (Some(wiki), false) = (scope_now.wiki.clone(), wiki_list()) {
+                div { class: "flex items-center gap-1 px-2 pb-1",
+                    button {
+                        r#type: "button",
+                        class: "flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent/40 md:size-6",
+                        aria_label: "All wikis",
+                        onclick: move |_| wiki_list.set(true),
+                        span { class: "rotate-180", ChevronRight { size: 14 } }
                     }
-                    {mode_toggle(mode(), set_mode)}
+                    Link {
+                        to: Route::WikiHomeRoute { org: scope_now.org.clone(), wiki: wiki.clone() },
+                        class: "flex min-w-0 items-center gap-1.5 text-[15px] font-semibold text-foreground md:text-[13px]",
+                        span { class: "truncate", "{heading}" }
+                    }
                 }
             }
             div { class: "min-h-0 flex-1 overflow-y-auto pb-2",
-                match &*files.read_unchecked() {
-                    Some(Ok(pages)) if mode() == ExplorerMode::Tags => {
-                        let (root, untagged) = build_tag_tree(pages, is_wiki);
-                        let icons = tag_icon_map(pages);
-                        rsx! {
-                            nav { class: "flex flex-col gap-px px-1.5",
-                                if root.children.is_empty() && untagged.is_empty() {
-                                    div { class: "px-3 py-2 text-xs text-muted-foreground", "No pages yet." }
+                if wiki_list() {
+                    nav { class: "flex flex-col gap-px px-1.5",
+                        match &*wikis.read_unchecked() {
+                            Some(Ok(list)) if list.is_empty() => rsx! {
+                                div { class: "px-3 py-2 text-sm text-muted-foreground", "No wikis in this org yet." }
+                            },
+                            Some(Ok(list)) => rsx! {
+                                for w in list.iter() {
+                                    Link {
+                                        key: "{w.slug}",
+                                        "data-testid": "wiki-shelf-wiki",
+                                        to: Route::WikiHomeRoute { org: active(), wiki: w.slug.clone() },
+                                        onclick: move |_| wiki_list.set(false),
+                                        class: "flex w-full items-center gap-2 rounded-lg px-2 min-h-11 text-left text-[16px] text-foreground/85 hover:bg-accent/40 md:min-h-0 md:rounded-md md:py-1 md:text-[13px]",
+                                        span { class: "flex size-5 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4 md:[&_svg]:size-3",
+                                            BookOpen { size: 12 }
+                                        }
+                                        span { class: "truncate",
+                                            if w.title.is_empty() { "{w.slug}" } else { "{w.title}" }
+                                        }
+                                        span { class: "ml-auto text-[0.7rem] tabular-nums text-muted-foreground/60", "{w.pages}" }
+                                    }
                                 }
-                                for (seg, node) in &root.children {
-                                    {tag_node(seg, node, String::new(), 0, tag_expanded, selected.clone(), &icons, &scope_now)}
-                                }
-                                if !untagged.is_empty() {
-                                    {loose_section("untagged", "Untagged", &untagged, collapsed, selected.clone(), &scope_now)}
-                                }
-                            }
+                            },
+                            Some(Err(e)) => rsx! {
+                                div { class: "px-3 py-2 text-sm text-muted-foreground", "{e}" }
+                            },
+                            None => rsx! {
+                                div { class: "px-3 py-2", Spinner { size: SpinnerSize::Small } }
+                            },
                         }
                     }
+                } else {
+                match &*files.read_unchecked() {
                     Some(Ok(_)) => {
                         let t = tree().expect("tree follows files");
                         let nodes = Rc::new(t.0.clone());
@@ -506,92 +404,11 @@ pub fn VaultExplorer(#[props(default)] org: String, #[props(default)] wiki: Stri
                         }
                     },
                 }
-                // ── Wikis: the org's reference shelf (not personal notes) ──
-                if let Some(Ok(list)) = &*wikis.read_unchecked() {
-                    if !list.is_empty() {
-                        {
-                            let chevron = if wiki_open() { "rotate-90" } else { "" };
-                            let count = list.len();
-                            let org_slug = active();
-                            rsx! {
-                                div { class: "mt-2 border-t border-border/40 pt-1 px-1.5",
-                                    button {
-                                        r#type: "button",
-                                        class: "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground hover:bg-accent/40 hover:text-foreground",
-                                        onclick: move |_| {
-                                            let now = *wiki_open.peek();
-                                            wiki_open.set(!now);
-                                        },
-                                        span { class: "flex h-3 w-3 shrink-0 items-center justify-center transition-transform {chevron}",
-                                            ChevronRight { size: 11 }
-                                        }
-                                        span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground/80",
-                                            BookOpen { size: 13 }
-                                        }
-                                        span { class: "truncate", "Wikis" }
-                                        span { class: "ml-auto text-[0.65rem] tabular-nums text-muted-foreground/60", "{count}" }
-                                    }
-                                    if wiki_open() {
-                                        nav { class: "flex flex-col gap-px",
-                                            for w in list.iter() {
-                                                Link {
-                                                    key: "{w.slug}",
-                                                    "data-testid": "wiki-shelf-wiki",
-                                                    to: Route::WikiHomeRoute { org: org_slug.clone(), wiki: w.slug.clone() },
-                                                    class: "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground",
-                                                    style: "padding-left: 18px",
-                                                    span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center",
-                                                        BookOpen { size: 12 }
-                                                    }
-                                                    span { class: "truncate",
-                                                        if w.title.is_empty() { "{w.slug}" } else { "{w.title}" }
-                                                    }
-                                                    span { class: "ml-auto text-[0.65rem] tabular-nums text-muted-foreground/60", "{w.pages}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
             // Presence lives in the top bar (avatar group); account,
             // theme, and org switching live at the rail's foot — the
             // explorer is pure vault tree now.
-        }
-    }
-}
-
-/// The Folders | Tags switch.
-fn mode_toggle(
-    current: ExplorerMode,
-    set_mode: impl Fn(ExplorerMode) + Clone + 'static,
-) -> Element {
-    rsx! {
-        div { class: "flex shrink-0 items-center gap-0.5 rounded-md bg-muted/40 p-0.5",
-            for (m, label) in [(ExplorerMode::Folders, "Folders"), (ExplorerMode::Tags, "Tags")] {
-                {
-                    let set_mode = set_mode.clone();
-                    rsx! {
-                        button {
-                            key: "{label}",
-                            r#type: "button",
-                            "data-testid": "explorer-mode",
-                            "data-mode": m.as_str(),
-                            "aria-pressed": if current == m { "true" } else { "false" },
-                            class: if current == m {
-                                "rounded px-1.5 py-0.5 text-[0.65rem] font-medium bg-accent text-foreground"
-                            } else {
-                                "rounded px-1.5 py-0.5 text-[0.65rem] text-muted-foreground hover:text-foreground"
-                            },
-                            onclick: move |_| set_mode(m),
-                            "{label}"
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -618,9 +435,9 @@ fn explorer_node(
     let indent = depth * 12;
 
     let row_cls = if is_selected {
-        "flex w-full items-center gap-1.5 rounded-md bg-accent px-1.5 py-1 text-left text-[13px] text-foreground"
+        "flex w-full items-center gap-1.5 rounded-lg bg-accent px-1.5 min-h-11 text-left text-[16px] md:min-h-0 md:rounded-md md:py-1 md:text-[13px] text-foreground"
     } else {
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+        "flex w-full items-center gap-1.5 rounded-lg px-1.5 min-h-11 text-left text-[16px] md:min-h-0 md:rounded-md md:py-1 md:text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
     };
     let toggle_key = key.clone();
     let row_key = key.clone();
@@ -654,7 +471,7 @@ fn explorer_node(
                 },
                 if is_folder {
                     span {
-                        class: "flex h-3 w-3 shrink-0 items-center justify-center transition-transform {chevron}",
+                        class: "-my-2 flex size-9 shrink-0 items-center justify-center transition-transform md:my-0 md:size-3 {chevron} [&_svg]:size-4 md:[&_svg]:size-[11px]",
                         onclick: move |e| {
                             e.stop_propagation();
                             let mut set = expanded.write();
@@ -664,17 +481,17 @@ fn explorer_node(
                         },
                         ChevronRight { size: 11 }
                     }
-                    span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground/80",
+                    span { class: "flex size-5 shrink-0 items-center justify-center [&_svg]:size-4 md:size-3.5 md:[&_svg]:size-3 text-muted-foreground/80",
                         {tag_icon(&node.meta.icon)}
                     }
                 } else if is_base {
                     // Base views get a board glyph — they open as live
                     // views, not text.
-                    span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary",
+                    span { class: "flex size-5 shrink-0 items-center justify-center [&_svg]:size-4 md:size-3.5 md:[&_svg]:size-3 text-primary",
                         SquareKanban { size: 12 }
                     }
                 } else {
-                    span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center",
+                    span { class: "flex size-5 shrink-0 items-center justify-center [&_svg]:size-4 md:size-3.5 md:[&_svg]:size-3",
                         FileText { size: 12 }
                     }
                 }
@@ -690,73 +507,6 @@ fn explorer_node(
 }
 
 /// One tag virtual folder row + its children (pages, then subtags).
-/// `expanded` is inverted relative to the folder tree's `collapsed`
-/// set: tag buckets start closed, opened paths are recorded.
-#[allow(clippy::too_many_arguments)]
-fn tag_node(
-    seg: &str,
-    node: &TagNode,
-    prefix: String,
-    depth: usize,
-    mut expanded: Signal<HashSet<String>>,
-    selected: String,
-    icons: &std::collections::HashMap<String, String>,
-    scope: &ExplorerScope,
-) -> Element {
-    let tag_path = if prefix.is_empty() {
-        seg.to_string()
-    } else {
-        format!("{prefix}/{seg}")
-    };
-    let key = format!("tag:{tag_path}");
-    // A bucket holding the open page starts open, so a deep link
-    // lands visible.
-    let holds_selected = !selected.is_empty() && node.pages.iter().any(|p| p.path == selected);
-    let is_collapsed = !expanded.read().contains(&key) && !holds_selected;
-    let indent = depth * 12;
-    let count = node.pages.len();
-    let chevron = if is_collapsed { "" } else { "rotate-90" };
-    let toggle_key = key.clone();
-    let icon_name = icons.get(&seg.to_lowercase()).cloned().unwrap_or_default();
-    let label = capitalize(seg);
-
-    rsx! {
-        div { key: "{tag_path}",
-            button {
-                r#type: "button",
-                "data-testid": "explorer-tag",
-                "data-tag": "{tag_path}",
-                class: "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground",
-                style: "padding-left: {indent + 6}px",
-                onclick: move |_| {
-                    let mut set = expanded.write();
-                    if !set.remove(&toggle_key) {
-                        set.insert(toggle_key.clone());
-                    }
-                },
-                span { class: "flex h-3 w-3 shrink-0 items-center justify-center transition-transform {chevron}",
-                    ChevronRight { size: 11 }
-                }
-                span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground/80",
-                    {tag_icon(&icon_name)}
-                }
-                span { class: "truncate", "{label}" }
-                if count > 0 {
-                    span { class: "ml-auto text-[0.65rem] tabular-nums text-muted-foreground/60", "{count}" }
-                }
-            }
-            if !is_collapsed {
-                for page in &node.pages {
-                    {page_row(page, depth + 1, selected.clone(), scope)}
-                }
-                for (child_seg, child) in &node.children {
-                    {tag_node(child_seg, child, tag_path.clone(), depth + 1, expanded, selected.clone(), icons, scope)}
-                }
-            }
-        }
-    }
-}
-
 /// A single note row (tag mode) — same look as the folder tree's
 /// file rows; clicking navigates.
 fn page_row(
@@ -772,9 +522,9 @@ fn page_row(
     let is_selected = !selected.is_empty() && page.path == selected;
     let indent = depth * 12;
     let row_cls = if is_selected {
-        "flex w-full items-center gap-1.5 rounded-md bg-accent px-1.5 py-1 text-left text-[13px] text-foreground"
+        "flex w-full items-center gap-1.5 rounded-lg bg-accent px-1.5 min-h-11 text-left text-[16px] md:min-h-0 md:rounded-md md:py-1 md:text-[13px] text-foreground"
     } else {
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+        "flex w-full items-center gap-1.5 rounded-lg px-1.5 min-h-11 text-left text-[16px] md:min-h-0 md:rounded-md md:py-1 md:text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground"
     };
     let path = page.path.clone();
     let title = page.title.clone();
@@ -805,11 +555,11 @@ fn page_row(
                 nav.push(row_scope.route(path.clone()));
             },
             if is_base {
-                span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary",
+                span { class: "flex size-5 shrink-0 items-center justify-center [&_svg]:size-4 md:size-3.5 md:[&_svg]:size-3 text-primary",
                     SquareKanban { size: 12 }
                 }
             } else {
-                span { class: "flex h-3.5 w-3.5 shrink-0 items-center justify-center",
+                span { class: "flex size-5 shrink-0 items-center justify-center [&_svg]:size-4 md:size-3.5 md:[&_svg]:size-3",
                     FileText { size: 12 }
                 }
             }
@@ -838,14 +588,14 @@ fn loose_section(
         div { class: "mt-1 border-t border-border/40 pt-1",
             button {
                 r#type: "button",
-                class: "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground",
+                class: "flex w-full items-center gap-1.5 rounded-lg px-1.5 min-h-11 text-left text-[16px] md:min-h-0 md:rounded-md md:py-1 md:text-[13px] text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground",
                 onclick: move |_| {
                     let mut set = collapsed.write();
                     if !set.remove(key) {
                         set.insert(key.to_string());
                     }
                 },
-                span { class: "flex h-3 w-3 shrink-0 items-center justify-center transition-transform {chevron}",
+                span { class: "-my-2 flex size-9 shrink-0 items-center justify-center transition-transform md:my-0 md:size-3 {chevron} [&_svg]:size-4 md:[&_svg]:size-[11px]",
                     ChevronRight { size: 11 }
                 }
                 span { class: "truncate", "{label}" }
@@ -862,7 +612,7 @@ fn loose_section(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExplorerMode, ExplorerScope, build_tag_tree, group_keys, initial_mode, mode_key};
+    use super::{ExplorerScope, is_note};
     use crate::document_session::{VAULT_ID, wiki_vault_id};
     use crate::routes::Route;
 
@@ -881,77 +631,12 @@ mod tests {
     }
 
     #[test]
-    fn a_wiki_opens_in_tags_and_the_vault_in_folders() {
-        assert_eq!(ExplorerMode::default_for(true), ExplorerMode::Tags);
-        assert_eq!(ExplorerMode::default_for(false), ExplorerMode::Folders);
-        // Off the web nothing is remembered, so the default is what
-        // the first open gets.
-        assert_eq!(
-            initial_mode(&wiki_vault_id("music-theory"), true),
-            ExplorerMode::Tags
-        );
-        assert_eq!(initial_mode(VAULT_ID, false), ExplorerMode::Folders);
-    }
-
-    #[test]
-    fn the_toggle_is_remembered_per_vault_id() {
-        assert_ne!(mode_key(VAULT_ID), mode_key(&wiki_vault_id("music-theory")));
-        assert_ne!(
-            mode_key(&wiki_vault_id("cooking")),
-            mode_key(&wiki_vault_id("music-theory"))
-        );
-        assert_eq!(
-            ExplorerMode::parse(ExplorerMode::Tags.as_str()),
-            Some(ExplorerMode::Tags)
-        );
-        assert_eq!(
-            ExplorerMode::parse(ExplorerMode::Folders.as_str()),
-            Some(ExplorerMode::Folders)
-        );
-        assert_eq!(ExplorerMode::parse("nope"), None);
-    }
-
-    /// The seeded wikis carry `type: concept` and few tags. In a wiki
-    /// the type is a topic and groups the page; in the vault it is the
-    /// note's widget (`song`) and does not.
-    #[test]
-    fn a_wiki_page_groups_by_its_type_and_a_vault_note_does_not() {
-        let concept = page("Concepts/Modes.md", "concept", &[]);
-        assert_eq!(group_keys(&concept, true), vec!["concept".to_string()]);
-        assert!(group_keys(&concept, false).is_empty());
-
-        let tagged = page("Concepts/Ionian.md", "concept", &["modes"]);
-        assert_eq!(
-            group_keys(&tagged, true),
-            vec!["modes".to_string(), "concept".to_string()]
-        );
-
-        // Structural types describe the tree, not the page.
-        for structural in ["folder", "index", "tag"] {
-            assert!(group_keys(&page("X.md", structural, &[]), true).is_empty());
-        }
-        // A tag that already names the type is not doubled.
-        let both = page("Y.md", "concept", &["concept"]);
-        assert_eq!(group_keys(&both, true), vec!["concept".to_string()]);
-    }
-
-    #[test]
-    fn the_tag_tree_lands_a_page_under_every_group() {
-        let pages = vec![
-            page("Concepts/Modes.md", "concept", &["theory/scales"]),
-            page("People/Bach.md", "person", &[]),
-            page("Loose.md", "", &[]),
-        ];
-        let (root, untagged) = build_tag_tree(&pages, true);
-        let theory = root.children.get("theory").expect("theory bucket");
-        assert_eq!(
-            theory.children.get("scales").map(|n| n.pages.len()),
-            Some(1)
-        );
-        assert_eq!(root.children.get("concept").map(|n| n.pages.len()), Some(1));
-        assert_eq!(root.children.get("person").map(|n| n.pages.len()), Some(1));
-        assert_eq!(untagged.len(), 1);
-        assert_eq!(untagged[0].path, "Loose.md");
+    fn the_navigator_lists_notes_not_records_or_tasks() {
+        assert!(is_note(&page("Home.md", "", &[])));
+        assert!(is_note(&page("Studio Notes.md", "", &["studio"])));
+        assert!(!is_note(&page("Records/inbox/x.md", "inbox-item", &[])));
+        assert!(!is_note(&page("Records/contacts/y.md", "contact", &[])));
+        assert!(!is_note(&page("Task/bounce-stems.md", "task", &[])));
     }
 
     #[test]

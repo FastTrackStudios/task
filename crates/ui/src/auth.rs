@@ -32,6 +32,13 @@ use crate::central_login::TokenSet;
 use crate::orgs::{OrgMeta, home_slug};
 use crate::presence::{ManualStatus, PresenceLocal, PresenceStatus};
 use crate::vox_clients::establish_for;
+use task_ui_core::node::NodeOwner;
+
+/// The device's person, when the app is pointed at this device's own
+/// node (`offline.local`) — see [`task_ui_core::node::local_owner`].
+async fn node_owner() -> Option<NodeOwner> {
+    task_ui_core::node::local_owner().await
+}
 
 // ── dev accounts (DEBUG BUILDS ONLY) ────────────────────────────────
 //
@@ -520,7 +527,15 @@ async fn push_link(st: AuthState, account: &ActiveAccount) {
 /// account is NOT signed out — its token stays cached so switching
 /// back is instant.
 async fn run_switch(mut st: AuthState, email: &str) {
-    let slug = home_slug(&st.orgs.peek());
+    // On this device's node, its own person signs in where their account
+    // lives — the node's org list may hold several home orgs (the example
+    // studio beside a personal org), and the first one is not necessarily
+    // theirs.
+    let owner = node_owner().await;
+    let slug = match &owner {
+        Some(o) if o.email == email => o.org.clone(),
+        _ => home_slug(&st.orgs.peek()),
+    };
     if slug.is_empty() {
         st.error
             .set(Some("org discovery hasn't resolved yet".to_owned()));
@@ -535,9 +550,10 @@ async fn run_switch(mut st: AuthState, email: &str) {
     }
     st.busy.set(true);
     st.error.set(None);
-    match resolve_session(&slug, email).await {
+    match resolve_session(&slug, email, owner.as_ref()).await {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             // Before any further RPC: the locker/link calls below should
             // already ride the new identity.
@@ -625,6 +641,7 @@ async fn run_credential_sign_in(
     match result {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             publish_session_token(st, Some(&account));
             // Same multi-server sync as run_switch (borrow before move).
@@ -676,6 +693,7 @@ async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: 
     match result {
         Ok(account) => {
             save_active_email(&account.email);
+            remember_for_offline(&account);
             sync_active_server_entry(st.registry, Some(&account));
             publish_session_token(st, Some(&account));
             pull_locker(st, &account).await;
@@ -685,6 +703,20 @@ async fn run_central_token_sign_in(mut st: AuthState, tokens: TokenSet, issuer: 
         Err(e) => st.error.set(Some(e)),
     }
     st.busy.set(false);
+}
+
+/// Remember who signed in on this device, so the next cold start can
+/// open the workspace without the server (`offline.boot`). The principal
+/// only — the token stays in the token store, where it already was.
+fn remember_for_offline(account: &ActiveAccount) {
+    crate::offline::remember_account(
+        &crate::orgs::http_base(),
+        &crate::offline::RememberedAccount {
+            user_id: account.user_id,
+            email: account.email.clone(),
+            name: account.name.clone(),
+        },
+    );
 }
 
 /// Explicit sign-out: revoke the session server-side, drop the cached
@@ -729,6 +761,7 @@ async fn run_sign_out(mut st: AuthState) {
     clear_cached_token(&account.email);
     clear_refresh(&account.email);
     clear_active_email();
+    crate::offline::forget_account(&crate::orgs::http_base(), &account.email);
     sync_active_server_entry(st.registry, None);
     // Drop the authenticated sockets NOW, before the revoke round trip —
     // `sign_out` passes the token as an argument, so it doesn't need the
@@ -748,7 +781,9 @@ async fn run_sign_out(mut st: AuthState) {
     // takes over — which is what signing out should mean. The demo cast
     // takes the release path on purpose: its login form offers the cast
     // one click each, and "log out, come back as Casey" is the demo.
-    if cfg!(debug_assertions) && !demo_cast_active() {
+    // Not on this device's own node: Guest is a dev-seed account a node
+    // never has, and the signed-out screen offers the device's person.
+    if cfg!(debug_assertions) && !demo_cast_active() && node_owner().await.is_none() {
         run_switch(st, GUEST_EMAIL).await;
     }
 }
@@ -864,6 +899,25 @@ pub fn provide_auth() -> AuthCtx {
         // which `SignInGate` would read as "signed out" and flash the
         // login screen over a session that is about to restore.
         let mut busy = busy;
+        // On this device's own node the person is known without asking:
+        // the node provisioned them (`offline.local`). Land on them in any
+        // build — unless the stored account is one of the debug cast,
+        // which a demo session switches between on purpose.
+        #[cfg(not(target_arch = "wasm32"))]
+        if task_ui_core::node::local_active() {
+            let stored = load_active_email().filter(|e| {
+                demo_cast_active() && dev_accounts().iter().any(|a| a.email == e.as_str())
+            });
+            busy.set(true);
+            spawn(async move {
+                match (stored, node_owner().await) {
+                    (Some(email), _) => ctx.switch_account(email),
+                    (None, Some(owner)) => ctx.switch_account(owner.email),
+                    (None, None) => busy.set(false),
+                }
+            });
+            return;
+        }
         match load_active_email() {
             Some(email) => {
                 busy.set(true);
@@ -915,6 +969,30 @@ fn GateChrome() -> Element {
     }
 }
 
+/// "Continue as <you> on this device" — the signed-out screen's way back
+/// in when the app is pointed at its own node. The device's person has
+/// no password they typed (the node generated it), so the login form
+/// alone would be a dead end after a sign-out. Renders nothing when the
+/// app is pointed at a host.
+#[component]
+fn DeviceOwnerSignIn() -> Element {
+    let ctx = use_context::<AuthCtx>();
+    let owner = use_resource(node_owner);
+    let Some(Some(owner)) = owner.read().clone() else {
+        return rsx! {};
+    };
+    let email = owner.email.clone();
+    rsx! {
+        Button {
+            variant: ButtonVariant::Primary,
+            size: ButtonSize::Medium,
+            class: "w-full",
+            on_click: move |_| ctx.switch_account(email.clone()),
+            "Continue as {owner.name} on this device"
+        }
+    }
+}
+
 #[component]
 pub fn SignInGate(children: Element) -> Element {
     let ctx = use_context::<AuthCtx>();
@@ -954,27 +1032,25 @@ pub fn SignInGate(children: Element) -> Element {
         // surfaces WHY discovery hasn't resolved when it knows.
         let discovery = use_context::<crate::orgs::DiscoveryError>();
         let err = discovery.0.read().clone();
+        // Not booted = discovery (the server) has not answered yet;
+        // booted and busy = the session is being restored or made.
+        let status = if booted() {
+            "Signing you in…"
+        } else {
+            "Connecting…"
+        };
         return rsx! {
             // The gate sits ABOVE the router, so the frameless desktop
             // window has no top bar here — without this strip a signed-out
             // window could not be moved or closed.
             GateChrome {}
-            div { class: "flex min-h-screen items-center justify-center p-6",
-                div { class: "flex w-full max-w-sm flex-col items-center gap-3",
-                    p { class: "text-sm text-muted-foreground", "Restoring your session…" }
-                    if let Some(msg) = err {
-                        p { class: "text-center text-xs text-destructive", "{msg}" }
-                    }
-                    details { class: "w-full text-sm",
-                        summary { class: "cursor-pointer text-center text-muted-foreground",
-                            "Taking too long?"
-                        }
-                        div { class: "flex flex-col gap-4 pt-3",
-                            LoginForm {}
-                            crate::server_registry::ServersPanel {}
-                        }
-                    }
-                }
+            crate::loading_screen::LoadingScreen {
+                status: status.to_owned(),
+                error: err,
+                help: rsx! {
+                    LoginForm {}
+                    crate::server_registry::ServersPanel {}
+                },
             }
         };
     }
@@ -983,11 +1059,17 @@ pub fn SignInGate(children: Element) -> Element {
         div { class: "flex min-h-screen items-center justify-center p-6",
             div { class: "flex w-full max-w-sm flex-col gap-4",
                 div { class: "flex flex-col gap-1",
+                    div { class: "pb-3", crate::loading_screen::TaskMark {} }
                     h1 { class: "text-lg font-semibold", "Sign in to Task" }
                     p { class: "text-sm text-muted-foreground",
-                        "This server's data is private to its members."
+                        if task_ui_core::central_auth::issuer().is_some() {
+                            "Your FastTrackStudio account opens your work in every app."
+                        } else {
+                            "This server's data is private to its members."
+                        }
                     }
                 }
+                DeviceOwnerSignIn {}
                 LoginForm {}
                 // Without this a user pointed at the wrong server is
                 // stuck: they cannot sign in, and the switcher that would
@@ -1075,7 +1157,11 @@ pub fn boot_session_token() -> Option<String> {
 }
 
 /// Token-cache-first session resolution against the home org.
-async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, String> {
+async fn resolve_session(
+    slug: &str,
+    email: &str,
+    node_owner: Option<&NodeOwner>,
+) -> Result<ActiveAccount, String> {
     // 0. Discovery already validated the cached token and told us who it
     //    is (`orgs::discovered_principal_for`). That is the whole answer:
     //    no lane dial, no `whoami`, no issuer round trip.
@@ -1099,7 +1185,31 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
         });
     }
 
-    let client = establish_for::<AuthServiceClient>(slug).await?;
+    let client = match establish_for::<AuthServiceClient>(slug).await {
+        Ok(client) => client,
+        Err(e) => {
+            // t[impl offline.boot] — the server cannot be reached, and
+            // this device was signed in as `email` before: open the
+            // workspace as that account, from what the device kept (the
+            // cached token, the remembered principal, the cached orgs and
+            // every list's device copy). Nothing is validated, because
+            // nothing can be; every request the app makes still carries
+            // the token, and the server checks it when it is back.
+            if architect::classify(&e).is_unreachable()
+                && let Some(token) = load_cached_token(email)
+                && let Some(who) =
+                    crate::offline::remembered_account(&crate::orgs::http_base(), email)
+            {
+                return Ok(ActiveAccount {
+                    user_id: who.user_id,
+                    email: who.email,
+                    name: who.name,
+                    token,
+                });
+            }
+            return Err(e);
+        }
+    };
 
     // 1. Cached token → whoami validates it without a fresh sign-in.
     if let Some(token) = load_cached_token(email) {
@@ -1137,6 +1247,28 @@ async fn resolve_session(slug: &str, email: &str) -> Result<ActiveAccount, Strin
     //    release the roster is empty, there is nothing to sign in with,
     //    and the user goes through `LoginForm` — which is already on
     //    screen — hence the message rather than a failed sign-in.
+    // t[impl offline.local] — this device's own person, on its own node:
+    // the node provisioned the account and keeps its credentials, so the
+    // sign-in is an ordinary one against the org's own `AuthService`, in
+    // any build, with no issuer and no network.
+    if let Some(owner) = node_owner.filter(|o| o.email == email) {
+        let bundle = establish_for::<AuthServiceClient>(slug)
+            .await?
+            .sign_in_email_password(SignInEmailPassword {
+                email: owner.email.clone(),
+                password: owner.password.clone(),
+                ip_address: None,
+                user_agent: Some("task-device".to_owned()),
+            })
+            .await
+            .map_err(|e| format!("sign in on this device: {e}"))?;
+        save_session_token(email, &bundle.token);
+        let mut account = account_from(bundle.user, email, bundle.token);
+        if account.name.trim().is_empty() || account.name == account.email {
+            account.name = owner.name.clone();
+        }
+        return Ok(account);
+    }
     let Some(dev) = dev_accounts().iter().find(|a| a.email == email) else {
         return Err(format!("sign in as {email} to continue"));
     };
@@ -1451,7 +1583,12 @@ pub const STATUS_OPTIONS: [(ManualStatus, &str, PresenceStatus); 3] = [
 /// come back on the context. Real architect-auth accounts; this is what
 /// production shows in place of the dev-account picker.
 #[component]
-pub fn LoginForm() -> Element {
+pub fn LoginForm(
+    /// Offer "Continue with FastTrackStudio" above the fields (off where
+    /// the caller already shows it — the sign-in chooser).
+    #[props(default = true)]
+    central: bool,
+) -> Element {
     let ctx = use_context::<AuthCtx>();
     let busy = ctx.busy;
     let mut error = ctx.error;
@@ -1476,42 +1613,10 @@ pub fn LoginForm() -> Element {
     // Read each render rather than cached in a signal: discovery
     // resolves asynchronously at boot, and a value captured once would
     // hide the button from anyone who reached this screen first.
-    let central_issuer = task_ui_core::central_auth::issuer();
-
-    let central_sign_in = move |_| {
+    let central_issuer = task_ui_core::central_auth::issuer_or_default().filter(|_| central);
+    let on_central = move |_| {
         error.set(None);
-        #[cfg(target_arch = "wasm32")]
-        {
-            match crate::central_login::redirect_uri() {
-                Some(uri) => {
-                    // Only returns on failure — success is the page
-                    // navigating away to the issuer.
-                    if let Err(e) = crate::central_login::begin(&uri) {
-                        error.set(Some(e.to_string()));
-                    }
-                }
-                None => error.set(Some("no browser context".to_owned())),
-            }
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // iOS installs a system authentication session at boot
-            // (`ios_auth`); desktop has none yet and says so.
-            if crate::central_login::native::available() {
-                spawn(async move {
-                    match crate::central_login::native::sign_in().await {
-                        Ok(redeemed) => ctx.adopt_central_token(redeemed.tokens, redeemed.issuer),
-                        Err(e) => error.set(Some(e.to_string())),
-                    }
-                });
-            } else {
-                error.set(Some(
-                    "Signing in through the browser isn't available here — use your email and \
-                     password."
-                        .to_owned(),
-                ));
-            }
-        }
+        central_sign_in(ctx, error);
     };
 
     rsx! {
@@ -1525,7 +1630,7 @@ pub fn LoginForm() -> Element {
                 Button {
                     variant: ButtonVariant::Primary,
                     size: ButtonSize::Medium,
-                    on_click: central_sign_in,
+                    on_click: on_central,
                     class: "w-full",
                     "Continue with FastTrackStudio"
                 }
@@ -1555,7 +1660,14 @@ pub fn LoginForm() -> Element {
                 on_change: move |_| error.set(None),
             }
             Button {
-                variant: ButtonVariant::Primary,
+                // One primary action per screen: with a central account
+                // on offer, that is "Continue with FastTrackStudio", and
+                // this server-only form is the alternative.
+                variant: if central_issuer.is_some() {
+                    ButtonVariant::Outline
+                } else {
+                    ButtonVariant::Primary
+                },
                 size: ButtonSize::Medium,
                 loading: busy(),
                 on_click: submit,
@@ -1789,127 +1901,260 @@ pub fn ChangeEmailForm() -> Element {
         }
     }
 }
+/// Sign in with a FastTrackStudio account: the issuer's page in the
+/// browser (web), or the system's authentication sheet (iOS). Errors land
+/// in `error`.
+fn central_sign_in(ctx: AuthCtx, mut error: Signal<Option<String>>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = ctx;
+        match crate::central_login::redirect_uri() {
+            // Only returns on failure — success is the page navigating
+            // away to the issuer.
+            Some(uri) => {
+                if let Err(e) = crate::central_login::begin(&uri) {
+                    error.set(Some(e.to_string()));
+                }
+            }
+            None => error.set(Some("no browser context".to_owned())),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // iOS installs a system authentication session at boot
+        // (`ios_auth`); desktop has none yet and says so.
+        if crate::central_login::native::available() {
+            spawn(async move {
+                match crate::central_login::native::sign_in().await {
+                    Ok(redeemed) => ctx.adopt_central_token(redeemed.tokens, redeemed.issuer),
+                    Err(e) => error.set(Some(e.to_string())),
+                }
+            });
+        } else {
+            error.set(Some(
+                "Signing in through the browser isn't available here — use your email and password."
+                    .to_owned(),
+            ));
+        }
+    }
+}
 
-/// Account & status content for the mobile bottom sheet — the same
-/// roster / status / sign-out actions as the desktop [`AccountSwitcher`]
-/// popover (both ride [`AuthCtx`] + [`PresenceLocal`]), restyled as
-/// touch-sized rows (≥44px). `on_done` fires after any action so the
-/// hosting sheet can close.
+/// Whether the signed-in account is only this device's own person — the
+/// node's local owner, not an account anyone signed into.
+fn is_device_only(email: &str) -> bool {
+    email.is_empty() || email.ends_with("@this-device.local")
+}
+
+/// Account & status: who you are (or a Sign in button when you are only
+/// this device), the devices and servers this app reaches, your status,
+/// and sign out. One surface for the phone's account sheet and the
+/// Settings → Account panel. `on_done` fires after an action that should
+/// close a hosting sheet.
 #[component]
 pub fn AccountSheetBody(on_done: EventHandler<()>) -> Element {
     let ctx = use_context::<AuthCtx>();
     let active = ctx.active;
-    let error = ctx.error;
+    let mut error = ctx.error;
     let local = use_context::<PresenceLocal>();
     let mut manual = local.manual;
+    let mut signing_in = use_signal(|| false);
 
     let account = active.read().clone();
     let (name, email) = account.as_ref().map_or_else(
-        || ("Signing in…".to_owned(), String::new()),
+        || (String::new(), String::new()),
         |a| (a.name.clone(), a.email.clone()),
     );
-    let active_email = account.as_ref().map(|a| a.email.clone());
+    let device_only = is_device_only(&email);
     let effective = local.effective_status();
     let dot = effective.dot_class();
     let current_status = *manual.read();
+    let active_email = account.as_ref().map(|a| a.email.clone());
 
     rsx! {
-        div { class: "flex flex-col gap-4 pb-2",
-            // Signed-in identity card.
-            div { class: "flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-3",
-                span { class: "relative shrink-0",
-                    Avatar { name: name.clone(), email: email.clone(), size: 40 }
-                    span { class: "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card {dot}",
-                        title: "{effective.label()}",
+        div { class: "flex flex-col gap-5 pb-2",
+            // ── Who you are ──
+            div { class: "flex flex-col items-center gap-3 rounded-[24px] bg-foreground/[0.05] px-5 py-6 text-center",
+                if device_only {
+                    span { class: "flex size-16 items-center justify-center rounded-full bg-foreground/[0.08] text-muted-foreground",
+                        architect_ui::lucide_dioxus::UserRound { size: 30 }
+                    }
+                    div { class: "flex flex-col gap-1",
+                        span { class: "text-[19px] font-semibold text-foreground", "Not signed in" }
+                        span { class: "text-[14px] leading-5 text-muted-foreground",
+                            "Task is running on this device alone. Sign in to reach your work on every device."
+                        }
+                    }
+                    if !signing_in() {
+                    button {
+                        r#type: "button",
+                        "data-testid": "account-sign-in",
+                        class: "mt-1 flex h-12 w-full items-center justify-center rounded-2xl bg-primary text-[16px] font-semibold text-primary-foreground active:opacity-90",
+                        onclick: move |_| {
+                            error.set(None);
+                            signing_in.set(true);
+                        },
+                        "Sign in"
+                    }
+                    }
+                } else {
+                    span { class: "relative",
+                        Avatar { name: name.clone(), email: email.clone(), size: 64 }
+                        span { class: "absolute bottom-0.5 right-0.5 size-4 rounded-full border-[3px] border-background {dot}",
+                            title: "{effective.label()}",
+                        }
+                    }
+                    div { class: "flex flex-col gap-0.5",
+                        span { class: "text-[19px] font-semibold text-foreground", "{name}" }
+                        span { class: "text-[14px] text-muted-foreground", "{email}" }
+                    }
+                    if !signing_in() {
+                        button {
+                            r#type: "button",
+                            class: "text-[14px] font-medium text-primary active:opacity-70",
+                            onclick: move |_| {
+                                error.set(None);
+                                signing_in.set(true);
+                            },
+                            "Switch account"
+                        }
                     }
                 }
-                span { class: "flex min-w-0 flex-col",
-                    span { class: "truncate text-sm font-semibold text-foreground", "{name}" }
-                    if !email.is_empty() {
-                        span { class: "truncate text-xs text-muted-foreground", "{email}" }
-                    }
-                }
-            }
-            if let Some(msg) = error.read().as_ref() {
-                div { class: "px-1 text-xs text-destructive", "{msg}" }
-            }
-
-            section {
-                h3 { class: "px-1 pb-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                    "Servers"
-                }
-                crate::server_registry::ServersPanel {}
-            }
-
-            section {
-                h3 { class: "px-1 pb-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                    "Sign in"
-                }
-                LoginForm {}
-            }
-
-            // Dev-account quick picker — one-click switch, DEBUG builds only.
-            if cfg!(debug_assertions) {
-                section {
-                    h3 { class: "px-1 pb-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                        "Dev accounts"
-                    }
-                    div { class: "flex flex-col",
-                        for dev in dev_accounts().iter().copied() {
-                            button {
-                                key: "{dev.email}",
-                                r#type: "button",
-                                class: "flex min-h-[44px] w-full items-center gap-3 rounded-lg px-2 py-2 text-left active:bg-accent",
-                                onclick: move |_| {
-                                    on_done.call(());
-                                    ctx.switch_account(dev.email);
-                                },
-                                Avatar { name: dev.name.to_string(), email: dev.email.to_string(), size: 28 }
-                                span { class: "flex min-w-0 flex-col",
-                                    span { class: "truncate text-sm text-foreground", "{dev.name}" }
-                                    span { class: "truncate text-xs text-muted-foreground", "{dev.email}" }
-                                }
-                                if active_email.as_deref() == Some(dev.email) {
-                                    span { class: "ml-auto text-sm text-primary", "●" }
-                                }
-                            }
+                // The ways in, unfolded in place — the same on the phone
+                // and in desktop Settings, with no sheet over a sheet.
+                if signing_in() {
+                    div { class: "flex w-full flex-col text-left",
+                        SignInChooser {}
+                        button {
+                            r#type: "button",
+                            class: "mx-auto text-[14px] text-muted-foreground active:opacity-70",
+                            onclick: move |_| signing_in.set(false),
+                            "Cancel"
                         }
                     }
                 }
             }
-
-            section {
-                h3 { class: "px-1 pb-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
-                    "Status"
+            if !signing_in() {
+                if let Some(msg) = error.read().as_ref() {
+                    div { class: "-mt-2 px-2 text-[13px] text-destructive", "{msg}" }
                 }
-                div { class: "flex flex-col",
+            }
+
+            // ── Your devices (the account's, through the issuer) ──
+            crate::account_devices::AccountDevicesSection {}
+
+            // ── Devices & servers ──
+            div {
+                task_ui_core::sheet::SheetSection { label: "Devices & servers".to_owned() }
+                crate::server_registry::ServersPanel {}
+            }
+
+            // ── Status ──
+            div {
+                task_ui_core::sheet::SheetSection { label: "Status".to_owned() }
+                task_ui_core::sheet::SheetGroup {
                     for (value , label , status) in STATUS_OPTIONS {
                         button {
                             key: "{label}",
                             r#type: "button",
-                            class: "flex min-h-[44px] w-full items-center gap-3 rounded-lg px-2 py-2 text-left active:bg-accent",
-                            onclick: move |_| {
-                                manual.set(value);
-                                on_done.call(());
-                            },
-                            span { class: "h-2.5 w-2.5 rounded-full {status.dot_class()}" }
-                            span { class: "text-sm text-foreground", "{label}" }
+                            class: "flex min-h-[50px] w-full items-center gap-3 px-4 text-left text-[15px] text-foreground active:bg-foreground/[0.06]",
+                            onclick: move |_| manual.set(value),
+                            span { class: "size-2.5 shrink-0 rounded-full {status.dot_class()}" }
+                            span { class: "min-w-0 flex-1 truncate", "{label}" }
                             if current_status == value {
-                                span { class: "ml-auto text-sm text-primary", "●" }
+                                span { class: "text-primary", architect_ui::lucide_dioxus::Check { size: 17 } }
                             }
                         }
                     }
                 }
             }
 
+            // Dev-account quick picker — one-tap switch, DEBUG builds only.
+            if cfg!(debug_assertions) && !dev_accounts().is_empty() {
+                div {
+                    task_ui_core::sheet::SheetSection { label: "Dev accounts".to_owned() }
+                    task_ui_core::sheet::SheetGroup {
+                        for dev in dev_accounts().iter().copied() {
+                            button {
+                                key: "{dev.email}",
+                                r#type: "button",
+                                class: "flex min-h-[54px] w-full items-center gap-3 px-4 text-left active:bg-foreground/[0.06]",
+                                onclick: move |_| {
+                                    on_done.call(());
+                                    ctx.switch_account(dev.email);
+                                },
+                                Avatar { name: dev.name.to_string(), email: dev.email.to_string(), size: 30 }
+                                span { class: "flex min-w-0 flex-1 flex-col",
+                                    span { class: "truncate text-[15px] text-foreground", "{dev.name}" }
+                                    span { class: "truncate text-[13px] text-muted-foreground", "{dev.email}" }
+                                }
+                                if active_email.as_deref() == Some(dev.email) {
+                                    architect_ui::lucide_dioxus::Check { size: 16 }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !device_only {
+                button {
+                    r#type: "button",
+                    class: "flex h-12 w-full items-center justify-center rounded-2xl bg-foreground/[0.05] text-[16px] font-medium text-destructive active:bg-destructive/10",
+                    onclick: move |_| {
+                        on_done.call(());
+                        ctx.sign_out();
+                    },
+                    "Sign out"
+                }
+            }
+        }
+    }
+}
+
+/// How to sign in: a FastTrackStudio account first (one account for every
+/// FastTrackStudio app and device), or email and password for this server
+/// alone, revealed on request.
+#[component]
+fn SignInChooser() -> Element {
+    let ctx = use_context::<AuthCtx>();
+    let mut error = ctx.error;
+    let mut with_email = use_signal(|| false);
+    let central = move |_| {
+        error.set(None);
+        central_sign_in(ctx, error);
+    };
+    rsx! {
+        div { class: "flex flex-col gap-3 pb-4",
             button {
                 r#type: "button",
-                class: "flex min-h-[44px] w-full items-center justify-center rounded-lg border border-destructive/40 px-3 py-2 text-sm font-medium text-destructive active:bg-destructive/10",
-                onclick: move |_| {
-                    on_done.call(());
-                    ctx.sign_out();
-                },
-                "Sign out"
+                "data-testid": "sign-in-fts",
+                class: "flex h-14 w-full items-center justify-center gap-2.5 rounded-2xl bg-primary text-[16px] font-semibold text-primary-foreground active:opacity-90",
+                onclick: central,
+                architect_ui::lucide_dioxus::Zap { size: 18 }
+                "Continue with FastTrackStudio"
+            }
+            p { class: "px-2 text-center text-[13px] leading-5 text-muted-foreground",
+                "One account for every FastTrackStudio app — and every device you sign in on joins your others."
+            }
+            if with_email() {
+                div { class: "flex items-center gap-2 py-1",
+                    div { class: "h-px flex-1 bg-border" }
+                    span { class: "text-[12px] text-muted-foreground", "or with email" }
+                    div { class: "h-px flex-1 bg-border" }
+                }
+                LoginForm { central: false }
+            } else {
+                button {
+                    r#type: "button",
+                    "data-testid": "sign-in-email",
+                    class: "flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-foreground/[0.06] text-[15px] font-medium text-foreground active:bg-foreground/[0.1]",
+                    onclick: move |_| with_email.set(true),
+                    architect_ui::lucide_dioxus::Mail { size: 16 }
+                    "Use email and password"
+                }
+            }
+            if let Some(msg) = error.read().as_ref() {
+                div { class: "px-1 text-center text-[13px] text-destructive", "{msg}" }
             }
         }
     }
@@ -2283,15 +2528,14 @@ fn tokens_dir() -> Option<std::path::PathBuf> {
 /// A per-email token file. Emails are filename-safe on the targets we
 /// ship, but sanitize defensively (only `/` is illegal on unix).
 #[cfg(not(target_arch = "wasm32"))]
-fn token_store(email: &str) -> Option<architect_auth::client::FileTokenStore> {
+fn token_store(email: &str) -> Option<auth_client::FileTokenStore> {
     let safe = email.replace(['/', '\\'], "_");
-    tokens_dir()
-        .map(|d| architect_auth::client::FileTokenStore::new(d.join(format!("{safe}.json"))))
+    tokens_dir().map(|d| auth_client::FileTokenStore::new(d.join(format!("{safe}.json"))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_cached_token(email: &str) -> Option<String> {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     token_store(email)?
         .load()
         .ok()
@@ -2302,7 +2546,7 @@ fn load_cached_token(email: &str) -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn save_cached_token(email: &str, token: &str) {
-    use architect_auth::client::{StoredSession, TokenStore as _};
+    use auth_client::{StoredSession, TokenStore as _};
     if let Some(store) = token_store(email) {
         let _ = store.save(&StoredSession::new(token).with_email(email));
     }
@@ -2310,7 +2554,7 @@ fn save_cached_token(email: &str, token: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_cached_token(email: &str) {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     if let Some(store) = token_store(email) {
         let _ = store.clear();
     }
@@ -2321,16 +2565,14 @@ fn clear_cached_token(email: &str) {
 /// `StoredSession` whose `token` is the refresh token; the access
 /// token's expiry rides on the main file's `expires_at_unix`.
 #[cfg(not(target_arch = "wasm32"))]
-fn refresh_store(email: &str) -> Option<architect_auth::client::FileTokenStore> {
+fn refresh_store(email: &str) -> Option<auth_client::FileTokenStore> {
     let safe = email.replace(['/', '\\'], "_");
-    tokens_dir().map(|d| {
-        architect_auth::client::FileTokenStore::new(d.join(format!("{safe}.refresh.json")))
-    })
+    tokens_dir().map(|d| auth_client::FileTokenStore::new(d.join(format!("{safe}.refresh.json"))))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_refresh(email: &str) -> Option<RefreshGrant> {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     let refresh_token = refresh_store(email)?
         .load()
         .ok()
@@ -2352,7 +2594,7 @@ fn load_refresh(email: &str) -> Option<RefreshGrant> {
 /// token's entry, which has to exist to carry it.
 #[cfg(not(target_arch = "wasm32"))]
 fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
-    use architect_auth::client::{StoredSession, TokenStore as _};
+    use auth_client::{StoredSession, TokenStore as _};
     if let Some(store) = refresh_store(email) {
         let _ = store.save(&StoredSession::new(refresh_token).with_email(email));
     }
@@ -2365,7 +2607,7 @@ fn save_refresh(email: &str, refresh_token: &str, expires_at: i64) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_refresh(email: &str) {
-    use architect_auth::client::TokenStore as _;
+    use auth_client::TokenStore as _;
     if let Some(store) = refresh_store(email) {
         let _ = store.clear();
     }

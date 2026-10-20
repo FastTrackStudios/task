@@ -1217,8 +1217,32 @@ fn resolve_active_org(override_slug: Option<String>) -> eyre::Result<String> {
 pub(crate) fn resolve_slug(org_override: Option<&str>) -> eyre::Result<String> {
     match resolve_active_org(org_override.map(str::to_owned)) {
         Ok(s) => Ok(s),
-        Err(_) => Ok(org_ctx::resolve_active(None)?.root.slug().to_owned()),
+        Err(_) => match desktop_node_org() {
+            Some(slug) => Ok(slug),
+            None => Ok(org_ctx::resolve_active(None)?.root.slug().to_owned()),
+        },
     }
+}
+
+/// With no `--org` and no CLI session, the org to use on the desktop
+/// app's node while it runs: the person's own (`personal` — the org an
+/// account's devices share is held under it on the device that set it),
+/// else the first the node holds. `--org` picks another.
+fn desktop_node_org() -> Option<String> {
+    task_client::desktop::node_endpoint()?;
+    let orgs = task_client::desktop::node_root()?.join("orgs");
+    let mut slugs: Vec<String> = std::fs::read_dir(orgs)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().join("org.toml").is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    slugs.sort();
+    slugs
+        .iter()
+        .find(|s| s.as_str() == "personal")
+        .or_else(|| slugs.first())
+        .cloned()
 }
 
 /// The URL-resolution and bearer-scoping tests that used to live here

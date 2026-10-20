@@ -15,8 +15,10 @@
 
 #[cfg(target_os = "ios")]
 mod ios {
+    use std::ptr::NonNull;
     use std::sync::Mutex;
 
+    use block2::{DynBlock, RcBlock};
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::{AnyThread as _, define_class, msg_send};
@@ -56,6 +58,55 @@ mod ios {
                 }
             }
 
+            /// The watch's request for the phone to answer: a watch-API
+            /// call (`{method, path, token, body}`) when the phone runs
+            /// Task itself, which the watch cannot dial. Answered off
+            /// this queue, through the node, as `{status, body}`.
+            #[unsafe(method(session:didReceiveMessage:replyHandler:))]
+            fn did_receive_message(
+                &self,
+                _session: &WCSession,
+                message: &NSDictionary<NSString, AnyObject>,
+                reply: &DynBlock<dyn Fn(NonNull<NSDictionary<NSString, AnyObject>>)>,
+            ) {
+                let field = |key: &str| -> String {
+                    message
+                        .objectForKey(&NSString::from_str(key))
+                        .and_then(|v| v.downcast::<NSString>().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
+                };
+                let request = Relayed {
+                    method: field("method"),
+                    path: field("path"),
+                    token: field("token"),
+                    body: field("body"),
+                };
+                let reply = SendBlock(reply.copy());
+                std::thread::spawn(move || {
+                    let reply = reply;
+                    let (status, body) = relay(request);
+                    let keys = [NSString::from_str("status"), NSString::from_str("body")];
+                    let values = [
+                        NSString::from_str(&status.to_string()),
+                        NSString::from_str(&String::from_utf8_lossy(&body)),
+                    ];
+                    let answer = NSDictionary::<NSString, AnyObject>::from_slices(
+                        &[&*keys[0], &*keys[1]],
+                        &[&*values[0], &*values[1]],
+                    );
+                    reply.0.call((NonNull::from(&*answer),));
+                });
+            }
+
+            /// The watch app was installed (or the watch paired) while the
+            /// phone was running: the config parked for want of a watch
+            /// app goes now, instead of waiting for the next change.
+            #[unsafe(method(sessionWatchStateDidChange:))]
+            fn watch_state_did_change(&self, _session: &WCSession) {
+                push_pending();
+            }
+
             #[unsafe(method(sessionDidBecomeInactive:))]
             fn did_become_inactive(&self, _session: &WCSession) {}
 
@@ -72,6 +123,52 @@ mod ios {
         fn new() -> Retained<Self> {
             let this = Self::alloc().set_ivars(());
             unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// One watch-API request the watch handed the phone.
+    struct Relayed {
+        method: String,
+        path: String,
+        token: String,
+        body: String,
+    }
+
+    /// The watch's reply block, carried to the thread that answers it.
+    /// WatchConnectivity's reply handler may be called from any thread.
+    struct SendBlock(RcBlock<dyn Fn(NonNull<NSDictionary<NSString, AnyObject>>)>);
+    // SAFETY: WCSession documents the reply handler as callable from any
+    // queue; nothing else holds or calls this copy.
+    unsafe impl Send for SendBlock {}
+
+    /// Answer a relayed watch request through the phone's own node. Only
+    /// the watch API, and only `/org/…/watch/v1/…` paths — the relay is
+    /// not a way into anything else the node serves.
+    fn relay(req: Relayed) -> (u16, Vec<u8>) {
+        if !(req.path.starts_with("/org/") && req.path.contains("/watch/v1/")) {
+            return (404, b"not a watch path".to_vec());
+        }
+        let Some(node) = task_ui_core::node::host() else {
+            return (503, b"this phone runs no node".to_vec());
+        };
+        let method = if req.method.is_empty() {
+            "GET".to_owned()
+        } else {
+            req.method
+        };
+        let token = Some(req.token).filter(|t| !t.is_empty());
+        let fut = node.watch(
+            method.clone(),
+            req.path.clone(),
+            token,
+            req.body.into_bytes(),
+        );
+        match task_node_host::block_on(fut) {
+            Ok((status, body)) => {
+                tracing::info!(%method, path = %req.path, status, "watch: relayed");
+                (status, body)
+            }
+            Err(e) => (503, e.into_bytes()),
         }
     }
 

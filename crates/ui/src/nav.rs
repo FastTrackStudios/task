@@ -4,9 +4,9 @@
 //! and `primary_mobile_tabs()` is the smaller bottom-bar set.
 
 use architect_ui::lucide_dioxus::{
-    BookOpen, BookUser, CalendarDays, ChartGantt, CircleCheck, Flag, FolderKanban, FolderOpen,
-    House, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Target, Timer, Users,
-    Waypoints,
+    Activity as ActivityIcon, BookOpen, BookUser, CalendarDays, CircleCheck, FolderKanban,
+    FolderOpen, Inbox as InboxIcon, Notebook, RefreshCw, Settings as SettingsIcon, Star, Timer,
+    Users, Waypoints,
 };
 use dioxus::prelude::*;
 
@@ -24,11 +24,11 @@ pub struct NavTab {
     pub plugin: &'static str,
 }
 
-fn icon_house() -> Element {
-    rsx! { House { size: 16 } }
-}
 fn icon_inbox() -> Element {
     rsx! { InboxIcon { size: 16 } }
+}
+fn icon_activity() -> Element {
+    rsx! { ActivityIcon { size: 16 } }
 }
 fn icon_contacts() -> Element {
     rsx! { BookUser { size: 16 } }
@@ -42,14 +42,8 @@ fn icon_tasks() -> Element {
 fn icon_vault() -> Element {
     rsx! { Notebook { size: 16 } }
 }
-fn icon_milestones() -> Element {
-    rsx! { Flag { size: 16 } }
-}
 fn icon_schedule() -> Element {
     rsx! { CalendarDays { size: 16 } }
-}
-fn icon_gantt() -> Element {
-    rsx! { ChartGantt { size: 16 } }
 }
 fn icon_timer() -> Element {
     rsx! { Timer { size: 16 } }
@@ -66,11 +60,11 @@ fn icon_wiki() -> Element {
 fn icon_connections() -> Element {
     rsx! { Waypoints { size: 16 } }
 }
-fn icon_goals() -> Element {
-    rsx! { Target { size: 18 } }
-}
 fn icon_settings() -> Element {
     rsx! { SettingsIcon { size: 16 } }
+}
+fn icon_star() -> Element {
+    rsx! { Star { size: 16 } }
 }
 fn icon_sync() -> Element {
     rsx! { RefreshCw { size: 16 } }
@@ -78,48 +72,28 @@ fn icon_sync() -> Element {
 
 pub fn nav_tabs() -> Vec<NavTab> {
     vec![
-        NavTab {
-            label: "Home",
-            plugin: "core",
-            icon: icon_house,
-            route: Route::DashboardRoute {},
-        },
+        // Linear's order: the core loop first (Inbox, your issues,
+        // favorites), then the work's structure, then the rest. No
+        // Home: the app opens on the Inbox.
         NavTab {
             label: "Inbox",
             plugin: "core",
             icon: icon_inbox,
             route: Route::InboxRoute {},
         },
-        // Contacts — the people directory (adjacent to Inbox).
-        NavTab {
-            label: "Contacts",
-            plugin: "contacts",
-            icon: icon_contacts,
-            route: Route::ContactsRoute {},
-        },
-        NavTab {
-            label: "Projects",
-            plugin: "core",
-            icon: icon_projects,
-            route: Route::ProjectsRoute {},
-        },
-        NavTab {
-            label: "Goals",
-            plugin: "core",
-            icon: icon_goals,
-            route: Route::GoalsRoute {},
-        },
-        // Vault-views shortcut: the sidebar
-        // item points at the board's VAULT ENTRY, not a bespoke
-        // route — [[Views/Tasks]] and this tab open the same thing.
         NavTab {
             label: "Tasks",
             plugin: "core",
             icon: icon_tasks,
-            route: Route::VaultRoute {
-                path: "Views/Tasks.base".into(),
-                org: String::new(),
-            },
+            route: Route::TasksRoute {},
+        },
+        // Third: the day — Calendar opens on the Planner. Projects are a
+        // sidebar row away, and their work shows up in Tasks and Inbox.
+        NavTab {
+            label: "Calendar",
+            plugin: "scheduling",
+            icon: icon_schedule,
+            route: Route::ScheduleRoute {},
         },
         NavTab {
             label: "Vault",
@@ -131,22 +105,39 @@ pub fn nav_tabs() -> Vec<NavTab> {
             },
         },
         NavTab {
-            label: "Milestones",
+            label: "Projects",
             plugin: "core",
-            icon: icon_milestones,
-            route: Route::MilestonesRoute {},
+            icon: icon_projects,
+            route: Route::ProjectsRoute {},
         },
         NavTab {
-            label: "Schedule",
-            plugin: "scheduling",
-            icon: icon_schedule,
-            route: Route::ScheduleRoute {},
-        },
-        NavTab {
-            label: "Gantt",
+            label: "Favorites",
             plugin: "core",
-            icon: icon_gantt,
-            route: Route::GanttRoute {},
+            icon: icon_star,
+            route: Route::FavoritesRoute {},
+        },
+        // Everything that happened — changes, comments, captures,
+        // timers — scrollable back (`crate::activity`).
+        NavTab {
+            label: "Activity",
+            plugin: "core",
+            icon: icon_activity,
+            route: Route::ActivityRoute {},
+        },
+        // Issues and pieces of projects with no where or when — kept
+        // off Tasks (next actions), one tap from here.
+        NavTab {
+            label: "Project work",
+            plugin: "core",
+            icon: icon_projects,
+            route: Route::ProjectWorkRoute {},
+        },
+        // Contacts — the people directory.
+        NavTab {
+            label: "Contacts",
+            plugin: "contacts",
+            icon: icon_contacts,
+            route: Route::ContactsRoute {},
         },
         NavTab {
             label: "Timer",
@@ -266,15 +257,17 @@ pub fn use_active_plugins() -> task_plugin::PluginSet {
     crate::orgs::active_plugin_set(&sel.read(), &orgs.read())
 }
 
-/// The bottom-tab-bar set: four primary destinations. Everything else
-/// lives behind the "More" tab the bar appends itself.
+/// The phone's three fixed tabs (Linear's): Inbox — capture → process is
+/// the core loop, and it carries the count of what's waiting — Tasks
+/// (your issues) and Favorites. The bar's fourth slot is the section
+/// switcher, which shows wherever else you are and opens every section.
 pub fn primary_mobile_tabs() -> Vec<NavTab> {
     vec![
         NavTab {
-            label: "Home",
+            label: "Inbox",
             plugin: "core",
-            icon: icon_house,
-            route: Route::DashboardRoute {},
+            icon: icon_inbox,
+            route: Route::InboxRoute {},
         },
         NavTab {
             label: "Tasks",
@@ -283,16 +276,10 @@ pub fn primary_mobile_tabs() -> Vec<NavTab> {
             route: Route::TasksRoute {},
         },
         NavTab {
-            label: "Projects",
+            label: "Favorites",
             plugin: "core",
-            icon: icon_projects,
-            route: Route::ProjectsRoute {},
-        },
-        NavTab {
-            label: "Schedule",
-            plugin: "scheduling",
-            icon: icon_schedule,
-            route: Route::ScheduleRoute {},
+            icon: icon_star,
+            route: Route::FavoritesRoute {},
         },
     ]
 }
@@ -324,17 +311,22 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::HomeRoute {} => "Home",
         Route::DashboardRoute {} => "Home",
         Route::InboxRoute {} => "Inbox",
+        Route::ActivityRoute {} => "Activity",
+        Route::FavoritesRoute {} => "Favorites",
         Route::ContactsRoute {} => "Contacts",
+        Route::PersonRoute { .. } => "Person",
         Route::ProjectsRoute {} => "Projects",
         Route::ProjectDetailRoute { .. } => "Project",
         Route::GoalsRoute {} => "Goals",
         Route::TasksRoute {} => "Tasks",
         Route::TaskDetailRoute { .. } => "Task",
+        Route::ProjectWorkRoute {} => "Project work",
         Route::VaultRoute { .. } => "Vault",
         Route::MilestonesRoute {} => "Milestones",
-        Route::ScheduleRoute {} => "Schedule",
+        Route::ScheduleRoute {} => "Calendar",
         Route::GanttRoute {} => "Gantt",
         Route::TimerRoute {} => "Timer",
+        Route::TimerNowRoute {} => "Timer",
         Route::MembersRoute {} => "Members",
         Route::WikiRoute {} => "Wiki",
         Route::GraphRoute { .. } => "Graph",
@@ -350,6 +342,7 @@ pub fn route_title(route: &Route) -> &'static str {
         Route::WikiScopedSourceRoute { .. } => "Source",
         Route::FilesRoute {} => "Files",
         Route::SettingsRoute {} => "Settings",
+        Route::AccountRoute {} => "Account",
         Route::SyncRoute {} => "Sync",
         // Titled, though nobody should ever read it: the page redeems a
         // code and navigates away. It shows only if the exchange fails
@@ -402,6 +395,20 @@ mod tests {
             "no Sync tab for a default org: {:?}",
             tabs.iter().map(|t| t.label).collect::<Vec<_>>()
         );
+    }
+
+    /// The activity feed is a core page every org reaches from the nav —
+    /// the bell's "View all activity" is not its only door.
+    // t[verify activity.ui.page]
+    #[test]
+    fn the_activity_tab_is_offered_to_every_org() {
+        let tabs = nav_tabs_for(&task_plugin::PluginSet::resolve(None));
+        let tab = tabs
+            .iter()
+            .find(|t| t.label == "Activity")
+            .expect("an Activity tab");
+        assert_eq!(tab.plugin, "core");
+        assert_eq!(route_title(&tab.route), "Activity");
     }
 
     /// And it is gated on the thing it syncs: an org with Files off has

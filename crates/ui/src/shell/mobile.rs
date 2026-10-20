@@ -19,15 +19,14 @@
 //! shell-lifetime component (see `crate::collab` docs for the keyed-
 //! child rule).
 
+use architect_ui::lucide_dioxus::Feather;
 use architect_ui::prelude::{Button, ButtonVariant, Text, TextVariant};
 use chrono::Utc;
 use dioxus::prelude::*;
 
-use crate::auth::{AccountSheetBody, AuthCtx, Avatar};
 use crate::chrome::{fmt_hms, owner_id, resolve_org, use_second_tick};
-use crate::nav::{NavTab, nav_tabs_for, primary_mobile_tabs, tabs_match, use_active_plugins};
+use crate::nav::{NavTab, nav_tabs_for, tabs_match, use_active_plugins};
 use crate::orgs::{OrgMeta, OrgSelection};
-use crate::presence::PresenceLocal;
 use crate::routes::Route;
 use crate::shell::org_switcher::OrgSwitcher;
 use crate::stores;
@@ -35,6 +34,44 @@ use crate::stores;
 // ── bottom sheet primitive ──────────────────────────────────────────
 
 pub use task_ui_core::sheet::BottomSheet;
+
+// ── on-screen keyboard height ───────────────────────────────────────
+
+/// Keeps `--kb` on the root element at the on-screen keyboard's height
+/// (0 when none). On iOS the keyboard shrinks the *visual* viewport and
+/// leaves fixed layout where it was, so anything pinned to the bottom —
+/// the phone command palette's field, a composer's chips — sits under
+/// the keyboard unless it pads by this.
+const KEYBOARD_INSET_JS: &str = r#"
+(() => {
+  if (window.__taskKb || !window.visualViewport) return;
+  window.__taskKb = true;
+  const vv = window.visualViewport;
+  const set = () => {
+    const s = document.documentElement.style;
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    s.setProperty('--kb', kb + 'px');
+    // `kb-open` while the on-screen keyboard is up — what keyboard
+    // toolbars show on.
+    document.documentElement.classList.toggle('kb-open', kb > 80);
+    // The visible rectangle itself: iOS scrolls the layout viewport to
+    // keep a focused field in view, which moves anything `fixed` with
+    // it. A sheet that must stay on screen pins to these instead.
+    s.setProperty('--vv-top', vv.offsetTop + 'px');
+    s.setProperty('--vv-h', vv.height + 'px');
+  };
+  vv.addEventListener('resize', set);
+  vv.addEventListener('scroll', set);
+  set();
+})();
+"#;
+
+/// Install [`KEYBOARD_INSET_JS`] once. Call from the app shell.
+pub fn use_keyboard_inset() {
+    use_hook(|| {
+        let _ = document::eval(KEYBOARD_INSET_JS);
+    });
+}
 
 // ── sticky page action bar ──────────────────────────────────────────
 
@@ -57,7 +94,8 @@ pub fn MobileActionBar(children: Element) -> Element {
     rsx! {
         div {
             class: "fixed inset-x-0 z-30 flex items-center gap-2 border-t border-border bg-background/95 px-3 py-2 backdrop-blur md:hidden",
-            style: "bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));",
+            // Above the floating tab bar (3.75rem pill + its margin).
+            style: "bottom: calc(3.375rem + 0.75rem + max(0.75rem, calc(env(safe-area-inset-bottom, 0px) - 4px)));",
             {children}
         }
     }
@@ -355,80 +393,123 @@ fn MobileTimerSheet(mut open: Signal<bool>) -> Element {
     }
 }
 
-// ── bottom tab bar + "More" sheet ───────────────────────────────────
+// ── the phone's tab bar (Linear's) ──────────────────────────────────
 
+/// How far the capture button travels up to mean "start a timer".
+const SWIPE_TIMER: f64 = 36.0;
+
+/// The phone shell's bottom: a floating pill of four sections — Inbox,
+/// Tasks, Schedule and Vault by default (the person's own first four,
+/// from Customize) — and, apart from it on the right, the capture
+/// button: a fleeting thought, into the inbox.
+///
+/// Every other section is in the left drawer (swipe right), under the
+/// work it sits beside; there is no switcher slot, so the bar spends all
+/// four places on sections a thumb reaches all day.
 #[component]
 pub fn BottomTabBar(current: Route) -> Element {
-    let mut more_open = use_signal(|| false);
-    let mut account_open = use_signal(|| false);
-    let primary = primary_mobile_tabs();
+    let to_process = crate::process::use_to_process_count();
+    let new_issue = use_context::<crate::new_issue::NewIssue>();
+    // The capture button's swipe-up: how far it has lifted, and whether
+    // it has gone far enough to mean "start a timer".
+    let mut touch_y = use_signal(|| None::<f64>);
+    let mut lift = use_signal(|| 0.0f64);
+    let mut swiping = use_signal(|| false);
+    let mut swallow_click = use_signal(|| false);
+    let start_timer = crate::pages::timer_focus::use_start_timer_now();
+    let every = nav_tabs_for(&use_active_plugins());
+    let layout = crate::nav_layout::use_nav_layout();
+    let (all, _hidden) = layout.read().arrange(every);
+    let primary: Vec<NavTab> = all.into_iter().take(crate::nav_layout::PRIMARY).collect();
 
-    // "More" is you: your avatar and presence dot, opening every section
-    // and, at the top of that sheet, your account.
-    let ctx = use_context::<AuthCtx>();
-    let local = use_context::<PresenceLocal>();
-    let account = ctx.active.read().clone();
-    let (name, email) = account.as_ref().map_or_else(
-        || ("Signing in…".to_owned(), String::new()),
-        |a| (a.name.clone(), a.email.clone()),
-    );
-    let effective = local.effective_status();
-    let dot = effective.dot_class();
+    let slot = |active: bool| {
+        if active {
+            "relative flex h-[2.875rem] flex-1 items-center justify-center gap-1 rounded-full bg-accent text-foreground"
+        } else {
+            "relative flex h-[2.875rem] flex-1 items-center justify-center gap-1 rounded-full text-foreground/80 active:bg-accent/60"
+        }
+    };
+    let badge = if to_process > 99 {
+        "99+".to_owned()
+    } else {
+        to_process.to_string()
+    };
+
     rsx! {
         nav {
-            class: "fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur md:hidden",
-            style: "padding-bottom: env(safe-area-inset-bottom, 0px);",
-            ul { class: "mx-auto grid max-w-md grid-cols-5",
+            class: "fixed inset-x-0 bottom-0 z-30 flex items-end gap-2 px-7 md:hidden",
+            style: "padding-bottom: max(0.75rem, calc(env(safe-area-inset-bottom, 0px) - 4px));",
+            // The pill.
+            div { class: "flex h-[3.375rem] flex-1 items-center gap-0.5 rounded-full border border-border/70 bg-popover/95 p-1 shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur",
                 for tab in primary.iter() {
-                    li { key: "{tab.label}",
-                        TabBarItem { tab: tab.clone(), active: tabs_match(&current, tab) }
-                    }
-                }
-                li {
-                    button {
-                        r#type: "button",
-                        class: "flex min-h-[56px] w-full flex-col items-center justify-center gap-1 py-2 text-muted-foreground active:text-foreground",
-                        aria_label: "More sections and your account",
-                        onclick: move |_| more_open.set(true),
-                        span { class: "relative flex h-5 w-5 items-center justify-center",
-                            Avatar { name: name.clone(), email: email.clone(), size: 22 }
-                            span { class: "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border-2 border-background {dot}",
-                                title: "{effective.label()}",
+                    Link {
+                        key: "{tab.label}",
+                        to: tab.route.clone(),
+                        class: slot(tabs_match(&current, tab)),
+                        aria_label: "{tab.label}",
+                        span { class: "flex size-6 items-center justify-center [&_svg]:size-[22px]", {(tab.icon)()} }
+                        if matches!(tab.route, Route::InboxRoute {}) && to_process > 0 {
+                            span { class: "absolute right-[22%] top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none tabular-nums text-primary-foreground",
+                                "{badge}"
                             }
                         }
-                        span { class: "text-[11px] font-medium", "More" }
                     }
                 }
             }
-        }
-        BottomSheet {
-            open: more_open(),
-            title: "All sections".to_string(),
-            on_close: move |()| more_open.set(false),
-            // Your account — the sheet the phone's top bar used to open.
+            // Quick capture — a fleeting thought, from anywhere; it waits in
+            // the inbox to be processed. (New issues are each section's
+            // header action.)
+            // Tap: capture. Press and swipe up: a timer starts at once and
+            // its page opens — for when you are starting before you know
+            // what to call it.
             button {
                 r#type: "button",
-                class: "mb-3 flex min-h-[52px] w-full items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2 text-left active:bg-accent",
-                onclick: move |_| {
-                    more_open.set(false);
-                    account_open.set(true);
+                "data-testid": "capture-button",
+                class: if swiping() { "flex size-[3.375rem] shrink-0 items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] transition-transform" } else { "flex size-[3.375rem] shrink-0 items-center justify-center rounded-full border border-border/70 bg-popover/95 text-foreground shadow-[0_8px_30px_rgb(0_0_0/0.35)] backdrop-blur active:bg-accent" },
+                style: if lift() > 0.0 { format!("transform: translateY(-{:.0}px)", lift().min(48.0)) } else { String::new() },
+                aria_label: "Capture a fleeting thought — swipe up to start a timer",
+                ontouchstart: move |e: TouchEvent| {
+                    if let Some(t) = e.touches().first() {
+                        touch_y.set(Some(t.client_coordinates().y));
+                    }
                 },
-                span { class: "relative shrink-0",
-                    Avatar { name: name.clone(), email: email.clone(), size: 32 }
-                    span { class: "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background {dot}" }
-                }
-                span { class: "flex min-w-0 flex-col leading-tight",
-                    span { class: "truncate text-sm font-medium text-foreground", "{name}" }
-                    span { class: "truncate text-xs text-muted-foreground", "{effective.label()} · Account & status" }
+                ontouchmove: move |e: TouchEvent| {
+                    if let (Some(y0), Some(t)) = (touch_y(), e.touches().first()) {
+                        let up = (y0 - t.client_coordinates().y).max(0.0);
+                        lift.set(up);
+                        swiping.set(up >= SWIPE_TIMER);
+                    }
+                },
+                // A swipe the system takes over ends in a cancel, not an end:
+                // settle the button either way.
+                ontouchcancel: move |_| {
+                    touch_y.set(None);
+                    lift.set(0.0);
+                    swiping.set(false);
+                },
+                ontouchend: move |_| {
+                    let go = swiping();
+                    touch_y.set(None);
+                    lift.set(0.0);
+                    swiping.set(false);
+                    if go {
+                        swallow_click.set(true);
+                        start_timer(String::new());
+                    }
+                },
+                onclick: move |_| {
+                    if swallow_click() {
+                        swallow_click.set(false);
+                        return;
+                    }
+                    new_issue.capture(String::new());
+                },
+                if swiping() {
+                    architect_ui::lucide_dioxus::Timer { size: 22 }
+                } else {
+                    Feather { size: 22 }
                 }
             }
-            MoreSheetBody { on_navigate: move |()| more_open.set(false) }
-        }
-        BottomSheet {
-            open: account_open(),
-            title: "Account & status".to_string(),
-            on_close: move |()| account_open.set(false),
-            AccountSheetBody { on_done: move |()| account_open.set(false) }
         }
     }
 }
@@ -458,7 +539,7 @@ fn MoreSheetBody(on_navigate: EventHandler<()>) -> Element {
                 h3 { class: "px-1 pb-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground",
                     "Organization"
                 }
-                OrgSwitcher { compact: false }
+                OrgSwitcher { compact: false, up: true }
             }
             // Who's online — the same roster the desktop sidebar shows.
             crate::presence::PresenceRoster {}
@@ -467,15 +548,29 @@ fn MoreSheetBody(on_navigate: EventHandler<()>) -> Element {
 }
 
 #[component]
-fn TabBarItem(tab: NavTab, active: bool) -> Element {
+fn TabBarItem(tab: NavTab, active: bool, #[props(default)] badge: usize) -> Element {
     let class = if active {
         "flex min-h-[56px] w-full flex-col items-center justify-center gap-1 py-2 text-primary"
     } else {
         "flex min-h-[56px] w-full flex-col items-center justify-center gap-1 py-2 text-muted-foreground active:text-foreground"
     };
+    let label = if badge > 99 {
+        "99+".to_owned()
+    } else {
+        badge.to_string()
+    };
     rsx! {
         Link { to: tab.route.clone(), class,
-            span { class: "flex h-5 w-5 items-center justify-center", {(tab.icon)()} }
+            span { class: "relative flex h-5 w-5 items-center justify-center",
+                {(tab.icon)()}
+                // What's waiting to be processed — the one number the
+                // tab bar shows, because processing is the core loop.
+                if badge > 0 {
+                    span { class: "absolute -right-2.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none tabular-nums text-primary-foreground",
+                        "{label}"
+                    }
+                }
+            }
             span { class: "text-[11px] font-medium", "{tab.label}" }
         }
     }

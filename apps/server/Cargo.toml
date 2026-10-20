@@ -22,8 +22,15 @@ tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["io"] }
 axum = { version = "0.8", features = ["ws", "macros"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+# `ServiceExt::oneshot`: the local node answers the watch API in-process
+# (`LocalNode::watch`), with no socket for a router to listen on.
+tower = { version = "0.5", features = ["util"] }
 # Forwarding client for the OTLP proxy (src/otlp.rs).
 reqwest = { workspace = true }
+# `task-server peer`: the account pass dials the issuer's `DeviceService`
+# over wss, which needs a rustls provider picked (two are in the graph).
+task-dial = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 architect-telemetry = { workspace = true, features = ["otel"] }
@@ -195,6 +202,10 @@ email-smtp = { workspace = true, optional = true }
 # with human-in-the-loop approval + the delivery poller.
 email-product = { workspace = true, optional = true }
 vox = { workspace = true }
+# `local_node` — an app hosting this backend in-process serves each
+# org's GUARDED router (bearer baked in, like a socket upgrade) over an
+# in-memory link: `memory_link_pair` + the acceptor/initiator pair.
+vox-core = { workspace = true }
 # Org-wide presence: `crdt::sync::PresenceHost` + the `DocPresence`
 # vox service mounted per org (`vox` feature = the sync/presence
 # transport; no Dioxus, no persistence backends).
@@ -204,6 +215,9 @@ crdt = { workspace = true, features = ["vox"] }
 # Mounted per org as the `DocSync` service (and the per-file half
 # of `DocPresence` — see `presence::PresenceRouter`).
 vault-collab = { workspace = true }
+# The doc ⇄ markdown codec + the replica lineage rule the DocSync guard
+# applies (`doc_guard`).
+vault-doc = { workspace = true }
 chrono.workspace = true
 architect = { workspace = true, features = ["server", "local"] }
 architect-auth = { workspace = true, features = ["full"] }
@@ -286,12 +300,13 @@ files-daemon = { workspace = true }
 vox = { workspace = true, features = ["transport-websocket"] }
 futures = { workspace = true }
 attachments-proto = { workspace = true }
-architect = { workspace = true, features = ["local"] }
+# `atom-turso`: `offline_queue_e2e` drives the device's durable call
+# queue (`CallQueue` over `TursoRows`) against this server.
+architect = { workspace = true, features = ["local", "atom-turso"] }
 chrono = { workspace = true }
 tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 walkdir = { workspace = true }
-tower = { version = "0.5", features = ["util"] }
 vault-proto = { workspace = true, features = ["vox"] }
 project = { workspace = true, features = ["vox"] }
 collection-proto = { workspace = true, features = ["vox"] }

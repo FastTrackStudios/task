@@ -49,6 +49,7 @@ mod item {
     pub const SIGN_IN: &str = "task.sync.sign-in";
     pub const SIGN_OUT: &str = "task.sync.sign-out";
     pub const QUIT: &str = "task.quit";
+    pub const UPDATE: &str = "task.update";
 }
 
 /// Build the menu.
@@ -120,12 +121,20 @@ fn menu() -> DioxusTrayMenu {
     ));
 
     let _ = tray.append(&PredefinedMenuItem::separator());
+    // Installs a downloaded update and restarts, or looks for one first.
+    let _ = tray.append(&MenuItem::with_id(
+        MenuId::new(item::UPDATE),
+        "Check for updates",
+        true,
+        None,
+    ));
+    let _ = tray.append(&PredefinedMenuItem::separator());
     // Quits the *app*. The agent is a service and keeps syncing, which
     // is the whole reason it is a service — so this does not say "Quit"
     // on its own, which would read as "stop syncing".
     let _ = tray.append(&MenuItem::with_id(
         MenuId::new(item::QUIT),
-        "Close window (sync keeps running)",
+        "Quit Task (sync keeps running)",
         true,
         None,
     ));
@@ -165,9 +174,15 @@ pub fn use_tray() {
             item::SHOW => {
                 let window = dioxus::desktop::window();
                 window.set_visible(true);
+                crate::menu_bar::dock_icon(true);
                 window.set_focus();
             }
-            item::QUIT => dioxus::desktop::window().close(),
+            // The app, not the agent: the agent is a service and keeps syncing.
+            item::QUIT => std::process::exit(0),
+            // Off the event loop: a check downloads the update.
+            item::UPDATE => {
+                std::thread::spawn(update_now);
+            }
             // Everything else is the agent's work, and the agent is
             // across a socket — so it happens off the event loop. A
             // menu click that mounted forty roots inline would freeze
@@ -190,6 +205,7 @@ async fn act(id: String) {
     match id.as_str() {
         item::SIGN_IN => {
             tracing::info!("tray: {}", crate::sync_service::sign_agent_in().await);
+            crate::finder::sync_domain_soon();
             return;
         }
         item::SIGN_OUT => {
@@ -242,6 +258,9 @@ async fn act(id: String) {
         other => Err(format!("no such menu item: {other}")),
     };
 
+    if matches!(id.as_str(), item::BY_ORG | item::FLAT | item::UNMOUNT) {
+        crate::finder::sync_domain_soon();
+    }
     match outcome {
         Ok(said) => tracing::info!("tray: {said}"),
         Err(e) => tracing::warn!("tray: {e}"),
@@ -251,3 +270,26 @@ async fn act(id: String) {
 /// The agent on this machine, over its local control socket — the same
 /// one the CLI and the app's sync page use.
 use crate::sync_service::agent;
+
+/// "Check for updates": install a staged update and restart, or check
+/// first and do the same if one turns up.
+fn update_now() {
+    let version = match crate::updater::staged() {
+        Some(v) => Some(v),
+        None => match crate::updater::check() {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!(%e, "tray: update check failed");
+                return;
+            }
+        },
+    };
+    let Some(version) = version else {
+        tracing::info!("tray: Task is up to date");
+        return;
+    };
+    match crate::updater::install_and_relaunch(&version) {
+        Ok(()) => std::process::exit(0),
+        Err(e) => tracing::warn!(%e, "tray: the update was not installed"),
+    }
+}

@@ -48,12 +48,12 @@ pub fn serialize_task(task: &TaskInfo) -> Result<String, WriteError> {
     // Always end the close fence with `\n` so consumers that
     // detect frontmatter via the `\n---\n` pattern (vault-obsidian,
     // task::parse, anything else) see the boundary cleanly. For
-    // empty bodies the file ends with `---\n`; non-empty bodies
-    // get their leading newline normalized.
+    // empty bodies the file ends with `---\n`; a non-empty body is
+    // set off by ONE blank line, which `parse` takes back off — so
+    // `details` round-trips byte for byte (a description edited in
+    // the document editor must not gain a blank first line per save).
     let body = if task.details.is_empty() {
         String::new()
-    } else if task.details.starts_with('\n') {
-        task.details.clone()
     } else {
         format!("\n{}", task.details)
     };
@@ -167,6 +167,35 @@ mod tests {
         assert_eq!(back.recurrence.as_deref(), Some("FREQ=WEEKLY;INTERVAL=2"));
         assert_eq!(back.recurrence_anchor.as_deref(), Some("completion"));
         assert_eq!(back.title, "Mixing practice");
+    }
+
+    // t[verify doc.editor.body-only]
+    /// The description the document editor writes comes back exactly as
+    /// written — no blank first line gained per save, none lost.
+    #[test]
+    fn details_round_trip_byte_for_byte() {
+        for details in [
+            "",
+            "## Plan\n\n- [ ] Comp vocals\n- [x] Tune\n",
+            "\nStarts with a blank line",
+            "> [!note]- Folded\n> body\n\n```mermaid\ngraph TD\n```\n",
+        ] {
+            let mut t = task_proto::capture::capture("Mix the single");
+            t.path = "Task/mix-the-single.md".into();
+            t.details = details.to_owned();
+            let md = serialize_task(&t).expect("serialize");
+            let back = crate::parse::parse_str(&t.path, "mix-the-single", &md).expect("parse");
+            assert_eq!(back.details, details, "file was:\n{md}");
+            // And a second pass is stable.
+            let again = serialize_task(&back).expect("serialize again");
+            let back2 = crate::parse::parse_str(&t.path, "mix-the-single", &again).expect("parse");
+            assert_eq!(back2.details, details);
+        }
+        // A hand-written note with no blank line after the fence reads
+        // as its body.
+        let raw = "---\ntitle: Hand\ntype: task\n---\nBody\n";
+        let back = crate::parse::parse_str("Task/hand.md", "hand", raw).expect("parse");
+        assert_eq!(back.details, "Body\n");
     }
 
     #[test]

@@ -174,6 +174,14 @@ pub async fn sweep(state: &AppState, slug: &str, endpoint: &iroh::Endpoint) {
         if let Err(e) = sweep_peer(&org.files, endpoint, &host, hosting, &org_root).await {
             debug!(peer = %host.0, %slug, error = %e, "device sync: peer not reached this pass");
         }
+        // And the org's documents (`offline.peers`), with every node
+        // that keeps content — this org's own machines, not a federated
+        // server holding its structure.
+        if hosting.content != Content::None
+            && let Err(e) = crate::doc_peer::pull_peer(&org, endpoint, &host).await
+        {
+            debug!(peer = %host.0, %slug, error = %e, "device sync: documents not exchanged this pass");
+        }
     }
 }
 
@@ -351,31 +359,51 @@ impl files_sync::SyncObserver for NoProgress {}
 /// the id a device admitted is the org's, so the pull has to come *from*
 /// that endpoint or the far gate sees a machine it never admitted.
 pub fn start(state: &AppState, host: &IrohHost) {
-    let interval = match std::env::var("TASK_DEVICE_SYNC_SECS")
+    let Some(interval) = interval() else {
+        info!("device sync: disabled by TASK_DEVICE_SYNC_SECS=0");
+        return;
+    };
+    for (org_slug, endpoint) in &host.endpoints {
+        sweep_every(state, org_slug, endpoint, interval);
+    }
+}
+
+/// Start the sweep for one org bound after [`start`] — an org a device
+/// node joined or created once it was up (`LocalNode::bind`). Without
+/// it a joined org is dialable and never dials: its documents and roots
+/// would move only when the other node happened to pull.
+pub fn start_one(state: &AppState, slug: &str, endpoint: &iroh::Endpoint) {
+    match interval() {
+        Some(every) => sweep_every(state, slug, endpoint, every),
+        None => info!("device sync: disabled by TASK_DEVICE_SYNC_SECS=0"),
+    }
+}
+
+/// `TASK_DEVICE_SYNC_SECS`, or the default; `None` when `0` turns the
+/// sweep off.
+fn interval() -> Option<Duration> {
+    match std::env::var("TASK_DEVICE_SYNC_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
     {
-        Some(0) => {
-            info!("device sync: disabled by TASK_DEVICE_SYNC_SECS=0");
-            return;
-        }
-        Some(secs) => Duration::from_secs(secs),
-        None => DEFAULT_INTERVAL,
-    };
-
-    for (org_slug, endpoint) in &host.endpoints {
-        let (state, slug, endpoint) = (state.clone(), org_slug.clone(), endpoint.clone());
-        tokio::spawn(async move {
-            // A first pass immediately, so an operator who has just
-            // pasted an id does not wait a minute to see it take.
-            let mut timer = tokio::time::interval(interval);
-            loop {
-                timer.tick().await;
-                sweep(&state, &slug, &endpoint).await;
-            }
-        });
-        info!(slug = %org_slug, secs = interval.as_secs(), "device sync: sweeping this org's devices");
+        Some(0) => None,
+        Some(secs) => Some(Duration::from_secs(secs)),
+        None => Some(DEFAULT_INTERVAL),
     }
+}
+
+fn sweep_every(state: &AppState, slug: &str, endpoint: &iroh::Endpoint, interval: Duration) {
+    let (state, slug_owned, endpoint) = (state.clone(), slug.to_owned(), endpoint.clone());
+    tokio::spawn(async move {
+        // A first pass immediately, so an operator who has just
+        // pasted an id does not wait a minute to see it take.
+        let mut timer = tokio::time::interval(interval);
+        while !endpoint.is_closed() {
+            timer.tick().await;
+            sweep(&state, &slug_owned, &endpoint).await;
+        }
+    });
+    info!(%slug, secs = interval.as_secs(), "device sync: sweeping this org's devices");
 }
 
 #[cfg(test)]

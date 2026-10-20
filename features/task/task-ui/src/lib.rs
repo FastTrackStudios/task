@@ -32,3 +32,13 @@ pub use views::{
     TasksApp, TasksAppProps, TimeSection, TriageStrip, ViewMode, WorkflowSection, clock_running,
     days_late, late_label, owner_name, task_section,
 };
+// The property system: one typeable picker, five chips, their icons.
+pub use views::{
+    AssigneeChip, CHIP_CLASS, CHIP_QUIET_CLASS, Hotkey, IssueView, IssueViewProps, LabelsChip,
+    PRIORITIES, PersonDot, PickOption, PriorityChip, PriorityIcon, ProjectChip, PropertyPicker,
+    PropertyRow, STATUSES, StatusChip, StatusIcon, assignee_of, canonical_priority,
+    canonical_status, label_color, labels_of, match_rank, picker_filtered, toggle_label,
+    with_assignee,
+};
+// Making an issue: Linear's composer with Task's natural-language title.
+pub use views::{CaptureKind, Composer, ComposerProps, compose, kind_from_text, project_title};

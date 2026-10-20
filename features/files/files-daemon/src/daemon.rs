@@ -650,6 +650,9 @@ impl SyncDaemon {
         match gone {
             // Dropping the session unmounts.
             Some((at, session)) => {
+                // Off Linux `Session` is a Drop-less stub (mount.rs), so
+                // clippy calls this a no-op there; on Linux it unmounts.
+                #[allow(clippy::drop_non_drop)]
                 drop(session);
                 tracing::info!(%root_id, mountpoint = %at.display(), "unmounted");
                 self.save_mounts();
@@ -2712,7 +2715,7 @@ impl SyncDaemon {
 
 #[cfg(test)]
 mod footprint_tests {
-    use super::{PROGRESS_SHOWN, RootRuntimeStatus, resident_bytes};
+    use super::{PROGRESS_SHOWN, RootRuntimeStatus};
 
     /// A root with more conflicts than fit on a screen keeps the first
     /// screenful and the true count. The count is what a surface needs
@@ -2753,9 +2756,11 @@ mod footprint_tests {
         assert_eq!(s.divergent_total, 0);
     }
 
+    // `/proc` is Linux's; elsewhere `resident_bytes` is `None` by design.
     #[test]
+    #[cfg(target_os = "linux")]
     fn resident_size_is_readable_on_this_platform() {
-        let rss = resident_bytes().expect("/proc/self/statm");
+        let rss = super::resident_bytes().expect("/proc/self/statm");
         assert!(rss > 0, "a running process has a resident size");
     }
 }

@@ -165,57 +165,21 @@ BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plis
 # requires CFBundleShortVersionString to be 1-3 period-separated integers
 # (the crate's "0.0.1-alpha" is rejected); CFBundleVersion just has to climb.
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
-MARKETING_VER="${MARKETING_VER:-0.0.1}"
-# App bundle OS type — App Store requires CFBundlePackageType=APPL (dx omits it).
-/usr/libexec/PlistBuddy -c "Set :CFBundlePackageType APPL" "$APP/Info.plist" 2>/dev/null \
-    || /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "$APP/Info.plist"
-# Launch screen — required because iPad multitasking is implied by the
-# orientation set. An empty UILaunchScreen dict = system default (fine).
-/usr/libexec/PlistBuddy -c "Add :UILaunchScreen dict" "$APP/Info.plist" 2>/dev/null || true
-# URL scheme = bundle id. The central sign-in (`ui::central_login::native`,
-# `ios_auth.rs`) sends the person to the issuer in an
-# ASWebAuthenticationSession and gets the redirect back on
-# `<bundle id>://auth/callback`; the issuer has exactly that URI
-# registered for this app (fts-auth.nix). Declaring the scheme here is
-# what lets the system hand the URL to this app and no other.
-/usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string $BUNDLE" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleTypeRole string Editor" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string $BUNDLE" "$APP/Info.plist"
+MARKETING_VER="${MARKETING_VER:-0.0.3}"
+# Everything that changes how the app RUNS — the scene manifest iOS 27
+# requires, launch screen, orientations, URL scheme, display name, usage
+# strings — is shared with the simulator build (build-ios.sh), so a dev
+# build and a TestFlight build cannot differ in it.
+# shellcheck source=app-plist.sh
+source "$SCRIPT_DIR/app-plist.sh"
+task_app_plist "$APP"
 # Single supported platform — dx leaves both iPhoneOS+iPadOS, which Apple
 # rejects (91177). This is an iOS app; keep only iPhoneOS.
 /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$APP/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms:0 string iPhoneOS" "$APP/Info.plist"
-# Home-screen name. dx derives the bundle name from the Dioxus.toml
-# `[application] name`, so `task-app-mobile` shipped as "TaskAppMobile" on
-# the device. FTS only reads correctly because its package is already
-# called `fasttrackstudio`. CFBundleDisplayName is what iOS actually shows,
-# so set it explicitly rather than relying on the package name — the
-# macOS script and both watch targets already do.
-if [ -n "${APP_DISPLAY_NAME:-}" ]; then
-    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_DISPLAY_NAME" "$APP/Info.plist" 2>/dev/null \
-        || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_DISPLAY_NAME" "$APP/Info.plist"
-fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VER" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$APP/Info.plist"
-# Minimum OS — App Store rejects a bundle without it (dx doesn't emit one).
-/usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 15.0" "$APP/Info.plist" 2>/dev/null \
-    || /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 15.0" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Processes your guitar signal from the connected audio interface or microphone.'" "$APP/Info.plist" 2>/dev/null || true
-# Local network: pack downloads dial the studio engine peer-to-peer (iroh
-# direct paths / LAN WebSocket); without this key iOS silently drops the
-# traffic and the pack host is unreachable on the same Wi-Fi.
-/usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'Connects to your studio engine on the local network to stream and download sound packs.'" "$APP/Info.plist" 2>/dev/null || true
-# The Bonjour type the app browses to RAISE the local-network prompt —
-# iroh's raw UDP gets silently filtered instead of prompting without it.
-/usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _fts._tcp" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$APP/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$APP/Info.plist" 2>/dev/null || true
 # TestFlight requires ITSAppUsesNonExemptEncryption declared (false = no
 # non-standard crypto → no export-compliance docs).
 /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$APP/Info.plist" 2>/dev/null || true
@@ -227,6 +191,14 @@ fi
 # All reads are `|| true`-guarded inside the command sub so a missing key
 # can't trip set -e (a bare `var=$(failing)` assignment DOES exit under -e).
 DEV="${XCODE_DIR:-$(xcode-select -p)}"
+# Inside the nix dev shell DEVELOPER_DIR (and so xcode-select -p) is the
+# nix apple-sdk, which has no iPhoneOS platform: every read below came back
+# as PlistBuddy's "File Doesn't Exist" and the stamps went in empty or
+# garbled — and App Store Connect rejected the upload (90207, 90534). Ask
+# for the real Xcode instead.
+case "$DEV" in
+    /nix/store/*) DEV="$(env -u DEVELOPER_DIR /usr/bin/xcode-select -p)" ;;
+esac
 SDK="$DEV/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
 SDK_VER="$(/usr/libexec/PlistBuddy -c 'Print :Version' "$SDK/SDKSettings.plist" 2>/dev/null || true)"
 SDK_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$DEV/Platforms/iPhoneOS.platform/version.plist" 2>/dev/null || true)"
@@ -320,6 +292,10 @@ if [ -n "$WATCH_APP" ]; then
     # platform installed. Defaults to the main build's Xcode ($DEV).
     WATCH_DEV="${WATCH_XCODE_DIR:-$DEV}"
     # Unsigned generic-watchOS-device build; we re-sign manually below.
+    # Without the nix shell's toolchain variables: Xcode honours an
+    # exported LD and calls the bare linker with clang's flags
+    # ("ld: unknown options: -Xlinker …").
+    env -u LD -u LDPLUSPLUS -u CC -u CXX -u NIX_LDFLAGS -u NIX_CFLAGS_COMPILE \
     DEVELOPER_DIR="$WATCH_DEV" xcodebuild \
         -project "$WATCH_DIR/$WATCH_SCHEME.xcodeproj" -scheme "$WATCH_SCHEME" \
         -configuration Release -destination 'generic/platform=watchOS' \
@@ -361,6 +337,58 @@ if [ -n "$WATCH_APP" ]; then
     echo "=== embedded + signed watch companion: $EMB ==="
 fi
 
+# ── Widget extension (apps/ios-widgets) ──────────────────────────────────
+# Widgets, the Capture control and the timer's Live Activity, embedded at
+# <iOS.app>/PlugIns/ and signed inside-out with its own App Store profile
+# (bundle id + App Group set up by setup-extensions.rb).
+WIDGETS_APP="${WIDGETS_APP:-apps/ios-widgets}"
+WIDGETS_BUNDLE_ID="${WIDGETS_BUNDLE_ID:-$DX_BUNDLE_ID.widgets}"
+if [ -n "$WIDGETS_APP" ] && [ -d "$ROOT/$WIDGETS_APP" ]; then
+    echo "=== building widget extension ($WIDGETS_BUNDLE_ID) ==="
+    WIDGETS_DIR="$ROOT/$WIDGETS_APP"
+    ( cd "$WIDGETS_DIR" && "$NIX" run nixpkgs#xcodegen -- generate ) > /tmp/fts-widgets-xcodegen.log 2>&1 \
+        || { echo "ERROR: widgets xcodegen failed"; tail -20 /tmp/fts-widgets-xcodegen.log; exit 1; }
+    WIDGETS_DD="$(mktemp -d)"
+    TMP_DIRS+=("$WIDGETS_DD")
+    env -u LD -u LDPLUSPLUS -u CC -u CXX -u NIX_LDFLAGS -u NIX_CFLAGS_COMPILE -u SDKROOT \
+    DEVELOPER_DIR="$DEV" xcodebuild \
+        -project "$WIDGETS_DIR/TaskWidgets.xcodeproj" -scheme TaskWidgets \
+        -configuration Release -destination 'generic/platform=iOS' \
+        -derivedDataPath "$WIDGETS_DD" \
+        CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+        build > /tmp/fts-widgets-build.log 2>&1 \
+        || { echo "ERROR: widgets build failed"; tail -30 /tmp/fts-widgets-build.log; exit 1; }
+    WIDGETS_BUILT="$WIDGETS_DD/Build/Products/Release-iphoneos/TaskWidgets.appex"
+    WIDGETS_PROFILE="$(PROFILE_TYPE=IOS_APP_STORE CERT_TYPE=DISTRIBUTION \
+        ruby "$SCRIPT_DIR/mint-dev-profile.rb" - "$WIDGETS_BUNDLE_ID" "FTS Widgets App Store" \
+        | awk -F= '/PROFILE_PATH=/{print $2}')"
+    mkdir -p "$APP/PlugIns"
+    rm -rf "$APP/PlugIns/TaskWidgets.appex"
+    cp -R "$WIDGETS_BUILT" "$APP/PlugIns/"
+    WEX="$APP/PlugIns/TaskWidgets.appex"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VER" "$WEX/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NO" "$WEX/Info.plist"
+    cp "$WIDGETS_PROFILE" "$WEX/embedded.mobileprovision"
+    security cms -D -i "$WIDGETS_PROFILE" > /tmp/fts-widgets-prof.plist
+    /usr/libexec/PlistBuddy -x -c "Print :Entitlements" /tmp/fts-widgets-prof.plist > /tmp/fts-widgets-ent.plist
+    codesign --force --keychain "$KEYCHAIN" --sign "$SIGN_ID" \
+        --entitlements /tmp/fts-widgets-ent.plist --timestamp "$WEX"
+    codesign --verify --strict "$WEX"
+    echo "=== embedded + signed widget extension: $WEX ==="
+fi
+
+# The app's App Intents metadata (apps/mobile/build.rs): without it the
+# Capture and Timer controls cannot run their intent in the app.
+INTENTS="$(ls -dt "$ROOT"/target/aarch64-apple-ios/*/appintents/Metadata.appintents 2>/dev/null | head -1)"
+if [ -n "$INTENTS" ]; then
+    rm -rf "$APP/Metadata.appintents"
+    cp -R "$INTENTS" "$APP/"
+    echo "=== app intents metadata: $INTENTS ==="
+elif [ "$DX_PACKAGE" = task-app-mobile ]; then
+    echo "error: no Metadata.appintents from apps/mobile/build.rs" >&2
+    exit 1
+fi
+
 echo "=== signing (distribution) ==="
 cp "$PROFILE" "$APP/embedded.mobileprovision"
 security cms -D -i "$PROFILE" > /tmp/fts-prof.plist
@@ -379,10 +407,18 @@ mkdir -p "$WORK/Payload"
 cp -R "$APP" "$WORK/Payload/"
 IPA="$WORK/FastTrackStudio.ipa"
 # ditto (not zip) — preserves the _CodeSignature/CodeResources symlink that
-# altool requires; a plain zip breaks it.
-( cd "$WORK" && ditto -c -k --sequesterRsrc --keepParent Payload "$IPA" )
+# altool requires; a plain zip breaks it. --norsrc --noextattr: no
+# __MACOSX/ AppleDouble tree. Files built on a recent macOS carry a
+# com.apple.provenance xattr, and with --sequesterRsrc the archive grew a
+# second __MACOSX/Payload/TaskAppMobile.app/ that the upload read as an
+# app with no executable (ITMS 90207).
+( cd "$WORK" && ditto -c -k --norsrc --noextattr --keepParent Payload "$IPA" )
 
 echo "=== uploading to TestFlight ==="
-xcrun altool --upload-app -t ios -f "$IPA" \
+# In a clean environment: under the nix shell's variables altool's own
+# unpacking of the IPA failed ("Info.plist doesn't exist") and the server
+# then saw an app with no executable (90207).
+env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="$WORK" \
+    /usr/bin/xcrun altool --upload-app -t ios -f "$IPA" \
     --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 echo "=== DONE — build $BUILD_NO uploaded; it appears in TestFlight after Apple processes it (~5-15 min) ==="

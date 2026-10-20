@@ -63,31 +63,6 @@ pub fn handle_tab_href(href: &str) -> bool {
     false
 }
 
-/// Whether the note opts into section tabs: frontmatter `tabs: true`
-/// (general) or `type: event` (legacy). Reads the leading `---` block.
-fn wants_tabs(text: &str) -> bool {
-    let Some(rest) = text.strip_prefix("---") else {
-        return false;
-    };
-    let Some((front, _)) = rest.split_once("\n---") else {
-        return false;
-    };
-    front.lines().any(|l| {
-        let l = l.trim_start();
-        if let Some(v) = l.strip_prefix("type:") {
-            if v.trim().trim_matches(['"', '\'']) == "event" {
-                return true;
-            }
-        }
-        if let Some(v) = l.strip_prefix("tabs:") {
-            if v.trim().trim_matches(['"', '\'']) == "true" {
-                return true;
-            }
-        }
-        false
-    })
-}
-
 /// Section spans: `(heading_line_start, body_end, name)` for every
 /// top-level `#` after the first (the title).
 fn sections(text: &str) -> Vec<(usize, usize, String)> {
@@ -118,13 +93,12 @@ fn sections(text: &str) -> Vec<(usize, usize, String)> {
     out
 }
 
-/// Decorations for the section-tab system (empty when the note hasn't
-/// opted in or has fewer than two sections).
+/// Decorations for the section-tab system (empty with fewer than two
+/// sections). `state` is the note's body; the host runs this pass only
+/// for notes the spec claims (`type: event` or `tabs: true`) — the
+/// properties that opt a note in are not in the body.
 pub fn event_tab_decorations(state: &EditorState) -> Vec<DecoratedRange> {
     let text = state.doc.to_string();
-    if !wants_tabs(&text) {
-        return Vec::new();
-    }
     let secs = sections(&text);
     if secs.len() < 2 {
         return Vec::new();

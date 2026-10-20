@@ -91,6 +91,25 @@ pub const REPLICA_PERMITS: architect_permissions::ServicePermits =
         ],
     };
 
+/// The document lane's own resource (`offline.peers`): a peer exchanges
+/// the org's documents with this node — every vault file's Loro history —
+/// and that is all it may do with the vault. Apart from `vault/**` for
+/// the same reason [`REPLICA_RESOURCE`] is apart from `files/**`: the
+/// vault lanes are how a person reads, writes and moves notes, and "may
+/// sync documents" must not become all of those.
+pub const DOCS_REPLICA_RESOURCE: &str = "docs/replica";
+
+/// What the document lane's methods require. `sync` is a `write`: a
+/// session carries the caller's history into this node's documents.
+pub const DOC_PEER_PERMITS: architect_permissions::ServicePermits =
+    architect_permissions::ServicePermits {
+        service: "doc-peer",
+        methods: &[
+            architect_permissions::MethodPermit::new("list", Action::READ, DOCS_REPLICA_RESOURCE),
+            architect_permissions::MethodPermit::new("sync", Action::WRITE, DOCS_REPLICA_RESOURCE),
+        ],
+    };
+
 /// Resolve an admitted peer to a principal of its own.
 ///
 /// Peers are not people and must not borrow a person's identity to be
@@ -194,6 +213,16 @@ impl PermissionEngine for HostEngine {
         {
             return Decision::Allow;
         }
+        // The document lane: list and exchange. Which peers may — the
+        // org's own devices, not a federated server — is the lane's to
+        // check against the admission's hosting; this only lets a
+        // host reach it.
+        if matches!(who, Principal::Host { .. })
+            && what.as_str() == DOCS_REPLICA_RESOURCE
+            && matches!(action.as_str(), "read" | "write")
+        {
+            return Decision::Allow;
+        }
         // Deny rather than abstain: a composite is first-allow-wins, so
         // this only ever narrows what another engine already refused.
         Decision::deny(format!(
@@ -208,10 +237,16 @@ impl PermissionEngine for HostEngine {
         if !matches!(who, Principal::Host { .. }) {
             return Vec::new();
         }
-        vec![(
-            Resource::new(REPLICA_RESOURCE),
-            vec![Action::READ.into(), Action::DOWNLOAD.into()],
-        )]
+        vec![
+            (
+                Resource::new(REPLICA_RESOURCE),
+                vec![Action::READ.into(), Action::DOWNLOAD.into()],
+            ),
+            (
+                Resource::new(DOCS_REPLICA_RESOURCE),
+                vec![Action::READ.into(), Action::WRITE.into()],
+            ),
+        ]
     }
 }
 

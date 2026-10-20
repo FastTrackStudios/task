@@ -116,6 +116,30 @@
 //! example vault, whose awkward cases were all copied *from* the archive
 //! after that reader got them wrong.
 
+/// The servers' tracing, for the chapter that booted them — installed
+/// once per process by [`server::Server::start`]. Through the test
+/// writer, so a passing chapter stays quiet and a failing one (nextest
+/// prints its output) shows what the servers were doing. `RUST_LOG`
+/// overrides the filter; `TASK_TEST_SPANS=1` also prints each span as
+/// it closes with how long it was busy — how a slow step shows itself.
+pub fn init_tracing() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,sqlx=warn"));
+        let spans = if std::env::var_os("TASK_TEST_SPANS").is_some() {
+            tracing_subscriber::fmt::format::FmtSpan::CLOSE
+        } else {
+            tracing_subscriber::fmt::format::FmtSpan::NONE
+        };
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_span_events(spans)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 pub mod archive;
 pub mod client;
 pub mod device;

@@ -11,7 +11,7 @@
 //! Both registers keep their state in their own crates; this mounts
 //! both stores at the app root through one `provide`.
 
-use task_plugin_ui::architect_ui::lucide_dioxus::{MapPin, Package};
+use task_plugin_ui::architect_ui::lucide_dioxus::Package;
 use task_plugin_ui::dioxus::prelude::*;
 use task_plugin_ui::{PluginApp, PluginNav};
 
@@ -19,20 +19,13 @@ use task_plugin_ui::{PluginApp, PluginNav};
 pub const APP: PluginApp = PluginApp {
     id: "home",
     version: env!("CARGO_PKG_VERSION"),
-    nav: &[
-        PluginNav {
-            label: "Locations",
-            icon: icon_locations,
-            path: "",
-            rail: false,
-        },
-        PluginNav {
-            label: "Inventory",
-            icon: icon_inventory,
-            path: "inventory",
-            rail: false,
-        },
-    ],
+    // Inventory only: a place is a kind of vault note, not a section.
+    nav: &[PluginNav {
+        label: "Inventory",
+        icon: icon_inventory,
+        path: "inventory",
+        rail: false,
+    }],
     view,
     panel: None,
     claim_file: None,
@@ -58,10 +51,6 @@ fn provide() {
 fn provide_all() {
     locations_ui::provide_stores();
     inventory_ui::provide_stores();
-}
-
-fn icon_locations() -> Element {
-    rsx! { MapPin { size: 16 } }
 }
 
 fn icon_inventory() -> Element {

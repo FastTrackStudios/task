@@ -99,7 +99,26 @@ pub async fn bind_endpoint(
             iroh_blobs::ALPN.to_vec(),
         ]);
     if let Some(book) = book {
-        builder = builder.address_lookup(book);
+        builder = builder
+            .address_lookup(book)
+            // Without the host's DNS configuration. The default resolver
+            // reads it at bind (macOS: `SCDynamicStoreCreate`, a `configd`
+            // round trip), and from a binary on a busy external volume
+            // that call blocked the bind for ~8s — every test world paid
+            // it. An endpoint given a book is one whose peers are in the
+            // book (the suites, a LAN demo); public resolvers serve its
+            // n0 lookups (relay, pkarr) as well as the system's would —
+            // the same ones the default falls back to when there is no
+            // system configuration. Named outright: a builder given
+            // none resolves nothing, and every relay and publish fails.
+            .dns_resolver(
+                iroh::dns::DnsResolver::builder()
+                    .with_nameservers([
+                        (([1, 1, 1, 1], 53).into(), iroh::dns::DnsProtocol::Udp),
+                        (([8, 8, 8, 8], 53).into(), iroh::dns::DnsProtocol::Udp),
+                    ])
+                    .build(),
+            );
     }
     builder.bind().await
 }

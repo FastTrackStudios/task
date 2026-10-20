@@ -28,20 +28,16 @@
 //! persistent bar.
 
 use resources_ui::WatchView;
-use task_plugin_ui::architect_ui::lucide_dioxus::Youtube;
+use task_plugin_ui::PluginApp;
 use task_plugin_ui::dioxus::prelude::*;
-use task_plugin_ui::{PluginApp, PluginNav};
 
 /// What the app binary registers.
 pub const APP: PluginApp = PluginApp {
     id: resources_ui::APP_ID,
     version: env!("CARGO_PKG_VERSION"),
-    nav: &[PluginNav {
-        label: "Watch",
-        icon,
-        path: "",
-        rail: false,
-    }],
+    // No sidebar entry: reached from where it belongs (see the crate
+    // docs), not as a section of its own.
+    nav: &[],
     view,
     panel: None,
     claim_file: None,
@@ -59,10 +55,6 @@ pub const APP: PluginApp = PluginApp {
     claim_link: None,
     claim_href: None,
 };
-
-fn icon() -> Element {
-    rsx! { Youtube { size: 16 } }
-}
 
 fn view(path: &str, query: &str) -> Option<Element> {
     // The screens are their own wasm chunk on the web, downloaded the

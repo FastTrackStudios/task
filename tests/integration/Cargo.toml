@@ -17,6 +17,9 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# The servers' tracing, printed for a failing chapter (`init_tracing`).
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 architect = { workspace = true, features = ["iroh", "vox"] }
 files = { workspace = true }
 files-sync = { workspace = true }
@@ -71,6 +74,12 @@ blake3 = { workspace = true }
 # `wiki_promote.rs` stamps a promotion with an explicit instant so the
 # rendered documents are a pure function of their inputs.
 chrono = { workspace = true }
+# `process.rs`: a capture lands in the Inbox lane and is processed into
+# a task; what a maintenance hour brings forward is
+# `BlockCategory::surfaces`, read from the scheduling vocabulary rather
+# than restated here.
+inbox-proto = { workspace = true, features = ["vox"] }
+scheduling-proto = { workspace = true }
 
 [lints]
 workspace = true
