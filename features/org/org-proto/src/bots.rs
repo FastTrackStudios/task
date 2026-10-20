@@ -41,6 +41,11 @@ pub struct CreateBotRequest {
     /// grants them later (`task-server admin grant --principal <bot
     /// id>`). Refused together with a non-empty `orgs`; an empty
     /// `orgs` without it is refused too.
+    ///
+    /// Defaults to `false` so apps from before 0.2, which never send
+    /// it, can still make bots: vox refuses a field the caller's schema
+    /// lacks unless it has a default (tests/bots_wire_compat.rs).
+    #[facet(default)]
     pub no_orgs: bool,
     pub tools: BotTools,
 }
