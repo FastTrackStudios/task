@@ -783,6 +783,20 @@ impl InboxMutations {
         );
     }
 
+    /// Carry out the one write a decision makes
+    /// ([`inbox_proto::Decision::apply`], [`inbox_proto::decision::undo`]).
+    /// `stored` says whether the item is in the inbox yet: a fresh
+    /// capture being processed on the spot ([`crate::process::ProcessNow`])
+    /// is not, so its first save creates it and a delete writes nothing.
+    pub fn carry(&self, slug: String, write: inbox_proto::Write, stored: bool) {
+        match write {
+            inbox_proto::Write::Save(next) if stored => self.save(slug, next),
+            inbox_proto::Write::Save(next) => self.capture(slug, next),
+            inbox_proto::Write::Remove(id) if stored => self.delete(slug, id),
+            inbox_proto::Write::Remove(_) => {}
+        }
+    }
+
     /// Remove an item now; restore (and notify) if the delete fails.
     pub fn delete(&self, slug: String, id: String) {
         let key = id.clone();
@@ -845,8 +859,7 @@ impl InboxMutations {
             move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
             move || async move {
                 let task = crate::feeds::create_task_info(&slug, task).await?;
-                let mut done = done;
-                done.processed_into = Some(task.path);
+                let done = linked(&done, task.path);
                 crate::feeds::upsert_inbox_item(&slug, done.clone())
                     .await
                     .map(|()| Some(done))
@@ -871,8 +884,7 @@ impl InboxMutations {
             move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
             move || async move {
                 let project = crate::feeds::create_project(&slug, project).await?;
-                let mut done = done;
-                done.processed_into = Some(format!("project:{}", project.id));
+                let done = linked(&done, inbox_proto::decision::project_ref(project.id));
                 crate::feeds::upsert_inbox_item(&slug, done.clone())
                     .await
                     .map(|()| Some(done))
@@ -898,13 +910,22 @@ impl InboxMutations {
             move |s| s.update_optimistic(Id::Real(id), move |r| *r = row),
             move || async move {
                 crate::feeds::create_wiki_note(&slug, &path, &markdown).await?;
-                let mut done = done;
-                done.processed_into = Some(path);
+                let done = linked(&done, path);
                 crate::feeds::upsert_inbox_item(&slug, done.clone())
                     .await
                     .map(|()| Some(done))
             },
         );
+    }
+}
+
+/// The capture written back pointing at what it became — the shared
+/// decision ([`inbox_proto::Decision::Into`]), applied only once that
+/// thing exists, so a failed create leaves the capture in the inbox.
+fn linked(item: &inbox_proto::InboxItem, what: String) -> inbox_proto::InboxItem {
+    match inbox_proto::Decision::Into(what).apply(item, chrono::Utc::now().date_naive()) {
+        inbox_proto::Write::Save(next) => next,
+        inbox_proto::Write::Remove(_) => item.clone(),
     }
 }
 

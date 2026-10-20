@@ -25,7 +25,7 @@
 //! desk, a card with the chips in a row. ⌘↩ creates.
 
 use architect_ui::lucide_dioxus::{
-    ArrowUp, CalendarDays, Clock, DoorOpen, Link2, ListTree, Plus, Repeat, Tag, X,
+    ArrowRight, ArrowUp, CalendarDays, Clock, DoorOpen, Link2, ListTree, Plus, Repeat, Tag, X,
 };
 use dioxus::prelude::*;
 use uuid::Uuid;
@@ -169,6 +169,35 @@ pub fn kind_from_text(text: &str) -> CaptureKind {
     }
 }
 
+/// What the surface is making right now. Opened as a capture (and
+/// `switchable` — it can file captures), it stays a capture until it is
+/// `given` something a task has by hand, or its text says so
+/// ([`kind_from_text`]); opened as a new task it is one.
+#[must_use]
+pub fn resolved_kind(
+    opened_as: CaptureKind,
+    switchable: bool,
+    given: bool,
+    text: &str,
+) -> CaptureKind {
+    if !switchable {
+        return opened_as;
+    }
+    if opened_as == CaptureKind::Task || given || kind_from_text(text) == CaptureKind::Task {
+        CaptureKind::Task
+    } else {
+        CaptureKind::Note
+    }
+}
+
+/// Whether the surface offers "Process now": only while what is typed
+/// is still a plain capture — a task or a project is already decided
+/// (`process.capture.process-now`).
+#[must_use]
+pub fn offers_process_now(kind: CaptureKind) -> bool {
+    kind == CaptureKind::Note
+}
+
 /// A project's name from what was typed: the first line, without a
 /// leading `project:` / `new project`.
 #[must_use]
@@ -284,6 +313,11 @@ pub struct ComposerProps {
     /// On a note: start a timer with the text as what it is for.
     #[props(default)]
     pub on_timer: Option<EventHandler<String>>,
+    /// On a note: decide it now instead of filing it — the whole text,
+    /// handed to processing (`process.capture.process-now`). Closing
+    /// processing undecided still files it in the inbox.
+    #[props(default)]
+    pub on_process: Option<EventHandler<String>>,
 }
 
 #[component]
@@ -338,15 +372,7 @@ pub fn Composer(props: ComposerProps) -> Element {
         || due().is_some()
         || recurrence().is_some()
         || !subs().is_empty();
-    let text_kind = kind_from_text(&title.read());
-    let tasky = opened_as == CaptureKind::Task || given || text_kind == CaptureKind::Task;
-    let kind = if !switchable {
-        opened_as
-    } else if tasky {
-        CaptureKind::Task
-    } else {
-        CaptureKind::Note
-    };
+    let kind = resolved_kind(opened_as, switchable, given, &title.read());
     // Yours unless you say otherwise — once it is a task.
     let default_assignee = props.people.first().cloned();
     let default_assignee_chip = default_assignee.clone();
@@ -942,6 +968,29 @@ pub fn Composer(props: ComposerProps) -> Element {
                             Plus { size: 14 }
                             "More"
                         }
+                    // Process it now: the capture's answer is obvious, so
+                    // it is decided in the same gesture rather than filed
+                    // for the deck (`process.capture.process-now`).
+                    if let (true, Some(on_process)) = (offers_process_now(kind), props.on_process) {
+                        button {
+                            r#type: "button",
+                            "data-testid": "composer-process",
+                            class: CHIP_ROW_QUIET_CLASS,
+                            title: "Decide what this is now",
+                            disabled: title.read().trim().is_empty(),
+                            onclick: move |_| {
+                                let t = title.peek().trim().to_owned();
+                                if t.is_empty() {
+                                    return;
+                                }
+                                let d = description.peek().trim().to_owned();
+                                on_process.call(if d.is_empty() { t } else { format!("{t}\n\n{d}") });
+                                props.on_close.call(());
+                            },
+                            ArrowRight { size: 15 }
+                            "Process now"
+                        }
+                    }
                     // Start a timer instead — the swipe-up on the capture
                     // button, for whoever has not found it yet.
                     if let (CaptureKind::Note, Some(on_timer)) = (kind, props.on_timer) {
@@ -1107,6 +1156,50 @@ pub fn Composer(props: ComposerProps) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // t[verify process.capture.process-now]
+    /// The ✎ capture door offers "Process now" exactly while what is
+    /// typed is a plain capture: a capture given a chip or written with
+    /// task syntax is a task already, a project is a project, and New
+    /// task is never a capture. The door itself — the button, the card
+    /// it opens, keeping the words when closed undecided — is driven in
+    /// the browser by `apps/tests/playwright/capture-process-now.spec.js`.
+    #[test]
+    fn process_now_is_offered_while_it_is_still_a_capture() {
+        let door = |opened, switchable, given, text| {
+            offers_process_now(resolved_kind(opened, switchable, given, text))
+        };
+        assert!(door(
+            CaptureKind::Note,
+            true,
+            false,
+            "Ask the tuner what the soundboard costs"
+        ));
+        assert!(
+            !door(CaptureKind::Note, true, true, "Ask the tuner"),
+            "a chip makes it a task"
+        );
+        assert!(
+            !door(CaptureKind::Note, true, false, "Ask the tuner !high"),
+            "so does task syntax"
+        );
+        assert!(!door(
+            CaptureKind::Note,
+            true,
+            false,
+            "Ask the tuner @calls"
+        ));
+        assert!(
+            !door(CaptureKind::Task, true, false, "plain words"),
+            "New task is a task"
+        );
+        assert!(door(
+            CaptureKind::Note,
+            false,
+            true,
+            "a capture-only surface"
+        ));
+    }
 
     /// The `@` list holds people and contexts; only a context's id says
     /// so, and a made-up one is a context too.

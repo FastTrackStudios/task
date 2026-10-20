@@ -52,6 +52,7 @@ pub fn NewIssueHost() -> Element {
     let muts = stores::use_task_mutations();
     let inbox = stores::use_inbox_mutations();
     let start_timer = crate::pages::timer_focus::use_start_timer_now();
+    let process_now = use_context::<crate::process::ProcessNow>();
     let target = use_memo(move || crate::orgs::create_target(&selection.read(), &org_list.read()));
     let member_names = crate::pages::wiki_access::use_member_names(target);
 
@@ -153,6 +154,15 @@ pub fn NewIssueHost() -> Element {
             // Start timer: the clock starts with whatever was typed, and
             // its page opens to name or finish it.
             on_timer: move |desc: String| start_timer(desc),
+            // Process now: the global ✎ capture can decide what it just
+            // wrote, on the spot — the same card the deck uses, holding
+            // the capture unstored until the first decision writes it
+            // once; closing it undecided files it, open
+            // (`process.capture.process-now`).
+            on_process: {
+                let slug = slug.clone();
+                move |text: String| process_now.start(slug.clone(), &text)
+            },
             place,
             on_create: move |(mut task, subs): (task_proto::TaskInfo, Vec<String>)| {
                 // The id is chosen here so the sub-issues can name their
