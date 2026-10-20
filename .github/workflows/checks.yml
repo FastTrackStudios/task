@@ -1,4 +1,4 @@
-# Task Checks — the one PR/push gate, on THEBATTLESHIP.
+# Task Checks — the release gate (and on-demand/nightly checks), on THEBATTLESHIP.
 #
 # Runs on the org's self-hosted `nix-host` runner (32 cores, 186 GB),
 # four instances so this workflow's parallel jobs do not queue behind
@@ -12,14 +12,15 @@
 # On this runner the store is already warm, so entering the shell is
 # instant and nothing installs nix per job.
 #
-# CHANGE SELECTION: the `plan` job asks `cargo rail plan` (patched flake
-# build — nix/modules/cargo-rail.nix) which workspace crates the range
-# actually affects, walking cargo's resolved reverse-dependency graph.
-# This workspace is ~163 members, so that selection is worth real minutes
-# per PR. Gates are crate-membership checks against the plan's execution
-# set; infra changes (.github/**, flake.nix, nix/**, … — see
-# .config/rail.toml [change-detection].infrastructure) or any rail
-# failure FAIL OPEN.
+# CHANGE SELECTION: on a dispatched run with `base`, the `plan` job asks
+# `cargo rail plan` (patched flake build — nix/modules/cargo-rail.nix)
+# which workspace crates the range actually affects, walking cargo's
+# resolved reverse-dependency graph. This workspace is ~163 members, so
+# that selection is worth real minutes. Release PRs and the nightly run
+# skip selection and check everything. Gates are crate-membership checks
+# against the plan's execution set; infra changes (.github/**,
+# flake.nix, nix/**, … — see .config/rail.toml
+# [change-detection].infrastructure) or any rail failure FAIL OPEN.
 #
 # CACHE: there is none, and that is the point. The old hosted setup ran
 # `Swatinem/rust-cache`, which tars a multi-GB target dir up to the
@@ -42,15 +43,41 @@
 
 name: checks
 
-# Pull requests only (and by hand): a merge to main is the tree its PR
-# already passed; checking it again on push held the task runners for a
-# quarter of an hour the next PR was waiting on.
+# WHEN THIS RUNS — the release model (skills/release-workflow.md):
+#
+#   card PR -> dev      NOT here. The gate is the worker's own `just ci`
+#                       under the build lease, in the canonical warm
+#                       checkout, recorded on the card; the reviewer
+#                       checks that evidence and squash-merges. Running it
+#                       again here rebuilt the same tree in a second
+#                       target dir for ~20 minutes per push.
+#   release PR dev -> main   HERE, automatically, the FULL set (no change
+#                       selection): it is the last look before production
+#                       and it runs once per release, not once per card.
+#   by hand             `gh workflow run checks.yml --ref <branch>` runs
+#                       everything on that branch; add `-f base=dev` to
+#                       check only what the branch changed against dev.
+#   nightly             dev's tip, once a day, so two cards that each
+#                       passed alone but break together are caught before
+#                       the release PR rather than in it. Cheap: dev moves
+#                       a few cards a day and the target dir is warm.
+#
+# A merge to main is never checked on push: the release guard
+# (release.yml) proves the merge commit's tree IS the tree this tested.
 on:
   pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      base:
+        description: "Only check crates affected since this ref (e.g. dev). Empty = everything."
+        required: false
+        default: ""
+  schedule:
+    - cron: "17 10 * * *"
 
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.ref }}
+  group: checks-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'schedule' && 'nightly' || 'run' }}
   cancel-in-progress: true
 
 env:
@@ -117,6 +144,7 @@ jobs:
       workspace: ${{ steps.filter.outputs.workspace }}
       wasm: ${{ steps.filter.outputs.wasm }}
       skip: ${{ steps.filter.outputs.skip }}
+      ref: ${{ steps.filter.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -124,63 +152,46 @@ jobs:
           fetch-depth: 0
       - name: Plan affected crates
         id: filter
+        env:
+          DISPATCH_BASE: ${{ inputs.base }}
         run: |
           set -u
 
           # Fail open: if we cannot compute an honest plan, run everything.
           run_all() {
-            echo "plan: $1 — running EVERYTHING (fail open)"
+            echo "plan: $1 — running EVERYTHING"
             for o in workspace wasm; do
               echo "$o=true" >> "$GITHUB_OUTPUT"
             done
             exit 0
           }
+          skip_all() {
+            echo "plan: $1 — nothing to run"
+            printf 'skip=true\nworkspace=false\nwasm=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          }
 
-          [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && run_all "manual dispatch"
-
-          # `[skip checks]` on the PR's head commit turns the gate off, for
-          # the case where `just ci` was already run locally against this
-          # exact tree.
-          #
-          # DELIBERATELY NOT one of GitHub's own tokens ([skip ci],
-          # [ci skip], [no ci], [skip actions], [actions skip]): those are
-          # intercepted before a workflow starts and would suppress EVERY
-          # workflow on the commit, deploy.yml included. This one is ours,
-          # so it can be scoped.
-          #
-          # PULL REQUESTS ONLY. A push to main runs the full gate whatever
-          # the message says — main is what deploys.
-          #
-          # What it cannot do: a PR run builds the MERGE of this branch
-          # with main, and `just ci` locally built the branch alone. If
-          # main has moved, a local pass does not cover the merge. This is
-          # a claim about a tree, not a proof about the merge.
-          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
-            head_msg="$(git log -1 --pretty=%B \
-              "${{ github.event.pull_request.head.sha }}" 2>/dev/null || true)"
-            case "$head_msg" in
-              *"[skip checks]"*)
-                echo "plan: [skip checks] on the head commit — gate off"
-                {
-                  echo "skip=true"
-                  echo "workspace=false"
-                  echo "wasm=false"
-                } >> "$GITHUB_OUTPUT"
-                exit 0
-                ;;
-            esac
-          fi
-
-          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
-            base="$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD 2>/dev/null)" \
-              || run_all "no merge-base"
-          else
-            base="${{ github.event.before }}"
-            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
-               || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-              base="$(git rev-parse HEAD~1 2>/dev/null)" || run_all "no parent commit"
-            fi
-          fi
+          case "${GITHUB_EVENT_NAME:-}" in
+            # Release PRs (the only PRs this workflow sees) run the full
+            # set. There is no skip token any more: a release is exactly
+            # the run that must not be skipped.
+            pull_request) run_all "release PR into ${GITHUB_BASE_REF}" ;;
+            # Nightly: the integration branch's tip. Before `dev` exists
+            # (migration step 1) there is nothing to check.
+            schedule)
+              git ls-remote --exit-code --heads origin dev >/dev/null \
+                || skip_all "no dev branch yet"
+              echo "ref=dev" >> "$GITHUB_OUTPUT"
+              run_all "nightly check of dev"
+              ;;
+            workflow_dispatch)
+              [ -n "${DISPATCH_BASE}" ] || run_all "manual dispatch"
+              git fetch --quiet origin "${DISPATCH_BASE}" 2>/dev/null || true
+              base="$(git merge-base "origin/${DISPATCH_BASE}" HEAD 2>/dev/null)" \
+                || run_all "no merge-base with ${DISPATCH_BASE}"
+              ;;
+            *) run_all "event ${GITHUB_EVENT_NAME:-?}" ;;
+          esac
 
           plan="$(${NIX_DEV} cargo rail plan --quiet --from "$base" --to HEAD -f json)" \
             || run_all "cargo rail plan failed"
@@ -251,7 +262,7 @@ jobs:
   #                 the codegen afterwards anyway.
   #   wasm        — a different target triple, so a separate tree; it
   #                 shares only build scripts and proc macros.
-  #   docs        — rustdoc, main only.
+  #   docs        — rustdoc, release PRs only.
   #
   # Steps run under `!cancelled()` rather than stopping at the first
   # failure: serialised, a bail-out would cost a whole extra run to learn
@@ -261,8 +272,13 @@ jobs:
     runs-on: [self-hosted, task]
     timeout-minutes: 60
     needs: plan
+    if: ${{ needs.plan.outputs.skip != 'true' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Empty = the event's own ref (a PR's merge ref, a dispatched
+          # branch); `dev` for the nightly run.
+          ref: ${{ needs.plan.outputs.ref }}
       - name: Persistent target dir
         run: |
           # Outside $GITHUB_WORKSPACE — actions/checkout runs
@@ -301,7 +317,6 @@ jobs:
       # fmt is ungated: it compiles nothing, so change selection would
       # save nothing.
       - name: fmt
-        if: ${{ needs.plan.outputs.skip != 'true' }}
         run: ${NIX_DEV} just ci-fmt
       - name: Manifests + lockfile
         if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' }}
@@ -327,8 +342,11 @@ jobs:
         if: ${{ !cancelled() && needs.plan.outputs.wasm == 'true' }}
         run: ${NIX_DEV} just ci-wasm
 
+      # Release PRs only. It was gated on `github.ref == refs/heads/main`,
+      # which no run has had since pushes to main stopped triggering this
+      # workflow — so rustdoc -D warnings had silently not run at all.
       - name: Docs
-        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && needs.plan.outputs.workspace == 'true' && github.base_ref == 'main' }}
         run: ${NIX_DEV} just ci-docs
 
       # Cargo never collects stale artifacts: every rebuild leaves the old
@@ -345,7 +363,7 @@ jobs:
       #
       # always(): a red run has to give the disk back too.
       - name: Bound the target dir
-        if: ${{ always() && needs.plan.outputs.skip != 'true' }}
+        if: ${{ always() }}
         run: |
           # CARGO_INCREMENTAL=0 stops new incremental output but does not
           # remove what earlier runs left; nothing regenerates this now.
