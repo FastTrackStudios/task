@@ -599,15 +599,9 @@ async fn doctor_check_schema(ws_url: &str) -> eyre::Result<()> {
     };
 
     let local = task_server::schema_stamps();
-    let mut stale: Vec<&str> = Vec::new();
-    let mut unserved: Vec<&str> = Vec::new();
-    for (name, stamp) in &local {
-        match served.get(*name).and_then(|v| v.as_str()) {
-            Some(s) if s == stamp => {}
-            Some(_) => stale.push(name),
-            None => unserved.push(name),
-        }
-    }
+    let skew =
+        org_proto::schema_stamp::diff(&local, |name| served.get(name).and_then(|v| v.as_str()));
+    let (stale, unserved) = (skew.stale, skew.unserved);
 
     if stale.is_empty() && unserved.is_empty() {
         println!(
