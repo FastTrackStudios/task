@@ -39,6 +39,7 @@ mod asset_migration_e2e;
 mod auth;
 mod auth_live;
 mod bots_e2e;
+mod capture_peers_e2e;
 mod central_auth_e2e;
 mod central_discovery_e2e;
 mod chart_collab_e2e;

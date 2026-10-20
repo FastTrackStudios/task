@@ -809,13 +809,19 @@ pub struct DeclaredCapture {
     pub body: &'static str,
     /// Where it came from: `ui`, `cli`, `watch`, or an agent's lane.
     pub source: &'static str,
-    /// `open`, or `suggested` for something an agent proposed.
+    /// `open`, `suggested` for something an agent proposed, or
+    /// `processed` for one already decided.
     pub status: &'static str,
     /// Captured this many days before the plant.
     pub captured_days_ago: i64,
     /// Snoozed: resurfaces this many days after the plant. `None` =
     /// due now.
     pub resurface_in_days: Option<i64>,
+    /// What a processed capture became (`processed_into`): a declared
+    /// task's path (`Task/<slug>.md`, where the seeder files it) or a
+    /// committed note's vault path. `None` on a processed capture is
+    /// "already done" — it became nothing.
+    pub processed_into: Option<&'static str>,
 }
 
 /// What is waiting in the inbox: plain thoughts, captures carrying
@@ -831,6 +837,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 2,
         resurface_in_days: None,
+        processed_into: None,
     },
     DeclaredCapture {
         org: "acme-audio",
@@ -840,6 +847,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 1,
         resurface_in_days: None,
+        processed_into: None,
     },
     DeclaredCapture {
         org: "acme-audio",
@@ -849,6 +857,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 1,
         resurface_in_days: None,
+        processed_into: None,
     },
     DeclaredCapture {
         org: "acme-audio",
@@ -858,6 +867,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 3,
         resurface_in_days: None,
+        processed_into: None,
     },
     DeclaredCapture {
         org: "acme-audio",
@@ -867,6 +877,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "suggested",
         captured_days_ago: 0,
         resurface_in_days: None,
+        processed_into: None,
     },
     DeclaredCapture {
         org: "acme-audio",
@@ -876,6 +887,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 10,
         resurface_in_days: Some(14),
+        processed_into: None,
     },
     // Marked up the way people capture: a person by @handle, a #tag
     // and an @context — the inbox shows Sam's avatar, a badge, a chip.
@@ -887,6 +899,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 0,
         resurface_in_days: None,
+        processed_into: None,
     },
     DeclaredCapture {
         org: "acme-audio",
@@ -896,6 +909,7 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 1,
         resurface_in_days: None,
+        processed_into: None,
     },
     // Someone outside the org: Jordan is a contact, not a member, and
     // the mention still opens their profile.
@@ -907,6 +921,42 @@ pub const INBOX: &[DeclaredCapture] = &[
         status: "open",
         captured_days_ago: 0,
         resurface_in_days: None,
+        processed_into: None,
+    },
+    // Already decided — the other side of the loop, so the walk back
+    // from a durable thing to the thought that started it exists in the
+    // planted world (`process.capture.verbatim`): one capture that became
+    // a task on the board, one rewritten as a note in Alice's words (the
+    // committed note quotes it verbatim), and one that was already done.
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a10",
+        body: "Return the hired mic stands @errands",
+        source: "watch",
+        status: "processed",
+        captured_days_ago: 4,
+        resurface_in_days: None,
+        processed_into: Some("Task/return-the-hired-mic-stands.md"),
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a11",
+        body: "B room hums whenever the fridge compressor kicks in?? ground loop?",
+        source: "ui",
+        status: "processed",
+        captured_days_ago: 5,
+        resurface_in_days: None,
+        processed_into: Some("The B room hum is the fridge on the studio circuit.md"),
+    },
+    DeclaredCapture {
+        org: "acme-audio",
+        id: "6f1d2c3a-0b7e-4c51-9a2f-1e8d4b5c6a12",
+        body: "Text Sam the door code for Saturday",
+        source: "ui",
+        status: "processed",
+        captured_days_ago: 2,
+        resurface_in_days: None,
+        processed_into: None,
     },
 ];
 
@@ -922,6 +972,7 @@ pub fn capture_item(c: &DeclaredCapture, now: chrono::DateTime<chrono::Utc>) -> 
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut item = inbox::InboxItem::capture(c.id, c.body, c.source, created);
     c.status.clone_into(&mut item.status);
+    item.processed_into = c.processed_into.map(str::to_owned);
     if let Some(days) = c.resurface_in_days {
         item.resurface_on = Some(
             (now + chrono::Duration::days(days))
@@ -2688,14 +2739,78 @@ mod declared_tests {
             assert!(
                 [
                     inbox::InboxItem::STATUS_OPEN,
-                    inbox::InboxItem::STATUS_SUGGESTED
+                    inbox::InboxItem::STATUS_SUGGESTED,
+                    inbox::InboxItem::STATUS_PROCESSED,
                 ]
                 .contains(&c.status),
-                "{}: a seeded capture is waiting — open or suggested, not `{}`",
+                "{}: a seeded capture is open, suggested or processed, not `{}`",
                 c.id,
                 c.status
             );
+            assert!(
+                c.processed_into.is_none() || c.status == inbox::InboxItem::STATUS_PROCESSED,
+                "{}: only a processed capture names what it became",
+                c.id
+            );
         }
+    }
+
+    // t[verify process.capture.verbatim]
+    /// The seed shows a capture in each state processing leaves it in —
+    /// waiting (open), suggested, snoozed, and processed into a task,
+    /// into a note, and into nothing — and every processed one walks
+    /// back: its task is a declared task at the path the seeder files it
+    /// under, its note is committed and quotes the capture verbatim.
+    #[test]
+    fn the_seed_has_a_capture_in_every_state_and_each_walks_back() {
+        let acme: Vec<DeclaredCapture> = inbox_of("acme-audio").copied().collect();
+        let processed = |c: &&DeclaredCapture| c.status == inbox::InboxItem::STATUS_PROCESSED;
+        assert!(
+            acme.iter()
+                .any(|c| c.status == "open" && c.resurface_in_days.is_none())
+        );
+        assert!(acme.iter().any(|c| c.status == "suggested"));
+        assert!(acme.iter().any(|c| c.resurface_in_days.is_some()));
+        assert!(
+            acme.iter()
+                .filter(processed)
+                .any(|c| c.processed_into.is_none()),
+            "one capture already done"
+        );
+        let tasks: Vec<&str> = DECLARED
+            .iter()
+            .filter(|p| p.org == "acme-audio")
+            .flat_map(|p| p.tasks.iter().map(|(t, _, _)| *t))
+            .collect();
+        let (mut to_task, mut to_note) = (false, false);
+        for c in acme.iter().filter(processed) {
+            let Some(into) = c.processed_into else {
+                continue;
+            };
+            if into.starts_with("Task/") {
+                let title = tasks
+                    .iter()
+                    .find(|t| task::write::default_task_path(t, None) == into)
+                    .unwrap_or_else(|| panic!("{into}: no declared task is filed there"));
+                assert!(c.body.starts_with(title), "{}: became `{title}`", c.body);
+                to_task = true;
+            } else {
+                let note = STUDIO
+                    .get_file(format!("acme-audio/Vault/{into}"))
+                    .and_then(include_dir::File::contents_utf8)
+                    .unwrap_or_else(|| panic!("{into}: the note is not committed"));
+                let quoted: String = c.body.lines().map(|l| format!("> {l}\n")).collect();
+                assert!(
+                    note.contains(&format!("> [!quote] Original capture\n{quoted}")),
+                    "{into} quotes its capture verbatim"
+                );
+                to_note = true;
+            }
+        }
+        assert!(
+            to_task && to_note,
+            "a capture became a task, and one a note"
+        );
     }
 
     // t[verify process.due]

@@ -48,7 +48,11 @@ t[process.capture.process-now]
 A capture surface in the app offers to process what was just captured,
 there and then, rather than only filing it for later. The deck is for the
 backlog; a capture whose answer is obvious is decided in the same
-gesture.
+gesture. The ✎ capture offers **Process now** while what is typed is
+still a plain capture; it opens the same card the deck uses, holding the
+capture unstored until the first decision writes it once, and closing it
+undecided files it in the inbox, open. Quick-add opens that card
+directly.
 
 ---
 
@@ -109,7 +113,11 @@ in passing.
 
 Each outcome is one decision, and each says exactly what it writes. The
 item's own status change is the last write, so a failure creating the
-thing it became leaves the capture in the inbox, not lost.
+thing it became leaves the capture in the inbox, not lost. What a
+decision writes back to the capture is decided once, for every surface,
+by `inbox_proto::Decision::apply` (`features/inbox/inbox-proto/src/decision.rs`):
+`Into(<what it became>)`, `Done`, `Later(response)`, `Keep`, `Delete`;
+the note and reference shapes live beside it.
 
 ### A task
 
@@ -391,17 +399,25 @@ without the person saying so.
 
 | rule | checked by |
 |---|---|
-| `process.capture.single-path`, `.verbatim`, `process.outcome.task` | `tests/integration/tests/it/process.rs` — capture on the Inbox lane, task on the Task lane, back-link read back |
+| `process.capture.single-path`, `.verbatim`, `process.outcome.task` | `tests/integration/tests/it/process.rs` — capture on the Inbox lane, task on the Task lane, back-link read back and walked (`decision::origin_of`) |
+| `process.capture.process-now` | `task-ui` `composer::tests::process_now_is_offered_while_it_is_still_a_capture` (when the door shows); `apps/tests/playwright/capture-process-now.spec.js` drives the ✎ door, the card it opens with every outcome, and closing undecided into the inbox |
+| `process.outcome.{waiting,now,note,reference,project,later,done,delete}`, `process.suggestion`, `process.undo` | `process.rs` — each outcome as the card makes it (the thing on its own lane, then the write `Decision::apply` makes), each walked back from what it made; snooze, done and delete undone to exactly the stored item; a note's create-only clash leaving the capture open |
+| the same decisions with no host | `apps/server/tests/it/capture_peers_e2e.rs` — two device nodes, no host: processed, snoozed and deleted on one, seen so on the other; a decision on the other comes back |
 | `process.due` | `process.rs` (the planted inbox over the wire) and `example_org::declared_tests::the_planted_inbox_has_captures_to_process` |
 | `process.capture.marks`, `.people` | `people` unit tests (what is a mark; people by handle or name, first or full); `example_org::declared_tests::every_person_a_capture_names_has_a_profile`; `example_org::declared_tests::the_seeded_inbox_shows_people_tags_and_contexts`; `process.rs` serves the planted captures verbatim |
 | `process.suggested` | `task-proto::suggest` unit tests (the order, "Not now", what is running); `apps/server/tests/it/watch_suggested_e2e.rs::the_watch_suggests_and_acts_on_the_same_pick` — planned task, a template's maintenance hour opening a "Maintenance hour" session, the fall-through to overdue and captures, over the watch bridge |
 | `process.focus.*` (but `.everywhere`) | unit tests in `task-proto::relevance` and `scheduling-proto::focus`; `process.rs` over `TaskService::query`; the seed's maintenance hour in `example_org::declared_tests` |
 
-The seeded world shows the whole loop to Alice: nine captures in
+The seeded world shows the whole loop to Alice: twelve captures in
 acme-audio's inbox (one suggested from mail, one snoozed two weeks out,
 two carrying `@errands` / `#chore`, and two marked up with a person, a
 `#tag` and an `@context` — Sam by handle, Casey by name — and one naming
-Jordan, a mastering engineer who is a contact but not a member), weekday and weekend templates with
+Jordan, a mastering engineer who is a contact but not a member; and three
+already decided — one processed into the "Return the hired mic stands"
+task, one rewritten as the committed note "The B room hum is the fridge
+on the studio circuit", quoting it verbatim, and one already done —
+`example_org::declared_tests::the_seed_has_a_capture_in_every_state_and_each_walks_back`),
+weekday and weekend templates with
 a "Maintenance" block (16:00–17:00 on weekdays), and
 three open album tasks tagged `@errands`, `@chores` and `#chore` for that
 hour to bring forward. What is not met is in [unmet](unmet.md).
