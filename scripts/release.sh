@@ -32,7 +32,7 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-REPO="${GITHUB_REPOSITORY:-FastTrackStudio/task}"
+REPO="${GITHUB_REPOSITORY:-FastTrackStudios/task}"
 INTEGRATION_BRANCH="${INTEGRATION_BRANCH:-dev}"
 PRODUCTION_BRANCH="${PRODUCTION_BRANCH:-main}"
 

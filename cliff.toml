@@ -50,7 +50,7 @@ split_commits = false
 protect_breaking_commits = true
 commit_preprocessors = [
     # "(#149)" → a link to the PR.
-    { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/FastTrackStudio/task/pull/${1}))" },
+    { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/FastTrackStudios/task/pull/${1}))" },
 ]
 commit_parsers = [
     # Bookkeeping that is not a change to the product.

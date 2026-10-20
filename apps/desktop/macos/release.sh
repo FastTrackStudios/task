@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish the macOS app as a GitHub release of FastTrackStudio/task:
+# Publish the macOS app as a GitHub release of FastTrackStudios/task:
 # build the notarized Developer-ID app (build-dmg.sh), then create the
 # release `desktop-v<version>` carrying
 #
