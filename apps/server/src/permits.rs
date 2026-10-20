@@ -241,6 +241,14 @@ table!(SHARE, "share", "shares/**", [
     rd "list_incoming", wa "promote_incoming",
 ]);
 
+// Cross-org Sharing Grants (`docs/spec/sharing.md`). The gate admits a
+// member; the impl then refuses anyone who is not an owner or admin of
+// the org by their membership row, because an `admin` permit would lock
+// everyone out (see the module docs). Every grant change audits.
+table!(SHARING, "sharing", "sharing/**", [
+    rd "preview_grant", wa "create_grant", wa "revoke_grant", rd "list_grants",
+]);
+
 // Per-file CRDT: `sync` mutates the doc; presence is ephemeral and never
 // persisted (see `crate::presence`).
 table!(DOC_SYNC, "doc-sync", "doc/**", [wr "sync"]);
@@ -1173,6 +1181,11 @@ pub fn mounts() -> Vec<Mount> {
             share_proto::share_service_service_descriptor(),
             SHARE,
         ),
+        m(
+            "core",
+            share_proto::sharing_service_service_descriptor(),
+            SHARING,
+        ),
         m("core", crdt::sync::doc_sync_service_descriptor(), DOC_SYNC),
         m(
             "core",
@@ -1922,7 +1935,7 @@ impl DenyLedger {
     /// become a memory leak.
     pub const CAP: usize = 512;
 
-    fn record(&self, reason: &str) {
+    pub(crate) fn record(&self, reason: &str) {
         let Ok(mut g) = self.inner.lock() else { return };
         if let Some(e) = g.entries.get_mut(reason) {
             e.count += 1;
