@@ -38,7 +38,7 @@ PRODUCT_NAME="${PRODUCT_NAME:-Task}"
 DX_TAILWIND="${DX_TAILWIND-../tailwind.css}"
 ICON_1024="${ICON_1024:-$ROOT/apps/mobile/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png}"
 OUT_DIR="${OUT_DIR:-$ROOT/target/dmg}"
-MARKETING_VER="${MARKETING_VER:-0.0.2}"
+MARKETING_VER="${MARKETING_VER:-0.0.3}"
 BUILD_NO="${BUILD_NO:-$(date +%s)}"
 
 # Notarization credentials live where the TestFlight flow already keeps
@@ -255,8 +255,32 @@ spctl --assess --type execute --verbose=4 "$MOUNT/$(basename "$APP")" || {
 }
 hdiutil detach "$MOUNT" >/dev/null
 
+# ── What the in-app updater downloads (apps/desktop/src/updater.rs) ─────────
+# The same notarized app, stapled on its own (the DMG's ticket covers its
+# code; stapling the bundle lets an update pass Gatekeeper offline too),
+# zipped with ditto so the signature survives, and a manifest naming it.
+echo "=== the updater's zip and manifest ==="
+xcrun stapler staple "$APP"
+ZIP="$OUT_DIR/Task-macos.zip"
+rm -f "$ZIP"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+ZIP_SHA="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
+MANIFEST="$OUT_DIR/latest-macos.json"
+RELEASE_TAG="desktop-v$MARKETING_VER"
+cat > "$MANIFEST" <<JSON
+{
+  "version": "$MARKETING_VER",
+  "build": "$BUILD_NO",
+  "zip": "https://github.com/FastTrackStudios/task/releases/download/$RELEASE_TAG/Task-macos.zip",
+  "sha256": "$ZIP_SHA"
+}
+JSON
+cp "$DMG" "$OUT_DIR/Task-macos.dmg"
+
 echo
 echo "=== done ==="
 echo "dmg: $DMG"
+echo "zip: $ZIP ($ZIP_SHA)"
+echo "manifest: $MANIFEST"
 echo "Drag Task to Applications, open it once, sign in — the sync agent"
 echo "installs itself and this machine pairs with your org."

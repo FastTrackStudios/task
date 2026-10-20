@@ -145,6 +145,13 @@ mobile-css: css
 mobile-sim *ARGS:
     bash apps/mobile/ios/build-ios.sh {{ARGS}}
 
+# Publish the macOS app (signed, notarized) as GitHub release
+# `desktop-v<VERSION>`: a DMG for a first install, and the zip +
+# manifest installed copies update themselves from
+# (apps/desktop/src/updater.rs). Run on the Mac holding the signing keys.
+release-desktop VERSION:
+    bash apps/desktop/macos/release.sh {{VERSION}}
+
 # The typing test: every markdown construct typed into the app's note
 # view on the booted simulator through the iOS keyboard's input calls;
 # text, caret and rendering checked, a screenshot per case.

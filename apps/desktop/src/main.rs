@@ -3,12 +3,18 @@ use dioxus::desktop::{Config, tao};
 use dioxus::prelude::*;
 use ui::App;
 
+mod mac_auth;
 mod sync_service;
 mod tray;
+mod updater;
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
+    // Before anything can open a TLS socket: the graph carries both rustls
+    // backends, so it cannot pick one itself, and a TLS dial without one
+    // panics (on the main thread, where it aborts). Err = already set.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     // Error/crash telemetry — hold `_sentry` for the life of `main`
     // (`launch` diverges, so binding it here is sufficient). The tracing
     // subscriber carries the Sentry layer so `warn!`/`error!` events are
@@ -25,6 +31,14 @@ fn main() {
     // crate's own docs prescribe exactly this for client apps.)
     std::mem::forget(otel);
 
+    // An update an earlier run downloaded and verified: swap it in before
+    // anything opens, and let the new bundle start instead.
+    if updater::install_staged_at_launch() {
+        std::process::exit(0);
+    }
+    // Then look for the next one, in the background (GitHub Releases).
+    updater::start();
+
     // The sync agent is a separate process precisely so it outlives this
     // window; the app's part is making sure it exists. Off the main
     // thread — it runs a subprocess, and nothing on screen waits for it.
@@ -36,6 +50,8 @@ fn main() {
     //
     // Before launch, because the nav is built on first render.
     task_plugins::register_all();
+    // "Continue with FastTrackStudio": the issuer in a system sheet.
+    mac_auth::init();
 
     // This install is a node of its own (`offline.local`): the backend,
     // in-process, over `<data dir>/task/node`. Installing is free — it
