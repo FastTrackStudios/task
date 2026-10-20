@@ -1,7 +1,7 @@
 //! `/settings` — the settings window.
 //!
 //! One list of panels — Account, Appearance, General, Sections,
-//! Keyboard — drawn the way iOS and Linear draw settings: on a phone, an
+//! Keyboard, Bots — drawn the way iOS and Linear draw settings: on a phone, an
 //! account card and grouped rows, each opening its panel with a back
 //! button; from `md` up, the panels down a sidebar beside the open one.
 //!
@@ -10,7 +10,7 @@
 //! is kept per device says so where it is set.
 
 use architect_ui::lucide_dioxus::{
-    ChevronLeft, ChevronRight, Keyboard, LayoutGrid, Palette, SlidersHorizontal, UserRound,
+    Bot, ChevronLeft, ChevronRight, Keyboard, LayoutGrid, Palette, SlidersHorizontal, UserRound,
 };
 use dioxus::prelude::*;
 use task_ui_core::sheet::{SheetGroup, SheetSection, SheetSelect, SheetToggle};
@@ -37,15 +37,17 @@ enum Panel {
     General,
     Sections,
     Keyboard,
+    Bots,
 }
 
 impl Panel {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Account,
         Self::Appearance,
         Self::General,
         Self::Sections,
         Self::Keyboard,
+        Self::Bots,
     ];
 
     fn label(self) -> &'static str {
@@ -55,6 +57,7 @@ impl Panel {
             Self::General => "General",
             Self::Sections => "Sections",
             Self::Keyboard => "Keyboard",
+            Self::Bots => "Bots",
         }
     }
 
@@ -65,6 +68,7 @@ impl Panel {
             Self::General => rsx! { SlidersHorizontal { size: 17 } },
             Self::Sections => rsx! { LayoutGrid { size: 17 } },
             Self::Keyboard => rsx! { Keyboard { size: 17 } },
+            Self::Bots => rsx! { Bot { size: 17 } },
         }
     }
 
@@ -76,6 +80,7 @@ impl Panel {
             Self::General => "bg-zinc-500",
             Self::Sections => "bg-emerald-500",
             Self::Keyboard => "bg-amber-500",
+            Self::Bots => "bg-indigo-500",
         }
     }
 }
@@ -154,6 +159,7 @@ pub fn SettingsView() -> Element {
                         Panel::General => rsx! { GeneralPanel {} },
                         Panel::Sections => rsx! { SectionsPanel {} },
                         Panel::Keyboard => rsx! { KeyboardPanel {} },
+                        Panel::Bots => rsx! { crate::bots::BotsPanel {} },
                     }
                 }
             }

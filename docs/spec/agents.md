@@ -10,7 +10,8 @@ is about **who** an agent is when it gets there, and **what** it may reach.
 | bot accounts, keys, scopes | `apps/server/src/bots.rs` |
 | a bot key at the permission gate | `apps/server/src/permits.rs` (`HomeOrBotResolver`) |
 | a bot key on the account lane | `apps/server/src/central_auth.rs` (`home_principal`), `apps/server/src/mcp.rs` (`bot_tools`) |
-| the operator verbs | `task-server admin bot create|list|revoke` (`apps/server/src/admin_cli.rs`) |
+| the app's surface | `BotService` on `/server/vox` (`features/org/org-proto/src/bots.rs`, `BotServiceImpl`), Settings → Bots (`crates/ui/src/bots.rs`) |
+| the operator verbs | `task-server admin bot create\|list\|revoke` (`apps/server/src/admin_cli.rs`) |
 
 ---
 
@@ -37,4 +38,4 @@ stops working.
 
 | rule | checked by |
 |---|---|
-| `mcp.bots` | e2e (`apps/server/tests/it/bots_e2e.rs`): a node with its person signed in makes Atlas (all tools) and a Librarian (library); over `POST /mcp` with only their keys, Atlas makes and lists a task, the Librarian is offered no task tools, is refused one by name and writes a note; an org the person is not in cannot be given; a revoked key reaches nothing. Unit: `bots` (library scope, bot addresses). Not yet: managing bots from the app (Settings), OAuth for Hermes' Connect button |
+| `mcp.bots` | e2e (`apps/server/tests/it/bots_e2e.rs`): a node with its person signed in makes Atlas (all tools) and a Librarian (library); over `POST /mcp` with only their keys, Atlas makes and lists a task, the Librarian is offered no task tools, is refused one by name and writes a note; an org the person is not in cannot be given; a revoked key reaches nothing. Unit: `bots` (library scope, bot addresses). Through the app's lane: `the_app_manages_bots_through_the_server_lane` makes, lists and revokes a bot with the person's session over `/server/vox` and refuses a bad token and a foreign org. Unit: `ui::bots` (the Hermes snippet). Not yet: OAuth for Hermes' Connect button |

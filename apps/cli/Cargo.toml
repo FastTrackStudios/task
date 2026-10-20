@@ -3,6 +3,12 @@ name = "task-cli"
 version.workspace = true
 edition.workspace = true
 
+# The program is a library function (`task_cli::main`) so the desktop
+# app's package can build the same `task` from its own dependency graph:
+# one build, one feature resolution, for every binary in the bundle.
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "task"
 path = "src/main.rs"
@@ -311,6 +317,13 @@ plugin-contacts = ["task-server/plugin-contacts", "task-client/plugin-contacts"]
 plugin-recall = ["task-server/plugin-recall", "task-client/plugin-recall"]
 plugin-home = ["task-server/plugin-home",
     "task-client/plugin-home", "dep:locations"]
+
+# The CLI ships inside the desktop app's bundle, so it links what it
+# carries rather than the dev shell's /nix/store OpenSSL and bzip2 — see
+# the same block in `apps/desktop/Cargo.toml`.
+[target.'cfg(target_os = "macos")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+bzip2 = { version = "0.5", features = ["static"] }
 
 [dev-dependencies]
 # `collection`'s local `slug()` is a 12th copy of the slugify rule and

@@ -96,30 +96,31 @@ APP="$(ls -d $APP_GLOB 2>/dev/null | head -1)"
 PLIST="$APP/Contents/Info.plist"
 echo "=== app bundle: $APP ==="
 
-# ── The sync agent, inside the app ──────────────────────────────────────────
-# This is what makes the DMG worth having over the App Store build: the app
-# registers this binary as a LaunchAgent on first run, and it keeps syncing
-# after the window closes. Contents/MacOS because that is where the app looks
-# (next to its own executable) and where nested code may be signed.
-echo "=== building the sync agent ==="
+# ── The sync agent and the CLI, inside the app ──────────────────────────────
+# The agent is what makes the DMG worth having over the App Store build: the
+# app registers it as a LaunchAgent on first run, and it keeps syncing after
+# the window closes. `task` ships with the app and is linked onto PATH at
+# launch (apps/desktop/src/cli_link.rs), so it updates with the app and talks
+# to the app's own node as the person signed in to it. Contents/MacOS because
+# that is where the app looks (next to its own executable) and where nested
+# code may be signed.
+#
+# Both are bins of the app's own package (apps/desktop/src/bin), built with
+# the app's profile and target (dx builds `--target aarch64-apple-darwin`
+# with `desktop-release`). Same package, same profile, same target: one
+# feature resolution, so every dependency the app's build just compiled is
+# reused and this step is two links.
+BIN_TARGET=aarch64-apple-darwin
+BIN_PROFILE=desktop-release
+BIN_DIR="$ROOT/target/$BIN_TARGET/$BIN_PROFILE"
+echo "=== building the sync agent and the task CLI ==="
 "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
     set -euo pipefail
     cd '$ROOT'
-    cargo build --release -p files-daemon --features daemon-bin --bin fts-files-daemon
+    cargo build --profile $BIN_PROFILE --target $BIN_TARGET -p $DX_PACKAGE --bin fts-files-daemon --bin task
 "
-cp "$ROOT/target/release/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
-
-# ── The CLI, inside the app ─────────────────────────────────────────────────
-# `task` ships with the app and is linked onto PATH at launch
-# (apps/desktop/src/cli_link.rs), so it updates with the app and talks to
-# the app's own node as the person signed in to it.
-echo "=== building the task CLI ==="
-"$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
-    set -euo pipefail
-    cd '$ROOT'
-    cargo build --release -p task-cli --bin task
-"
-cp "$ROOT/target/release/task" "$APP/Contents/MacOS/task"
+cp "$BIN_DIR/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
+cp "$BIN_DIR/task" "$APP/Contents/MacOS/task"
 
 # ── The cloud folder ────────────────────────────────────────────────────────
 # The File Provider extension is what makes a synced root show up in Finder
@@ -182,6 +183,31 @@ echo "=== app: $PRODUCT_NAME ($DX_BUNDLE_ID) $MARKETING_VER build $BUILD_NO ==="
 # Hardened runtime (--options runtime) is required for notarization. Nested
 # code first: signing anything inside the bundle after the bundle itself
 # invalidates the outer signature.
+# ── Only what every Mac has ─────────────────────────────────────────────────
+# The dev shell links its own libiconv (and, left alone, OpenSSL and bzip2,
+# which the manifests now build in). A /nix/store path exists on no other
+# Mac, and the hardened runtime refuses another team's dylib even here, so
+# a bundle that names one dies in dyld before main. libiconv is part of
+# macOS (ABI-compatible), so those references are pointed at /usr/lib;
+# anything else from the store fails the build rather than the launch.
+echo "=== system libraries only ==="
+for bin in "$APP"/Contents/MacOS/* "$APP"/Contents/PlugIns/*.appex/Contents/MacOS/*; do
+    [ -f "$bin" ] || continue
+    file -b "$bin" | grep -q Mach-O || continue
+    for lib in $(otool -L "$bin" | awk 'NR>1 && $1 ~ /^\/nix\/store\// {print $1}'); do
+        case "$lib" in
+            */libiconv.2.dylib) install_name_tool -change "$lib" /usr/lib/libiconv.2.dylib "$bin" ;;
+            */libz.1.dylib) install_name_tool -change "$lib" /usr/lib/libz.1.dylib "$bin" ;;
+            *) ;;
+        esac
+    done
+    if otool -L "$bin" | awk 'NR>1' | grep -q '/nix/store/'; then
+        echo "ERROR: $(basename "$bin") links libraries from /nix/store:" >&2
+        otool -L "$bin" | grep '/nix/store/' >&2
+        exit 1
+    fi
+done
+
 echo "=== signing (Developer ID + hardened runtime) ==="
 ENTITLEMENTS="$SCRIPT_DIR/Task-devid.entitlements"
 # Checked, not assumed. codesign hands entitlements to AMFI, which
@@ -202,9 +228,12 @@ find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0
 # not through the app, so it is verified on its own terms.
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
     --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP/Contents/MacOS/fts-files-daemon"
-# The CLI too: a program of its own, run from a shell.
+# The CLI too: a program of its own, run from a shell — with the same
+# entitlements, because it embeds the same backend: copypatch's JIT
+# (through vox) maps executable memory, which the hardened runtime refuses
+# without `allow-jit` (0.0.4's CLI panicked "mmap(MAP_JIT) failed").
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
-    --sign "$SIGN_ID" "$APP/Contents/MacOS/task"
+    --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP/Contents/MacOS/task"
 # The extension carries its own entitlements, not the app's: it must be
 # sandboxed (the system will not load one that is not) where the app must not
 # be, since an App-Sandboxed app cannot register the agent as a LaunchAgent.

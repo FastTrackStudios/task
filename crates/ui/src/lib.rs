@@ -23,6 +23,7 @@ pub mod app;
 pub mod app_views;
 pub mod appearance;
 pub mod auth;
+pub mod bots;
 pub mod central_login;
 pub mod chrome;
 pub mod collab;

@@ -271,10 +271,17 @@ impl TaskClient {
         let session_url = if self.config.server.is_some() || !self.config.use_session {
             None
         } else {
+            // A session with no token signs nobody in — a leftover from a
+            // sign-in that never finished — so it does not get to send the
+            // CLI past a running desktop node.
             session::load()
                 .ok()
                 .flatten()
-                .and_then(|s| s.active_server().map(|e| e.url.clone()))
+                .and_then(|s| {
+                    s.active_server()
+                        .filter(|e| !e.token.is_empty())
+                        .map(|e| e.url.clone())
+                })
                 .or_else(desktop::node_endpoint)
         };
         transport::pick_server_base(self.config.server.as_deref(), session_url.as_deref())

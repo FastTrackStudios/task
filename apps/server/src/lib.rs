@@ -3543,6 +3543,12 @@ pub fn server_layer_router(state: &AppState, local_trusted: bool) -> architect::
                 crate::device_enrollment::DeviceEnrollmentImpl::new(state.clone()),
             ),
         )
+        // A person's bots (`mcp.bots`): server-wide, like the accounts
+        // they are, and token-in-request like the rest of this lane.
+        .with(
+            org_proto::bot_descriptor(),
+            org_proto::serve_bots(crate::bots::BotServiceImpl::new(state.clone())),
+        )
         .with(
             files_storage::storage_admin_descriptor(),
             files_storage::serve_storage_admin(storage_admin),

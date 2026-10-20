@@ -27,6 +27,11 @@
 //! over an in-process link, exactly the spec's RPC-seam testing rule.
 
 pub mod account;
+/// The `fts-files-daemon` program, as a library function, so the desktop
+/// app's package can build the same binary from its own dependency graph
+/// (one build for every binary in the bundle).
+#[cfg(feature = "daemon-bin")]
+pub mod cli;
 mod control;
 mod daemon;
 mod error;
