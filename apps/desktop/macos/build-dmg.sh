@@ -233,9 +233,12 @@ find "$APP" \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0
 # not through the app, so it is verified on its own terms.
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
     --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP/Contents/MacOS/fts-files-daemon"
-# The CLI too: a program of its own, run from a shell.
+# The CLI too: a program of its own, run from a shell — with the same
+# entitlements, because it embeds the same backend: copypatch's JIT
+# (through vox) maps executable memory, which the hardened runtime refuses
+# without `allow-jit` (0.0.4's CLI panicked "mmap(MAP_JIT) failed").
 codesign --force --keychain "$KEYCHAIN" --timestamp --options runtime \
-    --sign "$SIGN_ID" "$APP/Contents/MacOS/task"
+    --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP/Contents/MacOS/task"
 # The extension carries its own entitlements, not the app's: it must be
 # sandboxed (the system will not load one that is not) where the app must not
 # be, since an App-Sandboxed app cannot register the agent as a LaunchAgent.
