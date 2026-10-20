@@ -56,8 +56,8 @@ pub use snapshot::{
 
 #[cfg(feature = "vox")]
 pub use bots::{
-    BotServiceClient, BotServiceRpcDispatcher as BotDispatcher, bot_service_rpc_service_descriptor as bot_descriptor,
-    serve as serve_bots,
+    BotServiceClient, BotServiceRpcDispatcher as BotDispatcher,
+    bot_service_rpc_service_descriptor as bot_descriptor, serve as serve_bots,
 };
 
 #[cfg(feature = "vox")]

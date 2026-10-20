@@ -96,35 +96,30 @@ APP="$(ls -d $APP_GLOB 2>/dev/null | head -1)"
 PLIST="$APP/Contents/Info.plist"
 echo "=== app bundle: $APP ==="
 
-# ── The sync agent, inside the app ──────────────────────────────────────────
-# This is what makes the DMG worth having over the App Store build: the app
-# registers this binary as a LaunchAgent on first run, and it keeps syncing
-# after the window closes. Contents/MacOS because that is where the app looks
-# (next to its own executable) and where nested code may be signed.
-# Same profile and target as the app (dx builds `--target aarch64-apple-darwin`
-# with `desktop-release`), so the dependencies the app just built are reused:
-# a plain `--release` is a second cache, rebuilt from tokio up when stale.
+# ── The sync agent and the CLI, inside the app ──────────────────────────────
+# The agent is what makes the DMG worth having over the App Store build: the
+# app registers it as a LaunchAgent on first run, and it keeps syncing after
+# the window closes. `task` ships with the app and is linked onto PATH at
+# launch (apps/desktop/src/cli_link.rs), so it updates with the app and talks
+# to the app's own node as the person signed in to it. Contents/MacOS because
+# that is where the app looks (next to its own executable) and where nested
+# code may be signed.
+#
+# Both are bins of the app's own package (apps/desktop/src/bin), built with
+# the app's profile and target (dx builds `--target aarch64-apple-darwin`
+# with `desktop-release`). Same package, same profile, same target: one
+# feature resolution, so every dependency the app's build just compiled is
+# reused and this step is two links.
 BIN_TARGET=aarch64-apple-darwin
 BIN_PROFILE=desktop-release
 BIN_DIR="$ROOT/target/$BIN_TARGET/$BIN_PROFILE"
-echo "=== building the sync agent ==="
+echo "=== building the sync agent and the task CLI ==="
 "$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
     set -euo pipefail
     cd '$ROOT'
-    cargo build --profile $BIN_PROFILE --target $BIN_TARGET -p files-daemon --features daemon-bin --bin fts-files-daemon
+    cargo build --profile $BIN_PROFILE --target $BIN_TARGET -p $DX_PACKAGE --bin fts-files-daemon --bin task
 "
 cp "$BIN_DIR/fts-files-daemon" "$APP/Contents/MacOS/fts-files-daemon"
-
-# ── The CLI, inside the app ─────────────────────────────────────────────────
-# `task` ships with the app and is linked onto PATH at launch
-# (apps/desktop/src/cli_link.rs), so it updates with the app and talks to
-# the app's own node as the person signed in to it.
-echo "=== building the task CLI ==="
-"$NIX" develop "$ROOT" --accept-flake-config -c bash -c "
-    set -euo pipefail
-    cd '$ROOT'
-    cargo build --profile $BIN_PROFILE --target $BIN_TARGET -p task-cli --bin task
-"
 cp "$BIN_DIR/task" "$APP/Contents/MacOS/task"
 
 # ── The cloud folder ────────────────────────────────────────────────────────

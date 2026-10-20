@@ -82,7 +82,8 @@ pub fn BotsPanel() -> Element {
                 }
             }
         }
-        ServerBots { key: "{entry.id}", entry }
+        // Keyed by server, so switching servers remounts (and refetches).
+        {rsx! { ServerBots { key: "{entry.id}", entry } }}
     }
 }
 
@@ -322,8 +323,14 @@ fn KeyCard(name: String, snippet: String, on_done: EventHandler<()>) -> Element 
 mod tests {
     #[test]
     fn the_snippet_points_hermes_at_the_servers_mcp() {
-        assert_eq!(super::http_base("wss://task.example.com/vox"), "https://task.example.com");
-        assert_eq!(super::http_base("ws://127.0.0.1:9090/vox"), "http://127.0.0.1:9090");
+        assert_eq!(
+            super::http_base("wss://task.example.com/vox"),
+            "https://task.example.com"
+        );
+        assert_eq!(
+            super::http_base("ws://127.0.0.1:9090/vox"),
+            "http://127.0.0.1:9090"
+        );
         let s = super::hermes_snippet("https://task.example.com", "ak_x");
         assert!(s.contains("TASK_TOKEN=ak_x"));
         assert!(s.contains("url: \"https://task.example.com/mcp\""));

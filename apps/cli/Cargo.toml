@@ -3,6 +3,12 @@ name = "task-cli"
 version.workspace = true
 edition.workspace = true
 
+# The program is a library function (`task_cli::main`) so the desktop
+# app's package can build the same `task` from its own dependency graph:
+# one build, one feature resolution, for every binary in the bundle.
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "task"
 path = "src/main.rs"

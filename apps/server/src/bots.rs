@@ -354,11 +354,9 @@ impl BotServiceImpl {
     /// The person behind `token`, and the home identity bots live in.
     fn caller(&self, token: &str) -> Result<(Uuid, crate::HomeIdentity), org_proto::BotError> {
         use org_proto::BotError;
-        let home = self
-            .state
-            .home_identity
-            .clone()
-            .ok_or_else(|| BotError::Refused("this server has no home org to keep bots in".into()))?;
+        let home = self.state.home_identity.clone().ok_or_else(|| {
+            BotError::Refused("this server has no home org to keep bots in".into())
+        })?;
         let state = self.state.clone();
         let token = token.to_owned();
         let who = tokio::runtime::Handle::current()
@@ -381,7 +379,10 @@ fn wire(bot: Bot) -> org_proto::BotInfo {
 }
 
 impl org_proto::BotService for BotServiceImpl {
-    fn list_bots(&self, session_token: String) -> Result<Vec<org_proto::BotInfo>, org_proto::BotError> {
+    fn list_bots(
+        &self,
+        session_token: String,
+    ) -> Result<Vec<org_proto::BotInfo>, org_proto::BotError> {
         let (owner, home) = self.caller(&session_token)?;
         tokio::runtime::Handle::current()
             .block_on(async move { list(&home.auth, &home.memberships, owner).await })
@@ -400,7 +401,15 @@ impl org_proto::BotService for BotServiceImpl {
         };
         let made = tokio::runtime::Handle::current()
             .block_on(async move {
-                create(&home.auth, &home.memberships, owner, &req.name, &req.orgs, tools).await
+                create(
+                    &home.auth,
+                    &home.memberships,
+                    owner,
+                    &req.name,
+                    &req.orgs,
+                    tools,
+                )
+                .await
             })
             // What `create` refuses is the request, not the server.
             .map_err(|e| org_proto::BotError::Refused(format!("{e:#}")))?;

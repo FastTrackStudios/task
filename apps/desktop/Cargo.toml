@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+# The window; `task` and `fts-files-daemon` (src/bin) ship beside it.
+default-run = "task-app-desktop"
 
 [dependencies]
 # A process-level rustls CryptoProvider, installed first thing in `main`:
@@ -35,6 +37,13 @@ tracing = { workspace = true }
 # files-daemon itself would pull jj, iroh and a chunk store into a
 # window that only needs to ask questions.
 files-daemon-proto = { workspace = true }
+# …but the bundle's other two programs are built from THIS package
+# (`src/bin/task.rs`, `src/bin/fts-files-daemon.rs`, each one call), so
+# one feature resolution covers all three binaries and `build-dmg.sh`
+# links them from what the app's build already compiled. The window never
+# calls into either; they are here for those two bins.
+task-cli = { path = "../cli" }
+files-daemon = { workspace = true, features = ["daemon-bin"] }
 # The shipped app set. `task-plugins` is the composition root — the
 # only crate naming both Task and an app plugin — so this manifest
 # never lists an individual app, and the three front ends cannot drift
