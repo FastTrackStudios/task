@@ -12,4 +12,4 @@
 //! when software roots landed (issue #273) — a software root placed on a
 //! Storage Location is the same agreement.
 
-pub use files_proto::consts::{GIT_DIR, MARKER_FILE, STORE_DIR};
+pub use files_proto::consts::{GIT_DIR, MARKER_FILE, STORE_DIR, is_private_dir, is_within_private};

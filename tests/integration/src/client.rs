@@ -322,6 +322,11 @@ impl Session {
     pub async fn devices(&self) -> files::SyncServiceClient {
         self.establish().await
     }
+
+    /// The contacts directory and its CardDAV sync accounts.
+    pub async fn contacts(&self) -> contacts_proto::ContactsClient {
+        self.establish().await
+    }
 }
 
 /// The endpoint every session in this process dials from.
@@ -419,4 +424,5 @@ signable!(
     crdt::sync::DocSyncClient,
     email_proto::EmailSyncClient,
     email_proto::EmailLinksClient,
+    contacts_proto::ContactsClient,
 );

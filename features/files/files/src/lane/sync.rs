@@ -563,6 +563,10 @@ fn walk(
             continue;
         }
         if path.is_dir() {
+            // t[impl vault.private.node-only]
+            if crate::consts::is_private_dir(&path) {
+                continue;
+            }
             out.dirs.push(rel.clone());
             walk(&path, &rel, ignores, depth + 1, out)?;
         } else {

@@ -2774,6 +2774,48 @@ mod declared_tests {
         }
     }
 
+    // t[verify contacts.secret.out-of-vault]
+    // t[verify vault.private.node-only]
+    /// The seeded CardDAV account is the shape a real one takes on disk:
+    /// a reference to a test-only secret source and no password at all,
+    /// in a directory the marker makes node-private.
+    #[test]
+    fn the_seeded_carddav_account_holds_a_reference_not_a_password() {
+        let dir = STUDIO
+            .get_dir("acme-audio/Vault/Records/contacts/.sync")
+            .expect("the seed declares a CardDAV account");
+        assert!(
+            dir.get_file("acme-audio/Vault/Records/contacts/.sync/.fts-private")
+                .is_some(),
+            "the account directory is not marked node-private"
+        );
+        let accounts: Vec<_> = dir
+            .files()
+            .filter(|f| f.path().extension().is_some_and(|e| e == "md"))
+            .collect();
+        assert!(!accounts.is_empty());
+        for f in accounts {
+            let src = f.contents_utf8().expect("utf-8 account");
+            let (fm, _) = src
+                .strip_prefix("---\n")
+                .and_then(|s| s.split_once("\n---"))
+                .expect("frontmatter");
+            let v: serde_yaml::Value = serde_yaml::from_str(fm).expect("yaml");
+            assert!(
+                v.get("password").is_none(),
+                "{}: a password in the vault",
+                f.path().display()
+            );
+            assert_eq!(v["password_ref"]["type"].as_str(), Some("test"));
+            assert!(
+                v["server_url"]
+                    .as_str()
+                    .is_some_and(|u| u.starts_with("https://")),
+                "a seeded account must be https"
+            );
+        }
+    }
+
     // t[verify process.capture.people]
     /// Everyone a seeded capture names by `@handle` who is a member has
     /// a profile — a committed contact in that org's vault — and every

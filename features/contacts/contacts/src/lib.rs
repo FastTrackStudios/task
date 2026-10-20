@@ -21,10 +21,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 pub mod carddav;
+pub mod credentials;
 pub mod parse;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 pub mod vault_contacts;
 pub mod write;
 
+pub use carddav::{Transport, validate_account};
+pub use credentials::{CredentialStore, NativeCredentials, PasswordRef, Preference, TestSecrets};
 pub use parse::{ParseError, parse_contact};
 pub use vault_contacts::{VaultContacts, VaultContactsError};
 pub use write::{WriteError, serialize_contact};

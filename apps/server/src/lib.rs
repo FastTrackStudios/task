@@ -1401,10 +1401,19 @@ pub(crate) async fn build_org_state(
             .map_err(|e| eyre::eyre!("recall backend: {e}"))?;
 
         // Contacts backend rooted at the same vault — people live
-        // under `Records/contacts/`.
+        // under `Records/contacts/`. CardDAV passwords never do: they
+        // go to the OS keyring or, where there is none, the envelope
+        // keyed by this server's auth secret (`contacts.secret.out-of-vault`).
         #[cfg(feature = "plugin-contacts")]
-        let contacts = contacts::VaultContacts::new(vault_root.clone())
-            .map_err(|e| eyre::eyre!("contacts backend: {e}"))?;
+        let contacts = contacts::VaultContacts::with_secrets(
+            vault_root.clone(),
+            std::sync::Arc::new(contacts::NativeCredentials::new(
+                contacts::Preference::from_env(),
+                Some(auth_secret()),
+            )),
+            contacts::Transport::from_env(),
+        )
+        .map_err(|e| eyre::eyre!("contacts backend: {e}"))?;
 
         // Tag registry rooted at the same vault — `Records/tags.json`.
         let tags =

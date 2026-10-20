@@ -85,6 +85,11 @@ fn is_skip(path: &Path, root: &Path) -> bool {
     if name.starts_with('.') {
         return true;
     }
+    // A node-private directory is never a page source, whatever it is
+    // called (`vault.private.node-only`).
+    if path.is_dir() && files_proto::consts::is_private_dir(path) {
+        return true;
+    }
     // Conventional vault-trash directory.
     if path.is_dir() && matches!(name, "trash" | "Trash") {
         return true;
