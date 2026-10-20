@@ -16,6 +16,12 @@ the File Root holds what it weighs** — identity and metadata under
 `resources/` or the vault, bytes in a File Root, so subscribing to a
 library moves names rather than gigabytes.
 
+Two goals are hard constraints on every design (ADR 0006, proposed):
+**every node is a full peer** — a server is just a peer that is always on —
+and **storage is one pooled system** across disks, NAS boxes and S3. Run
+the checklist in `skills/architecture-guardrails.md` before designing or
+reviewing anything that touches sync, sharing, auth, Files or storage.
+
 Wiring an app (Session, Signal, Ignition, Keyflow) to Task: follow
 `docs/app-integration.md` — sign-in, stores, safe saves, manifests,
 libraries, live events, and what is not built yet.
